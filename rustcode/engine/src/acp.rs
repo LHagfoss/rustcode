@@ -456,12 +456,21 @@ fn replay_history_updates_with_compaction(
             }
             // A user request says who sent it (`_meta.rustcode.origin`); a
             // tool's result or attachment in the user role has no sender.
-            "user" if !message.content.is_empty() && message.is_user_request() => updates.push(
-                SessionUpdate::UserMessageChunk(crate::message_origin::user_chunk(
-                    message.content.clone(),
-                    streaming::message_time_meta(&message.timestamp),
-                )),
-            ),
+            "user" if !message.content.is_empty() && message.is_user_request() => {
+                updates.push(SessionUpdate::UserMessageChunk(
+                    crate::message_origin::user_chunk(message.content.clone(), {
+                        let mut meta =
+                            streaming::message_time_meta(&message.timestamp).unwrap_or_default();
+                        if let Some(origin) = &message.origin {
+                            meta.insert(
+                                "rustcode".to_owned(),
+                                serde_json::json!({"origin": origin}),
+                            );
+                        }
+                        Some(meta)
+                    }),
+                ))
+            }
             "user" if !message.content.is_empty() => {
                 let mut chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(
                     message.content.clone(),
@@ -2221,6 +2230,7 @@ fn echo_prompt(
     clients: &clients::SessionClients,
     sender: clients::ClientId,
     prompt: &[ContentBlock],
+    origin: Option<serde_json::Value>,
 ) {
     let text = prompt
         .iter()
@@ -2236,7 +2246,15 @@ fn echo_prompt(
     // The other clients did not write it: they are told who did.
     clients.update_others(
         sender,
-        SessionUpdate::UserMessageChunk(crate::message_origin::user_chunk(text, None)),
+        SessionUpdate::UserMessageChunk(crate::message_origin::user_chunk(
+            text,
+            origin.map(|origin| {
+                serde_json::Map::from_iter([(
+                    "rustcode".to_owned(),
+                    serde_json::json!({"origin": origin}),
+                )])
+            }),
+        )),
     );
 }
 
@@ -2766,7 +2784,7 @@ async fn serve_connection(
                             });
                             let accepted = external.steer(&blocks).await;
                             if accepted {
-                                remote.note_prompt(&request.session_id, &request.text);
+                                remote.note_prompt(&request.session_id, &request.text, request.meta.as_ref().and_then(|v| v.get("rustcode")).and_then(|v| v.get("origin")).cloned().filter(|v| crate::message_origin::from_meta(v).is_some()));
                             }
                             responder.respond(serde_json::json!({ "accepted": accepted }))?;
                             Ok(())
@@ -2791,7 +2809,13 @@ async fn serve_connection(
                     if images {
                         return responder.respond(serde_json::json!({ "accepted": false }));
                     }
-                    let answer = steer::accept(&mut *state.lock().await, &request.text);
+                    let mut state = state.lock().await;
+                    let answer = steer::accept(&mut state, &request.text);
+                    if answer.get("accepted").and_then(serde_json::Value::as_bool) == Some(true) {
+                        if let Some(steer) = state.pending_steers.last_mut() {
+                            steer.origin = request.meta.as_ref().and_then(|v| v.get("rustcode")).and_then(|v| v.get("origin")).cloned().filter(|v| crate::message_origin::from_meta(v).is_some());
+                        }
+                    }
                     responder.respond(answer)
                 }
             },
@@ -3925,6 +3949,7 @@ async fn serve_connection(
                 let server = server.clone();
                 async move |request: PromptRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
+                    let origin = request.meta.as_ref().and_then(|meta| meta.get("rustcode")).and_then(|v| v.get("origin")).cloned().filter(|v| crate::message_origin::from_meta(v).is_some());
                     // The access the client runs this thread at, kept where the
                     // engine reads it with no app attached (orchestration/local_threads.rs).
                     if let Some(access) = request
@@ -3955,13 +3980,13 @@ async fn serve_connection(
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
-                        server.remote.note_prompt(&session_id, &prompt_text);
+                        server.remote.note_prompt(&session_id, &prompt_text, origin.clone());
                         server.remote.note_prompt_applied(&session_id);
                         let remote = server.remote.clone();
                         let turn_session = session_id.clone();
                         // The other clients that have the thread show the
                         // prompt too; the one that sent it already does.
-                        echo_prompt(&server.clients.session(&session_id), client_id, &request.prompt);
+                        echo_prompt(&server.clients.session(&session_id), client_id, &request.prompt, origin.clone());
                         // The turn belongs to the engine, not this connection:
                         // it runs on if the client goes, and only its answer
                         // is lost.
@@ -4024,7 +4049,7 @@ async fn serve_connection(
                             agent_client_protocol::Error::invalid_params().data(message)
                         })?
                         .text;
-                    echo_prompt(&server.clients.session(&session_id), client_id, &request.prompt);
+                    echo_prompt(&server.clients.session(&session_id), client_id, &request.prompt, origin.clone());
 
                     // A report only reads the session, so it answers now, beside
                     // a running turn, instead of queueing at the turn gate.
@@ -4066,6 +4091,7 @@ async fn serve_connection(
                             terminal_backlog,
                             terminal_overflow,
                             text,
+                            origin,
                             session_clients,
                             prompt_server.client,
                             prompt_server.auto_approve,

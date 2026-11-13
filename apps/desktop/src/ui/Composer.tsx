@@ -26,7 +26,6 @@ import {
   ListEnd,
   Paperclip,
   Pencil,
-  Plus,
   Shield,
   ShieldCheck,
   ShieldOff,
@@ -96,7 +95,7 @@ import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles, SCOPES
 import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason } from "../state/harness";
 import { usageOf } from "../state/harnessUsage";
 import { childAccountOn, type SignedOutLogins } from "../state/logins";
-import { useMachineReconnecting } from "../state/machines";
+import { useMachineReconnecting, useMachines } from "../state/machines";
 import {
   type MentionEntry,
   type MentionNode,
@@ -145,11 +144,13 @@ import { localId, shortAge, type ThreadState } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
+import { threadMachine } from "./composerFooterLayout";
 import { EnvironmentSelector } from "./EnvironmentSelector";
 import { overFolderDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
+import { DeviceGlyphIcon } from "./MachineGlyph";
 import { ModelPicker } from "./ModelPicker";
 import { PasteChip } from "./PasteChip";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
@@ -282,7 +283,7 @@ type DrawerEntry = { kind: "command"; command: SlashCommand } | MentionEntry;
  */
 type DrawerRowItem =
   | { kind: "heading"; label: string }
-  | { kind: "harness"; harness: string; name: string }
+  | { kind: "harness"; harness: string; name: string; account?: string; plan?: string }
   | { kind: "row"; entry: DrawerEntry; index: number }
   | { kind: "more"; section: MentionSection; hidden: number; index: number }
   | { kind: "less"; section: MentionSection; index: number };
@@ -412,7 +413,7 @@ const MENTION_TINT: Record<MentionState, string> = {
 };
 
 // The drawer's row, shared by all four kinds: one line, the mark first, what it is last.
-const DRAWER_ROW = "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left";
+const DRAWER_ROW = "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left";
 const DRAWER_NAME = "min-w-[96px] max-w-[45%] shrink-0 truncate font-medium text-fg text-sub";
 
 /** `text` with the letters the query matched marked, as the folder picker marks a folder's name. */
@@ -1366,9 +1367,6 @@ export const Composer = memo(function Composer({
             <FileText size={16} className="shrink-0 text-fg-muted" />
             <span className={DRAWER_NAME}>{entry.path.slice(cut)}</span>
             <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{entry.path.slice(0, cut)}</span>
-            <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
-              Project
-            </span>
           </button>
         );
       }
@@ -1382,9 +1380,11 @@ export const Composer = memo(function Composer({
               <Marked text={keyword.label} query={drawerQuery} />
             </span>
             <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{keyword.hint}</span>
-            <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
-              @{keyword.word}
-            </span>
+            {i === selected && (
+              <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
+                @{keyword.word}
+              </span>
+            )}
           </button>
         );
       }
@@ -1400,26 +1400,16 @@ export const Composer = memo(function Composer({
             <span className={DRAWER_NAME}>
               <Marked text={entry.agent.name} query={drawerQuery} />
             </span>
-            {/* Which harness, at which effort: what the row delegates to. */}
-            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
-              {entry.agent.model
-                ? `${entry.agent.harnessName}${entry.agent.effort ? ` · ${entry.agent.effort}` : ""}`
-                : entry.agent.effort}
-            </span>
-            <span className="ml-auto flex shrink-0 items-center gap-2">
-              {entry.agent.account && (
-                <span className="max-w-[120px] truncate text-caption text-fg-muted">
-                  {entry.agent.account}
-                </span>
-              )}
-              {entry.agent.plan && (
-                <span className="text-caption text-fg-faint tabular">{entry.agent.plan}</span>
-              )}
-              {/* The token the row writes, so what it will say in the message is no surprise. */}
-              <span className="max-w-[220px] truncate rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
+            {/* One muted detail: the effort it would start on. The harness is the group's header, the
+                login and plan are said there once. */}
+            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{entry.agent.effort}</span>
+            {/* The token the row writes, on the row under the keys only, so what the message will
+                say is no surprise without every row carrying it. */}
+            {i === selected && (
+              <span className="ml-auto max-w-[220px] shrink-0 truncate rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
                 @{entry.agent.token}
               </span>
-            </span>
+            )}
           </button>
         );
       case "thread": {
@@ -1469,7 +1459,7 @@ export const Composer = memo(function Composer({
         {drawer && (
           <div
             ref={drawerRef}
-            className="rc-composer-drawer rc-in absolute inset-x-6 bottom-[calc(100%-1rem)] z-0 flex max-h-72 flex-col gap-0.5 overflow-y-auto px-1.5 pt-1.5 pb-[calc(1rem+6px)]"
+            className="rc-composer-drawer rc-in absolute inset-x-6 bottom-[calc(100%-1rem)] z-0 flex max-h-64 flex-col overflow-y-auto px-1.5 pt-1.5 pb-[calc(1rem+6px)]"
             role="listbox"
             aria-label={drawerLabel}
           >
@@ -1498,6 +1488,13 @@ export const Composer = memo(function Composer({
                   >
                     <HarnessIcon id={item.harness} name={item.name} size={12} />
                     <span className="truncate">{item.name}</span>
+                    {/* The login and what its plan has left, once for the group's rows. */}
+                    {(item.account || item.plan) && (
+                      <span className="ml-auto flex shrink-0 items-center gap-2 text-fg-faint">
+                        {item.account && <span className="max-w-[140px] truncate">{item.account}</span>}
+                        {item.plan && <span className="tabular">{item.plan}</span>}
+                      </span>
+                    )}
                   </div>
                 );
               }
@@ -1842,6 +1839,7 @@ export const Composer = memo(function Composer({
       <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex items-center gap-4 px-2 pt-[14px] pb-1.5 text-callout text-fg-muted">
         <div className="flex min-w-0 items-center gap-1">
           {!thread && <EnvironmentSelector />}
+          {thread && <ThreadMachineChip host={host} />}
           <FolderMenu thread={thread} cwd={cwd} host={host} />
           {!thread && !newThreadHost && <WorktreeToggle draft={draft} compact={compact} />}
           {thread?.worktree && (
@@ -2064,6 +2062,38 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
 }
 
 /**
+ * Where an open thread runs, when that is a paired machine: its glyph and name before the folder,
+ * a quiet label rather than a button (the machine is fixed once a thread exists). A thread on this
+ * computer shows nothing, as in the sidebar. The name is the first label to give way under a
+ * container width, and the glyph keeps the name for assistive tech.
+ */
+function ThreadMachineChip({ host }: { host: string }) {
+  const machines = useMachines((s) => s.machines);
+  const there = threadMachine(host, machines);
+  if (!there) return null;
+  return (
+    <Tooltip side="bottom" label={there.title}>
+      <span
+        role="img"
+        aria-label={there.title}
+        className="flex h-7 min-w-0 shrink items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-callout text-fg-muted"
+      >
+        <span className="relative flex shrink-0">
+          <DeviceGlyphIcon glyph={there.glyph} tint={there.tint} size={14} />
+          {there.away && (
+            <span className="-right-0.5 -top-0.5 absolute size-1.5 rounded-full bg-warning ring-2 ring-[var(--rc-composer-footer-bg)]" />
+          )}
+        </span>
+        <span className="min-w-0 max-w-[160px] truncate @max-lg/composer:max-w-[96px] @max-md/composer:hidden">
+          {there.name}
+        </span>
+      </span>
+    </Tooltip>
+  );
+}
+
+/**
+/**
  * The folder button under the composer: the project picker (ui/ProjectPicker.tsx), which starts a
  * new thread in a project or moves the open thread to another one.
  */
@@ -2170,6 +2200,27 @@ export function PermissionMenu({ threadId, compact }: { threadId?: string; compa
   );
 }
 
+/**
+ * The + as one filled shape on a 16px grid: 2px arms, each 10px long, crossing at (8, 8). Every
+ * edge is a whole pixel, at 1x and (as whole device pixels) at 2x, and a single path means the
+ * crossing is painted once.
+ */
+function PlusMark() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      shapeRendering="crispEdges"
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <path d="M7 3h2v4h4v2H9v4H7V9H3V7h4z" />
+    </svg>
+  );
+}
+
 /** The + menu at the start of the composer's row, after the SwiftUI app's AddPanel. */
 function PlusMenu({
   onAttach,
@@ -2197,16 +2248,16 @@ function PlusMenu({
       className="min-w-[220px]"
       trigger={
         // The one button the message is added to: the send circle's own diameter with a 16px mark, so
-        // the row's two ends read as the row's two ends and sit on one line. `absoluteStrokeWidth`
-        // keeps that mark a true 2px instead of the 1.33px a 16px lucide would otherwise draw, and at
-        // this size the arms land on whole pixels: the cross stays a cross at 2x instead of reading
-        // as two soft, uneven strokes.
+        // the row's two ends read as the row's two ends and sit on one line. The mark is one filled
+        // outline on a whole-pixel grid (`PlusMark`), not two stroked lines: lucide's Plus draws two
+        // 24-unit strokes scaled to 16px, so their ends land on thirds of a pixel and the crossing
+        // is painted twice, which reads as "-|-" instead of one plus.
         <button
           type="button"
           aria-label="Attach and more"
           className="flex size-9 shrink-0 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-8"
         >
-          <Plus size={16} strokeWidth={2} absoluteStrokeWidth />
+          <PlusMark />
         </button>
       }
     >

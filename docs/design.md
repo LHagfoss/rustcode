@@ -839,8 +839,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   and `bg-fill` over the card (hover and focus
   `bg-fill-strong`), with no edge, so the same control reads at every nesting
   depth; switches keep their own shape.
-- **Settings row, reset:** rows show their description in full and keep the
-  reset button of the bullet below where the value differs from its default.
+- **Settings row, description and hint:** a description is one short line
+  (about 90 characters at most): what the title does not already say. Anything
+  longer a person may need goes in `hint`, a tip behind a small info mark after
+  the title (`Row` and `Group` in `settingsKit`), opened on hover or keyboard
+  focus. Group footers follow the same rule.
+- **Settings row, reset:** a row keeps the reset button of the bullet below
+  where the value differs from its default.
 - **Tooltip:** `tipSurface px-2 py-1` (see Tooltips and hover cards).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
   20px, the `2xl` step), with no padding of its own: every text row in it

@@ -298,12 +298,8 @@ export function StatisticsPage() {
       <Group
         title="Daily activity"
         action={days.data?.truncated ? <Chip tone="warn">Day read capped</Chip> : undefined}
-        footer={
-          <span className="block">
-            One bar a day, in UTC as the store groups them. Cost is what harnesses reported that day; the
-            tiles add a list-price estimate where none was reported.
-          </span>
-        }
+        footer="One bar a day, in UTC."
+        hint="Cost is what harnesses reported that day; the tiles add a list-price estimate where none was reported."
       >
         {!days.data ? (
           <ChartSkeleton />
@@ -337,13 +333,8 @@ export function StatisticsPage() {
       {usage.groups.length > 0 && (
         <Group
           title="Cost by harness and model"
-          footer={
-            <span className="block">
-              The bar is each harness's share of the period's cost; picking a name in the legend takes it off
-              the bar, and a row lights its harness. ≈ marks an estimate at API list prices on {PRICE_DATE},
-              and a row with neither number has no bar.
-            </span>
-          }
+          footer={`≈ marks an estimate at API list prices on ${PRICE_DATE}.`}
+          hint="The bar is each harness's share of the period's cost; picking a name in the legend takes it off the bar. A row with neither number has no bar."
         >
           {usage.ranked.some((group) => rankOf(usage.costs.get(group.harness)) > 0) ? (
             <CostShare
@@ -364,7 +355,7 @@ export function StatisticsPage() {
           ) : (
             <Row
               title="No cost to compare"
-              subtitle="No model this period ran reported a cost, and none has a list price this page can apply."
+              subtitle="No model this period reported a cost or has a list price."
             />
           )}
           <UsageTable
@@ -756,7 +747,7 @@ function PlanLimits({ names }: { names: Map<string, string> }) {
           Usage…
         </Action>
       }
-      footer="Read from each subscription's own sign-in by Settings › Usage and the background poll; nothing new is read here."
+      footer="Read from each subscription's own sign-in, as in Settings › Usage."
     >
       <div className="flex flex-col gap-4 px-4 py-4">
         {plans.map((plan) => {
@@ -831,10 +822,7 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
 function ThreadFootnote({ report }: { report: ThreadReport }) {
   return (
     <div className="space-y-1">
-      <span className="block">
-        Each thread is counted once: under the thread that started it, or on its own when that thread has no
-        recorded turns.
-      </span>
+      <span className="block">Each thread is counted once, under the thread that started it.</span>
       <HowThisIsCounted>
         <span className="block">
           A parent's total includes its delegates at any depth; the number on the right is input and output
@@ -1027,7 +1015,7 @@ function NothingRecorded({
     >
       <Row
         title="Nothing recorded yet"
-        subtitle="Run a turn, or open the app once so existing threads are collected into the local data store."
+        subtitle="Run a turn, or open the app once to collect existing threads."
       />
     </Group>
   );

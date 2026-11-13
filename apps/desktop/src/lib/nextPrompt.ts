@@ -4,6 +4,7 @@
 // reply that offers nothing suggests nothing. Tab puts it in the field to edit; it is never sent.
 
 import type { ThreadState, TranscriptItem } from "../state/thread";
+import { readFlag, writeFlag } from "./storage";
 
 const KEY = "rustcode.nextPrompt";
 
@@ -11,20 +12,12 @@ const KEY = "rustcode.nextPrompt";
 export const NEXT_PROMPT_DEFAULT = false;
 
 export function nextPromptEnabled(): boolean {
-  try {
-    const raw = localStorage.getItem(KEY);
-    return raw === null ? NEXT_PROMPT_DEFAULT : raw === "1";
-  } catch {
-    return NEXT_PROMPT_DEFAULT;
-  }
+  return readFlag(KEY, NEXT_PROMPT_DEFAULT);
 }
 
 export function setNextPrompt(on: boolean) {
-  try {
-    localStorage.setItem(KEY, on ? "1" : "0");
-  } catch {
-    // Not persisted in a private window.
-  }
+  // Not persisted in a private window.
+  writeFlag(KEY, on);
 }
 
 /** A suggestion longer than this is a paragraph, not a next prompt. */

@@ -2607,11 +2607,15 @@ export class MockEngine {
   }
 
   /** The shell's thread actions, on the mock's own threads. */
-  renameThread(id: string, title: string): string {
+  renameThread(id: string, title: string, user = false): string {
     const thread = this.thread(id);
     thread.title = title.split(/\s+/).join(" ").trim();
+    if (user) this.userTitled.add(id);
     return thread.title;
   }
+
+  /** The threads the user named themselves (`thread_user_titled`). */
+  userTitled = new Set<string>();
 
   trashThread(id: string) {
     this.thread(id);
@@ -6087,7 +6091,9 @@ export class MockTransport implements Transport {
       if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("Not a thread id.");
       return `/Users/lars/.config/rustcode/threads/2026/11/08/${id}/logs/debug.log`;
     }
-    if (command === "thread_rename") return this.engine?.renameThread(String(args.id), String(args.title));
+    if (command === "thread_rename")
+      return this.engine?.renameThread(String(args.id), String(args.title), args.user === true);
+    if (command === "thread_user_titled") return this.engine?.userTitled.has(String(args.id)) ?? false;
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
     if (command === "project_files") return MOCK_PROJECT_FILES;
     if (command === "git_changes") {

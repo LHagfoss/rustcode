@@ -255,8 +255,8 @@ function PresenceRow() {
       : !state.enabled
         ? "Off: nothing is shared with Discord."
         : state.discordDetected
-          ? "Shares the open project's folder name and whether a turn is running. Discord is running."
-          : "Shares the open project's folder name and whether a turn is running. Discord's desktop app is not running right now.";
+          ? "Shares the project folder's name and whether a turn runs."
+          : "Shares the project folder's name and whether a turn runs. Discord is not running.";
   // Off is the default: presence shares what you work on, so turning it on is the user's call.
   const reset = state?.enabled ? () => setEnabled(false) : undefined;
   return (
@@ -299,14 +299,15 @@ function GeneralPage() {
       <Group title="New threads">
         <Row
           title="Default project folder"
-          subtitle="Where a new thread starts, in place of the folder of the open thread. A folder picked for one new thread still wins."
+          subtitle="Where a new thread starts, unless you pick a folder for it."
+          hint="Used in place of the open thread's folder. A folder picked for one new thread still wins."
           status={defaultCwd || "None chosen"}
         >
           <Action onClick={() => void pickFolder(defaultCwd).then((p) => p && setDefaultCwd(p))}>
             Choose…
           </Action>
         </Row>
-        <Row title="Harness, model and effort" subtitle="Which agent runs a new thread by default.">
+        <Row title="Harness, model and effort" subtitle="Which harness runs a new thread by default.">
           <Action onClick={() => openSettings("agents")}>Harnesses…</Action>
         </Row>
         <Row
@@ -316,7 +317,8 @@ function GeneralPage() {
               ? () => void defaultAccess.set(SETTINGS_DEFAULTS.defaultPermissionMode)
               : undefined
           }
-          subtitle="New threads start here. The shield under the message box changes one thread only."
+          subtitle="What a new thread may do without asking."
+          hint="The shield under the message box changes one thread only."
         >
           <ScopedValue mixed={defaultAccess.mixed} breakdown={defaultAccess.breakdown}>
             <Choice
@@ -336,7 +338,8 @@ function GeneralPage() {
               ? () => void resume.set(SETTINGS_DEFAULTS.resumeAfterRestart)
               : undefined
           }
-          subtitle="A thread whose turn was cut short by quitting, an update or a server restart is sent “Continue where you left off” when the app is back."
+          subtitle="Pick up a turn that quitting or an update cut short."
+          hint="The thread is sent “Continue where you left off” when the app is back."
         >
           <ScopedValue mixed={resume.mixed} breakdown={resume.breakdown}>
             <Switch
@@ -353,7 +356,8 @@ function GeneralPage() {
               ? () => void afterLimit.set(SETTINGS_DEFAULTS.continueAfterLimit)
               : undefined
           }
-          subtitle="A thread stopped by its plan's limit, by a provider that was overloaded, or by the network dropping is told to carry on once it can go on again, unless you have moved it to another harness or account, or sent it something else."
+          subtitle="Carry on after a usage limit, an overloaded provider or a dropped network."
+          hint="Once it can go on again. Not if you moved the thread to another harness or account, or sent it something else."
         >
           <ScopedValue mixed={afterLimit.mixed} breakdown={afterLimit.breakdown}>
             <Switch
@@ -371,7 +375,8 @@ function GeneralPage() {
               ? () => void autoCompactMode.set(SETTINGS_DEFAULTS.autoCompact.mode)
               : undefined
           }
-          subtitle="Off by default. When on, RustCode asks the harness to compact its own context when a turn ends above the threshold; the second mode also compacts shortly before Claude Code's or Codex's prompt cache expires. Never while a turn runs, a message waits, an approval is open or the thread's last answer is unread, and never over the answer itself: the compaction leaves one quiet row under it. Turn it off for one thread in its menu."
+          subtitle="Compact a thread's context when a turn ends above the threshold."
+          hint="The second mode also compacts shortly before Claude Code's or Codex's prompt cache expires. Never while a turn runs, a message waits, an approval is open or the last answer is unread. Turn it off for one thread in its menu."
         >
           <ScopedValue mixed={autoCompactMode.mixed} breakdown={autoCompactMode.breakdown}>
             <Choice
@@ -390,7 +395,8 @@ function GeneralPage() {
                 ? () => void autoCompactThreshold.set(AUTO_COMPACT_DEFAULT_THRESHOLD)
                 : undefined
             }
-            subtitle="Compact once the context passes this many tokens. The second mode's idle, pre-cache rule uses a smaller 60k threshold."
+            subtitle="Compact once the context passes this many tokens."
+            hint="The second mode's idle, pre-cache rule uses a smaller 60k threshold."
           >
             <ScopedValue mixed={autoCompactThreshold.mixed} breakdown={autoCompactThreshold.breakdown}>
               <Slider
@@ -412,7 +418,8 @@ function GeneralPage() {
           reset={
             notifications ? undefined : () => setSystemNotifications(SETTINGS_DEFAULTS.systemNotifications)
           }
-          subtitle="A notification when a thread needs your approval, asks you a question, hits a usage limit or finishes. The app asks the system for permission the first time one is due."
+          subtitle="When a thread needs approval, asks a question, hits a limit or finishes."
+          hint="The app asks the system for permission the first time one is due."
         >
           <Switch label="System notifications" checked={notifications} onChange={setSystemNotifications} />
         </Row>
@@ -423,7 +430,8 @@ function GeneralPage() {
               ? undefined
               : () => setNotificationsBackgroundOnly(SETTINGS_DEFAULTS.notificationsBackgroundOnly)
           }
-          subtitle="While the window is in front, a toast says it instead, and the thread's row keeps it. A thread on screen is never announced either way."
+          subtitle="With the window in front, a toast says it instead."
+          hint="The thread's row keeps it. A thread on screen is never announced either way."
         >
           <Switch
             label="Only when RustCode is in the background"
@@ -434,7 +442,8 @@ function GeneralPage() {
         <Row
           title="While-you-were-away recap"
           reset={recap ? undefined : () => setRecapWhileAway(SETTINGS_DEFAULTS.recapWhileAway)}
-          subtitle="A card at the top of the chat and the inbox after the app sat idle: what needs you, what failed and what finished. Dismissed, the inbox keeps a row that brings it back."
+          subtitle="A card after the app sat idle: what needs you, what failed, what finished."
+          hint="It shows at the top of the chat and the inbox. Dismissed, the inbox keeps a row that brings it back."
         >
           <Switch label="While-you-were-away recap" checked={recap} onChange={setRecapWhileAway} />
         </Row>
@@ -445,7 +454,7 @@ function GeneralPage() {
               ? () => setRecapHours(SETTINGS_DEFAULTS.recapHours)
               : undefined
           }
-          subtitle="How long the app must sit idle before the recap is due."
+          subtitle="How long the app sits idle before the recap."
         >
           <Choice
             label="Away before the recap"
@@ -457,10 +466,7 @@ function GeneralPage() {
       </Group>
       <Group title="This computer">
         <PresenceRow />
-        <Row
-          title="Tab moves focus between controls"
-          subtitle="Use Tab and Shift+Tab to navigate controls throughout the app."
-        >
+        <Row title="Tab moves focus between controls" subtitle="Tab and Shift+Tab move between controls.">
           <Switch
             label="Tab moves focus between controls"
             checked={tabFocus}
@@ -481,7 +487,7 @@ function GeneralPage() {
                     setHapticsState(HAPTICS_DEFAULT);
                   }
             }
-            subtitle="A light tap on the Force Touch trackpad when you send, stop a turn, or rest on Send."
+            subtitle="A light tap when you send or stop a turn."
           >
             <Switch
               label="Trackpad haptics"
@@ -515,7 +521,7 @@ function ChatPage() {
             ? () => setChatWidth(SETTINGS_DEFAULTS.chatWidth)
             : undefined
         }
-        subtitle="How wide the transcript and the composer grow on a large window. They always share one measure."
+        subtitle="How wide the transcript and composer grow on a large window."
       >
         <Choice<ChatWidth>
           label="Chat width"
@@ -531,15 +537,13 @@ function ChatPage() {
       <Row
         title="Smart UI"
         reset={smartUi ? undefined : () => setSmartUi(SETTINGS_DEFAULTS.smartUi)}
-        subtitle="The agent can answer with a small interactive view (a filterable table, a chart with controls) that runs in the chat, sandboxed, with no network. Its buttons can send a message for you, only when you click them."
+        subtitle="Let replies include a small interactive view, such as a table or chart."
+        hint="It runs in the chat, sandboxed, with no network. Its buttons send a message only when you click them."
       >
         <Switch label="Smart UI" checked={smartUi} onChange={setSmartUi} />
       </Row>
       {smartUiPending && (
-        <Row
-          title="Restart the server to apply"
-          subtitle="The RustCode server learns the Smart UI setting when it starts."
-        >
+        <Row title="Restart the server to apply" subtitle="The server reads this setting when it starts.">
           <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
             Restart Server
           </Action>
@@ -555,7 +559,8 @@ function ChatPage() {
                 setLinkPreviewsState(LINK_PREVIEWS_DEFAULT);
               }
         }
-        subtitle="Links show as chips with the page's title, icon and colour. The app fetches them itself, with no cookies, from public hosts only."
+        subtitle="Show links as chips with the page's title and icon."
+        hint="The app fetches them itself, with no cookies, from public hosts only."
       >
         <Switch
           label="Link previews"
@@ -576,7 +581,8 @@ function ChatPage() {
                 setNextPromptState(NEXT_PROMPT_DEFAULT);
               }
         }
-        subtitle="When a reply ends by offering something (“Want me to add tests?”), the empty composer suggests the answer. Tab puts it in the field to edit, Esc dismisses it; it is never sent on its own. Read from the reply on this computer, with no extra model requests."
+        subtitle="The empty composer suggests an answer to what a reply offers."
+        hint="Tab puts it in the field to edit, Esc dismisses it. It is never sent on its own, and needs no extra model requests."
       >
         <Switch
           label="Suggested next prompt"
@@ -626,9 +632,8 @@ function AgentsPage() {
       <SettingsScopeBar />
       {snapshot.unsupported && (
         <p className="mb-4 rounded-lg bg-warning/10 px-3 py-2 text-callout">
-          This server does not run other harnesses yet (no{" "}
-          <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's built-in harness.
-          Update RustCode to add Claude Code, Codex, Gemini and others.
+          This server does not run other harnesses yet. Threads use the built-in harness; update RustCode to
+          add more.
         </p>
       )}
       {!snapshot.unsupported && (
@@ -673,8 +678,8 @@ function AgentsPage() {
         }
         footer={
           thisMachine
-            ? "Each harness signs in on its own; RustCode never stores its credentials. Check starts a harness to confirm it runs and lists its models."
-            : "A switch here turns the harness on or off on every connected machine. Sign-in, accounts and Check stay on the machine itself."
+            ? "Each harness signs in on its own. Check confirms it runs and lists its models."
+            : "A switch here turns a harness on or off on every connected machine."
         }
       >
         {thisMachine && adding && <AddHarnessForm onClose={() => setAdding(false)} />}
@@ -719,7 +724,8 @@ function OrchestrationGroup() {
               ? () => void orchestration.set(SETTINGS_DEFAULTS.orchestration)
               : undefined
           }
-          subtitle="An agent can list and read threads, message one in this project, start new threads (in their own worktrees, on any harness, model or named account) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow. A thread it starts gets the lower of this thread's access and Default access, so it is never given more than the thread that started it."
+          subtitle="An agent can read, message and start threads, and compare a task across harnesses."
+          hint="Full access does this without asking; Auto-edit may list, read and wait; otherwise you approve each. A thread it starts gets the lower of this thread's access and Default access."
         >
           <ScopedValue mixed={orchestration.mixed} breakdown={orchestration.breakdown}>
             <Switch
@@ -736,7 +742,8 @@ function OrchestrationGroup() {
               ? () => void readAcrossProjects.set(SETTINGS_DEFAULTS.readAcrossProjects)
               : undefined
           }
-          subtitle="When on, an agent can list, search and read any thread, including in other projects. Reading a thread still follows the approval rules above. Messaging and starting threads stay in the project."
+          subtitle="An agent can list, search and read any thread, in any project."
+          hint="Reading still follows the approval rules above. Messaging and starting threads stay in the project."
         >
           <ScopedValue mixed={readAcrossProjects.mixed} breakdown={readAcrossProjects.breakdown}>
             <Switch
@@ -747,10 +754,7 @@ function OrchestrationGroup() {
           </ScopedValue>
         </Row>
         {pending && (
-          <Row
-            title="Restart the server to apply"
-            subtitle="The RustCode server learns this setting when it starts."
-          >
+          <Row title="Restart the server to apply" subtitle="The server reads this setting when it starts.">
             <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
               Restart Server
             </Action>
@@ -762,7 +766,7 @@ function OrchestrationGroup() {
         disabled={!orchestrationValue}
         footer={
           orchestrationValue
-            ? "Only live delegates take a slot; a finished one frees it at once. A message to a thread this one already runs is a follow-up and takes none."
+            ? "Only live delegates take a slot. A follow-up to a thread this one already runs takes none."
             : "These limits have no effect while “Threads can start and message other threads” is off."
         }
       >
@@ -773,7 +777,7 @@ function OrchestrationGroup() {
               ? () => void totalLimitSetting.set(SETTINGS_DEFAULTS.totalLimit)
               : undefined
           }
-          subtitle="How many delegates may run at once across this app, whichever thread started them."
+          subtitle="How many delegates may run at once, whichever thread started them."
           status={
             running === 0
               ? "No delegates running now"
@@ -800,7 +804,8 @@ function OrchestrationGroup() {
               ? () => void threadLimitSetting.set(SETTINGS_DEFAULTS.threadLimit)
               : undefined
           }
-          subtitle="How many delegates one thread may have working at the same time. The total above can make this lower."
+          subtitle="How many delegates one thread may have working at once."
+          hint="The total above can make this lower."
           status={
             threadLimit > totalLimit
               ? `${threadLimit} set, ${possible} possible while the total is ${totalLimit}`
@@ -882,7 +887,7 @@ function ConnectionsPage() {
         <Group title="Credentials and accounts">
           <Row
             title={`Sign in on ${remote.name} itself`}
-            subtitle="Credentials and accounts never leave their machine, so they are not editable here. Open RustCode on that computer and sign in there; this app can still use its threads."
+            subtitle="Sign in on that computer. Credentials never leave their machine."
           />
         </Group>
       </>
@@ -897,7 +902,7 @@ function ConnectionsPage() {
   return (
     <>
       <SettingsScopeBar machineOnly />
-      <Group title="GitHub" footer="RustCode uses the GitHub CLI's sign-in for pull requests.">
+      <Group title="GitHub" footer="Pull requests use the GitHub CLI's sign-in.">
         {!data.github?.cliInstalled ? (
           <Row
             title="GitHub CLI not installed"
@@ -923,10 +928,7 @@ function ConnectionsPage() {
           <Row title="Not signed in" subtitle="Run: gh auth login" />
         )}
       </Group>
-      <Group
-        title="Model accounts"
-        footer="Sign in or out with `/login` in a thread, or switch with the model picker's Account row."
-      >
+      <Group title="Model accounts" footer="Sign in or out with `/login` in a thread.">
         {data.accounts.length ? (
           data.accounts.map((a, i) => (
             <Row key={i} title={a.display || a.provider} subtitle={`${a.provider} · ${a.method}`}>
@@ -1088,7 +1090,7 @@ function AppearancePage() {
         <Row
           title="Light or dark"
           reset={mode !== SETTINGS_DEFAULTS.theme ? () => setTheme(SETTINGS_DEFAULTS.theme) : undefined}
-          subtitle="System follows your operating system. Picking a theme sets its mode."
+          subtitle="System follows your operating system."
         >
           <Choice
             label="Appearance"
@@ -1111,7 +1113,7 @@ function AppearancePage() {
         <Row
           title="Animate streaming text"
           reset={animateStreaming ? undefined : () => setAnimateStreaming(SETTINGS_DEFAULTS.animateStreaming)}
-          subtitle="A reply's new words fade in as the model writes them. Finished replies never animate."
+          subtitle="New words fade in as the model writes them."
         >
           <Switch label="Animate streaming text" checked={animateStreaming} onChange={setAnimateStreaming} />
         </Row>
@@ -1122,7 +1124,8 @@ function AppearancePage() {
               ? () => setReduceTransparency(SETTINGS_DEFAULTS.reduceTransparency)
               : undefined
           }
-          subtitle="Menus, dialogs, the sidebar and headers turn solid instead of frosted. Also on when your system asks for it."
+          subtitle="Menus, dialogs and the sidebar turn solid instead of frosted."
+          hint="Also on when your system asks for it."
         >
           <Switch label="Reduce transparency" checked={reduceTransparency} onChange={setReduceTransparency} />
         </Row>
@@ -1143,8 +1146,8 @@ function AppearancePage() {
         }
         footer={
           supported === false
-            ? "This server has no themes yet, so only the built-in ones show. Update RustCode for theme files."
-            : `Theme files live in ${userDir} and a project's .rustcode/themes; edits apply live. See docs/themes.md.`
+            ? "This server has no theme files yet. Update RustCode to add your own."
+            : `Theme files live in ${userDir}; edits apply live. See docs/themes.md.`
         }
       >
         <div
@@ -1223,8 +1226,8 @@ function BannerSetting() {
         reset={banner.name !== BANNER_NAME_DEFAULT ? reset : undefined}
         subtitle={
           banner.name
-            ? "Behind the top of new threads, fading toward the message field"
-            : "A wide picture over new threads, drawn in text or as is. Cropped to fit"
+            ? "Behind the top of new threads."
+            : "A wide picture over new threads, drawn in text or as is."
         }
       >
         <div className="flex shrink-0 items-center gap-2">
@@ -1254,7 +1257,7 @@ function BannerSetting() {
                 ? () => setBannerDarken(BANNER_DARKEN_DEFAULT)
                 : undefined
             }
-            subtitle="Black over the picture, so the text on it reads"
+            subtitle="Black over the picture, so the text reads"
           >
             <Slider
               label="Darken the banner"
@@ -1464,12 +1467,13 @@ function RecordRequestBodiesGroup() {
   return (
     <Group
       title="Record request bodies"
-      footer="Each body is redacted and clipped before it is stored, and dropped after 7 days. Agents query what was kept with query_data (docs/data-store.md). Off, only timing, sizes and status are recorded."
+      footer="Redacted, clipped and dropped after 7 days. Off, only timing and status are kept."
     >
       <Row
         title="Provider requests (built-in harness)"
         reset={capture.providerPayloads ? () => save({ ...capture, providerPayloads: false }) : undefined}
-        subtitle="Saves each request the built-in harness sends a provider, and a summary of the response, so a slow or failed turn can be read back instead of guessed at."
+        subtitle="Save each request the built-in harness sends a provider."
+        hint="With a summary of the response, so a slow or failed turn can be read back. Agents query it with query_data (docs/data-store.md)."
       >
         <Switch
           label="Provider requests (built-in harness)"
@@ -1480,7 +1484,8 @@ function RecordRequestBodiesGroup() {
       <Row
         title="Harness messages"
         reset={capture.harnessRpcPayloads ? () => save({ ...capture, harnessRpcPayloads: false }) : undefined}
-        subtitle="Saves each message exchanged with a harness (ACP or Codex JSON-RPC), so a failed handshake or tool call can be read back."
+        subtitle="Save each message exchanged with a harness."
+        hint="ACP or Codex JSON-RPC, so a failed handshake or tool call can be read back."
       >
         <Switch
           label="Harness messages"
@@ -1490,7 +1495,7 @@ function RecordRequestBodiesGroup() {
       </Row>
       {error && <Row title="Could not save" subtitle={error} />}
       {pending && (
-        <Row title="Restart the server to apply" subtitle="The RustCode server reads these when it starts.">
+        <Row title="Restart the server to apply" subtitle="The server reads these when it starts.">
           <Action
             prominent
             disabled={anyRunning}
@@ -1511,18 +1516,15 @@ function AdvancedPage() {
   return (
     <>
       <RecordRequestBodiesGroup />
-      <Group
-        title="Server status and logs"
-        footer="The server's process, its live log, the system and a debug report for issues."
-      >
+      <Group title="Server status and logs" footer="The server's process, log and a debug report.">
         <Row title="Diagnostics" subtitle="Moved to its own page.">
           <Action onClick={() => openSettings("diagnostics")}>Open Diagnostics</Action>
         </Row>
       </Group>
-      <Group title="Setup" footer="Each agent signs in on its own; RustCode never stores its credentials.">
+      <Group title="Setup">
         <Row
           title="Set up your agents again"
-          subtitle="Walks through finding each agent, signing it in and checking that it runs."
+          subtitle="Find each harness, sign it in and check that it runs."
         >
           <Action onClick={() => setOnboarding(true)}>Run setup again</Action>
         </Row>
@@ -1533,10 +1535,7 @@ function AdvancedPage() {
 
 function AboutPage() {
   return (
-    <Group
-      title="Version"
-      footer="RustCode is open source. The licences of everything it ships are in its release."
-    >
+    <Group title="Version" footer="RustCode is open source; its licences ship in each release.">
       <AppVersion />
       <UpdateChannelRow />
       <AutoInstallRow />
@@ -1561,11 +1560,7 @@ function UpdateChannelRow() {
   return (
     <Row
       title="Update channel"
-      subtitle={
-        channel === "beta"
-          ? "Beta: newer betas show here and at the foot of the sidebar."
-          : "Stable releases only. Betas of the next version are skipped."
-      }
+      subtitle={channel === "beta" ? "Beta: also offers betas of the next version." : "Stable releases only."}
     >
       <Choice
         label="Update channel"
@@ -1591,7 +1586,8 @@ function AutoInstallRow() {
   return (
     <Row
       title="Install updates automatically"
-      subtitle="Installs a newer release and reopens RustCode once no thread is working. A running turn is never interrupted."
+      subtitle="Install a newer release once no thread is working."
+      hint="RustCode reopens by itself. A running turn is never interrupted."
     >
       <Switch label="Install updates automatically" checked={enabled} onChange={setAutoInstall} />
     </Row>

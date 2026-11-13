@@ -396,6 +396,13 @@ async fn call(
                     .to_owned(),
         };
     }
+    if version < super::ONE_WAY_VERSION && super::names_wait(tool, &args) {
+        return CallAnswer {
+            success: false,
+            content: "error: one-way message_session needs a newer RustCode app. Nothing was sent."
+                .to_owned(),
+        };
+    }
     // The same for a file an older app would drop, instead of attaching it silently
     // nowhere.
     if version < super::ATTACHMENT_VERSION && super::carries_attachments(tool, &args) {

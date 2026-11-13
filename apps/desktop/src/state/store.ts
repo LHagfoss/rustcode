@@ -95,6 +95,7 @@ import {
 import { dismissOverlays } from "../lib/overlays";
 import { trashName } from "../lib/platform";
 import { setShellTransport, shellCall } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
 import {
@@ -162,6 +163,7 @@ import {
 } from "./headerButtons";
 import {
   answerOrchestration,
+  clearWaitingLinks,
   interruptedLinks,
   linkFinished,
   linkStarted,
@@ -249,6 +251,7 @@ import {
   MAX_DELEGATES_TOTAL,
   MIN_DELEGATES_PER_THREAD,
   MIN_DELEGATES_TOTAL,
+  parseDelivered,
 } from "./orchestration";
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
@@ -775,11 +778,7 @@ export const SETTINGS_DEFAULTS = {
 };
 
 function stored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
+  return readStorage(key);
 }
 
 /** A boolean kept as "1"/"0", or the default when it was never set. */
@@ -834,12 +833,9 @@ export function loadTotalLimit(): number {
   return total;
 }
 
+/** Storage can be unavailable (private window); the setting just does not persist. */
 export function store(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Storage can be unavailable (private window); the setting just does not persist.
-  }
+  writeStorage(key, value);
 }
 
 function storedJson<T>(key: string, fallback: T): T {
@@ -3695,7 +3691,15 @@ export function setArchived(id: string, on: boolean) {
   if (on && get().selectedId === id) startNewThread();
 }
 
-export async function renameThread(id: string, title: string): Promise<boolean> {
+/**
+ * Renames a thread. `user` is a name the user typed: the thread records that they chose it, and an
+ * agent naming its own thread with `update_session` leaves it alone (issue 3599).
+ */
+export async function renameThread(
+  id: string,
+  title: string,
+  options: { user?: boolean } = {},
+): Promise<boolean> {
   // A thread's name lives on the computer that owns it, and renaming one is that computer's
   // folder (`thread_rename` is this shell's): another machine's thread is not renamed from here.
   if (threadIsRemote(id)) {
@@ -3703,7 +3707,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
     return false;
   }
   try {
-    const saved = await shellCall<string>("thread_rename", { id, title });
+    const saved = await shellCall<string>("thread_rename", { id, title, user: !!options.user });
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: saved } : x)) }));
     updateThread(id, (t) => ({ ...t, title: saved }));
     return true;
@@ -4347,7 +4351,13 @@ export function sendDecisionFor(
  * engine will not take one now. Exported for the wake a busy parent gets for a child's question
  * (state/host.ts `sendWake`), which is sent by the same rule as a typed message.
  */
-export async function steer(id: string, text: string, extras?: ComposeExtras): Promise<boolean> {
+export async function steer(
+  id: string,
+  text: string,
+  extras?: ComposeExtras,
+  sender?: string,
+  link?: string,
+): Promise<boolean> {
   const thread = get().threads[id];
   // What the turn reads: the typed text with its command, links and long pastes in place.
   const full = composedText(text, extras ?? emptyExtras);
@@ -4370,7 +4380,29 @@ export async function steer(id: string, text: string, extras?: ComposeExtras): P
     const sessionId = splitThreadKey(id).id;
     const result = (await conn.request(
       Method.steer,
-      prompt ? { sessionId, text: full, prompt } : { sessionId, text: full },
+      {
+        sessionId,
+        text: full,
+        ...(prompt ? { prompt } : {}),
+        ...(sender && parseDelivered(text)
+          ? {
+              _meta: {
+                rustcode: {
+                  origin: {
+                    kind: "agent",
+                    threads: [
+                      {
+                        sessionId: sender,
+                        title: parseDelivered(text)?.title ?? "",
+                        ...(link ? { linkId: link } : {}),
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : {}),
+      },
       10_000,
     )) as JsonObject | null;
     if (result?.accepted !== true) return false;
@@ -4400,7 +4432,7 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
     removeQueued(id, queuedId);
     return restartWith(id, item.text, item.extras ?? emptyExtras);
   }
-  if (await steer(id, item.text, item.extras)) {
+  if (await steer(id, item.text, item.extras, item.from, item.link)) {
     removeQueued(id, queuedId);
     glideAway(id, item);
     // A delegate's message that was waiting: the turn it went into answers its link.
@@ -4437,6 +4469,7 @@ export async function resumeQueue(id: string): Promise<boolean> {
   await runPrompt(id, next.text, next.extras, {
     fromView: next.fromView,
     link: next.link,
+    sender: next.from,
     resumeLinks: next.resume,
     wake: next.wake,
     wakeLinks: next.wakeLinks,
@@ -4746,6 +4779,7 @@ export async function runPrompt(
   options: {
     fromView?: boolean;
     link?: string;
+    sender?: string;
     /**
      * The links a restart severed and this resume turn answers (`resumeInterrupted`): started as
      * working when its turn begins and settled when it ends, as a link's own turn leaves its link
@@ -4907,6 +4941,20 @@ export async function runPrompt(
     request._meta = {
       rustcode: {
         access: permissionModeOf(get(), id),
+        ...(options.sender && parseDelivered(text)
+          ? {
+              origin: {
+                kind: "agent",
+                threads: [
+                  {
+                    sessionId: options.sender,
+                    title: parseDelivered(text)?.title ?? "",
+                    ...(options.link ? { linkId: options.link } : {}),
+                  },
+                ],
+              },
+            }
+          : {}),
         ...(options.autoCompact ? { autoCompact: true } : {}),
       },
     };
@@ -6348,6 +6396,7 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  * Whatever fails is reported in one toast for the selection, not one per thread.
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
+  if (status === "done") clearWaitingLinks(ids.filter((id) => !threadIsRemote(id)));
   const remote = ids.filter(threadIsRemote);
   const remoteRequests = remote.map(async (id) => {
     const conn = connectionForThread(id);

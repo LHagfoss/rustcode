@@ -282,6 +282,7 @@ pub(crate) async fn run_prompt(
     terminal_backlog: Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
     terminal_overflow: Arc<AtomicBool>,
     text: String,
+    origin: Option<serde_json::Value>,
     clients: SessionClients,
     client: Arc<reqwest::Client>,
     auto_approve: bool,
@@ -472,6 +473,9 @@ pub(crate) async fn run_prompt(
             let mut state = state.lock().await;
             let is_first = !crate::config::session_has_content(&state.history);
             record_prompt(&mut state, &session_id, &text);
+            if let Some(message) = state.history.last_mut() {
+                message.origin = origin.clone();
+            }
             is_first
         };
         if is_first_prompt {

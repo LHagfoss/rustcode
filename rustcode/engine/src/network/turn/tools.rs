@@ -196,8 +196,10 @@ fn append_pending_steers(state: &mut AppState, turn_session_id: &str) {
     if state.active_session_id != turn_session_id {
         return;
     }
-    for text in state.take_steers_for_history(turn_session_id) {
-        state.history.push(ChatMessage::new("user", text));
+    for steer in state.take_steer_records_for_history(turn_session_id) {
+        let mut message = ChatMessage::new("user", steer.text);
+        message.origin = steer.origin;
+        state.history.push(message);
     }
 }
 
@@ -2868,12 +2870,13 @@ mod tests {
     use super::super::{GroundedArtifactEvidence, TurnContext};
     use super::{
         BatchOutcomeCounts, REVERIFICATION_ACTION, append_finalized_tool_batch,
-        apply_round_stagnation, apply_stale_round, batch_invalidates_read_recovery,
-        benign_shell_wrapper_failure, bounded_malformed_tool_history,
-        content_bearing_inspection_status, grounded_artifact_recovery_message,
-        incomplete_tool_result, loop_signal_event, mutation_batch_guidance, record_round_output,
-        scheduled_tool_calls, selected_tool_call_indices, should_apply_loop_recovery,
-        take_deferred_batch, targeted_no_progress_guidance, tool_changes_workspace,
+        append_pending_steers, apply_round_stagnation, apply_stale_round,
+        batch_invalidates_read_recovery, benign_shell_wrapper_failure,
+        bounded_malformed_tool_history, content_bearing_inspection_status,
+        grounded_artifact_recovery_message, incomplete_tool_result, loop_signal_event,
+        mutation_batch_guidance, record_round_output, scheduled_tool_calls,
+        selected_tool_call_indices, should_apply_loop_recovery, take_deferred_batch,
+        targeted_no_progress_guidance, tool_changes_workspace,
     };
     use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;
@@ -3033,6 +3036,16 @@ mod tests {
                 pending: 1,
             }
         );
+    }
+
+    #[test]
+    fn delivered_steer_keeps_its_structured_origin_in_history() {
+        let (mut state, session_id) = steerable_state();
+        assert!(state.queue_steer("review this".to_owned()));
+        let origin = serde_json::json!({"kind": "agent", "threads": [{"sessionId": "sender"}]});
+        state.pending_steers.last_mut().unwrap().origin = Some(origin.clone());
+        append_pending_steers(&mut state, &session_id);
+        assert_eq!(state.history.last().unwrap().origin.as_ref(), Some(&origin));
     }
 
     #[test]

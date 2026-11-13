@@ -1121,7 +1121,7 @@ async fn handle_enter_inner(
                     );
                 } else {
                     let new_title = tokens[1..].join(" ");
-                    crate::config::save_session_title(&s.active_session_id, &new_title);
+                    crate::config::save_user_session_title(&s.active_session_id, &new_title);
                     s.invalidate_session_title_cache();
                     s.set_transient_notice(format!("Thread title renamed to \"{}\"", new_title));
                 }

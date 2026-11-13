@@ -6,6 +6,7 @@
 // (the values in index.css) are all there is.
 
 import { arr, type Json, obj, str } from "../acp/jsonrpc";
+import { readStorage, writeStorage } from "./storage";
 
 export const ThemeMethod = {
   list: "_rustcode/themes",
@@ -205,17 +206,14 @@ export function applyTheme(theme: Theme, root: HTMLElement = document.documentEl
     else root.style.setProperty(cssName(t), theme.tokens[t]);
   }
   root.dataset.radius = theme.radius;
-  try {
-    localStorage.setItem(CACHE, JSON.stringify(theme));
-  } catch {
-    // Not kept in a private window: the next start paints the default first.
-  }
+  // Not kept in a private window: the next start paints the default first.
+  writeStorage(CACHE, JSON.stringify(theme));
 }
 
 /** Paints the last applied theme before the first render, so a custom theme does not flash. */
 export function applyCachedTheme(): void {
   try {
-    const raw = localStorage.getItem(CACHE);
+    const raw = readStorage(CACHE);
     const theme = raw ? parseTheme(JSON.parse(raw) as Json) : undefined;
     if (theme) applyTheme(theme);
   } catch {

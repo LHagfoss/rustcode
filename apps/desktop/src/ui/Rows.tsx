@@ -44,7 +44,7 @@ import { splitReply } from "../smartui/parse";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { stateOf } from "../state/host";
-import { LINK_LABEL } from "../state/orchestration";
+import { LINK_LABEL, parseDelivered } from "../state/orchestration";
 import {
   editMessage,
   forkThread,
@@ -104,7 +104,13 @@ export const UserRow = memo(function UserRow({
 }) {
   const [open, setOpen] = useState(false);
   const { text, images: markers } = useMemo(() => splitImageMarkers(item.text), [item.text]);
-  const markdown = useMemo(() => messageMarkdown(text), [text]);
+  // A message another thread sent with its id: the heading becomes a link to that thread, and the
+  // ids under it are not shown. One from before the ids reads as it was written.
+  const sender = useMemo(() => {
+    const parsed = parseDelivered(text);
+    return parsed?.session ? { ...parsed, session: parsed.session } : null;
+  }, [text]);
+  const markdown = useMemo(() => messageMarkdown(sender ? sender.body : text), [sender, text]);
   const body = useRef<HTMLDivElement>(null);
   const [long, setLong] = useState(false);
   useLayoutEffect(() => {
@@ -190,6 +196,20 @@ export const UserRow = memo(function UserRow({
           !text && "hidden",
         )}
       >
+        {sender && (
+          <div className="mb-1 text-callout text-fg-muted">
+            From thread{" "}
+            <button
+              type="button"
+              title="Open thread"
+              onClick={() => selectThread(sender.session)}
+              className="rounded-sm text-fg underline decoration-fg-faint underline-offset-2 hover:decoration-fg"
+            >
+              {sender.title || "untitled"}
+            </button>{" "}
+            (agent)
+          </div>
+        )}
         <div
           ref={body}
           className={cx(

@@ -553,6 +553,10 @@ impl HarnessMirror {
     /// Note a prompt the app or a device is about to send, so the device sees
     /// it in the transcript.
     pub(crate) fn note_prompt(&self, text: &str) {
+        self.note_prompt_with_origin(text, None);
+    }
+
+    pub(crate) fn note_prompt_with_origin(&self, text: &str, origin: Option<serde_json::Value>) {
         let text = text.trim();
         if text.is_empty() {
             return;
@@ -564,6 +568,7 @@ impl HarnessMirror {
             .is_some_and(|message| message.role == "user" && message.content == text);
         if !echoed {
             let mut message = ChatMessage::new("user", text.to_owned());
+            message.origin = origin;
             message.timestamp = now();
             state.push(message);
         }

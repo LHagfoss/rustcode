@@ -5,6 +5,7 @@
 
 import { clip } from "./clip";
 import { hasShell, shellCall } from "./shell";
+import { readFlag, writeFlag } from "./storage";
 
 export interface LinkMeta {
   title?: string;
@@ -48,20 +49,12 @@ const MAX_ACTIVE = 4;
 export const LINK_PREVIEWS_DEFAULT = true;
 
 export function linkPreviewsEnabled(): boolean {
-  try {
-    const raw = localStorage.getItem(KEY);
-    return raw === null ? LINK_PREVIEWS_DEFAULT : raw === "1";
-  } catch {
-    return LINK_PREVIEWS_DEFAULT;
-  }
+  return readFlag(KEY, LINK_PREVIEWS_DEFAULT);
 }
 
 export function setLinkPreviews(on: boolean) {
-  try {
-    localStorage.setItem(KEY, on ? "1" : "0");
-  } catch {
-    // Not persisted in a private window.
-  }
+  // Not persisted in a private window.
+  writeFlag(KEY, on);
 }
 
 export function linkMetaCached(url: string): LinkMeta | null {

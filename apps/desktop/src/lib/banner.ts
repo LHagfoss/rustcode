@@ -8,6 +8,7 @@
 import { useSyncExternalStore } from "react";
 import { isTauri } from "../acp/transport";
 import { shellCall } from "./shell";
+import { readStorage, writeStorage } from "./storage";
 
 export type BannerStyle = "ascii" | "picture";
 
@@ -43,20 +44,12 @@ export interface BannerSetting {
 }
 
 function read(key: string): string {
-  try {
-    return localStorage.getItem(key) ?? "";
-  } catch {
-    return "";
-  }
+  return readStorage(key) ?? "";
 }
 
 function write(key: string, value: string) {
-  try {
-    if (value) localStorage.setItem(key, value);
-    else localStorage.removeItem(key);
-  } catch {
-    // Not kept in a private window.
-  }
+  // Not kept in a private window.
+  writeStorage(key, value || null);
 }
 
 /** A stored whole number held to 0..max; anything unreadable is the default. */

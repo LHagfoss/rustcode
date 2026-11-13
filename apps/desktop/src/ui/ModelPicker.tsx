@@ -1,15 +1,15 @@
-// The composer's model pill: the model and, beside its name, its effort. It opens a narrow card: a
-// rail of harness icons on the left (the current harness first) and, beside it, a search over the
-// browsed harness's models with the current one checked; typing searches every harness. The card
-// is as tall as the longest list it can show, up to the room the window has, and only the list
-// scrolls. Picking a model turns the card to its second step: the model's levels, Fast mode and
-// the harness's logins (a row at the foot of the list goes there too). What the thread's harness
-// cannot do is greyed out with the reason, from capability flags. The two steps are different
-// sizes (the list is wider than the effort menu), so the card measures the step it shows and
-// glides between the two, anchored to the pill.
+// The composer's model pill: the model and, beside its name, its effort. It opens one card for
+// everything the pill says: a rail of harness icons on the left (the current harness first), the
+// browsed harness's models in the middle (a search over them, the current one checked; typing
+// searches every harness), and on the right the current model's effort levels, Fast mode and the
+// harness's logins with what is left of each plan. Nothing switches between a model step and an
+// effort step: picking a model keeps the card open and moves the keyboard to its levels. The card
+// is as tall as the longest list it can show, up to the room the window has, and only the lists
+// scroll. What the thread's harness cannot do is greyed out with the reason, from capability flags.
 
-import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { harnessPlanKey, leftPercent, shownWindow } from "../acp/rustcode";
 import {
   type ConfigOption,
   effortLabel,
@@ -20,7 +20,6 @@ import {
 } from "../acp/types";
 import { clip } from "../lib/clip";
 import { matchModels } from "../lib/modelSearch";
-import { observeSize } from "../lib/resize";
 import {
   controlDisabledReason,
   defaultEffort,
@@ -31,6 +30,7 @@ import {
 } from "../state/harness";
 import { accountSignedOut, newThreadAccountOn } from "../state/logins";
 import {
+  type CachedPlan,
   effortMemory,
   ensureHarnessModels,
   harnessesOn,
@@ -41,6 +41,7 @@ import {
   pickNewThreadAccount,
   pickNewThreadChoice,
   setConfigOption,
+  shownPlan,
   switchThreadAccount,
   switchThreadHarness,
   useApp,
@@ -156,6 +157,23 @@ export interface AccountChip {
   gone?: boolean;
   /** The plan read found this login signed out: rows say so and are muted. */
   signedOut?: boolean;
+  /** What is left of the login's shortest plan window, in percent, when a plan read has it. */
+  left?: number | null;
+}
+
+/**
+ * What is left of a login's plan, in percent: its shortest window, read from the plan cache the
+ * composer's meter reads. Null when no plan was read for it (or the login is gone).
+ */
+export function accountLeft(
+  cache: Record<string, CachedPlan>,
+  harness: string,
+  account: string | null | undefined,
+): number | null {
+  if (account === undefined) return null;
+  const { plan } = shownPlan(undefined, cache[harnessPlanKey(harness, account)]);
+  const window = plan ? shownWindow(plan) : undefined;
+  return window ? leftPercent(window) : null;
 }
 
 /** A harness's logins, only when there is a choice to make between them. */
@@ -166,18 +184,6 @@ export function shownAccounts(chips: AccountChip[]): AccountChip[] {
 /** Whether a chip can be pressed: not while a turn runs, not a login that is gone or signed out. */
 function chipPressable(chip: AccountChip, disabled: boolean): boolean {
   return !disabled && !chip.gone && !chip.signedOut;
-}
-
-/**
- * The chip ← (`-1`) or → (`1`) lands on from chip `from`, skipping those that cannot be pressed;
- * `-1` when there is none that way (the row does not wrap).
- */
-export function moveChip(chips: AccountChip[], from: number, dir: 1 | -1, disabled: boolean): number {
-  for (let at = from + dir; at >= 0 && at < chips.length; at += dir) {
-    const chip = chips[at];
-    if (chip && chipPressable(chip, disabled)) return at;
-  }
-  return -1;
 }
 
 /**
@@ -244,31 +250,6 @@ export function repeatedModelNames(models: Choice[]): Set<string> {
   return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
 }
 
-/** The card's own size in px: the step it shows, measured rather than guessed. */
-export interface CardSize {
-  width: number;
-  height: number;
-}
-
-/**
- * Reports the size `node` has as soon as it is given one, and again whenever it changes, until the
- * returned call. The card's step is in a portal Radix mounts after this component's own effects, so
- * an effect on `open` runs before there is anything to measure: the card measures itself from its
- * ref, which React calls exactly when the node mounts and with `null` when it goes.
- */
-export function measureCard(node: HTMLElement | null, onSize: (size: CardSize) => void): () => void {
-  if (!node) return () => {};
-  const measure = () => {
-    const rect = node.getBoundingClientRect();
-    onSize({ width: rect.width, height: rect.height });
-  };
-  // The opening size is measured mid-commit, so it paints without the transition; later changes
-  // come from `observeSize`, which reports on a frame of its own rather than inside the observer's
-  // delivery (writing layout there is what raises a ResizeObserver loop warning).
-  measure();
-  return observeSize(node, measure);
-}
-
 /** One harness's models in the list, with what the list needs to offer them. */
 interface ModelGroup {
   harness: Harness;
@@ -303,33 +284,32 @@ export function traitsLabel({
 /** A model row's height, the search row's and the list's padding, as the card draws them. */
 const ROW_PX = 28;
 const LIST_CHROME_PX = 48;
-/** The effort and account row above the search: its 28px and the card's 4px gutter. */
-const TRAITS_ROW_PX = 32;
+/** What the right column needs to show a model's levels and its logins without scrolling much. */
+const COLUMN_PX = 264;
 /** A rail button (`size-9`) and the gap under it, and the rail's own padding. */
 const RAIL_ITEM_PX = 40;
 const RAIL_CHROME_PX = 8;
 
 /**
- * The card's floor: as tall as the longest harness's list (or the rail, when it is longer), so
- * moving along the rail never makes the card jump. `CARD_MAX` still caps it to the window's room.
+ * The card's floor: as tall as the longest harness's list (or the rail, when it is longer, or the
+ * effort column), so moving along the rail never makes the card jump. `CARD_MAX` still caps it to
+ * the window's room.
  */
-export function panelHeight(groups: { models: unknown[] }[], hasTraits = false): number {
+export function panelHeight(groups: { models: unknown[] }[]): number {
   const rows = Math.max(1, ...groups.map((group) => group.models.length));
-  return (
-    Math.max(LIST_CHROME_PX + rows * ROW_PX, RAIL_CHROME_PX + groups.length * RAIL_ITEM_PX) +
-    (hasTraits ? TRAITS_ROW_PX : 0)
-  );
+  return Math.max(LIST_CHROME_PX + rows * ROW_PX, RAIL_CHROME_PX + groups.length * RAIL_ITEM_PX, COLUMN_PX);
 }
 
 /**
- * The card's second step, for the model the thread runs: its levels from lowest to highest with the
- * default marked, a reset, Fast mode when the model has it, and the harness's logins while it has
- * more than one. A harness without an effort control says why in the levels' place. Its header
- * goes back to the models.
+ * The card's right column: the current model's effort levels from lowest to highest with the
+ * default marked, a reset, Fast mode when the model has it, and the harness's logins with what is
+ * left of each one's plan. It sits beside the model list, so the model, its effort and its account
+ * are chosen in one card with no step between them. A harness without an effort control says why in
+ * the levels' place. ↑↓ walk its rows, ← returns to the search, and a printed character goes back to
+ * the search to filter (the card's `onKeyDown`).
  */
-function EffortPanel({
+function TraitsColumn({
   model,
-  onBack,
   levels,
   effort,
   defaultLevel,
@@ -341,9 +321,11 @@ function EffortPanel({
   onEffort,
   onFast,
   onPickAccount,
+  onSearch,
+  focusAsk,
+  askTick,
 }: {
   model: string;
-  onBack: () => void;
   levels: string[];
   effort?: string | null;
   defaultLevel: string | null;
@@ -355,78 +337,53 @@ function EffortPanel({
   onEffort: (effort: string) => void;
   onFast: (on: boolean) => void;
   onPickAccount: (id: string | null) => void;
+  /** Hands the keyboard back to the model search. */
+  onSearch: () => void;
+  /** Set while a model was just picked: focus follows the checked level as it settles. */
+  focusAsk: RefObject<boolean>;
+  /** Changes with every model pick, so picking the model already run asks again. */
+  askTick: number;
 }) {
+  const column = useRef<HTMLDivElement>(null);
   const showLevels = !effortReason && levels.length > 0;
-  const panel = useRef<HTMLDivElement>(null);
-  const scroller = useRef<HTMLDivElement>(null);
-  // Whether the list runs on under its foot, so the card says it scrolls instead of cutting a row.
-  const [more, setMore] = useState(false);
-  const measureMore = useCallback(() => {
-    const list = scroller.current;
-    if (list) setMore(list.scrollHeight - list.scrollTop - list.clientHeight > 1);
-  }, []);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures when the rows change
+  const choosable = accounts.length > 1;
+  const empty = !showLevels && !effortReason && !fast && accounts.length === 0;
+  // The card hands the keyboard to the column's checked row (or its first) after a model pick, and
+  // again when the level settles a render later (a model brings the level it was last left on).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refocus when the model or level changes
   useEffect(() => {
-    const list = scroller.current;
-    measureMore();
-    return list ? observeSize(list, measureMore) : undefined;
-  }, [measureMore, levels.length, accounts.length, fast]);
-  // The one chip the ↑↓ rows stop at: the selected login, else the first that can be pressed.
-  const stop = (() => {
-    const chosen = accounts.findIndex((chip) => chip.selected && chipPressable(chip, accountsDisabled));
-    return chosen >= 0 ? chosen : accounts.findIndex((chip) => chipPressable(chip, accountsDisabled));
-  })();
-  // The card opens on this step's checked row (or its first), so ↑↓ and ⏎ act at once; a model just
-  // picked settles its level a render later, and focus follows it there.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refocus when the checked level changes
-  useEffect(() => {
-    const root = panel.current;
+    if (!focusAsk.current) return;
+    const root = column.current;
     const row =
       root?.querySelector<HTMLElement>("[data-menu-row][aria-checked='true']:not([disabled])") ??
       root?.querySelector<HTMLElement>("[data-menu-row]:not([disabled])");
     row?.focus({ preventScroll: true });
-  }, [effort]);
+  }, [model, effort, askTick]);
   return (
     <div
-      ref={panel}
+      ref={column}
+      role="group"
+      aria-label={`Effort and account for ${model}`}
+      data-traits=""
       onKeyDown={(event) => {
-        // ← → walk the account chips; ← on the first one (or Backspace anywhere) goes back.
-        const onChip = (event.target as HTMLElement).closest<HTMLElement>("[data-chip]");
-        if (onChip && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        if (event.key === "ArrowLeft") {
           event.preventDefault();
-          const chips = [...(panel.current?.querySelectorAll<HTMLElement>("[data-chip]") ?? [])];
-          const next = moveChip(
-            accounts,
-            chips.indexOf(onChip),
-            event.key === "ArrowRight" ? 1 : -1,
-            accountsDisabled,
-          );
-          if (next >= 0) chips[next]?.focus();
-          else if (event.key === "ArrowLeft") onBack();
-        } else if (event.key === "ArrowLeft" || event.key === "Backspace") {
-          event.preventDefault();
-          onBack();
+          onSearch();
+        } else if (event.key.length === 1 && event.key !== " ") {
+          // Type to filter: the character lands in the search the focus moves to.
+          onSearch();
         } else menuKeys(event);
       }}
-      style={{ maxHeight: CARD_MAX }}
-      className="flex w-[240px] flex-col overflow-hidden p-1"
+      className="flex w-[208px] shrink-0 flex-col border-border border-s bg-fill-subtle max-sm:w-[160px]"
     >
-      <button
-        type="button"
-        onClick={onBack}
-        className="flex h-7 w-full min-w-0 shrink-0 items-center gap-1 rounded-xl px-2 text-body text-fg-muted hover:bg-fill hover:text-fg focus-visible:bg-fill"
-      >
-        <ChevronLeft size={13} strokeWidth={2.5} className="shrink-0" />
-        <span className="min-w-0 truncate">{model}</span>
-      </button>
-      <div className={menuSeparator} />
-      <div
-        ref={scroller}
-        onScroll={measureMore}
-        style={more ? ({ "--rc-fade": "24px" } as CSSProperties) : undefined}
-        className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto", more && "fade-bottom")}
-      >
-        {(showLevels || effortReason) && <div className={menuLabel}>Effort</div>}
+      <div className="scroll-stable min-h-0 flex-1 p-1">
+        {(showLevels || effortReason) && (
+          <div className={cx(menuLabel, "flex items-baseline gap-1.5")}>
+            <span>Effort</span>
+            <span className="min-w-0 truncate text-fg-muted">{model}</span>
+          </div>
+        )}
         {effortReason && (
           <p data-menu-static className="flex items-start gap-1.5 px-2 pb-1 text-caption text-fg-faint">
             <Lock size={10} className="mt-[2px] shrink-0" />
@@ -440,6 +397,7 @@ function EffortPanel({
                 key={level}
                 role="menuitemradio"
                 aria-checked={level === effort}
+                close={false}
                 onSelect={() => onEffort(level)}
               >
                 <span className="min-w-0 flex-1 truncate">{effortLabel(level)}</span>
@@ -454,6 +412,7 @@ function EffortPanel({
               </CardMenuItem>
             ))}
             <CardMenuItem
+              close={false}
               disabled={!defaultLevel || defaultLevel === effort}
               onSelect={() => defaultLevel && onEffort(defaultLevel)}
               className="text-fg-muted disabled:cursor-default disabled:opacity-40"
@@ -475,52 +434,80 @@ function EffortPanel({
             {(showLevels || effortReason || fast) && <div className={menuSeparator} />}
             <div className={cx(menuLabel, "flex items-baseline gap-1.5")}>
               <span>Account</span>
-              {accountsDisabled && <span className="ms-auto">Stop the turn to switch</span>}
+              {accountsDisabled && choosable && (
+                <span className="ms-auto min-w-0 truncate">Stop the turn to switch</span>
+              )}
             </div>
-            <div
-              role="radiogroup"
-              aria-label="Account"
-              data-menu-group=""
-              className="mb-1 grid grid-cols-2 gap-0.5 rounded-2xl bg-fill p-0.5"
-            >
-              {accounts.map((chip, index) => {
-                const pressable = chipPressable(chip, accountsDisabled);
-                return (
-                  <Tooltip
-                    key={chip.id ?? chip.name}
-                    label={chip.signedOut ? "This account is not signed in" : undefined}
-                  >
-                    <button
-                      type="button"
-                      role="radio"
-                      data-chip=""
-                      data-menu-row={index === stop ? "" : undefined}
-                      aria-checked={chip.selected}
-                      aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
-                      disabled={!pressable}
-                      onClick={() => {
-                        if (chip.id !== undefined) onPickAccount(chip.id);
-                      }}
-                      className={cx(
-                        "flex h-6 min-w-0 items-center justify-center gap-1 rounded-xl px-2 text-callout outline-none disabled:cursor-default focus-visible:bg-fill-strong",
-                        chip.selected ? "bg-knob text-knob-fg shadow-knob" : "text-fg-muted hover:text-fg",
-                        !pressable && !chip.selected && "opacity-40",
-                        chip.signedOut && "text-fg-faint",
-                        chip.gone && "italic",
-                        // An odd one out takes the last row whole instead of sitting in half of it.
-                        index === accounts.length - 1 && index % 2 === 0 && "col-span-2",
-                      )}
-                    >
-                      <UserRound size={12} strokeWidth={1.75} className="shrink-0" />
-                      <span title={chip.name} className="min-w-0 truncate">
-                        {chip.name}
+            {accounts.map((chip) => {
+              const pressable = choosable && chipPressable(chip, accountsDisabled);
+              const row = (
+                <>
+                  <UserRound size={12} strokeWidth={1.75} className="shrink-0 text-fg-muted" />
+                  <span title={chip.name} className="min-w-0 flex-1 truncate">
+                    {chip.name}
+                  </span>
+                  {chip.signedOut ? (
+                    <span className="shrink-0 text-caption text-fg-faint">Signed out</span>
+                  ) : (
+                    chip.left != null && (
+                      <span
+                        className={cx(
+                          "shrink-0 text-caption tabular",
+                          chip.left < 20 ? "text-warning" : "text-fg-faint",
+                        )}
+                      >
+                        {chip.left}% left
                       </span>
-                    </button>
-                  </Tooltip>
+                    )
+                  )}
+                  {choosable && (
+                    <Check
+                      size={13}
+                      strokeWidth={2.5}
+                      className={cx("shrink-0 text-accent", !chip.selected && "invisible")}
+                    />
+                  )}
+                </>
+              );
+              // One login is a line of the card, not a choice to make.
+              if (!choosable)
+                return (
+                  <div
+                    key={chip.id ?? chip.name}
+                    data-menu-static
+                    className="flex min-h-7 items-center gap-2 px-2 py-1 text-body"
+                  >
+                    {row}
+                  </div>
                 );
-              })}
-            </div>
+              return (
+                <CardMenuItem
+                  key={chip.id ?? chip.name}
+                  role="menuitemradio"
+                  aria-checked={chip.selected}
+                  aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
+                  close={false}
+                  disabled={!pressable}
+                  onSelect={() => {
+                    if (chip.id !== undefined) onPickAccount(chip.id);
+                  }}
+                  className={cx(
+                    "disabled:cursor-default",
+                    !pressable && !chip.selected && "opacity-40",
+                    chip.signedOut && "text-fg-faint",
+                    chip.gone && "italic",
+                  )}
+                >
+                  {row}
+                </CardMenuItem>
+              );
+            })}
           </>
+        )}
+        {empty && (
+          <p data-menu-static className="px-2 py-1.5 text-caption text-fg-faint">
+            Nothing to set for this model.
+          </p>
         )}
       </div>
     </div>
@@ -532,23 +519,30 @@ function EffortPanel({
  * marked) and beside it a search that opens focused over that harness's models, the current model
  * checked; typing searches every harness. ↑↓ move the highlight (the current model until the user
  * moves), ⏎ picks it, ← at the start of the search moves to the rail, where ↑↓ move between
- * harnesses and → returns to the search.
+ * harnesses and → returns to the search; → at the end of the search moves to the effort column.
  */
 function ModelPanel({
   groups,
   current,
   onPick,
-  traits,
-  onTraits,
+  onColumn,
+  keepFocus,
+  onSearchFocus,
+  fieldRef,
   maxHeight = CARD_MAX,
 }: {
   groups: ModelGroup[];
   current?: string | null;
   onPick: (group: ModelGroup, value: string) => void;
-  /** What the second step holds for the current model (its effort), and the row that opens it. */
-  traits?: string | null;
-  onTraits?: () => void;
-  /** The card's ceiling for this step: less the note under it when the list has one. */
+  /** Moves the keyboard to the effort column; absent when the card has none. */
+  onColumn?: () => void;
+  /** A model was just picked: the card's focus is in the effort column and stays there. */
+  keepFocus: RefObject<boolean>;
+  /** The search took the keyboard: nothing is waiting for the effort column any more. */
+  onSearchFocus: () => void;
+  /** The search field, so the effort column can hand the keyboard back to it. */
+  fieldRef: RefObject<HTMLInputElement | null>;
+  /** The card's ceiling: less the note under it when the list has one. */
   maxHeight?: string;
 }) {
   const [filter, setFilter] = useState("");
@@ -557,7 +551,7 @@ function ModelPanel({
   // The row the user moved to, named rather than numbered: the rows change under it when the
   // provider, the filter or the current harness changes.
   const [picked, setPicked] = useState<{ harness: string; model: string } | null>(null);
-  const field = useRef<HTMLInputElement>(null);
+  const field = fieldRef;
   const scroller = useRef<HTMLDivElement>(null);
   const rail = useRef<HTMLDivElement>(null);
   const searching = !!filter.trim();
@@ -578,8 +572,11 @@ function ModelPanel({
     : -1;
   const active = Math.max(found, 0);
   const row = rows[active];
+  // The card opens with the search focused, unless a model pick just remounted the list (another
+  // harness's model) and the keyboard belongs to the levels it brought.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on mount only
   useEffect(() => {
-    field.current?.focus();
+    if (!keepFocus.current) field.current?.focus();
   }, []);
   useEffect(() => {
     scroller.current?.querySelector(`[id="model-row-${active}"]`)?.scrollIntoView({ block: "nearest" });
@@ -602,22 +599,9 @@ function ModelPanel({
   const railButtons = () => [...(rail.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
   return (
     <div
-      className="flex min-h-0 w-[min(360px,calc(100vw-32px))] flex-1 flex-col"
-      style={{ minHeight: `min(${panelHeight(groups, !!traits)}px, ${maxHeight})` }}
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      style={{ minHeight: `min(${panelHeight(groups)}px, ${maxHeight})` }}
     >
-      {traits && onTraits && (
-        <div className="shrink-0 p-1 pb-0">
-          <button
-            type="button"
-            onClick={onTraits}
-            className="flex h-7 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-body hover:bg-fill focus-visible:bg-fill"
-          >
-            <span className="min-w-0 flex-1 truncate text-start text-fg-muted">Effort and account</span>
-            <span className="shrink-0 text-fg">{traits}</span>
-            <ChevronRight size={13} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
-          </button>
-        </div>
-      )}
       <div className="flex min-h-0 flex-1">
         <div
           ref={rail}
@@ -667,12 +651,26 @@ function ModelPanel({
         </div>
         <div
           className="flex min-h-0 min-w-0 flex-1 flex-col"
+          onFocus={(e) => {
+            if (e.target === field.current) onSearchFocus();
+          }}
           onKeyDown={(e) => {
             if (e.key === "ArrowLeft") {
               if (!caretAtStart()) return;
               e.preventDefault();
               const buttons = railButtons();
               (buttons.find((b) => b.getAttribute("aria-pressed") === "true") ?? buttons[0])?.focus();
+            } else if (e.key === "ArrowRight") {
+              // → from the end of the typed text leaves the list for the effort column.
+              const input = field.current;
+              const atEnd =
+                !input ||
+                document.activeElement !== input ||
+                (input.selectionStart === input.value.length && input.selectionEnd === input.value.length);
+              if (onColumn && atEnd) {
+                e.preventDefault();
+                onColumn();
+              }
             } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault();
               highlight(movePickerIndex(active, e.key === "ArrowDown" ? 1 : -1, rows.length));
@@ -798,6 +796,7 @@ export function pillLabel(model?: string | null, compact = false): string {
 }
 
 const NO_CONFIG: ConfigOption[] = [];
+const NO_PLANS: Record<string, CachedPlan> = {};
 
 /** A built-in model list known from any open thread, for a new thread before it exists. */
 function firstConfig(threads: Record<string, ThreadState>): ConfigOption[] {
@@ -898,15 +897,15 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     if (host) void loadMachineHarnesses(host, { report: false });
   }, [host]);
   const [open, setOpenState] = useState(false);
-  // The card's step: the model list, or the picked model's effort, Fast mode and logins.
-  const [step, setStep] = useState<"models" | "traits">("models");
-  // Every opening starts on the models, drawn at the size it needs rather than the last one's.
+  // Bumped by a model pick so the column re-reads its focus request (a ref alone renders nothing).
+  const [columnAsk, setColumnAsk] = useState(0);
+  // The search field and the effort column share the keyboard: a model pick hands it to the levels
+  // (`focusColumn`), and the search takes it back (← from the column, a printed character, a click).
+  const field = useRef<HTMLInputElement | null>(null);
+  const columnFocus = useRef(false);
+  // Every opening starts on the search.
   const setOpen = (next: boolean) => {
-    if (next) {
-      setStep("models");
-      setBox(null);
-      setGliding(false);
-    }
+    if (next) columnFocus.current = false;
     setOpenState(next);
   };
   // `/model` asks the picker to open (store.runCommandAction).
@@ -915,9 +914,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   useEffect(() => {
     if (ask === seenAsk.current) return;
     seenAsk.current = ask;
-    setStep("models");
-    setBox(null);
-    setGliding(false);
+    columnFocus.current = false;
     setOpenState(true);
   }, [ask]);
 
@@ -942,6 +939,9 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const account = isNew ? newAccount : (thread?.harness?.account ?? null);
   // A running thread keeps its login, as it keeps its harness.
   const accountBlocked = !isNew && !!thread?.running;
+  // What is left of each login's plan: this computer's plan read, which a paired machine's logins
+  // have no part in.
+  const planCache = useApp((s) => (host ? NO_PLANS : s.planCache));
   const engineReady = useApp((s) => (host ? s.connectedHosts.includes(host) : s.status === "ready"));
 
   const { models, efforts, model, effort } = pickerModels(thread, harness, effective, knownConfig);
@@ -981,6 +981,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       id: a.id,
       name: a.name,
       selected,
+      left: accountLeft(planCache, h.id, a.id),
       // A definite `needs_login` is as signed out as a row the plan read saw.
       signedOut: a.auth === "needs_login" || accountSignedOut(h.id, a.id, signedOut),
     });
@@ -990,7 +991,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     const chips: AccountChip[] = [];
     // A thread from before this harness had accounts keeps its own sign-in:
     // it stays readable and is only moved by hand.
-    if (!own && named.length) chips.push({ id: null, name: "Original login", selected: true });
+    if (!own && named.length)
+      chips.push({
+        id: null,
+        name: "Original login",
+        selected: true,
+        left: accountLeft(planCache, h.id, null),
+      });
     // Its login was removed from Settings; without another, its way back is
     // the harness's own sign-in.
     if (own && !named.some((a) => a.id === own)) {
@@ -1024,8 +1031,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       models: dedupeModels(listed, isCurrent ? model : (h.last?.model ?? null)),
     };
   });
-  // The current harness's logins, and only when there is more than one to choose between.
-  const accountRows = harness ? shownAccounts(accountChips(harness)) : [];
+  // The current harness's logins: the column lists them all (a single one as a line with what is
+  // left of its plan), while the pill names one only when there is a choice between them.
+  const allAccounts = harness ? accountChips(harness) : [];
+  const accountRows = shownAccounts(allAccounts);
 
   // An external harness lists its models only when asked: ask for every harness on show once the
   // card opens, so a group never sits empty behind a "no models" line it could have answered.
@@ -1051,8 +1060,11 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     const entry = group.harness.models.find((m) => m.id === value);
     const remembered = rememberedEffort(effortMemory(), group.harness.id, value);
     const levels = orderEfforts(entry?.efforts ?? []);
-    if (levels.length) setStep("traits");
-    else setOpen(false);
+    // A model with levels or logins keeps the card open for them; the keyboard follows to its levels.
+    if (levels.length) {
+      columnFocus.current = true;
+      setColumnAsk((n) => n + 1);
+    } else setOpen(false);
     const same = group.harness.id === providerId;
     if (same) {
       if (thread) void writeModelPick(thread.id, modelThreadWrites(entry, value, effort, remembered, true));
@@ -1096,30 +1108,6 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     fast: !!fast,
   });
 
-  // The card's own size: whatever step it shows, measured rather than guessed, so the two steps
-  // (the wide list, the narrow effort menu) glide into each other instead of jumping. The size an
-  // opening lands on is painted without the transition; only a step changing after it animates.
-  const [box, setBox] = useState<CardSize | null>(null);
-  const [gliding, setGliding] = useState(false);
-  const stopMeasuring = useRef<(() => void) | null>(null);
-  const glideFrame = useRef(0);
-  // The card's step mounts with the portal, after this component's own effects, so the measurement
-  // hangs off the node's ref instead of an effect on `open`: it starts when the node is there.
-  const measureBody = useCallback((node: HTMLDivElement | null) => {
-    stopMeasuring.current?.();
-    stopMeasuring.current = null;
-    cancelAnimationFrame(glideFrame.current);
-    if (!node) return;
-    stopMeasuring.current = measureCard(node, (size) =>
-      setBox((current) =>
-        current && current.width === size.width && current.height === size.height ? current : size,
-      ),
-    );
-    // Radix publishes the room it has a frame after the card mounts, and that first size is not a
-    // step change: it is committed with the transition still off.
-    glideFrame.current = requestAnimationFrame(() => setGliding(true));
-  }, []);
-
   // Nothing to show until the engine lists harnesses (or the thread its options): a placeholder pill.
   if (!harnesses && !thread?.configOptions.length) {
     return (
@@ -1129,28 +1117,29 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     );
   }
 
-  const traitsStep = step === "traits" && !!traits;
   // The note under a list takes its room from the card's ceiling, never from the list's last row.
-  const cardMax = !traitsStep && modelReason ? `calc(${CARD_MAX} - ${NOTE_PX}px)` : CARD_MAX;
+  const cardMax = modelReason ? `calc(${CARD_MAX} - ${NOTE_PX}px)` : CARD_MAX;
+  const focusSearch = () => field.current?.focus();
+  const focusColumn = () => {
+    const root = document.querySelector<HTMLElement>("[data-traits]");
+    const row =
+      root?.querySelector<HTMLElement>("[data-menu-row][aria-checked='true']:not([disabled])") ??
+      root?.querySelector<HTMLElement>("[data-menu-row]:not([disabled])");
+    row?.focus({ preventScroll: true });
+  };
   return (
     <CardPopover
       open={open}
       onOpenChange={setOpen}
       role="dialog"
       label="Model"
-      // The card focuses its own control (the search field, which the panel does on mount; the
-      // effort step its checked row) so the arrow keys act on what the card is for the moment it opens.
+      // The card focuses its own control (the search field, which the panel does on mount) so the
+      // arrow keys act on what the card is for the moment it opens.
       onOpenAutoFocus={(event) => event.preventDefault()}
-      // Escape steps back out of the effort menu before it closes the card; the models step has no
-      // step behind it, so there Escape closes as it always did.
-      onEscapeKeyDown={(event) => {
-        if (!traitsStep) return;
-        event.preventDefault();
-        setStep("models");
-      }}
-      // The card takes the size its step measured; the step itself is never wider than the window
-      // allows, and only the model list scrolls. Its own ceiling is the full card, note included:
-      // the list gives the note its room (`cardMax`), so the two together never pass it.
+      // One card, so Escape closes it from wherever the keyboard is.
+      // The card is as wide as its three parts need, and never wider than the window allows; only
+      // the lists scroll. Its own ceiling is the full card, note included: the list gives the note
+      // its room (`cardMax`), so the two together never pass it.
       className="flex flex-col overflow-hidden! p-0"
       style={{ maxHeight: CARD_MAX }}
       trigger={
@@ -1172,59 +1161,47 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       }
     >
       <div
-        // The card itself never scrolls (the popover's own `overflow-y-auto` would win over a plain
-        // `overflow-hidden`): only the model list does, so the header, search and rail stay put. While
-        // the two steps swap places the card clips what it is growing out of or into.
-        className={cx(
-          "min-h-0 overflow-hidden",
-          gliding && "transition-[width,height] duration-200 ease-snappy motion-reduce:transition-none",
-        )}
-        style={box ? { width: box.width, height: box.height } : undefined}
+        style={{ maxHeight: CARD_MAX }}
+        className="flex min-h-0 w-[min(560px,calc(100vw-32px))] flex-col overflow-hidden"
       >
-        {/* The ceiling matters as much as the measurement: a long list that grew the body past it
-            would make the clipped card taller than the room it has, and nothing would scroll. Capped,
-            the body hands the list the room left under the note, and the list scrolls in it. */}
-        <div
-          ref={measureBody}
-          style={{ maxHeight: CARD_MAX }}
-          className="flex w-max max-w-[min(360px,calc(100vw-32px))] flex-col"
-        >
-          {traitsStep ? (
-            <EffortPanel
-              model={displayName ?? label}
-              onBack={() => setStep("models")}
-              levels={efforts}
-              effort={effort}
-              defaultLevel={defaultLevel}
-              effortReason={effortReason}
-              fast={!!fast}
-              fastOn={!!fast?.currentBool}
-              accounts={accountRows}
-              accountsDisabled={accountBlocked || (!!harness && !!unavailableReason(harness))}
-              onEffort={pickEffort}
-              onFast={(on) => thread && void setConfigOption(thread.id, "fast", on)}
-              onPickAccount={pickAccount}
-            />
-          ) : (
-            <>
-              <ModelPanel
-                key={providerId}
-                groups={groups}
-                current={model}
-                onPick={pickModel}
-                traits={traits}
-                onTraits={() => setStep("traits")}
-                maxHeight={cardMax}
-              />
-              {modelReason && (
-                <p className="flex shrink-0 items-start gap-1.5 border-border border-t px-3 py-2 text-caption text-fg-faint">
-                  <Lock size={10} className="mt-[2px] shrink-0" />
-                  <span>{modelReason}</span>
-                </p>
-              )}
-            </>
-          )}
+        <div className="flex min-h-0 flex-1">
+          <ModelPanel
+            key={providerId}
+            groups={groups}
+            current={model}
+            onPick={pickModel}
+            onColumn={focusColumn}
+            keepFocus={columnFocus}
+            onSearchFocus={() => {
+              columnFocus.current = false;
+            }}
+            fieldRef={field}
+            maxHeight={cardMax}
+          />
+          <TraitsColumn
+            model={displayName ?? label}
+            levels={efforts}
+            effort={effort}
+            defaultLevel={defaultLevel}
+            effortReason={effortReason}
+            fast={!!fast}
+            fastOn={!!fast?.currentBool}
+            accounts={allAccounts}
+            accountsDisabled={accountBlocked || (!!harness && !!unavailableReason(harness))}
+            onEffort={pickEffort}
+            onFast={(on) => thread && void setConfigOption(thread.id, "fast", on)}
+            onPickAccount={pickAccount}
+            onSearch={focusSearch}
+            focusAsk={columnFocus}
+            askTick={columnAsk}
+          />
         </div>
+        {modelReason && (
+          <p className="flex shrink-0 items-start gap-1.5 border-border border-t px-3 py-2 text-caption text-fg-faint">
+            <Lock size={10} className="mt-[2px] shrink-0" />
+            <span>{modelReason}</span>
+          </p>
+        )}
       </div>
     </CardPopover>
   );

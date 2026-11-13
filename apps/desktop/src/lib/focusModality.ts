@@ -5,20 +5,14 @@
 // ring in index.css is drawn under it (docs/design.md › Focus). Tab is suppressed outside
 // form and modal contexts unless the user enables navigation between controls.
 
+import { readFlag, writeFlag } from "./storage";
+
 const TAB_FOCUS = "rustcode.tabMovesFocus";
 export function tabMovesFocus(): boolean {
-  try {
-    return localStorage.getItem(TAB_FOCUS) === "1";
-  } catch {
-    return false;
-  }
+  return readFlag(TAB_FOCUS, false);
 }
 export function setTabMovesFocus(value: boolean): void {
-  try {
-    localStorage.setItem(TAB_FOCUS, value ? "1" : "0");
-  } catch {
-    /* Storage unavailable. */
-  }
+  writeFlag(TAB_FOCUS, value);
 }
 /** A bare Tab or Shift+Tab; Ctrl, Cmd and Alt with Tab belong to shortcuts and the system. */
 export function shouldBlockTab(

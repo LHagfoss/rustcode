@@ -112,16 +112,28 @@ const parseCapabilities = (v: Json): Capabilities => {
 };
 
 /** A harness's own folder is read, never written. */
-const HARNESS_SKILLS_NOTE =
-  "Read from Claude Code's own folder; RustCode never writes there. Turning one off stops RustCode from offering it, and tells a new external-harness thread not to use it.";
+const HARNESS_SKILLS_NOTE = "Read from Claude Code's own folder; RustCode never writes there.";
+
+const HARNESS_SKILLS_HINT =
+  "Turning one off stops RustCode from offering it, and tells a new external-harness thread not to use it.";
 
 /** Where a skill was found, in the words people use. */
-const SOURCE: Record<string, { label: string; order: number; note?: string }> = {
+const SOURCE: Record<string, { label: string; order: number; note?: string; hint?: string }> = {
   workspace: { label: "Project", order: 0 },
-  "claude-project": { label: "Claude Code (project)", order: 1, note: HARNESS_SKILLS_NOTE },
+  "claude-project": {
+    label: "Claude Code (project)",
+    order: 1,
+    note: HARNESS_SKILLS_NOTE,
+    hint: HARNESS_SKILLS_HINT,
+  },
   rustcode: { label: "User", order: 2 },
   universal: { label: "Shared (~/.agents)", order: 3 },
-  "claude-user": { label: "Claude Code (~/.claude)", order: 4, note: HARNESS_SKILLS_NOTE },
+  "claude-user": {
+    label: "Claude Code (~/.claude)",
+    order: 4,
+    note: HARNESS_SKILLS_NOTE,
+    hint: HARNESS_SKILLS_HINT,
+  },
   configured: { label: "Configured", order: 5 },
   builtin: { label: "Built-in", order: 6 },
 };
@@ -243,7 +255,8 @@ export function CapabilitiesPage() {
               <Plus size={12} /> Add server to all
             </Action>
           }
-          footer="The definition is added to every connected machine. Environment variables and headers stay on this machine; the others get the definition with blank values, and a target that would carry a secret is added here only."
+          footer="Added to every connected machine. Environment variables and headers stay on this one."
+          hint="The others get the definition with blank values, and a target that would carry a secret is added here only."
         >
           {!addingAll && (
             <Row
@@ -784,6 +797,7 @@ function SkillsSection({
           key={source}
           title={<span className="font-medium text-body text-fg-muted">{sourceOf(source).label}</span>}
           footer={sourceOf(source).note}
+          hint={sourceOf(source).hint}
         >
           {skills.map((s) => (
             <Row
