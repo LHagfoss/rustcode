@@ -46,7 +46,10 @@
   --color-surface: var(--rc-surface);
   --color-surface-2: var(--rc-surface-2);
   --color-surface-3: var(--rc-surface-3);
-  --color-border: var(--rc-border);
+  /* `border-border`, `divide-border` and `bg-border` are the soft separator, not the theme's own
+     `border` token (see `--rc-separator`). */
+  --color-border: var(--rc-separator);
+  --color-separator: var(--rc-separator);
   --color-border-strong: var(--rc-border-strong);
   --color-fg: var(--rc-text);
   --color-fg-muted: var(--rc-text-muted);
@@ -190,6 +193,11 @@
 
 /* Derived from the tokens above: never set by a theme. */
 :root {
+  /* The one separator: a hairline between rows, under a header, above a footer, a panel edge. A few
+     per cent of the text colour, so it is a soft step lighter than any surface in the dark theme
+     and a soft step darker in the light one, whatever opaque `border` a theme brings (a theme's
+     `border` was a solid colour that read as a dark, hard line on a raised popover). */
+  --rc-separator: color-mix(in srgb, var(--rc-text) 5%, transparent);
   --rc-fill-subtle: color-mix(in srgb, var(--rc-text) 4.5%, transparent);
   --rc-fill: color-mix(in srgb, var(--rc-text) 8%, transparent);
   --rc-fill-strong: color-mix(in srgb, var(--rc-text) 13%, transparent);
@@ -216,8 +224,8 @@
   --rc-diff-del-word: color-mix(in srgb, var(--rc-danger) 34%, transparent);
   /* Shadows lift, they do not loom: about half a theme's shadow colour, kept close to the edge. */
   --rc-shadow-soft: color-mix(in srgb, var(--rc-shadow-color) 50%, transparent);
-  --rc-shadow-1: 0 1px 1px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border);
-  --rc-shadow-2: 0 2px 8px var(--rc-shadow-soft), 0 0 0 1px var(--rc-border);
+  --rc-shadow-1: 0 1px 1px var(--rc-shadow-soft), 0 0 0 1px var(--rc-separator);
+  --rc-shadow-2: 0 2px 8px var(--rc-shadow-soft), 0 0 0 1px var(--rc-separator);
   --rc-radius-xs: 6px;
   --rc-radius-sm: 8px;
   --rc-radius-md: 10px;
@@ -424,6 +432,47 @@
   mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rc-fade, 56px)), transparent);
   /* design-lint: allow (mask alpha, not a colour) */
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rc-fade, 56px)), transparent);
+}
+
+/*
+ * Inset separators. A divider stops where the content's padding does instead of running to the
+ * container's edges: `rule-t` / `rule-b` draw a hairline along the top or bottom edge, `rule-l` /
+ * `rule-r` along a side, and `rule-rows` puts one above every child but the first. The inset is
+ * `--rc-rule-inset` (default 16px, a card's inline padding; a vertical rule insets by the same
+ * amount from top and bottom, set on the element to match its padding). It is a background, so it
+ * adds no border width and needs no positioning.
+ */
+@utility rule-t {
+  background-image: linear-gradient(var(--rc-separator), var(--rc-separator));
+  background-repeat: no-repeat;
+  background-size: calc(100% - 2 * var(--rc-rule-inset, 1rem)) 1px;
+  background-position: center top;
+}
+@utility rule-b {
+  background-image: linear-gradient(var(--rc-separator), var(--rc-separator));
+  background-repeat: no-repeat;
+  background-size: calc(100% - 2 * var(--rc-rule-inset, 1rem)) 1px;
+  background-position: center bottom;
+}
+@utility rule-l {
+  background-image: linear-gradient(var(--rc-separator), var(--rc-separator));
+  background-repeat: no-repeat;
+  background-size: 1px calc(100% - 2 * var(--rc-rule-inset, 1rem));
+  background-position: left center;
+}
+@utility rule-r {
+  background-image: linear-gradient(var(--rc-separator), var(--rc-separator));
+  background-repeat: no-repeat;
+  background-size: 1px calc(100% - 2 * var(--rc-rule-inset, 1rem));
+  background-position: right center;
+}
+@utility rule-rows {
+  & > * + * {
+    background-image: linear-gradient(var(--rc-separator), var(--rc-separator));
+    background-repeat: no-repeat;
+    background-size: calc(100% - 2 * var(--rc-rule-inset, 1rem)) 1px;
+    background-position: center top;
+  }
 }
 
 @utility tabular {
@@ -1161,7 +1210,7 @@
   @apply glass-filter;
   box-shadow:
     0 2px 8px -4px var(--rc-shadow-soft),
-    0 0 0 1px var(--rc-border);
+    0 0 0 1px var(--rc-separator);
   transition: background-color 160ms ease-out;
 }
 .rc-toast {
@@ -1173,7 +1222,7 @@
   @apply glass-filter;
   box-shadow:
     0 3px 12px -4px var(--rc-shadow-soft),
-    0 0 0 1px var(--rc-border);
+    0 0 0 1px var(--rc-separator);
 }
 /* The box clips to its own corner, so the attachment thumbnails and a scrolled field stop at the
    curve instead of painting over it. Nothing in it opens a popover: they are portalled. */

@@ -108,12 +108,12 @@ import {
   useApp,
 } from "../state/store";
 import {
-  applyUpdate,
   checkIfStale,
   checkNow,
   installProgress,
   loadChannels,
   offersUpdate,
+  requestUpdate,
   setAutoInstall,
   setUpdateChannel,
   showWhatsNew,
@@ -1031,7 +1031,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3">
+    <div className="rc-expand rule-t flex flex-col gap-2 px-4 py-3">
       <div className="flex items-center gap-2">
         <input
           autoFocus
@@ -1336,6 +1336,7 @@ function AppVersion() {
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
   const background = useUpdates((s) => s.error);
+  const waiting = useUpdates((s) => s.waiting);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const shellVersion = useUpdates((s) => s.version);
@@ -1357,7 +1358,7 @@ function AppVersion() {
     }
     setError(null);
     // One install path: the sidebar row shows the same progress when it is visible.
-    const failed = await applyUpdate();
+    const failed = await requestUpdate();
     if (failed) setError(failed);
   };
   const { fraction, step } = installProgress(progress);
@@ -1366,13 +1367,15 @@ function AppVersion() {
     ? failure
     : installing
       ? step
-      : info && !info.available
-        ? "RustCode is up to date."
-        : info?.development
-          ? "A development build; it does not update itself."
-          : offered
-            ? (info?.installNote ?? undefined)
-            : undefined;
+      : waiting
+        ? "Waiting for threads to finish, then reopens."
+        : info && !info.available
+          ? "RustCode is up to date."
+          : info?.development
+            ? "A development build; it does not update itself."
+            : offered
+              ? (info?.installNote ?? undefined)
+              : undefined;
   return (
     <Row
       title={`RustCode ${version}`}
@@ -1835,7 +1838,7 @@ export function Settings() {
 function PanelHeader({ label }: { label: string }) {
   const resets = useRowResets();
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-4 pe-2">
+    <header className="rule-b flex h-12 shrink-0 items-center gap-3 ps-4 pe-2">
       <nav aria-label="Settings breadcrumb" className="min-w-0">
         <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-body">
           <li className="shrink-0 font-medium text-fg-muted">Settings</li>

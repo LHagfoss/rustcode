@@ -15,6 +15,7 @@ mod pty;
 mod service;
 mod smartui;
 mod threads;
+mod update_log;
 mod updater;
 mod webview;
 

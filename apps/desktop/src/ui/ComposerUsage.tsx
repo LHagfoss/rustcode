@@ -280,6 +280,7 @@ export function ContextInspector({
       </div>
       {comparable && (
         <Segments
+          fill
           value={view}
           options={[
             { value: "before", label: "Before" },
@@ -398,7 +399,7 @@ export function ContextInspector({
         </div>
       )}
       {active && (
-        <div className="flex flex-col gap-1 border-border border-t px-0.5 pt-2">
+        <div className="mx-0.5 flex flex-col gap-1 border-border border-t pt-2">
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-callout font-medium">{active.name}</span>
             <span className="text-caption text-fg-muted tabular">
@@ -424,8 +425,8 @@ export function ContextInspector({
         </div>
       )}
       {shown.length > 0 && (
-        <ul className="flex flex-col border-border border-t pt-1">
-          <li className="flex items-center gap-2 px-0.5 py-[2px] text-caption">
+        <ul className="mx-0.5 flex flex-col border-border border-t pt-1">
+          <li className="flex items-center gap-2 py-[2px] text-caption">
             <span className="size-2 shrink-0 rounded-xs bg-fill-strong shadow-[inset_0_0_0_0.5px_var(--rc-border-strong)]" />
             <span className="flex-1 text-fg-muted">Free</span>
             <span className="text-fg-muted tabular">{formatTokens(free)}</span>
@@ -462,7 +463,7 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
   ].filter(Boolean);
   if (!parts.length && !notes.length) return null;
   return (
-    <div className="flex flex-col gap-0.5 border-border border-t px-0.5 pt-2 text-caption text-fg-muted">
+    <div className="mx-0.5 flex flex-col gap-0.5 border-border border-t pt-2 text-caption text-fg-muted">
       {parts.length > 0 && <span className="tabular">Thread total: {parts.join(" · ")}</span>}
       {notes.length > 0 && <span className="text-fg-faint">{notes.join(" · ")}</span>}
     </div>
@@ -514,7 +515,7 @@ function UsageCard({
         </span>
       )}
       {usage?.size ? (
-        <div className="border-border border-t pt-3">
+        <div className="mx-0.5 border-border border-t pt-3">
           <ContextInspector
             usage={usage}
             before={before}
