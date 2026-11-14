@@ -230,7 +230,7 @@ function RememberedGroup() {
             className="text-accent hover:underline"
             onClick={() => openSettings("agents")}
           >
-            Trusted accounts in Harnesses › Orchestration…
+            “Let delegates use my named accounts without asking” in Harnesses › Orchestration…
           </button>
         </>
       }

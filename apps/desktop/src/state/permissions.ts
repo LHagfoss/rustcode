@@ -48,7 +48,7 @@ export const ALWAYS_ASKS: { title: string; why: string }[] = [
   },
   {
     title: "A delegate on a named account",
-    why: "Starting a thread on a signed-in account spends that account's usage, so each account is approved once per thread.",
+    why: "Starting a thread on a signed-in account spends that account's usage, so each account is approved once per thread, unless you trust this computer's accounts (Harnesses › Orchestration).",
   },
   {
     title: "Outside apps",
