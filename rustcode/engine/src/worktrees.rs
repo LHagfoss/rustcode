@@ -1225,6 +1225,55 @@ fn branch_is_covered(repo: &Path, base: &str, branch: &str, head: Option<&str>) 
             })
 }
 
+/// [`cleanup`] for a caller that read its pull request earlier: a delegate may
+/// have renamed its branch since, leaving the recorded name stale. The
+/// worktree's branch now is the one cleanup compares against, so its pull
+/// request is read here, as `thread_status` reads it, and cleanup accepts the
+/// rename only when that pull request merged and nothing would be lost. Runs
+/// on a blocking thread. This is the body of `_rustcode/worktrees/cleanup` and
+/// of an outside agent's `cleanup_worktree`.
+pub(crate) async fn cleanup_resolving_rename(
+    path: PathBuf,
+    branch: Option<String>,
+    head_sha: Option<String>,
+    merged: bool,
+) -> Result<Result<Value, WorktreeError>, tokio::task::JoinError> {
+    let probe = path.clone();
+    let renamed =
+        match tokio::task::spawn_blocking(move || crate::pull_requests::current_branch(&probe))
+            .await
+        {
+            Ok(Some(now))
+                if branch
+                    .as_deref()
+                    .is_some_and(|asked| !asked.trim().is_empty() && asked != now) =>
+            {
+                match crate::pull_requests::for_branch(&path, &now).await {
+                    Ok(Some(pull)) => Some(RenamedPull {
+                        branch: now,
+                        number: Some(pull.number),
+                        head_sha: pull.head_sha,
+                        merged: pull.merged,
+                    }),
+                    // No pull request on it, or gh could not answer: cleanup
+                    // refuses the changed branch instead of guessing what it is.
+                    Ok(None) | Err(_) => None,
+                }
+            }
+            _ => None,
+        };
+    tokio::task::spawn_blocking(move || {
+        cleanup(
+            &path,
+            branch.as_deref(),
+            head_sha.as_deref(),
+            merged,
+            renamed.as_ref(),
+        )
+    })
+    .await
+}
+
 /// Remove a merged delegate's worktree and branch (#3153), refusing when the
 /// worktree is dirty, its commits are not on the base branch, it is on a
 /// different branch than the caller named, or it holds ignored files that are

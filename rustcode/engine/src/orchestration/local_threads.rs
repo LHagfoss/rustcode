@@ -27,9 +27,9 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    ClientCapabilities, ContentBlock, InitializeRequest, LoadSessionRequest, NewSessionRequest,
-    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, StopReason, TextContent,
+    CancelNotification, ClientCapabilities, ContentBlock, InitializeRequest, LoadSessionRequest,
+    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, StopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use serde_json::{Map, Value, json};
@@ -1542,6 +1542,15 @@ impl Engine {
         }
     }
 
+    /// `session/cancel`: stop the turn running on `session_id`, as the app's
+    /// stop button does. The engine's registry is shared by every connection,
+    /// so a thread another client opened is stopped too.
+    fn cancel(&self, session_id: &str) -> Result<(), String> {
+        self.connection
+            .send_notification(CancelNotification::new(session_id.to_owned()))
+            .map_err(acp_message)
+    }
+
     /// `_rustcode/steer`: whether the running turn took the message.
     async fn steer(&self, session_id: &str, text: &str) -> Result<bool, String> {
         let request = crate::acp::steer::SteerRequest {
@@ -1621,6 +1630,51 @@ fn acp_message(error: agent_client_protocol::Error) -> String {
 }
 
 // ---------------------------------------------------------------- the words
+
+/// `interrupt_session` for an outside agent: stop the turn running on another
+/// thread of this computer. The links under it are not walked here (an outside
+/// agent has none); the answer says whether a turn was running.
+pub(crate) async fn interrupt(caller: &str, args: &Value) -> Value {
+    if let Err(remote) = super::local::local_machine(args) {
+        return remote;
+    }
+    let target = args
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if target.is_empty() {
+        return error("invalid", "session_id is required");
+    }
+    if target == caller {
+        return error("not_allowed", "a thread cannot stop itself");
+    }
+    let Some(meta) = crate::config::session_meta_by_id(target) else {
+        return error("not_found", "no thread has that id; use list_sessions");
+    };
+    if !super::local::may_reach(caller, target, &meta) {
+        return not_allowed(
+            "that thread is in another project; acting across projects is off. Turn on “Let agents read threads in other projects” in Settings › Harnesses. Nothing was stopped.",
+        );
+    }
+    let was_running = crate::thread_status::is_active(target);
+    let engine = match Engine::open(Access::Ask).await {
+        Ok(engine) => engine,
+        Err(refusal) => return refusal,
+    };
+    if let Err(reason) = engine.cancel(target) {
+        return failed(format!("the stop did not reach the engine: {reason}"));
+    }
+    let mut answer = json!({
+        "session_id": target,
+        "interrupted": was_running,
+        "status": crate::thread_status::current(target).as_str(),
+    });
+    if !was_running {
+        answer["note"] = json!("no turn was running on that thread");
+    }
+    answer
+}
 
 /// The message as the other thread receives it: who it is from, then the text.
 fn delivered(text: &str, from: &str) -> String {

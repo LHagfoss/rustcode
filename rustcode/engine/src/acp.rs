@@ -3682,53 +3682,16 @@ async fn serve_connection(
                     .unwrap_or_default();
                 connection.spawn(async move {
                     let _tracked = crate::pull_requests::MergeGuard(request.merge_id.clone());
-                    let branch = match request
-                        .branch
-                        .clone()
-                        .filter(|branch| !branch.trim().is_empty())
-                    {
-                        Some(branch) => Some(branch),
-                        // Resolving HEAD runs git, so it does not hold an async worker.
-                        None => {
-                            let cwd = request.cwd.clone();
-                            tokio::task::spawn_blocking(move || {
-                                crate::pull_requests::current_branch(&cwd)
-                            })
-                            .await
-                            .ok()
-                            .flatten()
-                        }
-                    };
-                    let number = match (request.number, branch.as_deref()) {
-                        (Some(number), _) => Some(number),
-                        (None, Some(branch)) => {
-                            match crate::pull_requests::for_branch(&request.cwd, branch).await {
-                                Ok(pull) => pull.map(|pull| pull.number),
-                                Err(error) => {
-                                    return responder
-                                        .respond(serde_json::json!({ "error": error }));
-                                }
-                            }
-                        }
-                        (None, None) => None,
-                    };
-                    let Some(number) = number else {
-                        return responder.respond(serde_json::json!({
-                            "error": {
-                                "code": "not_found",
-                                "message": "no pull request matches this thread's branch; open one first"
-                            }
-                        }));
-                    };
                     let wait = std::time::Duration::from_millis(
                         request
                             .timeout_ms
                             .unwrap_or(crate::pull_requests::MAX_MERGE_WAIT_SECS * 1000)
                             .max(1000),
                     );
-                    let answer = match crate::pull_requests::merge_when_green(
+                    let answer = match crate::pull_requests::merge_branch_when_green(
                         &request.cwd,
-                        number,
+                        request.number,
+                        request.branch.clone(),
                         wait,
                         &cancel,
                     )
@@ -3746,48 +3709,12 @@ async fn serve_connection(
         .on_receive_request(
             async move |request: WorktreeCleanupRequest, responder, connection| {
                 connection.spawn(async move {
-                    // A delegate may have renamed its branch after the caller read
-                    // its pull request, leaving the recorded name stale. The
-                    // worktree's branch now is the one cleanup compares against,
-                    // so its pull request is read here, as `thread_status`
-                    // reads it, and cleanup then accepts the rename only when
-                    // that pull request merged and nothing would be lost.
-                    let path = request.path.clone();
-                    let renamed = match tokio::task::spawn_blocking(move || {
-                        crate::pull_requests::current_branch(&path)
-                    })
-                    .await
-                    {
-                        Ok(Some(branch))
-                            if request
-                                .branch
-                                .as_deref()
-                                .is_some_and(|asked| !asked.trim().is_empty() && asked != branch) =>
-                        {
-                            match crate::pull_requests::for_branch(&request.path, &branch).await {
-                                Ok(Some(pull)) => Some(crate::worktrees::RenamedPull {
-                                    branch,
-                                    number: Some(pull.number),
-                                    head_sha: pull.head_sha,
-                                    merged: pull.merged,
-                                }),
-                                // No pull request on it, or gh could not answer:
-                                // cleanup refuses the changed branch instead of
-                                // guessing what the branch is.
-                                Ok(None) | Err(_) => None,
-                            }
-                        }
-                        _ => None,
-                    };
-                    let cleaned = tokio::task::spawn_blocking(move || {
-                        crate::worktrees::cleanup(
-                            &request.path,
-                            request.branch.as_deref(),
-                            request.head_sha.as_deref(),
-                            request.merged,
-                            renamed.as_ref(),
-                        )
-                    })
+                    let cleaned = crate::worktrees::cleanup_resolving_rename(
+                        request.path,
+                        request.branch,
+                        request.head_sha,
+                        request.merged,
+                    )
                     .await;
                     match cleaned {
                         Ok(Ok(cleanup)) => responder.respond(serde_json::json!({ "cleanup": cleanup }))?,
