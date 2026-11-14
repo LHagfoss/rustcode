@@ -20,8 +20,10 @@ import {
   unavailableReason,
   validateDefault,
 } from "../state/harness";
+import { buildHarnessChange } from "../state/harnessAdvanced";
 import { CHECK_STEP_LABEL, currentResult, resultTone } from "../state/harnessCheck";
-import { runHarnessCheck, useHarnessChecks } from "../state/harnessChecks";
+import { forgetHarnessCheck, runHarnessCheck, useHarnessChecks } from "../state/harnessChecks";
+import { type HarnessForm, hasFormErrors, validateHarnessForm } from "../state/harnessForm";
 import { accountToSignIn } from "../state/logins";
 import {
   accountSlug,
@@ -29,12 +31,15 @@ import {
   askConfirm,
   checkHarnessAccounts,
   ensureHarnessModels,
+  errorText,
   type NewThreadChoice,
   removeHarness,
   removeHarnessAccount,
+  setHarnessAdvanced,
   setHarnessEnabled,
   useApp,
 } from "../state/store";
+import { HarnessCommandFields } from "./AddHarness";
 import { HarnessIcon } from "./HarnessIcon";
 import { CopyButton } from "./Markdown";
 import { cx, noTextHelpers, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
@@ -366,6 +371,81 @@ export function useAutoDetect() {
   }, []);
 }
 
+function HarnessAdvanced({ harness }: { harness: Harness }) {
+  const [form, setForm] = useState<HarnessForm>(() => ({
+    name: harness.name,
+    executable: harness.command[0] ?? "",
+    args: harness.command.slice(1),
+    env: (harness.env_names ?? []).map((name) => ({ name, value: "" })),
+  }));
+  const [failure, setFailure] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const errors = validateHarnessForm(form);
+  const change = buildHarnessChange(harness, form, harness.env_names ?? []);
+  const dirty = Object.keys(change).length > 1;
+  const save = async () => {
+    if (busy || hasFormErrors(errors)) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      await setHarnessAdvanced(change);
+      forgetHarnessCheck(harness.id);
+      setForm((f) => ({ ...f, env: f.env.map((row) => ({ ...row, value: "" })) }));
+    } catch (error) {
+      setFailure(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <details className="ml-11 text-callout">
+      <summary className="cursor-pointer text-fg-muted">Advanced</summary>
+      <form
+        className="mt-3 flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        <fieldset disabled={busy} className="flex min-w-0 flex-col gap-3">
+          <div className="text-caption text-fg-muted">
+            Command runs directly, with one argument per row. Saved environment values stay masked; type to
+            replace one, or remove its row to clear it.
+          </div>
+          {harness.default_command && (
+            <Action
+              quiet
+              onClick={() =>
+                setForm((f) => ({
+                  ...f,
+                  executable: harness.default_command![0]!,
+                  args: harness.default_command!.slice(1),
+                }))
+              }
+            >
+              Reset to default
+            </Action>
+          )}
+          <HarnessCommandFields
+            form={form}
+            patch={(patch) => setForm((f) => ({ ...f, ...patch }))}
+            shown={errors}
+            saved={form.env.flatMap((row, i) => (harness.env_names?.includes(row.name) ? [i] : []))}
+          />
+          {failure && (
+            <p role="alert" className="whitespace-pre-wrap text-caption text-warning">
+              {failure}
+            </p>
+          )}
+          <Action type="submit" prominent disabled={!dirty || busy || hasFormErrors(errors)}>
+            {busy ? "Saving…" : "Save"}
+          </Action>
+        </fieldset>
+      </form>
+    </details>
+  );
+}
+
 export function HarnessCard({ harness }: { harness: Harness }) {
   const entry = useHarnessChecks((s) => s.byHarness[harness.id]);
   const checking = !!entry && "running" in entry;
@@ -457,6 +537,9 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         </div>
       )}
       {(accountSignIn(harness) || (harness.accounts?.length ?? 0) > 0) && <AccountsList harness={harness} />}
+      {!harness.builtin && (
+        <HarnessAdvanced key={JSON.stringify([harness.command, harness.env_names])} harness={harness} />
+      )}
       {/* A failure's own words; every other end is already the status line. */}
       {(result ? result.state === "error" : harness.error) && !checking && (
         <ErrorDetails

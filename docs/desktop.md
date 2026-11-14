@@ -2066,3 +2066,8 @@ Opening a link starts the app or brings its existing window forward.
 In the command palette, **Copy prompt link** copies the current composer text,
 and **Copy thread link** copies the selected thread's address. A thread's menu
 also offers **Copy link**. Thread links in messages keep their inline navigation.
+
+Settings › Harnesses includes Cursor (the `agent acp` CLI), and an Advanced
+disclosure on every external harness for its executable, arguments and masked
+environment variables. Save re-detects it; Reset to default restores a known
+harness's launch command. See [harnesses.md](harnesses.md).

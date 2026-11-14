@@ -1021,6 +1021,7 @@ export interface Harness {
   known: boolean;
   enabled: boolean;
   command: string[];
+  default_command?: string[];
   /** Names (never values) of the variables a custom harness's process is started with. */
   env_names?: string[];
   installed: boolean;
@@ -1210,6 +1211,9 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         known: bool(o.known) ?? (builtin || LEGACY_KNOWN_HARNESSES.includes(id)),
         enabled: bool(o.enabled) ?? false,
         command: arr(o.command).flatMap((c) => (typeof c === "string" ? [c] : [])),
+        default_command: Array.isArray(o.default_command)
+          ? arr(o.default_command).flatMap((c) => (typeof c === "string" ? [c] : []))
+          : undefined,
         ...envNames(o.env_names),
         installed: bool(o.installed) ?? false,
         version: str(o.version),
