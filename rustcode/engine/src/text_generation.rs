@@ -89,6 +89,7 @@ impl Generator {
             model: self.model.clone(),
             url,
             api_protocol: protocol,
+            send_x_api_key: (self.provider == "anthropic").then_some(true),
             max_output_tokens: Some(2048),
             ..Default::default()
         })
@@ -306,6 +307,7 @@ mod tests {
             };
             let profile = generator.profile().unwrap();
             assert!(profile.api_key.is_none());
+            assert_eq!(profile.send_x_api_key_header(), provider == "anthropic");
             assert_eq!(
                 profile.api_protocol == Some(crate::config::ApiProtocol::AnthropicMessages),
                 provider == "anthropic"
