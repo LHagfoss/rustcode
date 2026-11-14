@@ -16,6 +16,7 @@ import {
   Clock,
   CornerDownRight,
   Hand,
+  ListChecks,
   MessageCircleQuestion,
   ShieldAlert,
 } from "lucide-react";
@@ -30,6 +31,8 @@ import {
   grantAllowed,
   optionScope,
   type PreviewRow,
+  planTitle,
+  proposedPlan,
   type RiskAssessment,
   showsRawInput,
 } from "../lib/approval";
@@ -41,6 +44,7 @@ import {
   type ResolvedApproval,
   selectThread,
 } from "../state/store";
+import { CopyButton, Markdown } from "./Markdown";
 import {
   cx,
   Kbd,
@@ -123,14 +127,17 @@ function useApproval(request: PermissionRequest, risk: RiskAssessment) {
   };
   const byScope = (scope: ReturnType<typeof optionScope>) => options.find((o) => optionScope(o) === scope);
   const decline = byScope("decline");
-  const hour = grants ? byScope("hour") : undefined;
-  const always = grants ? byScope("always") : undefined;
+  // Plan mode's answers are ways to start building (auto-accept edits, ask for each), not grants
+  // for a call: they go in the menu under the engine's own names, never as "Always allow".
+  const plan = proposedPlan(request) !== undefined;
+  const hour = grants && !plan ? byScope("hour") : undefined;
+  const always = grants && !plan ? byScope("always") : undefined;
   // Approve answers this call once; an engine that only offers a standing answer gets that.
   const allow = byScope("once") ?? always;
   const other = options.filter(
     (o) => o !== decline && o !== hour && o !== always && o !== allow && (grants || !isGrant(o)),
   );
-  return { options, pick, decline, hour, always, allow, other };
+  return { options, pick, decline, hour, always, allow, other, plan };
 }
 
 /**
@@ -147,7 +154,7 @@ function ApprovalActions({
   pending?: number;
   answers: ReturnType<typeof useApproval>;
 }) {
-  const { options, pick, decline, allow, hour, always, other } = answers;
+  const { options, pick, decline, allow, hour, always, other, plan } = answers;
   const grants = [hour, always].filter((o): o is PermissionOption => !!o);
   const menu = grants.length > 0 || other.length > 0 || pending > 1;
   const digit = (o: PermissionOption) => options.indexOf(o) + 1;
@@ -156,7 +163,7 @@ function ApprovalActions({
       {menu && (
         <DropdownMenu.Root modal={false}>
           <DropdownMenu.Trigger asChild>
-            <Pill size="sm" quiet aria-label="Allow for longer">
+            <Pill size="sm" quiet aria-label={plan ? "More ways to build" : "Allow for longer"}>
               {grants.length > 0 ? "Grant" : "More"} <ChevronDown size={11} />
             </Pill>
           </DropdownMenu.Trigger>
@@ -196,14 +203,14 @@ function ApprovalActions({
       {decline && (
         <Tooltip label={`${decline.name} (${digit(decline)})`}>
           <Pill size="sm" onClick={() => pick(options.indexOf(decline))}>
-            Decline <Kbd>esc</Kbd>
+            {plan ? "Keep planning" : "Decline"} <Kbd>esc</Kbd>
           </Pill>
         </Tooltip>
       )}
       {allow && (
         <Tooltip label={`${allow.name} (${digit(allow)})`}>
           <Pill size="sm" prominent onClick={() => pick(options.indexOf(allow))}>
-            Approve <Kbd>⏎</Kbd>
+            {plan ? "Build" : "Approve"} <Kbd>⏎</Kbd>
           </Pill>
         </Tooltip>
       )}
@@ -251,6 +258,36 @@ function Preview({ rows }: { rows: PreviewRow[] }) {
   );
 }
 
+/** How tall a proposed plan reads before it folds: most plans fit, a long one is a click away. */
+const PLAN_SHOWN = 360;
+
+/**
+ * Plan mode's proposal, as the plan it is: its Markdown rendered, Copy, and the whole of it a click
+ * away when it runs past the fold. It replaces the raw `{"plan": …}` an unknown tool would show.
+ */
+function PlanProposal({ plan }: { plan: string }) {
+  const [open, setOpen] = useState(false);
+  const long = plan.split("\n").length > 18 || plan.length > 1400;
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md bg-fill-subtle p-3" data-testid="proposed-plan">
+      <div
+        className={cx("selectable min-w-0", !open && long && "overflow-hidden")}
+        style={open || !long ? undefined : { maxHeight: PLAN_SHOWN }}
+      >
+        <Markdown text={plan} />
+      </div>
+      <div className="flex items-center justify-end gap-1">
+        {long && (
+          <Pill size="sm" quiet onClick={() => setOpen(!open)}>
+            {open ? "Collapse" : "Show the whole plan"}
+          </Pill>
+        )}
+        <CopyButton text={plan} iconOnly label="Copy plan" />
+      </div>
+    </div>
+  );
+}
+
 function Shell({ children, label }: { children: React.ReactNode; label: string }) {
   return (
     <section aria-label={label} className="elevated flex flex-col gap-3 p-4 rc-in">
@@ -285,6 +322,33 @@ export function ApprovalRow({
   const rows = approvalPreview(request);
   const note = field(request.input, "reason");
   const tone = RISK_TONE[risk.level];
+  const plan = proposedPlan(request);
+  if (plan !== undefined) {
+    return (
+      <div className="flex flex-col gap-1.5" role="group" aria-label="Plan ready">
+        <div className="flex items-center gap-2">
+          <span className="flex w-[18px] shrink-0 justify-center">
+            <ListChecks size={16} className="text-accent" />
+          </span>
+          <span className="shrink-0 font-medium text-accent text-body">Plan ready</span>
+          <span className="min-w-0 truncate text-callout text-fg-muted">{planTitle(plan)}</span>
+          {pending > 1 && (
+            <span className="shrink-0 text-caption text-fg-muted tabular">
+              {number} of {pending}
+            </span>
+          )}
+        </div>
+        <div className="ml-[26px]">
+          <PlanProposal plan={plan} />
+        </div>
+        {!inBar && (
+          <div className="ml-[26px] flex items-center gap-1.5">
+            <ApprovalActions request={request} pending={pending} answers={answers} />
+          </div>
+        )}
+      </div>
+    );
+  }
   // For a command the block is useful; an edit's diff header already names the file.
   const showBody = rows.length > 0 || request.diffs.length > 0;
   const showInput = rows.length === 0 && showsRawInput(request);
@@ -361,6 +425,7 @@ export function ApprovalNotice({
   const answers = useApproval(request, risk);
   const { options, pick, decline, allow } = answers;
   const tone = RISK_TONE[risk.level];
+  const plan = proposedPlan(request);
   useDigitKeys(keys ? options.length : 0, pick);
   useApprovalKeys(
     keys && decline ? () => pick(options.indexOf(decline)) : undefined,
@@ -371,18 +436,36 @@ export function ApprovalNotice({
       aria-label="Approval needed"
       className="elevated flex min-h-[34px] items-center gap-2 rounded-2xl px-2 py-1 rc-in"
     >
-      <Tooltip label={`${risk.label}${risk.why ? `: ${risk.why}` : ""}`}>
-        <Hand size={14} className={cx("ml-1 shrink-0", tone.icon)} fill="currentColor" fillOpacity={0.2} />
-      </Tooltip>
+      {plan !== undefined ? (
+        <ListChecks size={14} className="ml-1 shrink-0 text-accent" aria-hidden />
+      ) : (
+        <Tooltip label={`${risk.label}${risk.why ? `: ${risk.why}` : ""}`}>
+          <Hand size={14} className={cx("ml-1 shrink-0", tone.icon)} fill="currentColor" fillOpacity={0.2} />
+        </Tooltip>
+      )}
       {from && <span className="max-w-[30%] shrink-0 truncate text-callout text-fg-muted">From {from}</span>}
-      <span className="min-w-0 flex-1 truncate text-callout text-fg-muted">
-        Allow{" "}
-        <span className="font-medium text-body text-fg" title={request.title}>
-          {approvalSubject(request)}
+      {plan !== undefined ? (
+        // Plan mode asks whether to start building, not whether a tool may run.
+        <span className="min-w-0 flex-1 truncate text-callout text-fg-muted">
+          Plan ready
+          {planTitle(plan) && (
+            <>
+              {": "}
+              <span className="font-medium text-body text-fg">{planTitle(plan)}</span>
+            </>
+          )}
+          . Start building?
         </span>
-        ?
-      </span>
-      <RiskBadge risk={risk} />
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-callout text-fg-muted">
+          Allow{" "}
+          <span className="font-medium text-body text-fg" title={request.title}>
+            {approvalSubject(request)}
+          </span>
+          ?
+        </span>
+      )}
+      {plan === undefined && <RiskBadge risk={risk} />}
       {pending > 1 && (
         <span className="shrink-0 text-caption text-fg-muted tabular">
           {number} of {pending}
