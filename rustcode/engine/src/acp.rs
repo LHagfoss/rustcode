@@ -675,6 +675,11 @@ fn apply_client_info(
     info: clients::ClientInfo,
     clients: &clients::SessionClients,
 ) {
+    let secret_clients = clients.clone();
+    state.secret_asker = Some(std::sync::Arc::new(move |request| {
+        let clients = secret_clients.clone();
+        Box::pin(async move { clients.request(None, request).await.ok() })
+    }));
     state.visualization_level = info.visualization_level;
     state.smart_ui = info.smart_ui;
     state.preview_client = preview::preview_client_for(info.preview, clients);

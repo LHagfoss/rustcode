@@ -68,6 +68,7 @@ import {
   Tooltip,
 } from "./primitives";
 import { DiffView } from "./Rows";
+import { SecretCard } from "./SecretCard";
 
 export function orderedOptions(options: PermissionOption[]): PermissionOption[] {
   const rank = (o: PermissionOption) =>
@@ -870,7 +871,9 @@ export function AttentionCard({
   /** The thread's folder, so a path outside it is called out. */
   project?: string;
 }) {
-  return request.question ? (
+  return request.secret ? (
+    <SecretCard key={`${request.rpcId}`} request={request} from={from} />
+  ) : request.question ? (
     <QuestionCard key={`${request.rpcId}`} request={request} from={from} keys={keys} />
   ) : (
     <ApprovalNotice

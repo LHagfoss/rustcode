@@ -5620,6 +5620,7 @@ function reply(
 }
 
 export function answerPermission(request: PermissionRequest, option: PermissionOption | null) {
+  if (request.secret) return;
   const answered = reply(
     request,
     option ? permissionSelected(option.id) : permissionCancelled,
@@ -5859,12 +5860,37 @@ function loadPermissionPins(): Record<string, PermissionMode> {
   return kept;
 }
 
+/** Secret values travel only on the originating connection, never into items or drafts. */
+export function answerSecret(request: PermissionRequest, value: string | null): boolean {
+  if (!request.secret) return false;
+  const result: JsonObject =
+    value === null
+      ? permissionCancelled
+      : {
+          ...permissionSelected("secret_save"),
+          _meta: { rustcode: { secret: value } },
+        };
+  const answered = reply(request, result);
+  if (answered) {
+    const text =
+      value === null ? "Declined" : `Secret ${request.secret.name} saved to ${request.secret.destination}`;
+    set((s) => ({
+      resolvedApprovals: {
+        ...s.resolvedApprovals,
+        [request.sessionId]: { rpcId: request.rpcId, text, at: Date.now(), allowed: value !== null },
+      },
+    }));
+  }
+  return answered;
+}
+
 /**
  * Answer a question with what its form holds: options, words, files, or a file beside either
  * (`lib/questionAnswer.ts`). False when nothing was sent, so the form keeps its draft: it held no
  * answer, or the thread's computer is away.
  */
 export function answerQuestion(request: PermissionRequest, choice: QuestionChoice): boolean {
+  if (request.secret) return false;
   const shaped = shapeQuestionAnswer(request, choice);
   if (!shaped) return false;
   if (!reply(request, shaped.result, shaped.answer, shaped.files)) return false;

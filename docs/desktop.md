@@ -2156,3 +2156,12 @@ Settings › Harnesses includes Cursor (the `agent acp` CLI), and an Advanced
 disclosure on every external harness for its executable, arguments and masked
 environment variables. Save re-detects it; Reset to default restores a known
 harness's launch command. See [harnesses.md](harnesses.md).
+
+### Private secret card
+
+`request_secret` shows the requesting thread and harness, key, reason and dotenv
+path above the composer. Enter a value in the masked field, optionally Show it,
+then Save or Decline. Values stay out of drafts and transcript items. A remote
+thread warns that its machine receives the value; the reply uses that thread's
+connection. Other threads can list the pending request but cannot answer it.
+In mock transport, send `secret card` to stage this request without an engine.

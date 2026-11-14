@@ -88,6 +88,7 @@ pub fn tools_with(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
         // Answered by this server itself rather than by the client, so no
         // orchestration version gates it (#3369).
         std::iter::once(crate::pull_watch::LINK_TOOL_NAME)
+            .chain(std::iter::once(super::secret::TOOL_NAME))
             // Workflow runs start threads, so they need the tools that do
             // (version 2); the engine's hub answers them (#3394).
             .chain(
@@ -429,6 +430,20 @@ async fn call(
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
     if identity.outside {
         return call_outside(forward, identity, tool, params).await;
+    }
+    if tool == super::secret::TOOL_NAME {
+        return forward
+            .call(CallRequest {
+                session_id: identity.session_id.clone(),
+                token: identity.token.clone(),
+                tool: tool.to_owned(),
+                args: params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+                outside: false,
+            })
+            .await;
     }
     // The engine asks the user through the thread's own channel; checked
     // here first so a bad call is refused without leaving the harness.
@@ -1232,6 +1247,7 @@ mod tests {
         // The link tool needs no orchestration version, so it is listed last
         // for every client and answered by this server (#3369).
         expected.push(crate::pull_watch::LINK_TOOL_NAME.to_owned());
+        expected.push(super::super::secret::TOOL_NAME.to_owned());
         // The workflow tools follow it for a client that can start threads.
         expected.extend(crate::workflow::TOOL_NAMES.map(str::to_owned));
         assert_eq!(listed, expected);
