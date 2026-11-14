@@ -316,7 +316,7 @@ export function TerminalPanel() {
                 type="button"
                 aria-label={`Close ${tab.title}`}
                 onClick={() => closeTerminalTab(tab.id)}
-                className="shrink-0 text-fg-faint opacity-0 group-hover:opacity-100 hover:text-fg"
+                className="shrink-0 text-fg-faint opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:text-fg focus-visible:opacity-100"
               >
                 <X size={11} />
               </button>

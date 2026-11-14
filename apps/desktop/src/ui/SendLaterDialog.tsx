@@ -7,7 +7,7 @@ import { Dialog } from "radix-ui";
 import { useEffect, useState } from "react";
 import { countdown, presetTime, SEND_LATER_PRESETS, whenText } from "../state/schedule";
 import { DateTimePicker } from "./DateTimePicker";
-import { Pill } from "./primitives";
+import { Pill, Tooltip } from "./primitives";
 
 export function SendLaterDialog({
   open,
@@ -38,9 +38,9 @@ export function SendLaterDialog({
             className="elevated pointer-events-auto flex w-[min(380px,calc(100vw-48px))] flex-col gap-3 p-5"
           >
             <Dialog.Title className="font-semibold text-body">Send later</Dialog.Title>
-            <p className="truncate text-fg-muted" title={preview}>
-              {preview || "A message"}
-            </p>
+            <Tooltip label={preview}>
+              <p className="truncate text-fg-muted">{preview || "A message"}</p>
+            </Tooltip>
             <div className="flex flex-col gap-1">
               {SEND_LATER_PRESETS.map((preset) => {
                 const due = presetTime(preset.id);
