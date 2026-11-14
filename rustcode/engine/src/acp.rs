@@ -3390,6 +3390,30 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: crate::text_generation::ConfigureRequest, responder, connection| {
+                connection.spawn(async move {
+                    match crate::text_generation::configure(request).await {
+                        Ok(answer) => responder.respond(answer)?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::text_generation::GenerateRequest, responder, connection| {
+                connection.spawn(async move {
+                    match crate::text_generation::generate(request).await {
+                        Ok(answer) => responder.respond(answer)?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: crate::git_actions::StateRequest, responder, connection| {
                 connection.spawn(async move {
                     let state = tokio::task::spawn_blocking(move || crate::git_actions::state(&request.path)).await;
@@ -4151,6 +4175,28 @@ async fn serve_connection(
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
+                        if crate::config::load_session_title(&session_id).is_none()
+                            && crate::config::load_config().2.generate_session_titles
+                            && crate::text_generation::load().ok().is_some_and(|c| c.selected.is_some())
+                        {
+                            let fallback: String = prompt_text.lines().next().unwrap_or_default().chars().take(48).collect();
+                            crate::config::save_session_title(&session_id, &fallback);
+                            let title_session = session_id.clone();
+                            let title_prompt = prompt_text.clone();
+                            let title_clients = server.clients.session(&session_id);
+                            tokio::spawn(async move {
+                                if let Ok(answer) = crate::text_generation::generate(crate::text_generation::GenerateRequest {
+                                    kind: "thread_title".into(), prompt: Some(title_prompt), path: None, files: vec![],
+                                }).await {
+                                    if let Some(title) = answer["text"].as_str().and_then(crate::app::actions::normalize_generated_title) {
+                                        if crate::app::actions::apply_generated_title(&title_session, Some(&fallback), &title) {
+                                            let update = SessionUpdate::SessionInfoUpdate(agent_client_protocol::schema::v1::SessionInfoUpdate::new().title(title));
+                                            let _ = prompt::send_updates(&title_clients, &title_session, vec![update]);
+                                        }
+                                    }
+                                }
+                            });
+                        }
                         server.remote.note_prompt(&session_id, &prompt_text, origin.clone());
                         server.remote.note_prompt_applied(&session_id);
                         let remote = server.remote.clone();

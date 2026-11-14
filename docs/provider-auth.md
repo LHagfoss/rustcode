@@ -110,3 +110,13 @@ Keychain grants access to one signed identity. RustCode is not signed with an Ap
 Credentials saved in Keychain by an earlier version move to the file the first time each one is read; that read can ask one last time. The Keychain items are left in place; delete entries for `org.rustcode.provider-auth` in Keychain Access once you no longer need them.
 
 When a credential is attached to a profile, keep that profile's provider endpoint. Do not copy an account credential onto a profile pointing at an unrelated host. Legacy profiles without a credential reference continue using their existing API-key or environment-variable settings.
+
+## Text generator keys
+
+Text generation has its own write-only API key per generator. Settings ›
+Harnesses stores it through `NativeCredentialStore` under `text-generation`
+and the generator ID, never in settings or the definition file. Listing
+or selecting generators never returns a key. Removing a generator deletes its
+credential. Configure these on the local machine; the remote ACP relay does
+not permit the configuration method. These requests use API billing, separate
+from harness subscription accounts.

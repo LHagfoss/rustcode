@@ -1121,7 +1121,7 @@ mod tests {
     }
 }
 
-fn send_updates(
+pub(super) fn send_updates(
     clients: &SessionClients,
     session_id: &str,
     updates: Vec<SessionUpdate>,

@@ -4,10 +4,12 @@
 
 import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, RefreshCw } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openExternal } from "../lib/native";
 import {
+  acceptsGeneratedDraft,
   draftCommitMessage,
+  draftPull,
   GIT_ACTION_LABEL,
   type GitAction,
   type GitFile,
@@ -91,15 +93,17 @@ export function GitHeaderButton({ thread }: { thread?: ThreadState }) {
   }
 
   const run = async (action: GitAction) => {
-    if (action === "commit" || action === "commit_push") {
+    if (action === "commit" || action === "commit_push" || action === "create_pr") {
       setSheet(action);
       return;
     }
     setBusy(action);
     const id = toast(`${GIT_ACTION_LABEL[action]}…`, "info", { persist: true });
     try {
-      const answer = (await request(GitMethod.run, { path: cwd, action }, 330_000)) as { url?: string };
-      const pull = action === "create_pr" ? pullFromUrl(answer?.url) : undefined;
+      const answer = (await request(GitMethod.run, { path: cwd, action }, 330_000)) as {
+        url?: string;
+      };
+      const pull = pullFromUrl(answer?.url);
       if (pull)
         void request(
           "_rustcode/pulls/watch/start",
@@ -185,7 +189,15 @@ export function GitHeaderButton({ thread }: { thread?: ThreadState }) {
           </MenuContent>
         </DropdownMenu.Root>
       </span>
-      {sheet && (
+      {sheet === "create_pr" && (
+        <PullSheet
+          cwd={cwd}
+          fallback={state.lastCommitMessage || thread.title || state.branch || "Update"}
+          onClose={() => setSheet(null)}
+          onDone={() => void refresh()}
+        />
+      )}
+      {(sheet === "commit" || sheet === "commit_push") && (
         <CommitSheet
           cwd={cwd}
           title={thread.title}
@@ -215,11 +227,32 @@ function CommitSheet({
   onDone: () => void;
 }) {
   const [message, setMessage] = useState(() => draftCommitMessage(title, state.files));
+  const edited = useRef(false);
+  const [generationNote, setGenerationNote] = useState("");
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set(state.files.map((f) => f.path)));
   const [newBranch, setNewBranch] = useState("");
   const [running, setRunning] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const files = state.files.filter((f) => picked.has(f.path)).map((f) => f.path);
+  const fileKey = JSON.stringify(files);
+  useEffect(() => {
+    let cancelled = false;
+    void request(
+      "_rustcode/textGeneration/generate",
+      { kind: "commit_message", path: cwd, files: JSON.parse(fileKey) },
+      50_000,
+    )
+      .then((answer) => {
+        const text = (answer as { text?: string }).text;
+        if (acceptsGeneratedDraft(edited.current, cancelled, text)) setMessage(text);
+      })
+      .catch(() => {
+        if (!cancelled) setGenerationNote("Using the original draft; text generation failed.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd, fileKey]);
   const ready = !!message.trim() && files.length > 0 && !running;
   const verb = push ? "Commit & Push" : "Commit";
 
@@ -277,13 +310,21 @@ function CommitSheet({
             </Dialog.Title>
             <textarea
               value={message}
-              onChange={(e) => setMessage(e.target.value)}
+              onChange={(e) => {
+                edited.current = true;
+                setMessage(e.target.value);
+              }}
               rows={3}
               aria-label="Commit message"
               placeholder="What this commit does"
               {...noTextHelpers}
               className="w-full resize-y rounded-md bg-fill-subtle p-2 text-body outline-none"
             />
+            {generationNote && (
+              <p role="status" className="text-caption text-fg-muted">
+                {generationNote}
+              </p>
+            )}
             <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
               {state.files.map((file) => (
                 <label
@@ -343,6 +384,101 @@ function CommitSheet({
                   {running && <Spinner size={12} />} {verb}
                 </Pill>
               )}
+            </div>
+          </Dialog.Content>
+        </div>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function PullSheet({
+  cwd,
+  fallback,
+  onClose,
+  onDone,
+}: {
+  cwd: string;
+  fallback: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [draft, setDraft] = useState(() => draftPull(fallback));
+  const edited = useRef(false);
+  const [note, setNote] = useState("");
+  const [running, setRunning] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void request("_rustcode/textGeneration/generate", { kind: "pull_request", path: cwd }, 50_000)
+      .then((answer) => {
+        const text = (answer as { text?: string }).text;
+        if (acceptsGeneratedDraft(edited.current, cancelled, text)) setDraft(draftPull(text));
+      })
+      .catch(() => {
+        if (!cancelled) setNote("Using the original draft; text generation failed.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd]);
+  async function create() {
+    setRunning(true);
+    try {
+      const answer = (await request(
+        GitMethod.run,
+        { action: "create_pr", path: cwd, ...draft },
+        330_000,
+      )) as { url?: string };
+      if (answer.url) void openExternal(answer.url);
+      onDone();
+      onClose();
+    } catch (error) {
+      setNote(gitErrorOf(error).message);
+    } finally {
+      setRunning(false);
+    }
+  }
+  return (
+    <Dialog.Root open onOpenChange={(open) => !open && !running && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="elevated pointer-events-auto flex w-[min(560px,calc(100vw-48px))] flex-col gap-3 p-5"
+          >
+            <Dialog.Title className="font-semibold">Create pull request</Dialog.Title>
+            <input
+              aria-label="Pull request title"
+              className={inputClass}
+              value={draft.title}
+              onChange={(e) => {
+                edited.current = true;
+                setDraft({ ...draft, title: e.target.value });
+              }}
+            />
+            <textarea
+              aria-label="Pull request body"
+              rows={8}
+              className={inputClass}
+              value={draft.body}
+              onChange={(e) => {
+                edited.current = true;
+                setDraft({ ...draft, body: e.target.value });
+              }}
+            />
+            {note && (
+              <p role="status" className="text-caption text-fg-muted">
+                {note}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Pill disabled={running} onClick={onClose}>
+                Cancel
+              </Pill>
+              <Pill prominent disabled={running || !draft.title.trim()} onClick={() => void create()}>
+                Create pull request
+              </Pill>
             </div>
           </Dialog.Content>
         </div>

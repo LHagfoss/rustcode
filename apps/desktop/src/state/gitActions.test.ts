@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { RpcError } from "../acp/jsonrpc";
 import {
+  acceptsGeneratedDraft,
   draftCommitMessage,
   draftPull,
   type GitState,
@@ -130,4 +131,11 @@ test("gitErrorOf reads the engine's reason", () => {
     message: "This commits to main.",
   });
   expect(gitErrorOf(new Error("boom"))).toEqual({ reason: "failed", message: "boom" });
+});
+
+test("generated drafts never replace user input or a closed sheet", () => {
+  expect(acceptsGeneratedDraft(false, false, "Generated")).toBe(true);
+  expect(acceptsGeneratedDraft(true, false, "Generated")).toBe(false);
+  expect(acceptsGeneratedDraft(false, true, "Generated")).toBe(false);
+  expect(acceptsGeneratedDraft(false, false, undefined)).toBe(false);
 });

@@ -621,3 +621,14 @@ press Enter to submit it. Templates are limited to 64 KiB and expanded prompts
 to 256 KiB; empty, invalid UTF-8, symlink, and slash-command expansions are
 rejected. Listing does not create command directories. User templates are
 included in `rustcode sync`; workspace templates remain with the project.
+
+### Text generators
+
+Settings › Harnesses › Text generation can add an Anthropic, OpenAI,
+OpenRouter or custom OpenAI-compatible generator, then select it. Model IDs
+are entered explicitly. Custom base URLs include the API prefix (for example,
+`http://localhost:11434/v1`); local services may use an empty key.
+Non-secret definitions and the selected ID live in `text-generators.json`
+beside the engine config. Keys live in the provider credential store.
+With none selected, existing thread title and git draft behavior is retained.
+Requests are tool-free, limited to 24,000 input characters and 45 seconds.

@@ -2008,6 +2008,22 @@ From the SwiftUI app, still missing or partial:
 
 New non-interactive engine process launches must use `platform::command` or `platform::tokio_command`; shared core code uses `rustcode_command::hidden_command`, and the desktop shell uses `process::command`. These helpers prevent console windows when the engine runs under the desktop app. PTY-backed interactive terminals retain their own console handling.
 
+### Text generation
+
+Settings › Harnesses › Text generation adds, selects or removes a separate
+model for small texts. Enter the provider, model ID and write-only key; custom
+OpenAI-compatible providers also need a base URL. Select the saved generator
+to enable it, or select the existing behavior to disable it. This is a
+machine-only setting, available locally.
+
+Commit opens immediately with the existing draft and selected files. A
+background request replaces the message only if you have not edited it.
+Changing the selected files requests a fresh draft. Create Pull Request opens
+an editable title/body sheet with the same protection. Generation failures
+leave the draft and show a quiet status message. No git write happens until
+you confirm the sheet. The selected generator also writes first-prompt titles
+for every harness; title renames made while it runs are preserved.
+
 ### App links
 
 Installed desktop builds register `rustcode://` on macOS, Windows and Linux.
