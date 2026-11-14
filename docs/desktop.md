@@ -476,6 +476,18 @@ in thread, ⌘J terminal, ⌘+ / ⌘- / ⌘0 text zoom, ⏎ send (or queue while
 running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the
 command token, Esc clears the draft and then stops the
 turn (⌘. stops it too), 1–9 answer the visible approval or question.
+An agent's question is a panel over the composer that leaves its draft alone:
+pick an answer (↑/↓ or 1–9), write one, or attach files to it — Attach files,
+paste or drop an image or a file, alone or beside an answer or words. Each
+waiting question keeps its own draft (`state/questionDrafts.ts`) across thread
+switches and a failed send. Files go in the answer's `_meta.rustcode.answer.attachments`;
+the engine saves images where the thread runs and the agent reads every file
+as a path, or its content for a small one, at the end of the answer
+(`rustcode/engine/src/acp/questions.rs`), so every harness gets them. A thread
+on another computer takes images and small files but not one known only by a
+path here, and an engine that does not list `attachments` in `answerKinds`
+shows the paperclip as unavailable with a reason. A question that takes only
+its own choices has no field and no files.
 
 Every key above except the composer's is a command in one table
 (`src/lib/keys.ts`) with an id, a label and a default binding, and Settings ›

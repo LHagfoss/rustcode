@@ -55,8 +55,6 @@ import {
   permissionCancelled,
   permissionSelected,
   projectName,
-  questionOptionsAnswer,
-  questionTextAnswer,
   type SessionSummary,
   type SessionUsage,
   type SlashCommand,
@@ -96,6 +94,7 @@ import {
 } from "../lib/keys";
 import { dismissOverlays } from "../lib/overlays";
 import { trashName } from "../lib/platform";
+import { type QuestionChoice, shapeQuestionAnswer } from "../lib/questionAnswer";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
@@ -268,6 +267,7 @@ import { projectChoice, projectKey } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
 import { type PreparedPullBranch, parsePullBranch } from "./pullThread";
 import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
+import { dropQuestionDraft } from "./questionDrafts";
 import {
   nextQueued,
   QUEUE_REASON,
@@ -5587,7 +5587,12 @@ function refuseAway(key: string): boolean {
  * answer the next. A question also leaves its answer in the transcript, where the reader can see
  * what was asked and what they said (state/thread.ts `questionItem`).
  */
-function reply(request: PermissionRequest, result: JsonObject, answer?: string): boolean {
+function reply(
+  request: PermissionRequest,
+  result: JsonObject,
+  answer?: string,
+  files: readonly string[] = [],
+): boolean {
   // The answer goes back on the connection the request arrived on (`handleInbound`). With the
   // machine away there is nothing to answer on: the card stays, and an answer made now is refused
   // rather than dropped.
@@ -5601,9 +5606,13 @@ function reply(request: PermissionRequest, result: JsonObject, answer?: string):
     return {
       ...settled,
       permissions: settled.permissions.filter((p) => p.rpcId !== request.rpcId),
-      items: answer ? [...settled.items, questionItem(request, answer)] : settled.items,
+      items:
+        answer || files.length
+          ? [...settled.items, questionItem(request, answer ?? "", Date.now(), files)]
+          : settled.items,
     };
   });
+  if (request.question) dropQuestionDraft(request);
   // Another request of the same thread keeps it waiting; the last one ends the wait.
   if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
   conn.respond(request.rpcId, result);
@@ -5616,6 +5625,8 @@ export function answerPermission(request: PermissionRequest, option: PermissionO
     option ? permissionSelected(option.id) : permissionCancelled,
     request.question ? (option?.name ?? "Declined") : undefined,
   );
+  if (answered && request.question)
+    settleLine(request, option ? `Answered: ${option.name}` : "Dismissed the question", !!option);
   if (!answered || request.question) return;
   settleApproval(request, option);
   // An hour's grant is the engine's to keep: list it again so the panel shows it.
@@ -5631,15 +5642,20 @@ export const RESOLVED_APPROVAL_MS = 1800;
  * of the card vanishing under the pointer.
  */
 function settleApproval(request: PermissionRequest, option: PermissionOption | null) {
-  const threadId = request.sessionId;
   const scope = option ? optionScope(option) : "decline";
   const text = option ? resolvedLine(request, option) : `Declined ${approvalSubject(request)}`;
+  settleLine(request, text, scope !== "decline");
+}
+
+/** The settled line itself, for an approval or an answered question (`ResolvedApprovalBar`). */
+function settleLine(request: PermissionRequest, text: string, allowed: boolean) {
+  const threadId = request.sessionId;
   const previous = resolvedTimers.get(threadId);
   if (previous) clearTimeout(previous);
   set((s) => ({
     resolvedApprovals: {
       ...s.resolvedApprovals,
-      [threadId]: { rpcId: request.rpcId, text, allowed: scope !== "decline", at: Date.now() },
+      [threadId]: { rpcId: request.rpcId, text, allowed, at: Date.now() },
     },
   }));
   const timer = setTimeout(() => {
@@ -5833,21 +5849,28 @@ function loadPermissionPins(): Record<string, PermissionMode> {
   return kept;
 }
 
+/**
+ * Answer a question with what its form holds: options, words, files, or a file beside either
+ * (`lib/questionAnswer.ts`). False when nothing was sent, so the form keeps its draft: it held no
+ * answer, or the thread's computer is away.
+ */
+export function answerQuestion(request: PermissionRequest, choice: QuestionChoice): boolean {
+  const shaped = shapeQuestionAnswer(request, choice);
+  if (!shaped) return false;
+  if (!reply(request, shaped.result, shaped.answer, shaped.files)) return false;
+  const said = [shaped.answer, shaped.files.length ? plural(shaped.files.length, "file") : ""]
+    .filter(Boolean)
+    .join(" · ");
+  settleLine(request, `Answered: ${said}`, true);
+  return true;
+}
+
 export function answerQuestionOptions(request: PermissionRequest, options: PermissionOption[]) {
-  if (!options.length) return;
-  reply(
-    request,
-    options.length === 1 ? permissionSelected(options[0]!.id) : questionOptionsAnswer(options),
-    options.map((o) => o.name).join(", "),
-  );
+  answerQuestion(request, { options, text: "", attachments: [] });
 }
 
 export function answerQuestionText(request: PermissionRequest, text: string) {
-  const carrier = request.options.find(
-    (o) => o.kind === "allow_once" || o.kind === "allow_always" || !o.kind,
-  );
-  if (!carrier || !text.trim()) return;
-  reply(request, questionTextAnswer(text.trim(), carrier), text.trim());
+  answerQuestion(request, { options: [], text, attachments: [] });
 }
 
 // ---------------------------------------------------------------- harnesses
