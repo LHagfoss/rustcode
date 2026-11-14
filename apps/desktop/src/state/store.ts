@@ -7985,9 +7985,13 @@ function stopPlanPolling() {
  * Opens Settings on a page (null closes it). An id from an older build still
  * lands somewhere sensible, so a caller that names Harnesses or Engine works.
  */
-export function openSettings(section: SettingsSection | string | null) {
+export function openSettings(
+  section: SettingsSection | string | null = readStorage("rustcode.settingsSection") ?? "general",
+) {
   dismissOverlays();
-  set({ settings: settingsSection(section), settingsMachine: null, switcherOpen: false });
+  const next = settingsSection(section);
+  if (next) writeStorage("rustcode.settingsSection", next);
+  set({ settings: next, settingsMachine: null, switcherOpen: false });
 }
 
 /** Open one machine's own Settings page, reached from its card and the Machines list. */
