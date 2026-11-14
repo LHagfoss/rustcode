@@ -24,7 +24,14 @@ import {
 } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
 import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
-import { gatewayLine, installServer, refreshServerService, serverLine, useMachines } from "../state/machines";
+import {
+  gatewayLine,
+  installServer,
+  refreshMachines,
+  refreshServerService,
+  serverLine,
+  useMachines,
+} from "../state/machines";
 import { expiredCodeCopy, refusalAgo, refusalCopy } from "../state/refusals";
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import {
@@ -37,9 +44,10 @@ import {
   toast,
   useApp,
 } from "../state/store";
+import { connectionDirection, peerOutbound } from "./connectionDirection";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
-import { Action, Chip, Group, Loading, Row } from "./settingsKit";
+import { Action, Chip, Group, Row } from "./settingsKit";
 
 /** The page keeps itself current while it is open: pairing counts down in the engine. */
 const POLL_MS = 2500;
@@ -72,6 +80,7 @@ export function RemoteAccessPage() {
   useEffect(() => {
     if (engine !== "ready") return;
     void refresh();
+    void refreshMachines();
     // The background server is what keeps threads running with the app closed
     // once RustCode uses it, so its state is read with the gateway's.
     void refreshServerService();
@@ -84,6 +93,7 @@ export function RemoteAccessPage() {
     return () => clearInterval(timer);
   }, []);
 
+  const machines = useMachines((s) => s.machines);
   const devices = remote?.devices ?? [];
   const refused = remote?.refusedConnections ?? [];
   const gateway = remote?.gateway;
@@ -146,20 +156,19 @@ export function RemoteAccessPage() {
     void run("pair", () => pairRemoteDevice());
   };
 
-  if (engine !== "ready" || (remote === null && !remoteError)) {
-    return <Loading error={remoteError} />;
-  }
-
   const sharedCount = gateway?.sessions ?? 0;
-  const status = unavailable
-    ? "Remote access is not available on this host."
-    : ended
-      ? ended
-      : enabled
-        ? sharedCount > 0
-          ? `Sharing ${sharedCount === 1 ? "one thread" : `${sharedCount} threads`} with paired devices.`
-          : "Remote access is on for this computer. Every thread on it is listed for paired devices."
-        : "Nothing is shared from this app.";
+  const status =
+    remote === null
+      ? "Checking remote access…"
+      : unavailable
+        ? "Remote access is not available on this host."
+        : ended
+          ? ended
+          : enabled
+            ? sharedCount > 0
+              ? `Sharing ${sharedCount === 1 ? "one thread" : `${sharedCount} threads`} with paired devices.`
+              : "Remote access is on for this computer. Every thread on it is listed for paired devices."
+            : "Nothing is shared from this app.";
 
   return (
     <>
@@ -308,14 +317,18 @@ export function RemoteAccessPage() {
               key={device.id}
               title={device.name}
               subtitle={`${deviceLabel(device.kind, device.platform)} · ${lastSeenLabel(device, now)}`}
-              status={<span className="font-mono">{device.id}</span>}
+              status={connectionDirection(
+                peerOutbound(device.hostId, machines),
+                device.connected === true,
+                device.name,
+              )}
             >
               {device.connected &&
                 distinctConnectionRoutes(device.routes).map((route) => (
                   <Chip
                     key={`${route.localAddress}-${route.path}`}
                     tone={connectionRouteTone(route)}
-                    title={`Connected to ${route.localAddress}`}
+                    title={`${device.name} connects inbound to this computer at ${route.localAddress}`}
                   >
                     {connectionRouteLabel(route)}
                   </Chip>
