@@ -957,11 +957,21 @@ composer's keys stay outside the table.
   The app sends its own in `session/new` (`_meta.rustcode.worktree.hooks`);
   the engine merges them, records them on the worktree and runs them there
   (`engine/src/project_hooks.rs`), so delegates started by `start_session`
-  get the same setup. The create action starts when the worktree is made;
-  with *wait* the thread's first turn is held until it exits (at most 10
-  minutes), and a failure is told to the agent at the top of that turn with
+  get the same setup. Repository commands show the normal approval card:
+  *Run once*, *Always for this project*, or *Don't run*. Consent is stored
+  outside the repository for the exact command and project; changing the
+  command asks again. Fork PR branches use separate consent per worktree,
+  even for a command already approved in the main checkout. Declining skips
+  the action and reports it in the thread. App-defined actions do not need
+  extra approval. Old saved actions without provenance ask again as well.
+  The create action starts after the thread attaches;
+  with *wait* the thread's first turn is held through approval and execution
+  (each limited to 10 minutes), and a failure is told to the agent at the top of that turn with
   the output tail. The settle action runs in the background when the thread
-  is marked settled.
+  is marked settled. Only one settle action runs per project at a time;
+  another settle while it runs is skipped. The ten-minute execution limit
+  kills the action's process group (the process tree on Windows), including
+  children holding its output pipes.
 - **Window.** The window opens at the size it was last closed with
   (`webview.rs` keeps it as logical points in `window.json` under the app's
   config folder; closing the window or quitting writes it, and a missing or

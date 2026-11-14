@@ -11,7 +11,7 @@
 //! thread's first turn is held until it exits (at most [`WAIT_LIMIT`]); a
 //! failure is told to the agent at the top of that turn, with its output tail.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -33,6 +33,12 @@ pub(crate) struct Hook {
     /// Hold the thread's first turn until the hook exits (create hooks only).
     #[serde(default)]
     pub wait: bool,
+    #[serde(default = "legacy_repository_action")]
+    pub repository: bool,
+}
+
+fn legacy_repository_action() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +74,7 @@ fn hook_of(value: &Value) -> Option<Hook> {
         name: if name.is_empty() { command } else { name }.to_owned(),
         command: command.to_owned(),
         wait: value.get("wait").and_then(Value::as_bool).unwrap_or(false),
+        repository: false,
     })
 }
 
@@ -87,6 +94,10 @@ pub(crate) fn parse_file(text: &str) -> Hooks {
             .iter()
             .filter(|action| action.get(flag).and_then(Value::as_bool) == Some(true))
             .find_map(hook_of)
+            .map(|hook| Hook {
+                repository: true,
+                ..hook
+            })
     };
     Hooks {
         create: first("runOnWorktreeCreate"),
@@ -132,6 +143,144 @@ pub(crate) fn resolve(worktree: &Path, meta: Option<&serde_json::Map<String, Val
     merge(file, from_meta(meta))
 }
 
+type Channel = crate::acp::clients::SessionClients;
+static CHANNELS: LazyLock<Mutex<HashMap<PathBuf, Channel>>> = LazyLock::new(Default::default);
+type Pending = (Hook, Arc<Slot>);
+static PENDING: LazyLock<Mutex<HashMap<PathBuf, Pending>>> = LazyLock::new(Default::default);
+static SETTLING: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Default::default);
+
+struct SettleGuard(PathBuf);
+impl SettleGuard {
+    fn acquire(project: &Path) -> Option<Self> {
+        let key = project
+            .canonicalize()
+            .unwrap_or_else(|_| project.to_path_buf());
+        SETTLING
+            .lock()
+            .ok()?
+            .insert(key.clone())
+            .then_some(Self(key))
+    }
+}
+impl Drop for SettleGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = SETTLING.lock() {
+            active.remove(&self.0);
+        }
+    }
+}
+
+fn consent_key(repo: &Path, scope: &str, command: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&(repo, scope, command)).unwrap())
+    )
+}
+
+fn trust_path(cwd: &Path, command: &str) -> Option<PathBuf> {
+    let repo = crate::worktrees::repo_of(cwd)?;
+    // Unknown provenance fails closed, as does a fork branch marked by prepare_branch.
+    let branch = crate::pull_requests::current_branch(cwd)?;
+    let status = crate::platform::command("git")
+        .current_dir(cwd)
+        .args([
+            "config",
+            "--get",
+            &format!("branch.{branch}.rustcodeUntrustedActions"),
+        ])
+        .output()
+        .ok()?;
+    let scope = if status.status.code() == Some(1) {
+        String::new()
+    } else {
+        cwd.to_string_lossy().into_owned()
+    };
+    Some(
+        crate::config::get_config_dir()?
+            .join("project-action-consent")
+            .join(consent_key(&repo, &scope, command)),
+    )
+}
+
+fn needs_approval(repository: bool, consent: Option<&Path>) -> bool {
+    repository && !consent.is_some_and(Path::is_file)
+}
+
+async fn approve(clients: &Channel, cwd: &Path, hook: &Hook) -> bool {
+    use agent_client_protocol::schema::v1::*;
+    if !hook.repository {
+        return true;
+    }
+    let path = trust_path(cwd, &hook.command);
+    if !needs_approval(hook.repository, path.as_deref()) {
+        return true;
+    }
+    let request = RequestPermissionRequest::new(
+        clients.session_id().to_owned(),
+        ToolCallUpdate::new(
+            format!("project-action-{:016x}", rand::random::<u64>()),
+            ToolCallUpdateFields::new()
+                .title(format!(
+                    "Repository action: {} — {}",
+                    hook.name, hook.command
+                ))
+                .raw_input(serde_json::json!({"command": hook.command, "cwd": cwd})),
+        ),
+        vec![
+            PermissionOption::new("once", "Run once", PermissionOptionKind::AllowOnce),
+            PermissionOption::new(
+                "always",
+                "Always for this project",
+                PermissionOptionKind::AllowAlways,
+            ),
+            PermissionOption::new("deny", "Don't run", PermissionOptionKind::RejectOnce),
+        ],
+    );
+    let response = tokio::time::timeout(WAIT_LIMIT, clients.request(None, request))
+        .await
+        .ok()
+        .and_then(Result::ok);
+    let choice = response.and_then(|response| match response.outcome {
+        RequestPermissionOutcome::Selected(selected) => Some(selected.option_id.to_string()),
+        _ => None,
+    });
+    let allowed = matches!(choice.as_deref(), Some("once" | "always"));
+    if choice.as_deref() == Some("always") {
+        if let Some(path) = path {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+                let _ = std::fs::write(path, b"approved");
+            }
+        }
+    }
+    if !allowed {
+        let _ = clients.update(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new(format!(
+                "Skipped repository action '{}' ({}): not approved.\n",
+                hook.name, hook.command
+            ))),
+        )));
+    }
+    allowed
+}
+
+fn kill_tree(pid: u32) {
+    #[cfg(unix)]
+    if let Ok(pid) = i32::try_from(pid) {
+        // SAFETY: the child was started in a separate process group.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = crate::platform::command("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .status();
+    }
+}
+
 fn tail(text: &str) -> String {
     let text = text.trim();
     if text.len() <= OUTPUT_TAIL {
@@ -155,11 +304,44 @@ pub(crate) fn run(hook: &Hook, cwd: &Path, limit: Duration) -> Outcome {
         command.arg("-c").arg(&hook.command);
         command
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let capture = || -> std::io::Result<(std::fs::File, std::fs::File)> {
+        Ok((tempfile::tempfile()?, tempfile::tempfile()?))
+    };
+    let (mut stdout, mut stderr) = match capture() {
+        Ok(files) => files,
+        Err(error) => {
+            return Outcome {
+                name: hook.name.clone(),
+                command: hook.command.clone(),
+                ok: false,
+                output: format!("could not capture output: {error}"),
+            };
+        }
+    };
+    let handles = stdout
+        .try_clone()
+        .and_then(|out| stderr.try_clone().map(|err| (out, err)));
+    let (out, err) = match handles {
+        Ok(handles) => handles,
+        Err(error) => {
+            return Outcome {
+                name: hook.name.clone(),
+                command: hook.command.clone(),
+                ok: false,
+                output: format!("could not capture output: {error}"),
+            };
+        }
+    };
     command
         .current_dir(cwd)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err));
     let outcome = |ok: bool, output: String| Outcome {
         name: hook.name.clone(),
         command: hook.command.clone(),
@@ -170,37 +352,40 @@ pub(crate) fn run(hook: &Hook, cwd: &Path, limit: Duration) -> Outcome {
         Ok(child) => child,
         Err(error) => return outcome(false, format!("could not start: {error}")),
     };
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-    let out = std::thread::spawn(move || {
-        let mut text = Vec::new();
-        if let Some(pipe) = stdout.as_mut() {
-            let _ = std::io::Read::read_to_end(pipe, &mut text);
-        }
-        text
-    });
-    let err = std::thread::spawn(move || {
-        let mut text = Vec::new();
-        if let Some(pipe) = stderr.as_mut() {
-            let _ = std::io::Read::read_to_end(pipe, &mut text);
-        }
-        text
-    });
+    let pid = child.id();
     let deadline = Instant::now() + limit;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
+            Ok(Some(status)) => {
+                kill_tree(pid);
+                break Some(status);
+            }
             Ok(None) if Instant::now() >= deadline => {
+                kill_tree(pid);
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(_) => break None,
+            Err(_) => {
+                kill_tree(pid);
+                let _ = child.wait();
+                break None;
+            }
         }
     };
-    let mut output = String::from_utf8_lossy(&out.join().unwrap_or_default()).into_owned();
-    output.push_str(&String::from_utf8_lossy(&err.join().unwrap_or_default()));
+    // Regular files avoid pipe-reader threads that can hang forever when a
+    // descendant escapes the group or keeps an inherited handle open.
+    let read_tail = |file: &mut std::fs::File| {
+        use std::io::{Read, Seek, SeekFrom};
+        let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let _ = file.seek(SeekFrom::Start(size.saturating_sub(OUTPUT_TAIL as u64)));
+        let mut bytes = Vec::new();
+        let _ = file.take(OUTPUT_TAIL as u64).read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    let mut output = read_tail(&mut stdout);
+    output.push_str(&read_tail(&mut stderr));
     match status {
         Some(status) if status.success() => outcome(true, output),
         Some(status) => outcome(false, format!("{output}\n(exit status {status})")),
@@ -227,8 +412,33 @@ pub(crate) fn start_create(worktree: &Path, hook: Hook) {
         setups.insert(worktree.to_path_buf(), (hook.wait, Arc::clone(&slot)));
     }
     let cwd = worktree.to_path_buf();
-    std::thread::spawn(move || {
-        let outcome = run(&hook, &cwd, WAIT_LIMIT);
+    PENDING.lock().unwrap().insert(cwd, (hook, slot));
+}
+
+pub(crate) fn attach(clients: crate::acp::clients::SessionClients, worktree: &Path) {
+    CHANNELS
+        .lock()
+        .unwrap()
+        .insert(worktree.to_path_buf(), clients.clone());
+    let pending = PENDING.lock().unwrap().remove(worktree);
+    let Some((hook, slot)) = pending else { return };
+    let cwd = worktree.to_path_buf();
+    tokio::spawn(async move {
+        let outcome = if approve(&clients, &cwd, &hook).await {
+            let run_hook = hook.clone();
+            let run_cwd = cwd.clone();
+            tokio::task::spawn_blocking(move || run(&run_hook, &run_cwd, WAIT_LIMIT))
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let outcome = outcome.unwrap_or_else(|| Outcome {
+            name: hook.name.clone(),
+            command: hook.command.clone(),
+            ok: true,
+            output: "Skipped: repository action was not approved.".into(),
+        });
         crate::dbg_log!(
             "[hooks] {} in {}: {}",
             hook.name,
@@ -249,11 +459,14 @@ pub(crate) async fn wait_setup(session_id: &str) -> Option<String> {
         return None;
     }
     let mut receiver = slot.subscribe();
-    let outcome = tokio::time::timeout(WAIT_LIMIT, receiver.wait_for(Option::is_some))
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .and_then(|value| value.clone());
+    let outcome = tokio::time::timeout(
+        WAIT_LIMIT * 2 + Duration::from_secs(1),
+        receiver.wait_for(Option::is_some),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .and_then(|value| value.clone());
     if let Ok(mut setups) = SETUPS.lock() {
         setups.remove(&path);
     }
@@ -286,11 +499,28 @@ pub(crate) fn on_settle(session_id: &str) {
     else {
         return;
     };
-    std::thread::spawn(move || {
-        let outcome = run(&hook, &worktree.path, WAIT_LIMIT);
+    let Some(_guard) = SettleGuard::acquire(&worktree.repo) else {
+        return;
+    };
+    let clients = CHANNELS.lock().unwrap().get(&worktree.path).cloned();
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    runtime.spawn(async move {
+        let _guard = _guard;
+        if hook.repository {
+            let Some(clients) = clients else { return };
+            if !approve(&clients, &worktree.path, &hook).await {
+                return;
+            }
+        }
+        let name = hook.name.clone();
+        let path = worktree.path.clone();
+        let outcome = tokio::task::spawn_blocking(move || run(&hook, &path, WAIT_LIMIT)).await;
+        let Ok(outcome) = outcome else { return };
         crate::dbg_log!(
             "[hooks] settle {} in {}: {}",
-            hook.name,
+            name,
             worktree.path.display(),
             if outcome.ok { "ok" } else { "failed" }
         );
@@ -301,6 +531,47 @@ pub(crate) fn on_settle(session_id: &str) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn repository_actions_require_explicit_exact_consent() {
+        let dir = tempfile::tempdir().unwrap();
+        let approved = dir
+            .path()
+            .join(consent_key(Path::new("/project"), "", "bun install"));
+        assert!(needs_approval(true, Some(&approved)));
+        assert!(needs_approval(true, None));
+        std::fs::write(&approved, "approved").unwrap();
+        assert!(!needs_approval(true, Some(&approved)));
+        let changed = dir
+            .path()
+            .join(consent_key(Path::new("/project"), "", "npm install"));
+        assert!(needs_approval(true, Some(&changed)));
+        assert!(!needs_approval(false, None));
+    }
+
+    #[test]
+    fn consent_is_for_exact_command_project_and_fork_scope() {
+        let root = Path::new("/project");
+        let approved = consent_key(root, "", "bun install");
+        assert_eq!(approved, consent_key(root, "", "bun install"));
+        assert_ne!(approved, consent_key(root, "", "bun install; echo changed"));
+        assert_ne!(
+            approved,
+            consent_key(Path::new("/other"), "", "bun install")
+        );
+        assert_ne!(approved, consent_key(root, "/fork-worktree", "bun install"));
+    }
+
+    #[test]
+    fn settle_guard_serializes_projects_and_releases_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = SettleGuard::acquire(dir.path()).unwrap();
+        assert!(SettleGuard::acquire(dir.path()).is_none());
+        let other = tempfile::tempdir().unwrap();
+        assert!(SettleGuard::acquire(other.path()).is_some());
+        drop(guard);
+        assert!(SettleGuard::acquire(dir.path()).is_some());
+    }
 
     #[test]
     fn the_file_names_the_first_hook_of_each_kind() {
@@ -317,7 +588,8 @@ mod tests {
             Some(Hook {
                 name: "Install".into(),
                 command: "bun install".into(),
-                wait: true
+                wait: true,
+                repository: true
             })
         );
         // A settle hook never holds anything.
@@ -358,6 +630,7 @@ mod tests {
                 name: "ok".into(),
                 command: "echo ready > made.txt && echo done".into(),
                 wait: true,
+                repository: false,
             },
             dir.path(),
             Duration::from_secs(10),
@@ -370,6 +643,7 @@ mod tests {
                 name: "bad".into(),
                 command: "echo nope >&2; exit 3".into(),
                 wait: true,
+                repository: false,
             },
             dir.path(),
             Duration::from_secs(10),
@@ -383,15 +657,18 @@ mod tests {
     #[test]
     fn a_hook_past_its_limit_is_stopped() {
         let dir = tempfile::tempdir().unwrap();
+        let started = Instant::now();
         let slow = run(
             &Hook {
                 name: "slow".into(),
-                command: "sleep 5".into(),
+                command: "sh -c 'sleep 30 & sleep 30'".into(),
                 wait: true,
+                repository: false,
             },
             dir.path(),
             Duration::from_millis(200),
         );
+        assert!(started.elapsed() < Duration::from_secs(3));
         assert!(!slow.ok);
         assert!(slow.output.contains("stopped after"));
     }
