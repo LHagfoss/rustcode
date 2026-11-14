@@ -2101,6 +2101,23 @@ pub(crate) struct PullReviewRequest {
     pub comments: Vec<crate::pull_requests::ReviewComment>,
 }
 
+/// Reply to, resolve or unresolve one review conversation, or add a line
+/// comment, from the pull request's diff view (#3768). Answers
+/// `{done: {resolved?}}` or `{error: {code, message}}`; `uncertain` means
+/// the change may have been made.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/pulls/thread", response = serde_json::Value)]
+pub(crate) struct PullThreadRequest {
+    pub cwd: std::path::PathBuf,
+    #[serde(default)]
+    pub repository: String,
+    pub number: u64,
+    pub action: crate::pull_requests::ThreadAction,
+}
+
 /// Whether the client lists a thread the engine starts for a paired device:
 /// `_meta.rustcode.threads` in `initialize`. The desktop app does; a terminal's
 /// client does not, so its shares never advertise `host_threads`.
@@ -3838,6 +3855,25 @@ async fn serve_connection(
                     let diff = crate::pull_requests::diff(&request.cwd, request.number).await;
                     responder.respond(match diff {
                         Ok(diff) => serde_json::to_value(diff).unwrap_or_default(),
+                        Err(error) => serde_json::json!({ "error": error }),
+                    })?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullThreadRequest, responder, connection| {
+                connection.spawn(async move {
+                    let done = crate::pull_requests::act_on_thread(
+                        &request.cwd,
+                        &request.repository,
+                        request.number,
+                        &request.action,
+                    )
+                    .await;
+                    responder.respond(match done {
+                        Ok(done) => serde_json::json!({ "done": done }),
                         Err(error) => serde_json::json!({ "error": error }),
                     })?;
                     Ok(())

@@ -2170,6 +2170,8 @@ function configOptions(thread: MockThread, harnesses: HarnessSnapshot): Json[] {
 export class MockEngine {
   /** What this computer knows of the others (`fleet.json`), by host id. */
   private textGenerators: JsonObject = { generators: [], selected: null };
+  /** Review conversations resolved or unresolved through `_rustcode/pulls/thread`. */
+  private pullResolved = new Map<string, boolean>();
   private fleet = new Map<string, JsonObject>();
   /** This computer's own chosen name and when it was chosen (`environment.json`). */
   private ownName: { name: string; at: string } | null = null;
@@ -3932,11 +3934,36 @@ export class MockEngine {
               },
             ],
             reviewThreads: [
-              { id: "PRRT_101", resolved: false, outdated: false, rootComment: 101 },
-              { id: "PRRT_102", resolved: false, outdated: true, rootComment: 102 },
-              { id: "PRRT_104", resolved: true, outdated: false, rootComment: 104 },
-              { id: "PRRT_105", resolved: false, outdated: false, rootComment: 105 },
-              { id: "PRRT_106", resolved: false, outdated: false, rootComment: 106 },
+              {
+                id: "PRRT_101",
+                resolved: this.pullResolved.get("PRRT_101") ?? false,
+                outdated: false,
+                rootComment: 101,
+              },
+              {
+                id: "PRRT_102",
+                resolved: this.pullResolved.get("PRRT_102") ?? false,
+                outdated: true,
+                rootComment: 102,
+              },
+              {
+                id: "PRRT_104",
+                resolved: this.pullResolved.get("PRRT_104") ?? true,
+                outdated: false,
+                rootComment: 104,
+              },
+              {
+                id: "PRRT_105",
+                resolved: this.pullResolved.get("PRRT_105") ?? false,
+                outdated: false,
+                rootComment: 105,
+              },
+              {
+                id: "PRRT_106",
+                resolved: this.pullResolved.get("PRRT_106") ?? false,
+                outdated: false,
+                rootComment: 106,
+              },
             ],
           },
         };
@@ -3987,6 +4014,17 @@ export class MockEngine {
             "Binary files a/apps/desktop/public/icon.png and b/apps/desktop/public/icon.png differ",
           ].join("\n"),
         };
+      case "_rustcode/pulls/thread": {
+        const action = obj(params.action);
+        const kind = str(action?.kind);
+        if ((kind === "reply" || kind === "comment") && !str(action?.body)?.trim())
+          return { error: { code: "failed", message: "the comment is empty" } };
+        if (kind === "resolve" || kind === "unresolve") {
+          this.pullResolved.set(str(action?.threadId) ?? "", kind === "resolve");
+          return { done: { resolved: kind === "resolve" } };
+        }
+        return { done: {} };
+      }
       case "_rustcode/pulls/review":
         return { review: { url: "https://github.com/LHagfoss/rustcode/pull/2788#pullrequestreview-1" } };
       case "_rustcode/rewind": {

@@ -63,6 +63,8 @@ export const Method = {
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",
+  /** Reply to, resolve or unresolve a review conversation, or add a line comment. */
+  pullThread: "_rustcode/pulls/thread",
   harnesses: "_rustcode/harnesses",
   harnessModels: "_rustcode/harnesses/models",
   harnessSet: "_rustcode/harnesses/set",
