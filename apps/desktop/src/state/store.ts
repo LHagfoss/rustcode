@@ -5939,6 +5939,11 @@ async function harnessCall(
   }
 }
 
+export async function setHarnessAdvanced(change: JsonObject): Promise<void> {
+  await harnessCall(Method.harnessSet, change, false);
+  // The set response already invalidates detection and returns a fresh snapshot.
+}
+
 export async function setHarnessEnabled(id: string, enabled: boolean): Promise<HarnessSnapshot | null> {
   // The switch in Settings shows the new state; only a failure needs a word.
   return harnessCall(Method.harnessSet, { id, enabled });

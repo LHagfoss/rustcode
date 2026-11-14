@@ -233,6 +233,23 @@ pub(crate) struct KnownHarness {
 
 pub(crate) const KNOWN: &[KnownHarness] = &[
     KnownHarness {
+        id: "cursor",
+        name: "Cursor",
+        kind: HarnessKind::Acp,
+        command: &["agent", "acp"],
+        login_command: Some(&["agent", "login"]),
+        install_hint: Some(if cfg!(windows) {
+            "irm 'https://cursor.com/install?win32=true' | iex"
+        } else {
+            "curl https://cursor.com/install -fsS | bash"
+        }),
+        version: Some(("agent", &["--version"])),
+        // `agent status` exists, but its output/exit contract is unverified.
+        auth_probe: None,
+        requires: None,
+        native_questions: false,
+    },
+    KnownHarness {
         id: "codex",
         name: "Codex",
         kind: HarnessKind::Codex,
@@ -741,6 +758,7 @@ fn snapshot_entry(
         "known": builtin || harness.known.is_some(),
         "enabled": harness.enabled,
         "command": harness.command,
+        "default_command": harness.known.map(|known| known.command),
         // Names only: a value may be a secret.
         "env_names": harness.env.iter().map(|(name, _)| name).collect::<Vec<_>>(),
         "installed": detection.installed,
@@ -1462,6 +1480,7 @@ mod tests {
             ids,
             [
                 "rustcode",
+                "cursor",
                 "codex",
                 "claude-code",
                 "gemini",
@@ -1472,12 +1491,15 @@ mod tests {
         );
         assert!(all[0].enabled);
         assert!(!all[1].enabled, "known harnesses start off");
-        assert_eq!(all[3].command[0], "/opt/gemini");
-        assert!(all[3].enabled);
-        assert_eq!(all[6].kind, HarnessKind::Acp);
-        assert!(all[6].enabled);
-        assert!(all[1].known.is_some(), "Codex is a standard harness");
-        assert!(all[6].known.is_none(), "a hand-added command is custom");
+        let gemini = all.iter().find(|h| h.id == "gemini").unwrap();
+        let custom = all.iter().find(|h| h.id == "my-agent").unwrap();
+        let codex = all.iter().find(|h| h.id == "codex").unwrap();
+        assert_eq!(gemini.command[0], "/opt/gemini");
+        assert!(gemini.enabled);
+        assert_eq!(custom.kind, HarnessKind::Acp);
+        assert!(custom.enabled);
+        assert!(codex.known.is_some(), "Codex is a standard harness");
+        assert!(custom.known.is_none(), "a hand-added command is custom");
         // A known id written by hand is the standard harness, listed once, with
         // the command and switch the user gave it.
         assert_eq!(

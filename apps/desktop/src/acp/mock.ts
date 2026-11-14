@@ -520,6 +520,24 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         models: [],
         error: null,
       },
+      {
+        id: "cursor",
+        name: "Cursor",
+        kind: "acp",
+        builtin: false,
+        known: true,
+        enabled: false,
+        command: ["agent", "acp"],
+        default_command: ["agent", "acp"],
+        installed: false,
+        auth: "unknown",
+        login_command: ["agent", "login"],
+        install_hint: "curl https://cursor.com/install -fsS | bash",
+        capabilities: ACP_CAPS,
+        accounts: [],
+        models: [],
+        error: null,
+      },
       // A harness the user wrote into config.toml by hand.
       {
         id: "local-agent",
@@ -4302,7 +4320,14 @@ export class MockEngine {
         if (h.builtin && params.enabled === false && this.harnesses.default.harness === h.id)
           throw new Error("choose another default harness before turning RustCode off");
         if (typeof params.enabled === "boolean") h.enabled = params.enabled;
-        if (Array.isArray(params.command)) h.command = params.command.map(String);
+        if (Array.isArray(params.command)) {
+          h.command = params.command.map(String);
+          h.installed = h.command[0] !== "missing";
+        }
+        if (obj(params.env))
+          h.env_names = [
+            ...new Set([...Object.keys(obj(params.env)!), ...arr(params.retain_env).map(String)]),
+          ];
         return this.snapshot();
       }
       case "_rustcode/harnesses/remove": {
