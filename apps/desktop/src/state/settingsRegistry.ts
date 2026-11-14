@@ -21,6 +21,7 @@ export type SettingKind = "app" | "server" | "machine";
 export const SECTION_KIND: Record<SettingsSection, SettingKind> = {
   general: "server",
   chat: "app",
+  permissions: "server",
   agents: "server",
   connections: "machine",
   capabilities: "server",
@@ -41,7 +42,7 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   // General keeps app preferences and this computer's own rows beside the server settings.
   { section: "general", title: "Default project folder", kind: "machine" },
   { section: "general", title: "Harness, model and effort", kind: "server" },
-  { section: "general", title: "Default access", kind: "server" },
+  { section: "general", title: "Access", kind: "server" },
   { section: "general", title: "Continue threads after a restart", kind: "server" },
   { section: "general", title: "Continue threads on their own", kind: "server" },
   { section: "general", title: "Auto-compact", kind: "server" },
@@ -53,6 +54,13 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   { section: "general", title: "Discord Rich Presence", kind: "machine" },
   { section: "general", title: "Tab moves focus between controls", kind: "app" },
   { section: "general", title: "Trackpad haptics", kind: "app" },
+  // Permissions: the default is a server setting; project and thread choices and what this
+  // app remembers stay on this computer.
+  { section: "permissions", title: "Default access", kind: "server" },
+  { section: "permissions", title: "Projects", kind: "app" },
+  { section: "permissions", title: "Threads with their own access", kind: "app" },
+  { section: "permissions", title: "Remembered approvals", kind: "machine" },
+  { section: "permissions", title: "Still asks at Full access", kind: "app" },
   // Harnesses: the default is a server setting, the cards and accounts are machine-only.
   { section: "agents", title: "New threads start on", kind: "server" },
   { section: "agents", title: "Harnesses", kind: "server" },

@@ -434,9 +434,23 @@ export function useScopedSetting(
   const shown = entries.find((entry) => entry.online && entry.value !== undefined);
   const mixed = scopeValuesMixed(entries);
   const offline = machines.filter((machine) => !machine.online);
+  // Optimistic: the row shows the new value and this app follows it at once, then each machine
+  // confirms; one that refuses goes back to what it had, with the reason in a toast.
   const set = async (value: Json) => {
+    const before = useSettingValues.getState().values;
+    for (const machine of writes) remember(machine.host, { [key]: value });
+    if (writes.some((machine) => machine.host === LOCAL_HOST)) applyLocalSettings({ [key]: value });
     const result = await runOnMachines(writes, (machine) => writeServerSetting(machine.host, key, value));
-    if (result.failures.length) toast(failureSummary(result), "error");
+    if (!result.failures.length) return;
+    for (const failed of result.failures) {
+      const previous = before[valueKey(failed.host, key)];
+      // A newer pick since this one was sent is the one the row keeps.
+      const now = useSettingValues.getState().values[valueKey(failed.host, key)];
+      if (previous === undefined || JSON.stringify(now) !== JSON.stringify(value)) continue;
+      remember(failed.host, { [key]: previous });
+      if (failed.host === LOCAL_HOST) applyLocalSettings({ [key]: previous });
+    }
+    toast(failureSummary(result), "error");
   };
   return {
     value: shown?.value,

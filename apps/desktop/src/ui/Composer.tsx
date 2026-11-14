@@ -102,7 +102,7 @@ import {
   type MentionSection,
   mentionNodes,
 } from "../state/mentionDrawer";
-import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
+import { modeLabel, PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import { noteRecentFile, recentFiles, recentFirst } from "../state/recentFiles";
 import { scheduledSummary, scheduleRefusalText } from "../state/schedule";
 import type { CachedPlan } from "../state/store";
@@ -118,8 +118,11 @@ import {
   featureMissing,
   HOME_FOLDER,
   harnessesOn,
+  hasOwnPermissionMode,
+  inheritedModeOf,
   limitTime,
   newThreadChoice,
+  openSettings,
   permissionModeOf,
   resumeWaitNow,
   saveQueuedEdit,
@@ -1853,7 +1856,7 @@ export const Composer = memo(function Composer({
         </div>
         <span className="flex-1" />
         <div className="flex shrink-0 items-center gap-1.5">
-          <PermissionMenu threadId={thread?.id} compact={compact} />
+          <PermissionMenu threadId={thread?.id} cwd={thread ? undefined : cwd} compact={compact} />
           <span className="flex h-7 shrink-0 items-center empty:hidden">
             <UsageMeter threadId={thread?.id} />
           </span>
@@ -2143,22 +2146,40 @@ const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
   full: ShieldOff,
 };
 
-/** What the thread may do without asking. Full access is tinted so it is never on unnoticed. */
-export function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: boolean }) {
-  const mode = useApp((s) => permissionModeOf(s, threadId));
+/**
+ * What the thread may do without asking. Full access is tinted so it is never on unnoticed. A thread
+ * follows its project's default (Settings › Permissions) until a mode is picked here; the menu says
+ * which, and "Use default" goes back to following it.
+ */
+export function PermissionMenu({
+  threadId,
+  cwd,
+  compact,
+}: {
+  threadId?: string;
+  /** A new thread's folder, whose project may have its own default. */
+  cwd?: string;
+  compact?: boolean;
+}) {
+  const mode = useApp((s) => permissionModeOf(s, threadId, cwd));
+  const own = useApp((s) =>
+    threadId ? hasOwnPermissionMode(s, threadId) : s.newThreadPermissionMode !== null,
+  );
+  const inherited = useApp((s) => inheritedModeOf(s, threadId, cwd));
   const current = PERMISSION_MODES.find((m) => m.id === mode)!;
   const Icon = PERMISSION_ICON[mode];
+  const source = own ? "Set for this thread" : "Default";
   return (
     <CardPopover
       role="menu"
       label="Permissions"
-      tooltip={current.detail}
+      tooltip={`${current.label} · ${current.detail}${own ? "" : " (the default)"}`}
       onKeyDown={menuKeys}
       className="w-[280px]"
       trigger={
         <button
           type="button"
-          aria-label={`Permissions: ${current.label}`}
+          aria-label={`Permissions: ${current.label}${own ? "" : ", the default"}`}
           className={cx(
             footerButton,
             "shrink-0 data-[state=open]:bg-fill",
@@ -2172,6 +2193,7 @@ export function PermissionMenu({ threadId, compact }: { threadId?: string; compa
       }
     >
       <div role="menu" aria-label="Permissions">
+        <div className="px-2 pt-1 pb-1.5 text-caption text-fg-muted">{source}</div>
         {PERMISSION_MODES.map((m) => {
           const ItemIcon = PERMISSION_ICON[m.id];
           const checked = m.id === mode;
@@ -2195,6 +2217,16 @@ export function PermissionMenu({ threadId, compact }: { threadId?: string; compa
             </CardMenuItem>
           );
         })}
+        <div role="separator" className="mx-1.5 my-1 h-px shrink-0 bg-border" />
+        {own && (
+          <CardMenuItem role="menuitem" onSelect={() => setPermissionMode(threadId, null)}>
+            <span className="text-body text-fg">Use default</span>
+            <span className="ms-auto text-caption text-fg-muted">{modeLabel(inherited)}</span>
+          </CardMenuItem>
+        )}
+        <CardMenuItem role="menuitem" onSelect={() => openSettings("permissions")}>
+          <span className="text-body text-fg">Permission settings…</span>
+        </CardMenuItem>
       </div>
     </CardPopover>
   );

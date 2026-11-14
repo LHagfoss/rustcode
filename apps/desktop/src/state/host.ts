@@ -170,6 +170,7 @@ import {
   wakeStillOwed,
   wakesDue,
 } from "./orchestration";
+import { revokeThreadGrant } from "./permissionGrants";
 import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
 import {
   forgetProject,
@@ -207,6 +208,7 @@ import {
   clearFinished,
   connectionFor,
   createSession,
+  defaultModeFor,
   dropInternetWait,
   dropLimitWait,
   effortMemory,
@@ -414,6 +416,12 @@ function setBook(fn: (book: LinkBook) => LinkBook) {
 }
 
 const book = () => useApp.getState().links;
+
+/** Settings › Permissions: forget one "Allow for This Thread" answer, so the thread asks again. */
+export function forgetThreadGrant(caller: string, key: string) {
+  setBook((b) => revokeThreadGrant(b, caller, key));
+}
+
 /** The two delegate limits (Settings › Harnesses): one thread's own, and the machine's total. */
 const delegateLimits = (): DelegateLimits => ({
   perThread: useApp.getState().threadLimit,
@@ -1436,7 +1444,7 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
   const harness = harnessOn(snapshot, call.harness, machine);
   if (isFailure(harness)) return failureJson(harness);
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
+  const access = narrowed(standalone ? ownMode(project) : childMode(caller, project), call.access);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(
     caller,
@@ -1552,7 +1560,7 @@ async function fanOutOnMachine(
     chosen.push({ harness: h, model: entry.model, effort: entry.effort, account: entry.account ?? null });
   }
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
+  const access = narrowed(standalone ? ownMode(project) : childMode(caller, project), call.access);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(
     caller,
@@ -4654,14 +4662,14 @@ async function newThread(
 }
 
 /**
- * What a delegated thread runs at: the lower of its parent's access and Settings ›
- * General › Default access, which is what a new thread would get anyway. The parent's
- * own limit is the one that counts, so an Ask or Auto-edit parent never hands out Full
+ * What a delegated thread runs at: the lower of its parent's access and the default access of the
+ * project it starts in (Settings › Permissions), which is what a new thread there would get anyway.
+ * The parent's own limit is the one that counts, so an Ask or Auto-edit parent never hands out Full
  * access. Applied at every depth, a grandchild can only be narrower still.
  */
-function childMode(caller: RuleThread): PermissionMode {
+function childMode(caller: RuleThread, project: string): PermissionMode {
   const s = useApp.getState();
-  return effectiveMode(permissionModeOf(s, caller.id), s.defaultPermissionMode);
+  return effectiveMode(permissionModeOf(s, caller.id), defaultModeFor(s, project));
 }
 
 /** `mode`, lowered to what the call asked for (a delegate preset's access, issue 3391); never raised. */
@@ -4672,11 +4680,11 @@ const narrowed = (mode: PermissionMode, asked: PermissionMode | undefined): Perm
 const accessOf = (id: string): PermissionMode => permissionModeOf(useApp.getState(), id);
 
 /**
- * What a standalone thread runs at: Settings › General › Default access, the
+ * What a standalone thread runs at: its project's default access (Settings › Permissions), the
  * same as a thread the user starts by hand. It is the user's own thread, not a
  * delegate, so the caller's own limit is not what bounds it.
  */
-const ownMode = (): PermissionMode => useApp.getState().defaultPermissionMode;
+const ownMode = (project: string): PermissionMode => defaultModeFor(useApp.getState(), project);
 
 /**
  * The first message of a standalone thread: the prompt as the user's own, with
@@ -4755,7 +4763,7 @@ async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject
   const other = !sameProject(project, projectOf(caller));
   // Fixed before the user is asked, so the card says what the thread runs at and the thread gets
   // exactly that, however long the card waits.
-  const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
+  const access = narrowed(standalone ? ownMode(project) : childMode(caller, project), call.access);
   const no = await permitted(
     caller,
     other ? `start:${project}` : "start",
@@ -4869,7 +4877,7 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
   const project = projectFor(caller, call.project);
   if (isFailure(project)) return failureJson(project);
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
+  const access = narrowed(standalone ? ownMode(project) : childMode(caller, project), call.access);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(
     caller,

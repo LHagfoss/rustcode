@@ -30,6 +30,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  ShieldCheck,
   Smartphone,
   Stethoscope,
   TerminalSquare,
@@ -152,6 +153,7 @@ import { NewThreadBanner } from "./NewThreadBanner";
 const OutsideAgentsPage = lazy(() =>
   import("./OutsideAgentsPage").then((m) => ({ default: m.OutsideAgentsPage })),
 );
+const PermissionsPage = lazy(() => import("./PermissionsPage").then((m) => ({ default: m.PermissionsPage })));
 
 import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
@@ -195,6 +197,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
     pages: [
       { id: "general", label: "General", icon: Gear },
       { id: "chat", label: "Chat", icon: MessageSquare },
+      { id: "permissions", label: "Permissions", icon: ShieldCheck },
     ],
   },
   {
@@ -312,7 +315,6 @@ function GeneralPage() {
   const afterLimit = useScopedSetting("continue-after-limit", boolLabel);
   const autoCompactMode = useScopedSetting("auto-compact-mode", compactLabel);
   const autoCompactThreshold = useScopedSetting("auto-compact-threshold", thresholdLabel);
-  const defaultAccessValue = String(defaultAccess.value ?? SETTINGS_DEFAULTS.defaultPermissionMode);
   const resumeValue = Boolean(resume.value ?? SETTINGS_DEFAULTS.resumeAfterRestart);
   const afterLimitValue = Boolean(afterLimit.value ?? SETTINGS_DEFAULTS.continueAfterLimit);
   const autoCompactValue = String(autoCompactMode.value ?? SETTINGS_DEFAULTS.autoCompact.mode);
@@ -341,23 +343,11 @@ function GeneralPage() {
           <Action onClick={() => openSettings("agents")}>Harnesses…</Action>
         </Row>
         <Row
-          title="Default access"
-          reset={
-            defaultAccess.mixed || defaultAccessValue !== SETTINGS_DEFAULTS.defaultPermissionMode
-              ? () => void defaultAccess.set(SETTINGS_DEFAULTS.defaultPermissionMode)
-              : undefined
-          }
-          subtitle="What a new thread may do without asking."
-          hint="The shield under the message box changes one thread only."
+          title="Access"
+          subtitle="What threads may do without asking, by default and per project."
+          status={permissionLabel(defaultAccess.value ?? SETTINGS_DEFAULTS.defaultPermissionMode)}
         >
-          <ScopedValue mixed={defaultAccess.mixed} breakdown={defaultAccess.breakdown}>
-            <Choice
-              label="Default access"
-              value={defaultAccessValue}
-              options={PERMISSION_MODES.map((m) => ({ value: m.id, label: m.label }))}
-              onChange={(value) => void defaultAccess.set(value)}
-            />
-          </ScopedValue>
+          <Action onClick={() => openSettings("permissions")}>Permissions…</Action>
         </Row>
       </Group>
       <Group title="Threads">
@@ -2055,6 +2045,7 @@ export function Settings() {
                   <Suspense fallback={<Loading error={null} />}>
                     {section === "general" && <GeneralPage />}
                     {section === "chat" && <ChatPage />}
+                    {section === "permissions" && <PermissionsPage />}
                     {section === "agents" && <AgentsPage />}
                     {section === "connections" && <ConnectionsPage />}
                     {section === "capabilities" && <CapabilitiesPage />}

@@ -24,6 +24,7 @@ import { type Link, type LinkState, linkStatusText } from "../state/orchestratio
 import { modeLabel } from "../state/permissions";
 import { openSettings, selectThread, setView, useApp } from "../state/store";
 import { AgentRow, SubagentRow, useNow } from "./AgentViews";
+import { GrantWhy } from "./GrantWhy";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const NO_AGENTS: SubagentInfo[] = [];
@@ -173,6 +174,7 @@ export function GrantDialog() {
           <Dialog.Title className="font-semibold text-body">
             “{grant.callerTitle}” wants to {verb(grant)}
           </Dialog.Title>
+          <GrantWhy grant={grant} />
           <div className="flex flex-col gap-1.5 text-callout text-fg-muted">
             {starts && (
               <span>

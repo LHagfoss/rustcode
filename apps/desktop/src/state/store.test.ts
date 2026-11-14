@@ -45,6 +45,7 @@ import {
   cancel,
   cancelEdit,
   cancelQueuedEdit,
+  clearPermissionModes,
   closeReport,
   commandsFor,
   commitPlansAnswer,
@@ -60,6 +61,8 @@ import {
   fetchHarnessModels,
   forgetPlans,
   forkThread,
+  hasOwnPermissionMode,
+  inheritedModeOf,
   isRepairableOpenError,
   loadTotalLimit,
   localChoices,
@@ -128,6 +131,7 @@ import {
   setPanel,
   setPermissionMode,
   setProjectCwd,
+  setProjectPermissionMode,
   setReduceTransparency,
   setSectionOrder,
   setSnoozed,
@@ -4059,7 +4063,7 @@ test("a mode chosen in one thread leaves the default and the other threads alone
   resetForTests();
 });
 
-test("changing the default access leaves the listed threads as they were", () => {
+test("threads that follow the default change with it; a thread's own choice stays", () => {
   resetForTests();
   useApp.setState({
     sessions: [
@@ -4067,13 +4071,56 @@ test("changing the default access leaves the listed threads as they were", () =>
       { id: "b", title: "B", cwd: "/tmp" },
     ] as never,
   });
-  setPermissionMode("b", "full");
-  setDefaultPermissionMode("edits");
-  const s = useApp.getState();
-  expect(s.defaultPermissionMode).toBe("edits");
+  setPermissionMode("b", "ask");
+  setDefaultPermissionMode("full");
+  let s = useApp.getState();
+  expect(s.defaultPermissionMode).toBe("full");
+  // The user chose Full access: a thread nobody picked a mode for has it at once (the bug where
+  // every listed thread stayed at Ask after the default was raised).
+  expect(permissionModeOf(s, "a")).toBe("full");
+  expect(permissionModeOf(s, "b")).toBe("ask");
+  expect(permissionModeOf(s, "a-new-one")).toBe("full");
+  // "Use default" drops the thread's own choice.
+  setPermissionMode("b", null);
+  s = useApp.getState();
+  expect(hasOwnPermissionMode(s, "b")).toBe(false);
   expect(permissionModeOf(s, "b")).toBe("full");
-  expect(permissionModeOf(s, "a")).toBe("ask");
-  expect(permissionModeOf(s, "a-new-one")).toBe("edits");
+  resetForTests();
+});
+
+test("a project's own default sits between the default and a thread's choice", () => {
+  resetForTests();
+  useApp.setState({
+    sessions: [
+      { id: "a", title: "A", cwd: "/work/app" },
+      { id: "b", title: "B", cwd: "/work/other" },
+      { id: "c", title: "C", cwd: "/work/app" },
+    ] as never,
+  });
+  setProjectPermissionMode("/work/app/", "full");
+  setPermissionMode("c", "edits");
+  const s = useApp.getState();
+  expect(permissionModeOf(s, "a")).toBe("full");
+  expect(permissionModeOf(s, "b")).toBe("ask");
+  expect(permissionModeOf(s, "c")).toBe("edits");
+  expect(inheritedModeOf(s, "c")).toBe("full");
+  // A new thread in that folder starts with the project's default.
+  expect(permissionModeOf(s, undefined, "/work/app")).toBe("full");
+  setProjectPermissionMode("/work/app", null);
+  expect(permissionModeOf(useApp.getState(), "a")).toBe("ask");
+  resetForTests();
+});
+
+test("Use default for all clears each listed thread's own choice, and only those", () => {
+  resetForTests();
+  setPermissionMode("a", "ask");
+  setPermissionMode("b", "edits");
+  setPermissionMode("c", "full");
+  clearPermissionModes(["a", "b"]);
+  const s = useApp.getState();
+  expect(hasOwnPermissionMode(s, "a")).toBe(false);
+  expect(hasOwnPermissionMode(s, "b")).toBe(false);
+  expect(permissionModeOf(s, "c")).toBe("full");
   resetForTests();
 });
 

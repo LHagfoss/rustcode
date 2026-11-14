@@ -263,7 +263,7 @@ import {
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
-import { projectChoice } from "./projectBook";
+import { projectChoice, projectKey } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
 import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
 import {
@@ -356,6 +356,7 @@ export const APP_VERSION = "0.1.0";
 export type SettingsSection =
   | "general"
   | "chat"
+  | "permissions"
   | "agents"
   | "connections"
   | "capabilities"
@@ -374,6 +375,7 @@ export type SettingsSection =
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "general",
   "chat",
+  "permissions",
   "agents",
   "connections",
   "capabilities",
@@ -653,9 +655,14 @@ export interface AppState {
   snoozed: Record<string, number>;
   /** The thread the custom snooze dialog is open for. */
   snoozeAsk: string | null;
-  /** What threads may do without asking (Settings › General › Default access)... */
+  /** What threads may do without asking (Settings › Permissions › Default access)... */
   defaultPermissionMode: PermissionMode;
-  /** ...each thread's own, once it was set from the composer's pill... */
+  /** ...a project's own default, by project path, over the one above (Settings › Permissions)... */
+  projectPermissionModes: Record<string, PermissionMode>;
+  /**
+   * ...each thread's own, only once someone chose it for that thread (the composer's pill, or a
+   * delegate's start). A thread without one follows its project's default, then the default.
+   */
   permissionModes: Record<string, PermissionMode>;
   /** ...and the next thread's, when the pill is used before one exists. */
   newThreadPermissionMode: PermissionMode | null;
@@ -776,6 +783,9 @@ const STORAGE = {
   snoozed: "rustcode.snoozed",
   permissionMode: "rustcode.permissionMode",
   permissionModes: "rustcode.permissionModes",
+  projectPermissionModes: "rustcode.projectPermissionModes",
+  /** Set once the pins older builds wrote for every thread were thinned (`loadPermissionPins`). */
+  permissionPinsThinned: "rustcode.permissionModes.thinned",
   /** Each harness's last new-thread choice, for an engine that does not remember it. */
   harnessChoices: "rustcode.harnessChoices",
   /** Each harness's last account picked for new threads, by harness id. */
@@ -950,7 +960,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   snoozed: storedJson<Record<string, number>>(STORAGE.snoozed, {}),
   snoozeAsk: null,
   defaultPermissionMode: parsePermissionMode(stored(STORAGE.permissionMode)),
-  permissionModes: storedJson<Record<string, PermissionMode>>(STORAGE.permissionModes, {}),
+  projectPermissionModes: loadProjectPermissionModes(),
+  permissionModes: loadPermissionPins(),
   newThreadPermissionMode: null,
   finished: {},
   failed: {},
@@ -4483,7 +4494,7 @@ export async function openSideChat(parentId: string, message: string): Promise<s
       title: title ? `Side chat: ${title}` : "Side chat",
     });
     // Never broader than the thread it was asked from, as for a delegate (state/permissions.ts).
-    setPermissionMode(id, effectiveMode(permissionModeOf(get(), parentId), get().defaultPermissionMode));
+    setPermissionMode(id, effectiveMode(permissionModeOf(get(), parentId), inheritedModeOf(get(), parentId)));
     setDraft(id, quoteMessage(message));
     peekThread(id);
     return id;
@@ -5611,43 +5622,137 @@ export function approveAll(threadId: string) {
 
 // ---------------------------------------------------------------- permission mode
 
-export function permissionModeOf(s: AppState, threadId: string | undefined): PermissionMode {
-  if (!threadId) return s.newThreadPermissionMode ?? s.defaultPermissionMode;
-  return s.permissionModes[threadId] ?? s.defaultPermissionMode;
+/** The project a thread belongs to, as Settings › Permissions files a project's access. */
+function threadProject(s: AppState, threadId: string): string {
+  const thread = s.threads[threadId];
+  const summary = thread ? undefined : s.sessions.find((x) => x.id === threadId);
+  const path =
+    thread?.worktree?.repo || thread?.cwd || summary?.worktree?.repo || summary?.repo || summary?.cwd;
+  return path ? projectKey(path) : "";
+}
+
+/** What a new thread in `project` gets: the project's own default, else the default. */
+export function defaultModeFor(s: AppState, project: string | undefined): PermissionMode {
+  if (!project) return s.defaultPermissionMode;
+  return s.projectPermissionModes[projectKey(project)] ?? s.defaultPermissionMode;
 }
 
 /**
- * Settings › General › Default access: what a new thread may do without asking. Threads already
- * listed keep the access they had, so lowering the default does not silently tighten one of them.
+ * What `threadId` may do without asking: its own choice, else its project's default, else the
+ * default. A thread nobody chose for follows the default as it changes, so raising the default to
+ * Full access reaches the threads already open. `cwd` names a new thread's folder.
+ */
+export function permissionModeOf(s: AppState, threadId: string | undefined, cwd?: string): PermissionMode {
+  if (!threadId) return s.newThreadPermissionMode ?? defaultModeFor(s, cwd);
+  const own = s.permissionModes[threadId];
+  if (own) return own;
+  // Most people set no project defaults: no lookup for the thread's folder then.
+  if (!Object.keys(s.projectPermissionModes).length) return s.defaultPermissionMode;
+  return defaultModeFor(s, threadProject(s, threadId));
+}
+
+/** Whether a thread has its own access, rather than following its project's or the default. */
+export function hasOwnPermissionMode(s: AppState, threadId: string | undefined): boolean {
+  return !!threadId && s.permissionModes[threadId] !== undefined;
+}
+
+/** What a thread would follow without its own choice: its project's default, else the default. */
+export function inheritedModeOf(s: AppState, threadId: string | undefined, cwd?: string): PermissionMode {
+  return defaultModeFor(s, threadId ? threadProject(s, threadId) : cwd);
+}
+
+/**
+ * Settings › Permissions › Default access: what threads may do without asking, unless a project or
+ * the thread itself says otherwise. Threads that follow it change with it, so a thread does not stay
+ * at Ask after the user chose Full access. Requests already waiting that it now allows are answered.
  */
 export function setDefaultPermissionMode(mode: PermissionMode) {
-  const { defaultPermissionMode: before, permissionModes: known, sessions, threads } = get();
-  const modes = { ...known };
-  for (const id of [...sessions.map((x) => x.id), ...Object.keys(threads)]) modes[id] ??= before;
-  set({ defaultPermissionMode: mode, permissionModes: modes });
+  if (get().defaultPermissionMode === mode) return;
+  set({ defaultPermissionMode: mode });
   store(STORAGE.permissionMode, mode);
-  store(STORAGE.permissionModes, JSON.stringify(modes));
+  answerAllowedWaiting();
+}
+
+/** A project's own default (`null` follows the default again); applied at once, like the default. */
+export function setProjectPermissionMode(project: string, mode: PermissionMode | null) {
+  const key = projectKey(project);
+  if (!key) return;
+  const modes = { ...get().projectPermissionModes };
+  if (mode) modes[key] = mode;
+  else delete modes[key];
+  set({ projectPermissionModes: modes });
+  store(STORAGE.projectPermissionModes, JSON.stringify(modes));
+  answerAllowedWaiting();
 }
 
 /**
  * Set what `threadId` may do without asking, from the composer's pill: only that thread, or (for a
- * thread not started yet) the next one. The default for new threads is the Settings row, so a
- * thread's choice never changes it. Requests already waiting that the mode now allows are answered.
+ * thread not started yet) the next one. `null` drops the thread's own choice, so it follows its
+ * project's default again. Requests already waiting that the mode now allows are answered.
  */
-export function setPermissionMode(threadId: string | undefined, mode: PermissionMode) {
+export function setPermissionMode(threadId: string | undefined, mode: PermissionMode | null) {
   if (!threadId) {
     set({ newThreadPermissionMode: mode });
     return;
   }
-  const modes = { ...get().permissionModes, [threadId]: mode };
+  const modes = { ...get().permissionModes };
+  if (mode) modes[threadId] = mode;
+  else delete modes[threadId];
   set({ permissionModes: modes });
   store(STORAGE.permissionModes, JSON.stringify(modes));
+  answerWaiting(threadId);
+}
+
+/** Drop the own access of every thread listed, so each follows its project's default again. */
+export function clearPermissionModes(threadIds: readonly string[]) {
+  const modes = { ...get().permissionModes };
+  for (const id of threadIds) delete modes[id];
+  set({ permissionModes: modes });
+  store(STORAGE.permissionModes, JSON.stringify(modes));
+  answerAllowedWaiting();
+}
+
+/** Answer what `threadId` waits on that its access now allows. */
+function answerWaiting(threadId: string) {
+  const pending = get().threads[threadId]?.permissions ?? [];
+  if (!pending.length) return;
   // With the machine away nothing can be answered: one refusal, not one per pending card.
   if (refuseAway(threadId)) return;
-  for (const request of get().threads[threadId]?.permissions ?? []) {
+  const mode = permissionModeOf(get(), threadId);
+  for (const request of pending) {
     const option = autoAnswer(request, mode);
     if (option) reply(request, permissionSelected(option.id));
   }
+}
+
+/** After a default changed: every waiting thread answers what its access now allows. */
+function answerAllowedWaiting() {
+  for (const [id, thread] of Object.entries(get().threads)) if (thread.permissions.length) answerWaiting(id);
+}
+
+function loadProjectPermissionModes(): Record<string, PermissionMode> {
+  const raw = storedJson<Record<string, unknown>>(STORAGE.projectPermissionModes, {});
+  const modes: Record<string, PermissionMode> = {};
+  for (const [path, mode] of Object.entries(raw ?? {})) {
+    if (mode === "ask" || mode === "edits" || mode === "full") modes[projectKey(path)] = mode;
+  }
+  return modes;
+}
+
+/**
+ * Each thread's own access. Builds before this pinned every listed thread to the default whenever
+ * it changed (and at every start), so a thread stayed at Ask after the user chose Full access. Once,
+ * the pins equal to the default are dropped, so those threads follow it again; one that differs may
+ * be the user's own choice and stays, listed in Settings › Permissions to reset.
+ */
+function loadPermissionPins(): Record<string, PermissionMode> {
+  const pins = storedJson<Record<string, PermissionMode>>(STORAGE.permissionModes, {});
+  if (stored(STORAGE.permissionPinsThinned) === "1") return pins;
+  const fallback = parsePermissionMode(stored(STORAGE.permissionMode));
+  const kept = Object.fromEntries(Object.entries(pins ?? {}).filter(([, mode]) => mode !== fallback));
+  store(STORAGE.permissionModes, JSON.stringify(kept));
+  store(STORAGE.permissionPinsThinned, "1");
+  return kept;
 }
 
 export function answerQuestionOptions(request: PermissionRequest, options: PermissionOption[]) {
@@ -8338,6 +8443,7 @@ export function resetForTests() {
     snoozed: {},
     snoozeAsk: null,
     defaultPermissionMode: "ask",
+    projectPermissionModes: {},
     permissionModes: {},
     newThreadPermissionMode: null,
     view: { kind: "chat" },
