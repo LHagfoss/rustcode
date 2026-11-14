@@ -518,9 +518,9 @@ async fn set_launch(
     launch: Option<crate::orchestration::hub::Launch>,
     ask_user: bool,
 ) -> bool {
-    let ask_user = ask_user
-        && launch.is_some()
+    let channel = launch.is_some()
         && crate::orchestration::hub::set_questions(&session.id, session.question_asker()).await;
+    let ask_user = ask_user && channel;
     let launch = launch.map(|launch| launch.with_ask_user(ask_user));
     let attached = launch.is_some();
     session.set_orchestrator(launch);

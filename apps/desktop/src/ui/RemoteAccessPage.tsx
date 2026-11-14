@@ -13,6 +13,9 @@
 import { Copy, RefreshCw, Smartphone, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  connectionRouteLabel,
+  connectionRouteTone,
+  distinctConnectionRoutes,
   heldBackReason,
   type RemoteOffer,
   type RemotePairing,
@@ -307,6 +310,16 @@ export function RemoteAccessPage() {
               subtitle={`${deviceLabel(device.kind, device.platform)} · ${lastSeenLabel(device, now)}`}
               status={<span className="font-mono">{device.id}</span>}
             >
+              {device.connected &&
+                distinctConnectionRoutes(device.routes).map((route) => (
+                  <Chip
+                    key={`${route.localAddress}-${route.path}`}
+                    tone={connectionRouteTone(route)}
+                    title={`Connected to ${route.localAddress}`}
+                  >
+                    {connectionRouteLabel(route)}
+                  </Chip>
+                ))}
               <Chip tone={device.connected ? "ok" : "idle"}>{device.connected ? "Connected" : "Paired"}</Chip>
               <RevokeDeviceAction device={device} />
             </Row>

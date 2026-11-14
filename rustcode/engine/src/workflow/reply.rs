@@ -18,17 +18,20 @@ pub(super) fn result(reply: &str, schema: Option<&Value>) -> Result<Value, Strin
     let Some(schema) = schema else {
         return Ok(Value::String(reply.to_owned()));
     };
-    let mut last_problem = None;
+    let mut first_problem = None;
     for candidate in candidates(reply) {
         let Ok(value) = serde_json::from_str::<Value>(&candidate) else {
             continue;
         };
         match check(&value, schema, "$") {
             Ok(()) => return Ok(value),
-            Err(problem) => last_problem = Some(problem),
+            // The first candidate is the reply itself; later ones are cut-outs of it.
+            Err(problem) => {
+                first_problem.get_or_insert(problem);
+            }
         }
     }
-    Err(match last_problem {
+    Err(match first_problem {
         Some(problem) => format!("the worker's JSON does not match the schema: {problem}"),
         None => "the worker's reply holds no JSON value".to_owned(),
     })

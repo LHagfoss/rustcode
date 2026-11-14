@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { parseRemoteStatus, RemoteMethod } from "./remote";
+import type { Json } from "./jsonrpc";
+import {
+  connectionRouteLabel,
+  connectionRouteTone,
+  distinctConnectionRoutes,
+  parseRemoteStatus,
+  type RemoteConnectionRoute,
+  RemoteMethod,
+} from "./remote";
 
 describe("remote access", () => {
   test("the methods are the engine's ACP extensions", () => {
@@ -212,5 +220,88 @@ describe("remote access", () => {
     expect(status.available).toBe(false);
     expect(status.devices).toEqual([]);
     expect(parseRemoteStatus(undefined).shared).toBe(false);
+  });
+
+  describe("the route a connected device uses", () => {
+    /** The routes the page would read off one connected device. */
+    const routesOf = (routes: Json): RemoteConnectionRoute[] =>
+      parseRemoteStatus({
+        available: true,
+        devices: [
+          { id: "d1", name: "Lars's iPhone", kind: "phone", platform: "ios", connected: true, routes },
+        ],
+      }).devices[0]?.routes ?? [];
+    const only = (routes: Json): RemoteConnectionRoute => {
+      const [route] = routesOf(routes);
+      if (!route) throw new Error("no route parsed");
+      return route;
+    };
+
+    test("a LAN connection reads as unencrypted and warns", () => {
+      const route = only([{ path: "lan", localAddress: "192.168.1.24:17879", encrypted: false }]);
+      expect(route).toEqual({ path: "lan", localAddress: "192.168.1.24:17879", encrypted: false });
+      expect(connectionRouteLabel(route)).toBe("LAN · Unencrypted");
+      expect(connectionRouteTone(route)).toBe("warn");
+    });
+
+    test("an overlay names its product and reads as encrypted", () => {
+      const named = only([
+        { path: "overlay", provider: "netbird", localAddress: "100.90.16.237:17879", encrypted: true },
+      ]);
+      expect(connectionRouteLabel(named)).toBe("NetBird · Encrypted");
+      expect(connectionRouteTone(named)).toBe("ok");
+      const unnamed = only([{ path: "overlay", localAddress: "100.90.16.238:17879", encrypted: true }]);
+      expect(connectionRouteLabel(unnamed)).toBe("VPN · Encrypted");
+      // A product this app does not know is a VPN, not a made-up name.
+      const unknown = only([
+        { path: "overlay", provider: "toaster", localAddress: "100.90.16.239:17879", encrypted: true },
+      ]);
+      expect(connectionRouteLabel(unknown)).toBe("VPN · Encrypted");
+    });
+
+    test("only a tunnel is ever labelled encrypted, whatever the frame says", () => {
+      for (const path of ["lan", "other", "loopback"]) {
+        const route = only([{ path, localAddress: "192.168.1.24:17879", encrypted: true }]);
+        expect(route.encrypted).toBe(false);
+        expect(connectionRouteLabel(route)).not.toContain("· Encrypted");
+      }
+      const other = only([{ path: "other", localAddress: "10.9.9.9:17879", encrypted: false }]);
+      expect(connectionRouteLabel(other)).toBe("Other network · Unencrypted");
+      // An overlay the engine does not call encrypted is not shown as encrypted either.
+      const claimed = only([{ path: "overlay", localAddress: "100.90.16.238:17879", encrypted: false }]);
+      expect(connectionRouteLabel(claimed)).toBe("VPN · Unencrypted");
+    });
+
+    test("a client on this computer never left it", () => {
+      const route = only([{ path: "loopback", localAddress: "127.0.0.1:17879", encrypted: false }]);
+      expect(connectionRouteLabel(route)).toBe("This computer");
+      expect(connectionRouteTone(route)).toBe("idle");
+    });
+
+    test("malformed routes are dropped, and an older engine sends none", () => {
+      expect(
+        routesOf([
+          { path: "carrier-pigeon", localAddress: "1.2.3.4:5", encrypted: true },
+          { path: "lan", encrypted: false },
+          "lan",
+        ]),
+      ).toEqual([]);
+      expect(
+        parseRemoteStatus({ available: true, devices: [{ id: "d1", name: "x" }] }).devices[0]?.routes,
+      ).toBe(undefined);
+    });
+
+    test("two connections over the same network read as one", () => {
+      const routes = routesOf([
+        { path: "lan", localAddress: "192.168.1.24:17879", encrypted: false },
+        { path: "lan", localAddress: "192.168.1.24:17879", encrypted: false },
+        { path: "overlay", provider: "tailscale", localAddress: "100.101.1.2:17879", encrypted: true },
+      ]);
+      expect(distinctConnectionRoutes(routes).map(connectionRouteLabel)).toEqual([
+        "LAN · Unencrypted",
+        "Tailscale · Encrypted",
+      ]);
+      expect(distinctConnectionRoutes(undefined)).toEqual([]);
+    });
   });
 });

@@ -7,8 +7,8 @@
 //! connections. Nothing awaits while the lock is held.
 
 use super::address::{
-    AdvertisedAddress, Candidate, HostRoute, ListenPlan, alternates_for, candidate_addresses,
-    host_routes,
+    AdvertisedAddress, Candidate, ConnectionRoute, HostRoute, ListenPlan, alternates_for,
+    candidate_addresses, host_routes,
 };
 use super::connect::{ConnectRequests, OpenError, Outcome, RequestEnd, RequestState};
 use super::connect_code;
@@ -183,6 +183,9 @@ struct Live {
     device_id: String,
     device_name: String,
     control: Arc<ConnectionControl>,
+    /// How the device reached this host, once the transport has classified
+    /// its socket.
+    route: Option<ConnectionRoute>,
 }
 
 #[derive(Default)]
@@ -369,6 +372,21 @@ pub(super) struct LiveConnection {
     shared: Arc<Shared>,
     pub(super) context: DeviceContext,
     pub(super) control: Arc<ConnectionControl>,
+}
+
+impl LiveConnection {
+    /// Record the network this connection arrived over, for the owner's
+    /// status. Classifying never keeps a device out.
+    pub(super) fn set_route(&self, route: ConnectionRoute) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(live) = state.live.get_mut(&self.context.connection_id) {
+            live.route = Some(route);
+        }
+    }
 }
 
 impl Drop for LiveConnection {
@@ -1131,6 +1149,7 @@ impl Shared {
                 device_id: record.id.clone(),
                 device_name: record.name.clone(),
                 control: Arc::clone(&control),
+                route: None,
             },
         );
         let (sink, queue) = FrameSink::new(self.limits.outbound_queue, Arc::clone(&control));
@@ -2005,6 +2024,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
                 ConnectionSummary {
                     device_id: live.device_id.clone(),
                     device_name: live.device_name.clone(),
+                    route: live.route.clone(),
                 },
             )
         })

@@ -2157,6 +2157,7 @@ export class MockEngine {
       recent: this.outside.recent.slice(0, 25),
       platforms: ["claude-desktop", "cursor", "codex", "other"],
       command: "/Applications/RustCode.app/Contents/MacOS/rustcode",
+      httpUrl: "http://127.0.0.1:43871/mcp",
       maxGrants: 20,
       available: true,
     } as unknown as JsonObject;
@@ -2758,10 +2759,17 @@ export class MockEngine {
       pairedDevices: this.remote.devices.length,
       refusedConnections: this.remote.refusedConnections,
       // The machine's answer says which paired devices are connected; the mock's gateway has them all.
-      devices: this.remote.devices.map((device) => ({
-        ...device,
-        connected: this.remote.gateway !== null && this.options.remote !== "disconnected",
-      })),
+      devices: this.remote.devices.map((device) => {
+        const connected = this.remote.gateway !== null && this.options.remote !== "disconnected";
+        return {
+          ...device,
+          connected,
+          // The gateway classifies the address each device dialled; the mock's phones are on the LAN.
+          ...(connected
+            ? { routes: [{ path: "lan", localAddress: "192.168.1.24:17879", encrypted: false }] }
+            : {}),
+        };
+      }),
       ...this.connectRequestsJson(),
     };
     if (this.remote.gateway) {

@@ -3602,3 +3602,112 @@ mod tests {
         assert_eq!(error, "missing 'query' argument");
     }
 }
+
+fn browser_open_schema() -> Value {
+    crate::computer_use::tools(&crate::computer_use::Settings {
+        enabled: true,
+        ..Default::default()
+    })
+    .into_iter()
+    .find(|tool| tool["name"] == "browser_open")
+    .unwrap()["inputSchema"]
+        .clone()
+}
+pub const BROWSER_OPEN: Tool = Tool {
+    name: "browser_open",
+    description: "Use RustCode's isolated browser; requires computer_use.enabled and approval. See docs/computer-use.md.",
+    arguments: "{}",
+    handler: browser_unavailable,
+    requires_confirmation: true,
+    schema: browser_open_schema,
+    capabilities: &[ToolCapability::Network],
+    safety: ToolSafety::Interactive,
+};
+
+fn browser_read_schema() -> Value {
+    crate::computer_use::tools(&crate::computer_use::Settings {
+        enabled: true,
+        ..Default::default()
+    })
+    .into_iter()
+    .find(|tool| tool["name"] == "browser_read")
+    .unwrap()["inputSchema"]
+        .clone()
+}
+pub const BROWSER_READ: Tool = Tool {
+    name: "browser_read",
+    description: "Use RustCode's isolated browser; requires computer_use.enabled and approval. See docs/computer-use.md.",
+    arguments: "{}",
+    handler: browser_unavailable,
+    requires_confirmation: true,
+    schema: browser_read_schema,
+    capabilities: &[ToolCapability::Network],
+    safety: ToolSafety::Interactive,
+};
+
+fn browser_screenshot_schema() -> Value {
+    crate::computer_use::tools(&crate::computer_use::Settings {
+        enabled: true,
+        ..Default::default()
+    })
+    .into_iter()
+    .find(|tool| tool["name"] == "browser_screenshot")
+    .unwrap()["inputSchema"]
+        .clone()
+}
+pub const BROWSER_SCREENSHOT: Tool = Tool {
+    name: "browser_screenshot",
+    description: "Use RustCode's isolated browser; requires computer_use.enabled and approval. See docs/computer-use.md.",
+    arguments: "{}",
+    handler: browser_unavailable,
+    requires_confirmation: true,
+    schema: browser_screenshot_schema,
+    capabilities: &[ToolCapability::Network],
+    safety: ToolSafety::Interactive,
+};
+
+fn browser_click_schema() -> Value {
+    crate::computer_use::tools(&crate::computer_use::Settings {
+        enabled: true,
+        ..Default::default()
+    })
+    .into_iter()
+    .find(|tool| tool["name"] == "browser_click")
+    .unwrap()["inputSchema"]
+        .clone()
+}
+pub const BROWSER_CLICK: Tool = Tool {
+    name: "browser_click",
+    description: "Use RustCode's isolated browser; requires computer_use.enabled and approval. See docs/computer-use.md.",
+    arguments: "{}",
+    handler: browser_unavailable,
+    requires_confirmation: true,
+    schema: browser_click_schema,
+    capabilities: &[ToolCapability::Network],
+    safety: ToolSafety::Interactive,
+};
+
+fn browser_type_schema() -> Value {
+    crate::computer_use::tools(&crate::computer_use::Settings {
+        enabled: true,
+        ..Default::default()
+    })
+    .into_iter()
+    .find(|tool| tool["name"] == "browser_type")
+    .unwrap()["inputSchema"]
+        .clone()
+}
+pub const BROWSER_TYPE: Tool = Tool {
+    name: "browser_type",
+    description: "Use RustCode's isolated browser; requires computer_use.enabled and approval. See docs/computer-use.md.",
+    arguments: "{}",
+    handler: browser_unavailable,
+    requires_confirmation: true,
+    schema: browser_type_schema,
+    capabilities: &[ToolCapability::Network],
+    safety: ToolSafety::Interactive,
+};
+
+fn browser_unavailable(_: &Value) -> Result<String, String> {
+    Err("Browser runtime unavailable".into())
+}

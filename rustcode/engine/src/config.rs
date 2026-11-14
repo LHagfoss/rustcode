@@ -1467,6 +1467,8 @@ pub struct AppConfig {
     /// Loop-guard budgets (`[loop_guard]` in config.toml). User config only.
     #[serde(default)]
     pub loop_guard: LoopGuardConfig,
+    #[serde(default)]
+    pub computer_use: crate::computer_use::Settings,
     /// Remote gateway address (`[remote]` in config.toml). User config only.
     #[serde(default)]
     pub remote: RemoteConfig,
@@ -1832,6 +1834,8 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     loop_guard: Option<LoopGuardConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    computer_use: Option<crate::computer_use::Settings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     remote: Option<RemoteConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     server: Option<ServerConfig>,
@@ -2013,6 +2017,7 @@ impl Default for AppConfig {
             subagent_concurrency_limit: DEFAULT_SUBAGENT_CONCURRENCY_LIMIT,
             delegation_enabled: true,
             loop_guard: LoopGuardConfig::default(),
+            computer_use: Default::default(),
             remote: RemoteConfig::default(),
             server: ServerConfig::default(),
             vision_model: Some("gemini-3.6-flash".to_string()),
@@ -2509,6 +2514,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
         delegation_enabled: Some(config.delegation_enabled),
         loop_guard: Some(config.loop_guard),
+        computer_use: Some(config.computer_use.clone()),
         remote: (config.remote != RemoteConfig::default()).then(|| config.remote.clone()),
         server: (config.server != ServerConfig::default()).then_some(config.server),
         last_active_session_id: config.last_active_session_id.clone(),
@@ -2640,6 +2646,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(enabled) = file.delegation_enabled {
         config.delegation_enabled = enabled;
     }
+    if let Some(computer_use) = file.computer_use {
+        config.computer_use = computer_use;
+    }
     if let Some(loop_guard) = file.loop_guard {
         config.loop_guard = loop_guard;
     }
@@ -2769,6 +2778,7 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // Loop-guard budgets are user safety decisions, mirroring command
     // permissions: a project file must not disable recovery guards.
     file.loop_guard = None;
+    file.computer_use = None;
     // Which interface exposes the user's sessions is the user's decision.
     file.remote = None;
     // Whether this machine installs updates by itself is the user's decision.
@@ -2909,6 +2919,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         subagent_concurrency_limit: None,
         delegation_enabled: None,
         loop_guard: None,
+        computer_use: None,
         remote: None,
         server: None,
         last_active_session_id: None,

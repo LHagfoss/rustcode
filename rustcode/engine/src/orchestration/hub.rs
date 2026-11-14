@@ -333,6 +333,7 @@ impl Hub {
 
     pub fn unregister(&self, session_id: &str) {
         self.lock().remove(session_id);
+        crate::computer_use::unregister(session_id);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Registered>> {
@@ -370,6 +371,10 @@ impl Hub {
                 "error: RustCode did not accept this orchestrator's session or token. Nothing was sent.",
             );
         };
+        if crate::computer_use::is_tool(&request.tool) {
+            return crate::computer_use::answer(&request, self.questions_for(&request), cancel)
+                .await;
+        }
         if request.tool == super::ask_user::TOOL_NAME {
             return self.ask_user(&request, cancel).await;
         }
