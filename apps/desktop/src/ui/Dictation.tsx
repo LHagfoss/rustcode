@@ -4,7 +4,7 @@
 // sends: the transcript is draft text like any other. The pure rules (states,
 // insertion, request shape) are `lib/dictation.ts`.
 
-import { Loader2, Mic, Square, X } from "lucide-react";
+import { Loader2, Mic, MicOff, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   clearDictationTarget,
@@ -21,8 +21,9 @@ import {
   TRANSCRIBE_METHOD,
   transcribeParams,
 } from "../lib/dictation";
+import { checkMicrophone, micBlocked, micBlockedNotice, openMicrophoneSettings } from "../lib/nativeAccess";
 import { openSettings, request, shortcutHint, toast } from "../state/store";
-import { cx, Tooltip } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 
 function toBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -43,6 +44,9 @@ export interface Dictation {
   release: () => void;
   discard: () => void;
   hold: boolean;
+  /** The system refuses the microphone to the app (macOS): the composer says how to allow it. */
+  blocked: "denied" | "restricted" | null;
+  dismissBlocked: () => void;
 }
 
 /** Records and transcribes; `insert` puts the text at the caret, `active` says this composer answers the shortcut. */
@@ -57,6 +61,7 @@ export function useDictation(insert: (text: string) => void, active: boolean): D
   const insertRef = useRef(insert);
   insertRef.current = insert;
   const [hold, setHold] = useState(() => readVoiceSettings().mode === "hold");
+  const [blocked, setBlocked] = useState<"denied" | "restricted" | null>(null);
 
   const dispatch = useCallback((event: DictationEvent) => {
     const next = dictationStep(stateRef.current, event);
@@ -96,6 +101,16 @@ export function useDictation(insert: (text: string) => void, active: boolean): D
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined")
         throw new Error("This window cannot record audio.");
+      // macOS gives the web view a silent stream, or none, when the app may not use the
+      // microphone: ask the system first, and say how to allow it instead of recording nothing.
+      const access = await checkMicrophone();
+      if (stateRef.current.kind !== "starting") return;
+      if (micBlocked(access)) {
+        setBlocked(access);
+        dispatch({ type: "discard" });
+        return;
+      }
+      setBlocked(null);
       const mime = pickMimeType((t) => MediaRecorder.isTypeSupported(t));
       const media = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (stateRef.current.kind !== "starting") {
@@ -226,7 +241,43 @@ export function useDictation(insert: (text: string) => void, active: boolean): D
     else finish();
   }, [discard, finish]);
 
-  return { state, elapsed, toggle, press, release: releaseHold, discard, hold };
+  const dismissBlocked = useCallback(() => setBlocked(null), []);
+
+  return { state, elapsed, toggle, press, release: releaseHold, discard, hold, blocked, dismissBlocked };
+}
+
+/** Over the composer's tray: the microphone is refused, and where to allow it. */
+export function MicrophoneNotice({ dictation }: { dictation: Dictation }) {
+  if (!dictation.blocked) return null;
+  const { text, canOpenSettings } = micBlockedNotice(dictation.blocked);
+  return (
+    <div role="status" className="mx-3 mt-1 flex items-start gap-2 rounded-lg bg-fill-subtle px-3 py-2 rc-in">
+      <MicOff size={14} className="mt-0.5 shrink-0 text-warning" aria-hidden />
+      <p className="m-0 min-w-0 flex-1 text-callout text-fg-muted leading-normal">{text}</p>
+      {canOpenSettings && (
+        <Pill
+          size="sm"
+          onClick={() =>
+            void openMicrophoneSettings().catch(() =>
+              toast("Open System Settings › Privacy & Security › Microphone.", "info"),
+            )
+          }
+        >
+          Open System Settings
+        </Pill>
+      )}
+      <Tooltip label="Dismiss">
+        <button
+          type="button"
+          aria-label="Dismiss the microphone notice"
+          onClick={dictation.dismissBlocked}
+          className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
+        >
+          <X size={12} strokeWidth={2.25} />
+        </button>
+      </Tooltip>
+    </div>
+  );
 }
 
 /** The tray's microphone: idle, recording (with its time and a discard), or transcribing. */

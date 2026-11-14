@@ -144,7 +144,7 @@ import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./A
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { threadMachine } from "./composerFooterLayout";
-import { DictationButton, useDictation } from "./Dictation";
+import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
 import { EnvironmentSelector } from "./EnvironmentSelector";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
@@ -1656,6 +1656,7 @@ export const Composer = memo(function Composer({
               the card (index.css `.rc-composer-footer`), so this row keeps the two things it is
               about — writing the message and sending it — apart and quiet. No divider: the field's
               own air, and the row's `pt-1`, separate them. */}
+          {!offline && <MicrophoneNotice dictation={dictation} />}
           <div className="rc-composer-tray flex items-center gap-2 px-3 pt-1 pb-3">
             <PlusMenu
               onAttach={chooseFiles}

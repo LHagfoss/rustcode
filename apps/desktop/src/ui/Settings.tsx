@@ -160,6 +160,7 @@ const PermissionsPage = lazy(() => import("./PermissionsPage").then((m) => ({ de
 
 import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
+import { SchemeWarning } from "./SchemeWarning";
 import { ScopedHarnessList } from "./ScopedHarnesses";
 import { ScopedValue, SettingsScopeBar, SourceChip } from "./SettingsScope";
 import { ShortcutsPage } from "./ShortcutSettings";
@@ -331,6 +332,7 @@ function GeneralPage() {
   return (
     <>
       <SettingsScopeBar />
+      <SchemeWarning />
       <Group title="New threads">
         <Row
           title="Default project folder"

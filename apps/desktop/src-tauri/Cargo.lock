@@ -3708,6 +3708,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "base64 0.22.1",
+ "block2",
  "chrono",
  "if-addrs",
  "objc2",
