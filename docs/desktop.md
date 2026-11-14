@@ -1351,8 +1351,13 @@ composer's keys stay outside the table.
   search opens every group (`groupTools`).
 - **Tool call detail.** Opening a tool row shows a body by what the call
   did (`src/lib/toolBody.ts`): a command shows its command line, its output
-  with terminal escape codes stripped, and its exit code (non-zero in
-  danger); a search or read shows its arguments and its results or content;
+  in its terminal colours, and its exit code (non-zero in danger). The
+  colours (`src/lib/ansi.ts`) are theme tokens: red danger, green success,
+  yellow warning, blue and cyan accent, black and grey muted, magenta plain;
+  256-colour and truecolor take the nearest of those by hue, and bold, dim,
+  italic and underline are kept. Every other escape sequence is dropped, a
+  `\r` progress line keeps what was written last, and Copy copies the plain
+  text. Other calls' output has its escape codes stripped; a search or read shows its arguments and its results or content;
   any other call, MCP tools included, lists its arguments as key/value rows
   (scalars inline, long strings wrapped, objects and lists as JSON for that
   value only). Diffs keep the diff view, and every Copy copies the raw value.
