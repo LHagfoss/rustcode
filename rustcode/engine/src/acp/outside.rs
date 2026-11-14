@@ -108,6 +108,7 @@ pub(crate) async fn list(_request: OutsideListRequest) -> Result<Value, String> 
         "recent": crate::data_store::recent_outside_calls(None, RECENT_CALLS),
         "platforms": outside::PLATFORMS,
         "command": command(),
+        "httpUrl": crate::orchestration::outside_http::ensure().await.ok(),
         "maxGrants": outside::MAX_GRANTS,
         "available": cfg!(unix),
     }))
