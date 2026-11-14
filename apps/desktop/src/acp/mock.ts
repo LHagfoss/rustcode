@@ -3576,6 +3576,45 @@ export class MockEngine {
             commit_count: 0,
           },
         };
+      case "_rustcode/git/state":
+        return mockGit(this.threads, str(params.path) ?? "") as unknown as Json;
+      case "_rustcode/git/run": {
+        const path = str(params.path) ?? "";
+        const git = mockGit(this.threads, path);
+        const action = str(params.action);
+        if (
+          (action === "commit" || action === "commit_push") &&
+          git.onDefault &&
+          !params.newBranch &&
+          !params.allowDefaultBranch
+        )
+          throw Object.assign(new Error("default_branch"), {
+            code: -32602,
+            data: {
+              reason: "default_branch",
+              message: `This commits to ${git.branch}. Confirm it, or commit to a new branch.`,
+            },
+          });
+        if (action === "commit" || action === "commit_push") {
+          const picked = new Set(Array.isArray(params.files) ? params.files : []);
+          if (str(params.newBranch))
+            Object.assign(git, { branch: str(params.newBranch), onDefault: false, upstream: null });
+          git.files = git.files.filter((f) => !picked.has(f.path));
+          git.ahead += 1;
+        }
+        if (action === "push" || action === "commit_push") {
+          git.upstream = `origin/${git.branch}`;
+          git.ahead = 0;
+        }
+        if (action === "pull") git.behind = 0;
+        let url: string | null = null;
+        if (action === "create_pr") {
+          git.upstream = `origin/${git.branch}`;
+          git.ahead = 0;
+          url = "https://github.com/LHagfoss/rustcode/pull/4242";
+        }
+        return { action, output: "", url, state: git } as unknown as Json;
+      }
       case "_rustcode/worktrees/state": {
         const paths = Array.isArray(params.paths) ? params.paths : [];
         return {
@@ -6638,4 +6677,56 @@ function mockQrRows(size = 37): string[] {
     rows.push(row);
   }
   return rows;
+}
+
+// ---------------------------------------------------------------- git (issue 3724)
+
+interface MockGit {
+  branch: string;
+  defaultBranch: string;
+  onDefault: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  hasRemote: boolean;
+  files: { path: string; status: string }[];
+}
+
+const mockGitStates = new Map<string, MockGit>();
+
+/**
+ * Each folder's git state, kept across calls so a commit, push and pull request move it on. A
+ * worktree thread starts from its worktree's numbers; the main checkout has uncommitted changes.
+ */
+function mockGit(threads: readonly { worktree?: MockWorktree }[], path: string): MockGit {
+  const known = mockGitStates.get(path);
+  if (known) return known;
+  const worktree = threads.find((t) => t.worktree?.path === path)?.worktree;
+  const state: MockGit = worktree
+    ? {
+        branch: worktree.branch,
+        defaultBranch: "main",
+        onDefault: false,
+        upstream: `origin/${worktree.branch}`,
+        ahead: worktree.ahead,
+        behind: worktree.behind,
+        hasRemote: true,
+        files: worktree.dirty ? [{ path: "src/app.ts", status: "M" }] : [],
+      }
+    : {
+        branch: "feat/desktop-git-actions",
+        defaultBranch: "main",
+        onDefault: false,
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+        hasRemote: true,
+        files: [
+          { path: "apps/desktop/src/ui/GitActions.tsx", status: "A" },
+          { path: "apps/desktop/src/ui/ChatView.tsx", status: "M" },
+          { path: "docs/desktop.md", status: "M" },
+        ],
+      };
+  mockGitStates.set(path, state);
+  return state;
 }
