@@ -64,7 +64,7 @@ import {
   thoughtHeadings,
   wakeLine,
 } from "../state/thread";
-import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
+import { displayTool, orchestrationTool, runIdOf, sessionIdOf, usefulSummary } from "../state/toolNames";
 import { type Waiting, waitingLabel, waitingNext, waitingTitle } from "../state/waiting";
 import { harnessId, wakeNotice } from "../state/wakeNotice";
 import { DiffView } from "./DiffView";
@@ -78,6 +78,7 @@ import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { turnActions, turnFooterHidden } from "./replyActions";
 import { SmartUIView } from "./SmartUIView";
 import { VizView } from "./Viz";
+import { WorkflowCard } from "./WorkflowRuns";
 
 type Item<K extends TranscriptItem["kind"]> = Extract<TranscriptItem, { kind: K }>;
 
@@ -570,6 +571,7 @@ export const ToolRow = memo(function ToolRow({
   // The line that tells two calls apart; a lone fence marker is not one.
   const summary = usefulSummary(item.summary) ?? label.summary;
   const startedId = orchestrationTool(item.title) === "start_session" ? sessionIdOf(item.output) : undefined;
+  const startedRun = orchestrationTool(item.title) === "run_workflow" ? runIdOf(item.output) : undefined;
   const link = useApp((s) => (startedId ? s.links.links.find((l) => l.target === startedId) : undefined));
   const linkState = useApp((s) => (link ? stateOf(s, link) : undefined));
   const opensThread = !!startedId && !!link;
@@ -666,6 +668,7 @@ export const ToolRow = memo(function ToolRow({
         )}
       </div>
       <McpAppSlot item={item} threadId={threadId} />
+      {startedRun && threadId && <WorkflowCard threadId={threadId} runId={startedRun} />}
       {open && (
         <div className="rc-expand mt-1.5 mb-1 ml-[26px]">
           <ToolDetail item={item} />

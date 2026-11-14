@@ -34,6 +34,8 @@ const WAKE_MARK: &str = "<!-- rustcode:wake -->";
 const CONTINUE_MARK: &str = "<!-- rustcode:continued -->";
 /// What a linked pull request's news ends with (`PULL_MARK` in the app).
 const PULL_MARK: &str = "<!-- rustcode:pull -->";
+/// What the note that a workflow run ended ends with (`WORKFLOW_MARK` in the app).
+const WORKFLOW_MARK: &str = "<!-- rustcode:workflow -->";
 
 /// One delegate a wake reports: `- link_id <id> · <status> · “<title>” · … · session <id> · …`.
 const LINK_LINE: &str = "- link_id ";
@@ -219,7 +221,7 @@ pub(crate) fn of_text(text: &str) -> MessageOrigin {
             threads: text.lines().filter_map(wake_thread).collect(),
         };
     }
-    if text.contains(CONTINUE_MARK) || text.contains(PULL_MARK) {
+    if text.contains(CONTINUE_MARK) || text.contains(PULL_MARK) || text.contains(WORKFLOW_MARK) {
         return MessageOrigin::of_kind(OriginKind::System);
     }
     MessageOrigin::of_kind(OriginKind::User)
@@ -508,6 +510,9 @@ The rest is in read_session on a child's session id.\n\
         // A linked pull request's news is the app's too, not the user's.
         let pull = of_text("Pull request #12: Merged\n\n<!-- rustcode:pull -->");
         assert_eq!(pull, MessageOrigin::of_kind(OriginKind::System));
+        // So is the note that a workflow run ended.
+        let workflow = of_text("Workflow review: done\n\n<!-- rustcode:workflow -->");
+        assert_eq!(workflow, MessageOrigin::of_kind(OriginKind::System));
     }
 
     #[test]

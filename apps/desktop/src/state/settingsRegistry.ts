@@ -113,7 +113,10 @@ export type ServerSettingKey =
   | "delegate-presets"
   | "limit-fallback"
   | "limit-fallback-map"
-  | "wake-batch-seconds";
+  | "wake-batch-seconds"
+  | "workflow-concurrency"
+  | "workflow-call-budget"
+  | "workflow-timeout-minutes";
 
 export interface ServerSettingSpec {
   key: ServerSettingKey;
@@ -166,7 +169,17 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
   { key: "limit-fallback", label: "Switch a delegate at a limit", type: "boolean", default: false },
   { key: "limit-fallback-map", label: "Limit fallback models", type: "list", default: [] },
   { key: "wake-batch-seconds", label: "Merge delegate wakes within", type: "number", default: 60 },
+  { key: "workflow-concurrency", label: "Workflow workers at once", type: "number", default: 3 },
+  { key: "workflow-call-budget", label: "Workflow agent calls per run", type: "number", default: 40 },
+  { key: "workflow-timeout-minutes", label: "Workflow run time limit", type: "number", default: 60 },
 ];
+
+/** The most each workflow limit may be set to (`rustcode/engine/src/workflow.rs`): the engine clamps to these. */
+export const WORKFLOW_LIMITS = {
+  "workflow-concurrency": { min: 1, max: 8 },
+  "workflow-call-budget": { min: 1, max: 500 },
+  "workflow-timeout-minutes": { min: 1, max: 1440 },
+} as const;
 
 export const SERVER_SETTING_KEYS: readonly ServerSettingKey[] = SERVER_SETTINGS.map((s) => s.key);
 

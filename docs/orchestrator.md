@@ -1675,7 +1675,7 @@ the harness pay one tool description for it. It does not run the page, so it
 returns no script errors, height or screenshot (`docs/smart-ui.md`).
 
 A thread on a harness with the orchestration tools (version 2 and up) also gets
-**`run_workflow`** and **`workflow_status`** (`workflow.rs`, #3394), answered by
+**`run_workflow`**, **`workflow_status`** and **`stop_workflow`** (`workflow.rs`, #3394), answered by
 the hub like the question tool: a JavaScript script, run in a sandbox with no
 files, network or clock, calls `agent(prompt, options)` to start delegates under
 the thread, and keeps its finished calls on disk so a restart continues it. See

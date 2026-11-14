@@ -7,10 +7,11 @@ between) lives only in the orchestrating agent's context, and is lost to a
 restart or a compaction. A workflow run holds that plan in a script and in a
 folder instead (#3394).
 
-This is the engine slice. It has no app UI yet: the run card in the chat, the
-status row above the composer and the run panel come next, as do the Settings
-controls for the limits. Today an agent starts a run with `run_workflow` and
-reads it with `workflow_status`.
+An agent starts a run with `run_workflow`, reads it with `workflow_status` and
+ends it with `stop_workflow`. The desktop app shows it as a card in the chat, a
+row above the composer with Stop, and a list of its worker threads
+(`docs/desktop.md`, *Workflow runs*), and tells the starting thread when it
+ends.
 
 ## The script
 
@@ -100,6 +101,8 @@ no loader.
 Both are tools of the `rustcode` MCP server, answered by the engine's hub, so
 they reach any harness that has the orchestration tools (version 2 and up) and
 need no app to be open. The built-in RustCode harness does not have them yet.
+The workflow tools are three: `run_workflow`, `workflow_status` and
+`stop_workflow`.
 
 **`run_workflow`** takes `script` (inline, at most 64 KiB) or `name` (the file
 `.rustcode/workflows/<name>.js` in the thread's project: letters, digits `-`,
@@ -120,6 +123,15 @@ to end and answers sooner when it does (at most 25 minutes). The answer holds:
 - `calls` (counts), `limits`, `elapsed_ms`, `resumes`, the last 20 `logs`;
 - `result`, the script's return value. One over 96 KiB is not inlined: the
   answer says `result_truncated` and names `result_file`.
+
+**`stop_workflow`** takes a `run_id` and ends the run: the script stops, no
+further `agent()` call starts, and the workers still running are interrupted
+(the same call `interrupt_session` makes). The run becomes `cancelled` and keeps
+the calls it had finished. It answers with the run once it has wound down, or
+with `stopping: true` when that takes more than 15 seconds. A run that already
+ended is answered as it is. A run a restart left running that nothing drives is
+ended on its record, so it is not resumed; its workers, if any are still alive,
+are threads the user can stop like any other.
 
 Workers are started with `start_session` as the thread that started the run, so
 they **nest under it**, count against its delegate slots (`delegates-per-thread`,
@@ -179,13 +191,36 @@ the usual defaults when unset):
 `run_workflow`'s `concurrency`, `call_budget` and `timeout_minutes` can lower a
 run's limits, never raise them past the settings.
 
-## Not in this slice
+## The app
 
-- The run card, the status row with Stop and the run panel in the desktop app,
-  and the Settings page for the limits (the keys above exist, the UI does not).
-- A tool or button to stop a run. A run ends on its own, by timeout, or by
-  failing.
+The desktop app reads a run from the same record through four ACP methods
+(`acp/workflows.rs`; the app side is `state/workflows.ts`):
+
+| Method | What it does |
+| --- | --- |
+| `_rustcode/workflows/list` | `{sessionId}`: that thread's newest 20 runs. Asking, with or without a thread, subscribes the connection to changes. Each run is `workflow_status`'s answer without `result` (it can be large), with `thread`, `has_result`, `woken` and `driven` (whether this engine is driving it). |
+| `_rustcode/workflows/changed` | A notification, `{sessionId, run}`, each time a run's record moves (a phase, a worker starting or ending, a log line, the end). The engine gathers changes for 300 ms and sends one summary per run. |
+| `_rustcode/workflows/stop` | `{sessionId, runId}`: `stop_workflow` for the Stop button. |
+| `_rustcode/workflows/wake` | `{sessionId, runId}`: claim the wake of a run that ended. Answers `{claimed}`, true once. |
+
+**Waking the starting thread.** When a run ends the app tells the thread that
+started it, once, with a short note marked as the app's own (`Workflow review:
+done · 5 workers · 4m 12s`, then how to read the result). It goes after the
+turn the thread is in, like a delegate's finish. The claim is kept in the run
+record (`woken`), so a second window or a reload does not repeat it. A thread
+whose agent already read the end (`workflow_status` on a settled run, or its
+own `stop_workflow`) is not woken for it. The app announces only a run that
+ended within the hour before it first saw it, so opening an old thread does not
+wake it for a run from last week; the agent can always read the run with
+`workflow_status`. With no app open nothing wakes the thread: the agent reads
+the run with `workflow_status` and `wait_ms`.
+
+**Limits in Settings.** A Workflows group under Orchestration in Settings has
+the three settings in *Limits*, per machine like the delegate limits. A run
+reads them when it starts.
+
+## Not yet
+
 - The built-in RustCode harness and outside agents (`mcp-connect`) as callers.
-- Waking the starting thread when a run ends. The agent reads the result with
-  `workflow_status` and `wait_ms`.
+- A button to resume a run a restart left undriven without opening its thread.
 - Retention of old runs.

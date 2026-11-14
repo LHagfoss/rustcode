@@ -589,6 +589,29 @@ composer's keys stay outside the table.
   are not in that strip: they are one collapsed line above it (harness icons,
   a count, what needs you in its own tint) that opens to a bounded, scrolling
   list with Open and Stop per delegate (`ui/DelegateStatus.tsx`).
+- **Workflow runs** (`docs/workflows.md`, issue 3394). A run an agent starts with
+  `run_workflow` shows in three places that read one record. **The card** sits
+  under the `run_workflow` call's row in the chat (`ui/WorkflowRuns.tsx`): its
+  name, status, elapsed time, the phases as steps (`review 2/3 · 1 failed`),
+  the workers done, running and failed, the last log line or why it ended, and
+  Stop while it goes. **The status row** is the first line of the delegate
+  panel above the composer while a run goes, always shown (the delegates stay
+  folded under it): one line, `review-pipeline · verify · 2 of 5 workers done ·
+  2m 19s`, with its own Stop, and it opens to the phases and every worker. The
+  panel is one place for what a thread has going; there is no second strip.
+  **The run panel** is that opened list, in the card and in the row: each
+  worker is a delegate thread of the thread that started the run, so a click
+  opens it. A run the engine has not been driving since a restart says it
+  resumes when its thread is open. Runs come from `_rustcode/workflows/list`
+  when a thread opens and from `_rustcode/workflows/changed` notifications
+  (the engine coalesces them to one summary per run every 300 ms), kept in
+  `state/workflows.ts`. When a run ends the starting thread is told once, as a
+  notice row (`Workflow review: done · 5 workers · 4m 12s`) that wakes it after
+  its turn like any delegate finish; the engine hands that claim to one client
+  (`_rustcode/workflows/wake`), so a second window or a reload cannot repeat it,
+  and a run that ended more than an hour before the app first saw it is not
+  announced. Settings has a **Workflows** group under Orchestration: workers at once, agent
+  calls per run and the run time limit, per machine like the delegate limits.
 - **Background work.** Claude Code's background commands and the turns it
   starts on its own when one finishes reach the app as
   `_rustcode/session/activity` (the engine asks the adapter for its async

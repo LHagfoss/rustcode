@@ -110,6 +110,8 @@ pub(crate) enum Topic {
     Themes,
     /// `_rustcode/pulls/watch`, after a watch request.
     PullWatches,
+    /// `_rustcode/workflows/changed`, after a workflow list request.
+    Workflows,
 }
 
 /// One session as one connection has it.

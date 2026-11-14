@@ -79,6 +79,7 @@ import {
   V2Method,
   type Worktree,
 } from "../acp/v2";
+import { WorkflowMethod } from "../acp/workflows";
 import { announce, mountAnnouncer } from "../lib/announce";
 import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
@@ -346,6 +347,7 @@ import {
 import { userTypedPrompt } from "./topLevel";
 import { readableTurnError } from "./turnError";
 import { waitingOn as backgroundWork } from "./waiting";
+import { onWorkflowChanged, subscribeWorkflows } from "./workflows";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -1342,6 +1344,7 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
   }
   machineConnections.set(id, next);
   void subscribePullWatches(next, id).catch(() => {});
+  void subscribeWorkflows(next).catch(() => {});
   machineOff.set(
     id,
     next.onInbound((message) => void handleInbound(scopeInbound(message, id), next, id)),
@@ -1901,6 +1904,7 @@ async function handshake(): Promise<void> {
     // row's own turn marks what it reports before any wake is worked out below.
     restoreQueuedThreads();
     void subscribePullWatches(conn).catch(() => {});
+    void subscribeWorkflows(conn).catch(() => {});
     // Messages written now and sent later come back the same way; one whose time passed while the
     // app was closed goes out once its thread is open.
     restoreScheduled();
@@ -2179,6 +2183,7 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
       else if (message.method === V2Method.orchestrationCancelled) orchestrationCallDropped(message.params);
       else if (message.method === PULL_WATCH && conn)
         void deliverPullWatch(conn, message.params, host).catch(() => {});
+      else if (message.method === WorkflowMethod.changed) onWorkflowChanged(message.params, host);
       else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
       return;
     case "request":

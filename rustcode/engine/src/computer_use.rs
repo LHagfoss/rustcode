@@ -66,6 +66,62 @@ impl Settings {
         })
     }
 }
+pub(crate) fn settings_value() -> Value {
+    let settings = Settings::load();
+    json!({"enabled": settings.enabled, "allowed_domains": settings.allowed_domains,
+        "browser_available": executable(&settings).is_some()})
+}
+
+pub(crate) fn save_settings(value: &Value) -> Result<(), String> {
+    let enabled = value["enabled"]
+        .as_bool()
+        .ok_or("enabled must be a boolean")?;
+    let domains: Vec<String> = serde_json::from_value(value["allowed_domains"].clone())
+        .map_err(|_| "allowed_domains must be a list of hosts")?;
+    if domains.iter().any(|host| !valid_domain(host)) {
+        return Err(
+            "Use a host such as example.com or *.example.org, without a URL or port".into(),
+        );
+    }
+    let dir = crate::config::get_config_dir().ok_or("No config directory")?;
+    let path = dir.join("config.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut file: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
+    if file.get("computer_use").is_none() {
+        file["computer_use"] = toml::Value::Table(Default::default());
+    }
+    file["computer_use"]["enabled"] = toml::Value::Boolean(enabled);
+    file["computer_use"]["allowed_domains"] =
+        toml::Value::Array(domains.into_iter().map(toml::Value::String).collect());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let temporary = path.with_extension("toml.tmp");
+    std::fs::write(
+        &temporary,
+        toml::to_string_pretty(&file).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    crate::atomic_file::replace_file(&temporary, &path).map_err(|e| e.to_string())
+}
+
+fn valid_domain(entry: &str) -> bool {
+    let host = entry.strip_prefix("*.").unwrap_or(entry);
+    !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        })
+}
+
 const NAMES: [&str; 5] = [
     "browser_open",
     "browser_read",
@@ -163,8 +219,8 @@ impl Drop for Chrome {
         let _ = std::fs::remove_dir_all(profile);
     }
 }
-async fn start(settings: &Settings) -> Result<Browser, String> {
-    let executable = settings
+pub(crate) fn executable(settings: &Settings) -> Option<PathBuf> {
+    settings
         .executable
         .clone()
         .or_else(|| {
@@ -179,7 +235,12 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
             .map(PathBuf::from)
             .find(|p| p.is_file())
         })
-        .ok_or("Chrome/Chromium not found; set computer_use.executable")?;
+        .filter(|path| path.is_file())
+}
+
+async fn start(settings: &Settings) -> Result<Browser, String> {
+    let executable =
+        executable(settings).ok_or("Chrome/Chromium not found; set computer_use.executable")?;
     let profile = crate::config::get_config_dir()
         .ok_or("No config directory")?
         .join("computer-use")
@@ -499,4 +560,26 @@ pub async fn run_approved(
         *browser = None;
     }
     result.map(|value| value.to_string())
+}
+
+#[cfg(test)]
+mod settings_tests {
+    #[test]
+    fn domain_entries_are_hosts_and_optional_subdomain_wildcards() {
+        for host in ["example.com", "*.example.org", "localhost", "EXAMPLE.COM"] {
+            assert!(super::valid_domain(host));
+        }
+        for host in [
+            "",
+            "*",
+            "https://example.com",
+            "example.com:443",
+            "a..com",
+            "-a.com",
+            "a/com",
+        ] {
+            assert!(!super::valid_domain(host));
+        }
+        assert!(!super::Settings::default().enabled);
+    }
 }

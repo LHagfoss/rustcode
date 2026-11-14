@@ -32,6 +32,7 @@ mod streaming;
 mod telemetry;
 mod themes;
 pub(crate) mod usage;
+mod workflows;
 
 pub(crate) use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock,
@@ -3825,6 +3826,29 @@ async fn serve_connection(
                     .map(|store| store.list(request.session_id.as_deref()))
                     .unwrap_or_default();
                 responder.respond(serde_json::json!({ "watches": watches }))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: workflows::WorkflowListRequest, responder, connection| {
+                server.clients.subscribe(client_id, clients::Topic::Workflows);
+                let clients = server.clients.clone();
+                connection.spawn(async move {
+                    responder.respond(workflows::list(request, &clients).await)
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: workflows::WorkflowStopRequest, responder, connection| {
+                // Stopping waits for the workers to be interrupted.
+                connection.spawn(async move { responder.respond(workflows::stop(request).await) })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: workflows::WorkflowWakeRequest, responder, _connection| {
+                responder.respond(workflows::wake(&request))
             },
             agent_client_protocol::on_receive_request!(),
         )

@@ -1,6 +1,7 @@
 import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
 import { dirname } from "../lib/paths";
 import { appPlatform, currentPlatform } from "../lib/platform";
+import { ComputerUseGroup } from "./ComputerUseGroup";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -86,6 +87,7 @@ import {
 } from "../state/orchestration";
 import { PERMISSION_MODES } from "../state/permissions";
 import { RECAP_HOUR_OPTIONS } from "../state/recap";
+import { serverSetting, WORKFLOW_LIMITS } from "../state/settingsRegistry";
 import {
   useLoadScopeSettings,
   useScope,
@@ -704,10 +706,82 @@ function AgentsPage() {
           <ScopedHarnessList targets={targets} writes={writes} />
         )}
       </Group>
+      {thisMachine && <ComputerUseGroup />}
       <OrchestrationGroup />
+      <WorkflowsGroup />
       <DelegatePresetsGroup />
       <LimitFallbackGroup />
     </>
+  );
+}
+
+/** One workflow limit: a slider over the engine's own range, with the value in the engine's unit. */
+function WorkflowLimitRow({
+  setting,
+  title,
+  subtitle,
+  hint,
+  unit,
+}: {
+  setting: keyof typeof WORKFLOW_LIMITS;
+  title: string;
+  subtitle: string;
+  hint: string;
+  unit: string;
+}) {
+  const range = WORKFLOW_LIMITS[setting];
+  const fallback = serverSetting(setting).default as number;
+  const scoped = useScopedSetting(setting, (value) =>
+    typeof value === "number" ? String(value) : String(fallback),
+  );
+  const value = Math.min(range.max, Math.max(range.min, Number(scoped.value ?? fallback)));
+  return (
+    <Row
+      title={title}
+      reset={scoped.mixed || value !== fallback ? () => void scoped.set(fallback) : undefined}
+      subtitle={subtitle}
+      hint={hint}
+    >
+      <ScopedValue mixed={scoped.mixed} breakdown={scoped.breakdown}>
+        <Slider
+          label={title}
+          value={value}
+          min={range.min}
+          max={range.max}
+          onCommit={(next) => void scoped.set(next)}
+          unit={unit}
+        />
+      </ScopedValue>
+    </Row>
+  );
+}
+
+/** Durable workflow runs (docs/workflows.md): what a run may use, read when it starts. */
+function WorkflowsGroup() {
+  return (
+    <Group title="Workflows">
+      <WorkflowLimitRow
+        setting="workflow-concurrency"
+        title="Workflow workers at once"
+        subtitle="How many worker threads one run may have working together."
+        hint="Workers are delegates of the thread that started the run, so the delegate limits above apply too. A run can ask for fewer, never more."
+        unit="workers"
+      />
+      <WorkflowLimitRow
+        setting="workflow-call-budget"
+        title="Workflow agent calls per run"
+        subtitle="How many worker threads one run may start in all."
+        hint="A call a restarted run replays from disk is not counted again. The call that goes over fails inside the script."
+        unit="calls"
+      />
+      <WorkflowLimitRow
+        setting="workflow-timeout-minutes"
+        title="Workflow run time limit"
+        subtitle="How long a run may take before it stops."
+        hint="Counted from each start. When it passes, the run ends as timed out and its running workers are stopped."
+        unit="minutes"
+      />
+    </Group>
   );
 }
 
