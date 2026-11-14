@@ -333,7 +333,7 @@ where
             "tools/list" => {
                 let _ = sender.send(result(
                     id,
-                    json!({ "tools": tools_with(orchestration, offered.smart_ui, offered.ask_user) }),
+                    json!({ "tools": (all_tools(orchestration, offered.smart_ui, offered.ask_user)) }),
                 ));
             }
             "tools/call" => {
@@ -390,7 +390,7 @@ where
                         let _ = sender.send(result(
                             id,
                             json!({
-                                "content": [{ "type": "text", "text": answer.content }],
+                                "content": response_content(tool, &answer),
                                 "isError": !answer.success,
                             }),
                         ));
@@ -444,6 +444,20 @@ async fn call(
                 token: identity.token.clone(),
                 tool: tool.to_owned(),
                 args,
+                outside: false,
+            })
+            .await;
+    }
+    if crate::computer_use::is_tool(tool) {
+        return forward
+            .call(CallRequest {
+                session_id: identity.session_id.clone(),
+                token: identity.token.clone(),
+                tool: tool.to_owned(),
+                args: params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
                 outside: false,
             })
             .await;
@@ -1672,4 +1686,23 @@ mod tests {
                 .contains("not reachable")
         );
     }
+}
+
+fn all_tools(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
+    let mut listed = tools_with(version, smart_ui, ask_user);
+    listed.extend(crate::computer_use::tools(
+        &crate::computer_use::Settings::load(),
+    ));
+    listed
+}
+
+fn response_content(tool: &str, answer: &CallAnswer) -> Value {
+    if tool == "browser_screenshot" && answer.success {
+        if let Ok(body) = serde_json::from_str::<Value>(&answer.content) {
+            if let Some(data) = body.get("data").and_then(Value::as_str) {
+                return json!([{"type":"image","mimeType":"image/png","data":data}]);
+            }
+        }
+    }
+    json!([{"type":"text","text":answer.content}])
 }

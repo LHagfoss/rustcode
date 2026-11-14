@@ -22,6 +22,7 @@ pub mod controller;
 pub mod daemon;
 pub mod data_store;
 use crate::app::{AppState, ChatMessage};
+mod computer_use;
 mod desktop_control;
 pub mod discord_rpc;
 pub mod doctor;
