@@ -1965,7 +1965,14 @@ export function Settings() {
   };
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Settings" data-tab-free className="fixed inset-0 z-30">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
+      data-tab-free
+      data-focus-scope
+      className="fixed inset-0 z-30"
+    >
       {/* The app behind, dimmed; a press on it (not on the panel) closes Settings. */}
       <div aria-hidden className="absolute inset-0 bg-bg/60" />
       <div
@@ -1982,6 +1989,7 @@ export function Settings() {
           <RowResets>
             <nav
               aria-label="Settings sections"
+              data-focus-area="sections"
               className="flex w-60 shrink-0 flex-col gap-3 bg-sidebar px-2 py-3"
             >
               <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
@@ -2091,7 +2099,7 @@ export function Settings() {
             </nav>
             <div className="flex min-w-0 flex-1 flex-col">
               <PanelHeader label={label} />
-              <main className="scroll-stable min-h-0 flex-1">
+              <main aria-label={label} data-focus-area="section" className="scroll-stable min-h-0 flex-1">
                 <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
                   <Suspense fallback={<Loading error={null} />}>
                     {section === "general" && <GeneralPage />}

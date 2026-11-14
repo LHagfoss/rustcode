@@ -480,7 +480,7 @@ export function Review({ threadId }: { threadId: string }) {
   };
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Review">
+    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Review" data-focus-area="main">
       <ViewHeader title={`Review · ${title}`}>
         <Segments
           label="Changes"

@@ -441,7 +441,11 @@ export function Inbox() {
   }, [items, active, run]);
 
   return (
-    <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg" aria-label="Needs you">
+    <main
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg"
+      aria-label="Needs you"
+      data-focus-area="main"
+    >
       <ViewHeader
         title={
           <span className="flex items-center gap-2">

@@ -510,6 +510,19 @@ path here, and an engine that does not list `attachments` in `answerKinds`
 shows the paperclip as unavailable with a reason. A question that takes only
 its own choices has no field and no files.
 
+F6 moves focus to the next area and ⇧F6 to the previous one, wrapping: the
+Threads sidebar, the conversation (or the open view: Needs you, the board,
+a review, a comparison), the message input, then the right panel and the
+terminal when they are shown; a hidden area is skipped. Each area gets back
+the control that last had focus in it, else its default (the highlighted
+thread row, the message field) or its first focusable control. In Settings F6
+moves between the section list and the open section. It does nothing while a
+dialog, a menu, the command palette or a shortcut recorder has the keyboard;
+in the terminal it reaches the app like the other app shortcuts, and the shell
+does not receive it. Each area is a labelled landmark (`data-focus-area`, the
+order and the restore in `src/lib/focusAreas.ts`), so a screen reader names
+where focus went.
+
 Every key above except the composer's is a command in one table
 (`src/lib/keys.ts`) with an id, a label and a default binding, and Settings ›
 Keyboard rebinds it: click the key, press the new combination, Esc cancels;

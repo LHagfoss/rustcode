@@ -1,5 +1,6 @@
 import { Tooltip } from "radix-ui";
 import { lazy, Suspense, useEffect } from "react";
+import { rememberFocus } from "./lib/focusAreas";
 import { applyTheme, resolveTheme } from "./lib/themes";
 import { setUserReduceTransparency } from "./lib/transparency";
 import { restoreZoom } from "./lib/zoom";
@@ -96,7 +97,12 @@ function useShortcuts() {
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Each area's last focused control, so F6 returns to it (lib/focusAreas.ts).
+    document.addEventListener("focusin", rememberFocus);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("focusin", rememberFocus);
+    };
   }, []);
 }
 

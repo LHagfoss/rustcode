@@ -1280,6 +1280,8 @@ export function Transcript({
         onWheel={onWheel}
         className="h-full overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges] sm:px-12"
         role="log"
+        data-focus-area="main"
+        tabIndex={-1}
         // Named for its thread, and silent as it streams: the turn's moments are announced once
         // each (`state/announceThreads.ts`), never every token or tool call a log would read out.
         aria-label={spokenTitle}

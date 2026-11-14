@@ -2299,6 +2299,7 @@ export function Sidebar() {
     <aside
       ref={slot}
       aria-label="Threads"
+      data-focus-area="threads"
       // Not clipped: while it slides out of a slot already 0 wide, the column beside it covers it.
       className="relative flex shrink-0 flex-col"
       style={{ width: hidden ? 0 : width }}
@@ -2338,6 +2339,7 @@ export function Sidebar() {
         <NeedsYouRow />
         <nav
           ref={list}
+          data-focus-default
           // One tab stop for the whole list (the row the keyboard is on), ↑ ↓ through its rows,
           // ⏎ to open and Esc to let the selection go.
           onKeyDown={onListKey}

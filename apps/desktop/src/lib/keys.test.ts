@@ -153,7 +153,7 @@ describe("what a binding may be", () => {
   test("needs a modifier unless it is a function key", () => {
     expect(bindingProblem({}, "new-thread", "b")).toContain("function key");
     expect(bindingProblem({}, "new-thread", "shift+b")).toContain("function key");
-    expect(bindingProblem({}, "new-thread", "f6")).toBeNull();
+    expect(bindingProblem({}, "new-thread", "f7")).toBeNull();
     expect(bindingProblem({}, "new-thread", "mod+alt+n")).toBeNull();
   });
 
@@ -184,7 +184,7 @@ describe("what a binding may be", () => {
       expect(bindingProblem({}, "settle-thread", key)).toContain("function key");
     }
     // The named keys that are not a row's own are still function keys or modified.
-    expect(bindingProblem({}, "pin-thread", "f6")).toBeNull();
+    expect(bindingProblem({}, "pin-thread", "f7")).toBeNull();
     expect(bindingProblem({}, "pin-thread", "mod+tab")).toContain("reserved by the system");
   });
 
@@ -278,7 +278,7 @@ describe("stored overrides", () => {
       expect(parseOverrides(JSON.stringify({ "settle-thread": key }))).toEqual({});
     }
     // A function key or a modified one stays, as for every other command.
-    expect(parseOverrides(JSON.stringify({ "pin-thread": "f6" }))).toEqual({ "pin-thread": "f6" });
+    expect(parseOverrides(JSON.stringify({ "pin-thread": "f7" }))).toEqual({ "pin-thread": "f7" });
   });
 
   test("a stored binding equal to the default is not kept as an override", () => {

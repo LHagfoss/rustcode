@@ -1394,7 +1394,13 @@ export const Composer = memo(function Composer({
   };
 
   return (
-    <div ref={shell} className={cx("rc-composer-shell relative @container/composer", className)}>
+    <div
+      ref={shell}
+      role="region"
+      aria-label="Message input"
+      data-focus-area="composer"
+      className={cx("rc-composer-shell relative @container/composer", className)}
+    >
       {thread && <QueuedAnnouncer threadId={thread.id} />}
       {/* What waits for a time the user picked, over the box: it leaves the transcript's own lane
           alone, and the stack's bottom edge carries the box down as the cards come and go. */}
@@ -1628,6 +1634,7 @@ export const Composer = memo(function Composer({
                 rows={1}
                 placeholder={suggestion ? `${suggestion.text}  ⇥` : placeholder}
                 aria-label="Message"
+                data-focus-default
                 aria-describedby={suggestion ? suggestionHint : undefined}
                 readOnly={offline}
                 {...noTextHelpers}

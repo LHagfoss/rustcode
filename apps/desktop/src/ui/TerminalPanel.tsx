@@ -14,7 +14,7 @@ import { projectName } from "../acp/types";
 import { canOpenPty, openPty, type PtyHandle } from "../lib/pty";
 import { cssVar, onAppThemeChange } from "../lib/theme";
 import { onTerminalCommand, takeTerminalCommands } from "../state/projectActions";
-import { setExtras, setTerminalOpen, toast, useApp, useShortcutHint } from "../state/store";
+import { setExtras, setTerminalOpen, shortcutFor, toast, useApp, useShortcutHint } from "../state/store";
 import {
   activeTab,
   addTerminalTab,
@@ -120,6 +120,12 @@ function TerminalView({ tab, visible }: { tab: TerminalTab; visible: boolean }) 
     // The panel's own keys while a shell has focus: ⌘L sends the selection to the message,
     // ⌘T opens a tab, ⌘W closes this one, ⌘⇧[ and ⌘⇧] move between tabs.
     term.attachCustomKeyEventHandler((e) => {
+      // App shortcuts reach the window from a focused shell too; F6 leaving the terminal must
+      // not also send its escape sequence to the shell, so the terminal skips that key.
+      if (e.type === "keydown") {
+        const command = shortcutFor(e);
+        if (command === "focus-next-area" || command === "focus-previous-area") return false;
+      }
       if (e.type !== "keydown" || !(e.metaKey || e.ctrlKey) || e.altKey) return true;
       const key = e.key.toLowerCase();
       const take = () => {
@@ -277,6 +283,7 @@ export function TerminalPanel() {
   return (
     <section
       aria-label="Terminal"
+      data-focus-area="terminal"
       className="relative flex shrink-0 flex-col border-border border-t bg-bg"
       style={{ height, display: open ? "flex" : "none" }}
     >
