@@ -18,6 +18,7 @@ import {
   PanelRight,
   Sparkles,
   SquareTerminal,
+  Zap,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -73,6 +74,7 @@ import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
 import { boundTips } from "./newThreadTips";
+import { ProjectActionsButton } from "./ProjectActions";
 import { ProjectMark } from "./ProjectMark";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import {
@@ -310,6 +312,7 @@ function ChangesHeaderButton() {
 export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
   status: { label: "Status", icon: CircleDashed, kind: "pill", Button: StatusHeaderButton },
   plan: { label: "Plan", icon: ListChecks, kind: "pill", Button: PlanHeaderButton },
+  actions: { label: "Project actions", icon: Zap, kind: "cluster", Button: ProjectActionsButton },
   pulls: { label: "Pull requests", icon: GitPullRequest, kind: "cluster", Button: PullsHeaderButton },
   terminal: { label: "Terminal", icon: SquareTerminal, kind: "cluster", Button: TerminalHeaderButton },
   details: { label: "Thread details", icon: PanelRight, kind: "cluster", Button: DetailsHeaderButton },
@@ -330,6 +333,7 @@ const PANEL_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["det
  * the action would be (docs/desktop.md › Several machines).
  */
 const LOCAL_ONLY_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>([
+  "actions",
   "terminal",
   "pulls",
   "changes",

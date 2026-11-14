@@ -886,6 +886,15 @@ composer's keys stay outside the table.
   attached count.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
+- **Project actions.** The header's ⚡ menu lists the project's quick
+  actions (named commands such as *Dev server* · `bun run dev`); picking one
+  opens the terminal and runs it in the thread's folder. *Add Action…* /
+  *Edit Actions…* open an editor of name and command rows (⌘⏎ saves). A
+  main checkout and its worktrees share one list (keyed by the session's
+  `repo`), kept in this app's storage only (`rustcode.projectActions`,
+  `state/projectActions.ts`). ⌘K lists them as `Run: ‹name›` with *Edit
+  project actions…*. A thread on another computer shows the button disabled,
+  like the terminal.
 - **Window.** The window opens at the size it was last closed with
   (`webview.rs` keeps it as logical points in `window.json` under the app's
   config folder; closing the window or quitting writes it, and a missing or
@@ -1047,7 +1056,7 @@ composer's keys stay outside the table.
   their top.
 - **Thread header buttons.** The chat header's buttons come from one
   registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): status,
-  plan, pull requests, terminal, details, changes. Settings › Chat › Thread
+  plan, project actions, pull requests, terminal, details, changes. Settings › Chat › Thread
   header buttons lists them as Shown and Hidden: drag a row to reorder it or
   move it across (pointer capture, so the webview's own drops never see it),
   ⌥↑/⌥↓ moves a focused row, and each row's Show/Hide button does the same

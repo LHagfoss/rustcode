@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { projectName } from "../acp/types";
 import { canOpenPty, openPty, type PtyHandle } from "../lib/pty";
 import { cssVar, onAppThemeChange } from "../lib/theme";
+import { onTerminalCommand, takeTerminalCommands } from "../state/projectActions";
 import { setTerminalOpen, useApp, useShortcutHint } from "../state/store";
 import { Cluster, ClusterButton } from "./primitives";
 
@@ -85,17 +86,24 @@ function TerminalView({ cwd, visible }: { cwd: string; visible: boolean }) {
       (handle) => {
         if (!live) return handle.close();
         pty = handle;
+        // A project action (state/projectActions.ts) left for this folder runs once the shell is up.
+        for (const command of takeTerminalCommands(cwd)) handle.write(`${command}\r`);
         term.onData((data) => handle.write(data));
         term.onResize(({ cols, rows }) => handle.resize(cols, rows));
         term.focus();
       },
       (e) => live && setError(e instanceof Error ? e.message : String(e)),
     );
+    const stopCommands = onTerminalCommand((dir) => {
+      if (dir !== cwd || !pty) return;
+      for (const command of takeTerminalCommands(cwd)) pty.write(`${command}\r`);
+    });
     const stopObserving = observeSize(el, () => {
       if (el.offsetWidth > 0) fit.fit();
     });
     return () => {
       live = false;
+      stopCommands();
       stopObserving();
       pty?.close();
       term.dispose();

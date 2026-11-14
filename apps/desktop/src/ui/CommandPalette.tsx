@@ -55,6 +55,7 @@ import { relativeAge } from "../state/thread";
 import {
   matches,
   type PaletteAction,
+  projectActionItems,
   pullOfThread,
   ranked,
   sidebarActions,
@@ -244,6 +245,7 @@ export function baseActions(): PaletteAction[] {
     },
     { id: "theme-dark", label: "Appearance: Dark", icon: Moon, words: "theme", run: () => setTheme("dark") },
     ...sidebarActions(),
+    ...projectActionItems(),
     {
       id: "restart",
       label: "Restart server",
