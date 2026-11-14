@@ -57,6 +57,11 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("orchestration", SettingType::Boolean, json!(true)),
             ("delegates-total", SettingType::Number, json!(8)),
             ("delegates-per-thread", SettingType::Number, json!(4)),
+            (
+                "trust-delegate-accounts",
+                SettingType::Boolean,
+                json!(false),
+            ),
             ("read-across-projects", SettingType::Boolean, json!(true)),
             ("delegate-presets", SettingType::List, json!([])),
             ("limit-fallback", SettingType::Boolean, json!(false)),

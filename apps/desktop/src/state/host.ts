@@ -645,7 +645,12 @@ async function permitted(
   accountKeys: string[] = [],
 ): Promise<Failure | null> {
   if (call?.dropped) return droppedFailure();
-  const needsAccountApproval = accountsNeedApproval(book(), caller.id, accountKeys);
+  const needsAccountApproval = accountsNeedApproval(
+    book(),
+    caller.id,
+    accountKeys,
+    useApp.getState().trustDelegateAccounts,
+  );
   if (!needsAccountApproval && hasGrant(book(), caller.id, key)) return null;
   // The thread's access level answers for the user where it already allows the work: the same
   // policy that answers the harness's own approvals, so a Full-access thread is not re-asked here.
@@ -681,6 +686,8 @@ async function permitted(
   if (choice === "deny") return failure("denied", `the user did not allow this thread to ${verb(question)}`);
   if (choice === "always") {
     setBook((b) => [key, ...accountKeys].reduce((next, allowed) => grant(next, caller.id, allowed), b));
+    // User authority must reach durable storage before the approved work starts.
+    await flushSave();
   }
   return null;
 }

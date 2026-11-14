@@ -1582,8 +1582,24 @@ export const hasGrant = (book: LinkBook, caller: string, key: string) =>
 export const delegateAccountKey = (machine: string, harness: string, account: string | null) =>
   JSON.stringify(["delegate-account", machine, harness, account]);
 
-export const accountsNeedApproval = (book: LinkBook, caller: string, keys: string[]) =>
-  keys.some((key) => !hasGrant(book, caller, key));
+export const accountsNeedApproval = (book: LinkBook, caller: string, keys: string[], trustLocal = false) =>
+  keys.some((key) => {
+    if (trustLocal) {
+      try {
+        const [kind, machine, , account] = JSON.parse(key);
+        if (
+          kind === "delegate-account" &&
+          machine === "local" &&
+          typeof account === "string" &&
+          account.length > 0
+        )
+          return false;
+      } catch {
+        /* An unknown key always needs an explicit grant. */
+      }
+    }
+    return !hasGrant(book, caller, key);
+  });
 
 export function grant(book: LinkBook, caller: string, key: string): LinkBook {
   if (hasGrant(book, caller, key)) return book;
