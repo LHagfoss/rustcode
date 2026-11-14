@@ -123,6 +123,8 @@ export type TranscriptItem =
       text: string;
       /** What was answered: the options chosen, or the words written. */
       answer: string;
+      /** The names of the files the answer carried. */
+      files?: string[];
       at?: number;
     }
   /**
@@ -227,7 +229,12 @@ export function settleEveryWait(state: ThreadState, at: number): ThreadState {
  * The row a resolved question leaves behind: what was asked and what was answered. Built here,
  * not in the reducer, because a permission request never reaches the transcript otherwise.
  */
-export function questionItem(request: PermissionRequest, answer: string, at = Date.now()): TranscriptItem {
+export function questionItem(
+  request: PermissionRequest,
+  answer: string,
+  at = Date.now(),
+  files: readonly string[] = [],
+): TranscriptItem {
   const question = request.question;
   return {
     kind: "question",
@@ -235,6 +242,7 @@ export function questionItem(request: PermissionRequest, answer: string, at = Da
     header: question?.header,
     text: question?.text || request.title,
     answer,
+    ...(files.length ? { files: [...files] } : {}),
     at,
   };
 }

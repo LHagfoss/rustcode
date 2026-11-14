@@ -830,6 +830,17 @@ export interface Question {
   text: string;
   descriptions: string[];
   multiple: boolean;
+  /**
+   * The answer may carry files: the engine lists `attachments` beside `text` in `answerKinds`. An
+   * engine that predates them (a paired machine not yet updated) does not, and neither does a
+   * question that takes only its own choices.
+   */
+  attachments?: boolean;
+  /** The user may write an answer of their own (`text` in `answerKinds`; an engine that lists none takes it). */
+  ownAnswer?: boolean;
+  /** Which question of a set asked one after another this is, from 1, and how many the set has. */
+  step?: number;
+  steps?: number;
 }
 
 /** A `session/request_permission`: a tool approval, or an `ask_question`. */
@@ -875,6 +886,7 @@ export function parsePermissionRequest(rpcId: number | string, params: JsonObjec
           text: str(i?.question) ?? str(toolCall.title) ?? "",
           descriptions: arr(i?.descriptions).map((d) => str(d) ?? ""),
           multiple: bool(i?.multiple) ?? false,
+          ...questionShape(meta),
         }
       : undefined;
   return {
@@ -887,6 +899,22 @@ export function parsePermissionRequest(rpcId: number | string, params: JsonObjec
     options,
     question,
     diffs: parseDiffs(toolCall.content),
+  };
+}
+
+/** What a question's `_meta.rustcode` says about its answer beyond the choices: files, and its place in a set. */
+function questionShape(
+  meta: JsonObject | undefined,
+): Pick<Question, "attachments" | "ownAnswer" | "step" | "steps"> {
+  const kinds = arr(meta?.answerKinds).map((k) => str(k));
+  const step = num(meta?.step);
+  const steps = num(meta?.steps);
+  const numbered = step !== undefined && steps !== undefined && steps > 1 && step >= 1 && step <= steps;
+  const ownAnswer = !kinds.length || kinds.includes("text");
+  return {
+    attachments: ownAnswer && kinds.includes("attachments"),
+    ownAnswer,
+    ...(numbered ? { step, steps } : {}),
   };
 }
 

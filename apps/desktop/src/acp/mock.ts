@@ -2591,7 +2591,7 @@ export class MockEngine {
             kind: "question",
             version: 2,
             questionId: "seed-question-1",
-            answerKinds: ["options", "text"],
+            answerKinds: ["options", "text", "attachments"],
           },
         },
       });
@@ -4942,7 +4942,12 @@ export class MockEngine {
             { optionId: "question_cancel", name: "Cancel", kind: "reject_once" },
           ],
           _meta: {
-            rustcode: { kind: "question", version: 2, questionId: "q-1", answerKinds: ["options", "text"] },
+            rustcode: {
+              kind: "question",
+              version: 2,
+              questionId: "q-1",
+              answerKinds: ["options", "text", "attachments"],
+            },
           },
         });
         if (
