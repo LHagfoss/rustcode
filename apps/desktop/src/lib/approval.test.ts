@@ -13,6 +13,8 @@ import {
   grantAllowed,
   leavesFolder,
   optionScope,
+  planTitle,
+  proposedPlan,
   resolvedLine,
   showsRawInput,
 } from "./approval";
@@ -231,4 +233,40 @@ test("Windows writes outside the folder warn for edits and command outputs", () 
   expect(leavesFolder("src\\a", undefined, root)).toBe(false);
   expect(leavesFolder("\\\\HOST\\share\\a", "\\\\host\\share", root)).toBe(false);
   expect(assessApproval(command('echo hi > "C:\\other folder\\a"'), root).level).toBe("destructive");
+});
+
+describe("plan mode", () => {
+  const plan = "# Add dark mode\n\n1. Read the theme tokens\n2. Add the toggle";
+  const ready = request({
+    title: "Ready to code?",
+    toolKind: "switch_mode",
+    input: { plan },
+    options: [
+      { id: "acceptEdits", name: "Yes, and auto-accept edits", kind: "allow_always" },
+      { id: "default", name: "Yes, and manually approve edits", kind: "allow_once" },
+      { id: "plan", name: "No, keep planning", kind: "reject_once" },
+    ],
+  });
+
+  test("a switch_mode call with a plan is a proposed plan", () => {
+    expect(proposedPlan(ready)).toBe(plan);
+    expect(proposedPlan(request({ toolKind: "switch_mode", input: { mode: "code" } }))).toBeUndefined();
+    expect(proposedPlan(request({ toolKind: "edit", input: { plan } }))).toBeUndefined();
+    expect(proposedPlan(request({ toolKind: "switch_mode", input: { plan: "  " } }))).toBeUndefined();
+  });
+
+  test("the plan is never shown as raw input", () => {
+    expect(showsRawInput(ready)).toBe(false);
+  });
+
+  test("its title is the first heading, or the first line", () => {
+    expect(planTitle(plan)).toBe("Add dark mode");
+    expect(planTitle("Refactor the **store**\n- step")).toBe("Refactor the store");
+    expect(planTitle("")).toBe("");
+  });
+
+  test("an answered plan says what happened to it", () => {
+    expect(resolvedLine(ready, ready.options[1]!)).toBe("Plan approved · Yes, and manually approve edits");
+    expect(resolvedLine(ready, ready.options[2]!)).toBe("Kept planning");
+  });
 });

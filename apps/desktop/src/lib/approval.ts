@@ -391,6 +391,7 @@ export function approvalPreview(request: PermissionRequest): PreviewRow[] {
  */
 export function showsRawInput(request: PermissionRequest): boolean {
   if (request.input === undefined || request.diffs.length > 0) return false;
+  if (proposedPlan(request) !== undefined) return false;
   const tool = request.title.trim().split(/\s/)[0] ?? "";
   if (READ_ONLY_TOOLS.has(tool) || WRITING_TOOLS.has(tool)) return false;
   return (
@@ -428,6 +429,33 @@ export function scopeLabel(scope: GrantScope): string {
   return "";
 }
 
+/**
+ * The plan a harness asks to start building from, when this request is plan mode's "ready to
+ * code?" (Claude Code's ExitPlanMode is a `switch_mode` call whose input carries the plan as
+ * Markdown). The card shows it as a plan to read, not as a tool's raw input.
+ */
+export function proposedPlan(request: PermissionRequest): string | undefined {
+  if (request.toolKind !== "switch_mode") return undefined;
+  const input = request.input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const plan = (input as Record<string, unknown>).plan;
+  return typeof plan === "string" && plan.trim() ? plan.trim() : undefined;
+}
+
+/** A plan's title: its first heading, else its first line, without Markdown marks. */
+export function planTitle(plan: string): string {
+  const lines = plan
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const line = lines.find((l) => /^#{1,6}\s/.test(l)) ?? lines[0] ?? "";
+  return line
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*]\s+/, "")
+    .replace(/[*_`]/g, "")
+    .trim();
+}
+
 /** What a call is, in a few words: the command's first line, or the tool and its path. */
 export function approvalSubject(request: PermissionRequest): string {
   const command = commandOf(request);
@@ -442,6 +470,9 @@ export function approvalSubject(request: PermissionRequest): string {
  * src/app.ts · once`, `Declined git push --force`. A rejection names no scope.
  */
 export function resolvedLine(request: PermissionRequest, option: PermissionOption): string {
+  if (proposedPlan(request) !== undefined) {
+    return optionScope(option) === "decline" ? "Kept planning" : `Plan approved · ${option.name}`;
+  }
   const subject = approvalSubject(request);
   const scope = optionScope(option);
   if (scope === "decline") return `Declined ${subject}`;

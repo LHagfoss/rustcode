@@ -915,6 +915,15 @@ composer's keys stay outside the table.
   paths); an edit needs none, since its diff header names the file and its
   `+N −M`. An answered card settles into one line (`Allowed edit src/app.ts ·
   once`) for a moment.
+  Plan mode's "ready to code?" (a `switch_mode` call carrying the plan, as
+  Claude Code's ExitPlanMode sends it) is not a tool to allow: the row reads
+  *Plan ready* with the plan's title and its Markdown rendered (folded past
+  360px, *Show the whole plan*, Copy), and the bar asks *Plan ready: ‹title›.
+  Start building?* with *Keep planning* (esc), *Build* (⏎, the harness's
+  ask-for-each-edit answer) and the harness's other ways to build under
+  *More* by their own names. It carries no risk badge, and it settles as
+  *Plan approved · ‹answer›* or *Kept planning* (`lib/approval.ts`
+  `proposedPlan`).
   A timed grant is kept by the engine beside the permanent always-allow
   rules and listed with its minutes left under Details › Allowed, where
   Revoke drops it. Keys 1–9 still pick in the engine's order. A child thread's approval or question
