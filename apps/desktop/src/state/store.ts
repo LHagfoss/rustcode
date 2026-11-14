@@ -344,7 +344,7 @@ import {
   type Toast,
   type ToastTone,
 } from "./toasts";
-import { userTypedPrompt } from "./topLevel";
+import { noticeOnlyHistory, userTypedPrompt } from "./topLevel";
 import { readableTurnError } from "./turnError";
 import { waitingOn as backgroundWork } from "./waiting";
 import { onWorkflowChanged, subscribeWorkflows } from "./workflows";
@@ -2044,11 +2044,60 @@ export async function createTheme(name: string, from: string): Promise<string | 
 // ---------------------------------------------------------------- pins and settled
 
 /**
+ * When the app began sending pull request news into threads (PR 3498, 2026-11-11). Until issue 3721 such a
+ * notice marked a delegate as messaged by the user, so it left its parent for a row of its own; only
+ * marks made since then can be one of those.
+ */
+const NOTICE_MESSAGED_SINCE = 1_794_402_000_000;
+
+/**
+ * Give delegates a notice wrongly marked as the user's back to their parent: each delegate marked
+ * since `NOTICE_MESSAGED_SINCE` is loaded once and unmarked when every message in it besides its
+ * task is an app notice. A failed or offline load is tried again on the next connection.
+ */
+let repairingNoticeMessaged = false;
+async function repairNoticeMessaged(): Promise<void> {
+  if (repairingNoticeMessaged) return;
+  repairingNoticeMessaged = true;
+  const key = "rustcode.noticeMessagedRepaired";
+  const checked = storedJson<Record<string, number>>(key, {});
+  try {
+    for (const session of get().sessions) {
+      const stamp = get().messaged[session.id];
+      if (
+        session.parent?.relationship !== "delegate" ||
+        stamp === undefined ||
+        stamp < NOTICE_MESSAGED_SINCE ||
+        threadIsRemote(session.id) ||
+        checked[session.id] !== undefined
+      )
+        continue;
+      const error = await openThread(session.id);
+      const thread = get().threads[session.id];
+      if (error || !thread?.loaded || thread.openFailed) continue;
+      // A real message sent while history was loading must keep its row.
+      if (get().messaged[session.id] !== stamp) continue;
+      if (noticeOnlyHistory(thread.items)) {
+        const messaged = { ...get().messaged };
+        delete messaged[session.id];
+        set({ messaged });
+        store(STORAGE.messaged, JSON.stringify(messaged));
+      }
+      checked[session.id] = stamp;
+      store(key, JSON.stringify(checked));
+    }
+  } finally {
+    repairingNoticeMessaged = false;
+  }
+}
+
+/**
  * Pins live in the engine when it has `_rustcode/session/pin`: local pins
  * move there once. Archived threads (an older app's) become Done once,
  * since Settled is exactly the threads marked Done.
  */
 async function syncPinsAndSettled(conn: AcpConnection): Promise<void> {
+  void repairNoticeMessaged();
   if (!stored(STORAGE.archiveMigrated)) {
     const archived = Object.keys(get().archived);
     store(STORAGE.archiveMigrated, "1");
@@ -5053,7 +5102,7 @@ export async function runPrompt(
   // when it was started by an agent (state/topLevel.ts). A resume after a
   // restart, a wake or a message from another thread is not a message the user
   // sent, and neither is the turn that continues after a wait.
-  if (userTypedPrompt(options)) markMessaged(id);
+  if (userTypedPrompt(options, text)) markMessaged(id);
   // Whoever starts a turn now moots the wait, and if this one stops the same way it waits again.
   if (!options.autoResume && !options.autoCompact && !thread?.running) dropWaits(id);
   // Never a second prompt into a running turn: an external harness takes it as the next turn and can
@@ -5092,7 +5141,7 @@ export async function runPrompt(
   // starts — a delegate's wake, a resume after a restart, the next row of the queue (`queued`), the
   // turn after a usage limit — is not a new send and leaves the snooze alone, so a sleeping thread
   // keeps working in the background without coming back to the list.
-  if (userTypedPrompt(options) && !options.queued) wakeOnWrite(id);
+  if (userTypedPrompt(options, text) && !options.queued) wakeOnWrite(id);
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
   // The turn a restart resumes this thread with answers the links the quit severed: they work again
@@ -5110,7 +5159,7 @@ export async function runPrompt(
   const shown = composedText(text, extras);
   // A message typed here flies out of the composer on its first sighting; one the new-thread screen
   // already drew does not (lib/sendFlight.ts).
-  const sent = userTypedPrompt(options) && !options.fromView && !options.alreadyShown;
+  const sent = userTypedPrompt(options, text) && !options.fromView && !options.alreadyShown;
   // The message is on screen before its blocks are built: a long paste or a 20 MB picture is copied
   // into the prompt's JSON after the bubble lands, not before it — and that update gets a painted
   // frame of its own, so the bubble's row (and the flight it starts) is drawn before the work that

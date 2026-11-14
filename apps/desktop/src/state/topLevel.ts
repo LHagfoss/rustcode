@@ -7,7 +7,7 @@
 // docs/orchestrator.md).
 
 import type { ThreadParent } from "../acp/types";
-import type { Link } from "./orchestration";
+import { type Link, parseDelivered } from "./orchestration";
 
 /** Where a thread sits in the sidebar. */
 export type Placement =
@@ -133,11 +133,23 @@ export function openChain(
  * after a usage limit, an overload or lost network, a wake the app sends, a
  * message from another thread or any other automatic turn is not the user typing.
  */
-export function userTypedPrompt(options: {
-  link?: string;
-  wake?: boolean;
-  automatic?: boolean;
-  autoResume?: boolean;
-}): boolean {
-  return !options.link && !options.wake && !options.automatic && !options.autoResume;
+export function userTypedPrompt(
+  options: {
+    link?: string;
+    wake?: boolean;
+    automatic?: boolean;
+    autoResume?: boolean;
+  },
+  text = "",
+): boolean {
+  return !appNotice(text) && !options.link && !options.wake && !options.automatic && !options.autoResume;
+}
+
+/** Origin markers survive both queueing and history replay. */
+export const appNotice = (text: string): boolean => /<!-- rustcode:[a-z-]+ -->/.test(text);
+
+/** Repair only proven notice-only histories; empty or mixed histories keep the user's row. */
+export function noticeOnlyHistory(items: readonly { kind: string; text?: string }[]): boolean {
+  const users = items.filter((item) => item.kind === "user" && !parseDelivered(item.text ?? ""));
+  return users.length > 0 && users.every((item) => appNotice(item.text ?? ""));
 }
