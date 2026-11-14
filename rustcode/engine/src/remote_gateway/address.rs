@@ -773,6 +773,89 @@ pub struct HostRoute {
     pub provider: Option<OverlayProvider>,
 }
 
+/// The network a connected device reached this host over, judged from the
+/// local address its socket landed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionPath {
+    /// A client on this computer; the traffic never leaves it.
+    Loopback,
+    /// A private address on Wi-Fi or Ethernet: plain WebSocket, readable by
+    /// anyone on that network.
+    Lan,
+    /// An address on a tunnel interface (NetBird, Tailscale, ZeroTier or
+    /// another VPN): the tunnel encrypts it, the gateway does not.
+    Overlay,
+    /// Any other address, or one that is no longer on an interface: treated
+    /// as unencrypted, because nothing says otherwise.
+    Other,
+}
+
+/// How one connected device reached this host and whether that path is
+/// encrypted. `encrypted` is the network's doing (a tunnel); the gateway
+/// itself has no TLS, so it is never true for `lan`, `loopback` or `other`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ConnectionRoute {
+    pub path: ConnectionPath,
+    /// The mesh product, when the interface name says which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<OverlayProvider>,
+    /// The local `host:port` the device dialled.
+    pub local_address: String,
+    pub encrypted: bool,
+}
+
+impl ConnectionRoute {
+    /// The network in a person's words, with whether it is encrypted:
+    /// `NetBird (encrypted by the tunnel)`, `LAN (not encrypted)`.
+    pub fn label(&self) -> String {
+        let network = match (self.path, self.provider) {
+            (ConnectionPath::Loopback, _) => "this computer",
+            (ConnectionPath::Lan, _) => "LAN",
+            (ConnectionPath::Overlay, Some(provider)) => provider.display_name(),
+            (ConnectionPath::Overlay, None) => "VPN",
+            (ConnectionPath::Other, _) => "an unrecognised network",
+        };
+        let state = if self.encrypted {
+            "encrypted by the tunnel"
+        } else {
+            "not encrypted"
+        };
+        format!("{network} ({state})")
+    }
+}
+
+/// Classify the local address of an accepted socket against the machine's
+/// interfaces. An address that is on no interface is `other`, never assumed
+/// to be a tunnel.
+pub fn connection_route(local: SocketAddr, candidates: &[Candidate]) -> ConnectionRoute {
+    let address = local.ip().to_canonical();
+    let (path, provider) = if address.is_loopback() {
+        (ConnectionPath::Loopback, None)
+    } else {
+        candidates
+            .iter()
+            .find(|candidate| candidate.address.to_canonical() == address)
+            .and_then(|candidate| route_kind_for(&candidate.interface, address))
+            .map_or(
+                (ConnectionPath::Other, None),
+                |(kind, provider)| match kind {
+                    HostRouteKind::Lan => (ConnectionPath::Lan, None),
+                    HostRouteKind::Overlay => (ConnectionPath::Overlay, provider),
+                    HostRouteKind::Hostname | HostRouteKind::Public => {
+                        (ConnectionPath::Other, None)
+                    }
+                },
+            )
+    };
+    ConnectionRoute {
+        path,
+        provider,
+        local_address: SocketAddr::new(address, local.port()).to_string(),
+        encrypted: path == ConnectionPath::Overlay,
+    }
+}
+
 /// Most routes one handshake reports, so the frame stays small.
 pub const MAX_ROUTES: usize = 8;
 
@@ -1155,6 +1238,58 @@ mod tests {
         // macOS shares one `utun` device between VPN products.
         assert_eq!(OverlayProvider::from_interface("utun4"), None);
         assert_eq!(OverlayProvider::from_interface("en0"), None);
+    }
+
+    #[test]
+    fn a_connection_is_classified_by_the_local_address_it_reached() {
+        let candidates = [
+            candidate("en0", "192.168.1.20"),
+            candidate("NetBird", "100.90.16.237"),
+            candidate("utun4", "100.90.16.238"),
+            candidate("en0", "100.64.0.9"),
+        ];
+        let route = |local: &str| connection_route(local.parse().unwrap(), &candidates);
+
+        let lan = route("192.168.1.20:17879");
+        assert_eq!(
+            (lan.path, lan.provider, lan.encrypted),
+            (ConnectionPath::Lan, None, false)
+        );
+        assert_eq!(lan.local_address, "192.168.1.20:17879");
+
+        let mesh = route("100.90.16.237:17879");
+        assert_eq!(mesh.path, ConnectionPath::Overlay);
+        assert_eq!(mesh.provider, Some(OverlayProvider::Netbird));
+        assert!(mesh.encrypted);
+
+        // A macOS `utunN` is a tunnel whose product is not known.
+        let unnamed = route("100.90.16.238:17879");
+        assert_eq!(
+            (unnamed.path, unnamed.provider, unnamed.encrypted),
+            (ConnectionPath::Overlay, None, true)
+        );
+
+        // The same range on Wi-Fi is a carrier's address, not a tunnel.
+        let cgnat = route("100.64.0.9:17879");
+        assert_eq!(
+            (cgnat.path, cgnat.encrypted),
+            (ConnectionPath::Other, false)
+        );
+
+        // An address on no interface is never assumed encrypted.
+        let gone = route("10.9.9.9:17879");
+        assert_eq!((gone.path, gone.encrypted), (ConnectionPath::Other, false));
+
+        // A dual-stack socket reports an IPv4 peer's address as IPv4-mapped.
+        let mapped = route("[::ffff:192.168.1.20]:17879");
+        assert_eq!(mapped.path, ConnectionPath::Lan);
+        assert_eq!(mapped.local_address, "192.168.1.20:17879");
+
+        let local = route("127.0.0.1:17879");
+        assert_eq!(
+            (local.path, local.encrypted),
+            (ConnectionPath::Loopback, false)
+        );
     }
 
     #[test]

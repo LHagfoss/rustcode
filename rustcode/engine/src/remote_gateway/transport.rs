@@ -12,6 +12,7 @@
 //! `connect_approved` it may send exactly one more frame, a `pair` request
 //! with the code the owner reads off the host.
 
+use super::address::{candidate_addresses, connection_route};
 use super::connect::Outcome;
 use super::control::RefusalReason;
 use super::devices::DeviceProfile;
@@ -51,6 +52,8 @@ pub(super) async fn serve_connection(
     slot: UnauthenticatedSlot,
 ) {
     let deadline = Instant::now() + shared.limits.handshake_timeout;
+    // The local address the device dialled says which network it arrived on.
+    let local = socket.local_addr().ok();
     // tungstenite bounds the HTTP upgrade itself (64 KiB of headers); these
     // bound every message after it.
     let config = WebSocketConfig::default()
@@ -131,6 +134,9 @@ pub(super) async fn serve_connection(
         }
     };
     drop(slot);
+    if let Some(local) = local {
+        connection.set_route(connection_route(local, &candidate_addresses()));
+    }
     if thread_names {
         welcome.confirm_thread_names();
     }

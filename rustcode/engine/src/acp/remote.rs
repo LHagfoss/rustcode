@@ -47,7 +47,7 @@ use crate::remote::{
     SessionRegistration, apply_session_mutation, read_session,
 };
 use crate::remote_gateway::control::{
-    DeviceSummary, MachineOfferDetails, MachineOfferStatus, OfferDetails,
+    ConnectionSummary, DeviceSummary, MachineOfferDetails, MachineOfferStatus, OfferDetails,
 };
 use crate::remote_gateway::lifecycle::RemoteLifecycle;
 use crate::remote_gateway::service;
@@ -1332,9 +1332,40 @@ async fn host_status() -> Value {
         "pairedDevices": devices.len(),
         "devices": devices
             .iter()
-            .map(|device| device_json(device, Some(connected(&device.id))))
+            .map(|device| {
+                let mut value = device_json(device, Some(connected(&device.id)));
+                if let Some(routes) = status
+                    .as_ref()
+                    .map(|status| connection_routes_json(&status.connections, &device.id))
+                    .filter(|routes| !routes.is_empty())
+                {
+                    value["routes"] = Value::Array(routes);
+                }
+                value
+            })
             .collect::<Vec<_>>(),
     })
+}
+
+/// The networks a device's open connections arrived over, one entry each:
+/// `path` (`loopback`, `lan`, `overlay` or `other`), the overlay's
+/// `provider` when the interface names it, the `localAddress` it dialled and
+/// whether the network `encrypted` the traffic. A gateway that does not
+/// classify connections yields none.
+fn connection_routes_json(connections: &[ConnectionSummary], device_id: &str) -> Vec<Value> {
+    connections
+        .iter()
+        .filter(|connection| connection.device_id == device_id)
+        .filter_map(|connection| connection.route.as_ref())
+        .map(|route| {
+            json!({
+                "path": route.path,
+                "provider": route.provider,
+                "localAddress": route.local_address,
+                "encrypted": route.encrypted,
+            })
+        })
+        .collect()
 }
 
 /// A paired device as the apps read it: what it is, where it runs and when
@@ -2363,6 +2394,53 @@ mod tests {
         assert_eq!(value["platform"], "unknown");
         assert!(value["lastSeenAt"].is_null() && value["connected"].is_null());
         assert!(value.get("token_sha256").is_none());
+    }
+
+    #[test]
+    fn a_connected_device_reports_the_network_it_arrived_over() {
+        use crate::remote_gateway::address::{ConnectionPath, ConnectionRoute, OverlayProvider};
+        let route = |path, provider, encrypted| ConnectionRoute {
+            path,
+            provider,
+            local_address: "100.90.16.237:17879".into(),
+            encrypted,
+        };
+        let connections = vec![
+            ConnectionSummary {
+                device_id: "aa".into(),
+                device_name: "phone".into(),
+                route: Some(route(
+                    ConnectionPath::Overlay,
+                    Some(OverlayProvider::Netbird),
+                    true,
+                )),
+            },
+            ConnectionSummary {
+                device_id: "bb".into(),
+                device_name: "pc".into(),
+                route: Some(route(ConnectionPath::Lan, None, false)),
+            },
+            ConnectionSummary {
+                device_id: "cc".into(),
+                device_name: "old".into(),
+                route: None,
+            },
+        ];
+        assert_eq!(
+            connection_routes_json(&connections, "aa"),
+            vec![json!({
+                "path": "overlay",
+                "provider": "netbird",
+                "localAddress": "100.90.16.237:17879",
+                "encrypted": true,
+            })]
+        );
+        assert_eq!(
+            connection_routes_json(&connections, "bb")[0]["encrypted"],
+            false
+        );
+        assert!(connection_routes_json(&connections, "cc").is_empty());
+        assert!(connection_routes_json(&connections, "missing").is_empty());
     }
 
     #[test]
