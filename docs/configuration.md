@@ -555,7 +555,9 @@ cannot become a general store over ACP. The keys are
 presets), `limit-fallback` (off by default), `limit-fallback-map` (a list,
 see › Switching a delegate at a limit) and `wake-batch-seconds` (default 60;
 how long an orchestrator waits to merge its delegates' finishes and stalls into
-one wake turn, 0 turns it off, see › Waking a parent thread). A client
+one wake turn, 0 turns it off, see › Waking a parent thread), and the
+workflow limits `workflow-concurrency` (3), `workflow-call-budget` (40) and
+`workflow-timeout-minutes` (60) ([workflows.md](workflows.md)). A client
 that reads a key the machine never set gets the engine's default. The desktop
 app seeds its own values once on first start, but only for the keys `stored`
 does not list, so a value another machine wrote first is kept.

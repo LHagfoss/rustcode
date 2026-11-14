@@ -66,6 +66,9 @@ keyring = { version = "3.6", default-features = false, features = ["apple-native
 qrcode = { version = "0.14.1", default-features = false }
 rand = "0.10.2"
 regex = "1"
+# The workflow sandbox (docs/workflows.md): QuickJS, built from C like the
+# bundled SQLite, with no module loader and no host bindings of its own.
+rquickjs = { version = "0.14", default-features = false, features = ["std", "futures", "parallel", "disable-assertions"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "form", "stream", "rustls"] }
 rusqlite = { version = "0.32.1", features = ["bundled", "hooks", "limits"] }
 schemars = "1.2.2"

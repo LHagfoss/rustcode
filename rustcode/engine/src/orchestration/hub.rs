@@ -289,15 +289,24 @@ impl Hub {
         version: u8,
     ) -> String {
         let token = random_token();
+        let version = version.min(super::VERSION);
         self.lock().insert(
             session_id.to_owned(),
             Registered {
                 token: token.clone(),
-                client,
-                version: version.min(super::VERSION),
+                client: client.clone(),
+                version,
                 questions: None,
             },
         );
+        // A workflow run this thread left running when the engine stopped
+        // continues from its first unfinished call (#3394).
+        if version >= 2 {
+            crate::workflow::resume(
+                session_id,
+                crate::workflow::ThreadRunner::new(session_id, client, version),
+            );
+        }
         token
     }
 
@@ -364,6 +373,9 @@ impl Hub {
         if request.tool == super::ask_user::TOOL_NAME {
             return self.ask_user(&request, cancel).await;
         }
+        if crate::workflow::is_tool(&request.tool) {
+            return workflow_call(&request, client, version, cancel).await;
+        }
         if !super::is_tool(&request.tool) {
             return CallAnswer::failure(format!(
                 "error: {} is not an orchestration tool",
@@ -391,6 +403,33 @@ impl Hub {
             success: output.success,
             content: output.content,
         }
+    }
+}
+
+/// `run_workflow` and `workflow_status` (#3394): the engine answers them, and
+/// a run's workers are delegates of the calling thread, started through the
+/// same client (or the engine's own answer) as its other orchestration calls.
+async fn workflow_call(
+    request: &CallRequest,
+    client: Option<Arc<dyn PreviewClient>>,
+    version: u8,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> CallAnswer {
+    if version < 2 {
+        return CallAnswer::failure(format!("error: unknown tool '{}'", request.tool));
+    }
+    let outcome = if request.tool == crate::workflow::RUN_TOOL_NAME {
+        let runner = crate::workflow::ThreadRunner::new(&request.session_id, client, version);
+        crate::workflow::start(&request.session_id, runner, &request.args)
+    } else {
+        crate::workflow::status(&request.session_id, &request.args, cancel).await
+    };
+    match outcome {
+        Ok(content) => CallAnswer {
+            success: true,
+            content,
+        },
+        Err(reason) => CallAnswer::failure(format!("error: {} failed: {reason}", request.tool)),
     }
 }
 

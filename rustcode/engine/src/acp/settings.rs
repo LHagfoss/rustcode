@@ -60,6 +60,10 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("limit-fallback", SettingType::Boolean, json!(false)),
             ("limit-fallback-map", SettingType::List, json!([])),
             ("wake-batch-seconds", SettingType::Number, json!(60)),
+            // Workflow runs (#3394): workers at once, agent() calls in all, minutes.
+            ("workflow-concurrency", SettingType::Number, json!(3)),
+            ("workflow-call-budget", SettingType::Number, json!(40)),
+            ("workflow-timeout-minutes", SettingType::Number, json!(60)),
         ]
     })
 }

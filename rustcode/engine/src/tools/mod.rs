@@ -1522,6 +1522,8 @@ pub const TOOLS: &[Tool] = &[
     misc::SMART_UI_PREVIEW,
     misc::SMART_UI_CHECK,
     misc::ASK_USER_QUESTION,
+    misc::RUN_WORKFLOW,
+    misc::WORKFLOW_STATUS,
     misc::LIST_SESSIONS,
     misc::MESSAGE_SESSION,
     misc::WAIT_SESSION,

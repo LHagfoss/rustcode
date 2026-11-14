@@ -54,6 +54,7 @@ rustcode --acp           # serve ACP over stdio (the app uses this)
 [Desktop app](docs/desktop.md) ·
 [Harnesses](docs/harnesses.md) ·
 [Orchestrator](docs/orchestrator.md) ·
+[Workflows](docs/workflows.md) ·
 [Configuration](docs/configuration.md) ·
 [Sandbox](docs/sandbox.md) ·
 [Architecture](docs/architecture.md)
