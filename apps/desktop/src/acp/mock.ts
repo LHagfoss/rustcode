@@ -3588,6 +3588,10 @@ export class MockEngine {
           this.textGenerators.selected = null;
         return this.textGenerators;
       }
+      case "_rustcode/voice/transcribe":
+        // Canned text, so the dictation flow works without an engine or a key.
+        if (!str(params.generatorId)) throw new Error("No transcription provider");
+        return { text: "Summarize what changed in this branch since main." };
       case "_rustcode/textGeneration/generate":
         if (!this.textGenerators.selected) return { text: null };
         return {

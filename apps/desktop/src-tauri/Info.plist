@@ -12,6 +12,11 @@
 	     layer, so its _rustcode._tcp record never reaches the network. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>RustCode finds and connects to your other machines on the local network.</string>
+	<!-- Voice dictation in the composer records from the microphone; macOS
+	     shows this text in its permission prompt, and refuses the microphone
+	     without it. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>RustCode records your voice when you dictate a message, and sends it to the transcription provider you chose.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_rustcode._tcp</string>

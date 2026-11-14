@@ -64,6 +64,7 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   { section: "permissions", title: "Remembered approvals", kind: "machine" },
   { section: "permissions", title: "Still asks at Full access", kind: "app" },
   { section: "agents", title: "Text generation", kind: "machine" },
+  { section: "agents", title: "Voice", kind: "machine" },
   // Harnesses: the default is a server setting, the cards and accounts are machine-only.
   { section: "agents", title: "New threads start on", kind: "server" },
   { section: "agents", title: "Harnesses", kind: "server" },

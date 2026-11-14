@@ -22,6 +22,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Computer use",
     keywords: "browser chrome chromium allowlist domains approval headless",
   },
+  {
+    section: "agents",
+    title: "Voice",
+    keywords: "dictation dictate microphone speech transcribe transcription whisper talk",
+  },
   // ------------------------------------------------------------ General
   {
     section: "general",
