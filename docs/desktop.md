@@ -903,8 +903,15 @@ composer's keys stay outside the table.
   learns the same list from the handshake and reconnects over whichever
   answers. A thread's header carries a chip while it is shared, with its
   attached count.
-- **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
-  per folder, kept while hidden, following the app's colours.
+- **Terminal.** ⌘J: xterm.js on shell PTYs in the thread's folder, following
+  the app's colours. Each folder has tabs (`state/terminalTabs.ts`, at most
+  8): **+** or ⌘T adds a shell, ⌘W closes the focused one, ⌘⇧[ / ⌘⇧] move
+  between them, and a tab takes the title the shell sets (`bun run dev`).
+  Tabs keep running while the panel is hidden or another thread is open.
+  Selecting output shows *Add to message* (⌘L): the selection goes to the
+  composer as a chip (`Terminal · 24 lines`, its last 400 lines at most),
+  sent as a fenced block naming the tab, and focus returns to the field.
+  A project action opens in its own tab, named after it, and reuses it.
 - **Git actions.** The header's git pill shows the one action the thread's
   folder calls for: *Commit* (with the number of changed files), *Pull* when
   the branch is behind, *Push* when it has commits the remote lacks or was
@@ -922,7 +929,8 @@ composer's keys stay outside the table.
   the pill disabled.
 - **Project actions.** The header's ⚡ menu lists the project's quick
   actions (named commands such as *Dev server* · `bun run dev`); picking one
-  opens the terminal and runs it in the thread's folder. *Add Action…* /
+  opens the terminal and runs it in the action's own tab in the thread's
+  folder. *Add Action…* /
   *Edit Actions…* open an editor of name and command rows (⌘⏎ saves). A
   main checkout and its worktrees share one list (keyed by the session's
   `repo`), kept in this app's storage only (`rustcode.projectActions`,
@@ -1953,7 +1961,6 @@ From the SwiftUI app, still missing or partial:
 - GitHub sign-in flow, model account switching (Connections is read-only),
   keybinding editor, Discord presence, revoking a paired device (Settings ›
   Remote access lists them; `rustcode remote revoke` in a terminal revokes).
-- Terminal tabs (one terminal per folder).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The
   Smart UI `rcui://` path was checked by unit test and the page itself in

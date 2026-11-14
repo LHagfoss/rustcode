@@ -129,20 +129,20 @@ export function saveProjectActions(
 const pending = new Map<string, string[]>();
 const waiting = new Set<(cwd: string) => void>();
 
-/** Leaves a command for the terminal of `cwd`; the caller opens the panel. */
+/** Leaves a command for a terminal tab (state/terminalTabs.ts); the caller opens the panel. */
 export function queueTerminalCommand(cwd: string, command: string): void {
   pending.set(cwd, [...(pending.get(cwd) ?? []), command]);
   for (const listener of waiting) listener(cwd);
 }
 
-/** The commands waiting for the terminal of `cwd`, once: taking them empties the queue. */
+/** The commands waiting for a terminal tab, once: taking them empties the queue. */
 export function takeTerminalCommands(cwd: string): string[] {
   const commands = pending.get(cwd) ?? [];
   pending.delete(cwd);
   return commands;
 }
 
-/** Tells a terminal a command arrived for some folder; it takes its own. */
+/** Tells the terminals a command arrived for some tab; each takes its own. */
 export function onTerminalCommand(listener: (cwd: string) => void): () => void {
   waiting.add(listener);
   return () => {
