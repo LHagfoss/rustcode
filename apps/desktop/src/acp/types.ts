@@ -842,6 +842,7 @@ export interface PermissionRequest {
   input?: Json;
   options: PermissionOption[];
   question?: Question;
+  secret?: { name: string; reason: string; destination: string };
   diffs: FileDiff[];
   /** When the app received it, so several waiting requests can read oldest first. */
   at?: number;
@@ -885,6 +886,10 @@ export function parsePermissionRequest(rpcId: number | string, params: JsonObjec
     toolKind: str(toolCall.kind),
     input,
     options,
+    secret:
+      str(meta?.kind) === "secret"
+        ? { name: str(i?.name) ?? "", reason: str(i?.reason) ?? "", destination: str(i?.destination) ?? "" }
+        : undefined,
     question,
     diffs: parseDiffs(toolCall.content),
   };

@@ -4922,6 +4922,21 @@ export class MockEngine {
         });
         return done("end_turn");
       }
+      if (/request_secret|secret card/i.test(prompt)) {
+        await this.ask("session/request_permission", {
+          sessionId: sid,
+          toolCall: {
+            toolCallId: "secret-demo",
+            title: "Secret API_KEY",
+            rawInput: { name: "API_KEY", reason: "Authenticate the deployment", destination: ".env.local" },
+          },
+          options: [
+            { optionId: "secret_save", name: "Save", kind: "allow_once" },
+            { optionId: "secret_decline", name: "Decline", kind: "reject_once" },
+          ],
+          _meta: { rustcode: { kind: "secret", version: 1 } },
+        });
+      }
       if (/question/i.test(prompt)) {
         const answer = await this.ask("session/request_permission", {
           sessionId: sid,

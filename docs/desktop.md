@@ -2043,3 +2043,12 @@ Opening a link starts the app or brings its existing window forward.
 In the command palette, **Copy prompt link** copies the current composer text,
 and **Copy thread link** copies the selected thread's address. A thread's menu
 also offers **Copy link**. Thread links in messages keep their inline navigation.
+
+### Private secret card
+
+`request_secret` shows the requesting thread and harness, key, reason and dotenv
+path above the composer. Enter a value in the masked field, optionally Show it,
+then Save or Decline. Values stay out of drafts and transcript items. A remote
+thread warns that its machine receives the value; the reply uses that thread's
+connection. Other threads can list the pending request but cannot answer it.
+In mock transport, send `secret card` to stage this request without an engine.

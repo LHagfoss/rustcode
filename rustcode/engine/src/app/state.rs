@@ -328,6 +328,7 @@ pub struct AppState {
     /// the same for the whole session. `None` hides `localhost_preview`.
     /// The client that hosts other threads for `message_session` (#2637),
     /// when it advertised one.
+    pub secret_asker: Option<crate::orchestration::ask_user::Asker>,
     pub orchestration_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     /// The orchestration version that client advertised: 1 offers the M1
     /// tools, 2 adds `read_session`, `start_session` and `fan_out`.
@@ -1859,6 +1860,7 @@ impl AppState {
             preview_client: None,
             desktop_client: None,
             smart_ui_client: None,
+            secret_asker: None,
             orchestration_client: None,
             orchestration_version: 0,
             local_orchestration: true,

@@ -520,6 +520,7 @@ async fn set_launch(
 ) -> bool {
     let channel = launch.is_some()
         && crate::orchestration::hub::set_questions(&session.id, session.question_asker()).await;
+    crate::orchestration::hub::set_secret_workspace(&session.id, session.cwd.clone()).await;
     let ask_user = ask_user && channel;
     let launch = launch.map(|launch| launch.with_ask_user(ask_user));
     let attached = launch.is_some();

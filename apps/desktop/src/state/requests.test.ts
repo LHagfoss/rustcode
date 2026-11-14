@@ -14,6 +14,7 @@ import { permissionSelected, questionTextAnswer } from "../acp/types";
 import { answerOrchestration, resolveGrant } from "./host";
 import { emptyBook, type Link } from "./orchestration";
 import {
+  answerSecret,
   connect,
   markFinished,
   markUnread,
@@ -571,5 +572,27 @@ describe("message_session attachments", () => {
     expect(queued[0]?.extras?.attachments).toMatchObject([
       { kind: "file", name: "orchestrator.md", path: file },
     ]);
+  });
+});
+
+describe("private secret replies", () => {
+  test("never records the value in thread state and refuses cross-thread answers", async () => {
+    const { parent, child, sent } = await staged();
+    const request = {
+      ...ask(child, 803),
+      secret: { name: "API_KEY", reason: "Deploy", destination: ".env.local" },
+    };
+    updateThread(child, (t) => ({ ...t, permissions: [request] }));
+    const refused = await answerOrchestration({
+      sessionId: parent,
+      tool: "answer_request",
+      args: { session_id: child, request_id: "803", choice: "allow_once" },
+    });
+    expect(errorOf(refused).code).toBe("not_allowed");
+    expect(answerSecret(request, "private-canary-97531")).toBe(true);
+    expect(JSON.stringify(useApp.getState().threads[child])).not.toContain("private-canary-97531");
+    expect(JSON.stringify(useApp.getState().resolvedApprovals)).not.toContain("private-canary-97531");
+    expect(JSON.stringify(responseTo(sent, 803))).toContain("private-canary-97531");
+    expect(useApp.getState().threads[child]?.permissions).toHaveLength(0);
   });
 });

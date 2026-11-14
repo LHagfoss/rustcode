@@ -1784,3 +1784,15 @@ itself, then from delegates' final answers. Four things keep it small:
   successful answer carries a `context_note` saying how full it is and
   suggesting a handoff to a new thread. It is told once per quarter
   (`contextNote`).
+
+### Private secret requests
+
+Harness MCP tool `request_secret` takes `name` (an environment variable key),
+`reason`, and `destination` (a dotenv file in the thread workspace). The user
+answers in a private card. Only confirmation or decline reaches the harness;
+the value travels directly on the permission response and is not a chat answer.
+Existing parent directories are required. Tracked files, links and paths outside
+the workspace are refused. Files are replaced with owner-only permissions.
+Environment injection and secret providers are not supported. Agents should use
+this tool instead of asking for credentials in chat, and must not read or print
+the destination. Commands can still expose a stored value if they print it.

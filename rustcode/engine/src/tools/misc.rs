@@ -3724,3 +3724,14 @@ pub const BROWSER_TYPE: Tool = Tool {
 fn browser_unavailable(_: &Value) -> Result<String, String> {
     Err("Browser runtime unavailable".into())
 }
+
+pub const REQUEST_SECRET: Tool = Tool {
+    name: crate::orchestration::secret::TOOL_NAME,
+    description: "Ask for a credential in a private card, never in chat. Stores NAME in an untracked workspace dotenv file. Returns only confirmation, never the value. Never read or print the destination file.",
+    arguments: r#"{"name":"API_KEY","reason":"Deploy the service","destination":".env.local"}"#,
+    handler: ask_user_question_unavailable,
+    requires_confirmation: false,
+    schema: crate::orchestration::secret::schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};

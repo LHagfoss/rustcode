@@ -3744,6 +3744,8 @@ interface Answering {
  * after the user answered the card, since that request may be gone by then.
  */
 function answeringFor(request: PermissionRequest, call: AnswerCall): Answering | Failure {
+  if (request.secret)
+    return failure("not_allowed", "Secret requests can only be answered privately by the user");
   const question = request.question;
   if (!question) {
     if (call.answer) return failure("invalid", "that request is an approval: give choice");
@@ -4056,7 +4058,7 @@ function listPendingRequests(caller: RuleThread, machine?: MachineRef): JsonObje
     request_id: String(request.rpcId),
     ...(targetMachine(thread.id) ? { machine: targetMachine(thread.id) } : {}),
     title: rule?.title ?? "",
-    kind: request.question ? "question" : "approval",
+    kind: request.secret ? "secret" : request.question ? "question" : "approval",
     asks: request.question?.text ?? request.title,
     // An approval's choices and a question's answers, in the order the card lists them.
     options: request.options.map((o) => ({ id: o.id, name: o.name })),

@@ -5608,6 +5608,7 @@ function reply(request: PermissionRequest, result: JsonObject, answer?: string):
 }
 
 export function answerPermission(request: PermissionRequest, option: PermissionOption | null) {
+  if (request.secret) return;
   const answered = reply(
     request,
     option ? permissionSelected(option.id) : permissionCancelled,
@@ -5830,6 +5831,30 @@ function loadPermissionPins(): Record<string, PermissionMode> {
   return kept;
 }
 
+/** Secret values travel only on the originating connection, never into items or drafts. */
+export function answerSecret(request: PermissionRequest, value: string | null): boolean {
+  if (!request.secret) return false;
+  const result: JsonObject =
+    value === null
+      ? permissionCancelled
+      : {
+          ...permissionSelected("secret_save"),
+          _meta: { rustcode: { secret: value } },
+        };
+  const answered = reply(request, result);
+  if (answered) {
+    const text =
+      value === null ? "Declined" : `Secret ${request.secret.name} saved to ${request.secret.destination}`;
+    set((s) => ({
+      resolvedApprovals: {
+        ...s.resolvedApprovals,
+        [request.sessionId]: { rpcId: request.rpcId, text, at: Date.now(), allowed: value !== null },
+      },
+    }));
+  }
+  return answered;
+}
+
 export function answerQuestionOptions(request: PermissionRequest, options: PermissionOption[]) {
   if (!options.length) return;
   reply(
@@ -5840,6 +5865,7 @@ export function answerQuestionOptions(request: PermissionRequest, options: Permi
 }
 
 export function answerQuestionText(request: PermissionRequest, text: string) {
+  if (request.secret) return;
   const carrier = request.options.find(
     (o) => o.kind === "allow_once" || o.kind === "allow_always" || !o.kind,
   );

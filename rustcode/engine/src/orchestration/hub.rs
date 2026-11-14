@@ -217,6 +217,7 @@ struct Registered {
     /// How `ask_user_question` reaches the user: the thread's own permission
     /// channel, set for a harness without a question tool (#3393).
     questions: Option<super::ask_user::Asker>,
+    workspace: Option<PathBuf>,
 }
 
 pub struct Hub {
@@ -297,6 +298,7 @@ impl Hub {
                 client: client.clone(),
                 version,
                 questions: None,
+                workspace: None,
             },
         );
         // A workflow run this thread left running when the engine stopped
@@ -319,6 +321,12 @@ impl Hub {
         };
         registered.questions = Some(asker);
         true
+    }
+
+    pub fn set_secret_workspace(&self, session_id: &str, workspace: PathBuf) {
+        if let Some(entry) = self.lock().get_mut(session_id) {
+            entry.workspace = Some(workspace);
+        }
     }
 
     /// The thread's question channel for a call, when its session and token
@@ -374,6 +382,19 @@ impl Hub {
         if crate::computer_use::is_tool(&request.tool) {
             return crate::computer_use::answer(&request, self.questions_for(&request), cancel)
                 .await;
+        }
+        if request.tool == super::secret::TOOL_NAME {
+            let workspace = self
+                .lock()
+                .get(&request.session_id)
+                .and_then(|entry| entry.workspace.clone());
+            return super::secret::answer(
+                &request,
+                workspace,
+                self.questions_for(&request),
+                cancel,
+            )
+            .await;
         }
         if request.tool == super::ask_user::TOOL_NAME {
             return self.ask_user(&request, cancel).await;
@@ -885,4 +906,13 @@ mod tests {
             super::super::VERSION,
         ));
     }
+}
+
+pub async fn set_secret_workspace(session_id: &str, workspace: PathBuf) {
+    #[cfg(unix)]
+    if let Ok(hub) = shared().await {
+        hub.set_secret_workspace(session_id, workspace);
+    }
+    #[cfg(not(unix))]
+    let _ = (session_id, workspace);
 }
