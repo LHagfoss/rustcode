@@ -14,7 +14,7 @@ describe("header buttons sanitising", () => {
   test("pull requests are hidden by default: ⌘K holds that action", () => {
     expect(DEFAULT_HEADER_BUTTONS).not.toContain("pulls");
     expect(DEFAULT_HEADER_BUTTONS).toEqual(
-      ids("status", "plan", "actions", "terminal", "details", "changes"),
+      ids("status", "plan", "git", "actions", "terminal", "details", "changes"),
     );
     // Still a button the setting lists, so it can be shown.
     expect(HEADER_BUTTON_IDS).toContain("pulls");
@@ -60,7 +60,9 @@ describe("header buttons sanitising", () => {
   test("a button added in a later release shows by default, after the arranged ones", () => {
     // Saved before `details` and `changes` existed.
     const stored = { shown: ids("terminal", "plan"), known: ids("status", "plan", "pulls", "terminal") };
-    expect(sanitizeHeaderButtons(stored)).toEqual(ids("terminal", "plan", "actions", "details", "changes"));
+    expect(sanitizeHeaderButtons(stored)).toEqual(
+      ids("terminal", "plan", "git", "actions", "details", "changes"),
+    );
   });
 
   test("project actions show for a layout saved before they existed", () => {

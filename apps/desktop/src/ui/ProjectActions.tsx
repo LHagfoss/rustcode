@@ -17,6 +17,7 @@ import {
   useProjectActions,
 } from "../state/projectActions";
 import { setTerminalOpen, toast, useApp } from "../state/store";
+import { terminalTabForAction } from "../state/terminalTabs";
 import type { ThreadState } from "../state/thread";
 import {
   ClusterButton,
@@ -29,13 +30,16 @@ import {
   Pill,
 } from "./primitives";
 
-/** Runs a command in the workspace terminal of `cwd`, opening the panel. */
+/**
+ * Runs a command in the workspace terminal of `cwd`, in the action's own tab (opened the first
+ * time, reused after), and opens the panel.
+ */
 export function runProjectAction(cwd: string, action: ProjectAction): void {
   if (!canOpenPty()) {
     toast("The terminal runs in the desktop app", "error");
     return;
   }
-  queueTerminalCommand(cwd, action.command);
+  queueTerminalCommand(terminalTabForAction(cwd, action).id, action.command);
   setTerminalOpen(true);
 }
 
@@ -161,8 +165,8 @@ export function ProjectActionsEditor() {
               Actions of {project ? projectName(project) : ""}
             </Dialog.Title>
             <p id="project-actions-hint" className="text-callout text-fg-muted">
-              Commands you run often in this project. Each runs in the thread's terminal (⌘J), in its folder;
-              worktrees of the project share the list. Kept on this computer.
+              Commands you run often in this project. Each runs in its own tab of the thread's terminal (⌘J),
+              in its folder; worktrees of the project share the list. Kept on this computer.
             </p>
             <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
               {rows.map((row, i) => (

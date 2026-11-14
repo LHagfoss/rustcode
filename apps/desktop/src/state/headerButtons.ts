@@ -11,6 +11,7 @@
 export const HEADER_BUTTON_IDS = [
   "status",
   "plan",
+  "git",
   "actions",
   "pulls",
   "terminal",
