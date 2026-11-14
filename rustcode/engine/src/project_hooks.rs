@@ -155,11 +155,11 @@ impl SettleGuard {
         let key = project
             .canonicalize()
             .unwrap_or_else(|_| project.to_path_buf());
-        SETTLING
-            .lock()
-            .ok()?
-            .insert(key.clone())
-            .then_some(Self(key))
+        let inserted = SETTLING.lock().ok()?.insert(key.clone());
+        // Only a successful acquisition owns a guard. Constructing and
+        // dropping one on rejection would relock the mutex and remove the
+        // existing runner's entry.
+        inserted.then(|| Self(key))
     }
 }
 impl Drop for SettleGuard {
@@ -564,13 +564,23 @@ mod tests {
 
     #[test]
     fn settle_guard_serializes_projects_and_releases_on_drop() {
-        let dir = tempfile::tempdir().unwrap();
-        let guard = SettleGuard::acquire(dir.path()).unwrap();
-        assert!(SettleGuard::acquire(dir.path()).is_none());
-        let other = tempfile::tempdir().unwrap();
-        assert!(SettleGuard::acquire(other.path()).is_some());
-        drop(guard);
-        assert!(SettleGuard::acquire(dir.path()).is_some());
+        let (finished, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let dir = tempfile::tempdir().unwrap();
+            let guard = SettleGuard::acquire(dir.path()).unwrap();
+            assert!(SettleGuard::acquire(dir.path()).is_none());
+            // Rejection must leave the first runner's ownership intact.
+            assert!(SettleGuard::acquire(dir.path()).is_none());
+            let other = tempfile::tempdir().unwrap();
+            assert!(SettleGuard::acquire(other.path()).is_some());
+            drop(guard);
+            assert!(SettleGuard::acquire(dir.path()).is_some());
+            finished.send(()).unwrap();
+        });
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("settle guard acquisition or release deadlocked");
+        worker.join().unwrap();
     }
 
     #[test]
