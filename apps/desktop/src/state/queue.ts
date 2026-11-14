@@ -5,17 +5,26 @@
 // no I/O here, so tests drive it.
 
 import type { ComposeExtras } from "./compose";
-import { type QueuedPrompt, wakeLine } from "./thread";
+import { isContinueMessage, type QueuedPrompt, wakeLine } from "./thread";
 
-/** A queued item that reads as a message at the end of the thread; a wake is one quiet line, not a row. */
-export const isQueuedMessage = (q: QueuedPrompt) => !q.wake;
+/**
+ * A queued app notice (a pull request's news, a workflow's end, a continue or resume prompt): the
+ * same divider once it is delivered, so it waits as one too, never as a bubble that reads as the
+ * user's own. It is read from the text, since that is what survives a reload.
+ */
+export const isQueuedNotice = (q: QueuedPrompt) => !q.wake && isContinueMessage(q.text);
+
+/** A queued item that reads as a message at the end of the thread; a wake or a notice is a quiet line, not a row. */
+export const isQueuedMessage = (q: QueuedPrompt) => !q.wake && !isQueuedNotice(q);
 
 /** The user's own queued messages: the ones an edit loads into the composer. */
-export const isOwnQueued = (q: QueuedPrompt) => !q.wake && !q.link;
+export const isOwnQueued = (q: QueuedPrompt) => isQueuedMessage(q) && !q.link;
 
 export interface QueueView {
   /** The queued messages, in the order they will run. */
   messages: QueuedPrompt[];
+  /** The app notices waiting, in queue order: each is drawn as a divider line, not a message. */
+  notices: QueuedPrompt[];
   /** The summary line a wake waits under. At most one is shown, however many wake the thread. */
   wake?: string;
   /** A stopped or failed turn left the queue here: Resume starts it, and nothing runs until then. */
@@ -33,6 +42,7 @@ export function queueView(thread: {
   const wake = thread.queue.find((q) => q.wake);
   return {
     messages: thread.queue.filter(isQueuedMessage),
+    notices: thread.queue.filter(isQueuedNotice),
     wake: wake ? wakeLine(wake.text) : undefined,
     held: !!thread.queueHeld && !thread.running,
     resumable: !!thread.queueHeld && !thread.running && thread.queue.length > 0,

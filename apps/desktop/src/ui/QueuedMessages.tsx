@@ -27,7 +27,7 @@ import {
   startQueuedEdit,
   useApp,
 } from "../state/store";
-import { type QueuedPrompt, wakeLine } from "../state/thread";
+import { type QueuedPrompt, stripMarks, wakeLine } from "../state/thread";
 import { openLightbox } from "./Lightbox";
 import { Markdown } from "./Markdown";
 import { cx, Pill, Tooltip } from "./primitives";
@@ -121,7 +121,7 @@ const QueuedBubble = memo(function QueuedBubble({
   const links = item.extras?.links ?? [];
   // A paste is in the text where it was pasted, as in the message once it is sent; the command and
   // links keep their chips at the top.
-  const body = splicePastes(item.text, attachments);
+  const body = splicePastes(stripMarks(item.text), attachments);
   return (
     <>
       {attachments.length > 0 && <QueuedAttachments list={attachments} />}

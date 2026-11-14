@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { estimatedRowHeight, type Row, rowGap } from "./Transcript";
+import { Provider as TooltipProvider } from "@radix-ui/react-tooltip";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { appendSteer, emptyThread, stripMarks, withPullMark, withWorkflowMark } from "../state/thread";
+import { UserRow } from "./Rows";
+import { estimatedRowHeight, queueRows, type Row, rowGap } from "./Transcript";
 
 const user = (id: string, text = "hi"): Row => ({ key: id, item: { kind: "user", id, text } });
 const tool = (id: string): Row => ({
@@ -93,5 +98,76 @@ describe("the height a row is reserved at", () => {
   test("a footer nothing draws takes no room, gap included", () => {
     const rows = [user("m1"), { key: "end" } as Row];
     expect(estimatedRowHeight(rows[1], true)).toBe(0);
+  });
+});
+
+describe("a notice queued behind a running turn (issue 3709)", () => {
+  const thread = (queue: { id: string; text: string }[]) => ({
+    ...emptyThread("s", "/p"),
+    running: true,
+    queue,
+  });
+
+  test("a pull request notice is a divider row, never a bubble, and shows no marker", () => {
+    const rows = queueRows(
+      thread([
+        { id: "q1", text: withPullMark("Pull request #3678: Already merged") },
+        { id: "q2", text: "and fix the tests" },
+        { id: "q3", text: withWorkflowMark("Workflow review: done\nthree agents") },
+      ]),
+      [],
+    );
+    expect(rows.map((r) => r.key)).toEqual(["queued-q1", "queued-q2", "queued-q3"]);
+    expect(rows[0]?.queueNotice?.line).toBe("Pull request #3678: Already merged");
+    expect(rows[0]?.queued).toBeUndefined();
+    // The user's own message keeps its bubble, numbered among the messages only.
+    expect(rows[1]?.queued?.index).toBe(0);
+    expect(rows[1]?.queued?.count).toBe(1);
+    expect(rows[2]?.queueNotice?.line).toBe("Workflow review: done");
+    for (const row of rows) expect(JSON.stringify(row)).not.toContain("<!--" + " rustcode");
+  });
+
+  test("a held queue of notices is resumable but counts no messages", () => {
+    const held = {
+      ...thread([{ id: "q1", text: withPullMark("Pull request #1: Merged") }]),
+      running: false,
+      queueHeld: true,
+    };
+    const rows = queueRows(held, []);
+    expect(rows.map((r) => r.key)).toEqual(["queued-q1", "queue-resume"]);
+    expect(rows[1]?.resume?.count).toBe(0);
+  });
+
+  test("a hidden marker is never drawn as text in a sent message either", () => {
+    expect(stripMarks("Pull request #1: Merged\n\n<!-- rustcode:pull -->")).toBe("Pull request #1: Merged");
+    const markup = renderToStaticMarkup(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(UserRow, {
+          item: { kind: "user", id: "u", text: "hello\n\n<!-- rustcode:resumed -->" },
+        }),
+      ),
+    );
+    expect(markup).toContain("hello");
+    expect(markup).not.toContain("rustcode:resumed");
+  });
+});
+
+describe("a steered message (issue 3711)", () => {
+  test("is drawn once: its bubble says Steered, and no divider repeats it", () => {
+    let state = { ...emptyThread("s", "/p"), running: true };
+    state = appendSteer(state, "dont cut new release", 1000);
+    // The note stays on the thread for the plan card, and none of it is a transcript row of its own.
+    expect(state.steers).toHaveLength(1);
+    const rows = queueRows(state, []);
+    expect(rows.some((r) => "steerNote" in r)).toBe(false);
+    const item = state.items[0];
+    if (item?.kind !== "user") throw new Error("not a message");
+    const markup = renderToStaticMarkup(
+      createElement(TooltipProvider, null, createElement(UserRow, { item })),
+    );
+    expect(markup.split("Steered").length - 1).toBe(1);
+    expect(markup).not.toContain("↳");
   });
 });

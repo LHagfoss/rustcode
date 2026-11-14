@@ -4,6 +4,7 @@ import type { ComposeExtras } from "./compose";
 import {
   isOwnQueued,
   isQueuedMessage,
+  isQueuedNotice,
   nextQueued,
   QUEUE_REASON,
   type QueueReason,
@@ -15,7 +16,7 @@ import {
   type TurnState,
   wakeDelivery,
 } from "./queue";
-import type { QueuedPrompt } from "./thread";
+import { PULL_MARK, type QueuedPrompt, withPullMark, withWorkflowMark } from "./thread";
 
 const item = (id: string, extra: Partial<QueuedPrompt> = {}): QueuedPrompt => ({
   id,
@@ -359,5 +360,37 @@ describe("how a wake reaches a parent that is mid-turn", () => {
     expect(wakeDelivery(steering(), turn(), 0)).toBe("queue");
     expect(wakeDelivery(steering(), turn({ running: false }), 1)).toBe("queue");
     expect(wakeDelivery(steering({ live: false }), turn({ running: false }), 0)).toBe("queue");
+  });
+});
+
+describe("a queued app notice (issue 3709)", () => {
+  const pull = (id: string) => item(id, { text: withPullMark("Pull request #3678: Already merged") });
+
+  test("a pull request, workflow or continue notice is a notice, not a message", () => {
+    const notices = [
+      pull("a"),
+      item("b", { text: withWorkflowMark("Workflow review: done") }),
+      item("c", { text: "Carry on\n\n<!-- rustcode:continued -->" }),
+      item("d", { text: "Back after the restart\n\n<!-- rustcode:resumed -->" }),
+    ];
+    for (const q of notices) {
+      expect(isQueuedNotice(q)).toBe(true);
+      expect(isQueuedMessage(q)).toBe(false);
+      // Nothing about it is the user's to edit.
+      expect(isOwnQueued(q)).toBe(false);
+    }
+    expect(isQueuedNotice(item("u", { text: "fix the bug" }))).toBe(false);
+    expect(isQueuedNotice(item("w", { wake: true, text: `2 delegates finished\n\n${PULL_MARK}` }))).toBe(
+      false,
+    );
+  });
+
+  test("the queue view lists notices apart from the messages and keeps their order", () => {
+    const view = queueView({
+      queue: [item("m1"), pull("n1"), item("m2"), pull("n2")],
+      running: true,
+    });
+    expect(view.messages.map((q) => q.id)).toEqual(["m1", "m2"]);
+    expect(view.notices.map((q) => q.id)).toEqual(["n1", "n2"]);
   });
 });

@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   displayTool,
+  failureReason,
   humanizeTool,
   orchestrationTool,
   sessionIdOf,
   splitToolName,
+  unwrapToolError,
   usefulSummary,
 } from "./toolNames";
 
@@ -149,5 +151,19 @@ describe("sessionIdOf", () => {
     expect(sessionIdOf('Started.\n{"status":"ok","session_id": "def"}')).toBe("def");
     expect(sessionIdOf("no thread here")).toBeUndefined();
     expect(sessionIdOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("why a call failed (issue 3711)", () => {
+  test("the harness's error wrapper is taken off", () => {
+    expect(unwrapToolError("<tool_use_error>boom</tool_use_error>")).toBe("boom");
+    expect(failureReason("<tool_use_error>the user said no</tool_use_error>")).toBe("the user said no");
+  });
+
+  test("a wrapper with no reason after it says so instead of leaving the row empty", () => {
+    const empty = "<tool_use_error>Error calling tool (mcp__rustcode__start_session): </tool_use_error>";
+    expect(failureReason(empty)).toBe("The tool gave no reason");
+    expect(failureReason(empty)).not.toContain("tool_use_error");
+    expect(failureReason(undefined)).toBe("");
   });
 });

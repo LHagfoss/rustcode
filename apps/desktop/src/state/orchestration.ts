@@ -497,10 +497,17 @@ export const failure = (code: string, message: string, linksLeft?: number): Fail
   message,
   ...(linksLeft === undefined ? {} : { linksLeft }),
 });
+/** What a failure says when whoever made it gave no words: never an empty reason (issue 3711). */
+export const failureMessage = (f: Failure): string =>
+  f.message.trim() ||
+  (f.code === "denied"
+    ? "the user did not allow it, or dismissed the approval"
+    : `it failed (${f.code}) and no reason was reported`);
+
 export const failureJson = (f: Failure): JsonObject => ({
   error: {
     code: f.code,
-    message: f.message,
+    message: failureMessage(f),
     ...(f.linksLeft === undefined ? {} : { links_left: f.linksLeft }),
   },
 });
