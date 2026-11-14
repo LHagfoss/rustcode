@@ -57,6 +57,9 @@ trash = "5.3"
 # The web view's frame-rate preference (src/webview.rs); the versions tauri/wry already use.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
+# Completion handlers: the microphone prompt (src/microphone.rs) and the link handler change
+# (src/url_scheme.rs); the version objc2 already uses.
+block2 = "=0.6.2"
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKWebViewConfiguration", "WKPreferences"] }
 
 

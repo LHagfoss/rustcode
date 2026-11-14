@@ -8,6 +8,7 @@ mod diagnostics;
 mod engine;
 mod links;
 mod machines;
+mod microphone;
 mod native;
 mod notify;
 mod process;
@@ -18,6 +19,7 @@ mod system_setup;
 mod threads;
 mod update_log;
 mod updater;
+mod url_scheme;
 mod webview;
 
 use engine::{Engine, EngineEvent};
@@ -107,6 +109,10 @@ pub fn run() {
             native::open_in_editor,
             native::open_folder_in_editor,
             native::haptic,
+            microphone::microphone_access,
+            microphone::open_microphone_settings,
+            url_scheme::url_scheme_status,
+            url_scheme::claim_url_scheme,
             notify::notify_show,
             notify::notify_permission,
             notify::notify_badge,
