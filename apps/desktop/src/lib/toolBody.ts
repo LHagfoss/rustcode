@@ -5,6 +5,7 @@
 
 import type { Json } from "../acp/jsonrpc";
 import { unwrapToolError } from "../state/toolNames";
+import { type AnsiLine, ansiPlainText, hasTerminalCodes, parseAnsi } from "./ansi";
 import { stripAnsi } from "./toolOutput";
 
 /** One argument as a row: `inline` on the key's line, `text` a wrapped block, `json` its own small block. */
@@ -17,7 +18,16 @@ export interface ArgRow {
 
 export type ToolBody =
   | { kind: "diff" }
-  | { kind: "command"; command?: string; output?: string; exitCode?: number; args: ArgRow[] }
+  | {
+      kind: "command";
+      command?: string;
+      /** Plain text: what Copy copies. */
+      output?: string;
+      /** The same output with its colours, when the command printed any escape codes. */
+      styled?: AnsiLine[];
+      exitCode?: number;
+      args: ArgRow[];
+    }
   | { kind: "lookup"; args: ArgRow[]; output?: string; outputLabel: string }
   | { kind: "args"; args: ArgRow[]; output?: string };
 
@@ -88,7 +98,24 @@ export function toolBody(
   if (kind === "execute") {
     const command = commandOf(item.input) ?? item.detail;
     const skip = new Set([...SUMMARY_KEYS, ...COMMAND_KEYS, "description"]);
-    return { kind: "command", command, output, exitCode: item.exitCode, args: argRows(item.input, skip) };
+    const args = argRows(item.input, skip);
+    const raw = item.output === undefined ? "" : unwrapToolError(item.output) || item.output;
+    if (hasTerminalCodes(raw)) {
+      // A terminal's output: its colours drawn, and `\r` progress kept to what was written last.
+      const styled = parseAnsi(raw);
+      const plain = ansiPlainText(styled);
+      if (!plain.trim()) return { kind: "command", command, exitCode: item.exitCode, args };
+      const coloured = styled.some((line) => line.some((span) => Object.keys(span.style).length > 0));
+      return {
+        kind: "command",
+        command,
+        output: plain,
+        styled: coloured ? styled : undefined,
+        exitCode: item.exitCode,
+        args,
+      };
+    }
+    return { kind: "command", command, output, exitCode: item.exitCode, args };
   }
   if (kind === "search" || kind === "read") {
     return {

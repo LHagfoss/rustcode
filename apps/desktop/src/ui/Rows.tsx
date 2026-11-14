@@ -34,9 +34,10 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
-import { memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { effortLabel, modelName } from "../acp/types";
+import { type AnsiLine, ansiClass } from "../lib/ansi";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
 import { type ArgRow, type ToolBody, toolBody } from "../lib/toolBody";
@@ -511,10 +512,21 @@ export function DiffCount({ added, removed }: { added: number; removed: number }
   );
 }
 
-function TextBox({ text, label, shown: display }: { text: string; label: string; shown?: string }) {
+function TextBox({
+  text,
+  label,
+  shown: display,
+  styled,
+}: {
+  text: string;
+  label: string;
+  shown?: string;
+  /** The text's lines with their terminal colours (lib/ansi.ts), drawn instead of `text`. */
+  styled?: AnsiLine[];
+}) {
   const [all, setAll] = useState(false);
   // `text` is what Copy copies; `display` is how it reads, where the two differ (a command's `~`).
-  const lines = (display ?? text).replace(/\n$/, "").split("\n");
+  const lines = styled ?? (display ?? text).replace(/\n$/, "").split("\n");
   // Folds only when that hides a few lines, not one.
   const folds = lines.length > 17;
   const shown = all || !folds ? lines : lines.slice(0, 14);
@@ -525,7 +537,7 @@ function TextBox({ text, label, shown: display }: { text: string; label: string;
         {text.trim() && <CopyButton text={text} iconOnly label={`Copy ${label.toLowerCase()}`} />}
       </div>
       <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-md bg-fill-subtle p-2 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all">
-        {shown.join("\n")}
+        {styled ? <StyledLines lines={shown as AnsiLine[]} /> : (shown as string[]).join("\n")}
       </pre>
       {folds && (
         <button
@@ -538,6 +550,27 @@ function TextBox({ text, label, shown: display }: { text: string; label: string;
       )}
     </div>
   );
+}
+
+/** Output lines in their terminal colours, as theme tokens. */
+function StyledLines({ lines }: { lines: AnsiLine[] }) {
+  return lines.map((line, i) => (
+    // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity but their place
+    <Fragment key={i}>
+      {i > 0 && "\n"}
+      {line.map((span, j) => {
+        const className = ansiClass(span.style);
+        // biome-ignore lint/suspicious/noArrayIndexKey: spans have no identity but their place
+        return className ? (
+          <span key={j} className={className}>
+            {span.text}
+          </span>
+        ) : (
+          <Fragment key={j}>{span.text}</Fragment>
+        );
+      })}
+    </Fragment>
+  ));
 }
 
 /** A call's arguments as key/value rows: scalars beside their key, long text and objects under it. */
@@ -586,7 +619,7 @@ function CommandBody({ body }: { body: Extract<ToolBody, { kind: "command" }> })
     <>
       {body.command && <TextBox label="Command" text={body.command} shown={displayCommand(body.command)} />}
       <ArgRows rows={body.args} />
-      {body.output && <TextBox label="Output" text={body.output} />}
+      {body.output && <TextBox label="Output" text={body.output} styled={body.styled} />}
       {body.exitCode !== undefined && (
         <span className={cx("font-mono text-caption", body.exitCode === 0 ? "text-fg-faint" : "text-danger")}>
           Exit code {body.exitCode}
