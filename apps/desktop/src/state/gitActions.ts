@@ -66,15 +66,32 @@ export interface GitPlan {
 }
 
 /**
+ * Whether the branch has an open pull request, from the open pull list (issue 3744): `unknown`
+ * while the list is still read or could not be (`gh` not signed in), so the button never offers a
+ * second pull request on a guess.
+ */
+export type PullPresence = "open" | "none" | "unknown";
+
+export function pullPresence<P extends { headRef: string }>(
+  branch: string | undefined,
+  list: readonly P[] | undefined,
+): { presence: PullPresence; pull?: P } {
+  if (!branch || !list) return { presence: "unknown" };
+  const pull = list.find((p) => p.headRef === branch);
+  return pull ? { presence: "open", pull } : { presence: "none" };
+}
+
+/**
  * The action the repository's state calls for, as T3 Code's git control picks it: changed files
  * commit first, a branch behind its upstream pulls, commits not on the remote push, and a pushed
- * branch with no pull request opens one. The default branch never offers a pull request.
+ * branch with no pull request opens one. The default branch never offers a pull request, and
+ * neither does a branch whose pull list is not known yet.
  */
-export function planGitActions(state: GitState, hasOpenPull: boolean): GitPlan {
+export function planGitActions(state: GitState, pull: PullPresence): GitPlan {
   if (!state.branch) return { others: [], note: "HEAD is not on a branch" };
   if (state.files.some((f) => f.status === "U"))
     return { others: [], note: "Resolve the merge conflicts first" };
-  const canPr = !state.onDefault && state.hasRemote && !hasOpenPull;
+  const canPr = !state.onDefault && state.hasRemote && pull === "none";
   if (state.files.length > 0) return { primary: "commit", others: state.hasRemote ? ["commit_push"] : [] };
   if (!state.hasRemote) return { others: [], note: "Nothing to commit" };
   if (state.behind > 0)
@@ -84,7 +101,7 @@ export function planGitActions(state: GitState, hasOpenPull: boolean): GitPlan {
   // A branch never pushed has no upstream; one with commits ahead has work to send.
   if (!state.upstream || state.ahead > 0) return { primary: "push", others: canPr ? ["create_pr"] : [] };
   if (canPr) return { primary: "create_pr", others: [] };
-  return { others: [], note: hasOpenPull ? "Pushed, pull request open" : "Up to date" };
+  return { others: [], note: pull === "open" ? "Pushed, pull request open" : "Up to date" };
 }
 
 /**
@@ -127,4 +144,32 @@ export function acceptsGeneratedDraft(
   text: string | undefined,
 ): text is string {
   return !edited && !cancelled && !!text;
+}
+
+/** One answer to `_rustcode/git/state`, with the folder it was read for. */
+export interface GitRead {
+  cwd?: string;
+  state?: GitState;
+  error?: string;
+}
+
+/**
+ * Orders the header's git state reads (issue 3744): `begin` hands each read a `land` that answers
+ * the read to keep, or undefined when a newer read started since, so an older folder's answer never
+ * lands after a newer one.
+ */
+export function gitReads() {
+  let latest = 0;
+  return {
+    begin(cwd: string) {
+      const token = ++latest;
+      return (read: Omit<GitRead, "cwd">): GitRead | undefined =>
+        token === latest ? { ...read, cwd } : undefined;
+    },
+  };
+}
+
+/** What the button shows for `cwd`: nothing (Reading git…) until an answer for that folder is in. */
+export function gitReadFor(read: GitRead, cwd: string | undefined): GitRead {
+  return cwd && read.cwd === cwd ? read : {};
 }

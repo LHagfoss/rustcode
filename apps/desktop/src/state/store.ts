@@ -266,6 +266,7 @@ import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, qu
 import { projectKey as actionsProjectKey, projectActions, worktreeHooks } from "./projectActions";
 import { projectChoice, projectKey } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
+import { type PreparedPullBranch, parsePullBranch } from "./pullThread";
 import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
 import {
   nextQueued,
@@ -4518,21 +4519,23 @@ export async function openSideChat(parentId: string, message: string): Promise<s
  * "Work on this in a thread" (issue 3727): a worktree thread on pull request `number`'s head branch
  * (`_rustcode/pulls/branch` fetches it, a fork's too), with `message` in its composer to read and
  * edit before sending, and the pull request linked so new checks and comments wake it. Runs on the
- * harness a new thread in `cwd` would. Answers the thread's id, or undefined after a toast.
+ * harness a new thread in `cwd` would. `message` is written from the branch the engine prepared, so
+ * it names the branch's real name and what a push does (issue 3743); a worktree that already has the
+ * branch is where the thread starts, rather than a second one. Answers the thread's id, or undefined
+ * after a toast.
  */
 export async function startPullThread(
   cwd: string,
   pull: { number: number; title: string; url?: string },
-  message: string,
+  message: (branch: PreparedPullBranch) => string,
 ): Promise<string | undefined> {
   const s = get();
   try {
     const answer = obj(
       await engine().request("_rustcode/pulls/branch", { cwd, number: pull.number }, 180_000),
     );
-    const branch = obj(answer?.branch);
-    const name = str(branch?.branch);
-    if (!name)
+    const branch = parsePullBranch(answer?.branch);
+    if (!branch)
       throw new Error(str(obj(answer?.error)?.message) ?? "The pull request's branch could not be fetched.");
     const choice =
       projectThreadChoice(s, cwd) ??
@@ -4545,17 +4548,17 @@ export async function startPullThread(
       });
     const harness = harnessesOn(s, LOCAL_HOST)?.harnesses.find((h) => h.id === choice?.harness);
     const id = await createSession({
-      cwd,
+      cwd: branch.worktree ?? cwd,
       harness: choice?.harness,
       account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
       model: choice?.model,
       effort: choice?.effort,
-      worktree: { repo: cwd, branch: name, title: pull.title },
+      ...(branch.worktree ? {} : { worktree: { repo: cwd, branch: branch.branch, title: pull.title } }),
       select: true,
       title: `#${pull.number} ${pull.title}`.slice(0, 80),
     });
-    const note = str(branch?.note);
-    setDraft(id, message);
+    const note = branch.note;
+    setDraft(id, message(branch));
     const repo = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\//.exec(pull.url ?? "")?.[1];
     const worktreeCwd = get().threads[id]?.cwd ?? cwd;
     void engine()

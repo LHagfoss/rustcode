@@ -14,13 +14,17 @@ import {
   type GitAction,
   type GitFile,
   GitMethod,
+  type GitRead,
   type GitState,
   gitErrorOf,
+  gitReadFor,
+  gitReads,
   parseGitState,
   planGitActions,
   pullFromUrl,
+  pullPresence,
 } from "../state/gitActions";
-import { usePullList } from "../state/pullQueries";
+import { readPullList, usePullList } from "../state/pullQueries";
 import { request, toast } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
@@ -37,19 +41,24 @@ import {
   Tooltip,
 } from "./primitives";
 
-type Read = { state?: GitState; error?: string };
-
-/** The folder's git state, read again when a turn ends and when the window comes back. */
-function useGitState(cwd: string | undefined, running: boolean): [Read, () => Promise<void>] {
-  const [read, setRead] = useState<Read>({});
+/**
+ * The folder's git state, read again when a turn ends and when the window comes back. Only the
+ * newest read's answer lands, and only for the folder it was read for (issue 3744).
+ */
+function useGitState(cwd: string | undefined, running: boolean): [GitRead, () => Promise<void>] {
+  const [read, setRead] = useState<GitRead>({});
+  const [reads] = useState(gitReads);
   const refresh = useCallback(async () => {
     if (!cwd) return;
+    const land = reads.begin(cwd);
+    let answer: GitRead | undefined;
     try {
-      setRead({ state: parseGitState(await request(GitMethod.state, { path: cwd }, 20_000)) });
+      answer = land({ state: parseGitState(await request(GitMethod.state, { path: cwd }, 20_000)) });
     } catch (error) {
-      setRead({ error: gitErrorOf(error).message });
+      answer = land({ error: gitErrorOf(error).message });
     }
-  }, [cwd]);
+    if (answer) setRead(answer);
+  }, [cwd, reads]);
   useEffect(() => {
     if (!running) void refresh();
   }, [refresh, running]);
@@ -58,7 +67,12 @@ function useGitState(cwd: string | undefined, running: boolean): [Read, () => Pr
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
-  return [read, refresh];
+  return [gitReadFor(read, cwd), refresh];
+}
+
+/** After a pull request is opened, the open list is read again so the button and the panel show it. */
+function rereadOpenPulls(cwd: string) {
+  void readPullList(cwd, "open", { force: true });
 }
 
 const ICON: Record<GitAction, typeof GitBranch> = {
@@ -69,7 +83,12 @@ const ICON: Record<GitAction, typeof GitBranch> = {
   create_pr: GitPullRequest,
 };
 
+/** Keyed by the thread, so a thread switch never carries the last thread's sheet or action over. */
 export function GitHeaderButton({ thread }: { thread?: ThreadState }) {
+  return <GitButton key={thread?.id ?? ""} thread={thread} />;
+}
+
+function GitButton({ thread }: { thread?: ThreadState }) {
   const cwd = thread?.cwd;
   const [read, refresh] = useGitState(cwd, !!thread?.running);
   const [busy, setBusy] = useState<GitAction | null>(null);
@@ -77,8 +96,8 @@ export function GitHeaderButton({ thread }: { thread?: ThreadState }) {
   const state = read.state;
   const branch = state?.branch;
   const pulls = usePullList(cwd, "open", { enabled: !!state?.hasRemote && !state.onDefault && !!branch });
-  const openPull = branch ? pulls.data?.find((pull) => pull.headRef === branch) : undefined;
-  const plan = useMemo(() => (state ? planGitActions(state, !!openPull) : undefined), [state, openPull]);
+  const { presence, pull: openPull } = pullPresence(branch, pulls.data);
+  const plan = useMemo(() => (state ? planGitActions(state, presence) : undefined), [state, presence]);
   if (!thread || !cwd) return null;
   if (read.error || !state || !plan) {
     return (
@@ -104,6 +123,7 @@ export function GitHeaderButton({ thread }: { thread?: ThreadState }) {
         url?: string;
       };
       const pull = pullFromUrl(answer?.url);
+      if (pull) rereadOpenPulls(cwd);
       if (pull)
         void request(
           "_rustcode/pulls/watch/start",
@@ -194,7 +214,10 @@ export function GitHeaderButton({ thread }: { thread?: ThreadState }) {
           cwd={cwd}
           fallback={state.lastCommitMessage || thread.title || state.branch || "Update"}
           onClose={() => setSheet(null)}
-          onDone={() => void refresh()}
+          onDone={() => {
+            void refresh();
+            rereadOpenPulls(cwd);
+          }}
         />
       )}
       {(sheet === "commit" || sheet === "commit_push") && (
