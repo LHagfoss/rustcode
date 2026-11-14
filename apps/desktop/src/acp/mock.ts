@@ -2081,6 +2081,7 @@ function configOptions(thread: MockThread, harnesses: HarnessSnapshot): Json[] {
 
 export class MockEngine {
   /** What this computer knows of the others (`fleet.json`), by host id. */
+  private textGenerators: JsonObject = { generators: [], selected: null };
   private fleet = new Map<string, JsonObject>();
   /** This computer's own chosen name and when it was chosen (`environment.json`). */
   private ownName: { name: string; at: string } | null = null;
@@ -3575,6 +3576,22 @@ export class MockEngine {
             base: "main",
             commit_count: 0,
           },
+        };
+      case "_rustcode/textGeneration/configure": {
+        const action = str(params.action);
+        const generators = arr(this.textGenerators.generators);
+        if (action === "set" && obj(params.generator)) generators.push(params.generator ?? null);
+        if (action === "select") this.textGenerators.selected = params.id ?? null;
+        this.textGenerators.generators =
+          action === "remove" ? generators.filter((g) => obj(g)?.id !== params.id) : generators;
+        if (action === "remove" && this.textGenerators.selected === params.id)
+          this.textGenerators.selected = null;
+        return this.textGenerators;
+      }
+      case "_rustcode/textGeneration/generate":
+        if (!this.textGenerators.selected) return { text: null };
+        return {
+          text: "feat(desktop): improve workspace navigation\n\nMake the workspace easier to navigate.",
         };
       case "_rustcode/git/state":
         return mockGit(this.threads, str(params.path) ?? "") as unknown as Json;

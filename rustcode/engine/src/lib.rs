@@ -292,3 +292,5 @@ mod background_history_tests {
         assert_eq!(metadata.full_output_artifact, None);
     }
 }
+
+mod text_generation;

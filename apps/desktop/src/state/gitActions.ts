@@ -18,6 +18,7 @@ export interface GitFile {
 export interface GitState {
   branch?: string;
   defaultBranch?: string;
+  lastCommitMessage?: string;
   onDefault: boolean;
   upstream?: string;
   ahead: number;
@@ -42,6 +43,7 @@ export function parseGitState(value: Json | undefined): GitState | undefined {
   return {
     branch: str(o.branch),
     defaultBranch: str(o.defaultBranch),
+    lastCommitMessage: str(o.lastCommitMessage),
     onDefault: bool(o.onDefault) ?? false,
     upstream: str(o.upstream),
     ahead: num(o.ahead) ?? 0,
@@ -116,4 +118,13 @@ export function gitErrorOf(error: unknown): { reason: string; message: string } 
   const data = error instanceof RpcError ? obj(error.data as Json) : undefined;
   const message = str(data?.message) ?? (error instanceof Error ? error.message : String(error));
   return { reason: str(data?.reason) ?? "failed", message };
+}
+
+/** A request may finish after the user edits the draft, including editing back to its original value. */
+export function acceptsGeneratedDraft(
+  edited: boolean,
+  cancelled: boolean,
+  text: string | undefined,
+): text is string {
+  return !edited && !cancelled && !!text;
 }

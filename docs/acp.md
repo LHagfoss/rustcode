@@ -286,3 +286,19 @@ if delivery succeeded.
 Malformed configuration and protocol errors are returned without overwriting
 the user's configuration. Tool permission decisions continue to use the ACP
 permission flow unless the server was deliberately started with `--yolo`.
+
+### Text generation extensions
+
+- `_rustcode/textGeneration/configure`: `{ action: "list" }` returns
+  `{ generators: [{ id, provider, model, baseUrl }], selected }`. `set` takes
+  `generator` and write-only `apiKey` (empty for keyless local services);
+  `select` takes `id` (null disables); `remove` takes `id`. Credentials never
+  appear in responses. Configuration is local-only, excluded from the relay.
+- `_rustcode/textGeneration/generate`: `kind` is `thread_title`,
+  `branch_name`, `commit_message` or `pull_request`. Titles and branch names
+  take `prompt`; commits take repository `path` and relative `files`; pull
+  requests take `path` and compare HEAD to origin's default branch. The reply
+  is `{ text }`, null when no generator is selected. PR text has a title on
+  the first line and a Markdown body after a blank line. Inputs are bounded
+  to 24,000 characters, requests time out after 45 seconds, and errors use
+  ACP error data with a readable message.

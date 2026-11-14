@@ -245,6 +245,7 @@ pub(crate) fn state(path: &Path) -> Result<Value, GitError> {
         "path": path,
         "branch": status.branch,
         "defaultBranch": default,
+        "lastCommitMessage": git(path, &["log", "-1", "--format=%B"]).unwrap_or_default(),
         "onDefault": status.branch.is_some() && status.branch == default,
         "upstream": status.upstream,
         "ahead": status.ahead,

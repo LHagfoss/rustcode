@@ -157,4 +157,6 @@ pub(crate) use prompt_improver::{improve_prompt, improvement_notice};
 mod recap;
 pub use recap::{RECAP_IDLE_DELAY, generate_conversation_recap};
 mod session_title;
-pub(crate) use session_title::generate_session_title;
+pub(crate) use session_title::{
+    apply_generated_title, generate_session_title, normalize_generated_title,
+};

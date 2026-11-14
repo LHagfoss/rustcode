@@ -3,6 +3,7 @@ import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
 import { dirname } from "../lib/paths";
 import { appPlatform, currentPlatform } from "../lib/platform";
 import { ComputerUseGroup } from "./ComputerUseGroup";
+import { TextGeneration } from "./TextGeneration";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -709,6 +710,7 @@ function AgentsPage() {
           <ScopedHarnessList targets={targets} writes={writes} />
         )}
       </Group>
+      {thisMachine && <TextGeneration />}
       {thisMachine && <ComputerUseGroup />}
       <OrchestrationGroup />
       <WorkflowsGroup />

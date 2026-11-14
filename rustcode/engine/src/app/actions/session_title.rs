@@ -108,6 +108,25 @@ pub(crate) async fn generate_session_title(
     if session_id.is_empty() || !wants_generated_title(prompt) {
         return None;
     }
+    if crate::text_generation::load()
+        .ok()
+        .is_some_and(|c| c.selected.is_some())
+    {
+        if !state.lock().await.config.generate_session_titles {
+            return None;
+        }
+        let expected = crate::config::load_session_title(session_id);
+        let answer = crate::text_generation::generate(crate::text_generation::GenerateRequest {
+            kind: "thread_title".into(),
+            prompt: Some(prompt.into()),
+            path: None,
+            files: vec![],
+        })
+        .await
+        .ok()?;
+        let title = normalize_generated_title(answer["text"].as_str()?)?;
+        return apply_generated_title(session_id, expected.as_deref(), &title).then_some(title);
+    }
     let (temporary, request_id) = {
         let live = state.lock().await;
         if !live.config.generate_session_titles {
