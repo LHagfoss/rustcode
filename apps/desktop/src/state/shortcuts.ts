@@ -44,7 +44,7 @@ export function runShortcut(command: string): boolean {
       setSwitcher(!s.switcherOpen);
       return true;
     case "settings":
-      openSettings(s.settings ? null : "general");
+      openSettings(s.settings ? null : undefined);
       return true;
     case "inbox":
       // The row toggles: the shortcut that opened the inbox takes you back to the chat.
