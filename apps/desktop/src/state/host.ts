@@ -151,6 +151,7 @@ import {
   renderRead,
   reopenLinks,
   restateLinks,
+  retainDelegateCleanup,
   retireCleanedLinks,
   sameProject,
   sameReach,
@@ -2833,6 +2834,10 @@ async function delegatePull(
   target: RuleThread,
   host = splitThreadKey(target.id).host,
 ): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure; note?: string }> {
+  const retained = [...book().links]
+    .reverse()
+    .find((link) => link.target === target.id && link.cleanup)?.cleanup;
+  if (!target.worktree && retained) return { branch: retained.branch, pull: retained.pull };
   const cwd = projectOf(target);
   if (!cwd) return { error: failure("failed", "this thread has no project folder") };
   const worktree = target.worktree;
@@ -2999,12 +3004,18 @@ export function cachedDelegatePull(id: string): StatusPull | undefined {
  * own to look up, so it reads as having none without asking.
  */
 export function readDelegatePull(id: string, maxAgeMs = PULL_READ_TTL_MS): Promise<StatusPull> {
+  const retained = [...book().links].reverse().find((link) => link.target === id && link.cleanup)?.cleanup;
+  if (retained && !ruleThread(useApp.getState(), id)?.worktree)
+    return Promise.resolve({ pull: retained.pull ?? null });
   const hit = pullReads.get(id);
   if (hit && Date.now() - hit.at < maxAgeMs) return Promise.resolve(hit.value);
   const flying = pullFlights.get(id);
   if (flying) return flying;
   const entry = ruleThread(useApp.getState(), id);
-  if (!entry?.worktree) return Promise.resolve({ pull: null });
+  if (!entry?.worktree) {
+    const retained = [...book().links].reverse().find((link) => link.target === id && link.cleanup)?.cleanup;
+    return Promise.resolve({ pull: retained?.pull ?? null });
+  }
   const read = delegatePull(entry)
     .then((state): StatusPull => {
       const value: StatusPull = state.error
@@ -3019,7 +3030,7 @@ export function readDelegatePull(id: string, maxAgeMs = PULL_READ_TTL_MS): Promi
 }
 
 /** The delegates a thread has, newest first and one per thread, for the status panel and reply. */
-export function delegateStatusInputs(s: AppState, orchestrator: string, max = 12): StatusInput[] {
+export function delegateStatusInputs(s: AppState, orchestrator: string, max = Infinity): StatusInput[] {
   const seen = new Set<string>();
   const out: StatusInput[] = [];
   const links = s.links.links;
@@ -3041,7 +3052,8 @@ export function delegateStatusInputs(s: AppState, orchestrator: string, max = 12
       model:
         (thread?.configOptions && selectOption(thread.configOptions, "model")?.current) || session?.model,
       branch: thread?.worktree?.branch ?? session?.worktree?.branch,
-      pull: cachedDelegatePull(link.target),
+      cleaned: !!link.cleanup,
+      pull: link.cleanup ? { pull: link.cleanup.pull ?? null } : cachedDelegatePull(link.target),
     });
   }
   return out;
@@ -3058,7 +3070,7 @@ export function answerStatusLocally(threadId: string, text: string): boolean {
   if (!isStatusQuery(text)) return false;
   const s = useApp.getState();
   if (!s.threads[threadId]) return false;
-  const inputs = delegateStatusInputs(s, threadId, 20);
+  const inputs = delegateStatusInputs(s, threadId);
   if (!inputs.length) return false;
   const now = Date.now();
   const rows = statusRows(inputs, now);
@@ -3266,6 +3278,13 @@ async function cleanupWorktree(
     }
     return failureJson(failure("failed", `the worktree could not be cleaned up: ${errorText(error)}`));
   }
+  setBook((b) =>
+    retainDelegateCleanup(b, target.id, {
+      at: Date.now(),
+      branch: state.branch ?? branch,
+      ...(state.pull ? { pull: state.pull } : {}),
+    }),
+  );
   const cleanup = obj(result)?.cleanup;
   // The worktree is gone and the engine moved the thread back to the
   // repository; the store must not keep offering the old folder.

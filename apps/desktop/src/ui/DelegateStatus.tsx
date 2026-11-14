@@ -13,6 +13,8 @@ import {
   panelMarks,
   pullText,
   runsOn,
+  settledStatus,
+  settledSummary,
   statusRows,
   statusSummary,
 } from "../state/delegateStatus";
@@ -223,6 +225,8 @@ export function DelegateStatusPanel({ threadId }: { threadId: string }) {
  * that it came from the app and not the model, so nobody reads it as the thread's reasoning.
  */
 export function StatusReplyRow({ rows }: { rows: readonly DelegateStatusRow[] }) {
+  const settled = rows.filter(settledStatus);
+  const visible = rows.filter((row) => !settledStatus(row));
   return (
     <div className="flex flex-col gap-1 rounded-xl border border-border bg-fill-subtle px-1 py-1.5">
       <div className="flex items-center gap-1.5 px-2 text-caption text-fg-muted">
@@ -231,9 +235,19 @@ export function StatusReplyRow({ rows }: { rows: readonly DelegateStatusRow[] })
         <span className="min-w-0 truncate">· {statusSummary(rows)}</span>
         <span className="ml-auto shrink-0 text-fg-faint">Local reply · no model turn</span>
       </div>
-      {rows.map((row) => (
+      {visible.map((row) => (
         <StatusLine key={row.id} row={row} onOpen={selectThread} />
       ))}
+      {settled.length > 0 && (
+        <details className="px-2 text-caption text-fg-muted">
+          <summary className="cursor-pointer rounded-lg py-1 hover:bg-fill-subtle">
+            {settledSummary(settled)}
+          </summary>
+          {settled.map((row) => (
+            <StatusLine key={row.id} row={row} onOpen={selectThread} />
+          ))}
+        </details>
+      )}
     </div>
   );
 }

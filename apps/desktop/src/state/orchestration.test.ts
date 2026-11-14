@@ -76,6 +76,7 @@ import {
   renderRead,
   reopenLinks,
   restateLinks,
+  retainDelegateCleanup,
   retireCleanedLinks,
   STALL_NOTICE_MS,
   sameProject,
@@ -2422,4 +2423,30 @@ test("cleanup retires old failures and survives delayed failure records and rest
       now: 50_000,
     }),
   ).toEqual([]);
+});
+
+test("cleanup retains merged and closed PRs on links across retirement and reload", () => {
+  for (const merged of [true, false]) {
+    const pull = {
+      number: 3705,
+      title: "Fix",
+      state: "closed" as const,
+      merged,
+      draft: false,
+      branch: "fix/x",
+      headSha: "abc",
+      ci: "passing" as const,
+      failing: [],
+      pending: 0,
+      passed: 1,
+    };
+    const saved = retainDelegateCleanup(book([link("parent", "child", "done")]), "child", {
+      at: 10,
+      branch: "fix/x",
+      pull,
+    });
+    const restored = parseBook(JSON.parse(JSON.stringify(retireCleanedLinks(saved, "child", 11))))!;
+    expect(restored.links[0]?.cleanup?.pull).toEqual(pull);
+    expect(mergeBooks(restored, saved).links[0]?.cleanup?.branch).toBe("fix/x");
+  }
 });
