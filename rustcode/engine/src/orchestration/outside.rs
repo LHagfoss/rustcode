@@ -187,6 +187,8 @@ pub fn changes_things(tool: &str) -> bool {
 /// One connected app.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
+    #[serde(default)]
+    pub expires_at: Option<i64>,
     pub id: String,
     pub name: String,
     pub platform: String,
@@ -319,6 +321,7 @@ pub fn create_at(
     );
     let token = format!("{TOKEN_PREFIX}{id}_{secret}");
     let grant = Grant {
+        expires_at: None,
         id,
         name,
         platform,
@@ -374,12 +377,20 @@ pub fn revoke_at(path: &Path, id: &str) -> Result<bool, String> {
 /// The grant `token` belongs to. Read from the file on every call, so a
 /// revocation or a change of scope applies to the very next call.
 pub fn authenticate_at(path: &Path, token: &str) -> Option<Grant> {
-    let rest = token.trim().strip_prefix(TOKEN_PREFIX)?;
+    authenticate_transport_at(path, token, false)
+}
+
+pub(super) fn authenticate_transport_at(path: &Path, token: &str, http: bool) -> Option<Grant> {
+    let rest = token.strip_prefix(if http { "rch_" } else { TOKEN_PREFIX })?;
     let (id, _) = rest.split_once('_')?;
     let hash = hash_token(token.trim());
-    list_at(path)
-        .into_iter()
-        .find(|grant| grant.id == id && same(&grant.token_hash, &hash))
+    list_at(path).into_iter().find(|grant| {
+        grant.id == id
+            && same(&grant.token_hash, &hash)
+            && grant
+                .expires_at
+                .is_none_or(|expiry| expiry > chrono::Utc::now().timestamp())
+    })
 }
 
 fn touch_at(path: &Path, id: &str, tool: &str) {
@@ -444,6 +455,7 @@ pub async fn ensure_hub() {
 /// Start listening at engine start when any app is connected, so it does not
 /// have to wait for a thread or for Settings to open.
 pub async fn bind_hub_when_connected() {
+    let _ = super::outside_http::ensure().await;
     if !list().is_empty() {
         ensure_hub().await;
     }
@@ -826,8 +838,18 @@ pub async fn answer_with(
     request: CallRequest,
     cancel: &CancellationToken,
 ) -> CallAnswer {
+    answer_transport_with(settings, runner, request, cancel, false).await
+}
+
+pub(super) async fn answer_transport_with(
+    settings: &Settings,
+    runner: &dyn Runner,
+    request: CallRequest,
+    cancel: &CancellationToken,
+    http: bool,
+) -> CallAnswer {
     let started = Instant::now();
-    let Some(grant) = authenticate_at(&settings.grants, &request.token) else {
+    let Some(grant) = authenticate_transport_at(&settings.grants, &request.token, http) else {
         return refusal(
             "error: RustCode did not accept this token. It may have been revoked; create a new one in RustCode › Settings › Outside agents. Nothing was sent.",
         );
@@ -935,7 +957,7 @@ pub async fn answer_with(
             }
         }
         // The grant may have been changed or revoked while the user decided.
-        match authenticate_at(&settings.grants, &request.token) {
+        match authenticate_transport_at(&settings.grants, &request.token, http) {
             Some(current) if current.scope >= needed => {}
             _ => {
                 record(
@@ -1347,6 +1369,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_scope_refusal_uses_the_same_gate() {
+        let fixture = Fixture::new();
+        let (_, token) =
+            create_http(&fixture.settings.grants, "HTTP app", Scope::ReadOnly).unwrap();
+        let answer = answer_transport_with(
+            &fixture.settings,
+            &fixture.runner,
+            CallRequest {
+                session_id: String::new(),
+                token,
+                tool: super::super::START_SESSION.into(),
+                args: json!({}),
+                outside: true,
+            },
+            &CancellationToken::new(),
+            true,
+        )
+        .await;
+        assert!(!answer.success);
+        assert_eq!(fixture.ran(), 0);
+    }
+
+    #[tokio::test]
     async fn a_read_only_token_reads() {
         let fixture = Fixture::new();
         let (_, token) = fixture.grant(Scope::ReadOnly, false);
@@ -1644,6 +1689,7 @@ mod tests {
                 .contains("needs Delegate access")
         );
         let grant = Grant {
+            expires_at: None,
             id: "id".into(),
             name: "Codex".into(),
             platform: "codex".into(),
@@ -1697,4 +1743,47 @@ mod tests {
         assert!(!summary.contains("secret") && !summary.contains("never shown"));
         assert_eq!(summarize("list_sessions", &json!({})), "list_sessions");
     }
+}
+
+/// OAuth credentials share the revocable grant store, but cannot authenticate stdio.
+pub(super) fn create_http(
+    path: &Path,
+    name: &str,
+    scope: Scope,
+) -> Result<(Grant, String), String> {
+    let (mut grant, token) = create_at(path, name, "other", scope, None)?;
+    let token = token.replacen("rcx_", "rch_", 1);
+    grant.token_hash = hash_token(&token);
+    grant.expires_at = Some(chrono::Utc::now().timestamp() + 3600);
+    let _guard = lock();
+    let mut clients = read(path);
+    let Some(saved) = clients.iter_mut().find(|g| g.id == grant.id) else {
+        return Err("grant revoked".into());
+    };
+    *saved = grant.clone();
+    write(path, &clients)?;
+    Ok((grant, token))
+}
+
+pub(super) async fn approve_connection(name: &str, destination: &str, scope: Scope) -> bool {
+    let id = format!("{:032x}", rand::random::<u128>());
+    let (sender, receiver) = oneshot::channel();
+    pending().push(Pending {
+        id: id.clone(),
+        client_id: id.clone(),
+        client_name: name.chars().take(60).collect(),
+        tool: "Connect over localhost HTTP".into(),
+        summary: format!(
+            "Destination: {destination}; requested access: {}",
+            scope.label()
+        ),
+        asked_at: now(),
+        answer: Some(sender),
+    });
+    let allowed = matches!(
+        tokio::time::timeout(APPROVAL_WAIT, receiver).await,
+        Ok(Ok(true))
+    );
+    withdraw(&id);
+    allowed
 }
