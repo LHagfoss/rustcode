@@ -139,6 +139,43 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
           className={cx(FIELD, "font-sans")}
         />
       </Field>
+      <HarnessCommandFields form={form} patch={patch} shown={shown} />
+      {failure && (
+        <div role="alert" className="selectable rounded-md bg-warning/10 px-3 py-2 text-callout text-warning">
+          <div className="font-medium">Could not verify it</div>
+          <div className="whitespace-pre-wrap break-words">{failure}</div>
+          <div className="text-caption text-fg-muted">Nothing was added. Fix the command and try again.</div>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Action type="submit" prominent disabled={!!busy}>
+          {busy && <Spinner size={11} />}
+          {busy === "adding" ? "Adding…" : busy === "verifying" ? "Verifying…" : "Add and verify"}
+        </Action>
+        <Action quiet disabled={!!busy} onClick={onClose}>
+          Cancel
+        </Action>
+        {busy === "verifying" && (
+          <span className="text-caption text-fg-muted">Starting it, ACP handshake, listing models.</span>
+        )}
+      </div>
+    </form>
+  );
+}
+
+export function HarnessCommandFields({
+  form,
+  patch,
+  shown,
+  saved = [],
+}: {
+  form: HarnessForm;
+  patch: (next: Partial<HarnessForm>) => void;
+  shown: ReturnType<typeof validateHarnessForm>;
+  saved?: number[];
+}) {
+  return (
+    <>
       <Field label="Executable" error={shown.executable} hint="A name looked up on PATH, or a path.">
         <input
           value={form.executable}
@@ -197,11 +234,12 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
                 />
                 <span className="text-fg-faint">=</span>
                 <input
+                  type="password"
+                  placeholder={saved.includes(i) ? "Saved value (unchanged)" : "value"}
                   value={row.value}
                   onChange={(e) =>
                     patch({ env: form.env.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)) })
                   }
-                  placeholder="value"
                   aria-label={`Variable ${i + 1} value`}
                   {...noTextHelpers}
                   className={cx(FIELD, "flex-1")}
@@ -226,25 +264,6 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </Field>
-      {failure && (
-        <div role="alert" className="selectable rounded-md bg-warning/10 px-3 py-2 text-callout text-warning">
-          <div className="font-medium">Could not verify it</div>
-          <div className="whitespace-pre-wrap break-words">{failure}</div>
-          <div className="text-caption text-fg-muted">Nothing was added. Fix the command and try again.</div>
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <Action type="submit" prominent disabled={!!busy}>
-          {busy && <Spinner size={11} />}
-          {busy === "adding" ? "Adding…" : busy === "verifying" ? "Verifying…" : "Add and verify"}
-        </Action>
-        <Action quiet disabled={!!busy} onClick={onClose}>
-          Cancel
-        </Action>
-        {busy === "verifying" && (
-          <span className="text-caption text-fg-muted">Starting it, ACP handshake, listing models.</span>
-        )}
-      </div>
-    </form>
+    </>
   );
 }

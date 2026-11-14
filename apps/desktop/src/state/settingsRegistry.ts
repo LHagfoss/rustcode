@@ -64,6 +64,7 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   { section: "permissions", title: "Remembered approvals", kind: "machine" },
   { section: "permissions", title: "Still asks at Full access", kind: "app" },
   { section: "agents", title: "Text generation", kind: "machine" },
+  { section: "agents", title: "Voice", kind: "machine" },
   // Harnesses: the default is a server setting, the cards and accounts are machine-only.
   { section: "agents", title: "New threads start on", kind: "server" },
   { section: "agents", title: "Harnesses", kind: "server" },
@@ -407,4 +408,83 @@ export function mcpCopy(server: CopyableMcpServer): McpCopy | null {
     headers: server.headerKeys.map((key) => `${key}: `),
     secretKeys,
   };
+}
+
+// ------------------------------------------------------------ project overrides
+
+/**
+ * What a project may set for itself (docs/desktop.md › Settings a project overrides), the same
+ * list as the engine's `PROJECT_KEYS` (`rustcode/engine/src/acp/settings.rs`). `default-harness`
+ * is project-only: the machine's default is the harness snapshot's, not a `settings.json` key.
+ *
+ * Left out on purpose: delegation limits, wake batching, workflow limits, presets and limit
+ * fallback act across every thread on the machine, so one project cannot own them; credentials,
+ * accounts and machine-only rows never leave their machine; app preferences are this app's.
+ */
+export const PROJECT_SETTING_KEYS = [
+  "default-harness",
+  "default-permission-mode",
+  "resume-after-restart",
+  "continue-after-limit",
+  "auto-compact-mode",
+  "auto-compact-threshold",
+] as const;
+
+export type ProjectSettingKey = (typeof PROJECT_SETTING_KEYS)[number];
+
+/** Whether a project may override this server setting. */
+export function projectOverridable(key: string): key is ProjectSettingKey {
+  return (PROJECT_SETTING_KEYS as readonly string[]).includes(key);
+}
+
+/** Where a value a thread reads comes from, nearest last. */
+export type SettingSource = "default" | "machine" | "project";
+
+export const SOURCE_LABEL: Record<SettingSource, string> = {
+  default: "Built-in default",
+  machine: "Machine's value",
+  project: "This project",
+};
+
+/** Default → machine → project: the nearest layer that set the value wins. */
+export function resolveSetting(layers: { default: Json; machine?: Json; project?: Json }): {
+  value: Json;
+  source: SettingSource;
+} {
+  if (layers.project !== undefined) return { value: layers.project, source: "project" };
+  if (layers.machine !== undefined) return { value: layers.machine, source: "machine" };
+  return { value: layers.default, source: "default" };
+}
+
+/** Why a row cannot be set per project, or null when it can. */
+export function projectReadOnlyReason(kind: SettingKind, key?: string): string | null {
+  if (kind === "app") return "An app preference: the same for every project.";
+  if (kind === "machine") return "Belongs to the machine, not to a project.";
+  if (key && projectOverridable(key)) return null;
+  return "Applies to every project on the machine.";
+}
+
+/** One machine a project override reaches, or why it is skipped. */
+export interface ProjectTarget {
+  machine: ScopedMachine;
+  /** The project's folder on that machine; absent when it has none. */
+  path?: string;
+}
+
+/**
+ * The project on each chosen machine, matched the way Run on matches it (same path, same remote,
+ * same folder name). A machine without it is skipped and listed, never written.
+ */
+export function projectTargets(
+  machines: ScopedMachine[],
+  pathOn: (machine: ScopedMachine) => string | undefined,
+): { reached: ProjectTarget[]; skipped: ScopedMachine[] } {
+  const reached: ProjectTarget[] = [];
+  const skipped: ScopedMachine[] = [];
+  for (const machine of machines) {
+    const path = pathOn(machine);
+    if (path) reached.push({ machine, path });
+    else skipped.push(machine);
+  }
+  return { reached, skipped };
 }

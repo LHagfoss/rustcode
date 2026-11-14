@@ -233,7 +233,8 @@ fn access_of(session_id: &str) -> Access {
     if full {
         return Access::Full;
     }
-    match crate::acp::settings::value("default-permission-mode")
+    // The thread's project may set its own default (Settings › Applying to › a project).
+    match crate::acp::settings::value_for_session("default-permission-mode", session_id)
         .and_then(|value| value.as_str().map(str::to_owned))
     {
         Some(mode) if mode == "full" => Access::Full,
@@ -1749,8 +1750,11 @@ mod tests {
     fn set_setting(key: &str, value: Value) {
         let mut values = serde_json::Map::new();
         values.insert(key.to_owned(), value);
-        crate::acp::settings::write(crate::acp::settings::SetSettingsRequest { values })
-            .expect("the test setting is written");
+        crate::acp::settings::write(crate::acp::settings::SetSettingsRequest {
+            values,
+            ..Default::default()
+        })
+        .expect("the test setting is written");
     }
 
     fn caller_with(access: Access) -> String {
