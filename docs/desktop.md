@@ -2131,11 +2131,22 @@ history, the logs or a file.
 
 On macOS the app's `Info.plist` carries `NSMicrophoneUsageDescription`, so
 the system asks for the microphone the first time.
+Before each recording the macOS app checks its microphone access
+(`microphone_access`, AVFoundation's authorization status) and shows the system
+prompt if the user was never asked. When access is off, nothing is recorded:
+a notice over the composer's tray says so, with **Open System Settings** for
+Privacy & Security › Microphone. Other systems record as before.
 
 ### App links
 
 Installed desktop builds register `rustcode://` on macOS, Windows and Linux.
 Opening a link starts the app or brings its existing window forward.
+
+When another app, or another copy of RustCode (an older install, a copy in
+Downloads), opens `rustcode://` links instead of this one, Settings › General
+shows a **Links** warning at the top with **Open Links Here**, which makes this
+copy the handler (`url_scheme_status`, `claim_url_scheme`). Development builds
+that are not an app bundle are not checked.
 
 - `rustcode://new?prompt=Fix%20the%20build` opens a new-thread draft. The prompt
   is plain text, capped at 8,000 characters. Read it and press Send yourself.
