@@ -645,7 +645,17 @@ composer's keys stay outside the table.
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
   request changes, at the head commit). "Ask the agent to review" starts a
-  thread draft naming the commit. Each `gh` read is a process, so the answers
+  thread draft naming the commit. *Work on this in a thread* (an open pull
+  request on this computer) opens a sheet: tick the description, the review
+  comments still on the diff and the failing checks, edit the instruction
+  ("Address the review comments and fix failing checks."), and *Start*. The
+  engine fetches the head into a local branch (`_rustcode/pulls/branch`,
+  `prepare_branch` in `engine/src/pull_requests.rs`; a fork's through
+  `refs/pull/N/head`, pushing back to the fork when maintainers may edit, else
+  read-only with a note), a worktree thread starts on it with the message in
+  its composer to read and send (`startPullThread`, `state/pullThread.ts`),
+  and the pull request is linked so new checks and comments wake it. A
+  thread already linked to it is offered first. Each `gh` read is a process, so the answers
   live in one store (`state/pullQueries.ts`) shared by the panel, the sidebar and
   the review view: a list, a detail or a diff the app already holds paints at
   once and is read again behind, and the lists and details are saved on the

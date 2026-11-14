@@ -1952,6 +1952,22 @@ pub(crate) struct PullViewRequest {
     pub number: u64,
 }
 
+/// Fetch a pull request's head into a local branch a worktree can check out
+/// (#3727). Answers `{branch}` or `{error}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/pulls/branch", response = serde_json::Value)]
+pub(crate) struct PullBranchRequest {
+    pub cwd: std::path::PathBuf,
+    pub number: u64,
+}
+
 /// One delegate's pull request and its checks, by branch (the worktree's) or
 /// the branch the folder is on. Answers `{branch, pull}` or `{error}`.
 #[derive(
@@ -3641,6 +3657,19 @@ async fn serve_connection(
                     let viewed = crate::pull_requests::view(&request.cwd, request.number).await;
                     responder.respond(match viewed {
                         Ok(pull) => serde_json::json!({ "pull": pull }),
+                        Err(error) => serde_json::json!({ "error": error }),
+                    })?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullBranchRequest, responder, connection| {
+                connection.spawn(async move {
+                    let prepared = crate::pull_requests::prepare_branch(&request.cwd, request.number).await;
+                    responder.respond(match prepared {
+                        Ok(branch) => serde_json::json!({ "branch": branch }),
                         Err(error) => serde_json::json!({ "error": error }),
                     })?;
                     Ok(())

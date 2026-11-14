@@ -3615,6 +3615,15 @@ export class MockEngine {
         }
         return { action, output: "", url, state: git } as unknown as Json;
       }
+      case "_rustcode/pulls/branch":
+        return {
+          branch: {
+            branch: "feat/mock-pull",
+            head_ref: "feat/mock-pull",
+            cross_repository: false,
+            read_only: false,
+          },
+        };
       case "_rustcode/worktrees/state": {
         const paths = Array.isArray(params.paths) ? params.paths : [];
         return {

@@ -11,9 +11,11 @@ import {
   CirclePlus,
   CircleX,
   ExternalLink,
+  GitBranchPlus,
   GitPullRequest,
   RefreshCw,
 } from "lucide-react";
+import { Dialog } from "radix-ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { JsonObject } from "../acp/jsonrpc";
 import {
@@ -45,9 +47,26 @@ import {
   usePullList,
 } from "../state/pullQueries";
 import { pullState } from "../state/pulls";
-import { openSettings, request, setDraft, setPanel, startNewThread, toast, useApp } from "../state/store";
+import {
+  DEFAULT_PULL_INSTRUCTION,
+  failingChecks,
+  linkedPullThread,
+  openComments,
+  pullThreadMessage,
+} from "../state/pullThread";
+import {
+  openSettings,
+  request,
+  selectThread,
+  setDraft,
+  setPanel,
+  startNewThread,
+  startPullThread,
+  toast,
+  useApp,
+} from "../state/store";
 import { relativeAge } from "../state/thread";
-import { splitThreadKey } from "../state/threadKeys";
+import { splitThreadKey, threadKey } from "../state/threadKeys";
 import { Markdown } from "./Markdown";
 import {
   Callout,
@@ -332,6 +351,7 @@ function PullView({
   // files and the activity come from the detail read behind it.
   const { detail, summary, error, live } = usePullDetail(cwd, number);
   const [reviewing, setReviewing] = useState(false);
+  const [working, setWorking] = useState(false);
   const askAgent = (pull: PullRequest) => {
     startNewThread(cwd, host || undefined);
     setDraft(
@@ -371,6 +391,11 @@ function PullView({
               </Pill>
             )}
             <Pill onClick={() => askAgent(summary)}>Ask the agent to review</Pill>
+            {!host && summary.state === "open" && (
+              <Pill onClick={() => setWorking(true)}>
+                <GitBranchPlus size={11} /> Work on this in a thread
+              </Pill>
+            )}
             {!reviewing && (
               <Pill
                 prominent
@@ -384,6 +409,9 @@ function PullView({
             )}
           </div>
           {reviewing && <ReviewForm cwd={cwd} pull={summary} onDone={() => setReviewing(false)} />}
+          {working && (
+            <PullThreadSheet cwd={cwd} pull={summary} detail={detail} onClose={() => setWorking(false)} />
+          )}
         </>
       ) : error ? (
         <ErrorView error={error} />
@@ -433,6 +461,125 @@ function PullView({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * "Work on this in a thread": what the new thread starts with (the instruction and the parts
+ * ticked), then a worktree on the pull request's branch with that message in its composer. A thread
+ * already linked to the pull request is offered first, so it is not opened twice.
+ */
+function PullThreadSheet({
+  cwd,
+  pull,
+  detail,
+  onClose,
+}: {
+  cwd: string;
+  pull: PullRequest;
+  detail?: PullDetail;
+  onClose: () => void;
+}) {
+  const comments = openComments(detail);
+  const checks = failingChecks(detail);
+  const [parts, setParts] = useState({ body: true, comments: true, checks: true });
+  const [instruction, setInstruction] = useState(DEFAULT_PULL_INSTRUCTION);
+  const [starting, setStarting] = useState(false);
+  const [linked, setLinked] = useState<string>();
+  useEffect(() => {
+    let live = true;
+    request("_rustcode/pulls/watches", {}, 15_000)
+      .then((answer) => {
+        if (live) setLinked(linkedPullThread(answer, pull.number, repositoryOf(pull.url)));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [pull.number, pull.url]);
+  const start = async () => {
+    setStarting(true);
+    const id = await startPullThread(cwd, pull, pullThreadMessage(pull, detail, parts, instruction));
+    setStarting(false);
+    if (!id) return;
+    setPanel(null);
+    onClose();
+  };
+  const tick = (key: keyof typeof parts, label: string, n: number | null) => (
+    <label className="flex items-center gap-2 text-callout">
+      <input
+        type="checkbox"
+        className="shrink-0 accent-[var(--rc-accent)]"
+        checked={parts[key] && n !== 0}
+        disabled={n === 0}
+        onChange={(e) => setParts((p) => ({ ...p, [key]: e.target.checked }))}
+      />
+      <span className={cx(n === 0 && "text-fg-faint")}>
+        {label}
+        {n !== null && <span className="text-fg-muted"> · {n}</span>}
+      </span>
+    </label>
+  );
+  return (
+    <Dialog.Root open onOpenChange={(open) => !open && !starting && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="elevated pointer-events-auto flex max-h-[80%] w-[min(520px,calc(100vw-48px))] flex-col gap-3 p-5"
+          >
+            <Dialog.Title className="font-semibold text-body">
+              Work on #{pull.number} in a thread
+            </Dialog.Title>
+            <p className="text-callout text-fg-muted">
+              {pull.title} · a worktree on <span className="font-mono">{pull.headRef}</span>. Pushing from the
+              thread updates the pull request, and its checks and comments wake the thread.
+            </p>
+            {linked && (
+              <Callout tone="warning">
+                A thread is already linked to this pull request.{" "}
+                <button
+                  type="button"
+                  className="text-accent hover:underline"
+                  onClick={() => {
+                    selectThread(threadKey("", linked));
+                    setPanel(null);
+                    onClose();
+                  }}
+                >
+                  Open it
+                </button>
+              </Callout>
+            )}
+            <div className="flex flex-col gap-1.5">
+              {tick("body", "Description", detail ? (detail.body.trim() ? null : 0) : null)}
+              {tick("comments", "Review comments", detail ? comments.length : null)}
+              {tick("checks", "Failing checks", detail ? checks.length : null)}
+            </div>
+            <textarea
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              rows={2}
+              aria-label="Instruction"
+              {...noTextHelpers}
+              className="w-full resize-y rounded-md bg-fill-subtle p-2 text-body outline-none"
+            />
+            <div className="flex items-center gap-2">
+              <span className="flex-1 text-caption text-fg-muted">
+                The message waits in the composer for you to send.
+              </span>
+              <Pill disabled={starting} onClick={onClose}>
+                Cancel
+              </Pill>
+              <Pill prominent disabled={starting} onClick={() => void start()}>
+                {starting && <Spinner size={12} />} {linked ? "Start another" : "Start"}
+              </Pill>
+            </div>
+          </Dialog.Content>
+        </div>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
