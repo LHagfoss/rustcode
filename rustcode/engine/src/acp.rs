@@ -3408,6 +3408,18 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: crate::transcription::TranscribeRequest, responder, connection| {
+                connection.spawn(async move {
+                    match crate::transcription::transcribe(request).await {
+                        Ok(answer) => responder.respond(answer)?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: crate::text_generation::GenerateRequest, responder, connection| {
                 connection.spawn(async move {
                     match crate::text_generation::generate(request).await {

@@ -4111,6 +4111,18 @@ test("a project's own default sits between the default and a thread's choice", (
   resetForTests();
 });
 
+test("a project's access from its server override resolves like the app's own", () => {
+  resetForTests();
+  useApp.setState({ sessions: [{ id: "a", title: "A", cwd: "/work/app" }] as never });
+  // What Settings › Applying to › a project mirrors from this machine's server.
+  setProjectPermissionMode("/work/app", "edits", { fromServer: true });
+  expect(permissionModeOf(useApp.getState(), "a")).toBe("edits");
+  expect(permissionModeOf(useApp.getState(), undefined, "/work/app")).toBe("edits");
+  setProjectPermissionMode("/work/app", null, { fromServer: true });
+  expect(permissionModeOf(useApp.getState(), "a")).toBe("ask");
+  resetForTests();
+});
+
 test("Use default for all clears each listed thread's own choice, and only those", () => {
   resetForTests();
   setPermissionMode("a", "ask");

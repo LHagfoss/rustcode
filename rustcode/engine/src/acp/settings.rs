@@ -19,7 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// The file these values live in, beside `config.toml`.
@@ -75,6 +76,42 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
     })
 }
 
+/// The keys a project may set for itself, resolved default → machine →
+/// project when a thread in that project reads them (docs/desktop.md ›
+/// Settings a project overrides). Credentials, accounts, delegation limits and
+/// the machine's own switches are not here: they belong to the machine.
+/// `default-harness` is project-only: the machine's default lives in
+/// `config.toml` (`_rustcode/harnesses/default`).
+pub(crate) const PROJECT_KEYS: &[&str] = &[
+    "default-harness",
+    "default-permission-mode",
+    "resume-after-restart",
+    "continue-after-limit",
+    "auto-compact-mode",
+    "auto-compact-threshold",
+];
+
+/// The type a project override of `key` must have, or `None` when a project
+/// may not override it.
+fn project_key_type(key: &str) -> Option<(&'static str, SettingType)> {
+    let known = PROJECT_KEYS.iter().find(|known| **known == key)?;
+    if *known == "default-harness" {
+        return Some((known, SettingType::Object));
+    }
+    registry_entry(known).map(|(known, kind, _)| (known, kind))
+}
+
+/// How a project is named in the file: its folder (a worktree's repository),
+/// without a trailing separator, the way the app's `projectKey` spells it.
+pub(crate) fn project_key(path: &str) -> String {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        path.to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 fn registry_entry(key: &str) -> Option<(&'static str, SettingType, &'static Value)> {
     registry()
         .iter()
@@ -89,6 +126,11 @@ pub(crate) struct GetSettingsRequest {
     /// The keys to read; absent reads all of them.
     #[serde(default)]
     pub keys: Option<Vec<String>>,
+    /// A project's folder: the values are resolved for a thread there, and
+    /// the answer carries the project's own overrides and where each value
+    /// comes from.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// `_rustcode/settings/set`: merge these values into the machine's settings.
@@ -97,6 +139,13 @@ pub(crate) struct GetSettingsRequest {
 pub(crate) struct SetSettingsRequest {
     #[serde(default)]
     pub values: Map<String, Value>,
+    /// Write the values as this project's overrides instead of the machine's.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Keys to remove: the project's override (with `project`), else the
+    /// machine's own value, so the next read falls back a layer.
+    #[serde(default)]
+    pub clear: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -105,6 +154,10 @@ struct SettingsFile {
     version: u32,
     #[serde(default)]
     values: Map<String, Value>,
+    /// Each project's overrides, keyed by [`project_key`]. A file written
+    /// before projects could override anything has none and reads the same.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    projects: BTreeMap<String, Map<String, Value>>,
 }
 
 fn file_version() -> u32 {
@@ -117,13 +170,11 @@ fn settings_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "could not determine the config directory".to_owned())
 }
 
-/// The stored values, with unknown or wrong-typed entries dropped: a file
+/// The stored file, with unknown or wrong-typed entries dropped: a file
 /// edited by hand must not make a read fail.
-fn read_values(path: &PathBuf) -> Map<String, Value> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Map::new(),
-        Err(_) => return Map::new(),
+fn read_file(path: &Path) -> SettingsFile {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return SettingsFile::default();
     };
     let file: SettingsFile = serde_json::from_str(&text).unwrap_or_default();
     let mut values = Map::new();
@@ -134,7 +185,24 @@ fn read_values(path: &PathBuf) -> Map<String, Value> {
             values.insert(known.to_owned(), value);
         }
     }
-    values
+    let mut projects = BTreeMap::new();
+    for (project, overrides) in file.projects {
+        let kept: Map<String, Value> = overrides
+            .into_iter()
+            .filter_map(|(key, value)| {
+                let (known, kind) = project_key_type(&key)?;
+                value_matches(kind, &value).then(|| (known.to_owned(), value))
+            })
+            .collect();
+        if !kept.is_empty() {
+            projects.insert(project_key(&project), kept);
+        }
+    }
+    SettingsFile {
+        version: 1,
+        values,
+        projects,
+    }
 }
 
 fn value_matches(kind: SettingType, value: &Value) -> bool {
@@ -147,16 +215,12 @@ fn value_matches(kind: SettingType, value: &Value) -> bool {
     }
 }
 
-fn write_values(path: &PathBuf, values: &Map<String, Value>) -> Result<(), String> {
+fn write_file(path: &Path, file: &SettingsFile) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|error| format!("could not create {}: {error}", dir.display()))?;
     }
-    let file = SettingsFile {
-        version: 1,
-        values: values.clone(),
-    };
-    let text = serde_json::to_string_pretty(&file)
+    let text = serde_json::to_string_pretty(file)
         .map_err(|error| format!("could not serialize settings: {error}"))?;
     let temporary = path.with_extension("json.tmp");
     std::fs::write(&temporary, text.as_bytes())
@@ -170,7 +234,14 @@ fn write_values(path: &PathBuf, values: &Map<String, Value>) -> Result<(), Strin
 /// this file actually holds. A client seeds a missing key only, so a value
 /// another machine wrote before this one first started is not overwritten.
 pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_protocol::Error> {
-    let stored = read_values(&settings_path().unwrap_or_default());
+    let file = read_file(&settings_path().unwrap_or_default());
+    let stored = &file.values;
+    let project = request.project.as_deref().map(project_key);
+    let overrides = project
+        .as_ref()
+        .and_then(|key| file.projects.get(key))
+        .cloned()
+        .unwrap_or_default();
     let mut values = Map::new();
     let keys: Vec<&str> = match &request.keys {
         Some(keys) => {
@@ -184,37 +255,107 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
         }
         None => registry().iter().map(|(key, ..)| *key).collect(),
     };
+    let mut sources = Map::new();
     for key in keys {
         let (key, _, default) = registry_entry(key).expect("checked above");
-        values.insert(
-            key.to_owned(),
-            if key == "computer-use" {
-                crate::computer_use::settings_value()
-            } else {
-                stored.get(key).cloned().unwrap_or_else(|| default.clone())
-            },
-        );
+        let (value, source) = if key == "computer-use" {
+            (crate::computer_use::settings_value(), "machine")
+        } else if let Some(value) = overrides.get(key) {
+            (value.clone(), "project")
+        } else if let Some(value) = stored.get(key) {
+            (value.clone(), "machine")
+        } else {
+            (default.clone(), "default")
+        };
+        values.insert(key.to_owned(), value);
+        sources.insert(key.to_owned(), json!(source));
     }
     let stored_keys: Vec<String> = stored.keys().cloned().collect();
-    Ok(json!({ "values": values, "stored": stored_keys }))
+    let mut answer = json!({ "values": values, "stored": stored_keys, "sources": sources });
+    if let Some(project) = project {
+        answer["project"] = json!({
+            "path": project,
+            "overrides": overrides,
+            "overridable": PROJECT_KEYS,
+        });
+    }
+    Ok(answer)
 }
 
 /// One setting's current value, for engine code that has to apply a
 /// client-hosted setting itself (#3422). The registry default applies where
 /// the machine has not set it.
 pub(crate) fn value(key: &str) -> Option<Value> {
+    value_for_project(key, None)
+}
+
+/// One setting as a thread in `project` reads it: the project's override,
+/// else the machine's value, else the registry default.
+pub(crate) fn value_for_project(key: &str, project: Option<&Path>) -> Option<Value> {
     let answer = read(GetSettingsRequest {
         keys: Some(vec![key.to_owned()]),
+        project: project.map(|path| path.to_string_lossy().into_owned()),
     })
     .ok()?;
     answer.get("values")?.get(key).cloned()
+}
+
+/// One setting as a thread reads it, through its project (its repository's
+/// folder, as the session store records it).
+pub(crate) fn value_for_session(key: &str, session_id: &str) -> Option<Value> {
+    let project = crate::config::load_session_repo(session_id);
+    value_for_project(key, project.as_deref())
+}
+
+/// A project's own override of `key`, without falling back a layer.
+#[cfg(test)]
+fn project_override(key: &str, project: &Path) -> Option<Value> {
+    let file = read_file(&settings_path().ok()?);
+    file.projects
+        .get(&project_key(&project.to_string_lossy()))?
+        .get(key)
+        .cloned()
 }
 
 /// Answer `_rustcode/settings/set`: merge the values, then read them back.
 pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_protocol::Error> {
     let path = settings_path()
         .map_err(|error| agent_client_protocol::Error::internal_error().data(error))?;
-    let mut values = read_values(&path);
+    let mut file = read_file(&path);
+    if let Some(project) = request.project.as_deref() {
+        let project = project_key(project);
+        if project.trim().is_empty() {
+            return Err(agent_client_protocol::Error::invalid_params().data("project is empty"));
+        }
+        let mut overrides = file.projects.remove(&project).unwrap_or_default();
+        for (key, value) in &request.values {
+            let Some((known, kind)) = project_key_type(key) else {
+                return Err(agent_client_protocol::Error::invalid_params()
+                    .data(format!("a project cannot override '{key}'")));
+            };
+            if !value_matches(kind, value) {
+                return Err(agent_client_protocol::Error::invalid_params()
+                    .data(format!("setting '{known}' has the wrong type")));
+            }
+            overrides.insert(known.to_owned(), value.clone());
+        }
+        for key in &request.clear {
+            overrides.remove(key);
+        }
+        if !overrides.is_empty() {
+            file.projects.insert(project.clone(), overrides);
+        }
+        write_file(&path, &file)
+            .map_err(|error| agent_client_protocol::Error::internal_error().data(error))?;
+        return read(GetSettingsRequest {
+            keys: None,
+            project: Some(project),
+        });
+    }
+    let values = &mut file.values;
+    for key in &request.clear {
+        values.remove(key);
+    }
     for (key, value) in &request.values {
         let Some((known, kind, _)) = registry_entry(key) else {
             return Err(agent_client_protocol::Error::invalid_params()
@@ -231,7 +372,7 @@ pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_p
         }
         values.insert(known.to_owned(), value.clone());
     }
-    write_values(&path, &values)
+    write_file(&path, &file)
         .map_err(|error| agent_client_protocol::Error::internal_error().data(error))?;
     read(GetSettingsRequest::default())
 }
@@ -258,6 +399,7 @@ mod tests {
                 ("orchestration".to_owned(), json!(false)),
                 ("delegates-total".to_owned(), json!(12)),
             ]),
+            ..Default::default()
         })
         .unwrap();
         assert_eq!(answer["values"]["orchestration"], json!(false));
@@ -274,6 +416,7 @@ mod tests {
 
         let reread = read(GetSettingsRequest {
             keys: Some(vec!["orchestration".to_owned()]),
+            ..Default::default()
         })
         .unwrap();
         assert_eq!(
@@ -300,16 +443,110 @@ mod tests {
     fn unknown_keys_and_wrong_types_are_refused_without_a_write() {
         let unknown = write(SetSettingsRequest {
             values: Map::from_iter([("theme".to_owned(), json!("dark"))]),
+            ..Default::default()
         });
         assert!(unknown.is_err());
         let wrong = write(SetSettingsRequest {
             values: Map::from_iter([("resume-after-restart".to_owned(), json!("yes"))]),
+            ..Default::default()
         });
         assert!(wrong.is_err());
         assert_eq!(
             read(GetSettingsRequest::default()).unwrap()["values"]["resume-after-restart"],
             json!(true)
         );
+    }
+
+    #[test]
+    fn a_project_override_resolves_over_the_machine_and_the_default() {
+        let project = "/work/strict-repo/";
+        write(SetSettingsRequest {
+            values: Map::from_iter([("default-permission-mode".to_owned(), json!("full"))]),
+            ..Default::default()
+        })
+        .unwrap();
+        // Before the project says anything: the machine's value, then the default.
+        let before = read(GetSettingsRequest {
+            project: Some(project.to_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(before["values"]["default-permission-mode"], json!("full"));
+        assert_eq!(
+            before["sources"]["default-permission-mode"],
+            json!("machine")
+        );
+        assert_eq!(before["sources"]["resume-after-restart"], json!("default"));
+
+        let answer = write(SetSettingsRequest {
+            values: Map::from_iter([
+                ("default-permission-mode".to_owned(), json!("ask")),
+                ("resume-after-restart".to_owned(), json!(false)),
+                (
+                    "default-harness".to_owned(),
+                    json!({"harness": "codex", "model": "gpt-5"}),
+                ),
+            ]),
+            project: Some(project.to_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(answer["values"]["default-permission-mode"], json!("ask"));
+        assert_eq!(
+            answer["sources"]["default-permission-mode"],
+            json!("project")
+        );
+        assert_eq!(answer["project"]["path"], json!("/work/strict-repo"));
+        assert_eq!(
+            answer["project"]["overrides"]["default-harness"]["harness"],
+            json!("codex")
+        );
+        // Another project and the machine itself are untouched.
+        assert_eq!(
+            value_for_project("default-permission-mode", Some(Path::new("/work/other"))),
+            Some(json!("full"))
+        );
+        assert_eq!(value("default-permission-mode"), Some(json!("full")));
+        assert_eq!(
+            value_for_project(
+                "default-permission-mode",
+                Some(Path::new("/work/strict-repo"))
+            ),
+            Some(json!("ask"))
+        );
+
+        // "Use the machine's value" removes the override only.
+        write(SetSettingsRequest {
+            clear: vec!["default-permission-mode".to_owned()],
+            project: Some(project.to_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            value_for_project("default-permission-mode", Some(Path::new(project))),
+            Some(json!("full"))
+        );
+        assert_eq!(
+            project_override("resume-after-restart", Path::new(project)),
+            Some(json!(false))
+        );
+        let _ = std::fs::remove_file(settings_path().unwrap());
+    }
+
+    #[test]
+    fn a_project_cannot_override_a_machine_setting() {
+        let refused = write(SetSettingsRequest {
+            values: Map::from_iter([("delegates-total".to_owned(), json!(2))]),
+            project: Some("/work/repo".to_owned()),
+            ..Default::default()
+        });
+        assert!(refused.is_err());
+        let wrong = write(SetSettingsRequest {
+            values: Map::from_iter([("default-harness".to_owned(), json!("codex"))]),
+            project: Some("/work/repo".to_owned()),
+            ..Default::default()
+        });
+        assert!(wrong.is_err());
     }
 
     #[test]

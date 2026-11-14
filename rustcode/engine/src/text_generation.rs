@@ -56,7 +56,7 @@ pub(crate) struct GenerateRequest {
     pub files: Vec<String>,
 }
 impl Generator {
-    fn profile(&self) -> Result<crate::config::ModelProfile> {
+    pub(crate) fn profile(&self) -> Result<crate::config::ModelProfile> {
         use crate::config::ApiProtocol;
         let (url, protocol) = match self.provider.as_str() {
             "anthropic" => (

@@ -571,6 +571,20 @@ Remote access or the server's own diagnostics (the gateway's desktop ACP
 allowlist, `rustcode/engine/src/remote_gateway/acp_relay.rs`). See
 [desktop.md](desktop.md) › Settings on one machine or all.
 
+A project can override some keys for itself. They live in the same file
+under `"projects": { "<folder>": { … } }`, keyed by the project's folder (a
+worktree's repository) without a trailing separator, and resolve default →
+machine → project whenever a thread in that project reads them (the engine's
+`value_for_session`, used for a thread's default access). `get` with
+`"project": "<folder>"` answers the resolved values, `"sources"` (`default`,
+`machine` or `project` per key) and `"project": { "path", "overrides",
+"overridable" }`; `set` with `"project"` writes overrides, and `"clear": [keys]`
+removes them (without `"project"` it removes the machine's own values). Only
+`default-harness` (project-only: `{ "harness", "model"?, "effort"? }`),
+`default-permission-mode`, `resume-after-restart`, `continue-after-limit`,
+`auto-compact-mode` and `auto-compact-threshold` may be overridden; any other
+key is refused. A file written before projects existed reads unchanged.
+
 `settings.json` is deliberately not part of `rustcode sync`: it is one
 machine's behaviour, not a shared configuration.
 
@@ -632,3 +646,13 @@ Non-secret definitions and the selected ID live in `text-generators.json`
 beside the engine config. Keys live in the provider credential store.
 With none selected, existing thread title and git draft behavior is retained.
 Requests are tool-free, limited to 24,000 input characters and 45 seconds.
+### Voice dictation
+
+Settings › Agents › Voice is kept by the desktop app on this machine
+(`rustcode.voice` in its storage): `generator` (a text generator ID with an
+`openai` or `custom` provider, or null for Off, the default), `model`
+(default `gpt-4o-mini-transcribe`), `language` (empty detects it) and `mode`
+(`toggle` or `hold`). The key is that generator's, in the provider credential
+store. The engine sends recordings of at most 10 MB and five minutes to
+`<base URL>/audio/transcriptions` and gives up after 60 seconds.
+

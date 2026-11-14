@@ -294,3 +294,4 @@ mod background_history_tests {
 }
 
 mod text_generation;
+mod transcription;

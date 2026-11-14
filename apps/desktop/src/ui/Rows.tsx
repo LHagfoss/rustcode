@@ -23,6 +23,7 @@ import {
   MessageSquareQuote,
   MessagesSquare,
   MoveRight,
+  Paperclip,
   Pencil,
   RotateCcw,
   Search,
@@ -309,8 +310,23 @@ export const QuestionRow = memo(function QuestionRow({
       <div className="selectable line-clamp-3 text-body text-fg-muted">{item.text}</div>
       <div className="flex min-w-0 items-start gap-1.5 text-body text-fg">
         <CornerDownRight size={13} className="mt-[3px] shrink-0 text-success" />
-        <span className="selectable min-w-0 break-words">{item.answer}</span>
+        <span className="selectable min-w-0 break-words">
+          {item.answer || (item.files?.length ? "Sent files" : "")}
+        </span>
       </div>
+      {item.files && item.files.length > 0 && (
+        <ul aria-label="Attached files" className="m-0 ml-[19px] flex list-none flex-wrap gap-1 p-0">
+          {item.files.map((name, i) => (
+            <li
+              key={`${i}:${name}`}
+              className="flex h-[22px] max-w-[240px] items-center gap-1 rounded-full bg-fill px-2 text-caption text-fg-muted"
+            >
+              <Paperclip size={11} className="shrink-0" aria-hidden />
+              <span className="selectable truncate">{name}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 });

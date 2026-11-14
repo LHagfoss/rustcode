@@ -1368,8 +1368,11 @@ mod tests {
     fn set_setting(key: &str, value: Value) {
         let mut values = serde_json::Map::new();
         values.insert(key.to_owned(), value);
-        crate::acp::settings::write(crate::acp::settings::SetSettingsRequest { values })
-            .expect("the test setting is written");
+        crate::acp::settings::write(crate::acp::settings::SetSettingsRequest {
+            values,
+            ..Default::default()
+        })
+        .expect("the test setting is written");
     }
 
     #[test]

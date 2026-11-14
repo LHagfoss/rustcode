@@ -1298,12 +1298,30 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `Declined git push --force`. It stays `RESOLVED_APPROVAL_MS` (1.8 s) and
   leaves, so an answer has a visible result instead of a card vanishing under
   the pointer.
+- **Question panel:** a question waiting on the user is a panel over the
+  composer (`ui/AttentionCards.tsx` `QuestionCard`, `elevated p-4`, `rc-in`),
+  not in place of it: the composer stays below with its draft, so the thread
+  and the user's own words keep their place while the question is answered.
+  The header (`h2`, accent) names the question and, for a set asked one after
+  another, `2 of 3` (`step`/`steps` in the request's `_meta.rustcode`); the
+  question scrolls past 168px so a long one leaves its answers in view. The
+  panel takes focus when it appears unless a field has it, never its first
+  answer, so ⏎ cannot send an answer nobody chose; ↑/↓, Home and End move
+  between answers, 1–9 pick one, esc dismisses outside a field, and once
+  answered focus goes back to the composer's field. A question that takes the
+  user's own answer also takes files: a `Paperclip` beside Send (Attach
+  files), a paste into the field or a drop on the panel (a dashed accent
+  outline while a drag is over it), shown in the composer's strip
+  (`ui/Attachments.tsx`). An answer leaves the panel as the settled line
+  approvals use (`Answered: Plain · 2 files`, `rc-resolve`); reduced motion
+  makes both instant.
 - **Question row:** an answered question stays in the transcript
   (`ui/Rows.tsx` `QuestionRow`, `bg-fill-subtle rounded-lg px-3 py-2`): the
   header in `font-medium` after a `MessageCircleQuestion` in accent, the
   question itself in `text-fg-muted` (three lines at most), and the answer
-  under a `CornerDownRight` in `success`. It is not folded away with its
-  turn. A question still waiting keeps its form over the composer, since its
+  under a `CornerDownRight` in `success`, then the names of any files the
+  answer carried as `bg-fill` chips with a `Paperclip`. It is not folded away
+  with its turn. A question still waiting keeps its form over the composer, since its
   answer is a choice; only the answer leaves a row.
 - **Plan card:** a thread's plan, at the foot of the transcript
   (`ui/PlanCard.tsx`): `rounded-2xl bg-surface p-4`, a `ListChecks` and
