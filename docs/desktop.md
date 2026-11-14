@@ -886,6 +886,11 @@ composer's keys stay outside the table.
   attached count.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
+- **Open in Editor.** The header's project button (and the project picker
+  anywhere) offers *Open in Editor* beside *Open in Finder* and *Open in
+  Terminal*: the thread's folder opens in the first editor with a command
+  line tool installed, VS Code, Cursor or Zed (`open_folder_in_editor` in
+  `src-tauri/src/native.rs`); with none, a toast says which to install.
 - **Window.** The window opens at the size it was last closed with
   (`webview.rs` keeps it as logical points in `window.json` under the app's
   config folder; closing the window or quitting writes it, and a missing or

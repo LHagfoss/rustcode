@@ -1019,8 +1019,49 @@ pub fn open_in_editor(path: String, line: Option<u32>, column: Option<u32>) -> R
     }
 }
 
+/// The first code editor with a command line tool installed (VS Code, Cursor, Zed), by the
+/// places `EDITOR_TOOLS` lists.
+fn installed_editor() -> Option<&'static Path> {
+    EDITOR_TOOLS
+        .iter()
+        .find_map(|(_, places)| places.iter().map(Path::new).find(|p| p.is_file()))
+}
+
+/// Opens a project folder in the user's code editor, as T3 Code's "Open in" does. Only a folder
+/// that exists, and only in one of the editors `EDITOR_TOOLS` knows: a folder has no default
+/// text editor to fall back on, so with none installed it says so.
+#[tauri::command(async)]
+pub fn open_folder_in_editor(path: String) -> Result<(), String> {
+    let path = expand_home(&path);
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(format!("No such folder: {}", path.display()));
+    }
+    let Some(bin) = installed_editor() else {
+        return Err(
+            "No code editor found: install the command line tool of VS Code, Cursor or Zed".into(),
+        );
+    };
+    crate::process::command(bin)
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn open_folder_in_editor_refuses_what_is_not_a_folder() {
+        assert!(super::open_folder_in_editor("relative/path".into())
+            .unwrap_err()
+            .starts_with("No such folder"));
+        let file = std::env::temp_dir().join(format!("rc-editor-file-{}", std::process::id()));
+        std::fs::write(&file, "x").unwrap();
+        let refused = super::open_folder_in_editor(file.display().to_string());
+        std::fs::remove_file(&file).unwrap();
+        assert!(refused.unwrap_err().starts_with("No such folder"));
+    }
+
     #[test]
     fn project_files_lists_what_git_sees() {
         let dir = std::env::temp_dir().join(format!("rc-project-files-{}", std::process::id()));

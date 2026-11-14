@@ -113,6 +113,11 @@ export function openInEditor(path: string, line?: number, column?: number): Prom
   return invoke<void>("open_in_editor", { path, line: line ?? null, column: column ?? null });
 }
 
+/** Opens a project folder in the user's code editor (VS Code, Cursor or Zed); rejects with why not. */
+export function openFolderInEditor(path: string): Promise<void> {
+  return invoke<void>("open_folder_in_editor", { path });
+}
+
 /** Writes a new skill's SKILL.md from the template and answers its path. */
 export function createSkill(name: string, scope: "user" | "project", cwd: string): Promise<string> {
   return invoke<string>("skill_create", { name, scope, cwd });
