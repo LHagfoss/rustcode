@@ -72,6 +72,18 @@ export function OutsideAgentsPage() {
           />
         </Group>
       )}
+      <Group title="Connection">
+        <Row
+          title="HTTP connection URL"
+          subtitle={status.httpUrl ?? "HTTP endpoint is not running. Restart RustCode to try again."}
+          status={status.httpUrl ? "For apps using Streamable HTTP and OAuth on this computer." : undefined}
+        >
+          {status.httpUrl && <Action onClick={() => void copyText(status.httpUrl ?? "")}>Copy URL</Action>}
+        </Row>
+        <Row title="Stdio command" subtitle={status.command}>
+          <Action onClick={() => void copyText(status.command)}>Copy command</Action>
+        </Row>
+      </Group>
       {status.pending.length > 0 && (
         <Group title="Waiting for you">
           {status.pending.map((item) => (

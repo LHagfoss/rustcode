@@ -30,9 +30,13 @@ describe("outside agents", () => {
         { at: "2026-11-13T10:05:00.000Z", clientName: "Cursor", tool: "list_sessions", outcome: "ok" },
       ],
       command: "/bin/rustcode",
+      httpUrl: "http://127.0.0.1:43871/mcp",
       maxGrants: 20,
       available: true,
     });
+    expect(status.httpUrl).toBe("http://127.0.0.1:43871/mcp");
+    expect(parseOutsideStatus({}).httpUrl).toBeNull();
+    expect(parseOutsideStatus({ httpUrl: null }).httpUrl).toBeNull();
     expect(status.grants.map((grant) => grant.id)).toEqual(["ab12", "cd34"]);
     // An unknown level reads as the safest one, never as more access.
     expect(status.grants[1]?.scope).toBe("read_only");

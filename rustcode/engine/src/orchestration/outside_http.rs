@@ -43,12 +43,44 @@ fn pkce(verifier: &str, challenge: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
         && URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())) == challenge
 }
-/// Start once per engine; an ephemeral loopback port avoids colliding with other engines.
+// High port, away from common development server defaults.
+const DEFAULT_PORT: u16 = 43871;
+const PORT_FILE: &str = "outside-http-port";
+
+async fn bind_port(preferred: u16) -> std::io::Result<TcpListener> {
+    for port in preferred..=u16::MAX {
+        match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AddrInUse,
+        "no free outside-agent HTTP port",
+    ))
+}
+
+async fn bind_configured(path: &std::path::Path) -> Result<TcpListener, String> {
+    let preferred = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.trim().parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(DEFAULT_PORT);
+    let listener = bind_port(preferred).await.map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    crate::service::write_private(path, port.to_string().as_bytes())
+        .map_err(|e| format!("could not save outside-agent HTTP port: {e}"))?;
+    Ok(listener)
+}
+
+/// Start once per engine, reusing the saved loopback port when available.
 pub async fn ensure() -> Result<String, String> {
     URL.get_or_try_init(|| async {
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .await
-            .map_err(|e| e.to_string())?;
+        let path = crate::config::get_config_dir()
+            .ok_or("could not determine the config directory")?
+            .join(PORT_FILE);
+        let listener = bind_configured(&path).await?;
         let base = format!(
             "http://127.0.0.1:{}",
             listener.local_addr().map_err(|e| e.to_string())?.port()
@@ -361,6 +393,35 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn port_falls_forward_and_persists_across_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(PORT_FILE);
+        let occupied = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        std::fs::write(&path, port.to_string()).unwrap();
+        let listener = bind_configured(&path).await.unwrap();
+        let chosen = listener.local_addr().unwrap();
+        assert!(chosen.ip().is_loopback());
+        assert!(chosen.port() > port);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            chosen.port().to_string()
+        );
+        drop(listener);
+        let restarted = bind_configured(&path).await.unwrap();
+        assert_eq!(restarted.local_addr().unwrap(), chosen);
+    }
+
+    #[tokio::test]
+    async fn missing_port_uses_default_or_next_free_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let listener = bind_configured(&dir.path().join(PORT_FILE)).await.unwrap();
+        assert!(listener.local_addr().unwrap().port() >= DEFAULT_PORT);
+    }
+
     #[test]
     fn s256_only_verifies_the_original_verifier() {
         let v = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";

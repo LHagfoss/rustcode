@@ -2157,6 +2157,7 @@ export class MockEngine {
       recent: this.outside.recent.slice(0, 25),
       platforms: ["claude-desktop", "cursor", "codex", "other"],
       command: "/Applications/RustCode.app/Contents/MacOS/rustcode",
+      httpUrl: "http://127.0.0.1:43871/mcp",
       maxGrants: 20,
       available: true,
     } as unknown as JsonObject;

@@ -77,6 +77,7 @@ export interface OutsideStatus {
   pending: OutsidePending[];
   recent: OutsideCall[];
   command: string;
+  httpUrl: string | null;
   maxGrants: number;
   /** False where the engine has no local socket for the bridge (Windows). */
   available: boolean;
@@ -157,6 +158,7 @@ export function parseOutsideStatus(value: Json): OutsideStatus {
     }),
     pending,
     recent,
+    httpUrl: str(root.httpUrl) || null,
     command: str(root.command) ?? "rustcode",
     maxGrants: num(root.maxGrants) ?? 20,
     available: bool(root.available) ?? true,

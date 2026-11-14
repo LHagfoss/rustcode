@@ -102,7 +102,7 @@ reads them.
 
 ## Not in this release
 
-- A connection URL in Settings, and remote hosted clients (#3199, #3368).
+- Remote hosted clients (#3199).
 - Reaching another paired computer (`machine`) from an outside agent, `unread`
   and `snoozed_until` in `update_session`, and changing a thread's model or
   effort with `configure_session`: they need the app.
@@ -115,11 +115,19 @@ own answer.
 
 ## Localhost HTTP and OAuth
 
-The engine also listens on an ephemeral `127.0.0.1` port, at `/mcp`, using
-stateless Streamable HTTP (JSON responses; no SSE subscription). The
-`_rustcode/outside/list` response includes `httpUrl`. Keep RustCode running;
-the URL changes after an engine restart. The Settings connection URL display
-and a real-client compatibility walkthrough are still follow-up work.
+The engine listens only on `127.0.0.1`, at `/mcp`, using stateless
+Streamable HTTP (JSON responses; no SSE subscription). It prefers port
+`43871`, chosen away from common development server defaults. If occupied,
+it tries successive ports and saves the selected port in
+`<config>/outside-http-port`; restarts reuse that port unless it is occupied.
+Other bind errors stop the endpoint rather than exposing it on another interface.
+
+Open Settings › Outside agents › Connection and press **Copy URL** to paste
+the HTTP connection URL into your client. The stdio command is alongside it.
+If startup fails, Settings says the HTTP endpoint is not running.
+The `_rustcode/outside/list` response supplies `httpUrl`. Keep RustCode
+running while connecting. A real-client compatibility walkthrough remains
+follow-up work.
 
 Discovery is at `/.well-known/oauth-protected-resource/mcp` (also the root
 protected-resource path) and `/.well-known/oauth-authorization-server`.
