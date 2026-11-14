@@ -853,6 +853,41 @@ fn cancelled() -> PullError {
     }
 }
 
+/// Merge the pull request `number`, or the one on `branch` (the checkout's own
+/// `HEAD` when neither is given), once every check passes: what the app's
+/// `_rustcode/pulls/merge` and an outside agent's `merge_when_green` both run.
+pub(crate) async fn merge_branch_when_green(
+    cwd: &Path,
+    number: Option<u64>,
+    branch: Option<String>,
+    wait: Duration,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<MergeOutcome, PullError> {
+    let branch = match branch.filter(|branch| !branch.trim().is_empty()) {
+        Some(branch) => Some(branch),
+        // Resolving HEAD runs git, so it does not hold an async worker.
+        None => {
+            let cwd = cwd.to_path_buf();
+            tokio::task::spawn_blocking(move || current_branch(&cwd))
+                .await
+                .ok()
+                .flatten()
+        }
+    };
+    let number = match (number, branch.as_deref()) {
+        (Some(number), _) => Some(number),
+        (None, Some(branch)) => for_branch(cwd, branch).await?.map(|pull| pull.number),
+        (None, None) => None,
+    };
+    let Some(number) = number else {
+        return Err(PullError {
+            code: "not_found",
+            message: "no pull request matches this thread's branch; open one first".to_owned(),
+        });
+    };
+    merge_when_green(cwd, number, wait, cancel).await
+}
+
 /// Wait for every check except the advisory ones, then squash-merge and delete
 /// the branch, as `scripts/pr-merge.sh` does. Two quiet rounds in a row are
 /// needed, so a path-filtered job that registers late is still caught. A

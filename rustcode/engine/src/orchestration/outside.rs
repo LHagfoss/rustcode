@@ -5,8 +5,11 @@
 //! The pieces:
 //!
 //! - [`Scope`] and [`required_scope`]: what a grant may call. `read_only`
-//!   reads threads, usage and projects; `delegate` also starts and messages
-//!   threads; `manage` is reserved for the management tools. A tool nobody
+//!   reads threads, usage and projects; `delegate` also starts, messages,
+//!   fans out and interrupts threads; `manage` adds the management tools
+//!   (`merge_when_green`, `cleanup_worktree`, `update_session`,
+//!   `configure_session`), which the engine runs itself
+//!   ([`super::outside_manage`]) since no thread is behind the call. A tool nobody
 //!   classified is refused to every grant, so a new internal tool is never
 //!   exposed by accident.
 //! - The grant store (`<config>/outside-agents.json`, mode 0600): one entry per
@@ -101,7 +104,7 @@ impl Scope {
                 "read threads, usage, harnesses and machines; nothing is started, sent or changed"
             }
             Self::Delegate => {
-                "read, and also start threads and message existing ones (the work you start runs at Auto-edit)"
+                "read, and also start, fan out, message and interrupt threads (the work you start runs at Auto-edit)"
             }
             Self::Manage => {
                 "delegate, and also the management tools (merge, clean up, settings) as RustCode offers them to outside agents"
@@ -133,10 +136,13 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
         | LIST_SCHEDULED_TASKS
         | WAIT_SESSION
         | WORKTREE_STATUS => Scope::ReadOnly,
-        START_SESSION | MESSAGE_SESSION | FAN_OUT | INTERRUPT_SESSION | UPDATE_SESSION
-        | CONFIGURE_SESSION | MANAGE_QUEUE => Scope::Delegate,
+        START_SESSION | MESSAGE_SESSION | FAN_OUT | INTERRUPT_SESSION | MANAGE_QUEUE => {
+            Scope::Delegate
+        }
         MERGE_WHEN_GREEN
         | CLEANUP_WORKTREE
+        | UPDATE_SESSION
+        | CONFIGURE_SESSION
         | HANDOFF_WORKTREE
         | TRANSFER_SESSION
         | ORGANIZE_THREADS
@@ -173,6 +179,12 @@ pub fn implemented(tool: &str) -> bool {
             | READ_ACTIVITY
             | START_SESSION
             | MESSAGE_SESSION
+            | FAN_OUT
+            | INTERRUPT_SESSION
+            | UPDATE_SESSION
+            | CONFIGURE_SESSION
+            | MERGE_WHEN_GREEN
+            | CLEANUP_WORKTREE
     )
 }
 
@@ -640,14 +652,17 @@ impl Runner for EngineRunner {
                 }
                 // What it starts is a thread of the user's own, never a
                 // delegate of a thread that does not exist.
-                super::START_SESSION => args["standalone"] = json!(true),
+                super::START_SESSION | super::FAN_OUT => args["standalone"] = json!(true),
                 _ => {}
             }
             let output = match tool {
                 super::THREAD_USAGE | super::QUERY_DATA | super::READ_ACTIVITY => {
                     data_tool(tool, &args)
                 }
-                _ => super::local::answer(caller, cancel, tool, &args).await,
+                _ => match super::outside_manage::answer(caller, cancel, tool, &args).await {
+                    Some(answer) => super::output(tool, answer),
+                    None => super::local::answer(caller, cancel, tool, &args).await,
+                },
             };
             CallAnswer {
                 success: output.success,
@@ -1013,7 +1028,7 @@ pub fn instructions(grant: &Grant) -> String {
         ""
     };
     format!(
-        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `message_session` sends an existing thread a message, and `wait_session` returns its answer. Work you start runs at Auto-edit: it can edit files but a command that needs approval is declined. Tools outside your access are not listed.",
+        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_session` sends an existing thread a message, `interrupt_session` stops a running turn, and `wait_session` returns an answer. With Manage access `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` act on a thread you name with `session_id`. Work you start runs at Auto-edit: it can edit files but a command that needs approval is declined. Tools outside your access are not listed.",
         grant.name,
         grant.scope.label(),
         grant.scope.meaning(),
@@ -1042,7 +1057,7 @@ pub fn tools_for(scope: Scope) -> Vec<Value> {
             let note = format!(
                 "\n\n[Outside agent: needs {} access; the user may be asked to approve it in RustCode.{}]",
                 needed.label(),
-                if name == super::START_SESSION {
+                if name == super::START_SESSION || name == super::FAN_OUT {
                     " The thread starts standalone and runs at Auto-edit."
                 } else {
                     ""
@@ -1229,8 +1244,8 @@ mod tests {
                 "{name} is listed to Read-only"
             );
         }
-        // Interrupting needs a running thread's handle the engine alone lacks.
-        assert!(!implemented(super::super::INTERRUPT_SESSION));
+        // `manage_queue` is a thread's own queue: an outside agent has none.
+        assert!(!implemented(super::super::MANAGE_QUEUE));
     }
 
     #[test]
@@ -1347,6 +1362,171 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_only_and_delegate_tokens_are_refused_the_tools_above_their_scope() {
+        let fixture = Fixture::new();
+        let (_, read) = fixture.grant(Scope::ReadOnly, false);
+        let (_, delegate) = fixture.grant(Scope::Delegate, false);
+        let named = json!({ "session_id": "t" });
+        // Read-only: every tool that changes a thread.
+        for (tool, needs) in [
+            (super::super::FAN_OUT, "Delegate"),
+            (super::super::INTERRUPT_SESSION, "Delegate"),
+            (super::super::UPDATE_SESSION, "Manage"),
+            (super::super::CONFIGURE_SESSION, "Manage"),
+            (super::super::MERGE_WHEN_GREEN, "Manage"),
+            (super::super::CLEANUP_WORKTREE, "Manage"),
+        ] {
+            let answer = fixture.call(&read, tool, named.clone()).await;
+            assert!(!answer.success, "{tool}");
+            assert!(answer.content.contains(needs), "{tool}: {}", answer.content);
+        }
+        // Delegate: stops and fans out, but does not manage.
+        for tool in [
+            super::super::UPDATE_SESSION,
+            super::super::CONFIGURE_SESSION,
+            super::super::MERGE_WHEN_GREEN,
+            super::super::CLEANUP_WORKTREE,
+        ] {
+            let answer = fixture.call(&delegate, tool, named.clone()).await;
+            assert!(
+                !answer.success && answer.content.contains("Manage"),
+                "{tool}"
+            );
+        }
+        assert_eq!(fixture.ran(), 0, "nothing reached the engine");
+        let audit = fixture.audit();
+        assert_eq!(audit.len(), 10);
+        assert!(audit.iter().all(|row| row["outcome"] == "denied"));
+    }
+
+    #[tokio::test]
+    async fn a_delegate_token_fans_out_and_interrupts_and_is_audited() {
+        let fixture = Fixture::new();
+        let (_, token) = fixture.grant(Scope::Delegate, false);
+        let fan_out = fixture
+            .call(
+                &token,
+                super::super::FAN_OUT,
+                json!({
+                    "prompt": "compare",
+                    "project": "/work/app",
+                    "harnesses": [{ "harness": "codex" }, { "harness": "claude-code" }],
+                }),
+            )
+            .await;
+        assert!(fan_out.success, "{}", fan_out.content);
+        let stop = fixture
+            .call(
+                &token,
+                super::super::INTERRUPT_SESSION,
+                json!({ "session_id": "t" }),
+            )
+            .await;
+        assert!(stop.success, "{}", stop.content);
+        assert_eq!(fixture.ran(), 2);
+        let audit = fixture.audit();
+        assert_eq!(audit.len(), 2);
+        assert!(audit.iter().all(|row| row["outcome"] == "ok"));
+        assert!(audit.iter().all(|row| row["scope"] == "delegate"));
+        let tools: Vec<&str> = audit
+            .iter()
+            .filter_map(|row| row["tool"].as_str())
+            .collect();
+        assert!(tools.contains(&"fan_out") && tools.contains(&"interrupt_session"));
+    }
+
+    #[tokio::test]
+    async fn a_manage_token_runs_the_management_tools_and_an_invalid_call_never_runs() {
+        let fixture = Fixture::new();
+        let (_, token) = fixture.grant(Scope::Manage, false);
+        for (tool, args) in [
+            (super::super::MERGE_WHEN_GREEN, json!({ "session_id": "t" })),
+            (super::super::CLEANUP_WORKTREE, json!({ "session_id": "t" })),
+            (
+                super::super::UPDATE_SESSION,
+                json!({ "session_id": "t", "title": "Done" }),
+            ),
+            (
+                super::super::CONFIGURE_SESSION,
+                json!({ "session_id": "t" }),
+            ),
+        ] {
+            let answer = fixture.call(&token, tool, args).await;
+            assert!(answer.success, "{tool}: {}", answer.content);
+        }
+        assert_eq!(fixture.ran(), 4);
+        // The gate validates before it runs: a merge with no thread is refused.
+        let invalid = fixture
+            .call(&token, super::super::MERGE_WHEN_GREEN, json!({}))
+            .await;
+        assert!(!invalid.success && invalid.content.contains("invalid"));
+        assert_eq!(fixture.ran(), 4);
+        let audit = fixture.audit();
+        assert_eq!(audit.iter().filter(|row| row["outcome"] == "ok").count(), 4);
+    }
+
+    #[tokio::test]
+    async fn the_new_tools_ask_the_user_first_and_a_decline_runs_nothing() {
+        let fixture = std::sync::Arc::new(Fixture::new());
+        let (_, token) = create_at(
+            &fixture.settings.grants,
+            "Cleanup Bot",
+            "other",
+            Scope::Manage,
+            Some(true),
+        )
+        .unwrap();
+        let waiting = {
+            let fixture = std::sync::Arc::clone(&fixture);
+            tokio::spawn(async move {
+                fixture
+                    .call(
+                        &token,
+                        super::super::CLEANUP_WORKTREE,
+                        json!({ "session_id": "t" }),
+                    )
+                    .await
+            })
+        };
+        let id = wait_for_pending("Cleanup Bot").await;
+        let shown = pending_view()
+            .into_iter()
+            .find(|item| item["id"] == json!(id))
+            .unwrap();
+        assert_eq!(shown["tool"], "cleanup_worktree");
+        assert!(answer_pending(&id, false));
+        let declined = waiting.await.unwrap();
+        assert!(!declined.success && declined.content.contains("declined"));
+        assert_eq!(fixture.ran(), 0);
+        assert_eq!(fixture.audit()[0]["outcome"], "declined");
+    }
+
+    #[test]
+    fn the_tool_list_shows_the_new_tools_at_their_scope() {
+        let names = |scope| -> Vec<String> {
+            tools_for(scope)
+                .iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                .collect()
+        };
+        let delegate = names(Scope::Delegate);
+        for tool in ["fan_out", "interrupt_session"] {
+            assert!(delegate.contains(&tool.to_owned()), "{tool}");
+        }
+        let manage = names(Scope::Manage);
+        for tool in [
+            "merge_when_green",
+            "cleanup_worktree",
+            "update_session",
+            "configure_session",
+        ] {
+            assert!(!delegate.contains(&tool.to_owned()), "{tool}");
+            assert!(manage.contains(&tool.to_owned()), "{tool}");
+        }
+        assert!(!manage.contains(&"manage_queue".to_owned()));
+    }
+
+    #[tokio::test]
     async fn a_read_only_token_reads() {
         let fixture = Fixture::new();
         let (_, token) = fixture.grant(Scope::ReadOnly, false);
@@ -1395,7 +1575,7 @@ mod tests {
         let answer = fixture
             .call(
                 &token,
-                super::super::MERGE_WHEN_GREEN,
+                super::super::HANDOFF_WORKTREE,
                 json!({ "session_id": "t" }),
             )
             .await;
