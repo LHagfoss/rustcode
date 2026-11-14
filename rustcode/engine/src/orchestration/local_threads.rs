@@ -1643,6 +1643,9 @@ pub(crate) async fn interrupt(caller: &str, args: &Value) -> Value {
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim();
+    if target.is_empty() {
+        return error("invalid", "session_id is required");
+    }
     if target == caller {
         return error("not_allowed", "a thread cannot stop itself");
     }
