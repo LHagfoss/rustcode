@@ -59,7 +59,12 @@ Starting a thread on a harness with named accounts (including standalone
 starts and fan-out) requires user approval for its account, even at Full access. The existing approval card names
 the resolved login. “Allow for This Thread” persists only that caller's machine,
 harness and account in the link book; “Allow Once” authorizes only this call.
-Old broad start grants do not authorize accounts. A new login, including the
+Grants are flushed to the engine's durable store before approved work starts,
+so restarting or updating keeps the thread's account authority.
+Settings › Harnesses › “Let delegates use my named accounts without asking”
+(default off) trusts local named logins. The approval card links there.
+Remote machines and unnamed default logins still require approval.
+Other delegation permissions still apply. Old broad start grants do not authorize accounts. A new login, including the
 default login, needs another approval; usage pressure and rate limits cannot
 supply it. With no app attached, a start without a matching saved account grant
 is refused with instructions to open the app and approve the login.

@@ -168,6 +168,7 @@ function localValues(): Record<ServerSettingKey, Json> {
     orchestration: state.orchestration,
     "delegates-total": state.totalLimit,
     "delegates-per-thread": state.threadLimit,
+    "trust-delegate-accounts": state.trustDelegateAccounts,
     "read-across-projects": state.readAcrossProjects,
     // Only ever kept on the server: there is no app-side copy to migrate.
     "delegate-presets": [],
@@ -297,6 +298,8 @@ function applyLocalSettings(values: Record<string, Json | undefined>): void {
     if (total !== undefined) store.setTotalLimit(total);
     const perThread = number("delegates-per-thread");
     if (perThread !== undefined) store.setThreadLimit(perThread);
+    const trust = bool("trust-delegate-accounts");
+    if (trust !== undefined) store.setTrustDelegateAccounts(trust);
     const readAcross = bool("read-across-projects");
     if (readAcross !== undefined) store.setReadAcrossProjects(readAcross);
     const fallback = bool("limit-fallback");

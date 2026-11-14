@@ -4197,6 +4197,20 @@ describe("what a delegated thread may do without asking", () => {
     expect(useApp.getState().threads[String(answer.session_id)]?.harness?.account).toBe("work");
   });
 
+  test("trusting local named accounts skips the start approval card", async () => {
+    const parent = await ready();
+    setPermissionMode(parent, "full");
+    await addHarnessAccount("codex", "work", "Work");
+    useApp.setState({ trustDelegateAccounts: true });
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "start_session",
+      args: { prompt: "do it", harness: "codex", account: "work" },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(answer.account).toBe("work");
+    expect(useApp.getState().grant).toBeNull();
+  });
   test("Full access and a saved account approval cannot authorize a fallback", async () => {
     const parent = await ready();
     setPermissionMode(parent, "full");

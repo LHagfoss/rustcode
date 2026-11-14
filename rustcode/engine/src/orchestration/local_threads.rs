@@ -535,7 +535,10 @@ async fn start_one(
         &harness.id,
     )
     .is_empty();
-    if has_accounts {
+    if has_accounts
+        && !(account.is_some()
+            && crate::acp::settings::value("trust-delegate-accounts") == Some(json!(true)))
+    {
         authorize_account(&link_book(), caller, &harness.id, account.as_deref())?;
     }
     let title = title_of(ask);

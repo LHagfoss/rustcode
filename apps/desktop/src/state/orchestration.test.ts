@@ -2384,6 +2384,25 @@ describe("a thread that carries on after a usage limit", () => {
 });
 
 describe("delegate account authority", () => {
+  test("thread account grants survive reload and remain scoped", () => {
+    const key = delegateAccountKey("local", "codex", "work");
+    const saved = emptyBook();
+    saved.grants.parent = [key];
+    const restored = interruptActive(parseBook(JSON.parse(JSON.stringify(saved)))!);
+    expect(accountsNeedApproval(restored, "parent", [key])).toBe(false);
+    expect(accountsNeedApproval(restored, "other", [key])).toBe(true);
+  });
+  test("trust skips only local named accounts and defaults to asking", () => {
+    const local = delegateAccountKey("local", "codex", "work");
+    expect(accountsNeedApproval(emptyBook(), "parent", [local])).toBe(true);
+    expect(accountsNeedApproval(emptyBook(), "parent", [local], true)).toBe(false);
+    expect(
+      accountsNeedApproval(emptyBook(), "parent", [delegateAccountKey("remote", "codex", "work")], true),
+    ).toBe(true);
+    expect(
+      accountsNeedApproval(emptyBook(), "parent", [delegateAccountKey("local", "codex", null)], true),
+    ).toBe(true);
+  });
   test("a persistent start grant and Full access cannot authorize another login", () => {
     const restricted = delegateAccountKey("local", "claude-code", "paral-2");
     const fallback = delegateAccountKey("local", "claude-code", "personal-1");

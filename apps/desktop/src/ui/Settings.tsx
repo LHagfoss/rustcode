@@ -798,6 +798,7 @@ function OrchestrationGroup() {
     typeof value === "number" ? (value === 0 ? "Off" : `${value} s`) : "60 s",
   );
   const wakeBatch = Number(wakeBatchSetting.value ?? WAKE_BATCH_DEFAULT_S);
+  const trustAccounts = useScopedSetting("trust-delegate-accounts", boolLabel);
   const readAcrossProjects = useScopedSetting("read-across-projects", boolLabel);
   const orchestrationValue = Boolean(orchestration.value ?? true);
   const readAcrossValue = Boolean(readAcrossProjects.value ?? true);
@@ -812,6 +813,18 @@ function OrchestrationGroup() {
   return (
     <>
       <Group title="Orchestration">
+        <Row
+          title="Let delegates use my named accounts without asking"
+          subtitle="Trust named logins on this computer. Accounts on other computers still need approval."
+        >
+          <ScopedValue mixed={trustAccounts.mixed} breakdown={trustAccounts.breakdown}>
+            <Switch
+              label="Let delegates use my named accounts without asking"
+              checked={Boolean(trustAccounts.value ?? false)}
+              onChange={(value) => void trustAccounts.set(value)}
+            />
+          </ScopedValue>
+        </Row>
         <Row
           title="Threads can start and message other threads"
           reset={
