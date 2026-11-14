@@ -85,8 +85,10 @@ pub mod remote_gateway;
 pub(crate) fn background_task_history_message(
     task_id: &str,
     call_id: Option<&str>,
-    output: crate::tools::ToolExecutionOutput,
+    mut output: crate::tools::ToolExecutionOutput,
 ) -> ChatMessage {
+    // A background command can print a secret it was given as `env`.
+    crate::orchestration::secret::redact_output(&mut output);
     let command = output
         .command
         .as_deref()

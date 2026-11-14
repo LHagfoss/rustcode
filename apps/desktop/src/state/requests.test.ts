@@ -580,7 +580,7 @@ describe("private secret replies", () => {
     const { parent, child, sent } = await staged();
     const request = {
       ...ask(child, 803),
-      secret: { name: "API_KEY", reason: "Deploy", destination: ".env.local" },
+      secret: { name: "API_KEY", reason: "Deploy", destination: ".env.local", env: true },
     };
     updateThread(child, (t) => ({ ...t, permissions: [request] }));
     const refused = await answerOrchestration({

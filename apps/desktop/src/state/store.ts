@@ -5860,6 +5860,13 @@ function loadPermissionPins(): Record<string, PermissionMode> {
   return kept;
 }
 
+/** Where a requested secret goes: a dotenv file, the thread's command environment, or both. */
+export function secretTargets(secret: NonNullable<PermissionRequest["secret"]>): string[] {
+  const targets = secret.destination ? [`saved to ${secret.destination}`] : [];
+  if (secret.env) targets.push(`$${secret.name} set for this thread's commands, in memory only`);
+  return targets;
+}
+
 /** Secret values travel only on the originating connection, never into items or drafts. */
 export function answerSecret(request: PermissionRequest, value: string | null): boolean {
   if (!request.secret) return false;
@@ -5873,7 +5880,9 @@ export function answerSecret(request: PermissionRequest, value: string | null): 
   const answered = reply(request, result);
   if (answered) {
     const text =
-      value === null ? "Declined" : `Secret ${request.secret.name} saved to ${request.secret.destination}`;
+      value === null
+        ? "Declined"
+        : `Secret ${request.secret.name}: ${secretTargets(request.secret).join("; ")}`;
     set((s) => ({
       resolvedApprovals: {
         ...s.resolvedApprovals,

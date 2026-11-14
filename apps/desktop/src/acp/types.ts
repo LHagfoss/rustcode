@@ -853,7 +853,8 @@ export interface PermissionRequest {
   input?: Json;
   options: PermissionOption[];
   question?: Question;
-  secret?: { name: string; reason: string; destination: string };
+  /** `destination` is the dotenv file the value is saved to; `env` passes it to the thread's later commands. */
+  secret?: { name: string; reason: string; destination?: string; env: boolean };
   diffs: FileDiff[];
   /** When the app received it, so several waiting requests can read oldest first. */
   at?: number;
@@ -900,7 +901,12 @@ export function parsePermissionRequest(rpcId: number | string, params: JsonObjec
     options,
     secret:
       str(meta?.kind) === "secret"
-        ? { name: str(i?.name) ?? "", reason: str(i?.reason) ?? "", destination: str(i?.destination) ?? "" }
+        ? {
+            name: str(i?.name) ?? "",
+            reason: str(i?.reason) ?? "",
+            destination: str(i?.destination),
+            env: bool(i?.env) ?? false,
+          }
         : undefined,
     question,
     diffs: parseDiffs(toolCall.content),

@@ -397,6 +397,18 @@ pub(crate) async fn confirm_and_execute_for_call(
     .await
 }
 
+/// A live output chunk with held secrets masked (`request_secret` `env`). A
+/// value split across two chunks is masked in the final result only.
+fn masked_progress(bytes: &[u8]) -> Vec<u8> {
+    match std::str::from_utf8(bytes)
+        .ok()
+        .and_then(crate::orchestration::secret::redact)
+    {
+        Some(text) => text.into_bytes(),
+        None => bytes.to_vec(),
+    }
+}
+
 /// Run one authorized tool call and return its output.
 ///
 /// Shared by the immediate path and the path that runs after the user approves
@@ -457,11 +469,11 @@ async fn run_authorized_tool(
                         &args_owned,
                         &tool_context,
                     );
-                    let result = if name_owned == "run_command" {
+                    let mut result = if name_owned == "run_command" {
                         if live_key_owned.is_some() {
                             let callback: crate::tools::CommandProgressCallback =
                                 Arc::new(move |bytes, stderr| {
-                                    let _ = progress_tx.send((bytes.to_vec(), stderr));
+                                    let _ = progress_tx.send((masked_progress(bytes), stderr));
                                 });
                             crate::tools::run_command_output_with_progress_cancellable_for_call_and_workspace(
                                 &args_owned,
@@ -486,7 +498,7 @@ async fn run_authorized_tool(
                         if live_key_owned.is_some() {
                             let callback: crate::tools::CommandProgressCallback =
                                 Arc::new(move |bytes, stderr| {
-                                    let _ = progress_tx.send((bytes.to_vec(), stderr));
+                                    let _ = progress_tx.send((masked_progress(bytes), stderr));
                                 });
                             crate::tools::set_active_tool_progress(Some(callback));
                         }
@@ -501,6 +513,8 @@ async fn run_authorized_tool(
                         crate::tools::set_active_tool_cancel(None);
                         output
                     };
+                    // A command can print a secret it was given as `env`.
+                    crate::orchestration::secret::redact_output(&mut result);
                     if result.success
                         && let Ok(mut diff) = mutation_diff_for_task.lock()
                     {

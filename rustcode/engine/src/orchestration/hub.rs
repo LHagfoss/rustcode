@@ -392,6 +392,9 @@ impl Hub {
                 &request,
                 workspace,
                 self.questions_for(&request),
+                // The external harness runs its own shell, so the value
+                // cannot reach its commands' environment.
+                None,
                 cancel,
             )
             .await;

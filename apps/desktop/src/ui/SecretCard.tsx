@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { PermissionRequest } from "../acp/types";
-import { answerSecret, useApp } from "../state/store";
+import { answerSecret, secretTargets, useApp } from "../state/store";
 import { isRemoteThread } from "../state/threadKeys";
 
 /** Local field state is discarded as soon as the response leaves this card. */
@@ -26,7 +26,11 @@ export function SecretCard({ request, from }: { request: PermissionRequest; from
       </div>
       <div className="text-sm font-medium">Secret {secret.name}</div>
       <p className="text-sm text-text-muted">{secret.reason}</p>
-      <p className="text-xs text-text-muted break-all">Save to {secret.destination}</p>
+      {secretTargets(secret).map((target) => (
+        <p key={target} className="text-xs text-text-muted break-all first-letter:uppercase">
+          {target}
+        </p>
+      ))}
       {isRemoteThread(request.sessionId) && (
         <p className="text-xs text-warning">The value will be sent to the machine running this thread.</p>
       )}
