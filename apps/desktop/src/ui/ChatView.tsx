@@ -67,6 +67,7 @@ import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
 import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
+import { GitHeaderButton } from "./GitActions";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
 import { DeviceGlyphIcon } from "./MachineGlyph";
@@ -312,6 +313,7 @@ function ChangesHeaderButton() {
 export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
   status: { label: "Status", icon: CircleDashed, kind: "pill", Button: StatusHeaderButton },
   plan: { label: "Plan", icon: ListChecks, kind: "pill", Button: PlanHeaderButton },
+  git: { label: "Git", icon: GitBranch, kind: "pill", Button: GitHeaderButton },
   actions: { label: "Project actions", icon: Zap, kind: "cluster", Button: ProjectActionsButton },
   pulls: { label: "Pull requests", icon: GitPullRequest, kind: "cluster", Button: PullsHeaderButton },
   terminal: { label: "Terminal", icon: SquareTerminal, kind: "cluster", Button: TerminalHeaderButton },
@@ -333,6 +335,7 @@ const PANEL_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["det
  * the action would be (docs/desktop.md › Several machines).
  */
 const LOCAL_ONLY_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>([
+  "git",
   "actions",
   "terminal",
   "pulls",

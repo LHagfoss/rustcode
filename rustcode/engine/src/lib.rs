@@ -27,6 +27,7 @@ mod desktop_control;
 pub mod discord_rpc;
 pub mod doctor;
 mod fleet;
+mod git_actions;
 pub mod harness;
 mod harness_usage;
 pub mod home;
