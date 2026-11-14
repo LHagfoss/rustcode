@@ -103,12 +103,34 @@ Where this shows:
   `VPN · Encrypted`, `This computer`.
 - Settings › Environments: a machine this computer connects to shows
   `LAN · Unencrypted` or `NetBird · Encrypted` for the route in use
-  (`apps/desktop/src/state/machines.ts`: `routeLabel`; the client side
-  classifies by the route kind it saved, `rustcode/client/src/registry.rs`:
-  `RouteKind::is_encrypted`).
+  (`apps/desktop/src/state/machines.ts`: `routeLabel`). A client cannot see
+  which interface it used, so it judges the route it dialled by its kind
+  (`rustcode/client/src/registry.rs`: `RouteKind::is_encrypted`): only a
+  tunnel is encrypted, and a public or unknown address is not. The gateway's
+  own answer above is the authority for a device that connects *to* this
+  computer.
+- `rustcode machines list`: a NETWORK column for each connected machine,
+  in the same words as `rustcode remote status` (`LAN (not encrypted)`,
+  `NetBird (encrypted by the tunnel)`, `an unrecognised network (not
+  encrypted)`), `—` for a machine that is not connected. `--json` carries
+  `network` with `path`, `provider`, `encrypted` and `label` (null when the
+  machine is not connected). The route is mapped onto the gateway's
+  `ConnectionRoute` in `rustcode/tui/src/machines.rs`, so the label and the
+  rule come from `address.rs`.
+- Route change: when this computer reconnects to a machine over another kind
+  of network than before (a tunnel at the office, the LAN at home), the app
+  shows a short notice once, `Studio: Now on LAN · Unencrypted` (an error tone when it moved off a tunnel onto a network that
+  does not encrypt, plain otherwise). The shell records it per machine as
+  `routeChange` (`apps/desktop/src-tauri/src/machines.rs`: `record_route`);
+  the window tells each change once and records where a machine stands the
+  first time it lists it, so a change from before the window opened is not
+  news. A new address on the same kind of network is not a change.
 - `rustcode remote status`: each connected device says `connected over LAN (not
   encrypted)` or `connected over NetBird (encrypted by the tunnel)`.
-- ACP: `_rustcode/remote` carries `routes` on each connected device.
+- ACP: `_rustcode/remote` carries `routes` on each connected device. A
+  device that was revoked is not listed, so it is never shown as connected,
+  and a route reported `encrypted` on any path but `overlay` is sent as
+  unencrypted (`rustcode/engine/src/acp/remote.rs`: `devices_json`).
 
 Downgrade: there is nothing to downgrade from. No encrypted transport exists
 to negotiate, so a client cannot be talked out of one. The two refusals that
@@ -239,6 +261,13 @@ Covered in CI (not by this page):
   never labelled encrypted, and what the desktop app prints for each
   (`address.rs` tests, `apps/desktop/src/acp/remote.test.ts`,
   `apps/desktop/src/state/machines.test.ts`).
+- Downgrade and identity, with no new transport: a device that moves from the
+  overlay to the LAN is reported on the LAN and unencrypted; a revoked device
+  is not listed as connected; an address nothing is known about is never
+  encrypted, on the gateway (`acp/remote.rs` tests), in the client
+  (`registry.rs` tests) and in `rustcode machines list` (`machines.rs`
+  tests); a reconnection over the LAN after a tunnel raises a downgrade
+  notice (`src-tauri/src/machines.rs`, `state/machines.test.ts`).
 
 Not covered, and listed so nobody assumes otherwise:
 
@@ -260,7 +289,7 @@ Not covered, and listed so nobody assumes otherwise:
 - A TLS-aware `describe`/`authenticate` and the downgrade refusal described
   under Migration, with tests for a changed certificate, an unknown
   certificate and a revoked device over TLS.
-- Per-connection route in the phone app and in `rustcode machines list`
-  (the desktop shows it today).
+- Per-connection route in the phone app (`rustcode machines list` and the
+  desktop show it today).
 - A device-test checklist for an iPhone on LAN, NetBird and cellular.
 - Optional hosted relay: #3199, opt-in.

@@ -22,7 +22,8 @@ use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
     backoff_delay, browse_async, Approved, Cause, ClientKind, DiscoveredMachine, Machine,
-    MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteProbe, TokenStore, Unreachable,
+    MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteChange, RouteProbe, TokenStore,
+    Unreachable,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -77,7 +78,8 @@ pub struct RouteView {
     /// the address is on; the app labels the route with it.
     provider: Option<&'static str>,
     /// The network itself encrypts the traffic (Tailscale, a VPN); a plain LAN
-    /// route does not.
+    /// route does not. Read from the gateway's own classification (#3701),
+    /// so only a tunnel is ever true.
     encrypted: bool,
     /// What the last test of this route found, or none if it was never tested.
     probe: Option<ProbeView>,
@@ -89,10 +91,23 @@ impl RouteView {
             kind: route.kind.as_str(),
             address: route.address.clone(),
             provider: route.provider.map(OverlayProvider::as_str),
-            encrypted: route.kind.is_encrypted(),
+            encrypted: route.is_encrypted(),
             probe: machine.probe_for(&route.address).map(ProbeView::of),
         }
     }
+}
+
+/// A machine that moved to another kind of network while this app held it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteChangeView {
+    /// Counts the changes of this machine since the app started.
+    seq: u64,
+    /// The route it was on and the one it is on now.
+    from: RouteView,
+    to: RouteView,
+    /// From a tunnel to a network that does not encrypt.
+    downgrade: bool,
 }
 
 /// The last test of one route, as the page shows it.
@@ -145,6 +160,10 @@ pub struct MachineView {
     routes: Vec<RouteView>,
     /// The route this connection came up over, or the one it will try first.
     route: Option<RouteView>,
+    /// The latest time this app reached the machine over another kind of
+    /// network than before (the LAN where it was a tunnel). The app tells the
+    /// person once per `seq`.
+    route_change: Option<RouteChangeView>,
     state: MachineState,
     /// Why it is not connected, as a word to branch on (`unreachable`,
     /// `rejected_token`, `version_mismatch`, `not_allowed`,
@@ -252,6 +271,13 @@ struct Live {
     /// refused, or whose server is gone, is shown where it was reached rather
     /// than on the first saved route.
     answered: Option<Route>,
+    /// The route the last connection came up over, kept while the machine is
+    /// reconnecting: a later connection over another kind of network is a
+    /// route change.
+    last_connected: Option<Route>,
+    /// The latest move to another kind of network, for the app to tell the
+    /// person about once.
+    shift: Option<RouteShift>,
     /// Why the last attempt failed.
     cause: Option<Cause>,
     detail: Option<String>,
@@ -272,6 +298,8 @@ impl Live {
             state: MachineState::Stopped,
             route: None,
             answered: None,
+            last_connected: None,
+            shift: None,
             cause: None,
             detail: None,
             hint: None,
@@ -440,6 +468,14 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
             .and_then(|live| live.route.as_ref().or(live.answered.as_ref()))
             .or_else(|| machine.last_working_route())
             .map(|route| RouteView::of(route, machine)),
+        route_change: live
+            .and_then(|live| live.shift.as_ref())
+            .map(|shift| RouteChangeView {
+                seq: shift.seq,
+                from: RouteView::of(&shift.from, machine),
+                to: RouteView::of(&shift.to, machine),
+                downgrade: shift.downgrade,
+            }),
         state: live.map_or(MachineState::Stopped, |live| live.state),
         reason: live
             .filter(|live| live.state != MachineState::Connected)
@@ -863,13 +899,44 @@ fn set_connected(machines: &Arc<Machines>, id: &str, route: &Route) {
     let mut live = machines.live.lock().unwrap();
     if let Some(entry) = live.get_mut(id) {
         entry.state = MachineState::Connected;
-        entry.route = Some(route.clone());
+        record_route(entry, route);
         entry.answered = None;
         entry.cause = None;
         entry.detail = None;
         entry.hint = None;
         entry.retry_in_secs = None;
     }
+}
+
+/// A machine now connected over another kind of network than it last was:
+/// `seq` counts them, so the app tells the person once per change however
+/// often it reads the status.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RouteShift {
+    seq: u64,
+    from: Route,
+    to: Route,
+    downgrade: bool,
+}
+
+/// Remember the route a connection came up over, and note when it is another
+/// kind of network than the last one.
+fn record_route(entry: &mut Live, route: &Route) {
+    if let Some((previous, change)) = entry
+        .last_connected
+        .as_ref()
+        .and_then(|previous| Some((previous, RouteChange::between(Some(previous), route)?)))
+    {
+        let seq = entry.shift.as_ref().map_or(1, |shift| shift.seq + 1);
+        entry.shift = Some(RouteShift {
+            seq,
+            from: previous.clone(),
+            to: route.clone(),
+            downgrade: change.is_downgrade(),
+        });
+    }
+    entry.last_connected = Some(route.clone());
+    entry.route = Some(route.clone());
 }
 
 /// Show a hint on a connected machine, unless the connection moved on.
@@ -1989,6 +2056,42 @@ mod tests {
                 "{state:?}"
             );
         }
+    }
+
+    /// A machine that reconnects over the LAN after a tunnel is reported as a
+    /// change to a plain network, once; the page never sees it as encrypted.
+    #[test]
+    fn a_machine_that_moves_from_a_tunnel_to_the_lan_reports_the_change() {
+        let tunnel = Route::with_kind(RouteKind::Tailscale, "mac.tail1234.ts.net:17879");
+        let lan = Route::new("192.168.1.20:17879");
+        let saved = machine();
+        let mut live = Live::new();
+
+        // The first connection has nothing to change from.
+        record_route(&mut live, &tunnel);
+        assert!(view(&saved, Some(&live)).route_change.is_none());
+
+        // The same kind of network again is not a change.
+        record_route(
+            &mut live,
+            &Route::with_kind(RouteKind::Tailscale, "other.ts.net"),
+        );
+        assert!(live.shift.is_none());
+
+        record_route(&mut live, &lan);
+        let json = serde_json::to_value(view(&saved, Some(&live))).unwrap();
+        assert_eq!(json["routeChange"]["seq"], 1);
+        assert_eq!(json["routeChange"]["downgrade"], true);
+        assert_eq!(json["routeChange"]["from"]["encrypted"], true);
+        assert_eq!(json["routeChange"]["to"]["kind"], "lan");
+        assert_eq!(json["routeChange"]["to"]["encrypted"], false);
+        assert_eq!(live.route, Some(lan.clone()));
+
+        // Back on the tunnel is the next change, and not a downgrade.
+        record_route(&mut live, &tunnel);
+        let json = serde_json::to_value(view(&saved, Some(&live))).unwrap();
+        assert_eq!(json["routeChange"]["seq"], 2);
+        assert_eq!(json["routeChange"]["downgrade"], false);
     }
 
     /// A machine reachable over the LAN whose overlay route does not answer

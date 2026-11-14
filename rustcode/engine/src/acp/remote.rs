@@ -46,6 +46,7 @@ use crate::remote::{
     RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, RemoteSnapshot, SessionPublisher,
     SessionRegistration, apply_session_mutation, read_session,
 };
+use crate::remote_gateway::address::ConnectionPath;
 use crate::remote_gateway::control::{
     ConnectionSummary, DeviceSummary, MachineOfferDetails, MachineOfferStatus, OfferDetails,
 };
@@ -1217,14 +1218,6 @@ async fn host_status() -> Value {
                 .map(DeviceSummary::from)
                 .collect()
         });
-    let connected = |id: &str| {
-        status.as_ref().is_some_and(|status| {
-            status
-                .connections
-                .iter()
-                .any(|connection| connection.device_id == id)
-        })
-    };
     let gateway = status.as_ref().map(|status| {
         json!({
             "connected": true,
@@ -1330,21 +1323,38 @@ async fn host_status() -> Value {
         "endedConnectRequests": ended_connect_requests,
         "refusedConnections": refused_connections,
         "pairedDevices": devices.len(),
-        "devices": devices
-            .iter()
-            .map(|device| {
-                let mut value = device_json(device, Some(connected(&device.id)));
-                if let Some(routes) = status
-                    .as_ref()
-                    .map(|status| connection_routes_json(&status.connections, &device.id))
-                    .filter(|routes| !routes.is_empty())
-                {
-                    value["routes"] = Value::Array(routes);
-                }
-                value
-            })
-            .collect::<Vec<_>>(),
+        "devices": devices_json(
+            &devices,
+            status.as_ref().map(|status| status.connections.as_slice()),
+        ),
     })
+}
+
+/// The paired devices as the apps read them, each with whether it is
+/// connected right now and the network its connections arrived over.
+///
+/// Only a paired device is listed: a connection whose device was revoked
+/// (or never paired) is not a device, so it is neither shown nor counted as
+/// connected. Without a gateway answer no device is connected.
+fn devices_json(
+    devices: &[DeviceSummary],
+    connections: Option<&[ConnectionSummary]>,
+) -> Vec<Value> {
+    let connections = connections.unwrap_or_default();
+    devices
+        .iter()
+        .map(|device| {
+            let connected = connections
+                .iter()
+                .any(|connection| connection.device_id == device.id);
+            let mut value = device_json(device, Some(connected));
+            let routes = connection_routes_json(connections, &device.id);
+            if !routes.is_empty() {
+                value["routes"] = Value::Array(routes);
+            }
+            value
+        })
+        .collect()
 }
 
 /// The networks a device's open connections arrived over, one entry each:
@@ -1362,7 +1372,9 @@ fn connection_routes_json(connections: &[ConnectionSummary], device_id: &str) ->
                 "path": route.path,
                 "provider": route.provider,
                 "localAddress": route.local_address,
-                "encrypted": route.encrypted,
+                // Only a tunnel encrypts: whatever else a frame says, a plain
+                // network (or one nothing is known about) never reads as so.
+                "encrypted": route.encrypted && route.path == ConnectionPath::Overlay,
             })
         })
         .collect()
@@ -2441,6 +2453,97 @@ mod tests {
         );
         assert!(connection_routes_json(&connections, "cc").is_empty());
         assert!(connection_routes_json(&connections, "missing").is_empty());
+    }
+
+    fn device(id: &str) -> DeviceSummary {
+        DeviceSummary {
+            id: id.into(),
+            name: format!("device {id}"),
+            last_seen_at: None,
+            kind: Default::default(),
+            platform: "ios".into(),
+            host_id: None,
+        }
+    }
+
+    fn connection(id: &str, path: ConnectionPath, address: &str) -> ConnectionSummary {
+        use crate::remote_gateway::address::ConnectionRoute;
+        ConnectionSummary {
+            device_id: id.into(),
+            device_name: format!("device {id}"),
+            route: Some(ConnectionRoute {
+                path,
+                provider: None,
+                local_address: address.into(),
+                encrypted: path == ConnectionPath::Overlay,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_device_that_moves_from_the_overlay_to_the_lan_is_never_reported_encrypted() {
+        let devices = [device("aa")];
+        let on_overlay = [connection(
+            "aa",
+            ConnectionPath::Overlay,
+            "100.90.16.237:17879",
+        )];
+        let listed = devices_json(&devices, Some(&on_overlay));
+        assert_eq!(listed[0]["routes"][0]["path"], "overlay");
+        assert_eq!(listed[0]["routes"][0]["encrypted"], true);
+
+        // It reconnects on the LAN: the label follows, and nothing of the
+        // earlier tunnel carries over.
+        let on_lan = [connection("aa", ConnectionPath::Lan, "192.168.1.20:17879")];
+        let listed = devices_json(&devices, Some(&on_lan));
+        assert_eq!(listed[0]["routes"].as_array().map(Vec::len), Some(1));
+        assert_eq!(listed[0]["routes"][0]["path"], "lan");
+        assert_eq!(listed[0]["routes"][0]["encrypted"], false);
+    }
+
+    #[test]
+    fn a_revoked_device_is_not_listed_as_connected() {
+        // The gateway still holds a connection for `bb`, but it is no longer
+        // paired, so it is not among the devices.
+        let connections = [
+            connection("aa", ConnectionPath::Lan, "192.168.1.20:17879"),
+            connection("bb", ConnectionPath::Overlay, "100.90.16.237:17879"),
+        ];
+        let listed = devices_json(&[device("aa")], Some(&connections));
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["id"], "aa");
+
+        // A paired device with no open connection is not connected either.
+        let listed = devices_json(&[device("aa"), device("cc")], Some(&connections));
+        assert_eq!(listed[1]["connected"], false);
+        assert!(listed[1].get("routes").is_none());
+
+        // Nor is any device when the gateway did not answer.
+        let listed = devices_json(&[device("aa")], None);
+        assert_eq!(listed[0]["connected"], false);
+    }
+
+    #[test]
+    fn an_address_nothing_is_known_about_is_never_reported_encrypted() {
+        // A frame that claims `encrypted` for a path that is not a tunnel is
+        // still reported as plain.
+        let mut other = connection("aa", ConnectionPath::Other, "10.9.9.9:17879");
+        if let Some(route) = other.route.as_mut() {
+            route.encrypted = true;
+        }
+        let mut lan = connection("bb", ConnectionPath::Lan, "192.168.1.20:17879");
+        if let Some(route) = lan.route.as_mut() {
+            route.encrypted = true;
+        }
+        let connections = [other, lan];
+        assert_eq!(
+            connection_routes_json(&connections, "aa")[0]["encrypted"],
+            false
+        );
+        assert_eq!(
+            connection_routes_json(&connections, "bb")[0]["encrypted"],
+            false
+        );
     }
 
     #[test]

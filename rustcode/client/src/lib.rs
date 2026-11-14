@@ -58,7 +58,8 @@ pub use reconnect::{
     prefer_last_working, slept,
 };
 pub use registry::{
-    Machine, MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteKind, RouteProbe,
+    Machine, MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteChange, RouteKind,
+    RouteProbe,
 };
 pub use routes::{
     AddressSpace, DialFailure, LAN_GRACE, RACE_DEADLINE, Race, RaceSettings, RouteFailure,
