@@ -768,6 +768,67 @@ pub async fn act_on_thread(
     Ok(ThreadActionResult { resolved: None })
 }
 
+/// An issue or pull request a `#` reference in a comment can name (#3769).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Reference {
+    pub number: u64,
+    pub title: String,
+    /// `issue` or `pull`.
+    pub kind: &'static str,
+    pub state: String,
+}
+
+/// How many of each a reference list reads: the newest, which most comments name.
+const REFERENCE_LIMIT: &str = "200";
+
+/// The references in one `gh issue list` or `gh pr list --json number,title,state` answer.
+pub(crate) fn references_of(value: &Value, kind: &'static str) -> Vec<Reference> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let number = item.get("number").and_then(Value::as_u64)?;
+            Some(Reference {
+                number,
+                title: text(item, "title"),
+                kind,
+                state: text(item, "state").to_lowercase(),
+            })
+        })
+        .collect()
+}
+
+/// The repository's newest issues and pull requests, for `#` completion. One list that cannot be
+/// read (issues turned off) leaves the other; both failing is an error.
+pub async fn references(cwd: &Path) -> Result<Vec<Reference>, PullError> {
+    let fields = [
+        "--state",
+        "all",
+        "--limit",
+        REFERENCE_LIMIT,
+        "--json",
+        "number,title,state",
+    ];
+    let issue_args: Vec<&str> = ["issue", "list"].into_iter().chain(fields).collect();
+    let pull_args: Vec<&str> = ["pr", "list"].into_iter().chain(fields).collect();
+    let (issues, pulls) = tokio::join!(gh_json(cwd, &issue_args), gh_json(cwd, &pull_args));
+    let mut out = Vec::new();
+    match (&issues, &pulls) {
+        (Err(error), Err(_)) => return Err(error.clone()),
+        _ => {
+            if let Ok(issues) = &issues {
+                out.extend(references_of(issues, "issue"));
+            }
+            if let Ok(pulls) = &pulls {
+                out.extend(references_of(pulls, "pull"));
+            }
+        }
+    }
+    out.sort_by(|a, b| b.number.cmp(&a.number));
+    Ok(out)
+}
+
 // ------------------------------------------------ a delegate's pull request
 
 /// The checks a merge never waits for: the advisory portability jobs in the
@@ -1714,6 +1775,23 @@ mod tests {
         let json = serde_json::to_value(second).unwrap();
         assert_eq!(json["replyTo"], 1);
         assert_eq!(json["url"], "https://gh/c/2");
+    }
+
+    #[test]
+    fn references_read_issue_and_pull_lists() {
+        let issues =
+            json!([{"number": 3769, "title": "Complete", "state": "OPEN"}, {"title": "no number"}]);
+        let refs = references_of(&issues, "issue");
+        assert_eq!(
+            refs,
+            vec![Reference {
+                number: 3769,
+                title: "Complete".into(),
+                kind: "issue",
+                state: "open".into(),
+            }]
+        );
+        assert!(references_of(&json!({"error": 1}), "pull").is_empty());
     }
 
     #[test]

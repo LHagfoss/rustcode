@@ -7,6 +7,7 @@ import type { JsonObject } from "../acp/jsonrpc";
 import { type PullRequest, parsePullError, pullErrorTitle, repositoryOf } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import type { PatchLine } from "./diff";
+import type { PullReference } from "./pullCompletion";
 import { readPullDetail } from "./pullQueries";
 import { request } from "./store";
 
@@ -101,4 +102,41 @@ export async function actOnThread(
   }
   void readPullDetail(cwd, pull.number, { force: true });
   return { ok: true };
+}
+
+/** How long a repository's reference list is reused before it is read again. */
+const REFERENCES_FRESH_MS = 5 * 60_000;
+const references = new Map<string, { at: number; read: Promise<PullReference[]> }>();
+
+/**
+ * The repository's newest issues and pull requests, for `#` completion: read once per folder and
+ * reused for a few minutes. A failure is an empty list, so the field still takes text.
+ */
+export function loadReferences(cwd: string): Promise<PullReference[]> {
+  const known = references.get(cwd);
+  if (known && Date.now() - known.at < REFERENCES_FRESH_MS) return known.read;
+  const read = request(Method.pullReferences, { cwd }, 30_000)
+    .then((answer) => {
+      const list = (answer as JsonObject | undefined)?.references;
+      if (!Array.isArray(list)) throw new Error("no references");
+      return list.flatMap((item): PullReference[] => {
+        const o = item as JsonObject;
+        const number = typeof o.number === "number" ? o.number : 0;
+        if (!number) return [];
+        return [
+          {
+            number,
+            title: typeof o.title === "string" ? o.title : "",
+            kind: o.kind === "pull" ? "pull" : "issue",
+            state: typeof o.state === "string" ? o.state : "",
+          },
+        ];
+      });
+    })
+    .catch(() => {
+      references.delete(cwd);
+      return [];
+    });
+  references.set(cwd, { at: Date.now(), read });
+  return read;
 }

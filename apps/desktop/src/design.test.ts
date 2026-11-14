@@ -50,6 +50,7 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/Composer.tsx", "Attach and more", "a round icon button, the send button's size"],
   ["ui/Attachments.tsx", "Show all", "the +N thumbnail tile, sized and shaped as the pictures beside it"],
   ["ui/Review.tsx", "aria-current={selected === path", "a file row in the review pane"],
+  ["ui/PullDiff.tsx", 'role="option"', "a completion row in a comment field's list"],
   ["ui/TurnChanges.tsx", "bg-fill-subtle", "the changes pill is a popover trigger"],
   ["ui/TurnTrace.tsx", "bg-fill-subtle", "the trace pill is a popover trigger"],
   [

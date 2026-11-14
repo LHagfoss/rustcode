@@ -13,7 +13,7 @@ import {
   MessageSquare,
   MessageSquarePlus,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { PullDetail, PullRequest } from "../acp/rustcode";
 import { pullErrorTitle } from "../acp/rustcode";
 import { formatBinding } from "../lib/keys";
@@ -23,9 +23,19 @@ import { appendToDraft, type FeedbackItem, feedbackItems, formatReviewFeedback }
 import { runWordMarks } from "../lib/wordDiff";
 import type { PatchLine } from "../state/diff";
 import {
+  applyCompletion,
+  type CompletionItem,
+  completionToken,
+  type PullReference,
+  pullPeople,
+  rankPeople,
+  rankReferences,
+} from "../state/pullCompletion";
+import {
   actOnThread,
   type LineTarget,
   lineTarget,
+  loadReferences,
   type ThreadAction,
   targetLabel,
 } from "../state/pullConversations";
@@ -85,6 +95,9 @@ function CommentBody({ author, at, body }: { author: string; at?: number; body: 
  * A comment the user writes to GitHub: a reply or a new line comment. It sends with the button or
  * mod+Enter, and on a failure keeps the text and shows GitHub's message under it.
  */
+/** What a comment field completes from: the folder whose repository `#` reads, and the pull's people. */
+const CompletionSource = createContext<{ cwd: string; people: readonly string[] }>({ cwd: "", people: [] });
+
 export function CommentField({
   label,
   placeholder,
@@ -103,6 +116,42 @@ export function CommentField({
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Completion (issue 3769): `#` lists issues and pull requests, `@` the pull's people.
+  const source = useContext(CompletionSource);
+  const field = useRef<HTMLTextAreaElement>(null);
+  const [caret, setCaret] = useState(0);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [active, setActive] = useState(0);
+  const [references, setReferences] = useState<PullReference[]>([]);
+  const token = dismissed === body ? null : completionToken(body, caret);
+  const wantsReferences = token?.trigger === "#" && !!source.cwd;
+  useEffect(() => {
+    if (!wantsReferences) return;
+    let live = true;
+    void loadReferences(source.cwd).then((list) => {
+      if (live) setReferences(list);
+    });
+    return () => {
+      live = false;
+    };
+  }, [wantsReferences, source.cwd]);
+  const items: CompletionItem[] = !token
+    ? []
+    : token.trigger === "#"
+      ? rankReferences(references, token.query)
+      : rankPeople(source.people, token.query);
+  const pickAt = Math.min(active, Math.max(items.length - 1, 0));
+  const complete = (item: CompletionItem) => {
+    if (!token) return;
+    const next = applyCompletion(body, token, item.insert);
+    setBody(next.text);
+    setCaret(next.caret);
+    setActive(0);
+    requestAnimationFrame(() => {
+      field.current?.focus();
+      field.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
   const submit = async () => {
     if (!body.trim() || busy) return;
     setBusy(true);
@@ -114,12 +163,37 @@ export function CommentField({
   return (
     <div className="flex flex-col gap-1.5 rounded-lg bg-fill-subtle p-2 font-sans">
       <textarea
+        ref={field}
         autoFocus
         rows={2}
         value={body}
         disabled={busy}
-        onChange={(e) => setBody(e.target.value)}
+        onChange={(e) => {
+          setBody(e.target.value);
+          setCaret(e.target.selectionStart);
+          setActive(0);
+        }}
+        onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+        aria-autocomplete="list"
         onKeyDown={(e) => {
+          if (items.length > 0 && !primaryModifier(e)) {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const step = e.key === "ArrowDown" ? 1 : -1;
+              setActive((pickAt + step + items.length) % items.length);
+              return;
+            }
+            if (e.key === "Enter" || e.key === "Tab") {
+              e.preventDefault();
+              complete(items[pickAt]!);
+              return;
+            }
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setDismissed(body);
+              return;
+            }
+          }
           if (e.key === "Enter" && primaryModifier(e)) {
             e.preventDefault();
             void submit();
@@ -131,6 +205,33 @@ export function CommentField({
         {...noTextHelpers}
         className="w-full resize-y rounded-md bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
       />
+      {items.length > 0 && (
+        <div
+          role="listbox"
+          aria-label={token?.trigger === "#" ? "Issues and pull requests" : "People"}
+          className="flex flex-col"
+        >
+          {items.map((item, i) => (
+            <button
+              key={item.key}
+              type="button"
+              role="option"
+              aria-selected={i === pickAt}
+              // Keep the caret in the field: a click picks without blurring it first.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => complete(item)}
+              onMouseEnter={() => setActive(i)}
+              className={cx(
+                "flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left text-callout",
+                i === pickAt ? "bg-fill-strong text-fg" : "text-fg-muted",
+              )}
+            >
+              <span className="shrink-0 font-mono">{item.label}</span>
+              {item.detail && <span className="min-w-0 flex-1 truncate">{item.detail}</span>}
+            </button>
+          ))}
+        </div>
+      )}
       {error && <Callout tone="danger">{error}</Callout>}
       <div className="flex items-center justify-end gap-1.5">
         {hint && <span className="min-w-0 flex-1 text-caption text-fg-muted">{hint}</span>}
@@ -442,62 +543,66 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
     [detail],
   );
   const open = conversations.filter((c) => !c.resolved);
+  const people = useMemo(() => pullPeople(detail), [detail]);
+  const completion = useMemo(() => ({ cwd, people }), [cwd, people]);
   // A conversation on a file the diff does not show still has a place: above the files.
   const shown = new Set(files?.map((f) => f.path));
   const elsewhere = files ? conversations.filter((c) => !shown.has(c.path)) : [];
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 text-caption text-fg-muted">
-        <span className="flex-1">
-          {files ? `${count(files.length, "file")} · ` : ""}
-          {count(conversations.length, "conversation")}
-          {conversations.length > 0 && `, ${open.length} unresolved`}
-        </span>
-        <Pill
-          size="sm"
-          disabled={open.length === 0}
-          onClick={() => addFeedbackToThread(unresolvedFeedback(conversations), pull)}
-        >
-          <CirclePlus size={11} /> Add all unresolved
-        </Pill>
-      </div>
-      {detail?.reviewCommentsError && (
-        <Callout tone="warning">Line comments could not be read: {detail.reviewCommentsError}</Callout>
-      )}
-      {general.length > 0 && (
-        <section aria-label="Reviews and comments" className="flex flex-col gap-1.5">
-          <h3 className="font-semibold text-caption text-fg-muted">Reviews and comments</h3>
-          {general.map((item) => (
-            <div key={item.key} className="rounded-md bg-fill-subtle p-2">
-              <div className="mb-0.5 flex items-center gap-2 text-caption text-fg-muted">
-                <span className="min-w-0 flex-1 truncate">
-                  <b className="text-fg">{item.author || "Deleted user"}</b> {item.kind.replace(/_/g, " ")}
-                  {item.at !== undefined && <> · {relativeAge(item.at)}</>}
-                </span>
-                <Pill size="sm" quiet onClick={() => addFeedbackToThread([item], pull)}>
-                  <CirclePlus size={11} /> Add to chat
-                </Pill>
-              </div>
-              <Markdown text={item.body} className="selectable text-callout" />
-            </div>
-          ))}
-        </section>
-      )}
-      {elsewhere.map((c) => (
-        <ConversationCard key={c.id} conversation={c} pull={pull} cwd={cwd} />
-      ))}
-      {error && <Callout tone="danger">{error}</Callout>}
-      {!files && !error && (
-        <div role="status" aria-label="Loading" className="flex flex-col gap-1.5">
-          {[70, 50, 85].map((w) => (
-            <Skeleton key={w} className="h-3" style={{ width: `${w}%` }} />
-          ))}
+    <CompletionSource.Provider value={completion}>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2 text-caption text-fg-muted">
+          <span className="flex-1">
+            {files ? `${count(files.length, "file")} · ` : ""}
+            {count(conversations.length, "conversation")}
+            {conversations.length > 0 && `, ${open.length} unresolved`}
+          </span>
+          <Pill
+            size="sm"
+            disabled={open.length === 0}
+            onClick={() => addFeedbackToThread(unresolvedFeedback(conversations), pull)}
+          >
+            <CirclePlus size={11} /> Add all unresolved
+          </Pill>
         </div>
-      )}
-      {files?.length === 0 && <p className="text-callout text-fg-muted">The diff is empty.</p>}
-      {files?.map((file) => (
-        <PullFile key={file.path} file={file} conversations={conversations} pull={pull} cwd={cwd} />
-      ))}
-    </div>
+        {detail?.reviewCommentsError && (
+          <Callout tone="warning">Line comments could not be read: {detail.reviewCommentsError}</Callout>
+        )}
+        {general.length > 0 && (
+          <section aria-label="Reviews and comments" className="flex flex-col gap-1.5">
+            <h3 className="font-semibold text-caption text-fg-muted">Reviews and comments</h3>
+            {general.map((item) => (
+              <div key={item.key} className="rounded-md bg-fill-subtle p-2">
+                <div className="mb-0.5 flex items-center gap-2 text-caption text-fg-muted">
+                  <span className="min-w-0 flex-1 truncate">
+                    <b className="text-fg">{item.author || "Deleted user"}</b> {item.kind.replace(/_/g, " ")}
+                    {item.at !== undefined && <> · {relativeAge(item.at)}</>}
+                  </span>
+                  <Pill size="sm" quiet onClick={() => addFeedbackToThread([item], pull)}>
+                    <CirclePlus size={11} /> Add to chat
+                  </Pill>
+                </div>
+                <Markdown text={item.body} className="selectable text-callout" />
+              </div>
+            ))}
+          </section>
+        )}
+        {elsewhere.map((c) => (
+          <ConversationCard key={c.id} conversation={c} pull={pull} cwd={cwd} />
+        ))}
+        {error && <Callout tone="danger">{error}</Callout>}
+        {!files && !error && (
+          <div role="status" aria-label="Loading" className="flex flex-col gap-1.5">
+            {[70, 50, 85].map((w) => (
+              <Skeleton key={w} className="h-3" style={{ width: `${w}%` }} />
+            ))}
+          </div>
+        )}
+        {files?.length === 0 && <p className="text-callout text-fg-muted">The diff is empty.</p>}
+        {files?.map((file) => (
+          <PullFile key={file.path} file={file} conversations={conversations} pull={pull} cwd={cwd} />
+        ))}
+      </div>
+    </CompletionSource.Provider>
   );
 }

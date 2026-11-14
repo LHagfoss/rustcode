@@ -65,6 +65,8 @@ export const Method = {
   pullReview: "_rustcode/pulls/review",
   /** Reply to, resolve or unresolve a review conversation, or add a line comment. */
   pullThread: "_rustcode/pulls/thread",
+  /** The repository's newest issues and pull requests, for `#` completion. */
+  pullReferences: "_rustcode/pulls/references",
   harnesses: "_rustcode/harnesses",
   harnessModels: "_rustcode/harnesses/models",
   harnessSet: "_rustcode/harnesses/set",
