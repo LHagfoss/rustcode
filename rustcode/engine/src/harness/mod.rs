@@ -1480,6 +1480,7 @@ mod tests {
             ids,
             [
                 "rustcode",
+                "cursor",
                 "codex",
                 "claude-code",
                 "gemini",
@@ -1490,12 +1491,15 @@ mod tests {
         );
         assert!(all[0].enabled);
         assert!(!all[1].enabled, "known harnesses start off");
-        assert_eq!(all[3].command[0], "/opt/gemini");
-        assert!(all[3].enabled);
-        assert_eq!(all[6].kind, HarnessKind::Acp);
-        assert!(all[6].enabled);
-        assert!(all[1].known.is_some(), "Codex is a standard harness");
-        assert!(all[6].known.is_none(), "a hand-added command is custom");
+        let gemini = all.iter().find(|h| h.id == "gemini").unwrap();
+        let custom = all.iter().find(|h| h.id == "my-agent").unwrap();
+        let codex = all.iter().find(|h| h.id == "codex").unwrap();
+        assert_eq!(gemini.command[0], "/opt/gemini");
+        assert!(gemini.enabled);
+        assert_eq!(custom.kind, HarnessKind::Acp);
+        assert!(custom.enabled);
+        assert!(codex.known.is_some(), "Codex is a standard harness");
+        assert!(custom.known.is_none(), "a hand-added command is custom");
         // A known id written by hand is the standard harness, listed once, with
         // the command and switch the user gave it.
         assert_eq!(
