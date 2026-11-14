@@ -656,7 +656,17 @@ composer's keys stay outside the table.
 - **Pull requests.** A panel lists the project's pull requests
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
-  request changes, at the head commit). "Ask the agent to review" starts a
+  request changes, at the head commit). Its *Diff* tab (`ui/PullDiff.tsx`,
+  `state/pullReview.ts`) draws the diff (`/diff`) file by file with +/-
+  counts, a rename's old path, and files over 400 lines folded, with the
+  review conversations on their lines: replies threaded, resolved ones folded
+  to a marker that opens, outdated ones marked above their file, review
+  summaries and plain comments above the files. The engine reads each
+  conversation's resolved state and id (`gh api graphql`, `reviewThreads`)
+  and each comment's side. *Add to chat* on a conversation, or *Add all
+  unresolved*, puts the comments with their file, lines and author into the
+  composer draft; nothing is sent. Replying and resolving from the app
+  (#3768) and `#`/`@` completion (#3769) are not there yet. "Ask the agent to review" starts a
   thread draft naming the commit. *Work on this in a thread* (an open pull
   request on this computer) opens a sheet: tick the description, the review
   comments still on the diff and the failing checks, edit the instruction
@@ -2010,7 +2020,8 @@ From the SwiftUI app, still missing or partial:
 - The auto-approve (YOLO) toggle on approval cards.
 - Subagents' verification status and background agents of threads off
   screen (subagents of a thread whose agents were listed nest under it).
-- Pull request line comments and the diff view in the review.
+- Replying to, resolving and adding pull request line comments (#3768), and
+  `#`/`@` completion in those fields (#3769).
 - Changes panel: branch mode, renames' old paths, syntax colours in diffs.
 - Localhost preview, the Smart UI agent preview (`smart_ui_preview`,
   `smartUi = 2`). `rustcode-viz` cards have Copy source but not Copy as

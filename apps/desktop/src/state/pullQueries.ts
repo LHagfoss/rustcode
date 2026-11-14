@@ -616,6 +616,7 @@ function savedDetail(detail: PullDetail): JsonObject {
     // Undefined fields drop out of the saved JSON.
     reviewComments: detail.reviewComments.map((c) => ({ ...c }) as unknown as JsonObject),
     ...(detail.reviewCommentsError ? { reviewCommentsError: detail.reviewCommentsError } : {}),
+    reviewThreads: detail.reviewThreads.map((t) => ({ ...t })),
   };
 }
 
