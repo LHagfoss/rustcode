@@ -260,6 +260,17 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
         }
         _ => args,
     };
+    if crate::computer_use::is_tool(name) {
+        let session = super::get_active_session_id().unwrap_or_default();
+        let cancel = cancel_token.clone().unwrap_or_default();
+        let result = tokio::runtime::Handle::current().block_on(crate::computer_use::run_approved(
+            &session, name, args, &cancel,
+        ));
+        return match result {
+            Ok(content) => ToolExecutionOutput::success(content),
+            Err(error) => ToolExecutionOutput::failure(as_error_message(&error)),
+        };
+    }
     // Snapshot the clients and release the registry before the call: the UI
     // locks the same registry to label tool rows, so holding it across a slow
     // `tools/call` freezes rendering and serializes calls to other servers.

@@ -12,7 +12,7 @@
 use serde_json::{Map, Value};
 
 /// The rules in this file, as recorded in `redaction_version`.
-pub const REDACTION_VERSION: i64 = 1;
+pub const REDACTION_VERSION: i64 = 2;
 
 /// What a redacted value is replaced with.
 pub const REDACTED: &str = "[redacted]";
@@ -54,6 +54,13 @@ pub fn is_sensitive_key(key: &str) -> bool {
 pub fn redact(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
+            // Browser typing may contain passwords or private form values.
+            // Keep the selector, but never persist its text in captured RPCs.
+            let browser_type = ["name", "tool", "tool_name"].iter().any(|key| {
+                map.get(*key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name == "browser_type" || name.ends_with("__browser_type"))
+            });
             let mut out = Map::with_capacity(map.len());
             for (key, value) in map {
                 out.insert(
@@ -65,7 +72,13 @@ pub fn redact(value: &Value) -> Value {
                     {
                         Value::String(REDACTED.to_owned())
                     } else {
-                        redact(value)
+                        let mut redacted = redact(value);
+                        if browser_type && matches!(key.as_str(), "arguments" | "args" | "input") {
+                            if let Some(text) = redacted.get_mut("text") {
+                                *text = Value::String(REDACTED.to_owned());
+                            }
+                        }
+                        redacted
                     },
                 );
             }
@@ -393,5 +406,17 @@ mod tests {
         assert!(text.len() <= 256);
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["headers"]["authorization"], REDACTED);
+    }
+}
+
+#[cfg(test)]
+mod browser_tests {
+    use super::*;
+    #[test]
+    fn browser_typing_is_redacted_in_captured_calls() {
+        let value = serde_json::json!({"params":{"name":"mcp__rustcode__browser_type","arguments":{"selector":"#password","text":"private"}}});
+        let redacted = redact(&value);
+        assert_eq!(redacted["params"]["arguments"]["text"], REDACTED);
+        assert_eq!(redacted["params"]["arguments"]["selector"], "#password");
     }
 }
