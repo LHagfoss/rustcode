@@ -1725,3 +1725,165 @@ mod tests {
         );
     }
 }
+
+// ------------------------------------------------- a pull request's branch here
+
+/// The local branch a pull request's work continues on, made ready for a
+/// worktree (#3727): fetched from the remote, tracking the branch the pull
+/// request pushes to. `read_only` when the head is a fork that does not let
+/// maintainers push; `note` says what that means.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PullBranch {
+    pub branch: String,
+    pub head_ref: String,
+    pub cross_repository: bool,
+    pub read_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+fn git_ok(dir: &Path, args: &[&str]) -> Result<String, String> {
+    crate::worktrees::git_timed(dir, args, Duration::from_secs(120))
+}
+
+fn local_branch_exists(repo: &Path, branch: &str) -> bool {
+    git_ok(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .is_ok()
+}
+
+/// The local name a fork's branch takes: its own name when that is free, else
+/// `owner-name`, as `gh pr checkout` names it.
+pub(crate) fn fork_branch_name(head: &str, owner: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(head) {
+        return head.to_owned();
+    }
+    format!("{owner}-{head}")
+}
+
+/// Fetch pull request `number`'s head into a local branch of the repository
+/// `cwd` belongs to, and point that branch at the remote it pushes to.
+pub async fn prepare_branch(cwd: &Path, number: u64) -> Result<PullBranch, PullError> {
+    let fields =
+        "headRefName,isCrossRepository,maintainerCanModify,headRepositoryOwner,headRepository";
+    let view = gh_json(cwd, &["pr", "view", &number.to_string(), "--json", fields]).await?;
+    let head = view["headRefName"].as_str().unwrap_or_default().to_owned();
+    if head.is_empty() || head.starts_with('-') {
+        return Err(PullError {
+            code: "failed",
+            message: format!("Pull request #{number} names no branch"),
+        });
+    }
+    let cross = view["isCrossRepository"].as_bool().unwrap_or(false);
+    let can_modify = view["maintainerCanModify"].as_bool().unwrap_or(false);
+    let owner = view["headRepositoryOwner"]["login"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let name = view["headRepository"]["name"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let cwd = cwd.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let repo = crate::worktrees::main_checkout(&cwd).ok_or_else(|| PullError {
+            code: "not_a_repository",
+            message: format!("{} is not in a git repository", cwd.display()),
+        })?;
+        let failed = |message: String| PullError {
+            code: "failed",
+            message,
+        };
+        if !cross {
+            if local_branch_exists(&repo, &head) {
+                // Bring it up to date when it only moves forward and no checkout holds it.
+                let _ = git_ok(&repo, &["fetch", "origin", &format!("{head}:{head}")]);
+            } else {
+                git_ok(
+                    &repo,
+                    &[
+                        "fetch",
+                        "origin",
+                        &format!("refs/heads/{head}:refs/heads/{head}"),
+                    ],
+                )
+                .map_err(failed)?;
+            }
+            let _ = git_ok(&repo, &["fetch", "origin", &head]);
+            let _ = git_ok(
+                &repo,
+                &["branch", &format!("--set-upstream-to=origin/{head}"), &head],
+            );
+            return Ok(PullBranch {
+                branch: head.clone(),
+                head_ref: head,
+                cross_repository: false,
+                read_only: false,
+                note: None,
+            });
+        }
+        let branch = fork_branch_name(&head, &owner, |b| local_branch_exists(&repo, b));
+        if !local_branch_exists(&repo, &branch) {
+            git_ok(
+                &repo,
+                &[
+                    "fetch",
+                    "origin",
+                    &format!("refs/pull/{number}/head:refs/heads/{branch}"),
+                ],
+            )
+            .map_err(failed)?;
+        }
+        let read_only = !can_modify || owner.is_empty() || name.is_empty();
+        let note = if read_only {
+            Some(format!(
+                "This pull request comes from a fork that does not allow maintainer edits: commits stay on the local branch {branch}."
+            ))
+        } else {
+            let fork = format!("https://github.com/{owner}/{name}.git");
+            for (key, value) in [
+                (format!("branch.{branch}.remote"), fork.as_str()),
+                (format!("branch.{branch}.merge"), &format!("refs/heads/{head}")),
+                (format!("branch.{branch}.pushRemote"), fork.as_str()),
+            ] {
+                git_ok(&repo, &["config", &key, value]).map_err(failed)?;
+            }
+            (branch != head).then(|| {
+                format!("Push with `git push {fork} HEAD:{head}`: the local branch is named {branch}.")
+            })
+        };
+        Ok(PullBranch {
+            branch,
+            head_ref: head,
+            cross_repository: true,
+            read_only,
+            note,
+        })
+    })
+    .await
+    .map_err(|error| PullError {
+        code: "failed",
+        message: error.to_string(),
+    })?
+}
+
+#[cfg(test)]
+mod pull_branch_tests {
+    use super::fork_branch_name;
+
+    #[test]
+    fn a_fork_branch_keeps_its_name_unless_taken() {
+        assert_eq!(fork_branch_name("fix", "alice", |_| false), "fix");
+        assert_eq!(
+            fork_branch_name("main", "alice", |b| b == "main"),
+            "alice-main"
+        );
+    }
+}
