@@ -14,12 +14,13 @@ import { projectName } from "../acp/types";
 import { canOpenPty, openPty, type PtyHandle } from "../lib/pty";
 import { cssVar, onAppThemeChange } from "../lib/theme";
 import { onTerminalCommand, takeTerminalCommands } from "../state/projectActions";
-import { setExtras, setTerminalOpen, useApp, useShortcutHint } from "../state/store";
+import { setExtras, setTerminalOpen, toast, useApp, useShortcutHint } from "../state/store";
 import {
   activeTab,
   addTerminalTab,
   closeTerminalTab,
-  ensureTerminalFolder,
+  markTerminalExited,
+  openTerminalFolder,
   showTerminalTab,
   stepTerminalTab,
   type TerminalTab,
@@ -95,6 +96,7 @@ function TerminalView({ tab, visible }: { tab: TerminalTab; visible: boolean }) 
     if (!el) return;
     setExited(false);
     setError(null);
+    markTerminalExited(id, false);
     const term = new Terminal({
       fontFamily:
         // macOS resolves by Menlo at the latest; the rest are Windows' and Linux's own monospace faces.
@@ -152,7 +154,11 @@ function TerminalView({ tab, visible }: { tab: TerminalTab; visible: boolean }) 
       term.cols,
       term.rows,
       (data) => term.write(data),
-      () => live && setExited(true),
+      () => {
+        if (!live) return;
+        setExited(true);
+        markTerminalExited(id, true);
+      },
     ).then(
       (handle) => {
         if (!live) return handle.close();
@@ -240,23 +246,19 @@ export function TerminalPanel() {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
   const tabs = useTerminalTabs((s) => s.tabs);
   const active = useTerminalTabs((s) => (cwd ? activeTab(s, cwd) : undefined));
-  const [opened, setOpened] = useState<string[]>([]);
   const [height, setHeight] = useState(260);
 
-  // A folder opened in the panel gets its first shell; the four folders used last stay alive.
+  // A folder shown in the open panel gets its first shell. Every tab in the state stays mounted;
+  // the folder cap closes the least recently used folder's tabs there (`withOpenedFolder`), once,
+  // and only when the panel opens, so a hidden panel never closes a shell.
   useEffect(() => {
     if (!open || !cwd) return;
-    ensureTerminalFolder(cwd);
-    if (!opened.includes(cwd)) setOpened((o) => [...o, cwd].slice(-4));
-  }, [open, cwd, opened]);
-  // An action run with the panel's folder not yet opened still needs its tab mounted.
-  useEffect(() => {
-    const folders = [...new Set(tabs.map((t) => t.cwd))].filter((dir) => !opened.includes(dir));
-    if (folders.length) setOpened((o) => [...o, ...folders].slice(-4));
-  }, [tabs, opened]);
+    const evicted = openTerminalFolder(cwd);
+    if (evicted?.busy)
+      toast(`Closed the terminals in ${projectName(evicted.cwd)}, which had a project action running.`);
+  }, [open, cwd]);
 
   const here = useMemo(() => (cwd ? tabs.filter((t) => t.cwd === cwd) : []), [tabs, cwd]);
-  const live = useMemo(() => tabs.filter((t) => opened.includes(t.cwd)), [tabs, opened]);
 
   const onResize = (e: React.PointerEvent) => {
     const startY = e.clientY;
@@ -271,7 +273,7 @@ export function TerminalPanel() {
     window.addEventListener("pointerup", up);
   };
 
-  if (!opened.length) return null;
+  if (!tabs.length) return null;
   return (
     <section
       aria-label="Terminal"
@@ -353,7 +355,7 @@ export function TerminalPanel() {
           </div>
         ) : null}
         {canOpenPty() &&
-          live.map((tab) => <TerminalView key={tab.id} tab={tab} visible={open && tab.id === active?.id} />)}
+          tabs.map((tab) => <TerminalView key={tab.id} tab={tab} visible={open && tab.id === active?.id} />)}
       </div>
     </section>
   );
