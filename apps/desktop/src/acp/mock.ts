@@ -9,6 +9,74 @@ import { arr, bool, type Json, type JsonObject, num, obj, str } from "./jsonrpc"
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
+/** The keys a project may override, as the engine's `PROJECT_KEYS` lists them. */
+const MOCK_PROJECT_KEYS = [
+  "default-harness",
+  "default-permission-mode",
+  "resume-after-restart",
+  "continue-after-limit",
+  "auto-compact-mode",
+  "auto-compact-threshold",
+];
+
+const mockProjectKey = (path: string) => path.replace(/[\\/]+$/, "") || path;
+
+/** `_rustcode/settings/get` as the engine answers it, resolved default → machine → project. */
+export function mockSettingsAnswer(
+  machine: JsonObject,
+  projects: Record<string, JsonObject>,
+  keys: string[],
+  project: string | undefined,
+): JsonObject {
+  const overrides = project ? (projects[mockProjectKey(project)] ?? {}) : {};
+  const all = { ...machine };
+  for (const [key, value] of Object.entries(overrides)) if (key in all) all[key] = value;
+  const values = keys.length
+    ? Object.fromEntries(keys.filter((key) => key in all).map((key) => [key, all[key]!]))
+    : all;
+  const sources = Object.fromEntries(
+    Object.keys(values).map((key) => [key, key in overrides ? "project" : "machine"]),
+  );
+  return {
+    values,
+    stored: Object.keys(machine),
+    sources,
+    ...(project
+      ? {
+          project: {
+            path: mockProjectKey(project),
+            overrides: { ...overrides },
+            overridable: MOCK_PROJECT_KEYS,
+          },
+        }
+      : {}),
+  };
+}
+
+/** `_rustcode/settings/set`: the machine's values, or a project's overrides (`project`, `clear`). */
+export function mockSettingsSet(
+  machine: JsonObject,
+  projects: Record<string, JsonObject>,
+  params: JsonObject,
+): JsonObject {
+  const values = obj(params.values) ?? {};
+  const clear = arr(params.clear).flatMap((key) => (typeof key === "string" ? [key] : []));
+  const project = str(params.project);
+  if (project) {
+    const refused = Object.keys(values).find((key) => !MOCK_PROJECT_KEYS.includes(key));
+    if (refused) throw Object.assign(new Error(`a project cannot override '${refused}'`), { code: -32602 });
+    const key = mockProjectKey(project);
+    const next: JsonObject = { ...(projects[key] ?? {}), ...values };
+    for (const name of clear) delete next[name];
+    if (Object.keys(next).length) projects[key] = next;
+    else delete projects[key];
+    return machine;
+  }
+  const next = { ...machine, ...values };
+  for (const name of clear) delete next[name];
+  return next;
+}
+
 /** The local mock's skills; their text is served only by `_rustcode/skills/get`. */
 const MOCK_SKILLS: JsonObject[] = [
   {
@@ -447,6 +515,24 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         auth: "unknown",
         login_command: ["pi"],
         install_hint: "npm install -g @earendil-works/pi-coding-agent",
+        capabilities: ACP_CAPS,
+        accounts: [],
+        models: [],
+        error: null,
+      },
+      {
+        id: "cursor",
+        name: "Cursor",
+        kind: "acp",
+        builtin: false,
+        known: true,
+        enabled: false,
+        command: ["agent", "acp"],
+        default_command: ["agent", "acp"],
+        installed: false,
+        auth: "unknown",
+        login_command: ["agent", "login"],
+        install_hint: "curl https://cursor.com/install -fsS | bash",
         capabilities: ACP_CAPS,
         accounts: [],
         models: [],
@@ -2100,6 +2186,7 @@ export class MockEngine {
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
   private presence = true;
   /** The server settings of this machine (`_rustcode/settings`, docs/configuration.md). */
+  private projectSettings: Record<string, JsonObject> = {};
   private serverSettings: JsonObject = {
     "default-permission-mode": "ask",
     "resume-after-restart": true,
@@ -3588,6 +3675,10 @@ export class MockEngine {
           this.textGenerators.selected = null;
         return this.textGenerators;
       }
+      case "_rustcode/voice/transcribe":
+        // Canned text, so the dictation flow works without an engine or a key.
+        if (!str(params.generatorId)) throw new Error("No transcription provider");
+        return { text: "Summarize what changed in this branch since main." };
       case "_rustcode/textGeneration/generate":
         if (!this.textGenerators.selected) return { text: null };
         return {
@@ -4180,17 +4271,11 @@ export class MockEngine {
           browser_available: false,
         };
         const keys = arr(params.keys).flatMap((key) => (typeof key === "string" ? [key] : []));
-        const values = keys.length
-          ? Object.fromEntries(
-              keys.filter((key) => key in this.serverSettings).map((key) => [key, this.serverSettings[key]!]),
-            )
-          : this.serverSettings;
-        return { values, stored: Object.keys(this.serverSettings) };
+        return mockSettingsAnswer(this.serverSettings, this.projectSettings, keys, str(params.project));
       }
       case "_rustcode/settings/set": {
-        const values = obj(params.values);
-        if (values) this.serverSettings = { ...this.serverSettings, ...values };
-        return { values: this.serverSettings, stored: Object.keys(this.serverSettings) };
+        this.serverSettings = mockSettingsSet(this.serverSettings, this.projectSettings, params);
+        return mockSettingsAnswer(this.serverSettings, this.projectSettings, [], str(params.project));
       }
       case "_rustcode/harnesses":
         return this.snapshot();
@@ -4235,7 +4320,14 @@ export class MockEngine {
         if (h.builtin && params.enabled === false && this.harnesses.default.harness === h.id)
           throw new Error("choose another default harness before turning RustCode off");
         if (typeof params.enabled === "boolean") h.enabled = params.enabled;
-        if (Array.isArray(params.command)) h.command = params.command.map(String);
+        if (Array.isArray(params.command)) {
+          h.command = params.command.map(String);
+          h.installed = h.command[0] !== "missing";
+        }
+        if (obj(params.env))
+          h.env_names = [
+            ...new Set([...Object.keys(obj(params.env)!), ...arr(params.retain_env).map(String)]),
+          ];
         return this.snapshot();
       }
       case "_rustcode/harnesses/remove": {
@@ -5819,6 +5911,7 @@ export class MockMachine {
   private createdCount = 0;
   /** The server settings of this machine, differing from this app's own. */
   private settings: JsonObject;
+  private projectSettings: Record<string, JsonObject> = {};
   /** A harness change made here, over the machine's seeded snapshot. */
   private harnessOverride: HarnessSnapshot | null = null;
   /** What this client advertised: only one that lists threads hears about the ones made here. */
@@ -5991,27 +6084,23 @@ export class MockMachine {
     }
     if (frame.method === "_rustcode/settings/get") {
       const keys = arr(obj(frame.params)?.keys).flatMap((key) => (typeof key === "string" ? [key] : []));
-      const values = keys.length
-        ? Object.fromEntries(
-            keys.filter((key) => key in this.settings).map((key) => [key, this.settings[key]!]),
-          )
-        : this.settings;
+      const project = str(obj(frame.params)?.project);
       return [
         JSON.stringify({
           jsonrpc: "2.0",
           id,
-          result: { values, stored: Object.keys(this.settings) },
+          result: mockSettingsAnswer(this.settings, this.projectSettings, keys, project),
         }),
       ];
     }
     if (frame.method === "_rustcode/settings/set") {
-      const values = obj(obj(frame.params)?.values);
-      if (values) this.settings = { ...this.settings, ...values };
+      const params = obj(frame.params) ?? {};
+      this.settings = mockSettingsSet(this.settings, this.projectSettings, params);
       return [
         JSON.stringify({
           jsonrpc: "2.0",
           id,
-          result: { values: this.settings, stored: Object.keys(this.settings) },
+          result: mockSettingsAnswer(this.settings, this.projectSettings, [], str(params.project)),
         }),
       ];
     }

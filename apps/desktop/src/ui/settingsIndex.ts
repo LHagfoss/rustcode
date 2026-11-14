@@ -22,6 +22,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Computer use",
     keywords: "browser chrome chromium allowlist domains approval headless",
   },
+  {
+    section: "agents",
+    title: "Voice",
+    keywords: "dictation dictate microphone speech transcribe transcription whisper talk",
+  },
   // ------------------------------------------------------------ General
   {
     section: "general",
@@ -156,7 +161,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     section: "agents",
     title: "Harnesses",
     keywords:
-      "agent harness install sign in check check all detect add harness custom acp command executable argument environment variable enable disable local remove",
+      "agent harness install sign in check check all detect add harness custom acp command path executable argument environment variables cursor advanced enable disable local remove",
   },
   {
     section: "agents",

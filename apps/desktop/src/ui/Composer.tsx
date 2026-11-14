@@ -39,6 +39,7 @@ import { harnessPlanKey } from "../acp/rustcode";
 import { type Harness, projectName, type SlashCommand } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { suggestBranch, validBranch } from "../acp/v2";
+import { insertTranscript } from "../lib/dictation";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { measuredFieldHeight } from "../lib/fieldHeight";
 import { matchSpans } from "../lib/folderList";
@@ -143,6 +144,7 @@ import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./A
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { threadMachine } from "./composerFooterLayout";
+import { DictationButton, useDictation } from "./Dictation";
 import { EnvironmentSelector } from "./EnvironmentSelector";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
@@ -748,6 +750,24 @@ export const Composer = memo(function Composer({
       }));
     setDraft(key, text);
   };
+  // A transcript lands at the caret (replacing a selection) and never sends on its own.
+  const dictation = useDictation((text) => {
+    const el = field.current;
+    const current = useApp.getState().drafts[key] ?? "";
+    const { value, caret } = insertTranscript(
+      current,
+      text,
+      el?.selectionStart ?? current.length,
+      el?.selectionEnd ?? current.length,
+    );
+    update(value);
+    requestAnimationFrame(() => {
+      const after = field.current;
+      if (!after) return;
+      after.focus();
+      after.selectionStart = after.selectionEnd = caret;
+    });
+  }, !offline);
   // A message walked back into the field puts the caret at its end, so ↓ comes forward again at once.
   const recall = (text: string) => {
     update(text);
@@ -1691,6 +1711,7 @@ export const Composer = memo(function Composer({
               </div>
             )}
             <div className="flex shrink-0 items-center gap-2">
+              {!offline && <DictationButton dictation={dictation} />}
               <ModelPicker thread={thread} compact={compact} />
               {queuedEdit ? (
                 <Tooltip label="Save in the queue (⏎)">

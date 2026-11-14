@@ -57,7 +57,7 @@ export function LimitFallbackGroup() {
         subtitle="Instead of waiting for the reset, if the table below has a model for it."
         hint="A delegate carries on within a minute. Off, it waits for the reset as it does today."
       >
-        <ScopedValue mixed={enabled.mixed} breakdown={enabled.breakdown}>
+        <ScopedValue mixed={enabled.mixed} breakdown={enabled.breakdown} project={enabled.project}>
           <Switch
             label="Continue a limited delegate on another provider"
             checked={on}

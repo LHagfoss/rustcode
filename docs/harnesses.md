@@ -142,6 +142,7 @@ latter, and groups those apart. Detection is cached for a minute; `set` and
 | `claude-code` | `acp` | `npx -y @agentclientprotocol/claude-agent-acp` | `claude --version` | `claude auth status --json` |
 | `gemini` | `acp` | `gemini --experimental-acp` | `gemini --version` | `unknown` |
 | `opencode` | `acp` | `opencode acp` | `opencode --version` | `unknown` |
+| `cursor` | `acp` | `agent acp` | `agent --version` | `unknown` |
 | `pi` | `acp` | `npx -y pi-acp` (pi's RPC mode adapted to ACP) | `pi --version` | `unknown` |
 
 Commands are looked up on the engine's `PATH` and then the login shell's, so
@@ -871,3 +872,17 @@ in `~/.claude` or any other harness directory, and no setting has to be turned
 on for the list to be complete. A harness skill that a higher-precedence root
 shadows by name is not listed a second time: the group shows the definition
 that wins, and `rustcode doctor` lists the roots that were searched.
+
+### Advanced launch settings
+
+In Settings › Harnesses, expand Advanced on an external harness to edit its
+executable, literal arguments and environment. Save replaces only changed fields
+and re-detects installation. Known harnesses offer Reset to default for the command.
+Saved variable values are never returned to the app; a masked row retains its
+value until replaced or removed. Removing all rows clears the environment.
+
+Cursor uses the official CLI's [`agent acp`](https://cursor.com/docs/cli/acp)
+transport, with [`agent --version`](https://cursor.com/docs/cli/installation)
+for detection. `agent login` signs in. The documented status command's output
+contract has not been verified, so sign-in status remains unknown until an ACP
+check succeeds. This integration does not use the Cursor SDK.

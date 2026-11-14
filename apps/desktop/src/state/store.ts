@@ -5769,7 +5769,11 @@ export function setDefaultPermissionMode(mode: PermissionMode) {
 }
 
 /** A project's own default (`null` follows the default again); applied at once, like the default. */
-export function setProjectPermissionMode(project: string, mode: PermissionMode | null) {
+export function setProjectPermissionMode(
+  project: string,
+  mode: PermissionMode | null,
+  options: { fromServer?: boolean } = {},
+) {
   const key = projectKey(project);
   if (!key) return;
   const modes = { ...get().projectPermissionModes };
@@ -5778,6 +5782,12 @@ export function setProjectPermissionMode(project: string, mode: PermissionMode |
   set({ projectPermissionModes: modes });
   store(STORAGE.projectPermissionModes, JSON.stringify(modes));
   answerAllowedWaiting();
+  // The same project override Settings › Applying to › a project edits, on this machine's server,
+  // so the engine resolves a thread's access through it too. Not echoed back when it came from there.
+  if (!options.fromServer)
+    void import("./settingsScope")
+      .then((scope) => scope.writeProjectSetting(LOCAL_HOST, key, "default-permission-mode", mode))
+      .catch(() => undefined);
 }
 
 /**
@@ -5953,6 +5963,11 @@ async function harnessCall(
     toast(errorText(error), "error");
     return null;
   }
+}
+
+export async function setHarnessAdvanced(change: JsonObject): Promise<void> {
+  await harnessCall(Method.harnessSet, change, false);
+  // The set response already invalidates detection and returns a fresh snapshot.
 }
 
 export async function setHarnessEnabled(id: string, enabled: boolean): Promise<HarnessSnapshot | null> {

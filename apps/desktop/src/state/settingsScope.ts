@@ -19,10 +19,17 @@ import type { Harness, HarnessSnapshot } from "../acp/types";
 import { Method, parseHarnessSnapshot } from "../acp/types";
 import { readStorage, writeStorage } from "../lib/storage";
 import { useMachines } from "./machines";
+import { readProjectBook, updateProjectEntry } from "./projectBook";
+import { matchProject, type Project, projectsOn } from "./projects";
 import { settingsReadCache } from "./settingsReadCache";
 import {
   failureSummary,
   missingSettingValues,
+  type ProjectSettingKey,
+  projectOverridable,
+  projectReadOnlyReason,
+  projectTargets,
+  resolveSetting,
   runOnMachines,
   type ScopeBreakdownEntry,
   type ScopeChoice,
@@ -30,6 +37,8 @@ import {
   type ScopeValueEntry,
   SERVER_SETTING_KEYS,
   type ServerSettingKey,
+  type SettingSource,
+  SOURCE_LABEL,
   scopeBreakdown,
   scopeValuesMixed,
   serverSetting,
@@ -69,6 +78,49 @@ export const useSettingsScope = create<ScopeStore>((set) => ({
     set({ scope });
   },
 }));
+
+// ------------------------------------------------------------ the project choice
+
+const PROJECT_STORAGE = "rustcode.settingsProject";
+
+function readProjectChoice(): Project | null {
+  try {
+    const root = obj(JSON.parse(readStorage(PROJECT_STORAGE) ?? "null") as Json);
+    if (typeof root?.path === "string" && root.path)
+      return {
+        path: root.path,
+        name: typeof root.name === "string" ? root.name : root.path,
+        ...(typeof root.remote === "string" ? { remote: root.remote } : {}),
+      };
+  } catch {
+    // An unreadable choice reads as All projects.
+  }
+  return null;
+}
+
+/** **All projects** (null, the default) or one project, as this machine names it. */
+export const useProjectScope = create<{
+  project: Project | null;
+  setProject: (project: Project | null) => void;
+}>((set) => ({
+  project: readProjectChoice(),
+  setProject: (project) => {
+    writeStorage(PROJECT_STORAGE, JSON.stringify(project));
+    set({ project });
+  },
+}));
+
+/** The projects the bar offers: this machine's, most recently used first. */
+export function useScopeProjects(): Project[] {
+  const sessions = useApp((state) => state.sessions);
+  return projectsOn(sessions, LOCAL_HOST);
+}
+
+/** The chosen project's folder on one machine: matched as Run on matches it, or nothing. */
+export function projectPathOn(project: Project, host: string): string | undefined {
+  if (host === LOCAL_HOST) return project.path;
+  return matchProject(project, projectsOn(useApp.getState().sessions, host))?.path;
+}
 
 /** A machine the panel can show, local or paired. */
 export type ScopeMachine = ScopedMachine;
@@ -338,6 +390,7 @@ export function hydrateLocalServerSettings(): Promise<void> {
       if (!values) return;
       remember(LOCAL_HOST, values);
       applyLocalSettings(values);
+      await seedLocalProjectOverrides(useApp.getState().projectPermissionModes).catch(() => undefined);
     } catch {
       // An older server: nothing to apply.
     }
@@ -398,6 +451,175 @@ export async function writeServerSetting(host: string, key: ServerSettingKey, va
   }
 }
 
+// ------------------------------------------------------------ project overrides
+
+/** One machine's answer for one project: its own overrides, keyed `host\u0000path`. */
+interface ProjectAnswer {
+  overrides: Record<string, Json>;
+}
+
+const useProjectValues = create<{ answers: Record<string, ProjectAnswer> }>(() => ({ answers: {} }));
+
+const projectKeyOf = (host: string, path: string) => `${host}\u0000${path}`;
+
+function rememberProject(host: string, path: string, answer: Json): void {
+  // An older server answers without `project`: it has no overrides, and the app's own stay.
+  const project = obj(obj(answer)?.project);
+  if (!project) return;
+  const overrides = obj(project.overrides) ?? {};
+  useProjectValues.setState((state) => ({
+    answers: { ...state.answers, [projectKeyOf(host, path)]: { overrides: { ...overrides } } },
+  }));
+  if (host === LOCAL_HOST) mirrorLocalProject(path, overrides);
+}
+
+/**
+ * This machine's project overrides drive the app's own per-project defaults, which a new thread
+ * and the approval answers read: Settings › Permissions › Projects and the project's harness.
+ */
+function mirrorLocalProject(path: string, overrides: Record<string, Json>): void {
+  void import("./store").then((store) => {
+    const mode = overrides["default-permission-mode"];
+    const current = store.useApp.getState().projectPermissionModes[path];
+    const next = mode === "ask" || mode === "edits" || mode === "full" ? mode : null;
+    if ((current ?? null) !== next) store.setProjectPermissionMode(path, next, { fromServer: true });
+  });
+  const harness = obj(overrides["default-harness"]);
+  if (harness && typeof harness.harness === "string")
+    updateProjectEntry(path, {
+      harness: harness.harness,
+      ...(typeof harness.model === "string" ? { model: harness.model } : {}),
+    });
+}
+
+/** Read one project's overrides from one machine. */
+export async function loadProjectSettings(host: string, path: string): Promise<void> {
+  try {
+    rememberProject(
+      host,
+      path,
+      await machineRequest(host, "_rustcode/settings/get", { project: path }, 10_000),
+    );
+  } catch {
+    // An older server has no project overrides: the row shows the machine's value.
+  }
+}
+
+/** Write (a value) or remove (`null`) one project override on one machine. */
+export async function writeProjectSetting(
+  host: string,
+  path: string,
+  key: ProjectSettingKey,
+  value: Json | null,
+): Promise<void> {
+  const params: JsonObject =
+    value === null ? { project: path, clear: [key] } : { project: path, values: { [key]: value } };
+  rememberProject(host, path, await machineRequest(host, "_rustcode/settings/set", params, 10_000));
+}
+
+const PROJECT_SEEDED = "rustcode.projectOverridesSeeded";
+
+/**
+ * Once: the per-project access and harness this app kept on its own move into this machine's
+ * server as project overrides, so every reader resolves them the same way. A project the server
+ * already has an override for keeps it.
+ */
+export async function seedLocalProjectOverrides(modes: Record<string, string>): Promise<void> {
+  if (readStorage(PROJECT_SEEDED) === "1") return;
+  const book = readProjectBook();
+  const paths = new Set([...Object.keys(modes), ...Object.keys(book)]);
+  for (const path of paths) {
+    const values: JsonObject = {};
+    const mode = modes[path];
+    if (mode) values["default-permission-mode"] = mode;
+    const entry = book[path];
+    if (entry?.harness)
+      values["default-harness"] = { harness: entry.harness, ...(entry.model ? { model: entry.model } : {}) };
+    if (!Object.keys(values).length) continue;
+    const answer = await machineRequest(LOCAL_HOST, "_rustcode/settings/get", { project: path }, 10_000);
+    const existing = obj(obj(obj(answer)?.project)?.overrides) ?? {};
+    const missing = missingSettingValues(Object.keys(existing), values);
+    if (Object.keys(missing).length)
+      await machineRequest(LOCAL_HOST, "_rustcode/settings/set", { project: path, values: missing }, 10_000);
+  }
+  writeStorage(PROJECT_SEEDED, "1");
+}
+
+/** How a row reads with one project chosen. */
+export interface ProjectRowState {
+  /** The project's name, for the hover card. */
+  name: string;
+  /** Why the row cannot change per project; null when it can. */
+  readOnly: string | null;
+  source: SettingSource;
+  /** Each machine's layer, for the hover card. */
+  breakdown: ScopeBreakdownEntry[];
+  /** Machines the chosen project is not on: never written. */
+  skipped: ScopeMachine[];
+  /** "Use the machine's value": remove the override everywhere the row reaches. */
+  clear?: () => Promise<void>;
+}
+
+/** Load the chosen project's overrides on every machine it reaches. */
+function useLoadProjectSettings(project: Project | null, targets: ScopeMachine[]): void {
+  const sessions = useApp((state) => state.sessions.length);
+  const key = project
+    ? `${project.path}|${targets.map((machine) => machine.host).join("|")}|${sessions}`
+    : "";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` names the project and its machines
+  useEffect(() => {
+    if (!project) return;
+    for (const machine of targets) {
+      const path = machine.online ? projectPathOn(project, machine.host) : undefined;
+      if (path) void loadProjectSettings(machine.host, path);
+    }
+  }, [key]);
+}
+
+/** A project row's layers on each machine, and the value shown. */
+export function projectLayers(
+  key: ProjectSettingKey,
+  project: Project,
+  targets: ScopeMachine[],
+  machineValue: (host: string) => Json | undefined,
+  answers: Record<string, ProjectAnswer>,
+  fallback: Json,
+  format: (value: Json | undefined) => string,
+): {
+  value: Json | undefined;
+  source: SettingSource;
+  mixed: boolean;
+  breakdown: ScopeBreakdownEntry[];
+  reached: { machine: ScopeMachine; path: string }[];
+  skipped: ScopeMachine[];
+} {
+  const { reached, skipped } = projectTargets(targets, (machine) => projectPathOn(project, machine.host));
+  const resolved = reached.map((target) => {
+    const own = answers[projectKeyOf(target.machine.host, target.path!)]?.overrides[key];
+    return {
+      target,
+      ...resolveSetting({ default: fallback, machine: machineValue(target.machine.host), project: own }),
+    };
+  });
+  const entries: ScopeValueEntry[] = resolved.map(({ target, value }) => ({ ...target.machine, value }));
+  const shown = resolved.find((entry) => entry.target.machine.online) ?? resolved[0];
+  return {
+    value: shown?.value,
+    source: shown?.source ?? "machine",
+    mixed: scopeValuesMixed(entries),
+    breakdown: [
+      ...resolved.map(({ target, value, source }) => ({
+        ...target.machine,
+        value,
+        label: `${format(value)} · ${SOURCE_LABEL[source]}${target.machine.online ? "" : " — offline"}`,
+      })),
+      ...skipped.map((machine) => ({ ...machine, label: "Skipped: the project is not on it" })),
+    ],
+    reached: reached.map((target) => ({ machine: target.machine, path: target.path! })),
+    skipped,
+  };
+}
+
 // ------------------------------------------------------------ the row hook
 
 export interface ScopedSetting {
@@ -409,6 +631,8 @@ export interface ScopedSetting {
   offline: ScopeMachine[];
   loading: boolean;
   set: (value: Json) => Promise<void>;
+  /** With one project chosen: where the value comes from, or why it cannot change here. */
+  project: ProjectRowState | null;
 }
 
 /**
@@ -434,6 +658,70 @@ export function useScopedSetting(
   const shown = entries.find((entry) => entry.online && entry.value !== undefined);
   const mixed = scopeValuesMixed(entries);
   const offline = machines.filter((machine) => !machine.online);
+  const chosen = useProjectScope((state) => state.project);
+  const answers = useProjectValues((state) => state.answers);
+  useLoadProjectSettings(chosen, targets);
+  if (chosen) {
+    const reason = projectReadOnlyReason("server", key);
+    if (reason || !projectOverridable(key)) {
+      return {
+        value: shown?.value,
+        mixed,
+        breakdown: scopeBreakdown(entries, (value) => format(value)),
+        targets,
+        writes: [],
+        offline,
+        loading,
+        set: async () => {
+          toast(reason ?? "", "info");
+        },
+        project: { name: chosen.name, readOnly: reason, source: "machine", breakdown: [], skipped: [] },
+      };
+    }
+    const layers = projectLayers(
+      key,
+      chosen,
+      targets,
+      (host) => stored[valueKey(host, key)],
+      answers,
+      serverSetting(key).default,
+      format,
+    );
+    const writable = layers.reached.filter(
+      (target) => target.machine.online && writes.some((w) => w.host === target.machine.host),
+    );
+    const write = async (value: Json | null) => {
+      const result = await runOnMachines(
+        writable.map((target) => target.machine),
+        (machine) =>
+          writeProjectSetting(
+            machine.host,
+            writable.find((t) => t.machine.host === machine.host)!.path,
+            key,
+            value,
+          ),
+      );
+      if (result.failures.length) toast(failureSummary(result), "error");
+    };
+    return {
+      value: layers.value,
+      mixed: layers.mixed,
+      breakdown: layers.breakdown,
+      targets,
+      writes: writable.map((target) => target.machine),
+      offline,
+      loading,
+      set: (value) => write(value),
+      project: {
+        name: chosen.name,
+        readOnly: null,
+        source: layers.source,
+        breakdown: layers.breakdown,
+        skipped: layers.skipped,
+        clear: layers.source === "project" || layers.mixed ? () => write(null) : undefined,
+      },
+    };
+  }
   // Optimistic: the row shows the new value and this app follows it at once, then each machine
   // confirms; one that refuses goes back to what it had, with the reason in a toast.
   const set = async (value: Json) => {
@@ -461,6 +749,7 @@ export function useScopedSetting(
     offline,
     loading,
     set,
+    project: null,
   };
 }
 
@@ -665,6 +954,8 @@ export interface ScopedDefaultHarness {
   /** Read the shown machine's harnesses again after a failure. */
   reload: () => void;
   set: (choice: NewThreadChoice) => Promise<void>;
+  /** With one project chosen: where the default comes from, and removing the override. */
+  project: ProjectRowState | null;
 }
 
 /** The default harness/model/effort across the chosen machines, and one write for all. */
@@ -691,18 +982,76 @@ export function useScopedDefaultHarness(): ScopedDefaultHarness {
   const snapshot = shownHost === undefined ? null : snapshotFor(shownHost);
   const mixed = scopeValuesMixed(entries);
   const value = snapshot?.default ?? null;
+  const format = (candidate: Json | undefined) => {
+    const choice = candidate as unknown as NewThreadChoice | undefined;
+    return choice?.harness ? `${choice.harness}${choice.model ? ` · ${choice.model}` : ""}` : "Not read";
+  };
+  const chosen = useProjectScope((state) => state.project);
+  const answers = useProjectValues((state) => state.answers);
+  useLoadProjectSettings(chosen, targets);
+  if (chosen) {
+    const layers = projectLayers(
+      "default-harness",
+      chosen,
+      targets,
+      (host) => (snapshotFor(host)?.default ?? undefined) as unknown as Json | undefined,
+      answers,
+      null,
+      format,
+    );
+    const writable = layers.reached.filter((target) => target.machine.online);
+    const write = async (choice: NewThreadChoice | null) => {
+      const value = choice
+        ? ({
+            harness: choice.harness,
+            ...(choice.model ? { model: choice.model } : {}),
+            ...(choice.effort ? { effort: choice.effort } : {}),
+          } as JsonObject)
+        : null;
+      const result = await runOnMachines(
+        writable.map((target) => target.machine),
+        (machine) =>
+          writeProjectSetting(
+            machine.host,
+            writable.find((target) => target.machine.host === machine.host)!.path,
+            "default-harness",
+            value,
+          ),
+      );
+      if (result.failures.length) toast(failureSummary(result), "error");
+    };
+    return {
+      snapshot,
+      value: (layers.value as unknown as NewThreadChoice | null) ?? value,
+      mixed: layers.mixed,
+      breakdown: layers.breakdown,
+      targets,
+      writes: writable.map((target) => target.machine),
+      error: shownHost === undefined ? null : (errors[shownHost] ?? null),
+      reload: () => {
+        if (shownHost !== undefined) void loadMachineHarness(shownHost);
+      },
+      set: (choice) => write(choice),
+      project: {
+        name: chosen.name,
+        readOnly: null,
+        source: layers.source === "default" ? "machine" : layers.source,
+        breakdown: layers.breakdown,
+        skipped: layers.skipped,
+        clear: layers.source === "project" || layers.mixed ? () => write(null) : undefined,
+      },
+    };
+  }
   const set = async (choice: NewThreadChoice) => {
     const result = await runOnMachines(writes, (machine) => writeDefaultHarness(machine.host, choice));
     if (result.failures.length) toast(failureSummary(result), "error");
   };
   return {
+    project: null,
     snapshot,
     value,
     mixed,
-    breakdown: scopeBreakdown(entries, (candidate) => {
-      const choice = candidate as unknown as NewThreadChoice | undefined;
-      return choice?.harness ? `${choice.harness}${choice.model ? ` · ${choice.model}` : ""}` : "Not read";
-    }),
+    breakdown: scopeBreakdown(entries, format),
     targets,
     writes,
     error: shownHost === undefined ? null : (errors[shownHost] ?? null),

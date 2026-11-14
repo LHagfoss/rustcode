@@ -511,6 +511,14 @@ mod tests {
     #[test]
     fn versions_parse() {
         assert_eq!(
+            parse_version("2026.03.11-6dfa30c\n").as_deref(),
+            Some("2026.03.11-6dfa30c")
+        );
+        assert_eq!(
+            parse_version("Cursor Agent 2026.10.22-27dcf5f").as_deref(),
+            Some("2026.10.22-27dcf5f")
+        );
+        assert_eq!(
             parse_version("codex-cli 0.162.1\n").as_deref(),
             Some("0.162.1")
         );

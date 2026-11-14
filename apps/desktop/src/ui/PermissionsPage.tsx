@@ -73,8 +73,8 @@ function DefaultAccessGroup() {
       title="Default access"
       hint="What a thread may do without asking, unless its project or the thread itself says otherwise. Threads that follow the default change with it."
       action={
-        setting.mixed ? (
-          <ScopedValue mixed breakdown={setting.breakdown}>
+        setting.mixed || setting.project ? (
+          <ScopedValue mixed={setting.mixed} breakdown={setting.breakdown} project={setting.project}>
             {null}
           </ScopedValue>
         ) : undefined

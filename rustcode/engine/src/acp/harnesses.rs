@@ -48,6 +48,8 @@ pub(crate) struct SetHarnessRequest {
     #[serde(default)]
     pub env: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
+    pub retain_env: Option<Vec<String>>,
+    #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub kind: Option<HarnessKind>,
@@ -159,6 +161,7 @@ pub(crate) async fn set(request: SetHarnessRequest) -> Result<Value, agent_clien
         enabled: request.enabled,
         command: request.command,
         env: request.env,
+        retain_env: request.retain_env,
         name: request.name,
         kind: request.kind,
     })
