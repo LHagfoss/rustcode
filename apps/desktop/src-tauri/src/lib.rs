@@ -24,6 +24,7 @@ use engine::{Engine, EngineEvent};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{Manager, RunEvent, State};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 type EngineState = Arc<Engine>;
 
@@ -50,6 +51,10 @@ fn engine_stop(engine: State<'_, EngineState>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            webview::show_main_window(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         // Notifications for a thread that needs the user (src/notify.rs).
         .plugin(tauri_plugin_notification::init())
@@ -151,6 +156,11 @@ pub fn run() {
             }
             // Built here, not from the config, so it renders at 120 Hz where the display does.
             webview::build_main_window(app)?;
+            let handle = app.handle().clone();
+            app.deep_link()
+                .on_open_url(move |_| webview::show_main_window(&handle));
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            app.deep_link().register_all()?;
             // A click on a notification is only reported while something listens for it.
             notify::register(app.handle());
             Ok(())

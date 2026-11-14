@@ -17,6 +17,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
+tauri-plugin-deep-link = "=2.6.3"
+tauri-plugin-single-instance = { version = "=2.5.5", features = ["deep-link"] }
 # macos-private-api: the transparent window behind the sidebar vibrancy (tauri.conf.json).
 tauri = { version = "=2.12.5", features = ["macos-private-api"] }
 tauri-plugin-dialog = "=2.8.4"
