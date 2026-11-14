@@ -238,6 +238,7 @@ export function loadServerSettings(host: string, force = false): Promise<void> {
 }
 
 async function readServerSettings(host: string): Promise<void> {
+  if ([...writesInFlight.keys()].some((key) => key.startsWith(`${host}\u0000`))) return;
   const revision = settingsRevision.get(host);
   const key = valueKey(host, "*");
 
