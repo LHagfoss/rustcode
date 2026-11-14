@@ -194,6 +194,27 @@ selector; credentials, accounts, the default project folder, Remote access and
 the machines list are machine-only and shown for one machine at a time —
 credentials are never editable over a remote connection.
 
+**Settings a project overrides.** **Applying to** has a second choice: All
+projects (the default) or one project (`useProjectScope` in
+`src/state/settingsScope.ts`). With a project chosen, the rows a project may
+set show the project's value and where it comes from (Built-in default,
+Machine's value, or This project) with the layers mark; the hover card gives
+each machine's layer, and **Use the machine's value** removes the override.
+Those rows are the default harness, model and effort, Default access,
+Continue threads after a restart, Continue threads on their own, Auto-compact
+and its threshold (`PROJECT_SETTING_KEYS` in `src/state/settingsRegistry.ts`).
+Other server rows are read-only with a short reason: delegation limits, wake
+batching, workflow limits, presets and limit fallback act across every thread
+on a machine. Credentials, accounts, machine-only rows and app preferences are
+never per project. Under All machines a project override is written on every
+connected machine that has the project, matched as **Run on** matches it
+(`src/state/projects.ts`); the bar lists the machines without it as skipped.
+The engine keeps the overrides with each machine's `settings.json` and
+resolves default → machine → project (docs/configuration.md). Settings ›
+Permissions › Projects and a project's harness (`update_project`) write the
+same override on this machine, and the app's earlier per-project values are
+moved into it once.
+
 **Permissions.** What a thread may do without asking is one of three modes:
 Ask, Auto-edit and Full access (`src/state/permissions.ts`). Settings ›
 Permissions (`src/ui/PermissionsPage.tsx`) holds the default (a server
@@ -1343,8 +1364,13 @@ composer's keys stay outside the table.
   search opens every group (`groupTools`).
 - **Tool call detail.** Opening a tool row shows a body by what the call
   did (`src/lib/toolBody.ts`): a command shows its command line, its output
-  with terminal escape codes stripped, and its exit code (non-zero in
-  danger); a search or read shows its arguments and its results or content;
+  in its terminal colours, and its exit code (non-zero in danger). The
+  colours (`src/lib/ansi.ts`) are theme tokens: red danger, green success,
+  yellow warning, blue and cyan accent, black and grey muted, magenta plain;
+  256-colour and truecolor take the nearest of those by hue, and bold, dim,
+  italic and underline are kept. Every other escape sequence is dropped, a
+  `\r` progress line keeps what was written last, and Copy copies the plain
+  text. Other calls' output has its escape codes stripped; a search or read shows its arguments and its results or content;
   any other call, MCP tools included, lists its arguments as key/value rows
   (scalars inline, long strings wrapped, objects and lists as JSON for that
   value only). Diffs keep the diff view, and every Copy copies the raw value.
@@ -2020,11 +2046,13 @@ From the SwiftUI app, still missing or partial:
 - A file reference that is changed in the turn does not open the Changes
   or Review diff yet.
 - Sticky turn bar, stream pacing, quote in reply.
-- The auto-approve (YOLO) toggle on approval cards.
+- Switching a thread to Full access from an approval card. The composer's
+  permission menu and Settings › Permissions set the mode, and a card offers
+  Always allow for that call.
 - Subagents' verification status and background agents of threads off
   screen (subagents of a thread whose agents were listed nest under it).
 - Pull request line comments and the diff view in the review.
-- Changes panel: branch mode, renames' old paths, syntax colours in diffs.
+- Changes panel: branch mode, renames' old paths.
 - Localhost preview, the Smart UI agent preview (`smart_ui_preview`,
   `smartUi = 2`). `rustcode-viz` cards have Copy source but not Copy as
   Text or VoiceOver summaries.
@@ -2032,9 +2060,7 @@ From the SwiftUI app, still missing or partial:
   are not offered.
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
-- GitHub sign-in flow, model account switching (Connections is read-only),
-  keybinding editor, Discord presence, revoking a paired device (Settings ›
-  Remote access lists them; `rustcode remote revoke` in a terminal revokes).
+- GitHub sign-in flow, model account switching (Connections is read-only).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The
   Smart UI `rcui://` path was checked by unit test and the page itself in
@@ -2060,6 +2086,31 @@ leave the draft and show a quiet status message. No git write happens until
 you confirm the sheet. The selected generator also writes first-prompt titles
 for every harness; title renames made while it runs are preserved.
 
+### Voice dictation
+
+Say a prompt instead of typing it. The microphone button in the composer's
+tray (beside the model picker) and `⌘⇧D` (Ctrl+Shift+D elsewhere; rebind it in
+Settings › Keyboard) start a recording. The button turns into a red dot with
+the elapsed time; press the button or the shortcut again to finish, or Esc to
+discard. In **Hold to talk** mode, recording lasts while the button or the
+shortcut is held. The audio is transcribed and the text is put at the caret
+(replacing a selection) in the draft. It never sends on its own.
+
+Nothing is recorded or sent until Settings › Agents › Voice › **Transcribe
+with** names a provider; while it is Off, the button opens that page. The
+providers are the OpenAI and custom OpenAI-compatible entries from Text
+generation, with their keys (any endpoint that serves `/audio/transcriptions`).
+Anthropic and OpenRouter entries are not listed: neither offers a
+speech-to-text endpoint. The model defaults to `gpt-4o-mini-transcribe`, and an
+optional language code (`en`, `nb`) skips detection. A recording stops at five
+minutes and is transcribed. A denied microphone, a missing provider, a
+recording that is too long or a network failure each shows a message, and the
+draft stays as it was. The audio is never stored: it is not in the thread's
+history, the logs or a file.
+
+On macOS the app's `Info.plist` carries `NSMicrophoneUsageDescription`, so
+the system asks for the microphone the first time.
+
 ### App links
 
 Installed desktop builds register `rustcode://` on macOS, Windows and Linux.
@@ -2079,3 +2130,8 @@ Opening a link starts the app or brings its existing window forward.
 In the command palette, **Copy prompt link** copies the current composer text,
 and **Copy thread link** copies the selected thread's address. A thread's menu
 also offers **Copy link**. Thread links in messages keep their inline navigation.
+
+Settings › Harnesses includes Cursor (the `agent acp` CLI), and an Advanced
+disclosure on every external harness for its executable, arguments and masked
+environment variables. Save re-detects it; Reset to default restores a known
+harness's launch command. See [harnesses.md](harnesses.md).

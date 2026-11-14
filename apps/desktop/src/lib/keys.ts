@@ -101,6 +101,13 @@ export const APP_COMMANDS: readonly AppCommand[] = [
   { id: "zoom-out", label: "Text smaller", binding: "mod+-", group: "Text", remappable: true },
   { id: "zoom-actual", label: "Text at its actual size", binding: "mod+0", group: "Text", remappable: true },
   {
+    id: "dictate",
+    label: "Dictate into the composer (press again to finish)",
+    binding: "mod+shift+d",
+    group: "Composer",
+    remappable: true,
+  },
+  {
     id: "composer-send",
     label: "Send · queue while running",
     binding: "enter",

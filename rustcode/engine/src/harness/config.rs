@@ -178,6 +178,9 @@ pub struct HarnessChange {
     /// Replaces the harness's environment; an empty map clears it.
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
+    /// Existing secret values to retain when replacing the environment.
+    #[serde(default)]
+    pub retain_env: Option<Vec<String>>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -211,7 +214,7 @@ pub(crate) fn check_default(
 /// Apply `change` to `harnesses`.
 pub(crate) fn apply_change(
     harnesses: &mut Vec<HarnessEntry>,
-    change: HarnessChange,
+    mut change: HarnessChange,
 ) -> Result<(), String> {
     let id = change.id.trim().to_owned();
     if !valid_id(&id) {
@@ -235,6 +238,20 @@ pub(crate) fn apply_change(
         for (name, value) in env {
             if name.trim().is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
                 return Err(format!("invalid environment variable '{name}'"));
+            }
+        }
+    }
+    if let Some(names) = &change.retain_env {
+        let env = change.env.get_or_insert_with(BTreeMap::new);
+        if let Some(existing) = harnesses
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.env.as_ref())
+        {
+            for name in names {
+                if let Some(value) = existing.get(name) {
+                    env.entry(name.clone()).or_insert_with(|| value.clone());
+                }
             }
         }
     }
@@ -754,6 +771,35 @@ pub(crate) fn edit_in<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advanced_retains_secret_values_without_returning_them() {
+        let mut entries = vec![HarnessEntry {
+            id: "cursor".into(),
+            env: Some(BTreeMap::from([
+                ("TOKEN".into(), "secret".into()),
+                ("OLD".into(), "gone".into()),
+            ])),
+            ..Default::default()
+        }];
+        apply_change(
+            &mut entries,
+            HarnessChange {
+                id: "cursor".into(),
+                env: Some(BTreeMap::from([("NEW".into(), "value".into())])),
+                retain_env: Some(vec!["TOKEN".into()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            entries[0].env.as_ref().unwrap(),
+            &BTreeMap::from([
+                ("TOKEN".into(), "secret".into()),
+                ("NEW".into(), "value".into())
+            ])
+        );
+    }
 
     #[test]
     fn config_round_trips_and_old_configs_still_load() {

@@ -302,3 +302,15 @@ permission flow unless the server was deliberately started with `--yolo`.
   the first line and a Markdown body after a blank line. Inputs are bounded
   to 24,000 characters, requests time out after 45 seconds, and errors use
   ACP error data with a readable message.
+### Voice transcription
+
+- `_rustcode/voice/transcribe`: `{ generatorId, model, language?, audio,
+  mimeType, durationMs }`, with `audio` base64. `generatorId` names a text
+  generator whose provider is `openai` or `custom`; its key is read from the
+  credential store. `mimeType` is `audio/webm`, `audio/mp4`, `audio/ogg`,
+  `audio/wav` or `audio/mpeg` (codec parameters allowed). Audio over 10 MB or
+  five minutes is refused before anything is sent; the request times out
+  after 60 seconds. The reply is `{ text }`; errors use ACP error data with a
+  readable message. The audio is never logged or stored. Local only, like the
+  text generation methods.
+

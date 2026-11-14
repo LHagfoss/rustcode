@@ -5,6 +5,7 @@
 // "find-in-thread" is not here: the transcript owns its find bar and matches
 // the same table itself (ui/Transcript.tsx).
 
+import { toggleDictation } from "../lib/dictation";
 import { cycleFocusArea } from "../lib/focusAreas";
 import { stepZoom } from "../lib/zoom";
 import { chooseFolder } from "./folders";
@@ -75,6 +76,9 @@ export function runShortcut(command: string): boolean {
     case "zoom-actual":
       zoom(0);
       return true;
+    case "dictate":
+      // The composer in view records; with none (Settings open, no chat) the key does nothing.
+      return toggleDictation();
     default:
       return false;
   }

@@ -7,7 +7,7 @@ describe("tool body by kind", () => {
     expect(toolBody({ diffs: [{}], input: { path: "a" } }, "edit")).toEqual({ kind: "diff" });
   });
 
-  test("a command shows its command line, output without escape codes, and exit code", () => {
+  test("a command shows its command line, output in plain text and in colour, and exit code", () => {
     const body = toolBody(
       {
         diffs: [],
@@ -21,6 +21,12 @@ describe("tool body by kind", () => {
       kind: "command",
       command: "bun test",
       output: "fail 1",
+      styled: [
+        [
+          { text: "fail", style: { color: "danger" } },
+          { text: " 1", style: {} },
+        ],
+      ],
       exitCode: 1,
       args: [{ key: "cwd", value: "/repo", shape: "inline" }],
     });
