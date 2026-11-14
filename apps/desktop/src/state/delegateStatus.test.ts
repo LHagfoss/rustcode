@@ -12,6 +12,8 @@ import {
   pullText,
   runsOn,
   type StatusInput,
+  settledStatus,
+  settledSummary,
   statusReply,
   statusRows,
   statusSummary,
@@ -185,4 +187,29 @@ describe("the collapsed panel", () => {
   test("offers Stop only on work under way or waiting", () => {
     expect(rows.filter(canStop).map((row) => row.id)).toEqual(["c", "b"]);
   });
+});
+
+test("settled summary folds cleaned successes and keeps actionable delegates visible", () => {
+  const rows = statusRows(
+    [
+      ...Array.from(
+        { length: 18 },
+        (_, i): StatusInput => ({
+          id: String(i),
+          title: "Merged",
+          state: "stopped",
+          cleaned: true,
+          pull: { pull: pull({ merged: true, state: "closed" }) },
+        }),
+      ),
+      { id: "run", title: "Running", state: "working" },
+      { id: "fail", title: "Failure", state: "failed", cleaned: true },
+      { id: "ask", title: "Needs you", state: "needs", cleaned: true },
+    ],
+    0,
+  );
+  const settled = rows.filter(settledStatus);
+  expect(settledSummary(settled)).toBe("18 merged and cleaned up");
+  expect(rows.filter((row) => !settledStatus(row)).map((row) => row.id)).toEqual(["ask", "run", "fail"]);
+  expect(pullText(settled[0]?.pull)).toBe("#3649 · merged");
 });

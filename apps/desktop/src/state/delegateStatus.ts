@@ -30,6 +30,7 @@ export interface DelegateStatusRow {
   harness?: string;
   account?: string;
   model?: string;
+  cleaned?: boolean;
   branch?: string;
   /** Absent until the pull request has been read. */
   pull?: StatusPull;
@@ -46,6 +47,7 @@ export interface StatusInput {
   harness?: string;
   account?: string;
   model?: string;
+  cleaned?: boolean;
   branch?: string;
   pull?: StatusPull;
 }
@@ -70,6 +72,7 @@ export function statusRows(inputs: readonly StatusInput[], now: number): Delegat
         id: input.id,
         title: input.title,
         state: input.state,
+        ...(input.cleaned ? { cleaned: true } : {}),
         ...(input.lastTool ? { lastTool: input.lastTool } : {}),
         ...(working && input.lastAt !== undefined ? { idleMs: Math.max(0, now - input.lastAt) } : {}),
         ...(input.harness ? { harness: input.harness } : {}),
@@ -175,4 +178,16 @@ export function panelMarks(rows: readonly DelegateStatusRow[]): StackAgent[] {
     harness: row.harness,
     label: row.title,
   }));
+}
+
+/** Only quiet successes and stopped work fold; failures and requests stay visible. */
+export function settledStatus(row: DelegateStatusRow): boolean {
+  return row.state === "done" || (row.state === "stopped" && row.cleaned === true);
+}
+export function settledSummary(rows: readonly DelegateStatusRow[]): string {
+  const merged = rows.filter((row) => row.cleaned && row.pull?.pull?.merged).length;
+  const rest = rows.length - merged;
+  return [merged ? `${merged} merged and cleaned up` : "", rest ? `${rest} settled` : ""]
+    .filter(Boolean)
+    .join(" · ");
 }

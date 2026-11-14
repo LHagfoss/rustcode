@@ -6,6 +6,7 @@
 // (state/host.ts). Pure: no store, no engine.
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
+import type { DelegatePull } from "../acp/rustcode";
 import { plainPath } from "../acp/types";
 import type { ThreadStatus, Worktree } from "../acp/v2";
 import { answerPreview } from "./answerPreview";
@@ -391,6 +392,8 @@ export function linkThreads(links: readonly Link[], states?: readonly LinkState[
 
 /** One thread working for another: from the message (or the start) to the answer. */
 export interface Link {
+  /** PR outcome retained independently of the removed checkout. */
+  cleanup?: { at: number; branch?: string; pull?: { [K in keyof DelegatePull]: DelegatePull[K] } };
   /** `<orchestrator>/<n>`. */
   id: string;
   orchestrator: string;
@@ -3064,3 +3067,12 @@ export interface GrantAsk {
 }
 
 export type GrantChoice = "always" | "once" | "deny";
+
+/** Capture the last branch and PR before deleting a delegate's checkout. */
+export function retainDelegateCleanup(
+  book: LinkBook,
+  target: string,
+  cleanup: NonNullable<Link["cleanup"]>,
+): LinkBook {
+  return { ...book, links: book.links.map((link) => (link.target === target ? { ...link, cleanup } : link)) };
+}
