@@ -4509,6 +4509,71 @@ export async function openSideChat(parentId: string, message: string): Promise<s
   }
 }
 
+/**
+ * "Work on this in a thread" (issue 3727): a worktree thread on pull request `number`'s head branch
+ * (`_rustcode/pulls/branch` fetches it, a fork's too), with `message` in its composer to read and
+ * edit before sending, and the pull request linked so new checks and comments wake it. Runs on the
+ * harness a new thread in `cwd` would. Answers the thread's id, or undefined after a toast.
+ */
+export async function startPullThread(
+  cwd: string,
+  pull: { number: number; title: string; url?: string },
+  message: string,
+): Promise<string | undefined> {
+  const s = get();
+  try {
+    const answer = obj(
+      await engine().request("_rustcode/pulls/branch", { cwd, number: pull.number }, 180_000),
+    );
+    const branch = obj(answer?.branch);
+    const name = str(branch?.branch);
+    if (!name)
+      throw new Error(str(obj(answer?.error)?.message) ?? "The pull request's branch could not be fetched.");
+    const choice =
+      projectThreadChoice(s, cwd) ??
+      newThreadChoice({
+        newThread: s.newThread,
+        harnesses: s.harnesses,
+        remoteHarnesses: s.remoteHarnesses,
+        newThreadHost: LOCAL_HOST,
+        projectCwd: cwd,
+      });
+    const harness = harnessesOn(s, LOCAL_HOST)?.harnesses.find((h) => h.id === choice?.harness);
+    const id = await createSession({
+      cwd,
+      harness: choice?.harness,
+      account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
+      model: choice?.model,
+      effort: choice?.effort,
+      worktree: { repo: cwd, branch: name, title: pull.title },
+      select: true,
+      title: `#${pull.number} ${pull.title}`.slice(0, 80),
+    });
+    const note = str(branch?.note);
+    setDraft(id, message);
+    const repo = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\//.exec(pull.url ?? "")?.[1];
+    const worktreeCwd = get().threads[id]?.cwd ?? cwd;
+    void engine()
+      .request(
+        "_rustcode/pulls/watch/start",
+        {
+          sessionId: splitThreadKey(id).id,
+          cwd: worktreeCwd,
+          number: pull.number,
+          ...(repo ? { repo } : {}),
+          link: true,
+        },
+        60_000,
+      )
+      .catch(() => {});
+    if (note) toast(note, "info", { persist: true });
+    return id;
+  } catch (error) {
+    toast(`Could not open #${pull.number} in a thread: ${errorText(error)}`, "error");
+    return undefined;
+  }
+}
+
 /** Add a side-chat answer to its parent's editable draft. */
 export function sendSideChatToParent(id: string, answer: string): boolean {
   const parent = sessionById(get(), id)?.parent;
