@@ -2159,8 +2159,9 @@ harness's launch command. See [harnesses.md](harnesses.md).
 
 ### Private secret card
 
-`request_secret` shows the requesting thread and harness, key, reason and dotenv
-path above the composer. Enter a value in the masked field, optionally Show it,
+`request_secret` shows the requesting thread and harness, key, reason and where
+the value goes above the composer: the dotenv path, and with `env` a line
+saying `$KEY` is set for the thread's commands, in memory only. Enter a value in the masked field, optionally Show it,
 then Save or Decline. Values stay out of drafts and transcript items. A remote
 thread warns that its machine receives the value; the reply uses that thread's
 connection. Other threads can list the pending request but cannot answer it.

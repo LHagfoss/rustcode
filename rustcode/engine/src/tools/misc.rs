@@ -3727,8 +3727,8 @@ fn browser_unavailable(_: &Value) -> Result<String, String> {
 
 pub const REQUEST_SECRET: Tool = Tool {
     name: crate::orchestration::secret::TOOL_NAME,
-    description: "Request a credential privately, never in chat. Save NAME to an untracked workspace dotenv file; return confirmation only. Never read or print the file.",
-    arguments: r#"{"name":"API_KEY","reason":"Deploy the service","destination":".env.local"}"#,
+    description: "Request a credential privately, never in chat. Save NAME to an untracked workspace dotenv destination and/or, with env=true, set $NAME for later run_command calls (masked in output). Confirmation only; never print it.",
+    arguments: r#"{"name":"API_KEY","reason":"Deploy the service","destination":"optional .env.local","env":"optional true"}"#,
     handler: ask_user_question_unavailable,
     requires_confirmation: false,
     schema: crate::orchestration::secret::schema,

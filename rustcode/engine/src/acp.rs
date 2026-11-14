@@ -1351,6 +1351,7 @@ async fn close_builtin(server: &AcpServer, session_id: &str) -> Option<std::path
     };
     crate::tools::abort_background_starts(session_id);
     crate::tools::stop_background_tasks(session_id);
+    crate::orchestration::secret::forget_thread_env(session_id);
     cwd
 }
 

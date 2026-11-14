@@ -1788,11 +1788,25 @@ itself, then from delegates' final answers. Four things keep it small:
 ### Private secret requests
 
 Harness MCP tool `request_secret` takes `name` (an environment variable key),
-`reason`, and `destination` (a dotenv file in the thread workspace). The user
-answers in a private card. Only confirmation or decline reaches the harness;
-the value travels directly on the permission response and is not a chat answer.
-Existing parent directories are required. Tracked files, links and paths outside
-the workspace are refused. Files are replaced with owner-only permissions.
-Environment injection and secret providers are not supported. Agents should use
-this tool instead of asking for credentials in chat, and must not read or print
-the destination. Commands can still expose a stored value if they print it.
+`reason`, and `destination` (a dotenv file in the thread workspace), `env:
+true`, or both. The user answers in a private card. Only confirmation or decline
+reaches the harness; the value travels directly on the permission response and
+is not a chat answer. Existing parent directories are required. Tracked files,
+links and paths outside the workspace are refused. Files are replaced with
+owner-only permissions. Agents should use this tool instead of asking for
+credentials in chat, and must not read or print the destination. Commands can
+still expose a value stored in a file if they print it.
+
+With `env: true` the value is passed to commands instead (use case: an agent
+needs an API key to run a deploy or a test, and the user pastes it once without
+it showing in chat). The engine keeps it in memory for that thread only, never
+on disk, and adds `NAME` to the environment of every later `run_command` the
+thread runs, foreground or background. The tool result only says `$NAME` is
+set. Any tool result, live command output and background completion that
+contains the value shows `***` instead, before it reaches the model, the
+transcript or `history.json`. Values shorter than four characters are not
+masked. The value is dropped when the thread closes or the engine stops; ask
+again after that. Only RustCode's built-in harness runs its commands, so an
+external harness (Claude Code, Codex, …) that passes `env` is refused and told
+to use `destination`. A background command's own log file under the thread's
+task directory holds its raw output, as it did before.

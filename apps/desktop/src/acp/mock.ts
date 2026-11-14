@@ -5128,7 +5128,7 @@ export class MockEngine {
           toolCall: {
             toolCallId: "secret-demo",
             title: "Secret API_KEY",
-            rawInput: { name: "API_KEY", reason: "Authenticate the deployment", destination: ".env.local" },
+            rawInput: { name: "API_KEY", reason: "Authenticate the deployment", destination: ".env.local", env: true },
           },
           options: [
             { optionId: "secret_save", name: "Save", kind: "allow_once" },

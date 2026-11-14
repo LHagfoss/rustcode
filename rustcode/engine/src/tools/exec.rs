@@ -796,6 +796,13 @@ fn run_command_output_unguarded(
         std::ffi::OsString::from("PATH"),
         std::ffi::OsString::from(crate::platform::augmented_path()),
     )];
+    // Secrets the user gave this thread through `request_secret` with `env`:
+    // the value reaches the process, never the arguments or the transcript.
+    if let Some(session_id) = get_active_session_id() {
+        for (name, value) in crate::orchestration::secret::thread_env(&session_id) {
+            command_env.push((name.into(), value.into()));
+        }
+    }
     if let Some(env_map) = env {
         for (k, v) in env_map {
             if let Some(val) = v.as_str() {
