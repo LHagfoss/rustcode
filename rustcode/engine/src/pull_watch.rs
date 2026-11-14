@@ -353,7 +353,7 @@ impl Watch {
                     fresh.push(self.push_event(kind, message, now));
                 }
             }
-            None if new.state != "open" => {
+            None if new.state != "open" && !self.link => {
                 fresh.push(
                     self.push_event(
                         "closed".to_owned(),
@@ -367,7 +367,7 @@ impl Watch {
                     ),
                 );
             }
-            None if self.link => {
+            None if self.link && new.state == "open" => {
                 for (kind, message) in changes(&Snapshot::default(), &new, &[], self.interests) {
                     fresh.push(self.push_event(kind, message, now));
                 }
@@ -507,6 +507,15 @@ impl WatchStore {
     fn update<T>(&self, change: impl FnOnce(&mut Vec<Watch>) -> T) -> std::io::Result<T> {
         static EDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = EDIT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Separate from the long-lived polling lease: every process edits and
+        // claims deliveries under this short lock, including non-polling clients.
+        std::fs::create_dir_all(&self.dir)?;
+        let edit = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.dir.join("pull_watches.edit.lock"))?;
+        edit.lock()?;
         let mut watches = self.load();
         let out = change(&mut watches);
         // Stopped watches are kept a week for the thread to show, then dropped.
@@ -672,13 +681,55 @@ impl WatchStore {
         number: u64,
     ) -> std::io::Result<Option<(Watch, Vec<WatchEvent>)>> {
         self.update(|watches| {
-            let watch = watches.iter_mut().find(|watch| {
+            let Some(watch) = watches.iter_mut().find(|watch| {
                 watch.session_id == session_id && watch.number == number && watch.link
-            })?;
-            let events = watch.pending().to_vec();
+            }) else {
+                return Ok(None);
+            };
+            // Receipts outlive watches (including unlinking and retention cleanup).
+            // Write before handing news to the caller, so a restart or a stale
+            // polling result cannot hand the same outcome to another client.
+            let path = self.dir.join("pull_deliveries.json");
+            let mut receipts: BTreeSet<String> = match std::fs::read(&path) {
+                Ok(bytes) => serde_json::from_slice(&bytes).map_err(std::io::Error::other)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
+                Err(error) => return Err(error),
+            };
+            let mut events = Vec::new();
+            for (index, event) in watch.events.iter().enumerate() {
+                let snapshot = watch.snapshot.as_ref();
+                let outcome = if event.kind == "closed" {
+                    snapshot.map(|s| s.state.as_str()).unwrap_or("closed")
+                } else {
+                    event.kind.as_str()
+                };
+                let detail = if matches!(event.kind.as_str(), "activity" | "stopped") {
+                    format!("{}:{}", event.at, event.message)
+                } else {
+                    String::new()
+                };
+                let key = serde_json::to_string(&(
+                    session_id,
+                    watch.key(),
+                    outcome,
+                    snapshot.map(|s| s.head.as_str()).unwrap_or_default(),
+                    detail,
+                ))
+                .map_err(std::io::Error::other)?;
+                let unseen = receipts.insert(key);
+                if unseen && index >= watch.delivered {
+                    events.push(event.clone());
+                }
+            }
+            let temporary = self.dir.join("pull_deliveries.tmp");
+            std::fs::write(
+                &temporary,
+                serde_json::to_vec(&receipts).map_err(std::io::Error::other)?,
+            )?;
+            crate::atomic_file::replace_file(&temporary, &path)?;
             watch.deliver();
-            Some((watch.clone(), events))
-        })
+            Ok(Some((watch.clone(), events)))
+        })?
     }
 
     /// The thread's links, one pull request each, newest first.
@@ -1329,6 +1380,80 @@ mod tests {
         store
             .link(session, Path::new(cwd), "o/r", 7, &pending, now)
             .unwrap()
+    }
+
+    #[test]
+    fn concurrent_clients_claim_an_outcome_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let now = chrono::Utc::now().timestamp();
+        let mut watch = linked(&store, "s", "/r", now);
+        watch.push_event("checks_failed".into(), "Failed".into(), now);
+        store.put(&watch).unwrap();
+        let claimed = std::thread::scope(|scope| {
+            let clients: Vec<_> = (0..4)
+                .map(|_| {
+                    let client = WatchStore::new(dir.path());
+                    scope.spawn(move || client.take("s", 7).unwrap().unwrap().1.len())
+                })
+                .collect();
+            clients
+                .into_iter()
+                .map(|client| client.join().unwrap())
+                .sum::<usize>()
+        });
+        assert_eq!(claimed, 1);
+    }
+
+    #[test]
+    fn restored_terminal_links_do_not_wake_the_thread() {
+        for state in ["merged", "closed"] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = WatchStore::new(dir.path());
+            let value = view(state, "a1", json!([]), "UNKNOWN", json!([]));
+            let now = chrono::Utc::now().timestamp();
+            store
+                .link("s", Path::new("/r"), "o/r", 7, &value, now)
+                .unwrap();
+            let restarted = WatchStore::new(dir.path());
+            assert!(restarted.take("s", 7).unwrap().unwrap().1.is_empty());
+            restarted.unlink("s", 7).unwrap();
+            restarted
+                .link("s", Path::new("/r"), "o/r", 7, &value, now)
+                .unwrap();
+            assert!(restarted.take("s", 7).unwrap().unwrap().1.is_empty());
+        }
+    }
+
+    #[test]
+    fn outcome_receipts_survive_restart_stale_polls_and_restored_links() {
+        for kind in ["closed", "checks_failed", "checks_passed", "sync_recovered"] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = WatchStore::new(dir.path());
+            let now = chrono::Utc::now().timestamp();
+            let mut stale = linked(&store, "s", "/r", now);
+            stale.push_event(kind.into(), kind.into(), now);
+            store.put(&stale).unwrap();
+            assert_eq!(store.take("s", 7).unwrap().unwrap().1.len(), 1);
+            // An in-flight read held an old cursor when the first client claimed.
+            let restarted = WatchStore::new(dir.path());
+            restarted.put(&stale).unwrap();
+            assert!(restarted.take("s", 7).unwrap().unwrap().1.is_empty());
+            restarted.unlink("s", 7).unwrap();
+            let mut restored = linked(&restarted, "s", "/r", now + 1);
+            restored.push_event(kind.into(), kind.into(), now + 1);
+            restarted.put(&restored).unwrap();
+            assert!(restarted.take("s", 7).unwrap().unwrap().1.is_empty());
+            // A different head, or another thread, still receives its outcome.
+            restored.snapshot.as_mut().unwrap().head = "new-head".into();
+            restored.push_event(kind.into(), kind.into(), now + 2);
+            restarted.put(&restored).unwrap();
+            assert_eq!(restarted.take("s", 7).unwrap().unwrap().1.len(), 1);
+            let mut other = linked(&restarted, "other", "/r", now);
+            other.push_event(kind.into(), kind.into(), now);
+            restarted.put(&other).unwrap();
+            assert_eq!(restarted.take("other", 7).unwrap().unwrap().1.len(), 1);
+        }
     }
 
     #[test]
