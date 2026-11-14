@@ -160,7 +160,7 @@ const PermissionsPage = lazy(() => import("./PermissionsPage").then((m) => ({ de
 import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
 import { ScopedHarnessList } from "./ScopedHarnesses";
-import { ScopedValue, SettingsScopeBar } from "./SettingsScope";
+import { ScopedValue, SettingsScopeBar, SourceChip } from "./SettingsScope";
 import { ShortcutsPage } from "./ShortcutSettings";
 
 const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
@@ -363,7 +363,7 @@ function GeneralPage() {
           subtitle="Pick up a turn that quitting or an update cut short."
           hint="The thread is sent “Continue where you left off” when the app is back."
         >
-          <ScopedValue mixed={resume.mixed} breakdown={resume.breakdown}>
+          <ScopedValue mixed={resume.mixed} breakdown={resume.breakdown} project={resume.project}>
             <Switch
               label="Continue threads after a restart"
               checked={resumeValue}
@@ -381,7 +381,7 @@ function GeneralPage() {
           subtitle="Carry on after a usage limit, an overloaded provider or a dropped network."
           hint="Once it can go on again. Not if you moved the thread to another harness or account, or sent it something else."
         >
-          <ScopedValue mixed={afterLimit.mixed} breakdown={afterLimit.breakdown}>
+          <ScopedValue mixed={afterLimit.mixed} breakdown={afterLimit.breakdown} project={afterLimit.project}>
             <Switch
               label="Continue threads on their own"
               checked={afterLimitValue}
@@ -400,7 +400,11 @@ function GeneralPage() {
           subtitle="Compact a thread's context when a turn ends above the threshold."
           hint="The second mode also compacts shortly before Claude Code's or Codex's prompt cache expires. Never while a turn runs, a message waits, an approval is open or the last answer is unread. Turn it off for one thread in its menu."
         >
-          <ScopedValue mixed={autoCompactMode.mixed} breakdown={autoCompactMode.breakdown}>
+          <ScopedValue
+            mixed={autoCompactMode.mixed}
+            breakdown={autoCompactMode.breakdown}
+            project={autoCompactMode.project}
+          >
             <Choice
               label="Auto-compact"
               value={autoCompactValue}
@@ -420,7 +424,11 @@ function GeneralPage() {
             subtitle="Compact once the context passes this many tokens."
             hint="The second mode's idle, pre-cache rule uses a smaller 60k threshold."
           >
-            <ScopedValue mixed={autoCompactThreshold.mixed} breakdown={autoCompactThreshold.breakdown}>
+            <ScopedValue
+              mixed={autoCompactThreshold.mixed}
+              breakdown={autoCompactThreshold.breakdown}
+              project={autoCompactThreshold.project}
+            >
               <Slider
                 label="Auto-compact threshold"
                 value={Math.round(autoCompactThresholdValue / 1_000)}
@@ -679,7 +687,12 @@ function AgentsPage() {
           }
           footer="A thread can still switch harness and model from the composer."
         >
-          {scoped.mixed && (
+          {scoped.project && (
+            <div className="px-4 pb-2">
+              <SourceChip project={scoped.project} />
+            </div>
+          )}
+          {!scoped.project && scoped.mixed && (
             <div className="px-4 pb-2">
               <ScopedValue mixed breakdown={scoped.breakdown}>
                 <span className="text-callout text-fg-muted">The connected machines disagree</span>
@@ -757,7 +770,7 @@ function WorkflowLimitRow({
       subtitle={subtitle}
       hint={hint}
     >
-      <ScopedValue mixed={scoped.mixed} breakdown={scoped.breakdown}>
+      <ScopedValue mixed={scoped.mixed} breakdown={scoped.breakdown} project={scoped.project}>
         <Slider
           label={title}
           value={value}
@@ -832,7 +845,11 @@ function OrchestrationGroup() {
           title="Let delegates use my named accounts without asking"
           subtitle="Trust named logins on this computer. Accounts on other computers still need approval."
         >
-          <ScopedValue mixed={trustAccounts.mixed} breakdown={trustAccounts.breakdown}>
+          <ScopedValue
+            mixed={trustAccounts.mixed}
+            breakdown={trustAccounts.breakdown}
+            project={trustAccounts.project}
+          >
             <Switch
               label="Let delegates use my named accounts without asking"
               checked={Boolean(trustAccounts.value ?? false)}
@@ -850,7 +867,11 @@ function OrchestrationGroup() {
           subtitle="An agent can read, message and start threads, and compare a task across harnesses."
           hint="Full access does this without asking; Auto-edit may list, read and wait; otherwise you approve each. A thread it starts gets the lower of this thread's access and Default access."
         >
-          <ScopedValue mixed={orchestration.mixed} breakdown={orchestration.breakdown}>
+          <ScopedValue
+            mixed={orchestration.mixed}
+            breakdown={orchestration.breakdown}
+            project={orchestration.project}
+          >
             <Switch
               label="Threads can start and message other threads"
               checked={orchestrationValue}
@@ -868,7 +889,11 @@ function OrchestrationGroup() {
           subtitle="An agent can list, search and read any thread, in any project."
           hint="Reading still follows the approval rules above. Messaging and starting threads stay in the project."
         >
-          <ScopedValue mixed={readAcrossProjects.mixed} breakdown={readAcrossProjects.breakdown}>
+          <ScopedValue
+            mixed={readAcrossProjects.mixed}
+            breakdown={readAcrossProjects.breakdown}
+            project={readAcrossProjects.project}
+          >
             <Switch
               label="Let agents read threads in other projects"
               checked={readAcrossValue}
@@ -909,7 +934,11 @@ function OrchestrationGroup() {
                 : `${running} running now`
           }
         >
-          <ScopedValue mixed={totalLimitSetting.mixed} breakdown={totalLimitSetting.breakdown}>
+          <ScopedValue
+            mixed={totalLimitSetting.mixed}
+            breakdown={totalLimitSetting.breakdown}
+            project={totalLimitSetting.project}
+          >
             <Slider
               label="Delegates across all threads"
               value={totalLimit}
@@ -937,7 +966,11 @@ function OrchestrationGroup() {
                 : `The busiest thread has ${busiest} now`
           }
         >
-          <ScopedValue mixed={threadLimitSetting.mixed} breakdown={threadLimitSetting.breakdown}>
+          <ScopedValue
+            mixed={threadLimitSetting.mixed}
+            breakdown={threadLimitSetting.breakdown}
+            project={threadLimitSetting.project}
+          >
             <Slider
               label="Delegates one thread can run at once"
               value={threadLimit}
@@ -958,7 +991,11 @@ function OrchestrationGroup() {
           subtitle="Delegates that finish or stall inside this window reach the thread in one turn."
           hint="Each wake is a model turn that resends the thread's whole context. A question for you is never held back. Off sends each as it comes."
         >
-          <ScopedValue mixed={wakeBatchSetting.mixed} breakdown={wakeBatchSetting.breakdown}>
+          <ScopedValue
+            mixed={wakeBatchSetting.mixed}
+            breakdown={wakeBatchSetting.breakdown}
+            project={wakeBatchSetting.project}
+          >
             <Slider
               label="Merge delegate wakes within"
               value={wakeBatch}
