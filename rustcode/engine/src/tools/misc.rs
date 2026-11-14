@@ -1267,6 +1267,39 @@ pub const ASK_USER_QUESTION: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Start a durable workflow run (#3394). Offered through the `rustcode` MCP
+/// server only; the engine's hub runs it (`workflow.rs`). A RustCode thread
+/// has no workflow runner.
+pub const RUN_WORKFLOW: Tool = Tool {
+    name: crate::workflow::RUN_TOOL_NAME,
+    description: "Start a workflow run: a JavaScript script that fans work out to worker threads and keeps its place on disk, so it survives a restart. Give `script` (the body of an async function: use await, return a JSON value) or `name` (a file in .rustcode/workflows/). The script has agent(prompt, {schema?, harness?, model?, effort?, title?}) which starts a normal delegate thread under this one and returns its reply (parsed and checked against `schema` when one is given), parallel([() => agent(...), ...]) which runs calls together, phase(title) which names the step the next calls belong to, log(...), and `args` (your `args` argument). The script runs in a sandbox with no files, shell, network, Date or Math.random, so it runs the same way every time and a restarted run replays its finished calls. Returns a run_id at once; read it with workflow_status. Limits (workers at once, total agent calls, run time) come from the user's settings and `concurrency`, `call_budget` and `timeout_minutes` can only lower them.",
+    arguments: r#"{"script": "phase('review'); const reviews = await parallel(args.files.map((f) => () => agent('Review ' + f, {schema: {type: 'object', properties: {issues: {type: 'array', items: {type: 'string'}}}, required: ['issues']}}))); phase('verify'); return await agent('Verify these findings: ' + JSON.stringify(reviews));", "args": {"files": ["src/a.rs", "src/b.rs"]}}"#,
+    handler: workflow_unavailable,
+    requires_confirmation: false,
+    schema: crate::workflow::run_schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+/// Read a workflow run (#3394): its phases, its workers and its result.
+pub const WORKFLOW_STATUS: Tool = Tool {
+    name: crate::workflow::STATUS_TOOL_NAME,
+    description: "Read a workflow run started with run_workflow: its status (running, done, failed, timed_out, cancelled), phases with how many workers each has running, done and failed, each worker's thread (session_id, link_id) and state, the last log lines, and the final structured result. `wait_ms` waits up to that long for the run to end and answers sooner when it does; without it the answer is the run's state now. Without `run_id` it lists this thread's runs.",
+    arguments: r#"{"run_id": "wf-19b2c3d4e5f-0a1b2c3d", "wait_ms": 600000}"#,
+    handler: workflow_unavailable,
+    requires_confirmation: false,
+    schema: crate::workflow::status_schema,
+    capabilities: &[],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn workflow_unavailable(_args: &Value) -> Result<String, String> {
+    Err(
+        "error: workflows are run by the rustcode MCP server; this thread does not have it"
+            .to_owned(),
+    )
+}
+
 fn ask_user_question_unavailable(_args: &Value) -> Result<String, String> {
     Err(
         "error: ask_user_question is answered by the rustcode MCP server; use ask_question here"

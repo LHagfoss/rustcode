@@ -88,6 +88,14 @@ pub fn tools_with(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
         // Answered by this server itself rather than by the client, so no
         // orchestration version gates it (#3369).
         std::iter::once(crate::pull_watch::LINK_TOOL_NAME)
+            // Workflow runs start threads, so they need the tools that do
+            // (version 2); the engine's hub answers them (#3394).
+            .chain(
+                (version >= 2)
+                    .then_some(crate::workflow::TOOL_NAMES)
+                    .into_iter()
+                    .flatten(),
+            )
             .chain(smart_ui.then_some(crate::smart_ui::CHECK_TOOL_NAME))
             // Asked by the engine through the thread's own channel, not the
             // client's orchestration request, so no version gates it either.
@@ -436,6 +444,32 @@ async fn call(
         if let Err(reason) = super::ask_user::validate(&args) {
             return CallAnswer::failure(format!(
                 "error: invalid {tool} call: {reason}. Nothing was asked."
+            ));
+        }
+        return forward
+            .call(CallRequest {
+                session_id: identity.session_id.clone(),
+                token: identity.token.clone(),
+                tool: tool.to_owned(),
+                args,
+                outside: false,
+            })
+            .await;
+    }
+    // A workflow run (#3394) is started and read by the engine's hub, which
+    // runs its workers as this thread's delegates.
+    if crate::workflow::is_tool(tool) {
+        if version < 2 {
+            return CallAnswer::failure(format!("error: unknown tool '{tool}'"));
+        }
+        let args = params
+            .get("arguments")
+            .cloned()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        if let Err(reason) = crate::workflow::validate(tool, &args) {
+            return CallAnswer::failure(format!(
+                "error: invalid {tool} call: {reason}. Nothing was started."
             ));
         }
         return forward
@@ -1175,6 +1209,8 @@ mod tests {
         // The link tool needs no orchestration version, so it is listed last
         // for every client and answered by this server (#3369).
         expected.push(crate::pull_watch::LINK_TOOL_NAME.to_owned());
+        // The workflow tools follow it for a client that can start threads.
+        expected.extend(crate::workflow::TOOL_NAMES.map(str::to_owned));
         assert_eq!(listed, expected);
         assert!(answers[1]["result"]["tools"][0]["inputSchema"]["type"] == "object");
 
