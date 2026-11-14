@@ -99,3 +99,35 @@ the "Let agents read threads in other projects" setting, as `list_sessions`
 does. `list_projects` lists the projects that have a thread on this computer;
 a folder registered in the app but with no thread yet shows only in the app's
 own answer.
+
+## Localhost HTTP and OAuth
+
+The engine also listens on an ephemeral `127.0.0.1` port, at `/mcp`, using
+stateless Streamable HTTP (JSON responses; no SSE subscription). The
+`_rustcode/outside/list` response includes `httpUrl`. Keep RustCode running;
+the URL changes after an engine restart. The Settings connection URL display
+and a real-client compatibility walkthrough are still follow-up work.
+
+Discovery is at `/.well-known/oauth-protected-resource/mcp` (also the root
+protected-resource path) and `/.well-known/oauth-authorization-server`.
+An unauthenticated MCP request returns a Bearer challenge with the metadata URL.
+Use a public `client_id` identifying your app, an exact loopback HTTP callback
+on `127.0.0.1`, `response_type=code`, `resource` equal to the MCP URL, one scope
+(`read_only`, `delegate`, or `manage`), `state`, and an S256 PKCE challenge.
+Only S256 is supported. Client registration and remote callbacks are not
+supported in this localhost slice.
+
+Open `/authorize` with those parameters. In RustCode's Outside agents approval
+list, the user sees the requesting app, callback destination and requested
+access and approves or declines. The callback receives a single-use code
+(valid for 60 seconds). POST form fields to `/token`: `grant_type`, `code`,
+`client_id`, the identical `redirect_uri` and `resource`, and `code_verifier`.
+The access token expires after one hour; send it only as an Authorization Bearer
+header. It cannot authenticate the stdio bridge. Every request checks expiry
+and the shared revocable grant store; every tool call uses the existing scope,
+per-change approval and audit gate.
+
+After expiry, revocation, a declined/timed-out approval, or an engine restart,
+start authorization again with fresh PKCE and state. There are no refresh tokens.
+Revoke connections in Settings › Outside agents. Codes and tokens are never
+logged. Remote hosted clients remain out of scope until #3199.
