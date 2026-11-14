@@ -1305,6 +1305,19 @@ composer's keys stay outside the table.
   actions by tool kind and "performed N other actions" for the rest, with
   "N failed" in danger. A call still running and a subagent keep their own rows; a
   search opens every group (`groupTools`).
+- **Tool call detail.** Opening a tool row shows a body by what the call
+  did (`src/lib/toolBody.ts`): a command shows its command line, its output
+  with terminal escape codes stripped, and its exit code (non-zero in
+  danger); a search or read shows its arguments and its results or content;
+  any other call, MCP tools included, lists its arguments as key/value rows
+  (scalars inline, long strings wrapped, objects and lists as JSON for that
+  value only). Diffs keep the diff view, and every Copy copies the raw value.
+- **Show tool calls.** Settings › Chat › Show tool calls (on by default,
+  `rustcode.showToolCalls`). Off, a finished turn shows its "Worked for …"
+  line, which no longer opens, and the reply; a running turn shows its
+  working line, thoughts and replies but no tool rows. Approvals (at the
+  foot), questions, errors, the plan card, the change line and the threads
+  and subagents a turn started still show (`foldTurns` `showTools`).
 - **Pictures.** A pasted picture's thumbnail and a sent message's pictures
   open in a lightbox (fit to the window, ←→ between the message's
   pictures, a click zooms, Esc or a click outside closes). A reply's

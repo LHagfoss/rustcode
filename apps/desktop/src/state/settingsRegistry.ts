@@ -54,6 +54,8 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   { section: "general", title: "Discord Rich Presence", kind: "machine" },
   { section: "general", title: "Tab moves focus between controls", kind: "app" },
   { section: "general", title: "Trackpad haptics", kind: "app" },
+  // Chat: display preferences this app keeps for itself.
+  { section: "chat", title: "Show tool calls", kind: "app" },
   // Permissions: the default is a server setting; project and thread choices and what this
   // app remembers stay on this computer.
   { section: "permissions", title: "Default access", kind: "server" },

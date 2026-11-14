@@ -153,17 +153,32 @@ function staysVisible(item: TranscriptItem): boolean {
   );
 }
 
+/** How a transcript folds beyond the turns the reader opened. */
+export interface FoldOptions {
+  /**
+   * Settings › Chat › Show tool calls. Off, a finished turn's `Worked for …` line has nothing to
+   * open, and a running turn draws none of its calls; what stays visible (subagents, threads it
+   * started, notices, questions) still does.
+   */
+  showTools?: boolean;
+}
+
 /**
  * The transcript's rows with finished turns folded. `open` holds the keys of
  * the turns the reader opened. The last turn while `running` never folds.
  */
-export function foldTurns(items: TranscriptItem[], running: boolean, open: ReadonlySet<string>): FoldRow[] {
+export function foldTurns(
+  items: TranscriptItem[],
+  running: boolean,
+  open: ReadonlySet<string>,
+  { showTools = true }: FoldOptions = {},
+): FoldRow[] {
   const rows: FoldRow[] = [];
   let start = 0;
   for (let i = 0; i <= items.length; i++) {
     // A turn runs from a message you sent up to the next one (or the end).
     if (i < items.length && (items[i]!.kind !== "user" || i === start)) continue;
-    pushTurn(items, start, i, running && i === items.length, open, rows);
+    pushTurn(items, start, i, running && i === items.length, open, rows, showTools);
     start = i;
   }
   return rows;
@@ -176,6 +191,7 @@ function pushTurn(
   live: boolean,
   open: ReadonlySet<string>,
   rows: FoldRow[],
+  showTools: boolean,
 ) {
   // The final answer: the replies at the end of the turn, after its last step.
   let answerFrom = to;
@@ -191,7 +207,7 @@ function pushTurn(
     if (!staysVisible(item) && i < answerFrom) work.push(i);
   }
   if (live) {
-    pushLiveTurn(items, from, to, rows);
+    pushLiveTurn(items, from, to, rows, showTools);
     return;
   }
   const end = items.slice(from, to).find((x) => x.kind === "turnEnd");
@@ -220,13 +236,14 @@ function pushTurn(
   }
   const fold: TurnFold = {
     key,
-    open: open.has(key),
+    // With tool calls hidden the divider is the whole record of the work: it has nothing to open.
+    open: showTools && open.has(key),
     elapsedMs: end?.kind === "turnEnd" ? end.elapsedMs : undefined,
     stopped: end?.kind === "turnEnd" && end.outcome === "cancelled",
     failedTurn: end?.kind === "turnEnd" && end.outcome === "failed",
     time: end?.kind === "turnEnd" ? end.at : undefined,
     answered: items.slice(answerFrom, to).some((item) => item.kind === "assistant" && !!item.text.trim()),
-    steps: work.length,
+    steps: showTools ? work.length : 0,
     tools,
     failed,
     files: files.size,
@@ -267,8 +284,20 @@ function replyFold(
  * The running turn shows as it streams; `groupTools` then folds each run of
  * its finished calls into one line, so what it does now reads on its own.
  */
-function pushLiveTurn(items: TranscriptItem[], from: number, to: number, rows: FoldRow[]) {
-  for (let i = from; i < to; i++) rows.push({ key: items[i]!.id, item: items[i]! });
+function pushLiveTurn(
+  items: TranscriptItem[],
+  from: number,
+  to: number,
+  rows: FoldRow[],
+  showTools: boolean,
+) {
+  for (let i = from; i < to; i++) {
+    const item = items[i]!;
+    // Hidden calls leave the working line to say what the turn does; an approval a hidden call
+    // waits on goes to the transcript's foot, where it is still answered.
+    if (!showTools && item.kind === "tool" && !staysVisible(item)) continue;
+    rows.push({ key: item.id, item });
+  }
 }
 
 /** The divider's words: `Worked for 1m 3s`, or `You stopped after 12s`. */

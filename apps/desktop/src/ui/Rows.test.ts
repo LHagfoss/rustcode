@@ -96,10 +96,36 @@ describe("a command the harness backgrounded", () => {
 });
 
 describe("a call's detail", () => {
-  test("names the input, and never passes it off as the output", () => {
+  test("names the command, and never passes it off as the output", () => {
     const markup = detail(call([], false));
-    expect(markup).toContain(">Input<");
+    expect(markup).toContain(">Command<");
+    expect(markup).toContain("npm test");
     expect(markup).not.toContain(">Output<");
+    // The description is the row's summary already; the body does not repeat it as JSON.
+    expect(markup).not.toContain("{");
+  });
+
+  test("a command that failed says its exit code in the danger colour", () => {
+    const markup = detail({ ...call([], false), output: "boom", exitCode: 2 });
+    expect(markup).toContain(">Output<");
+    expect(markup.replaceAll("<!-- -->", "")).toContain(`text-danger">Exit code 2`);
+  });
+
+  test("an MCP call lists its arguments as rows, not one JSON blob", () => {
+    const item: ToolItem = {
+      kind: "tool",
+      id: "m1",
+      title: "mcp__linear__create_issue",
+      status: "completed",
+      input: { title: "Bug", labels: ["a"], priority: 2 },
+      diffs: [],
+    };
+    const markup = detail(item);
+    expect(markup).toContain(">Arguments<");
+    expect(markup).toContain(">title</dt>");
+    expect(markup).toContain(">Bug</dd>");
+    expect(markup).toContain(">2</dd>");
+    expect(markup).not.toContain('"title"');
   });
 
   test("says there is no output when the call printed nothing", () => {

@@ -623,6 +623,8 @@ export interface AppState {
   reduceTransparency: boolean;
   /** How wide the chat lane grows, transcript and composer alike (Settings › Chat). */
   chatWidth: ChatWidth;
+  /** A turn shows its tool calls (Settings › Chat); off, only its "Worked for" line and the reply. */
+  showToolCalls: boolean;
   /** Which buttons the thread header shows, in order (Settings › Chat); anything absent is hidden. */
   headerButtons: HeaderButtonId[];
   /** Shortcuts the user changed, by command id (lib/keys.ts holds the defaults). */
@@ -779,6 +781,7 @@ const STORAGE = {
   animateStreaming: "rustcode.animateStreaming",
   reduceTransparency: "rustcode.reduceTransparency",
   chatWidth: "rustcode.chatWidth",
+  showToolCalls: "rustcode.showToolCalls",
   headerButtons: "rustcode.headerButtons",
   statusMarks: "rustcode.statusMarks",
   snoozed: "rustcode.snoozed",
@@ -817,6 +820,7 @@ export const SETTINGS_DEFAULTS = {
   animateStreaming: true,
   reduceTransparency: false,
   chatWidth: CHAT_WIDTH_DEFAULT,
+  showToolCalls: true,
   headerButtons: DEFAULT_HEADER_BUTTONS,
   resumeAfterRestart: true,
   systemNotifications: true,
@@ -948,6 +952,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
   reduceTransparency: storedFlag(STORAGE.reduceTransparency, SETTINGS_DEFAULTS.reduceTransparency),
   chatWidth: parseChatWidth(stored(STORAGE.chatWidth)),
+  showToolCalls: storedFlag(STORAGE.showToolCalls, SETTINGS_DEFAULTS.showToolCalls),
   headerButtons: sanitizeHeaderButtons(storedJson<unknown>(STORAGE.headerButtons, null)),
   shortcuts: parseOverrides(stored(STORAGE.shortcuts)),
   orchestrationPending: false,
@@ -6515,6 +6520,11 @@ export function setReduceTransparency(on: boolean) {
 export function setChatWidth(width: ChatWidth) {
   set({ chatWidth: width });
   store(STORAGE.chatWidth, width);
+}
+
+export function setShowToolCalls(on: boolean) {
+  set({ showToolCalls: on });
+  store(STORAGE.showToolCalls, on ? "1" : "0");
 }
 
 /**
