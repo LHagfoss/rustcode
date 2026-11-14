@@ -579,6 +579,195 @@ pub async fn post_review(
     })
 }
 
+/// A change to one review conversation, or a new line comment, written from
+/// the pull request's diff view (#3768).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ThreadAction {
+    #[serde(rename_all = "camelCase")]
+    Reply { thread_id: String, body: String },
+    #[serde(rename_all = "camelCase")]
+    Resolve { thread_id: String },
+    #[serde(rename_all = "camelCase")]
+    Unresolve { thread_id: String },
+    #[serde(rename_all = "camelCase")]
+    Comment {
+        commit_id: String,
+        path: String,
+        line: u64,
+        side: String,
+        #[serde(default)]
+        start_line: Option<u64>,
+        body: String,
+    },
+}
+
+/// What an action left behind: the conversation's resolved state after a
+/// resolve or unresolve, else nothing; the app reads the pull request again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ThreadActionResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<bool>,
+}
+
+const REPLY_MUTATION: &str = "mutation($thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{id}}}";
+const RESOLVE_MUTATION: &str =
+    "mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{isResolved}}}";
+const UNRESOLVE_MUTATION: &str =
+    "mutation($thread:ID!){unresolveReviewThread(input:{threadId:$thread}){thread{isResolved}}}";
+
+fn refused(message: impl Into<String>) -> PullError {
+    PullError {
+        code: "failed",
+        message: message.into(),
+    }
+}
+
+/// The REST request a new line comment makes: one comment at `commit_id` on
+/// `line` of `side`, from `start_line` for a range.
+pub fn line_comment_payload(
+    commit_id: &str,
+    path: &str,
+    line: u64,
+    side: &str,
+    start_line: Option<u64>,
+    body: &str,
+) -> Result<Value, PullError> {
+    if commit_id.is_empty() {
+        return Err(refused("the comment names no commit"));
+    }
+    if path.is_empty() || line == 0 || !matches!(side, "LEFT" | "RIGHT") {
+        return Err(refused(format!("{path} has no line {line} to comment on")));
+    }
+    if body.trim().is_empty() {
+        return Err(refused("the comment is empty"));
+    }
+    let mut payload = serde_json::json!({
+        "commit_id": commit_id,
+        "path": path,
+        "line": line,
+        "side": side,
+        "body": body,
+    });
+    // A range of one line is a line.
+    if let Some(start) = start_line.filter(|start| *start != line) {
+        if start == 0 || start > line {
+            return Err(refused(format!(
+                "lines {start}-{line} of {path} are not a range"
+            )));
+        }
+        payload["start_line"] = start.into();
+        payload["start_side"] = side.into();
+    }
+    Ok(payload)
+}
+
+/// The GraphQL `gh api` arguments for a conversation action, or `None` for a
+/// new line comment, which goes through REST.
+pub(crate) fn thread_mutation(action: &ThreadAction) -> Result<Option<Vec<String>>, PullError> {
+    let (query, thread, body) = match action {
+        ThreadAction::Reply { thread_id, body } => {
+            if body.trim().is_empty() {
+                return Err(refused("the reply is empty"));
+            }
+            (REPLY_MUTATION, thread_id, Some(body))
+        }
+        ThreadAction::Resolve { thread_id } => (RESOLVE_MUTATION, thread_id, None),
+        ThreadAction::Unresolve { thread_id } => (UNRESOLVE_MUTATION, thread_id, None),
+        ThreadAction::Comment { .. } => return Ok(None),
+    };
+    if thread.is_empty() {
+        return Err(refused(
+            "the conversation has no id; reload the pull request",
+        ));
+    }
+    // `-f` sends each value as a raw string: a body that starts with `@` is
+    // text, not a file to read.
+    let mut args = vec![
+        "api".to_owned(),
+        "graphql".to_owned(),
+        "-f".to_owned(),
+        format!("query={query}"),
+        "-f".to_owned(),
+        format!("thread={thread}"),
+    ];
+    if let Some(body) = body {
+        args.extend(["-f".to_owned(), format!("body={body}")]);
+    }
+    Ok(Some(args))
+}
+
+/// The first GraphQL error's message, which `gh api graphql` prints with a
+/// zero exit when the answer has `errors`.
+pub(crate) fn graphql_error(answer: &Value) -> Option<String> {
+    answer
+        .pointer("/errors/0/message")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Does `action` on pull request `number` of `repository`. A refusal comes
+/// back with GitHub's message; a write whose answer never arrived as
+/// `uncertain`, since it may have been made.
+pub async fn act_on_thread(
+    cwd: &Path,
+    repository: &str,
+    number: u64,
+    action: &ThreadAction,
+) -> Result<ThreadActionResult, PullError> {
+    let uncertain = |error: PullError| {
+        if error.code == "timed_out" {
+            PullError {
+                code: "uncertain",
+                message: "GitHub did not answer in time; the change may have been made. Reload the pull request before trying again.".to_owned(),
+            }
+        } else {
+            error
+        }
+    };
+    if let Some(args) = thread_mutation(action)? {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = gh(cwd, &args, None).await.map_err(uncertain)?;
+        let answer: Value = serde_json::from_slice(&output).unwrap_or(Value::Null);
+        if let Some(message) = graphql_error(&answer) {
+            return Err(refused(message));
+        }
+        let resolved = match action {
+            ThreadAction::Resolve { .. } => Some(true),
+            ThreadAction::Unresolve { .. } => Some(false),
+            _ => None,
+        };
+        return Ok(ThreadActionResult { resolved });
+    }
+    let ThreadAction::Comment {
+        commit_id,
+        path,
+        line,
+        side,
+        start_line,
+        body,
+    } = action
+    else {
+        return Err(refused("unknown conversation action"));
+    };
+    if !is_repository(repository) {
+        return Err(refused(format!(
+            "{repository} is not an owner/name repository"
+        )));
+    }
+    let payload = line_comment_payload(commit_id, path, *line, side, *start_line, body)?;
+    let endpoint = format!("repos/{repository}/pulls/{number}/comments");
+    let input = serde_json::to_vec(&payload).unwrap_or_default();
+    gh(
+        cwd,
+        &["api", "--method", "POST", &endpoint, "--input", "-"],
+        Some(input),
+    )
+    .await
+    .map_err(uncertain)?;
+    Ok(ThreadActionResult { resolved: None })
+}
+
 // ------------------------------------------------ a delegate's pull request
 
 /// The checks a merge never waits for: the advisory portability jobs in the
@@ -1525,6 +1714,83 @@ mod tests {
         let json = serde_json::to_value(second).unwrap();
         assert_eq!(json["replyTo"], 1);
         assert_eq!(json["url"], "https://gh/c/2");
+    }
+
+    #[test]
+    fn a_line_comment_names_its_commit_line_and_range() {
+        let one = line_comment_payload("abc", "src/a.rs", 12, "RIGHT", Some(12), "Nit").unwrap();
+        assert_eq!(
+            one,
+            json!({"commit_id": "abc", "path": "src/a.rs", "line": 12, "side": "RIGHT", "body": "Nit"})
+        );
+        let range = line_comment_payload("abc", "src/a.rs", 12, "LEFT", Some(9), "Why").unwrap();
+        assert_eq!(range["start_line"], 9);
+        assert_eq!(range["start_side"], "LEFT");
+        assert!(line_comment_payload("abc", "src/a.rs", 12, "RIGHT", Some(14), "x").is_err());
+        assert!(line_comment_payload("abc", "src/a.rs", 12, "MIDDLE", None, "x").is_err());
+        assert!(line_comment_payload("", "src/a.rs", 12, "RIGHT", None, "x").is_err());
+        assert!(line_comment_payload("abc", "src/a.rs", 12, "RIGHT", None, "  ").is_err());
+    }
+
+    #[test]
+    fn conversation_actions_send_raw_graphql_fields() {
+        let reply = ThreadAction::Reply {
+            thread_id: "PRRT_1".into(),
+            body: "@me thanks".into(),
+        };
+        let args = thread_mutation(&reply).unwrap().unwrap();
+        assert!(args[3].contains("addPullRequestReviewThreadReply"));
+        assert_eq!(args[4..], ["-f", "thread=PRRT_1", "-f", "body=@me thanks"]);
+        let resolve = thread_mutation(&ThreadAction::Resolve {
+            thread_id: "PRRT_1".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(resolve[3].contains("resolveReviewThread"));
+        let unresolve = thread_mutation(&ThreadAction::Unresolve {
+            thread_id: "PRRT_1".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(unresolve[3].contains("unresolveReviewThread"));
+        assert!(
+            thread_mutation(&ThreadAction::Resolve {
+                thread_id: String::new()
+            })
+            .is_err()
+        );
+        let empty = ThreadAction::Reply {
+            thread_id: "PRRT_1".into(),
+            body: " ".into(),
+        };
+        assert!(thread_mutation(&empty).is_err());
+    }
+
+    #[test]
+    fn a_conversation_action_reads_from_the_app_request() {
+        let action: ThreadAction = serde_json::from_value(json!({
+            "kind": "comment", "commitId": "abc", "path": "a.rs", "line": 3, "side": "RIGHT", "startLine": 1, "body": "x"
+        }))
+        .unwrap();
+        assert!(matches!(
+            action,
+            ThreadAction::Comment {
+                start_line: Some(1),
+                ..
+            }
+        ));
+        let action: ThreadAction =
+            serde_json::from_value(json!({"kind": "unresolve", "threadId": "T"})).unwrap();
+        assert_eq!(
+            action,
+            ThreadAction::Unresolve {
+                thread_id: "T".into()
+            }
+        );
+        assert_eq!(
+            graphql_error(&json!({"errors": [{"message": "Resource not accessible"}]})).as_deref(),
+            Some("Resource not accessible")
+        );
     }
 
     #[test]

@@ -2,16 +2,33 @@
 // place: each under the line it was left on, resolved ones folded to a marker,
 // outdated ones above their file, and the review summaries and plain comments
 // in a list above the files. "Add to chat" puts a conversation into the open
-// thread's composer as a draft; nothing here sends or writes to GitHub.
+// thread's composer as a draft. Reply, Resolve and the "+" on a diff line's
+// number write to GitHub through the engine (issue 3768); a failure keeps the text.
 
-import { ChevronDown, ChevronRight, CircleCheck, CirclePlus, MessageSquare } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  CirclePlus,
+  MessageSquare,
+  MessageSquarePlus,
+} from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { PullDetail, PullRequest } from "../acp/rustcode";
 import { pullErrorTitle } from "../acp/rustcode";
+import { formatBinding } from "../lib/keys";
+import { primaryModifier } from "../lib/platform";
 import { count } from "../lib/plural";
 import { appendToDraft, type FeedbackItem, feedbackItems, formatReviewFeedback } from "../lib/reviewFeedback";
 import { runWordMarks } from "../lib/wordDiff";
 import type { PatchLine } from "../state/diff";
+import {
+  actOnThread,
+  type LineTarget,
+  lineTarget,
+  type ThreadAction,
+  targetLabel,
+} from "../state/pullConversations";
 import { loadPullDiff } from "../state/pullQueries";
 import {
   type Conversation,
@@ -28,7 +45,7 @@ import { relativeAge } from "../state/thread";
 import { StatusMark } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
 import { Markdown } from "./Markdown";
-import { Callout, cx, Pill, Skeleton } from "./primitives";
+import { Callout, cx, noTextHelpers, Pill, Skeleton } from "./primitives";
 import { DiffCount } from "./Rows";
 
 /**
@@ -64,13 +81,115 @@ function CommentBody({ author, at, body }: { author: string; at?: number; body: 
   );
 }
 
+/**
+ * A comment the user writes to GitHub: a reply or a new line comment. It sends with the button or
+ * mod+Enter, and on a failure keeps the text and shows GitHub's message under it.
+ */
+export function CommentField({
+  label,
+  placeholder,
+  hint,
+  send,
+  onCancel,
+}: {
+  label: string;
+  placeholder: string;
+  /** A line under the field, such as how to pick a range. */
+  hint?: string;
+  /** Sends the text; an error string keeps the field open with it. */
+  send: (body: string) => Promise<string | null>;
+  onCancel: () => void;
+}) {
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async () => {
+    if (!body.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    const failed = await send(body);
+    setBusy(false);
+    if (failed) setError(failed);
+  };
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg bg-fill-subtle p-2 font-sans">
+      <textarea
+        autoFocus
+        rows={2}
+        value={body}
+        disabled={busy}
+        onChange={(e) => setBody(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && primaryModifier(e)) {
+            e.preventDefault();
+            void submit();
+          }
+          if (e.key === "Escape" && !busy) onCancel();
+        }}
+        placeholder={`${placeholder} (${formatBinding("mod+enter")} to send)`}
+        aria-label={label}
+        {...noTextHelpers}
+        className="w-full resize-y rounded-md bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
+      />
+      {error && <Callout tone="danger">{error}</Callout>}
+      <div className="flex items-center justify-end gap-1.5">
+        {hint && <span className="min-w-0 flex-1 text-caption text-fg-muted">{hint}</span>}
+        <Pill size="sm" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Pill>
+        <Pill size="sm" prominent disabled={busy || !body.trim()} onClick={() => void submit()}>
+          {busy ? "Sending…" : "Send"}
+        </Pill>
+      </div>
+    </div>
+  );
+}
+
 /** One conversation: its first comment and replies, or a marker when resolved, until opened. */
-export function ConversationCard({ conversation, pull }: { conversation: Conversation; pull: PullRequest }) {
+export function ConversationCard({
+  conversation,
+  pull,
+  cwd,
+}: {
+  conversation: Conversation;
+  pull: PullRequest;
+  cwd: string;
+}) {
+  // The resolved state the user just set, shown until the read after it agrees or it fails.
+  const [resolvedNow, setResolvedNow] = useState<boolean | null>(null);
+  const resolved = resolvedNow ?? conversation.resolved;
   const [open, setOpen] = useState(!conversation.resolved);
+  const [replying, setReplying] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (resolvedNow === conversation.resolved) setResolvedNow(null);
+  }, [conversation.resolved, resolvedNow]);
   const [first, ...replies] = conversation.comments;
   if (!first) return null;
+  const threadId = conversation.threadId;
+  const toggleResolved = async () => {
+    if (!threadId || busy) return;
+    const next = !resolved;
+    setBusy(true);
+    setResolvedNow(next);
+    if (next) setOpen(false);
+    const done = await actOnThread(cwd, pull, { kind: next ? "resolve" : "unresolve", threadId });
+    setBusy(false);
+    if (!done.ok) {
+      setResolvedNow(null);
+      setOpen(true);
+      toast(done.error, "error");
+    }
+  };
+  const reply = async (body: string) => {
+    if (!threadId) return "The conversation has no id; reload the pull request.";
+    const done = await actOnThread(cwd, pull, { kind: "reply", threadId, body });
+    if (!done.ok) return done.error;
+    setReplying(false);
+    return null;
+  };
   const range = conversationRange(conversation);
-  if (!open) {
+  if (!open && resolved) {
     return (
       <div className="my-1 font-sans">
         <Pill size="sm" quiet onClick={() => setOpen(true)} aria-expanded={false}>
@@ -93,7 +212,7 @@ export function ConversationCard({ conversation, pull }: { conversation: Convers
           {range ? `${conversation.side === "LEFT" ? "base " : ""}line ${range}` : conversation.path}
         </span>
         {conversation.outdated && <span className="shrink-0 text-warning">Outdated</span>}
-        {conversation.resolved && (
+        {resolved && (
           <button
             type="button"
             onClick={() => setOpen(false)}
@@ -102,6 +221,11 @@ export function ConversationCard({ conversation, pull }: { conversation: Convers
           >
             <CircleCheck size={11} /> Resolved <ChevronDown size={11} />
           </button>
+        )}
+        {threadId && (
+          <Pill size="sm" quiet disabled={busy} onClick={() => void toggleResolved()}>
+            {resolved ? "Unresolve" : "Resolve"}
+          </Pill>
         )}
         <Pill size="sm" quiet onClick={() => addFeedbackToThread(conversationFeedback(conversation), pull)}>
           <CirclePlus size={11} /> Add to chat
@@ -115,6 +239,16 @@ export function ConversationCard({ conversation, pull }: { conversation: Convers
           ))}
         </div>
       )}
+      {threadId &&
+        (replying ? (
+          <CommentField label="Reply" placeholder="Reply" send={reply} onCancel={() => setReplying(false)} />
+        ) : (
+          <div>
+            <Pill size="sm" quiet onClick={() => setReplying(true)}>
+              Reply…
+            </Pill>
+          </div>
+        ))}
     </article>
   );
 }
@@ -124,12 +258,32 @@ const PullFile = memo(function PullFile({
   file,
   conversations,
   pull,
+  cwd,
 }: {
   file: PullDiffFile;
   conversations: readonly Conversation[];
   pull: PullRequest;
+  cwd: string;
 }) {
   const [open, setOpen] = useState(!file.large && file.status !== "D");
+  // The lines a new comment is on: clicked on one line's number, shift-clicked on another for a range.
+  const [picked, setPicked] = useState<{ start: number; end: number } | null>(null);
+  const target: LineTarget | null = picked
+    ? lineTarget(file.path, file.lines, picked.end, picked.start)
+    : null;
+  // GitHub takes a line comment on a draft or a closed pull request too; it needs the head commit.
+  const canComment = Boolean(pull.headSha);
+  const pick = (i: number, extend: boolean) =>
+    setPicked((now) => (extend && now ? { start: now.start, end: i } : { start: i, end: i }));
+  const comment = async (body: string) => {
+    if (!target || !pull.headSha) return "Pick a line of the diff first.";
+    const action: ThreadAction = { kind: "comment", commitId: pull.headSha, body, ...target };
+    const done = await actOnThread(cwd, pull, action);
+    if (!done.ok) return done.error;
+    setPicked(null);
+    return null;
+  };
+  const composerAt = picked ? Math.max(picked.start, picked.end) : -1;
   const placement = useMemo(() => placeConversations(file, conversations), [file, conversations]);
   const texts = useMemo(() => (open ? file.lines.map((line) => line.text) : []), [open, file.lines]);
   const marks = useMemo(() => (open ? runWordMarks(file.lines) : []), [open, file.lines]);
@@ -161,7 +315,7 @@ const PullFile = memo(function PullFile({
         <DiffCount added={file.added} removed={file.removed} />
       </div>
       {placement.unplaced.map((c) => (
-        <ConversationCard key={c.id} conversation={c} pull={pull} />
+        <ConversationCard key={c.id} conversation={c} pull={pull} cwd={cwd} />
       ))}
       {!open ? (
         file.large && (
@@ -185,19 +339,45 @@ const PullFile = memo(function PullFile({
                 </div>
               ) : (
                 <div key={i}>
-                  <div className={cx("flex pr-3", tint(line.kind))}>
-                    <span
-                      className="shrink-0 pr-1.5 text-right text-fg-muted/60 tabular"
-                      style={{ width: `${width + 1}ch` }}
+                  <div
+                    className={cx(
+                      "flex pr-3",
+                      tint(line.kind),
+                      picked &&
+                        i >= Math.min(picked.start, picked.end) &&
+                        i <= composerAt &&
+                        "shadow-[inset_2px_0_0_var(--rc-accent)]",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      disabled={!canComment}
+                      onClick={(e) => pick(i, e.shiftKey)}
+                      aria-label={`Comment on ${line.kind === "del" ? `base line ${line.old}` : `line ${line.new}`}`}
+                      className="group/g relative flex shrink-0 enabled:hover:bg-accent/20 enabled:hover:text-accent"
                     >
-                      {line.old ?? ""}
-                    </span>
-                    <span
-                      className="shrink-0 pr-1.5 text-right text-fg-muted/60 tabular"
-                      style={{ width: `${width + 1}ch` }}
-                    >
-                      {line.new ?? ""}
-                    </span>
+                      <span
+                        className="shrink-0 pr-1.5 text-right text-fg-muted/60 tabular"
+                        style={{ width: `${width + 1}ch` }}
+                      >
+                        {line.old ?? ""}
+                      </span>
+                      <span
+                        className={cx(
+                          "shrink-0 pr-1.5 text-right text-fg-muted/60 tabular",
+                          canComment && "group-hover/g:invisible",
+                        )}
+                        style={{ width: `${width + 1}ch` }}
+                      >
+                        {line.new ?? ""}
+                      </span>
+                      {canComment && (
+                        <MessageSquarePlus
+                          size={11}
+                          className="invisible absolute top-[3px] right-1.5 group-hover/g:visible"
+                        />
+                      )}
+                    </button>
                     <span
                       className={cx(
                         "w-3 shrink-0",
@@ -216,9 +396,20 @@ const PullFile = memo(function PullFile({
                   </div>
                   {placement.atLine.get(i)?.map((c) => (
                     <div key={c.id} className="px-2 whitespace-normal">
-                      <ConversationCard conversation={c} pull={pull} />
+                      <ConversationCard conversation={c} pull={pull} cwd={cwd} />
                     </div>
                   ))}
+                  {i === composerAt && target && (
+                    <div className="px-2 py-1 whitespace-normal">
+                      <CommentField
+                        label={`Comment on ${targetLabel(target)}`}
+                        placeholder={`Comment on ${targetLabel(target)}`}
+                        hint="Shift-click another line number to comment on a range."
+                        send={comment}
+                        onCancel={() => setPicked(null)}
+                      />
+                    </div>
+                  )}
                 </div>
               ),
             )}
@@ -293,7 +484,7 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
         </section>
       )}
       {elsewhere.map((c) => (
-        <ConversationCard key={c.id} conversation={c} pull={pull} />
+        <ConversationCard key={c.id} conversation={c} pull={pull} cwd={cwd} />
       ))}
       {error && <Callout tone="danger">{error}</Callout>}
       {!files && !error && (
@@ -305,7 +496,7 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
       )}
       {files?.length === 0 && <p className="text-callout text-fg-muted">The diff is empty.</p>}
       {files?.map((file) => (
-        <PullFile key={file.path} file={file} conversations={conversations} pull={pull} />
+        <PullFile key={file.path} file={file} conversations={conversations} pull={pull} cwd={cwd} />
       ))}
     </div>
   );
