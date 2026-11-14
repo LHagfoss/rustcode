@@ -43,8 +43,8 @@ import {
 import { selectOption } from "../state/harness";
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
-import { queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
-import { type PlanClocks, planCardShown, type SteerNote, steerMarks } from "../state/steer";
+import { isQueuedNotice, queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
+import { type PlanClocks, planCardShown, type SteerNote } from "../state/steer";
 import {
   openSideChat,
   RESUME_TEXT,
@@ -56,6 +56,7 @@ import {
   useApp,
 } from "../state/store";
 import {
+  noticeLine,
   type QueuedPrompt,
   splitSubagentSteps,
   startedLinks,
@@ -94,7 +95,6 @@ import {
   WorkingRow,
 } from "./Rows";
 import { turnFooterHidden } from "./replyActions";
-import { SteerMark } from "./SteerMark";
 import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
@@ -150,8 +150,8 @@ export type Row = {
   };
   /** The queue's wake turn, as the one quiet line it waits under (its first line, and the whole text). */
   queueWake?: { line: string; text: string };
-  /** A steering note the plan cannot hold, drawn under the message it was sent as. */
-  steerNote?: SteerNote;
+  /** A queued app notice (pull request news, a workflow's end): the divider it will be once delivered. */
+  queueNotice?: { line: string };
   /** A queued row a steer just took: it is gliding out of the stack on its way to the transcript. */
   leaving?: QueuedPrompt;
   /** Resume, under a queue a stopped or failed turn held. */
@@ -220,6 +220,48 @@ function useTurnSettle(threadId: string, running: boolean, endId: string | undef
  * nothing) take no room: nothing mounts to measure them, so an estimate above zero would push every
  * row below it down and leave a blank strip at the end of the scroll.
  */
+
+/**
+ * What waits at the end of a thread, as rows: the one quiet line a wake turn waits under, each queued
+ * message as a bubble (a notice the app queued, such as a pull request's news, as the divider it is
+ * once delivered), Resume under a held queue, and the rows a steer just took, still gliding out.
+ */
+export function queueRows(thread: ThreadState, links: readonly Link[]): Row[] {
+  const out: Row[] = [];
+  const queue = queueView(thread);
+  const waking = thread.queue.find((q) => q.wake);
+  if (queue.wake && waking)
+    out.push({ key: "queue-wake", queueWake: { line: queue.wake, text: waking.text } });
+  const steering = steeringOf(thread);
+  const turn = turnState(thread);
+  // Notices and messages keep the order they will run in; a notice is a divider line, not a bubble.
+  let messageIndex = 0;
+  for (const q of thread.queue) {
+    if (q.wake) continue;
+    if (isQueuedNotice(q)) {
+      out.push({ key: `queued-${q.id}`, queueNotice: { line: noticeLine(q.text) } });
+      continue;
+    }
+    out.push({
+      key: `queued-${q.id}`,
+      queued: {
+        item: q,
+        index: messageIndex++,
+        count: queue.messages.length,
+        held: queue.held,
+        steering,
+        turn,
+        from: q.link ? links.find((l) => l.id === q.link)?.orchestratorTitle : undefined,
+      },
+    });
+  }
+  if (queue.resumable)
+    out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
+  // Rows a steer just took keep the stack's place while they glide up toward the transcript.
+  for (const item of thread.departing ?? []) out.push({ key: `leaving-${item.id}`, leaving: item });
+  return out;
+}
+
 /** Whether the reader has text marked: following the stream would scroll it away. */
 function selecting(): boolean {
   const s = window.getSelection();
@@ -236,7 +278,7 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (row.queued) return 96;
   if (row.resume) return 30;
   if (row.branch) return 24;
-  if (row.queueWake) return 26;
+  if (row.queueWake || row.queueNotice) return 26;
   // The turn's own lines: `Working for 12s` is `h-[34px]` over its hairline, and the live activity
   // is `min-h-6`. Left at a generic 24 they measured 39px taller a frame after mounting, and the
   // pinned view took that back in one step — the message just sent jumped with it.
@@ -670,37 +712,9 @@ export function Transcript({
     // What waits for the thread comes after all of it: its queued messages, the one quiet line a
     // wake turn waits under, and Resume when a stopped or failed turn held them. They scroll with
     // the transcript, and the pinned view follows them like any other row.
-    const queue = queueView(thread);
-    const waking = thread.queue.find((q) => q.wake);
-    if (queue.wake && waking)
-      out.push({ key: "queue-wake", queueWake: { line: queue.wake, text: waking.text } });
-    const steering = steeringOf(thread);
-    const turn = turnState(thread);
-    queue.messages.forEach((q, i) => {
-      out.push({
-        key: `queued-${q.id}`,
-        queued: {
-          item: q,
-          index: i,
-          count: queue.messages.length,
-          held: queue.held,
-          steering,
-          turn,
-          from: q.link ? links.find((l) => l.id === q.link)?.orchestratorTitle : undefined,
-        },
-      });
-    });
-    if (queue.resumable)
-      out.push({ key: "queue-resume", resume: { threadId: thread.id, count: queue.messages.length } });
-    // Rows a steer just took keep the stack's place while they glide up toward the transcript.
-    for (const item of thread.departing ?? []) out.push({ key: `leaving-${item.id}`, leaving: item });
-    // A steering note the plan does not hold says where it took effect, under the message it was
-    // sent as. It is its own row, outside the turn's fold, so it stays readable once that folds.
-    for (const note of steerMarks(thread.steers, thread.plan).inline) {
-      const at = out.findIndex((r) => r.item?.id === note.id);
-      if (at >= 0) out.splice(at + 1, 0, { key: `steer-${note.id}`, steerNote: note });
-      else out.push({ key: `steer-${note.id}`, steerNote: note });
-    }
+    out.push(...queueRows(thread, links));
+    // A steering note the plan does not hold is not drawn again here: the message it was sent as
+    // already says `Steered` on its own bubble, and one steer reads once.
     drawnRows.current = keepUnchangedRows(drawnRows.current, out);
     return drawnRows.current;
   }, [
@@ -1339,8 +1353,6 @@ export function Transcript({
                         steers={row.plan.steers}
                         clocks={row.plan.clocks}
                       />
-                    ) : row.steerNote ? (
-                      <SteerMark note={row.steerNote} />
                     ) : row.leaving ? (
                       <LeavingQueuedRow item={row.leaving} />
                     ) : row.agents ? (
@@ -1370,6 +1382,11 @@ export function Transcript({
                       // harnesses and time, the whole message in the title. Never a bubble that
                       // reads as the user's own.
                       <WakeRow text={row.queueWake.text} flat />
+                    ) : row.queueNotice ? (
+                      <NoticeRow
+                        flat
+                        item={{ kind: "notice", id: row.key, text: row.queueNotice.line, tone: "info" }}
+                      />
                     ) : row.resume ? (
                       <ResumeQueueRow threadId={row.resume.threadId} count={row.resume.count} />
                     ) : row.working ? (

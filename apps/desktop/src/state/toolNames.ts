@@ -305,3 +305,25 @@ export function runIdOf(output: string | undefined): string | undefined {
   const match = /"run_id"\s*:\s*"(wf-[a-z0-9-]+)"/.exec(output);
   return match?.[1];
 }
+
+/** The `<tool_use_error>` tags a harness wraps a failed call's text in: the reader never needs them. */
+const TOOL_ERROR_TAG = /<\/?tool_use_error>/g;
+
+/** What a harness printed for a call, with its error wrapper taken off. */
+export function unwrapToolError(output: string | undefined): string | undefined {
+  if (output === undefined) return undefined;
+  return output.replace(TOOL_ERROR_TAG, "").trim();
+}
+
+/**
+ * Why a call failed, as one line for its row: the first line of what it printed, unwrapped. A harness
+ * says `Error calling tool (name):` and nothing after it when the tool gave it no reason; that is
+ * said plainly instead of leaving the row's reason empty.
+ */
+export function failureReason(output: string | undefined, max = 120): string {
+  const first = (unwrapToolError(output) ?? "").split("\n").find((line) => line.trim()) ?? "";
+  const line = first.trim();
+  if (!line) return "";
+  const bare = /^Error calling tool(?: \([^)]*\))?:?$/i.test(line);
+  return bare ? "The tool gave no reason" : clip(line, max);
+}

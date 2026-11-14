@@ -339,6 +339,26 @@ export const isContinueMessage = (text: string) =>
   text.includes(PULL_MARK) ||
   text.includes(WORKFLOW_MARK);
 
+/** Every hidden origin marker (`<!-- rustcode:pull -->`, wake, continued, resumed, workflow). */
+const ORIGIN_MARKS = /\s*<!-- rustcode:[a-z-]+ -->/g;
+
+/** A message's text without its hidden origin markers: they are for history, never for the eye. */
+export const stripMarks = (text: string) => text.replace(ORIGIN_MARKS, "").trim();
+
+/**
+ * A queued app notice (a pull request's news, a workflow's end, a continue or resume prompt) as the
+ * line its notice row shows: the first line, with no marker. A queued one reads like the delivered one.
+ */
+export const noticeLine = (text: string) => wakeLine(stripMarks(text));
+
+/**
+ * Whether a tool row's call is still in flight: it has not answered and its turn still runs. A turn
+ * that ended (or a thread replayed from history) leaves no call in flight, so a row that never got
+ * its answer settles instead of spinning for good.
+ */
+export const toolInFlight = (status: ToolStatus | undefined, turnRunning: boolean) =>
+  turnRunning && (status === "pending" || status === "in_progress");
+
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
 

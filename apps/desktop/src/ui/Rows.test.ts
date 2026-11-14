@@ -107,3 +107,40 @@ describe("a call's detail", () => {
     expect(detail({ ...item, input: undefined })).toContain("No output");
   });
 });
+
+describe("a tool row whose call is over (issue 3711)", () => {
+  const open = call([{ status: "in_progress" }], false);
+
+  test("spins while its turn runs, and settles when no call is in flight", () => {
+    expect(spinners(drawn(open))).toBe(1);
+    // The thread is not running: nothing is in flight, so the row does not spin for good.
+    const idle = renderToStaticMarkup(
+      createElement(ToolRow, { item: open, cwd: "/p", threadId: "no-such-thread" }),
+    );
+    expect(spinners(idle)).toBe(0);
+  });
+
+  test("a failed call says why, with the harness's error wrapper taken off", () => {
+    const failed = call(
+      [
+        {
+          status: "failed",
+          content: [
+            {
+              type: "content",
+              content: {
+                type: "text",
+                text: "<tool_use_error>Error calling tool (mcp__rustcode__start_session): </tool_use_error>",
+              },
+            },
+          ],
+        },
+      ],
+      false,
+    );
+    const markup = drawn(failed);
+    expect(markup).not.toContain("tool_use_error");
+    expect(markup).toContain("The tool gave no reason");
+    expect(detail(failed)).not.toContain("tool_use_error");
+  });
+});
