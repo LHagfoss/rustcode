@@ -88,7 +88,7 @@ fn view_file_schema() -> Value {
 
 pub const VIEW_FILE: Tool = Tool {
     name: "view_file",
-    description: "Return exact numbered file text for an inclusive 1-indexed line range, or list a directory; output is never summarized. Reads have an 800-line hard cap; request targeted follow-up ranges for more. outline=true instead returns a bounded Markdown heading outline with section ranges to expand, paged by outline_offset/outline_limit; start_line, end_line and content_offset are then ignored. An outline is partial and never counts as a complete read.",
+    description: "Read exact numbered text (inclusive 1-based range; 800-line cap) or list a directory. Page targeted ranges. outline=true gives a partial Markdown outline with section ranges, paged by outline_offset/outline_limit; ignores start_line/end_line/content_offset. Outlines are not complete reads.",
     arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional ordinary-read start line, 1-indexed (default 1); ignored when outline=true", "end_line": "optional ordinary-read end line, 1-indexed (each call is capped at 800 lines; request targeted follow-up ranges for more content); ignored when outline=true", "content_offset": "optional ordinary-read byte offset; ignored when outline=true", "outline": "optional true to return a bounded Markdown heading outline only", "outline_offset": "optional zero-based offset for the next heading page; used only when outline=true", "outline_limit": "optional number of headings per page, 1 to 100 (default 50); used only when outline=true"}"#,
     handler: view_file_tool,
     requires_confirmation: false,

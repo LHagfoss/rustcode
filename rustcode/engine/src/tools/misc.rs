@@ -69,7 +69,7 @@ fn manage_scheduled_jobs_schema() -> Value {
 
 pub const MANAGE_SCHEDULED_JOBS: Tool = Tool {
     name: "manage_scheduled_jobs",
-    description: "Create and manage durable scheduled jobs in the RustCode daemon, which must already be running. Each schedule kind and action type needs its own fields: daily hour, minute and timezone; monthly also day; cron expression and timezone; once at; mcp_call server, tool and workspace; prompt prompt and workspace; shell_command command, working_directory and timeout_seconds; poll action, interval_seconds, max_runs and deadline_seconds. The daemon reports any a call left out.",
+    description: "Manage durable jobs; daemon must be running. Required fields by kind/type: daily hour/minute/timezone; monthly adds day; cron expression/timezone; once at; mcp_call server/tool/workspace; prompt prompt/workspace; shell_command command/working_directory/timeout_seconds; poll action/interval_seconds/max_runs/deadline_seconds. Missing fields are reported.",
     arguments: r#"{"operation":"create|list|pause|resume|run|history|delete", "job_id":"required for job operations", "id":"required for create", "name":"required for create", "workspace":"required for create", "schedule":{"kind":"daily|monthly|cron|once",...}, "action":{"type":"mcp_call|prompt|shell_command|poll",...}, "limit":50}"#,
     handler: manage_scheduled_jobs,
     requires_confirmation: true,
@@ -396,7 +396,7 @@ pub const READ_SESSION: Tool = Tool {
 
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
-    description: "Start a new thread with prompt as its first message, on another harness, model or named account if given, in its own worktree by default. Without `standalone` it is a delegate: a sub-task whose result you need, and it returns a link_id for `wait_session`. `standalone: true` starts a thread of the user's own at the top level instead; nothing is delivered back, so name the session_id to the user. Pass `machine` (from list_machines) to start it on another computer. Pass the whole task as prompt: the new thread does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. The user approves in the app, where the harness, account, model and effort are shown, so choose sensible ones and call it rather than asking first. `preset` is a saved delegate preset (list_harnesses); your arguments override it.",
+    description: "Start a thread with prompt, optional harness/model/account, and its own worktree by default. Returns a delegate link_id for wait_session; standalone:true instead creates a top-level user thread with no result delivery: report its session_id. machine from list_machines selects another computer. The thread sees no conversation: include the whole task, AGENTS.md rules, acceptance criteria and command timeouts (no TTY or default timeout). Call directly with sensible harness/account/model/effort; the app asks approval showing them. preset from list_harnesses supplies defaults; explicit arguments override.",
     arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -3727,7 +3727,7 @@ fn browser_unavailable(_: &Value) -> Result<String, String> {
 
 pub const REQUEST_SECRET: Tool = Tool {
     name: crate::orchestration::secret::TOOL_NAME,
-    description: "Ask for a credential in a private card, never in chat. Stores NAME in an untracked workspace dotenv file. Returns only confirmation, never the value. Never read or print the destination file.",
+    description: "Request a credential privately, never in chat. Save NAME to an untracked workspace dotenv file; return confirmation only. Never read or print the file.",
     arguments: r#"{"name":"API_KEY","reason":"Deploy the service","destination":".env.local"}"#,
     handler: ask_user_question_unavailable,
     requires_confirmation: false,
