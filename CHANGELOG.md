@@ -1,3 +1,30 @@
+## [v1.35.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.35.0) - 2026-11-14
+
+### Features
+- Linked pull request updates reach their thread while the app runs, even when another RustCode process checks GitHub, and show as a notice instead of a message from you. (#3677)
+- The desktop app binary is about 11 MB smaller. (#3678)
+- Record external tool-call duration and command names for direct command-time queries. (#3682)
+- The composer's usage meter and limits now refresh on their own every three minutes, without sending a message. (#3681)
+- Tab and Shift+Tab now respect the "Tab moves focus between controls" setting in Settings, the side panel and in-chat views. (#3680)
+- Settings buttons, fields and toggles are slightly shorter, so the pages are more compact. (#3684)
+- Fix Codex WebSocket reconnects caused by stale inherited certificate-directory settings. (#3685)
+- Require account-specific approval before delegates can spend a different named login's usage. (#3686)
+- Add a smaller Linux system-WebKitGTK tarball with in-app updates for Arch and other distributions providing WebKitGTK 4.1. (#3692)
+- Connect over SSH can now give both computers access to each other (Both ways), and Environments shows and revokes each direction separately. (#3693)
+- Outside agents connected to RustCode can now search threads and list projects. (#3689)
+- Automatically notify threads about their newly created PR's checks and let them hand off an approved merge without holding their turn. (#3691)
+- Keep cleaned delegates settled, restore access to retained history, and allow cleanup after desktop checks generate Tauri schemas. (#3695)
+- The delegates a thread started now show as one collapsed line above the composer, with Open and Stop per delegate when opened. (#3694)
+- Add a localhost HTTP MCP endpoint with OAuth discovery, S256 PKCE and scoped, expiring, revocable outside-agent access. (#3697)
+- Outside agents can fan out, interrupt, merge, clean up and rename or pin threads, gated by their access level and recorded in the audit. (#3698)
+- Show a copyable outside-agent HTTP URL in Settings and preserve its localhost port across restarts. (#3699)
+- Add opt-in isolated browser tools with domain restrictions and RustCode approvals. (#3700)
+- Settings › Remote access now shows which network each connected device uses and whether it is encrypted, and a new remote security guide describes the threat model. (#3701)
+- Agents can start durable workflow runs (`run_workflow`, `workflow_status`): a sandboxed script fans work out to delegate threads and a restarted run continues from its first unfinished call. (#3702)
+- Enable computer use and manage allowed browser domains from desktop Settings. (#3703)
+- Document outside-agent client setup and add HTTP OAuth interoperability regression coverage. (#3704)
+- Workflow runs now show in the app as a card in the chat and a row above the composer with Stop, and an agent can stop one with `stop_workflow`. (#3706)
+- `rustcode machines list` shows each connected machine's network and whether it is encrypted, and the app notes when a machine moves to another network (for example "Now on LAN · Unencrypted"). (#3705)
 ## [v1.34.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.34.2) - 2026-11-13
 
 ### Features
