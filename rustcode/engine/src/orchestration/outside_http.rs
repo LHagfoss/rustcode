@@ -26,6 +26,8 @@ struct Code {
 }
 struct Server {
     base: String,
+    settings: outside::Settings,
+    runner: Arc<dyn outside::Runner>,
     codes: Mutex<HashMap<String, Code>>,
     slots: Arc<tokio::sync::Semaphore>,
 }
@@ -87,6 +89,8 @@ pub async fn ensure() -> Result<String, String> {
         );
         let server = Arc::new(Server {
             base: base.clone(),
+            settings: outside::Settings::machine().ok_or("configuration unavailable")?,
+            runner: Arc::new(outside::EngineRunner),
             codes: Mutex::new(HashMap::new()),
             slots: Arc::new(tokio::sync::Semaphore::new(32)),
         });
@@ -289,10 +293,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                     && get("grant_type") == "authorization_code"
                     && pkce(get("code_verifier"), &c.challenge)
             }) {
-                match outside::grant_path()
-                    .ok_or("configuration unavailable".to_owned())
-                    .and_then(|p| outside::create_http(&p, &code.client, code.scope))
-                {
+                match outside::create_http(&server.settings.grants, &code.client, code.scope) {
                     Ok((_, token)) => {
                         json!({"access_token":token,"token_type":"Bearer","expires_in":3600,"scope":code.scope.as_str()})
                     }
@@ -312,9 +313,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                 .get("authorization")
                 .and_then(|v| v.strip_prefix("Bearer "))
                 .unwrap_or("");
-            if !outside::grant_path()
-                .is_some_and(|p| outside::authenticate_transport_at(&p, token, true).is_some())
-            {
+            if outside::authenticate_transport_at(&server.settings.grants, token, true).is_none() {
                 status = 401;
                 extra = format!(
                     "WWW-Authenticate: Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\"\r\n",
@@ -353,8 +352,8 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                                     outside: true,
                                 };
                                 let answer = outside::answer_transport_with(
-                                    &outside::Settings::machine().unwrap(),
-                                    &outside::EngineRunner,
+                                    &server.settings,
+                                    server.runner.as_ref(),
                                     request,
                                     &CancellationToken::new(),
                                     true,
@@ -448,3 +447,7 @@ mod tests {
         assert!(outside::authenticate_transport_at(&path, &token, true).is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "outside_http_interop.rs"]
+mod interop;
