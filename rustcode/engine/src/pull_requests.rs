@@ -117,6 +117,22 @@ pub struct InlineComment {
     /// The comment this one answers, in the same conversation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<u64>,
+    /// `RIGHT` for a line of the pull request's version, `LEFT` for the base's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side: Option<String>,
+}
+
+/// One review conversation: a line comment and its replies, and whether it
+/// was resolved. Its first comment names it in `review_comments`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewThread {
+    /// The provider's id for the conversation, which a reply or a resolve names.
+    pub id: String,
+    pub resolved: bool,
+    pub outdated: bool,
+    /// The id of the conversation's first comment.
+    pub root_comment: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -135,6 +151,9 @@ pub struct PullDetail {
     /// Why the line comments could not be read; the rest of the detail stands.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_comments_error: Option<String>,
+    /// The conversations the line comments make, with their resolved state;
+    /// empty when they could not be read.
+    pub review_threads: Vec<ReviewThread>,
 }
 
 /// Why the pull requests could not be read, said so the app can show it.
@@ -201,7 +220,25 @@ pub async fn view(cwd: &Path, number: u64) -> Result<PullDetail, PullError> {
     let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments");
     let view_args = ["pr", "view", &number, "--json", VIEW_FIELDS];
     let comment_args = ["api", "--paginate", "--jq", ".[]", &endpoint];
-    let (value, lines) = tokio::join!(gh_json(cwd, &view_args), gh(cwd, &comment_args, None),);
+    let number_field = format!("number={number}");
+    let query_field = format!("query={REVIEW_THREADS_QUERY}");
+    let thread_args = [
+        "api",
+        "graphql",
+        "-F",
+        "owner={owner}",
+        "-F",
+        "name={repo}",
+        "-F",
+        &number_field,
+        "-f",
+        &query_field,
+    ];
+    let (value, lines, threads) = tokio::join!(
+        gh_json(cwd, &view_args),
+        gh(cwd, &comment_args, None),
+        gh_json(cwd, &thread_args),
+    );
     let mut detail = detail(&value?).ok_or_else(|| PullError {
         code: "failed",
         message: "gh answered without a pull request".to_owned(),
@@ -210,7 +247,43 @@ pub async fn view(cwd: &Path, number: u64) -> Result<PullDetail, PullError> {
         Ok(output) => detail.review_comments = inline_comments(&String::from_utf8_lossy(&output)),
         Err(error) => detail.review_comments_error = Some(error.message),
     }
+    // Without the conversations the comments still read, only unresolved.
+    if let Ok(threads) = threads {
+        detail.review_threads = review_threads(&threads);
+    }
     Ok(detail)
+}
+
+/// The pull request's review conversations: resolved and outdated state and
+/// the database id of each one's first comment, which the REST comments carry.
+const REVIEW_THREADS_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:1){nodes{databaseId}}}}}}}";
+
+/// The conversations in a `reviewThreads` GraphQL answer; one without a
+/// first comment is skipped.
+pub(crate) fn review_threads(value: &Value) -> Vec<ReviewThread> {
+    value
+        .pointer("/data/repository/pullRequest/reviewThreads/nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|node| {
+            let root_comment = node
+                .pointer("/comments/nodes/0/databaseId")
+                .and_then(Value::as_u64)?;
+            Some(ReviewThread {
+                id: text(node, "id"),
+                resolved: node
+                    .get("isResolved")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                outdated: node
+                    .get("isOutdated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                root_comment,
+            })
+        })
+        .collect()
 }
 
 /// The line comments `gh api --paginate --jq '.[]'` printed, one JSON object
@@ -242,6 +315,7 @@ pub(crate) fn inline_comments(output: &str) -> Vec<InlineComment> {
                 body: text(&comment, "body"),
                 url: Some(text(&comment, "html_url")).filter(|url| !url.is_empty()),
                 reply_to: comment.get("in_reply_to_id").and_then(Value::as_u64),
+                side: Some(text(&comment, "side")).filter(|side| side == "LEFT" || side == "RIGHT"),
             }
         })
         .collect();
@@ -1313,6 +1387,7 @@ pub(crate) fn detail(value: &Value) -> Option<PullDetail> {
         activity,
         review_comments: Vec::new(),
         review_comments_error: None,
+        review_threads: Vec::new(),
         summary,
     })
 }
@@ -1450,6 +1525,31 @@ mod tests {
         let json = serde_json::to_value(second).unwrap();
         assert_eq!(json["replyTo"], 1);
         assert_eq!(json["url"], "https://gh/c/2");
+    }
+
+    #[test]
+    fn review_threads_carry_resolved_state_and_their_first_comment() {
+        let answer = json!({"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [
+            {"id": "PRRT_1", "isResolved": true, "isOutdated": false,
+             "comments": {"nodes": [{"databaseId": 101}]}},
+            {"id": "PRRT_2", "isResolved": false, "isOutdated": true,
+             "comments": {"nodes": [{"databaseId": 102}]}},
+            {"id": "PRRT_3", "isResolved": false, "comments": {"nodes": []}},
+        ]}}}}});
+        let threads = review_threads(&answer);
+        assert_eq!(threads.len(), 2);
+        assert_eq!(
+            (
+                threads[0].id.as_str(),
+                threads[0].resolved,
+                threads[0].root_comment
+            ),
+            ("PRRT_1", true, 101)
+        );
+        assert!(threads[1].outdated && !threads[1].resolved);
+        let json = serde_json::to_value(&threads[0]).unwrap();
+        assert_eq!(json["rootComment"], 101);
+        assert!(review_threads(&json!({"errors": []})).is_empty());
     }
 
     fn check(name: &str, status: &'static str) -> Check {

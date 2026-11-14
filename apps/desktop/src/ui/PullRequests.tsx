@@ -30,14 +30,7 @@ import { Method } from "../acp/types";
 import { useIntentRest } from "../lib/intent";
 import { openExternal } from "../lib/native";
 import { count } from "../lib/plural";
-import {
-  appendToDraft,
-  type FeedbackItem,
-  feedbackItems,
-  feedbackLocation,
-  formatReviewFeedback,
-  keepSelected,
-} from "../lib/reviewFeedback";
+import { type FeedbackItem, feedbackItems, feedbackLocation, keepSelected } from "../lib/reviewFeedback";
 import {
   PULL_LIMIT,
   type PullListState,
@@ -68,6 +61,7 @@ import {
 import { relativeAge } from "../state/thread";
 import { splitThreadKey, threadKey } from "../state/threadKeys";
 import { Markdown } from "./Markdown";
+import { addFeedbackToThread, PullDiff } from "./PullDiff";
 import {
   Callout,
   Cluster,
@@ -211,24 +205,6 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullRequest; onD
   );
 }
 
-/**
- * Puts `items` into the open thread's composer, after what it already holds,
- * and puts the caret at its end. The user reads, edits and sends it.
- */
-function addFeedbackToThread(items: readonly FeedbackItem[], pull: PullRequest) {
-  if (items.length === 0) return;
-  const key = useApp.getState().selectedId ?? "new";
-  const draft = useApp.getState().drafts[key] ?? "";
-  setDraft(key, appendToDraft(draft, formatReviewFeedback(items, pull)));
-  requestAnimationFrame(() => {
-    const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');
-    if (!field) return;
-    field.focus();
-    field.setSelectionRange(field.value.length, field.value.length);
-  });
-  toast(`Added ${count(items.length, "comment")} to the composer`, "success");
-}
-
 function FeedbackCard({
   item,
   checked,
@@ -352,6 +328,7 @@ function PullView({
   const { detail, summary, error, live } = usePullDetail(cwd, number);
   const [reviewing, setReviewing] = useState(false);
   const [working, setWorking] = useState(false);
+  const [tab, setTab] = useState<"overview" | "diff">("overview");
   const askAgent = (pull: PullRequest) => {
     startNewThread(cwd, host || undefined);
     setDraft(
@@ -419,7 +396,25 @@ function PullView({
         <PullSkeleton />
       )}
       {error && summary && <ErrorView error={error} />}
-      {detail && (
+      {summary && (
+        <div className="mt-3">
+          <Segments
+            label="Pull request view"
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: "overview", label: "Overview" },
+              { value: "diff", label: `Diff · ${summary.changedFiles}` },
+            ]}
+          />
+        </div>
+      )}
+      {tab === "diff" && summary && (
+        <div className="mt-3">
+          <PullDiff cwd={cwd} pull={summary} detail={detail} />
+        </div>
+      )}
+      {tab === "overview" && detail && (
         <>
           {detail.body && (
             <div className="mt-3 rounded-lg bg-fill-subtle p-3">

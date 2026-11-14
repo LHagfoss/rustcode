@@ -165,6 +165,17 @@ export interface PullDetail extends PullRequest {
   reviewComments: PullLineComment[];
   /** Why the line comments could not be read, when they could not. */
   reviewCommentsError?: string;
+  /** The conversations the line comments make, with their resolved state; empty when unread. */
+  reviewThreads: PullReviewThread[];
+}
+
+/** One review conversation, named by its first comment's id. */
+export interface PullReviewThread {
+  /** The provider's id, which a reply or a resolve names. */
+  id: string;
+  resolved: boolean;
+  outdated: boolean;
+  rootComment: number;
 }
 
 /** One review comment on a line of the diff. */
@@ -181,6 +192,8 @@ export interface PullLineComment {
   body: string;
   url?: string;
   replyTo?: number;
+  /** `RIGHT` for the pull request's version of the line, `LEFT` for the base's. */
+  side?: "LEFT" | "RIGHT";
 }
 
 export interface PullError {
@@ -374,10 +387,24 @@ export function parsePullDetail(result: Json | undefined): PullDetail | null {
           body: str(o.body) ?? "",
           url: str(o.url),
           replyTo: num(o.replyTo),
+          ...(o.side === "LEFT" || o.side === "RIGHT" ? { side: o.side } : {}),
         },
       ];
     }),
     reviewCommentsError: str(p.reviewCommentsError),
+    reviewThreads: arr(p.reviewThreads).flatMap((t) => {
+      const o = obj(t);
+      const rootComment = num(o?.rootComment);
+      if (!o || rootComment === undefined) return [];
+      return [
+        {
+          id: str(o.id) ?? "",
+          resolved: bool(o.resolved) ?? false,
+          outdated: bool(o.outdated) ?? false,
+          rootComment,
+        },
+      ];
+    }),
   };
 }
 
