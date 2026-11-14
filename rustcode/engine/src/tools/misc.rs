@@ -1293,6 +1293,19 @@ pub const WORKFLOW_STATUS: Tool = Tool {
     safety: ToolSafety::ReadOnly,
 };
 
+/// Stop a workflow run (#3394): no further agent() call starts and its
+/// running workers are interrupted.
+pub const STOP_WORKFLOW: Tool = Tool {
+    name: crate::workflow::STOP_TOOL_NAME,
+    description: "Stop a workflow run started with run_workflow: its script ends, no further agent() call starts, and the worker threads still running are interrupted. The run becomes cancelled and keeps the calls it had finished. Answers with the run's state.",
+    arguments: r#"{"run_id": "wf-19b2c3d4e5f-0a1b2c3d"}"#,
+    handler: workflow_unavailable,
+    requires_confirmation: false,
+    schema: crate::workflow::stop_schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 fn workflow_unavailable(_args: &Value) -> Result<String, String> {
     Err(
         "error: workflows are run by the rustcode MCP server; this thread does not have it"

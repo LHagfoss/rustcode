@@ -2113,6 +2113,9 @@ export class MockEngine {
     "limit-fallback": false,
     "limit-fallback-map": [],
     "wake-batch-seconds": 60,
+    "workflow-concurrency": 3,
+    "workflow-call-budget": 40,
+    "workflow-timeout-minutes": 60,
   };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
@@ -3370,6 +3373,15 @@ export class MockEngine {
         }
         return { watches: [watch] };
       }
+      case "_rustcode/workflows/list":
+        return { runs: [] };
+      case "_rustcode/workflows/stop":
+        // The mock has no runs of its own: a staged run (state/workflows.ts) is simply stopped.
+        return {
+          run: { run_id: str(obj(params)?.runId) ?? "", status: "cancelled", finished_at: Date.now() },
+        };
+      case "_rustcode/workflows/wake":
+        return { claimed: false };
       case "_rustcode/environment/sync":
         return this.environmentSync(obj(params) ?? {});
       case "_rustcode/pulls":
@@ -5732,6 +5744,9 @@ export class MockMachine {
       "limit-fallback": false,
       "limit-fallback-map": [],
       "wake-batch-seconds": 60,
+      "workflow-concurrency": 3,
+      "workflow-call-budget": 40,
+      "workflow-timeout-minutes": 60,
     };
     this.skills = [
       {

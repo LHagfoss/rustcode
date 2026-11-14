@@ -426,6 +426,15 @@ async fn workflow_call(
     let outcome = if request.tool == crate::workflow::RUN_TOOL_NAME {
         let runner = crate::workflow::ThreadRunner::new(&request.session_id, client, version);
         crate::workflow::start(&request.session_id, runner, &request.args)
+    } else if request.tool == crate::workflow::STOP_TOOL_NAME {
+        let run_id = request
+            .args
+            .get("run_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        crate::workflow::stop(&request.session_id, run_id, true)
+            .await
+            .map(|answer| answer.to_string())
     } else {
         crate::workflow::status(&request.session_id, &request.args, cancel).await
     };

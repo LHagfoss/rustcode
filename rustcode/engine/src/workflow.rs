@@ -10,10 +10,12 @@
 //! restart replays what it had and continues from the first call it had not
 //! finished ([`run`]).
 //!
-//! The agent starts and reads a run with two tools the `rustcode` MCP server
-//! offers, `run_workflow` and `workflow_status`; the engine's hub answers both
-//! ([`start`], [`status`]). This slice has no app UI: a run card, a status row
-//! and a run panel come next.
+//! The agent starts, reads and stops a run with three tools the `rustcode` MCP
+//! server offers, `run_workflow`, `workflow_status` and `stop_workflow`; the
+//! engine's hub answers them ([`start`], [`status`], [`stop`]). The app shows a
+//! run from the same record: every change is announced ([`changes`]) and the
+//! app reads a run's summary ([`run_summary`]), stops it and claims the one
+//! wake that tells the starting thread it ended ([`claim_wake`]).
 
 mod reply;
 mod run;
@@ -21,7 +23,7 @@ mod sandbox;
 mod store;
 mod threads;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -34,9 +36,10 @@ pub(crate) use self::threads::ThreadRunner;
 
 pub(crate) const RUN_TOOL_NAME: &str = "run_workflow";
 pub(crate) const STATUS_TOOL_NAME: &str = "workflow_status";
-pub(crate) const TOOL_NAMES: [&str; 2] = [RUN_TOOL_NAME, STATUS_TOOL_NAME];
+pub(crate) const STOP_TOOL_NAME: &str = "stop_workflow";
+pub(crate) const TOOL_NAMES: [&str; 3] = [RUN_TOOL_NAME, STATUS_TOOL_NAME, STOP_TOOL_NAME];
 
-/// Whether `name` is one of the two workflow tools.
+/// Whether `name` is one of the workflow tools.
 pub(crate) fn is_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
 }
@@ -56,6 +59,9 @@ const LISTED_RUNS: usize = 20;
 const STATUS_LOG_LINES: usize = 20;
 /// How often `workflow_status` re-reads a run it waits on.
 const STATUS_POLL: Duration = Duration::from_millis(500);
+/// How long a stop waits for the run to wind down (its workers are
+/// interrupted first) before answering that it is stopping.
+const STOP_WAIT: Duration = Duration::from_secs(15);
 
 /// The limits when the user has not set any, and the most any may be set to.
 /// The settings are `workflow-concurrency`, `workflow-call-budget` and
@@ -132,6 +138,17 @@ pub(crate) fn status_schema() -> Value {
     })
 }
 
+pub(crate) fn stop_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "run_id": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The run to stop, from run_workflow or workflow_status"}
+        },
+        "required": ["run_id"],
+        "additionalProperties": false
+    })
+}
+
 /// Check a workflow tool's arguments before anything runs.
 pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
     let known: &[&str] = match tool {
@@ -144,6 +161,7 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
             "timeout_minutes",
         ],
         STATUS_TOOL_NAME => &["run_id", "wait_ms"],
+        STOP_TOOL_NAME => &["run_id"],
         _ => return Err(format!("{tool} is not a workflow tool")),
     };
     let Some(map) = args.as_object() else {
@@ -161,6 +179,12 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
             },
         }
     };
+    if tool == STOP_TOOL_NAME {
+        return match map.get("run_id") {
+            Some(Value::String(id)) if store::valid_run_id(id) => Ok(()),
+            _ => Err("run_id must be a run id from run_workflow or workflow_status".to_owned()),
+        };
+    }
     if tool == STATUS_TOOL_NAME {
         match map.get("run_id") {
             None | Some(Value::Null) => {}
@@ -227,24 +251,49 @@ fn named_script(thread: &str, name: &str) -> Result<String, String> {
     Ok(script)
 }
 
-/// The runs this process is driving, by id.
-static ACTIVE: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+/// The runs this process is driving, by id, with what stops each.
+static ACTIVE: LazyLock<Mutex<HashMap<String, CancellationToken>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn active(id: &str) -> bool {
     ACTIVE
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .contains(id)
+        .contains_key(id)
+}
+
+/// A run that changed: a phase began, a worker started or ended, a log line
+/// was added, or the run ended.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Change {
+    pub thread: String,
+    pub run_id: String,
+}
+
+static CHANGES: LazyLock<tokio::sync::broadcast::Sender<Change>> =
+    LazyLock::new(|| tokio::sync::broadcast::channel(512).0);
+
+/// What the app listens to: one [`Change`] each time a run's record moves.
+pub(crate) fn changes() -> tokio::sync::broadcast::Receiver<Change> {
+    CHANGES.subscribe()
+}
+
+fn announce(thread: &str, run_id: &str) {
+    // Nobody listening is not an error: no app is open.
+    let _ = CHANGES.send(Change {
+        thread: thread.to_owned(),
+        run_id: run_id.to_owned(),
+    });
 }
 
 /// Drive `record`'s run in the background until it ends.
 fn spawn(store: Store, runner: Arc<dyn AgentRunner>, record: RunRecord, source: String) {
     let id = record.id.clone();
+    let run = Run::new(store, runner, record);
     ACTIVE
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .insert(id.clone());
-    let run = Run::new(store, runner, record);
+        .insert(id.clone(), run.stopper());
     tokio::spawn(async move {
         drive(run, source).await;
         ACTIVE
@@ -293,6 +342,7 @@ pub(crate) fn start(
     let limits = lowered(settings_limits(), args);
     let script_args = args.get("args").cloned().unwrap_or(Value::Null);
     let id = launch(store, runner, thread, name, source, script_args, limits)?;
+    announce(thread, &id);
     Ok(json!({
         "run_id": id,
         "status": "running",
@@ -301,7 +351,7 @@ pub(crate) fn start(
             "call_budget": limits.call_budget,
             "timeout_minutes": limits.timeout_secs / 60,
         },
-        "note": "Read it with workflow_status (wait_ms waits for the end). Its workers are threads nested under this one."
+        "note": "Read it with workflow_status (wait_ms waits for the end), stop it with stop_workflow. Its workers are threads nested under this one."
     })
     .to_string())
 }
@@ -369,6 +419,10 @@ async fn status_in(
         };
         let waiting = deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline);
         if record.status.settled() || !waiting || cancel.is_cancelled() {
+            // The agent reads how it ended: its thread need not be told again.
+            if record.status.settled() {
+                mark_told(store, &record.id);
+            }
             return Ok(report(store, &record).to_string());
         }
         tokio::select! {
@@ -396,6 +450,146 @@ fn listing(store: &Store) -> Value {
         })
         .collect();
     json!({ "runs": runs })
+}
+
+/// `stop_workflow` and the app's Stop: end the run. The script stops, no
+/// further `agent()` call starts, and the workers still running are
+/// interrupted; the run is `cancelled`. Answers with the run once it has wound
+/// down, or `stopping` when that takes longer than a few seconds. A run that
+/// already ended is answered as it is.
+///
+/// `told` is whether the one who stopped it is the thread's own agent: it has
+/// the answer, so the thread is not woken for the end.
+pub(crate) async fn stop(thread: &str, run_id: &str, told: bool) -> Result<Value, String> {
+    validate(STOP_TOOL_NAME, &json!({ "run_id": run_id }))?;
+    let store = Store::for_thread(thread)
+        .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
+    let answer = stop_in(&store, run_id).await?;
+    if told && answer["status"] != json!("running") && answer.get("stopping").is_none() {
+        mark_told(&store, run_id);
+    }
+    Ok(answer)
+}
+
+async fn stop_in(store: &Store, run_id: &str) -> Result<Value, String> {
+    let Some(mut record) = store.load(run_id) else {
+        return Err(format!("no run {run_id} in this thread"));
+    };
+    if record.status.settled() {
+        return Ok(summary(store, &record));
+    }
+    let token = ACTIVE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(run_id)
+        .cloned();
+    let Some(token) = token else {
+        // A restart left it running and nothing drives it: end it on its
+        // record, so it is not picked up again. Its workers, if any are still
+        // alive, are threads the user can stop like any other.
+        record.status = RunStatus::Cancelled;
+        record.finished_at = Some(now_ms());
+        record.updated_at = now_ms();
+        record.error = Some("the run was stopped".to_owned());
+        store.save(&record)?;
+        announce(&record.thread, &record.id);
+        return Ok(summary(store, &record));
+    };
+    token.cancel();
+    let deadline = tokio::time::Instant::now() + STOP_WAIT;
+    loop {
+        if let Some(now) = store.load(run_id)
+            && now.status.settled()
+            && !active(run_id)
+        {
+            return Ok(summary(store, &now));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let mut answer = summary(store, &record);
+            answer["stopping"] = json!(true);
+            return Ok(answer);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Serializes claims, so two clients cannot both win one.
+static WAKES: Mutex<()> = Mutex::new(());
+
+/// Claim the one wake for an ended run: true for the first caller after it
+/// ended, false for a run still going and for every later caller. The app
+/// that wins tells the thread that started the run.
+pub(crate) fn claim_wake(thread: &str, run_id: &str) -> Result<bool, String> {
+    let store = Store::for_thread(thread)
+        .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
+    claim_wake_in(&store, run_id)
+}
+
+/// Record that the thread knows how the run ended, so nothing wakes it for it.
+fn mark_told(store: &Store, run_id: &str) {
+    let _claim = WAKES.lock().unwrap_or_else(|error| error.into_inner());
+    if active(run_id) {
+        return;
+    }
+    if let Some(mut record) = store.load(run_id)
+        && record.status.settled()
+        && !record.woken
+    {
+        record.woken = true;
+        if let Err(reason) = store.save(&record) {
+            crate::dbg_log!("workflow {run_id}: {reason}");
+        }
+    }
+}
+
+fn claim_wake_in(store: &Store, run_id: &str) -> Result<bool, String> {
+    let _claim = WAKES.lock().unwrap_or_else(|error| error.into_inner());
+    let Some(mut record) = store.load(run_id) else {
+        return Err(format!("no run {run_id} in this thread"));
+    };
+    if !record.status.settled() || record.woken || active(run_id) {
+        return Ok(false);
+    }
+    record.woken = true;
+    store.save(&record)?;
+    Ok(true)
+}
+
+/// A run as the app shows it: [`report`] without the result (which can be
+/// large, and is read with `workflow_status`), plus whether it has one,
+/// whether this engine drives it and whether its thread was told it ended.
+fn summary(store: &Store, record: &RunRecord) -> Value {
+    let mut answer = report(store, record);
+    if let Some(map) = answer.as_object_mut() {
+        for key in ["result", "result_truncated", "result_bytes", "result_file"] {
+            map.remove(key);
+        }
+        map.insert("thread".to_owned(), json!(record.thread));
+        map.insert("has_result".to_owned(), json!(record.result.is_some()));
+        map.insert("woken".to_owned(), json!(record.woken));
+        map.insert("driven".to_owned(), json!(active(&record.id)));
+    }
+    answer
+}
+
+/// One run of `thread` as the app shows it.
+pub(crate) fn run_summary(thread: &str, run_id: &str) -> Option<Value> {
+    let store = Store::for_thread(thread)?;
+    let record = store.load(run_id)?;
+    Some(summary(&store, &record))
+}
+
+/// The newest runs of `thread` as the app shows them.
+pub(crate) fn run_summaries(thread: &str) -> Vec<Value> {
+    let Some(store) = Store::for_thread(thread) else {
+        return Vec::new();
+    };
+    store
+        .list()
+        .iter()
+        .take(LISTED_RUNS)
+        .map(|record| summary(&store, record))
+        .collect()
 }
 
 /// A run as `workflow_status` tells it: phases, workers and the result.
@@ -775,5 +969,203 @@ mod tests {
         assert!(missing.unwrap_err().contains("no run"));
         let listed = status_in(&store, &json!({}), &cancel).await.unwrap();
         assert!(listed.contains(&record.id));
+    }
+
+    /// A runner whose workers wait until the run is stopped.
+    struct Hang {
+        started: AtomicUsize,
+        abandoned: AtomicUsize,
+    }
+
+    impl AgentRunner for Hang {
+        fn start<'a>(
+            &'a self,
+            _request: &'a WorkerRequest,
+            _cancel: &'a CancellationToken,
+        ) -> Fut<'a, Result<Worker, String>> {
+            Box::pin(async move {
+                let n = self.started.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok(Worker {
+                    session_id: format!("session-{n}"),
+                    link_id: format!("link-{n}"),
+                })
+            })
+        }
+
+        fn wait<'a>(
+            &'a self,
+            _worker: &'a Worker,
+            cancel: &'a CancellationToken,
+        ) -> Fut<'a, Result<String, String>> {
+            Box::pin(async move {
+                cancel.cancelled().await;
+                Err("the run was stopped".to_owned())
+            })
+        }
+
+        fn abandon<'a>(&'a self, _worker: &'a Worker) -> Fut<'a, ()> {
+            Box::pin(async move {
+                self.abandoned.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+    }
+
+    fn limits() -> Limits {
+        Limits {
+            concurrency: 2,
+            call_budget: 10,
+            timeout_secs: 60,
+        }
+    }
+
+    #[tokio::test]
+    async fn stopping_a_run_ends_its_script_and_interrupts_its_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let hang = Arc::new(Hang {
+            started: AtomicUsize::new(0),
+            abandoned: AtomicUsize::new(0),
+        });
+        let id = launch(
+            store.clone(),
+            hang.clone(),
+            "1784626803679",
+            None,
+            r#"
+            phase("review");
+            await parallel([() => agent("one"), () => agent("two")]);
+            await agent("never started");
+            "#
+            .to_owned(),
+            Value::Null,
+            limits(),
+        )
+        .unwrap();
+        // Both workers are running.
+        for _ in 0..200 {
+            if hang.started.load(Ordering::SeqCst) == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(hang.started.load(Ordering::SeqCst), 2);
+
+        let stopped = stop_in(&store, &id).await.unwrap();
+        assert_eq!(stopped["status"], json!("cancelled"));
+        assert_eq!(stopped["error"], json!("the run was stopped"));
+        assert_eq!(stopped["driven"], json!(false));
+        assert!(stopped.get("result").is_none());
+        // The workers it left running were interrupted, and no third call began.
+        assert_eq!(hang.abandoned.load(Ordering::SeqCst), 2);
+        assert_eq!(hang.started.load(Ordering::SeqCst), 2);
+        let record = store.load(&id).unwrap();
+        assert_eq!(record.status, RunStatus::Cancelled);
+        assert!(record.finished_at.is_some());
+        // A stopped run is not picked up by a restart.
+        let runner: Arc<dyn AgentRunner> = hang;
+        assert_eq!(resume_in(&store, &runner), 0);
+        // Stopping again answers the run as it is.
+        let again = stop_in(&store, &id).await.unwrap();
+        assert_eq!(again["status"], json!("cancelled"));
+        assert!(stop_in(&store, "wf-0-00000000").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn stopping_a_run_nothing_drives_ends_it_on_its_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let record = new_record("1784626803679", None, Value::Null, limits());
+        store.create(&record, "return 1").unwrap();
+        let stopped = stop_in(&store, &record.id).await.unwrap();
+        assert_eq!(stopped["status"], json!("cancelled"));
+        assert_eq!(store.load(&record.id).unwrap().status, RunStatus::Cancelled);
+        let (_, runner) = echo();
+        assert_eq!(resume_in(&store, &runner), 0);
+    }
+
+    #[tokio::test]
+    async fn only_one_client_claims_the_wake_of_a_run_that_ended() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let record = new_record("1784626803679", None, Value::Null, limits());
+        store.create(&record, "return 1").unwrap();
+        // Still running: nothing to wake the thread for.
+        assert!(!claim_wake_in(&store, &record.id).unwrap());
+        stop_in(&store, &record.id).await.unwrap();
+        assert!(
+            !summary(&store, &store.load(&record.id).unwrap())["woken"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(claim_wake_in(&store, &record.id).unwrap());
+        assert!(!claim_wake_in(&store, &record.id).unwrap());
+        assert!(
+            summary(&store, &store.load(&record.id).unwrap())["woken"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(claim_wake_in(&store, "wf-0-00000000").is_err());
+    }
+
+    #[tokio::test]
+    async fn every_change_of_a_run_is_announced_and_a_summary_leaves_the_result_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let mut heard = changes();
+        let (_, runner) = echo();
+        let id = launch(
+            store.clone(),
+            runner,
+            "1784626803679",
+            Some("review".to_owned()),
+            r#"phase("one"); return await agent("look");"#.to_owned(),
+            Value::Null,
+            limits(),
+        )
+        .unwrap();
+        let record = settled(&store, &id).await;
+        let mut announced = 0;
+        while let Ok(change) = heard.try_recv() {
+            if change.run_id == id {
+                assert_eq!(change.thread, "1784626803679");
+                announced += 1;
+            }
+        }
+        // The phase, the call's start and end, and the end of the run.
+        assert!(announced >= 4, "{announced}");
+        let summary = summary(&store, &record);
+        assert_eq!(summary["status"], json!("done"));
+        assert_eq!(summary["has_result"], json!(true));
+        assert_eq!(summary["thread"], json!("1784626803679"));
+        assert!(summary.get("result").is_none());
+        assert_eq!(summary["workers"][0]["state"], json!("done"));
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_read_how_a_run_ended_is_not_woken_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let record = new_record("1784626803679", None, Value::Null, limits());
+        store.create(&record, "return 1").unwrap();
+        let cancel = CancellationToken::new();
+        // Read while it runs: nothing is told yet.
+        let args = json!({"run_id": record.id});
+        status_in(&store, &args, &cancel).await.unwrap();
+        assert!(!store.load(&record.id).unwrap().woken);
+        stop_in(&store, &record.id).await.unwrap();
+        assert!(!store.load(&record.id).unwrap().woken);
+        // Read after it ended: the agent has the answer.
+        status_in(&store, &args, &cancel).await.unwrap();
+        assert!(store.load(&record.id).unwrap().woken);
+        assert!(!claim_wake_in(&store, &record.id).unwrap());
+    }
+
+    #[test]
+    fn stop_workflow_needs_a_run_id() {
+        assert!(validate(STOP_TOOL_NAME, &json!({"run_id": "wf-1-abcdef01"})).is_ok());
+        assert!(validate(STOP_TOOL_NAME, &json!({})).is_err());
+        assert!(validate(STOP_TOOL_NAME, &json!({"run_id": "../escape"})).is_err());
+        assert!(validate(STOP_TOOL_NAME, &json!({"run_id": "wf-1-abcdef01", "x": 1})).is_err());
+        assert!(is_tool(STOP_TOOL_NAME));
     }
 }

@@ -81,6 +81,10 @@ pub(super) struct RunRecord {
     pub logs: Vec<LogLine>,
     pub result: Option<Value>,
     pub error: Option<String>,
+    /// Whether the thread that started the run was told it ended: a client
+    /// claims that once (`claim_wake`), so no reconnect tells it twice.
+    #[serde(default)]
+    pub woken: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,6 +317,7 @@ mod tests {
             logs: Vec::new(),
             result: None,
             error: None,
+            woken: false,
         }
     }
 

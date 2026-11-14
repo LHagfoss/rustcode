@@ -31,6 +31,7 @@ import {
   type ServerSettingKey,
   scopeBreakdown,
   scopeValuesMixed,
+  serverSetting,
 } from "./settingsRegistry";
 import { connectionFor, errorText, type NewThreadChoice, toast, useApp } from "./store";
 import { LOCAL_HOST } from "./threadKeys";
@@ -173,6 +174,10 @@ function localValues(): Record<ServerSettingKey, Json> {
     "limit-fallback": state.limitFallback,
     "limit-fallback-map": state.limitFallbackMap as unknown as Json,
     "wake-batch-seconds": state.wakeBatchSeconds,
+    // Only ever kept on the server, like the presets: nothing app-side to migrate.
+    "workflow-concurrency": serverSetting("workflow-concurrency").default,
+    "workflow-call-budget": serverSetting("workflow-call-budget").default,
+    "workflow-timeout-minutes": serverSetting("workflow-timeout-minutes").default,
   };
 }
 

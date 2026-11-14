@@ -44,6 +44,9 @@ export const ORCHESTRATION_TOOLS = [
   "list_scheduled_tasks",
   "delete_scheduled_task",
   "run_scheduled_task_now",
+  "run_workflow",
+  "workflow_status",
+  "stop_workflow",
 ] as const;
 
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
@@ -271,6 +274,15 @@ function orchestrationLabel(
       const change = [text(args.model), text(args.effort)].filter(Boolean).join(" · ");
       return change ? { title: "Changed thread model", summary: change } : { title: "Read thread settings" };
     }
+    case "run_workflow":
+      return {
+        title: running(status) ? "Starting workflow" : "Started workflow",
+        summary: text(args.name) || undefined,
+      };
+    case "workflow_status":
+      return { title: running(status) ? "Waiting for workflow" : "Read workflow" };
+    case "stop_workflow":
+      return { title: "Stopped workflow" };
     case "fan_out": {
       const n = Array.isArray(args.harnesses) ? args.harnesses.length : 0;
       return { title: `Fanned out to ${n || 2} harnesses` };
@@ -284,5 +296,12 @@ function orchestrationLabel(
 export function sessionIdOf(output: string | undefined): string | undefined {
   if (!output) return undefined;
   const match = /"session_id"\s*:\s*"([^"]+)"/.exec(output);
+  return match?.[1];
+}
+
+/** The `run_id` a `run_workflow` call answered with, for the card that follows the run. */
+export function runIdOf(output: string | undefined): string | undefined {
+  if (!output) return undefined;
+  const match = /"run_id"\s*:\s*"(wf-[a-z0-9-]+)"/.exec(output);
   return match?.[1];
 }
