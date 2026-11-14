@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { Link } from "./orchestration";
-import { type DelegatedThread, openChain, parentOf, topLevel, userTypedPrompt } from "./topLevel";
+import {
+  type DelegatedThread,
+  noticeOnlyHistory,
+  openChain,
+  parentOf,
+  topLevel,
+  userTypedPrompt,
+} from "./topLevel";
 
 const link = (over: Partial<Link> & Pick<Link, "orchestrator" | "target">): Link => ({
   id: `${over.orchestrator}/1`,
@@ -176,5 +183,28 @@ describe("what makes a delegated thread the user's own", () => {
     expect(userTypedPrompt({ wake: true })).toBe(false);
     expect(userTypedPrompt({ link: "parent/1" })).toBe(false);
     expect(userTypedPrompt({ automatic: true })).toBe(false);
+  });
+});
+
+describe("app notices preserve delegation", () => {
+  for (const origin of ["pull", "workflow", "wake", "continued", "resumed"]) {
+    test(`${origin} notice leaves a delegate nested, including after queueing`, () => {
+      const text = `Notice\n\n<!-- rustcode:${origin} -->`;
+      const messaged = userTypedPrompt({ link: "" }, text);
+      expect(messaged).toBe(false);
+      expect(topLevel(child({ messaged }), [], known("parent", "child"))).toBe("nested");
+      expect(noticeOnlyHistory([{ kind: "user", text }])).toBe(true);
+    });
+  }
+  test("cleanup preserves real messages, mixed histories and empty histories", () => {
+    const notice = { kind: "user", text: "Merged\n<!-- rustcode:pull -->" };
+    const typed = { kind: "user", text: "Please carry on" };
+    expect(noticeOnlyHistory([notice, typed])).toBe(false);
+    const task = { kind: "user", text: "From thread “Parent” (agent):\n\nDo the task" };
+    expect(noticeOnlyHistory([task, notice])).toBe(true);
+    expect(noticeOnlyHistory([task])).toBe(false);
+    expect(noticeOnlyHistory([typed])).toBe(false);
+    expect(noticeOnlyHistory([])).toBe(false);
+    expect(userTypedPrompt({}, typed.text)).toBe(true);
   });
 });
