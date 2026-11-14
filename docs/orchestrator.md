@@ -370,7 +370,7 @@ What it does not do, and says so by name:
   (`config::save_session_access`), and reads it for the caller and for a
   message's target. `/yolo` in a terminal or
   a paired device writes the same record (on is Full, off is Ask). Only a thread
-  no client has prompted since this was kept falls back to its own `/yolo` flag, else Settings › General › Default access
+  no client has prompted since this was kept falls back to its own `/yolo` flag, else Settings › Permissions › Default access (or the project's own default)
   — and so a thread the app narrowed to Ask under a Full default can read as
   Full until its next prompt. A missing or unknown setting reads as Ask.
 - **Targets run at their own access.** A `message_session` turn runs at the
@@ -583,7 +583,7 @@ dropped-call errors the engine returns say whether the call carried a key.
 
 A thread started by an agent runs at `effectiveMode(parentAccess, defaultAccess)`
 (`state/permissions.ts`): the lower of the access of the thread that started it
-and Settings › General › Default access, which is what a new thread would get
+and Settings › Permissions › Default access (or the project's own default), which is what a new thread would get
 anyway. So a thread at Ask or Auto-edit never hands out Full access, whatever
 the default is, and the cap holds at every depth — a grandchild is capped by its
 own parent, which is already capped by the thread above it. The app sets it
@@ -1625,7 +1625,7 @@ link, no delivery back, no `wait_session` (there is no link to wait on), so an
 orchestrator names the session id to the user instead, and the thread survives
 the caller being settled or archived. It takes no delegation slot and is not
 bounded by the caller's depth, which bounds how much work one thread hands out;
-it runs at Settings › General › Default access, what a thread the user starts
+it runs at Settings › Permissions › Default access (or the project's own default), what a thread the user starts
 by hand gets. Its prompt is delivered as the user's own first message, without
 the `From thread …` header or the delegate report a child gets. The approval
 card says **New thread** rather than **Delegate**, and the grant key is the

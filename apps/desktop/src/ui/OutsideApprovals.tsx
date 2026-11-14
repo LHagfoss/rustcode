@@ -42,6 +42,10 @@ export function OutsideApprovals() {
             {item.clientName} wants to run {item.tool}
           </div>
           <div className="selectable break-words text-callout text-fg-muted">{item.summary}</div>
+          <div className="text-caption text-fg-faint">
+            An outside app is not one of your threads, so their access, Full access included, does not cover
+            it.
+          </div>
           <div className="flex justify-end gap-2">
             <Action danger onClick={() => void answerOutsideCall(item.id, false)}>
               Decline

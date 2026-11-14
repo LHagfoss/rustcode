@@ -28,7 +28,8 @@ describe("setting kinds", () => {
     expect(rowKind("appearance", "Theme")).toBe("app");
     expect(rowKind("keyboard", "Keyboard shortcuts")).toBe("app");
     expect(rowKind("general", "System notifications")).toBe("app");
-    expect(rowKind("general", "Default access")).toBe("server");
+    expect(rowKind("permissions", "Default access")).toBe("server");
+    expect(rowKind("permissions", "Projects")).toBe("app");
     expect(rowKind("agents", "Harnesses")).toBe("server");
     expect(rowKind("capabilities", "MCP servers")).toBe("server");
     expect(rowKind("connections", "GitHub")).toBe("machine");

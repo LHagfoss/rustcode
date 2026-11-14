@@ -194,6 +194,20 @@ selector; credentials, accounts, the default project folder, Remote access and
 the machines list are machine-only and shown for one machine at a time —
 credentials are never editable over a remote connection.
 
+**Permissions.** What a thread may do without asking is one of three modes:
+Ask, Auto-edit and Full access (`src/state/permissions.ts`). Settings ›
+Permissions (`src/ui/PermissionsPage.tsx`) holds the default (a server
+setting), a project's own default, the threads that picked their own mode,
+the approvals the app remembers ("Allow for 1 hour" and "Allow for This
+Thread", each revocable), and the few prompts that still come at Full access.
+A thread follows its project's default, then the default, until a mode is
+picked under its composer (the shield pill, which also offers "Use default");
+so raising the default to Full access reaches the threads already open. A
+delegate is pinned at start to the lower of its parent's mode and its
+project's default. Every control applies at once: the row and the app change
+first and the server confirms, and a machine that refuses goes back with a
+toast (`useScopedSetting` in `src/state/settingsScope.ts`).
+
 Skills and MCP servers are listed per machine under Capabilities. **Add server
 to all** adds an MCP definition to every connected machine; **Copy to ‹machine›**
 on a row copies its definition. Values of MCP environment variables and

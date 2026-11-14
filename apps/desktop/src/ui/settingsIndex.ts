@@ -35,8 +35,34 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "Access",
+    keywords: "permission mode approval full access default",
+  },
+  // ------------------------------------------------------------ Permissions
+  {
+    section: "permissions",
     title: "Default access",
-    keywords: "permission mode approval full access auto-edit read-only shield",
+    keywords: "permission mode approval full access auto-edit ask supervised shield prompt",
+  },
+  {
+    section: "permissions",
+    title: "Projects",
+    keywords: "permission access per project override folder default",
+  },
+  {
+    section: "permissions",
+    title: "Threads with their own access",
+    keywords: "permission access thread override reset use default",
+  },
+  {
+    section: "permissions",
+    title: "Remembered approvals",
+    keywords: "allow always hour thread grant revoke trusted approvals",
+  },
+  {
+    section: "permissions",
+    title: "Still asks at Full access",
+    keywords: "why prompt approval full access account outside question plan",
   },
   {
     section: "general",

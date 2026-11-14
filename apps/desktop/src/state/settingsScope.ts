@@ -332,12 +332,25 @@ export function hydrateLocalServerSettings(): Promise<void> {
   return hydration;
 }
 
+/** The newest write of each `host\u0000key`, so an older answer never undoes a newer choice. */
+const writeTokens = new Map<string, number>();
+
 /** Write one setting to one machine; the local app follows it at once. */
 export async function writeServerSetting(host: string, key: ServerSettingKey, value: Json): Promise<void> {
+  const slot = valueKey(host, key);
+  const token = (writeTokens.get(slot) ?? 0) + 1;
+  writeTokens.set(slot, token);
   const answer = await machineRequest(host, "_rustcode/settings/set", { values: { [key]: value } }, 10_000);
   const values = obj(obj(answer)?.values);
-  if (values) remember(host, values);
-  if (host === LOCAL_HOST) applyLocalSettings({ [key]: value });
+  // A second click while the first was on its way: that answer still holds the first value.
+  const superseded = writeTokens.get(slot) !== token;
+  if (values) {
+    if (superseded) {
+      const { [key]: _stale, ...rest } = values;
+      remember(host, rest);
+    } else remember(host, values);
+  }
+  if (host === LOCAL_HOST && !superseded) applyLocalSettings({ [key]: value });
 }
 
 // ------------------------------------------------------------ the row hook
@@ -376,9 +389,23 @@ export function useScopedSetting(
   const shown = entries.find((entry) => entry.online && entry.value !== undefined);
   const mixed = scopeValuesMixed(entries);
   const offline = machines.filter((machine) => !machine.online);
+  // Optimistic: the row shows the new value and this app follows it at once, then each machine
+  // confirms; one that refuses goes back to what it had, with the reason in a toast.
   const set = async (value: Json) => {
+    const before = useSettingValues.getState().values;
+    for (const machine of writes) remember(machine.host, { [key]: value });
+    if (writes.some((machine) => machine.host === LOCAL_HOST)) applyLocalSettings({ [key]: value });
     const result = await runOnMachines(writes, (machine) => writeServerSetting(machine.host, key, value));
-    if (result.failures.length) toast(failureSummary(result), "error");
+    if (!result.failures.length) return;
+    for (const failed of result.failures) {
+      const previous = before[valueKey(failed.host, key)];
+      // A newer pick since this one was sent is the one the row keeps.
+      const now = useSettingValues.getState().values[valueKey(failed.host, key)];
+      if (previous === undefined || JSON.stringify(now) !== JSON.stringify(value)) continue;
+      remember(failed.host, { [key]: previous });
+      if (failed.host === LOCAL_HOST) applyLocalSettings({ [key]: previous });
+    }
+    toast(failureSummary(result), "error");
   };
   return {
     value: shown?.value,
