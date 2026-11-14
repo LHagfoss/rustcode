@@ -370,6 +370,15 @@ describe("smart ui", () => {
     expect(BASE_CSS).toContain(".rc-item > * { min-width: 0; overflow-wrap: anywhere; }");
   });
 
+  test("a table's long code and links wrap so it fits the reply", () => {
+    // A long path or URL in a cell wraps instead of widening the table past the reply,
+    // and a heading wraps at its spaces; only a table that truly cannot fit scrolls, in its box.
+    expect(BASE_CSS).toContain(".rc-table :is(code, kbd, a) { overflow-wrap: anywhere; }");
+    expect(BASE_CSS).toContain(".rc-table { overflow-wrap: normal;");
+    expect(BASE_CSS).toContain(".rc-table-box { overflow-x: auto;");
+    expect(BASE_CSS).not.toMatch(/\.rc-table th \{[^}]*white-space: nowrap/);
+  });
+
   test("the kit is in the page's stylesheet, in variables only", () => {
     for (const name of [
       ".rc-title",
