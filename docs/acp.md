@@ -295,7 +295,10 @@ permission flow unless the server was deliberately started with `--yolo`.
   `select` takes `id` (null disables); `remove` takes `id`. Credentials never
   appear in responses. Configuration is local-only, excluded from the relay.
 - `_rustcode/textGeneration/generate`: `kind` is `thread_title`,
-  `branch_name`, `commit_message` or `pull_request`. Titles and branch names
+  `branch_name`, `commit_message`, `pull_request` or `dictation_cleanup`
+  (takes `prompt`). An optional `project` folder picks that project's
+  `text-generator` override (docs/configuration.md); commits and pull requests
+  default to their `path`. Titles and branch names
   take `prompt`; commits take repository `path` and relative `files`; pull
   requests take `path` and compare HEAD to origin's default branch. The reply
   is `{ text }`, null when no generator is selected. PR text has a title on
@@ -305,7 +308,10 @@ permission flow unless the server was deliberately started with `--yolo`.
 ### Voice transcription
 
 - `_rustcode/voice/transcribe`: `{ generatorId, model, language?, audio,
-  mimeType, durationMs }`, with `audio` base64. `generatorId` names a text
+  mimeType, durationMs, cleanup?, project? }`, with `audio` base64. With
+  `cleanup`, the transcript goes through the text generator `project`
+  resolves to, and the reply adds `cleanup`: `applied`, `unavailable` (no
+  generator) or `failed`; in the last two `text` is the raw transcript. `generatorId` names a text
   generator whose provider is `openai` or `custom`; its key is read from the
   credential store. `mimeType` is `audio/webm`, `audio/mp4`, `audio/ogg`,
   `audio/wav` or `audio/mpeg` (codec parameters allowed). Audio over 10 MB or

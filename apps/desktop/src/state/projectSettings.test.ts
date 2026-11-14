@@ -6,7 +6,9 @@ import { describe, expect, test } from "bun:test";
 import type { JsonObject } from "../acp/jsonrpc";
 import { mockSettingsAnswer, mockSettingsSet } from "../acp/mock";
 import {
+  PROJECT_ONLY_KEYS,
   PROJECT_SETTING_KEYS,
+  patchProjectOverride,
   projectOverridable,
   projectReadOnlyReason,
   projectTargets,
@@ -45,6 +47,8 @@ describe("the registry's overridable flag", () => {
   test("per-thread behaviour and new-thread defaults, not machine-wide limits", () => {
     for (const key of [
       "default-harness",
+      "text-generator",
+      "voice",
       "default-permission-mode",
       "resume-after-restart",
       "continue-after-limit",
@@ -64,7 +68,7 @@ describe("the registry's overridable flag", () => {
 
   test("every overridable server key is one the registry knows", () => {
     for (const key of PROJECT_SETTING_KEYS)
-      if (key !== "default-harness") expect(SERVER_SETTING_KEYS).toContain(key);
+      if (!PROJECT_ONLY_KEYS.includes(key)) expect(SERVER_SETTING_KEYS as readonly string[]).toContain(key);
   });
 
   test("rows a project cannot set say why", () => {
@@ -72,6 +76,26 @@ describe("the registry's overridable flag", () => {
     expect(projectReadOnlyReason("server", "delegates-total")).toContain("every project");
     expect(projectReadOnlyReason("machine")).toContain("machine");
     expect(projectReadOnlyReason("app")).toContain("app preference");
+  });
+});
+
+describe("patchProjectOverride", () => {
+  test("sets or removes one field and keeps the rest", () => {
+    expect(patchProjectOverride(undefined, "cleanup", true)).toEqual({ cleanup: true });
+    expect(patchProjectOverride({ cleanup: true }, "language", "nb")).toEqual({
+      cleanup: true,
+      language: "nb",
+    });
+    // `null` is a value: Off for this project.
+    expect(patchProjectOverride({ model: "small" }, "id", null)).toEqual({ model: "small", id: null });
+    expect(patchProjectOverride({ cleanup: true, language: "nb" }, "cleanup", undefined)).toEqual({
+      language: "nb",
+    });
+  });
+
+  test("nothing left clears the key, so the machine's value applies", () => {
+    expect(patchProjectOverride({ id: "fast" }, "id", undefined)).toBeNull();
+    expect(patchProjectOverride(undefined, "id", undefined)).toBeNull();
   });
 });
 
@@ -112,6 +136,19 @@ describe("the mock transport", () => {
     expect((after.values as JsonObject)["default-permission-mode"]).toBe("edits");
     expect((after.sources as JsonObject)["default-permission-mode"]).toBe("machine");
     expect(projects).toEqual({});
+  });
+
+  test("a project keeps its own text generator and voice settings", () => {
+    const projects: Record<string, JsonObject> = {};
+    mockSettingsSet({}, projects, {
+      project: "/work/app",
+      values: { "text-generator": { id: "fast", model: "small" }, voice: { cleanup: true } },
+    });
+    const overrides = (mockSettingsAnswer({}, projects, [], "/work/app").project as JsonObject)
+      .overrides as JsonObject;
+    expect(overrides["text-generator"]).toEqual({ id: "fast", model: "small" });
+    expect(overrides.voice).toEqual({ cleanup: true });
+    expect((mockSettingsAnswer({}, projects, [], "/work/other").project as JsonObject).overrides).toEqual({});
   });
 
   test("a machine-wide setting is refused for a project", () => {

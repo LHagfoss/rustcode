@@ -3,6 +3,7 @@ import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
 import { dirname } from "../lib/paths";
 import { appPlatform, currentPlatform } from "../lib/platform";
 import { ComputerUseGroup } from "./ComputerUseGroup";
+import { ProjectGenerators } from "./ProjectGenerators";
 import { TextGeneration } from "./TextGeneration";
 import { VoiceGroup } from "./VoiceGroup";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
@@ -94,6 +95,7 @@ import { RECAP_HOUR_OPTIONS } from "../state/recap";
 import { serverSetting, WORKFLOW_LIMITS } from "../state/settingsRegistry";
 import {
   useLoadScopeSettings,
+  useProjectScope,
   useScope,
   useScopedDefaultHarness,
   useScopedSetting,
@@ -646,6 +648,7 @@ function AgentsPage() {
   const scoped = useScopedDefaultHarness();
   const snapshot = scoped.snapshot;
   const thisMachine = scope.mode === "this";
+  const chosenProject = useProjectScope((state) => state.project);
   const [saved, setSaved] = useState(false);
   const [adding, setAdding] = useState(false);
   const checking = useHarnessChecks((s) => Object.values(s.byHarness).some((e) => "running" in e));
@@ -738,6 +741,7 @@ function AgentsPage() {
       </Group>
       {thisMachine && <TextGeneration />}
       {thisMachine && <VoiceGroup />}
+      {thisMachine && chosenProject && <ProjectGenerators project={chosenProject} />}
       {thisMachine && <ComputerUseGroup />}
       <OrchestrationGroup />
       <WorkflowsGroup />

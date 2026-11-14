@@ -19,6 +19,40 @@ export interface VoiceSettings {
   /** ISO-639-1 hint ("en", "nb"); "" lets the provider detect it. */
   language: string;
   mode: DictationMode;
+  /** Run the transcript through the text generator to fix punctuation and drop filler words. */
+  cleanup: boolean;
+}
+
+/**
+ * A project's `voice` override (docs/desktop.md › Settings a project overrides): each field it
+ * sets replaces this machine's; `generator: null` turns dictation off in that project. The mode
+ * is the app's, never per project.
+ */
+export type VoiceOverride = Partial<Pick<VoiceSettings, "generator" | "model" | "language" | "cleanup">>;
+
+/** The fields a `voice` override may hold, read from whatever the engine answered. */
+export function readVoiceOverride(raw: unknown): VoiceOverride {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const value = raw as Record<string, unknown>;
+  const out: VoiceOverride = {};
+  if (value.generator === null || (typeof value.generator === "string" && value.generator))
+    out.generator = value.generator as string | null;
+  if (typeof value.model === "string" && value.model.trim()) out.model = value.model;
+  if (typeof value.language === "string") out.language = value.language;
+  if (typeof value.cleanup === "boolean") out.cleanup = value.cleanup;
+  return out;
+}
+
+/** Machine → project: a field the project set wins, a field it left out falls through. */
+export function resolveVoiceSettings(machine: VoiceSettings, override: VoiceOverride | null): VoiceSettings {
+  if (!override) return machine;
+  return {
+    ...machine,
+    ...("generator" in override ? { generator: override.generator ?? null } : {}),
+    ...(override.model !== undefined ? { model: override.model } : {}),
+    ...(override.language !== undefined ? { language: override.language } : {}),
+    ...(override.cleanup !== undefined ? { cleanup: override.cleanup } : {}),
+  };
 }
 
 export const DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
@@ -35,6 +69,7 @@ export const VOICE_DEFAULTS: VoiceSettings = {
   model: DEFAULT_TRANSCRIPTION_MODEL,
   language: "",
   mode: "toggle",
+  cleanup: false,
 };
 
 export function readVoiceSettings(): VoiceSettings {
@@ -45,6 +80,7 @@ export function readVoiceSettings(): VoiceSettings {
       model: typeof raw.model === "string" && raw.model.trim() ? raw.model : DEFAULT_TRANSCRIPTION_MODEL,
       language: typeof raw.language === "string" ? raw.language : "",
       mode: raw.mode === "hold" ? "hold" : "toggle",
+      cleanup: raw.cleanup === true,
     };
   } catch {
     return { ...VOICE_DEFAULTS };
@@ -153,6 +189,7 @@ export function transcribeParams(
   audioBase64: string,
   mimeType: string,
   durationMs: number,
+  project: string | null = null,
 ): {
   generatorId: string;
   model: string;
@@ -160,6 +197,8 @@ export function transcribeParams(
   audio: string;
   mimeType: string;
   durationMs: number;
+  cleanup: boolean;
+  project: string | null;
 } | null {
   if (!settings.generator) return null;
   return {
@@ -169,7 +208,19 @@ export function transcribeParams(
     audio: audioBase64,
     mimeType,
     durationMs: Math.round(durationMs),
+    cleanup: settings.cleanup,
+    project,
   };
+}
+
+/**
+ * The short note after a transcript whose cleanup was asked for but did not happen; the raw
+ * transcript is in the draft either way. Null when it was cleaned or not asked for.
+ */
+export function cleanupNote(cleanup: unknown): string | null {
+  if (cleanup === "unavailable") return "Inserted as dictated: no text generator to clean it up.";
+  if (cleanup === "failed") return "Inserted as dictated: cleanup did not finish.";
+  return null;
 }
 
 /** What a failure says, without the engine's wrapping. */

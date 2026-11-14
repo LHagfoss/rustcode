@@ -25,7 +25,8 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   {
     section: "agents",
     title: "Voice",
-    keywords: "dictation dictate microphone speech transcribe transcription whisper talk",
+    keywords:
+      "dictation dictate microphone speech transcribe transcription whisper talk clean up cleanup punctuation filler",
   },
   // ------------------------------------------------------------ General
   {

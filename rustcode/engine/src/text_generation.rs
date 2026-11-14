@@ -54,7 +54,54 @@ pub(crate) struct GenerateRequest {
     pub path: Option<PathBuf>,
     #[serde(default)]
     pub files: Vec<String>,
+    /// The project whose `text-generator` override applies; without it, a
+    /// commit or pull request draft uses its repository `path`.
+    #[serde(default)]
+    pub project: Option<PathBuf>,
 }
+
+/// The generator a request in `project` uses: the project's `text-generator`
+/// override (`{ id, model? }`, `id: null` turns it off there) over the
+/// machine's selection. A `model` in the override replaces the generator's
+/// own; an override naming a removed generator falls back to the machine's.
+pub(crate) fn resolve(config: &Generators, project_override: Option<&Value>) -> Option<Generator> {
+    let by_id = |id: &str| config.generators.iter().find(|g| g.id == id).cloned();
+    let machine = || config.selected.as_deref().and_then(by_id);
+    let Some(override_) = project_override.and_then(Value::as_object) else {
+        return machine();
+    };
+    let mut generator = match override_.get("id") {
+        Some(Value::Null) => return None,
+        Some(Value::String(id)) => by_id(id).or_else(machine)?,
+        _ => machine()?,
+    };
+    if let Some(model) = override_
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        generator.model = model.to_owned();
+    }
+    Some(generator)
+}
+
+/// The generator for `project` as configured on this machine now.
+pub(crate) fn generator_for(project: Option<&std::path::Path>) -> Option<Generator> {
+    let config = load().ok()?;
+    let project_override =
+        project.and_then(|p| crate::acp::settings::project_override("text-generator", p));
+    resolve(&config, project_override.as_ref())
+}
+
+/// Whether a request in `project` has a generator to use.
+pub(crate) fn configured_for(project: Option<&std::path::Path>) -> bool {
+    generator_for(project).is_some()
+}
+
+/// What the dictation cleanup asks of the generator: tidy the transcript, never rewrite it.
+pub(crate) const DICTATION_CLEANUP_INSTRUCTION: &str = "Clean up this dictated text. Fix punctuation, capitalisation and obvious transcription slips, and remove filler words such as um, uh, er and you know, and false starts. Keep the speaker's words, meaning, language and order; do not summarise, answer, translate or add anything. Return only the cleaned text.";
+
 impl Generator {
     pub(crate) fn profile(&self) -> Result<crate::config::ModelProfile> {
         use crate::config::ApiProtocol;
@@ -154,7 +201,10 @@ pub(crate) fn bounded(text: &str) -> String {
     result
 }
 fn context(r: &GenerateRequest) -> Result<String> {
-    if matches!(r.kind.as_str(), "thread_title" | "branch_name") {
+    if matches!(
+        r.kind.as_str(),
+        "thread_title" | "branch_name" | "dictation_cleanup"
+    ) {
         return Ok(bounded(r.prompt.as_deref().unwrap_or_default()));
     }
     let path = r.path.as_deref().context("Missing repository path")?;
@@ -226,11 +276,10 @@ pub(crate) async fn generate(r: GenerateRequest) -> Result<Value> {
         .context("Text generation timed out")?
 }
 async fn generate_inner(r: GenerateRequest) -> Result<Value> {
-    let config = load()?;
-    let Some(generator) = config
-        .generators
-        .iter()
-        .find(|g| Some(&g.id) == config.selected.as_ref())
+    let project = r.project.clone().or_else(|| r.path.clone());
+    let Some(generator) = tokio::task::spawn_blocking(move || generator_for(project.as_deref()))
+        .await
+        .context("Text generator lookup failed")?
     else {
         return Ok(json!({"text": null}));
     };
@@ -259,6 +308,7 @@ async fn generate_inner(r: GenerateRequest) -> Result<Value> {
         "pull_request" => {
             "Write a pull request title on the first line, then a blank line and a Markdown body describing these commits and diff. Return only that text."
         }
+        "dictation_cleanup" => DICTATION_CLEANUP_INSTRUCTION,
         _ => bail!("Unknown text generation kind"),
     };
     request_text(profile, instruction, input).await
@@ -295,6 +345,71 @@ mod tests {
     fn bounds_unicode_diff() {
         let output = bounded(&"é".repeat(25000));
         assert_eq!(output.chars().count(), 24000 + "\n[truncated]".len());
+    }
+    fn generators() -> Generators {
+        let entry = |id: &str, model: &str| Generator {
+            id: id.into(),
+            provider: "openai".into(),
+            model: model.into(),
+            base_url: None,
+        };
+        Generators {
+            generators: vec![entry("machine", "big"), entry("fast", "small")],
+            selected: Some("machine".into()),
+        }
+    }
+    #[test]
+    fn a_project_override_wins_over_the_machine_selection() {
+        let config = generators();
+        assert_eq!(resolve(&config, None).unwrap().id, "machine");
+        let fast = resolve(&config, Some(&json!({"id": "fast"}))).unwrap();
+        assert_eq!((fast.id.as_str(), fast.model.as_str()), ("fast", "small"));
+        // A model alone keeps the machine's generator with the project's model.
+        let model = resolve(&config, Some(&json!({"model": "tiny"}))).unwrap();
+        assert_eq!(
+            (model.id.as_str(), model.model.as_str()),
+            ("machine", "tiny")
+        );
+        // Off for this project, even though the machine has one.
+        assert!(resolve(&config, Some(&json!({"id": null}))).is_none());
+        // A removed generator falls back to the machine's selection.
+        assert_eq!(
+            resolve(&config, Some(&json!({"id": "gone"}))).unwrap().id,
+            "machine"
+        );
+        // A project may choose one when the machine has none selected.
+        let unselected = Generators {
+            selected: None,
+            ..generators()
+        };
+        assert!(resolve(&unselected, None).is_none());
+        assert_eq!(
+            resolve(&unselected, Some(&json!({"id": "fast"})))
+                .unwrap()
+                .id,
+            "fast"
+        );
+    }
+    #[test]
+    fn dictation_cleanup_passes_the_transcript_and_asks_only_for_tidying() {
+        let request = GenerateRequest {
+            kind: "dictation_cleanup".into(),
+            prompt: Some("um so fix the the login bug".into()),
+            path: None,
+            files: vec![],
+            project: None,
+        };
+        assert_eq!(context(&request).unwrap(), "um so fix the the login bug");
+        for phrase in [
+            "punctuation",
+            "capitalisation",
+            "filler words",
+            "um",
+            "Return only",
+        ] {
+            assert!(DICTATION_CLEANUP_INSTRUCTION.contains(phrase), "{phrase}");
+        }
+        assert!(DICTATION_CLEANUP_INSTRUCTION.contains("do not summarise, answer"));
     }
     #[test]
     fn provider_profiles_are_isolated() {

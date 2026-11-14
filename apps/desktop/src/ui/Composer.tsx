@@ -751,23 +751,27 @@ export const Composer = memo(function Composer({
     setDraft(key, text);
   };
   // A transcript lands at the caret (replacing a selection) and never sends on its own.
-  const dictation = useDictation((text) => {
-    const el = field.current;
-    const current = useApp.getState().drafts[key] ?? "";
-    const { value, caret } = insertTranscript(
-      current,
-      text,
-      el?.selectionStart ?? current.length,
-      el?.selectionEnd ?? current.length,
-    );
-    update(value);
-    requestAnimationFrame(() => {
-      const after = field.current;
-      if (!after) return;
-      after.focus();
-      after.selectionStart = after.selectionEnd = caret;
-    });
-  }, !offline);
+  const dictation = useDictation(
+    (text) => {
+      const el = field.current;
+      const current = useApp.getState().drafts[key] ?? "";
+      const { value, caret } = insertTranscript(
+        current,
+        text,
+        el?.selectionStart ?? current.length,
+        el?.selectionEnd ?? current.length,
+      );
+      update(value);
+      requestAnimationFrame(() => {
+        const after = field.current;
+        if (!after) return;
+        after.focus();
+        after.selectionStart = after.selectionEnd = caret;
+      });
+    },
+    !offline,
+    host ? null : home || null,
+  );
   // A message walked back into the field puts the caret at its end, so ↓ comes forward again at once.
   const recall = (text: string) => {
     update(text);

@@ -3,6 +3,11 @@
 //! generator entry (`text_generation.rs`), so there is one key store. The
 //! audio lives only in this request: it is never written to a thread's history,
 //! a log or a file.
+//!
+//! With `cleanup`, the transcript then goes through the text generator the
+//! project resolves to (`text_generation::resolve`) to fix punctuation and
+//! drop filler words. Without a generator, or when that call fails, the raw
+//! transcript is answered as it is: dictation never fails because of cleanup.
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -27,6 +32,12 @@ pub(crate) struct TranscribeRequest {
     pub audio: String,
     pub mime_type: String,
     pub duration_ms: u64,
+    /// Run the transcript through the text generator before answering it.
+    #[serde(default)]
+    pub cleanup: bool,
+    /// The project whose `text-generator` override the cleanup uses.
+    #[serde(default)]
+    pub project: Option<std::path::PathBuf>,
 }
 
 // The audio never reaches a log line, even through `{:?}`.
@@ -37,6 +48,7 @@ impl std::fmt::Debug for TranscribeRequest {
             .field("model", &self.model)
             .field("mime_type", &self.mime_type)
             .field("duration_ms", &self.duration_ms)
+            .field("cleanup", &self.cleanup)
             .finish_non_exhaustive()
     }
 }
@@ -132,7 +144,7 @@ pub(crate) async fn transcribe(r: TranscribeRequest) -> Result<Value> {
         .get("text-generation", &generator.id, "api-key")
         .await
         .context("Transcription credential unavailable")?;
-    tokio::time::timeout(
+    let answer = tokio::time::timeout(
         TIMEOUT,
         send(
             &url,
@@ -145,7 +157,40 @@ pub(crate) async fn transcribe(r: TranscribeRequest) -> Result<Value> {
         ),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("Transcription timed out"))?
+    .map_err(|_| anyhow::anyhow!("Transcription timed out"))??;
+    if !r.cleanup {
+        return Ok(answer);
+    }
+    let raw = answer["text"].as_str().unwrap_or_default().to_owned();
+    if raw.trim().is_empty() {
+        return Ok(answer);
+    }
+    let cleaned = crate::text_generation::generate(crate::text_generation::GenerateRequest {
+        kind: "dictation_cleanup".into(),
+        prompt: Some(raw.clone()),
+        path: None,
+        files: vec![],
+        project: r.project.clone(),
+    })
+    .await;
+    Ok(cleaned_or_raw(&raw, cleaned))
+}
+
+/// The transcript the composer gets after cleanup, and what happened to it:
+/// `cleanup` is `applied`, `unavailable` (no generator for this project) or
+/// `failed`; in the last two the raw transcript is kept. An empty answer
+/// counts as a failure, so cleanup never loses what was said.
+fn cleaned_or_raw(raw: &str, cleaned: Result<Value>) -> Value {
+    match cleaned {
+        Ok(answer) if answer["text"].is_null() => {
+            json!({ "text": raw.trim(), "cleanup": "unavailable" })
+        }
+        Ok(answer) => match answer["text"].as_str().map(str::trim) {
+            Some(text) if !text.is_empty() => json!({ "text": text, "cleanup": "applied" }),
+            _ => json!({ "text": raw.trim(), "cleanup": "failed" }),
+        },
+        Err(_) => json!({ "text": raw.trim(), "cleanup": "failed" }),
+    }
 }
 
 async fn send(
@@ -206,7 +251,42 @@ mod tests {
             audio: base64::engine::general_purpose::STANDARD.encode(audio),
             mime_type: mime.into(),
             duration_ms,
+            cleanup: false,
+            project: None,
         }
+    }
+
+    #[test]
+    fn cleanup_falls_back_to_the_raw_transcript() {
+        let raw = " um so fix the login bug ";
+        assert_eq!(
+            cleaned_or_raw(raw, Ok(json!({ "text": "So, fix the login bug." }))),
+            json!({ "text": "So, fix the login bug.", "cleanup": "applied" })
+        );
+        // No generator for this project: the raw text, with no error.
+        assert_eq!(
+            cleaned_or_raw(raw, Ok(json!({ "text": null }))),
+            json!({ "text": "um so fix the login bug", "cleanup": "unavailable" })
+        );
+        // The call failed or answered nothing: the raw text again.
+        assert_eq!(
+            cleaned_or_raw(raw, Err(anyhow::anyhow!("Text generator request failed"))),
+            json!({ "text": "um so fix the login bug", "cleanup": "failed" })
+        );
+        assert_eq!(
+            cleaned_or_raw(raw, Ok(json!({ "text": "  " })))["text"],
+            "um so fix the login bug"
+        );
+    }
+
+    #[test]
+    fn cleanup_is_off_unless_asked() {
+        let request: TranscribeRequest = serde_json::from_value(json!({
+            "generatorId": "g", "model": "m", "audio": "", "mimeType": "audio/webm", "durationMs": 1
+        }))
+        .unwrap();
+        assert!(!request.cleanup);
+        assert!(request.project.is_none());
     }
 
     #[test]

@@ -4203,7 +4203,7 @@ async fn serve_connection(
                             .join("\n");
                         if crate::config::load_session_title(&session_id).is_none()
                             && crate::config::load_config().2.generate_session_titles
-                            && crate::text_generation::load().ok().is_some_and(|c| c.selected.is_some())
+                            && crate::text_generation::configured_for(crate::config::load_session_repo(&session_id).as_deref())
                         {
                             let fallback: String = prompt_text.lines().next().unwrap_or_default().chars().take(48).collect();
                             crate::config::save_session_title(&session_id, &fallback);
@@ -4213,6 +4213,7 @@ async fn serve_connection(
                             tokio::spawn(async move {
                                 if let Ok(answer) = crate::text_generation::generate(crate::text_generation::GenerateRequest {
                                     kind: "thread_title".into(), prompt: Some(title_prompt), path: None, files: vec![],
+                                    project: crate::config::load_session_repo(&title_session),
                                 }).await {
                                     if let Some(title) = answer["text"].as_str().and_then(crate::app::actions::normalize_generated_title) {
                                         if crate::app::actions::apply_generated_title(&title_session, Some(&fallback), &title) {

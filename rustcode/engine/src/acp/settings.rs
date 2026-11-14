@@ -81,9 +81,14 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
 /// Settings a project overrides). Credentials, accounts, delegation limits and
 /// the machine's own switches are not here: they belong to the machine.
 /// `default-harness` is project-only: the machine's default lives in
-/// `config.toml` (`_rustcode/harnesses/default`).
+/// `config.toml` (`_rustcode/harnesses/default`). So are `text-generator`
+/// (`{ id, model? }`, over the machine's selection in `text-generators.json`)
+/// and `voice` (`{ generator?, model?, language?, cleanup? }`, over the app's
+/// own Voice settings).
 pub(crate) const PROJECT_KEYS: &[&str] = &[
     "default-harness",
+    "text-generator",
+    "voice",
     "default-permission-mode",
     "resume-after-restart",
     "continue-after-limit",
@@ -91,11 +96,14 @@ pub(crate) const PROJECT_KEYS: &[&str] = &[
     "auto-compact-threshold",
 ];
 
+/// Project keys with no machine value in this file: an object each.
+const PROJECT_ONLY_KEYS: &[&str] = &["default-harness", "text-generator", "voice"];
+
 /// The type a project override of `key` must have, or `None` when a project
 /// may not override it.
 fn project_key_type(key: &str) -> Option<(&'static str, SettingType)> {
     let known = PROJECT_KEYS.iter().find(|known| **known == key)?;
-    if *known == "default-harness" {
+    if PROJECT_ONLY_KEYS.contains(known) {
         return Some((known, SettingType::Object));
     }
     registry_entry(known).map(|(known, kind, _)| (known, kind))
@@ -307,9 +315,9 @@ pub(crate) fn value_for_session(key: &str, session_id: &str) -> Option<Value> {
     value_for_project(key, project.as_deref())
 }
 
-/// A project's own override of `key`, without falling back a layer.
-#[cfg(test)]
-fn project_override(key: &str, project: &Path) -> Option<Value> {
+/// A project's own override of `key`, without falling back a layer: how a
+/// project-only key (`text-generator`, `voice`) is read.
+pub(crate) fn project_override(key: &str, project: &Path) -> Option<Value> {
     let file = read_file(&settings_path().ok()?);
     file.projects
         .get(&project_key(&project.to_string_lossy()))?
@@ -534,6 +542,45 @@ mod tests {
     }
 
     #[test]
+    fn a_project_keeps_its_own_generator_and_voice() {
+        let project = "/work/voice-repo";
+        write(SetSettingsRequest {
+            values: Map::from_iter([
+                (
+                    "text-generator".to_owned(),
+                    json!({"id": "fast", "model": "small"}),
+                ),
+                (
+                    "voice".to_owned(),
+                    json!({"cleanup": true, "language": "nb"}),
+                ),
+            ]),
+            project: Some(format!("{project}/")),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            project_override("text-generator", Path::new(project)),
+            Some(json!({"id": "fast", "model": "small"}))
+        );
+        assert_eq!(
+            project_override("voice", Path::new(project)).unwrap()["cleanup"],
+            json!(true)
+        );
+        assert_eq!(
+            project_override("text-generator", Path::new("/work/other")),
+            None
+        );
+        write(SetSettingsRequest {
+            clear: vec!["text-generator".to_owned(), "voice".to_owned()],
+            project: Some(project.to_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(project_override("voice", Path::new(project)), None);
+    }
+
+    #[test]
     fn a_project_cannot_override_a_machine_setting() {
         let refused = write(SetSettingsRequest {
             values: Map::from_iter([("delegates-total".to_owned(), json!(2))]),
@@ -541,6 +588,12 @@ mod tests {
             ..Default::default()
         });
         assert!(refused.is_err());
+        let wrong_generator = write(SetSettingsRequest {
+            values: Map::from_iter([("text-generator".to_owned(), json!("fast"))]),
+            project: Some("/work/repo".to_owned()),
+            ..Default::default()
+        });
+        assert!(wrong_generator.is_err());
         let wrong = write(SetSettingsRequest {
             values: Map::from_iter([("default-harness".to_owned(), json!("codex"))]),
             project: Some("/work/repo".to_owned()),

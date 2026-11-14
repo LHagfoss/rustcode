@@ -12,6 +12,8 @@ import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } 
 /** The keys a project may override, as the engine's `PROJECT_KEYS` lists them. */
 const MOCK_PROJECT_KEYS = [
   "default-harness",
+  "text-generator",
+  "voice",
   "default-permission-mode",
   "resume-after-restart",
   "continue-after-limit",
@@ -3678,6 +3680,10 @@ export class MockEngine {
       case "_rustcode/voice/transcribe":
         // Canned text, so the dictation flow works without an engine or a key.
         if (!str(params.generatorId)) throw new Error("No transcription provider");
+        if (params.cleanup === true)
+          return this.textGenerators.selected
+            ? { text: "Summarize what changed in this branch since main.", cleanup: "applied" }
+            : { text: "um summarize what changed in this branch since main", cleanup: "unavailable" };
         return { text: "Summarize what changed in this branch since main." };
       case "_rustcode/textGeneration/generate":
         if (!this.textGenerators.selected) return { text: null };
