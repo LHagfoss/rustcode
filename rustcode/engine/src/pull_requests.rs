@@ -2083,6 +2083,9 @@ pub async fn prepare_branch(cwd: &Path, number: u64) -> Result<PullBranch, PullE
             ],
         )
         .map_err(failed)?;
+        // Keep fork provenance outside the checkout, where its action file cannot change it.
+        git_ok(&repo, &["config", &format!("branch.{branch}.rustcodeUntrustedActions"), "true"])
+            .map_err(failed)?;
         let read_only = !can_modify || owner.is_empty() || name.is_empty();
         let mut push_url = None;
         let how = if read_only {

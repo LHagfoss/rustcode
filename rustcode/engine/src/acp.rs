@@ -1,6 +1,6 @@
 mod agents;
 mod capabilities;
-mod clients;
+pub(crate) mod clients;
 mod commands;
 mod config;
 mod connections;
@@ -2384,6 +2384,9 @@ async fn serve_connection(
                                         harness,
                                         model: None,
                                     });
+                                    if let Some(tree) = &worktree {
+                                        crate::project_hooks::attach(announced.clients.session(&response.session_id.to_string()), &tree.path);
+                                    }
                                     responder.respond(crate::worktrees::finish_new(
                                         response,
                                         worktree.as_ref(),
@@ -2402,6 +2405,9 @@ async fn serve_connection(
                         harness: Some(crate::harness::BUILTIN_ID.to_owned()),
                         model: None,
                     });
+                    if let Some(tree) = &worktree {
+                        crate::project_hooks::attach(server.clients.session(&response.session_id.to_string()), &tree.path);
+                    }
                     responder.respond(crate::worktrees::finish_new(response, worktree.as_ref()))?;
                     Ok(())
                 }
@@ -4030,6 +4036,9 @@ async fn serve_connection(
                     let session_id = request.session_id.to_string();
                     let peer = server.clients.peer(client_id, &connection);
                     let response = acp_load_session(&server, request, &peer).await?;
+                    if let Some(tree) = crate::worktrees::of_session(&session_id) {
+                        crate::project_hooks::attach(server.clients.session(&session_id), &tree.path);
+                    }
                     let response = crate::worktrees::finish_load(response, &session_id);
                     responder.respond(response)
                 }
