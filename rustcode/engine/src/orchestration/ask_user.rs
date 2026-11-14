@@ -193,10 +193,14 @@ pub async fn ask(
     let call = format!("{:016x}", rand::random::<u64>());
     let mut answers = Vec::with_capacity(prompts.len());
     for (index, prompt) in prompts.iter().enumerate() {
-        let request = crate::acp::questions::question_permission_request(
-            "",
-            &format!("{TOOL_NAME}:{call}:{index}"),
-            prompt,
+        let request = crate::acp::questions::numbered(
+            crate::acp::questions::question_permission_request(
+                "",
+                &format!("{TOOL_NAME}:{call}:{index}"),
+                prompt,
+            ),
+            index,
+            prompts.len(),
         );
         let response = tokio::select! {
             response = asker(request) => response,

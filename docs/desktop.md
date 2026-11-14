@@ -476,6 +476,18 @@ in thread, ⌘J terminal, ⌘+ / ⌘- / ⌘0 text zoom, ⏎ send (or queue while
 running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the
 command token, Esc clears the draft and then stops the
 turn (⌘. stops it too), 1–9 answer the visible approval or question.
+An agent's question is a panel over the composer that leaves its draft alone:
+pick an answer (↑/↓ or 1–9), write one, or attach files to it — Attach files,
+paste or drop an image or a file, alone or beside an answer or words. Each
+waiting question keeps its own draft (`state/questionDrafts.ts`) across thread
+switches and a failed send. Files go in the answer's `_meta.rustcode.answer.attachments`;
+the engine saves images where the thread runs and the agent reads every file
+as a path, or its content for a small one, at the end of the answer
+(`rustcode/engine/src/acp/questions.rs`), so every harness gets them. A thread
+on another computer takes images and small files but not one known only by a
+path here, and an engine that does not list `attachments` in `answerKinds`
+shows the paperclip as unavailable with a reason. A question that takes only
+its own choices has no field and no files.
 
 Every key above except the composer's is a command in one table
 (`src/lib/keys.ts`) with an id, a label and a default binding, and Settings ›
@@ -655,7 +667,14 @@ composer's keys stay outside the table.
   read-only with a note), a worktree thread starts on it with the message in
   its composer to read and send (`startPullThread`, `state/pullThread.ts`),
   and the pull request is linked so new checks and comments wake it. A
-  thread already linked to it is offered first. Each `gh` read is a process, so the answers
+  thread already linked to it is offered first. Opening the same pull request
+  again lands on the same branch: a fork's local branch is recorded in
+  `branch.<name>.rustcode-pull`, an existing branch is fast-forwarded to the
+  head (in the worktree that has it checked out, where the new thread then
+  starts) and left as it is, with a note, when it has commits the head lacks.
+  The message is written from that answer, so it names the branch's real name
+  and says how to push, or that commits stay local for a fork without
+  maintainer edits. Each `gh` read is a process, so the answers
   live in one store (`state/pullQueries.ts`) shared by the panel, the sidebar and
   the review view: a list, a detail or a diff the app already holds paints at
   once and is read again behind, and the lists and details are saved on the
@@ -925,8 +944,10 @@ composer's keys stay outside the table.
 - **Git actions.** The header's git pill shows the one action the thread's
   folder calls for: *Commit* (with the number of changed files), *Pull* when
   the branch is behind, *Push* when it has commits the remote lacks or was
-  never pushed, and *Create Pull Request* for a pushed branch without one
-  (`planGitActions` in `state/gitActions.ts`). Its menu adds *Commit & Push*,
+  never pushed, and *Create Pull Request* for a pushed branch the open pull
+  list shows without one (`planGitActions` in `state/gitActions.ts`); while
+  that list is still read, or cannot be (`gh` not signed in), it is not
+  offered. Creating one reads the open list again at once. Its menu adds *Commit & Push*,
   the open pull request and *Refresh*. *Commit* opens a sheet with a drafted
   message (the thread's title, else the files) and a checkbox per file; on the
   default branch it warns and offers *Commit to new branch*, and the engine
@@ -935,7 +956,9 @@ composer's keys stay outside the table.
   `engine/src/git_actions.rs`), so hooks and signing apply and a failure shows
   the hook's output. A pull request opens with `gh pr create` and is linked
   to the thread, so its checks wake it. The state reads again when a turn
-  ends and when the window regains focus. A thread on another computer shows
+  ends and when the window regains focus; it belongs to the thread and folder
+  it was read for, so a thread switch shows *Reading git…* until the new
+  folder's answer is in, and a late answer to an older read is dropped. A thread on another computer shows
   the pill disabled.
 - **Project actions.** The header's ⚡ menu lists the project's quick
   actions (named commands such as *Dev server* · `bun run dev`); picking one

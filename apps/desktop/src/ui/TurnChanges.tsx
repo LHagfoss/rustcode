@@ -14,7 +14,7 @@ import type { Checkpoint, PatchFile } from "../acp/v2";
 import { parsePatch } from "../state/diff";
 import { canRewind, rewindCheckpoint, setView, turnDiff, useApp } from "../state/store";
 import { Patch } from "./DiffView";
-import { Pill, Skeleton } from "./primitives";
+import { Pill, Skeleton, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
 export function TurnChanges({
@@ -67,15 +67,23 @@ export function TurnChanges({
             </span>
             <span className="flex-1" />
             <Pill onClick={() => setView({ kind: "review", threadId })}>Review…</Pill>
-            {rewindable && (
-              <Pill
-                disabled={running}
-                onClick={rewindTo}
-                title={running ? "Stop the turn first" : rewindNote(rewind, keep, checkpoint.turn)}
-              >
-                <History size={12} /> Rewind to before turn {checkpoint.turn}
-              </Pill>
-            )}
+            {rewindable &&
+              (running ? (
+                // A disabled button takes no pointer, so the tip hangs on a span that can.
+                <Tooltip label="Stop the turn first">
+                  <span className="inline-flex">
+                    <Pill disabled>
+                      <History size={12} /> Rewind to before turn {checkpoint.turn}
+                    </Pill>
+                  </span>
+                </Tooltip>
+              ) : (
+                <Tooltip label={rewindNote(rewind, keep, checkpoint.turn)}>
+                  <Pill onClick={rewindTo}>
+                    <History size={12} /> Rewind to before turn {checkpoint.turn}
+                  </Pill>
+                </Tooltip>
+              ))}
           </div>
           <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
             {error && <p className="px-1 text-callout text-fg-muted">{error}</p>}

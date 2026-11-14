@@ -1497,7 +1497,7 @@ async fn ask_user(peer: Arc<RpcPeer>, out: OutputSender, id: Value, params: Valu
         .cloned()
         .unwrap_or_default();
     let mut answers = serde_json::Map::new();
-    for question in &questions {
+    for (index, question) in questions.iter().enumerate() {
         let question_id = str_field(question, "id").unwrap_or_default().to_owned();
         let options = question
             .get("options")
@@ -1524,10 +1524,14 @@ async fn ask_user(peer: Arc<RpcPeer>, out: OutputSender, id: Value, params: Valu
                 .collect(),
             multiple: false,
         };
-        let request = crate::acp::questions::question_permission_request(
-            "",
-            &format!("{item}:{question_id}"),
-            &prompt,
+        let request = crate::acp::questions::numbered(
+            crate::acp::questions::question_permission_request(
+                "",
+                &format!("{item}:{question_id}"),
+                &prompt,
+            ),
+            index,
+            questions.len(),
         );
         let (reply, answer) = oneshot::channel();
         let reply = if out.send(Output::Permission { request, reply }).is_ok() {

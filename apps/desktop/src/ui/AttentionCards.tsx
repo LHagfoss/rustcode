@@ -18,12 +18,13 @@ import {
   Hand,
   ListChecks,
   MessageCircleQuestion,
+  Paperclip,
   ShieldAlert,
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
-import { isAllow, type PermissionOption, type PermissionRequest } from "../acp/types";
+import type { PermissionOption, PermissionRequest } from "../acp/types";
 import {
   approvalPreview,
   approvalSubject,
@@ -36,14 +37,23 @@ import {
   type RiskAssessment,
   showsRawInput,
 } from "../lib/approval";
+import { onFileDrop, pickFiles } from "../lib/native";
+import { answerOptions, takesFiles } from "../lib/questionAnswer";
+import type { Attachment } from "../state/compose";
+import { type QuestionDraft, questionDraft, saveQuestionDraft } from "../state/questionDrafts";
 import {
   answerPermission,
-  answerQuestionOptions,
-  answerQuestionText,
+  answerQuestion,
   approveAll,
   type ResolvedApproval,
   selectThread,
+  threadIsRemote,
+  toast,
+  useApp,
+  useMachineOfThread,
 } from "../state/store";
+import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./Attachments";
+import { overQuestionDrop, QUESTION_DROP_ATTR } from "./folderDropTarget";
 import { CopyButton, Markdown } from "./Markdown";
 import {
   cx,
@@ -289,14 +299,6 @@ function PlanProposal({ plan }: { plan: string }) {
   );
 }
 
-function Shell({ children, label }: { children: React.ReactNode; label: string }) {
-  return (
-    <section aria-label={label} className="elevated flex flex-col gap-3 p-4 rc-in">
-      {children}
-    </section>
-  );
-}
-
 /**
  * An approval as a row in the transcript, at the call it is about: how risky it is, then the
  * key–value facts of exactly what it would run — command, paths, folder, and an edit's size —
@@ -502,6 +504,26 @@ export function ResolvedApprovalBar({ approval }: { approval: ResolvedApproval }
   );
 }
 
+/** How tall a question's own text reads before it scrolls, so a long one leaves its answers in view. */
+const QUESTION_TEXT_MAX = 168;
+
+/** The composer's field, where focus goes back once a question is answered from its form. */
+function focusComposerField() {
+  document.querySelector<HTMLTextAreaElement>('[data-rc-composer] textarea[aria-label="Message"]')?.focus();
+}
+
+/**
+ * A question over the composer, in place of nothing it covers: the composer stays below with its
+ * draft, so the thread's context and the user's own words are where they were (issue 3696). It
+ * says which of a set it is, the question (scrolling past `QUESTION_TEXT_MAX`), its answers with
+ * their descriptions, and a field for the user's own answer. ↑/↓ move between answers, 1–9 pick
+ * one, esc dismisses when no field has focus.
+ *
+ * A question that takes the user's own answer also takes files (issue 3756): Attach files, or a
+ * paste or drop on the form, under the composer's own limits (`ui/Attachments.tsx`). A file goes
+ * alone, beside the answer picked, or beside the words written; each question keeps its own
+ * (`state/questionDrafts.ts`), and a send that fails keeps them.
+ */
 export function QuestionCard({
   request,
   from,
@@ -509,42 +531,192 @@ export function QuestionCard({
 }: {
   request: PermissionRequest;
   from?: string;
-  /** Whether 1–9 answer it: only the first card on screen takes them. */
+  /** Whether 1–9 and esc answer it: only the first card on screen takes them. */
   keys?: boolean;
 }) {
   const q = request.question!;
-  const answers = request.options.filter((o) => isAllow(o.kind) || !o.kind);
+  const answers = answerOptions(request);
   const reject = request.options.find((o) => o.kind === "reject_once" || o.kind === "reject_always");
-  const [ticked, setTicked] = useState<string[]>([]);
-  const [text, setText] = useState("");
+  const [draft, setDraft] = useState<QuestionDraft>(() => questionDraft(request));
+  const { ticked, text, attachments } = draft;
+  const update = (change: (d: QuestionDraft) => QuestionDraft) =>
+    setDraft((d) => {
+      const next = change(d);
+      saveQuestionDraft(request, next);
+      return next;
+    });
+  const attach = (more: Attachment[]) => {
+    if (more.length) update((d) => ({ ...d, attachments: [...d.attachments, ...more] }));
+  };
+  const remote = threadIsRemote(request.sessionId);
+  const machine = useMachineOfThread(request.sessionId);
+  const cwd = useApp((s) => s.threads[request.sessionId]?.cwd);
+  const waiting = useApp(
+    (s) => s.threads[request.sessionId]?.permissions.filter((p) => p.question).length ?? 1,
+  );
+  const files = takesFiles(request);
+  // A question that takes only its own choices has no field, and so no files either.
+  const ownAnswer = q.ownAnswer !== false;
+  // A file picked here is sent by its path, which a thread on another computer cannot open: there
+  // only what the form reads (an image, a small file) goes.
+  const reachable = (more: Attachment[]) =>
+    more.filter((a) => {
+      if (!remote || a.kind !== "file" || !a.path) return true;
+      toast(`${a.name} is on this computer; ${machine ?? "the thread's computer"} cannot open it`, "info");
+      return false;
+    });
+  const fromFiles = (list: File[]) => {
+    if (!files) return;
+    void attachmentsFromFiles(list, true, "").then(attach);
+  };
+  const fromPaths = (paths: string[]) => {
+    if (!files) return;
+    void attachmentsFromPaths(paths, true, "").then((more) => attach(reachable(more)));
+  };
+  const fileInput = useRef<HTMLInputElement>(null);
+  const card = useRef<HTMLElement>(null);
+  const textId = useId();
+  const headId = useId();
+  const [dropping, setDropping] = useState(false);
+
+  const send = (options: PermissionOption[], words = "") => {
+    const within = card.current?.contains(document.activeElement);
+    if (!answerQuestion(request, { options, text: words, attachments })) return;
+    if (within) requestAnimationFrame(focusComposerField);
+  };
   useDigitKeys(keys && !q.multiple ? answers.length : 0, (i) => {
     const option = answers[i];
-    if (option) answerQuestionOptions(request, [option]);
+    if (option) send([option]);
   });
+  useApprovalKeys(keys && reject ? () => answerPermission(request, reject) : undefined);
+
+  // Files dropped on the window arrive as paths from the shell; those over this form are its own.
+  const dropped = useRef(fromPaths);
+  dropped.current = fromPaths;
+  useEffect(() => {
+    if (!files) return;
+    let stop: (() => void) | undefined;
+    let live = true;
+    void onFileDrop((event) => {
+      const over = !!event.position && overQuestionDrop(event.position);
+      setDropping(event.type === "over" && over);
+      if (event.type === "drop" && over && event.paths.length) dropped.current(event.paths);
+    }).then((unlisten) => {
+      if (live) stop = unlisten;
+      else unlisten();
+    });
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, [files]);
+
+  // The form takes the keyboard when it appears, unless the user is typing somewhere already.
+  useEffect(() => {
+    if (!keys) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.closest("input, textarea, [contenteditable]")) return;
+    // The panel itself, not its first answer: ⏎ or space then cannot send an answer nobody chose.
+    card.current?.focus({ preventScroll: true });
+  }, [keys]);
+
+  /** ↑/↓ between the answers (from the panel, into the first), Home and End to the ends. */
+  const onAnswersKey = (e: React.KeyboardEvent<HTMLElement>) => {
+    const target = e.target as HTMLElement;
+    if (target !== e.currentTarget && !target.hasAttribute("data-question-answer")) return;
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>("[data-question-answer]")];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const next =
+      e.key === "ArrowDown"
+        ? at + 1
+        : e.key === "ArrowUp"
+          ? at - 1
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? items.length - 1
+              : null;
+    if (next === null || !items.length) return;
+    e.preventDefault();
+    items[Math.max(0, Math.min(items.length - 1, next))]?.focus();
+  };
+
+  const progress =
+    q.step && q.steps ? `${q.step} of ${q.steps}` : waiting > 1 ? `${waiting} waiting` : undefined;
+  const chooseFiles = () => {
+    void pickFiles(cwd).then((paths) => {
+      if (paths === null) fileInput.current?.click();
+      else fromPaths(paths);
+    });
+  };
   return (
-    <Shell label="Question">
-      <div className="flex items-center gap-2 font-semibold text-body text-accent">
-        <MessageCircleQuestion size={15} />
-        {from ? `From ${from}: ` : ""}
-        {q.header || "RustCode has a question"}
+    <section
+      ref={card}
+      tabIndex={-1}
+      onKeyDown={onAnswersKey}
+      aria-labelledby={headId}
+      aria-describedby={textId}
+      {...(files ? { [QUESTION_DROP_ATTR]: "" } : {})}
+      className={cx(
+        "elevated flex flex-col gap-3 p-4 outline-none rc-in",
+        dropping && "outline-2 outline-accent/60 outline-dashed -outline-offset-4",
+      )}
+      onDragOver={(e) => {
+        if (files && e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          setDropping(true);
+        }
+      }}
+      onDragLeave={() => setDropping(false)}
+      onDrop={(e) => {
+        if (!files || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDropping(false);
+        fromFiles([...e.dataTransfer.files]);
+      }}
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <MessageCircleQuestion size={15} className="shrink-0 text-accent" aria-hidden />
+        <h2 id={headId} className="m-0 min-w-0 flex-1 truncate font-semibold text-accent text-body">
+          {from ? `From ${from}: ` : ""}
+          {q.header || "RustCode has a question"}
+        </h2>
+        {progress && <span className="shrink-0 text-caption text-fg-muted tabular">{progress}</span>}
       </div>
-      <div className="selectable text-body">{q.text}</div>
-      <div className={cx("flex flex-col", q.multiple ? "gap-1.5" : "gap-1")}>
+      <div
+        id={textId}
+        className="selectable overflow-y-auto whitespace-pre-wrap break-words text-body"
+        style={{ maxHeight: QUESTION_TEXT_MAX }}
+      >
+        {q.text}
+      </div>
+      <div
+        role="group"
+        aria-label="Answers"
+        className={cx("flex flex-col", q.multiple ? "gap-1.5" : "gap-1")}
+      >
         {answers.map((o, i) =>
           q.multiple ? (
-            <label key={o.id} className="flex items-start gap-2 rounded-lg px-1 py-0.5">
+            <label
+              key={o.id}
+              className="flex items-start gap-2 rounded-lg px-1 py-0.5 has-[:focus-visible]:bg-fill-subtle"
+            >
               <input
                 type="checkbox"
+                data-question-answer=""
                 className="mt-0.5 accent-[var(--rc-accent)]"
                 checked={ticked.includes(o.id)}
                 onChange={(e) =>
-                  setTicked(e.target.checked ? [...ticked, o.id] : ticked.filter((x) => x !== o.id))
+                  update((d) => ({
+                    ...d,
+                    ticked: e.target.checked ? [...d.ticked, o.id] : d.ticked.filter((x) => x !== o.id),
+                  }))
                 }
               />
-              <span>
-                <span className="block text-body">{o.name}</span>
+              <span className="min-w-0">
+                <span className="block break-words text-body">{o.name}</span>
                 {q.descriptions[i] && (
-                  <span className="block text-caption text-fg-muted">{q.descriptions[i]}</span>
+                  <span className="block break-words text-caption text-fg-muted">{q.descriptions[i]}</span>
                 )}
               </span>
             </label>
@@ -552,19 +724,27 @@ export function QuestionCard({
             <button
               key={o.id}
               type="button"
-              onClick={() => answerQuestionOptions(request, [o])}
-              className="group flex w-full items-center gap-2 rounded-lg bg-fill-subtle px-3 py-[9px] text-left hover:bg-accent/14"
+              data-question-answer=""
+              onClick={() => send([o])}
+              aria-keyshortcuts={keys && i < 9 ? String(i + 1) : undefined}
+              aria-description={
+                attachments.length
+                  ? `Sends ${attachments.length === 1 ? "the file" : "the files"} with it`
+                  : undefined
+              }
+              className="group flex w-full min-w-0 items-center gap-2 rounded-lg bg-fill-subtle px-3 py-[9px] text-left hover:bg-accent/14 focus-visible:bg-accent/14"
             >
-              <Kbd>{i + 1}</Kbd>
-              <span className="flex-1">
-                <span className="block text-body">{o.name}</span>
+              {i < 9 && <Kbd>{i + 1}</Kbd>}
+              <span className="min-w-0 flex-1">
+                <span className="block break-words text-body">{o.name}</span>
                 {q.descriptions[i] && (
-                  <span className="block text-caption text-fg-muted">{q.descriptions[i]}</span>
+                  <span className="block break-words text-caption text-fg-muted">{q.descriptions[i]}</span>
                 )}
               </span>
               <CircleArrowUp
                 size={16}
-                className="text-accent opacity-0 transition-opacity group-hover:opacity-100"
+                aria-hidden
+                className="shrink-0 text-accent opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
               />
             </button>
           ),
@@ -575,38 +755,103 @@ export function QuestionCard({
           <Pill
             prominent
             disabled={!ticked.length}
-            onClick={() =>
-              answerQuestionOptions(
-                request,
-                answers.filter((o) => ticked.includes(o.id)),
-              )
-            }
+            onClick={() => send(answers.filter((o) => ticked.includes(o.id)))}
           >
             Submit
           </Pill>
         </div>
       )}
-      <form
-        className="flex items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          answerQuestionText(request, text);
-        }}
-      >
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Or write your own answer…"
-          aria-label="Your own answer"
-          {...noTextHelpers}
-          className="h-[30px] flex-1 rounded-full bg-fill-subtle px-3 text-body outline-none placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+      {attachments.length > 0 && (
+        <AttachmentStrip
+          attachments={attachments}
+          className="-my-1 py-1"
+          onRemove={(id) => update((d) => ({ ...d, attachments: d.attachments.filter((a) => a.id !== id) }))}
         />
-        <Pill prominent type="submit" disabled={!text.trim()}>
-          Send
-        </Pill>
-        {reject && <Pill onClick={() => answerPermission(request, reject)}>{reject.name}</Pill>}
-      </form>
-    </Shell>
+      )}
+      {ownAnswer ? (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send([], text);
+          }}
+        >
+          <input
+            value={text}
+            onChange={(e) => update((d) => ({ ...d, text: e.target.value }))}
+            onPaste={(e) => {
+              const pasted = [...e.clipboardData.files];
+              if (!pasted.length || !files) return;
+              e.preventDefault();
+              fromFiles(pasted);
+            }}
+            onKeyDown={(e) => {
+              // Esc leaves the field rather than dismissing the question from inside it.
+              if (e.key === "Escape") e.currentTarget.blur();
+            }}
+            placeholder={files ? "Or write your own answer, or attach files…" : "Or write your own answer…"}
+            aria-label="Your own answer"
+            {...noTextHelpers}
+            className="h-[30px] min-w-[160px] flex-1 rounded-full bg-fill-subtle px-3 text-body outline-none placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+          />
+          <span className="flex shrink-0 items-center gap-2">
+            {files ? (
+              <Tooltip label="Attach files or images">
+                <button
+                  type="button"
+                  aria-label="Attach files"
+                  onClick={chooseFiles}
+                  className="inline-flex size-[30px] items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg"
+                >
+                  <Paperclip size={14} />
+                </button>
+              </Tooltip>
+            ) : (
+              remote && (
+                <Tooltip
+                  label={`Update RustCode on ${machine ?? "that computer"} to attach files to an answer`}
+                >
+                  <span
+                    role="img"
+                    aria-label="Attaching files needs a newer RustCode there"
+                    className="inline-flex size-[30px] items-center justify-center text-fg-faint"
+                  >
+                    <Paperclip size={14} />
+                  </span>
+                </Tooltip>
+              )
+            )}
+            <Pill prominent type="submit" disabled={!text.trim() && !attachments.length}>
+              Send
+            </Pill>
+            {reject && (
+              <Tooltip label={keys ? "Dismiss the question (esc)" : "Dismiss the question"}>
+                <Pill onClick={() => answerPermission(request, reject)}>{reject.name}</Pill>
+              </Tooltip>
+            )}
+          </span>
+          {files && (
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                const list = [...(e.target.files ?? [])];
+                e.target.value = "";
+                fromFiles(list);
+              }}
+            />
+          )}
+        </form>
+      ) : (
+        reject && (
+          <div className="flex justify-end">
+            <Pill onClick={() => answerPermission(request, reject)}>{reject.name}</Pill>
+          </div>
+        )
+      )}
+    </section>
   );
 }
 

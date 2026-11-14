@@ -309,7 +309,45 @@ describe("ACP types", () => {
       ],
       _meta: { rustcode: { kind: "question", version: 2 } },
     });
-    expect(request?.question).toEqual({ header: "H", text: "Which?", descriptions: ["a"], multiple: true });
+    expect(request?.question).toEqual({
+      header: "H",
+      text: "Which?",
+      descriptions: ["a"],
+      multiple: true,
+      attachments: false,
+      ownAnswer: true,
+    });
+    const withFiles = parsePermissionRequest(4, {
+      sessionId: "s",
+      toolCall: { toolCallId: "q", title: "Q", rawInput: { question: "Which?" } },
+      options: [{ optionId: "question_option_0", name: "A", kind: "allow_once" }],
+      _meta: {
+        rustcode: {
+          kind: "question",
+          version: 2,
+          answerKinds: ["options", "text", "attachments"],
+          step: 2,
+          steps: 3,
+        },
+      },
+    });
+    expect(withFiles?.question).toMatchObject({ attachments: true, ownAnswer: true, step: 2, steps: 3 });
+    const choicesOnly = parsePermissionRequest(5, {
+      sessionId: "s",
+      toolCall: { toolCallId: "q", title: "Q", rawInput: { question: "Which?" } },
+      options: [{ optionId: "question_option_0", name: "A", kind: "allow_once" }],
+      _meta: {
+        rustcode: {
+          kind: "question",
+          version: 2,
+          answerKinds: ["options", "attachments"],
+          step: 1,
+          steps: 1,
+        },
+      },
+    });
+    expect(choicesOnly?.question).toMatchObject({ attachments: false, ownAnswer: false });
+    expect(choicesOnly?.question?.step).toBeUndefined();
     const [a, b] = request!.options;
     expect(questionOptionsAnswer([a!, b!])).toEqual({
       outcome: { outcome: "selected", optionId: "question_option_0" },

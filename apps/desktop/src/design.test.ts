@@ -1,8 +1,8 @@
 // The design system's guard rails (docs/design.md): no raw colours or
 // palette classes outside the tokens, no retired class names, no arbitrary
 // radii, no native selects, hand-timed hover, hand-made blur or menu items,
-// no hand-styled labelled buttons, no spacing off the scale, and index.css's
-// built-in themes equal to BUILTIN_THEMES.
+// no hand-styled labelled buttons, no spacing off the scale, no native `title`
+// tips on controls, and index.css's built-in themes equal to BUILTIN_THEMES.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -42,13 +42,13 @@ const SHAPED = /(?<![\w-])rounded-(?:md|lg|full)(?![\w-])/;
  * fails the test instead of quietly allowing the next hand-styled button.
  */
 const PILL_ALLOWED: [file: string, part: string, why: string][] = [
-  ["ui/AttentionCards.tsx", "answerQuestionOptions(request, [o])", "the answers are choice rows"],
+  ["ui/AttentionCards.tsx", "send([o])", "the answers are choice rows"],
   ["ui/Board.tsx", "Unsettle", "a 24px icon button"],
   ["ui/ChatView.tsx", "px-2 font-medium", "the plan pill is a popover trigger"],
   ["ui/ChatView.tsx", "Thread status:", "the status pill is a menu trigger"],
   ["ui/Composer.tsx", "aria-pressed={wt.on}", "a worktree toggle; its fill is its state"],
   ["ui/Composer.tsx", "Attach and more", "a round icon button, the send button's size"],
-  ["ui/Composer.tsx", "Show all", "the +N thumbnail tile, sized and shaped as the pictures beside it"],
+  ["ui/Attachments.tsx", "Show all", "the +N thumbnail tile, sized and shaped as the pictures beside it"],
   ["ui/Review.tsx", "aria-current={selected === path", "a file row in the review pane"],
   ["ui/TurnChanges.tsx", "bg-fill-subtle", "the changes pill is a popover trigger"],
   ["ui/TurnTrace.tsx", "bg-fill-subtle", "the trace pill is a popover trigger"],
@@ -82,6 +82,68 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
 const SPACING_ALLOWED: [file: string, part: string, why: string][] = [];
 const SPACING =
   /(?<![\w-])(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|space-x|space-y)-(?:2|3)\.5(?![\w])/;
+
+/**
+ * A native `title` on a control is no tip at all: lib/quietNative.ts strips every `title` and keeps
+ * its text only as the `aria-label`, so the hint never shows and a keyboard never reaches it. The
+ * tip is the `Tooltip` (docs/design.md › Tooltips and hover cards), on a span around a disabled
+ * control. These files still have that many such titles from before the rule; the count only goes
+ * down, and a file that drops one must lower its number here.
+ */
+const NATIVE_TITLE_ALLOWED: Record<string, number> = {
+  "ui/ChatView.tsx": 1,
+  "ui/DelegateStatus.tsx": 1,
+  "ui/EarlierAttempts.tsx": 1,
+  "ui/Inbox.tsx": 3,
+  "ui/Markdown.tsx": 3,
+  "ui/NewThreadWidgets.tsx": 1,
+  "ui/OverviewDeliverables.tsx": 2,
+  "ui/OverviewDetails.tsx": 1,
+  "ui/OverviewProperties.tsx": 1,
+  "ui/PullRequests.tsx": 1,
+  "ui/Review.tsx": 1,
+  "ui/Rows.tsx": 4,
+  "ui/ScheduledMessages.tsx": 1,
+  "ui/Sidebar.tsx": 3,
+  "ui/StatisticsCharts.tsx": 1,
+  "ui/WorkflowRuns.tsx": 1,
+};
+/** A native control, or a `Pill` (which hands its props to a `<button>`). */
+const CONTROL_TAG = /^<(?:button|a|input|textarea|summary|Pill)\b/;
+/** Any other tag the pointer or the keyboard acts on. */
+const CONTROL_ATTR =
+  /\s(?:onClick|onPointerDown|onMouseDown|tabIndex)=|\srole="(?:button|link|tab|menuitem|option|checkbox|switch|separator)"/;
+
+/**
+ * Every opening tag of an element or a `Pill` in a file, with its `{…}` expressions, strings and
+ * comments left out: what is left names the tag's own props, so `title=` there is the tag's title.
+ */
+function ownProps(text: string): string[] {
+  const tags: string[] = [];
+  const start = /<(?:[a-z]+|Pill)[\s>]/g;
+  for (let m = start.exec(text); m; m = start.exec(text)) {
+    let depth = 0;
+    let quote = "";
+    let own = "";
+    for (let end = m.index; end < text.length; end++) {
+      const c = text[end];
+      if (!quote && c === "/" && (text[end + 1] === "/" || text[end + 1] === "*")) {
+        end = text[end + 1] === "/" ? text.indexOf("\n", end) : text.indexOf("*/", end) + 1;
+        if (end <= 0) break;
+        continue;
+      }
+      if (quote) {
+        if (c === quote) quote = "";
+      } else if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (c === ">" && depth === 0) break;
+      if (depth === 0 && c !== "}") own += c;
+    }
+    tags.push(own);
+  }
+  return tags;
+}
 
 /** Every `<button` opening tag in a file: tags span lines and hold `>` in expressions. */
 function buttonTags(text: string): string[] {
@@ -163,6 +225,28 @@ describe("design system", () => {
     }
     expect(found).toEqual([]);
     expect([...used].map(([, , why]) => `allowlist entry no longer matches a tag: ${why}`)).toEqual([]);
+  });
+
+  test("controls carry no native title, the Tooltip is the tip", () => {
+    const found: string[] = [];
+    const counts: Record<string, number> = {};
+    for (const path of files(join(SRC, "ui"))) {
+      if (!path.endsWith(".tsx")) continue;
+      const file = relative(SRC, path);
+      for (const tag of ownProps(readFileSync(path, "utf8"))) {
+        if (!/\stitle=/.test(tag) || !(CONTROL_TAG.test(tag) || CONTROL_ATTR.test(tag))) continue;
+        counts[file] = (counts[file] ?? 0) + 1;
+      }
+    }
+    for (const file of new Set([...Object.keys(counts), ...Object.keys(NATIVE_TITLE_ALLOWED)])) {
+      const has = counts[file] ?? 0;
+      const allowed = NATIVE_TITLE_ALLOWED[file] ?? 0;
+      if (has > allowed)
+        found.push(`${file}: ${has} native title on a control (allowed ${allowed}); use Tooltip`);
+      else if (has < allowed)
+        found.push(`${file}: ${has} native titles left, lower NATIVE_TITLE_ALLOWED from ${allowed}`);
+    }
+    expect(found).toEqual([]);
   });
 
   test("spacing comes from the scale, not half steps", () => {
