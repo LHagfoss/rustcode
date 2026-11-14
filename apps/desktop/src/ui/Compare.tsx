@@ -140,7 +140,7 @@ export function Compare({ fanOut }: { fanOut: string }) {
   }
   const shown = group.links.flatMap((id) => links.find((l) => l.id === id) ?? []);
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Compare">
+    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Compare" data-focus-area="main">
       <ViewHeader title={`Compare · ${group.title}`}>
         <Pill onClick={() => selectThread(group.orchestrator)}>Back to the thread</Pill>
       </ViewHeader>

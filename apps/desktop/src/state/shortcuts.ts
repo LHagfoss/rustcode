@@ -5,6 +5,7 @@
 // "find-in-thread" is not here: the transcript owns its find bar and matches
 // the same table itself (ui/Transcript.tsx).
 
+import { cycleFocusArea } from "../lib/focusAreas";
 import { stepZoom } from "../lib/zoom";
 import { chooseFolder } from "./folders";
 import {
@@ -59,6 +60,12 @@ export function runShortcut(command: string): boolean {
     case "toggle-terminal":
       setTerminalOpen(!s.terminalOpen);
       return true;
+    case "focus-next-area":
+    case "focus-previous-area":
+      // The palette, a confirmation and a permission request keep the keyboard; a dialog or a
+      // menu that has focus is left alone by `cycleFocusArea` itself.
+      if (s.switcherOpen || s.confirm || s.grant || s.onboardingOpen) return false;
+      return cycleFocusArea(command === "focus-next-area" ? 1 : -1);
     case "zoom-in":
       zoom(1);
       return true;

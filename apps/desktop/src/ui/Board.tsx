@@ -180,7 +180,7 @@ export function Board() {
   );
   const idle = sessions.filter((x) => !(x.id in archived) && statuses[x.id] === "idle").length;
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Board">
+    <main className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Board" data-focus-area="main">
       <ViewHeader title="Board">
         <span className="text-caption text-fg-muted">{idle} idle in the list</span>
       </ViewHeader>
