@@ -194,6 +194,27 @@ selector; credentials, accounts, the default project folder, Remote access and
 the machines list are machine-only and shown for one machine at a time —
 credentials are never editable over a remote connection.
 
+**Settings a project overrides.** **Applying to** has a second choice: All
+projects (the default) or one project (`useProjectScope` in
+`src/state/settingsScope.ts`). With a project chosen, the rows a project may
+set show the project's value and where it comes from (Built-in default,
+Machine's value, or This project) with the layers mark; the hover card gives
+each machine's layer, and **Use the machine's value** removes the override.
+Those rows are the default harness, model and effort, Default access,
+Continue threads after a restart, Continue threads on their own, Auto-compact
+and its threshold (`PROJECT_SETTING_KEYS` in `src/state/settingsRegistry.ts`).
+Other server rows are read-only with a short reason: delegation limits, wake
+batching, workflow limits, presets and limit fallback act across every thread
+on a machine. Credentials, accounts, machine-only rows and app preferences are
+never per project. Under All machines a project override is written on every
+connected machine that has the project, matched as **Run on** matches it
+(`src/state/projects.ts`); the bar lists the machines without it as skipped.
+The engine keeps the overrides with each machine's `settings.json` and
+resolves default → machine → project (docs/configuration.md). Settings ›
+Permissions › Projects and a project's harness (`update_project`) write the
+same override on this machine, and the app's earlier per-project values are
+moved into it once.
+
 **Permissions.** What a thread may do without asking is one of three modes:
 Ask, Auto-edit and Full access (`src/state/permissions.ts`). Settings ›
 Permissions (`src/ui/PermissionsPage.tsx`) holds the default (a server
