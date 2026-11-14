@@ -5880,7 +5880,9 @@ export function answerSecret(request: PermissionRequest, value: string | null): 
   const answered = reply(request, result);
   if (answered) {
     const text =
-      value === null ? "Declined" : `Secret ${request.secret.name}: ${secretTargets(request.secret).join("; ")}`;
+      value === null
+        ? "Declined"
+        : `Secret ${request.secret.name}: ${secretTargets(request.secret).join("; ")}`;
     set((s) => ({
       resolvedApprovals: {
         ...s.resolvedApprovals,
