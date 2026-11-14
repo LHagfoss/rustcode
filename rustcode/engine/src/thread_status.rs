@@ -260,6 +260,8 @@ pub(crate) fn set(session_id: &str, status: &str) -> Result<(), String> {
     crate::data_store::record_thread_settled(session_id, status == Status::Done);
     if status == Status::Done {
         crate::orchestration::local_threads::clear_waiting_links(session_id);
+        // The project's settle action (clearing build output) runs in its worktree.
+        crate::project_hooks::on_settle(session_id);
     }
     notify(session_id);
     Ok(())

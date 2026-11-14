@@ -8,6 +8,7 @@ import {
   sanitizeProjectActions,
   takeTerminalCommands,
   withProjectActions,
+  worktreeHooks,
 } from "./projectActions";
 
 describe("project actions", () => {
@@ -70,5 +71,39 @@ describe("project actions", () => {
     expect(takeTerminalCommands("/app")).toEqual(["bun run dev", "bun run check"]);
     expect(takeTerminalCommands("/app")).toEqual([]);
     expect(takeTerminalCommands("/other")).toEqual(["ls"]);
+  });
+});
+
+describe("worktree hooks", () => {
+  test("only the first action of each kind keeps its hook flag", () => {
+    const map = withProjectActions({}, "/p", [
+      { name: "Install", command: "bun install", onCreate: true, wait: true },
+      { name: "Also", command: "npm i", onCreate: true, onSettle: true },
+      { name: "Clean", command: "rm -rf dist", onSettle: true },
+    ]);
+    const list = map["/p"] ?? [];
+    expect(list.map((a) => [a.onCreate, a.wait, a.onSettle])).toEqual([
+      [true, true, undefined],
+      [undefined, undefined, true],
+      [undefined, undefined, undefined],
+    ]);
+    expect(sanitizeProjectActions(map)).toEqual(map);
+  });
+
+  test("wait needs run-on-create", () => {
+    const map = withProjectActions({}, "/p", [{ name: "Dev", command: "bun run dev", wait: true }]);
+    expect(map["/p"]?.[0]?.wait).toBeUndefined();
+  });
+
+  test("session/new carries the create and settle hooks", () => {
+    const list = withProjectActions({}, "/p", [
+      { name: "Install", command: "bun install", onCreate: true },
+      { name: "Clean", command: "rm -rf dist", onSettle: true },
+    ])["/p"];
+    expect(worktreeHooks(list ?? [])).toEqual({
+      create: { name: "Install", command: "bun install", wait: false },
+      settle: { name: "Clean", command: "rm -rf dist" },
+    });
+    expect(worktreeHooks([{ id: "dev", name: "Dev", command: "bun run dev" }])).toBeUndefined();
   });
 });

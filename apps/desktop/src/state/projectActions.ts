@@ -2,7 +2,9 @@
 // thread header's Actions menu and ⌘K run in the workspace terminal, in the thread's own folder.
 // They belong to the project, not the thread, so a main checkout and its worktrees share one list
 // (the key is the session's `repo`, else its folder). Kept in this app's storage; nothing is sent
-// to the engine or the agent.
+// to the agent. One action may run when a worktree of the project is created, and one when a thread
+// in such a worktree settles: `session/new` carries those to the engine, which runs them (`worktreeHooks`,
+// rustcode/engine/src/project_hooks.rs). A repository's `.rustcode/actions.json` wins over them.
 //
 // The terminal side is a small queue: `runInTerminal` opens the panel and leaves the command for
 // the terminal of that folder, which writes it once its shell is up (ui/TerminalPanel.tsx).
@@ -15,7 +17,17 @@ export interface ProjectAction {
   id: string;
   name: string;
   command: string;
+  /** Run when a worktree of the project is created (at most one action per project). */
+  onCreate?: boolean;
+  /** With `onCreate`: the thread's first turn waits until it exits. */
+  wait?: boolean;
+  /** Run in a thread's worktree when the thread settles (at most one action per project). */
+  onSettle?: boolean;
 }
+
+export type ActionRow = Pick<ProjectAction, "name" | "command" | "onCreate" | "wait" | "onSettle"> & {
+  id?: string;
+};
 
 /** Every project's actions, by project key. */
 export type ProjectActionsMap = Record<string, ProjectAction[]>;
@@ -56,11 +68,41 @@ export function sanitizeProjectActions(raw: unknown): ProjectActionsMap {
     for (const entry of list) {
       if (!isAction(entry) || seen.has(entry.id)) continue;
       seen.add(entry.id);
-      actions.push(entry);
+      actions.push(withFlags({ id: entry.id, name: entry.name, command: entry.command }, entry, actions));
     }
     if (actions.length) out[project] = actions.slice(0, MAX_ACTIONS);
   }
   return out;
+}
+
+/** `action` with the hook flags `from` asks for, each kept only while no earlier action has it. */
+function withFlags(
+  action: ProjectAction,
+  from: Partial<ProjectAction>,
+  before: readonly ProjectAction[],
+): ProjectAction {
+  const out = { ...action };
+  if (from.onCreate === true && !before.some((a) => a.onCreate)) {
+    out.onCreate = true;
+    if (from.wait === true) out.wait = true;
+  }
+  if (from.onSettle === true && !before.some((a) => a.onSettle)) out.onSettle = true;
+  return out;
+}
+
+/** What `session/new` sends for a new worktree of the project: `{ create, settle }`, or none. */
+export function worktreeHooks(
+  actions: readonly ProjectAction[],
+):
+  | { create?: { name: string; command: string; wait: boolean }; settle?: { name: string; command: string } }
+  | undefined {
+  const create = actions.find((a) => a.onCreate);
+  const settle = actions.find((a) => a.onSettle);
+  if (!create && !settle) return undefined;
+  return {
+    ...(create ? { create: { name: create.name, command: create.command, wait: !!create.wait } } : {}),
+    ...(settle ? { settle: { name: settle.name, command: settle.command } } : {}),
+  };
 }
 
 /** An id for a new action from its name, unique among the project's: `dev`, `dev-2`. */
@@ -86,7 +128,7 @@ export function actionId(name: string, taken: readonly ProjectAction[]): string 
 export function withProjectActions(
   map: ProjectActionsMap,
   project: string,
-  rows: readonly { id?: string; name: string; command: string }[],
+  rows: readonly ActionRow[],
 ): ProjectActionsMap {
   const actions: ProjectAction[] = [];
   for (const row of rows) {
@@ -94,7 +136,7 @@ export function withProjectActions(
     const command = row.command.trim();
     if (!name || !command || actions.length >= MAX_ACTIONS) continue;
     const id = row.id && !actions.some((a) => a.id === row.id) ? row.id : actionId(name, actions);
-    actions.push({ id, name, command });
+    actions.push(withFlags({ id, name, command }, row, actions));
   }
   const next = { ...map };
   if (actions.length) next[project] = actions;
@@ -117,10 +159,7 @@ export function projectActions(project: string): ProjectAction[] {
   return readActions()[project] ?? NONE;
 }
 
-export function saveProjectActions(
-  project: string,
-  rows: readonly { id?: string; name: string; command: string }[],
-): void {
+export function saveProjectActions(project: string, rows: readonly ActionRow[]): void {
   writePref(PROJECT_ACTIONS_KEY, withProjectActions(readActions(), project, rows));
 }
 
