@@ -2047,6 +2047,31 @@ leave the draft and show a quiet status message. No git write happens until
 you confirm the sheet. The selected generator also writes first-prompt titles
 for every harness; title renames made while it runs are preserved.
 
+### Voice dictation
+
+Say a prompt instead of typing it. The microphone button in the composer's
+tray (beside the model picker) and `⌘⇧D` (Ctrl+Shift+D elsewhere; rebind it in
+Settings › Keyboard) start a recording. The button turns into a red dot with
+the elapsed time; press the button or the shortcut again to finish, or Esc to
+discard. In **Hold to talk** mode, recording lasts while the button or the
+shortcut is held. The audio is transcribed and the text is put at the caret
+(replacing a selection) in the draft. It never sends on its own.
+
+Nothing is recorded or sent until Settings › Agents › Voice › **Transcribe
+with** names a provider; while it is Off, the button opens that page. The
+providers are the OpenAI and custom OpenAI-compatible entries from Text
+generation, with their keys (any endpoint that serves `/audio/transcriptions`).
+Anthropic and OpenRouter entries are not listed: neither offers a
+speech-to-text endpoint. The model defaults to `gpt-4o-mini-transcribe`, and an
+optional language code (`en`, `nb`) skips detection. A recording stops at five
+minutes and is transcribed. A denied microphone, a missing provider, a
+recording that is too long or a network failure each shows a message, and the
+draft stays as it was. The audio is never stored: it is not in the thread's
+history, the logs or a file.
+
+On macOS the app's `Info.plist` carries `NSMicrophoneUsageDescription`, so
+the system asks for the microphone the first time.
+
 ### App links
 
 Installed desktop builds register `rustcode://` on macOS, Windows and Linux.

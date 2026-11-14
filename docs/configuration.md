@@ -632,3 +632,13 @@ Non-secret definitions and the selected ID live in `text-generators.json`
 beside the engine config. Keys live in the provider credential store.
 With none selected, existing thread title and git draft behavior is retained.
 Requests are tool-free, limited to 24,000 input characters and 45 seconds.
+### Voice dictation
+
+Settings › Agents › Voice is kept by the desktop app on this machine
+(`rustcode.voice` in its storage): `generator` (a text generator ID with an
+`openai` or `custom` provider, or null for Off, the default), `model`
+(default `gpt-4o-mini-transcribe`), `language` (empty detects it) and `mode`
+(`toggle` or `hold`). The key is that generator's, in the provider credential
+store. The engine sends recordings of at most 10 MB and five minutes to
+`<base URL>/audio/transcriptions` and gives up after 60 seconds.
+

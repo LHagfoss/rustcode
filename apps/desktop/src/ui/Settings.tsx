@@ -4,6 +4,7 @@ import { dirname } from "../lib/paths";
 import { appPlatform, currentPlatform } from "../lib/platform";
 import { ComputerUseGroup } from "./ComputerUseGroup";
 import { TextGeneration } from "./TextGeneration";
+import { VoiceGroup } from "./VoiceGroup";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -721,6 +722,7 @@ function AgentsPage() {
         )}
       </Group>
       {thisMachine && <TextGeneration />}
+      {thisMachine && <VoiceGroup />}
       {thisMachine && <ComputerUseGroup />}
       <OrchestrationGroup />
       <WorkflowsGroup />
