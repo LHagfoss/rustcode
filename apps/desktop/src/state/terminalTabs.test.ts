@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   activeTab,
+  foldersOf,
+  MAX_FOLDERS,
   MAX_TABS_PER_FOLDER,
   TERMINAL_CONTEXT_LINES,
   type TerminalTabs,
@@ -8,8 +10,10 @@ import {
   terminalContext,
   terminalContextLabel,
   withActionTab,
+  withExited,
   withFolder,
   withNewTab,
+  withOpenedFolder,
   withoutTab,
   withStep,
   withTitle,
@@ -103,5 +107,81 @@ describe("terminal output as message context", () => {
 
   test("output holding a fence gets a longer one", () => {
     expect(terminalContext("```js\nx\n```", "zsh")).toContain("````\n```js");
+  });
+});
+
+describe("terminal folders", () => {
+  /** Opens each folder in turn, as visiting threads with the panel open does. */
+  const visit = (s: TerminalTabs, ...dirs: string[]) => {
+    const evicted: string[] = [];
+    for (const dir of dirs) {
+      const next = withOpenedFolder(s, dir);
+      s = next.state;
+      if (next.evicted) evicted.push(next.evicted.cwd);
+    }
+    return { s, evicted };
+  };
+
+  test("the cap is four folders", () => {
+    expect(MAX_FOLDERS).toBe(4);
+  });
+
+  test("a fifth folder closes the least recently used one, once, and the state settles", () => {
+    const { s, evicted } = visit(empty, "/a", "/b", "/c", "/d", "/a", "/e");
+    expect(evicted).toEqual(["/b"]);
+    expect(foldersOf(s).sort()).toEqual(["/a", "/c", "/d", "/e"]);
+    expect(s.active["/b"]).toBeUndefined();
+    // Showing the same folder again changes nothing: no update, so no effect runs again.
+    expect(withOpenedFolder(s, "/e").state).toBe(s);
+    expect(withOpenedFolder(s, "/e").evicted).toBeUndefined();
+  });
+
+  test("an evicted folder is gone from the state, so nothing mounts it again", () => {
+    const { s } = visit(empty, "/a", "/b", "/c", "/d", "/e");
+    expect(tabsOf(s, "/a")).toEqual([]);
+    expect(foldersOf(s)).toHaveLength(MAX_FOLDERS);
+    // Revisiting it starts a fresh shell and closes the next oldest.
+    const again = withOpenedFolder(s, "/a");
+    expect(again.evicted?.cwd).toBe("/b");
+    expect(foldersOf(again.state)).toHaveLength(MAX_FOLDERS);
+  });
+
+  test("many folders never leave more than the cap", () => {
+    const dirs = Array.from({ length: 20 }, (_, i) => `/w${i}`);
+    const { s, evicted } = visit(empty, ...dirs);
+    expect(foldersOf(s)).toEqual(dirs.slice(-MAX_FOLDERS));
+    expect(evicted).toEqual(dirs.slice(0, -MAX_FOLDERS));
+  });
+
+  test("a folder running a project action is kept over an idle one", () => {
+    let s = visit(empty, "/a", "/b", "/c", "/d").s;
+    s = withActionTab(s, "/a", { id: "dev", name: "Dev server" }, "dev").state;
+    const next = withOpenedFolder(s, "/e");
+    expect(next.evicted).toEqual({ cwd: "/b", busy: false });
+    expect(tabsOf(next.state, "/a").map((t) => t.id)).toContain("dev");
+  });
+
+  test("an action tab whose shell exited does not keep its folder", () => {
+    let s = visit(empty, "/a", "/b", "/c", "/d").s;
+    s = withActionTab(s, "/a", { id: "dev", name: "Dev server" }, "dev").state;
+    s = withExited(s, "dev", true);
+    expect(withOpenedFolder(s, "/e").evicted).toEqual({ cwd: "/a", busy: false });
+  });
+
+  test("when every other folder runs an action, the oldest closes and says so", () => {
+    let s = visit(empty, "/a", "/b", "/c", "/d").s;
+    for (const dir of ["/a", "/b", "/c", "/d"]) s = withActionTab(s, dir, { id: "dev", name: "Dev" }).state;
+    expect(withOpenedFolder(s, "/e").evicted).toEqual({ cwd: "/a", busy: true });
+  });
+
+  test("an action run in a fifth folder with the panel hidden closes nothing", () => {
+    let s = visit(empty, "/a", "/b", "/c", "/d").s;
+    s = withActionTab(s, "/e", { id: "dev", name: "Dev" }, "dev").state;
+    expect(foldersOf(s)).toHaveLength(5);
+    // Opening the panel on that folder then evicts once, and never the action's own folder.
+    const next = withOpenedFolder(s, "/e");
+    expect(next.evicted?.cwd).toBe("/a");
+    expect(tabsOf(next.state, "/e").map((t) => t.id)).toEqual(["dev"]);
+    expect(withOpenedFolder(next.state, "/e").state).toBe(next.state);
   });
 });
