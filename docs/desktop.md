@@ -937,6 +937,21 @@ composer's keys stay outside the table.
   `state/projectActions.ts`). ⌘K lists them as `Run: ‹name›` with *Edit
   project actions…*. A thread on another computer shows the button disabled,
   like the terminal.
+- **Worktree setup and settle actions.** In the actions editor one action
+  can be marked *Run when a worktree is created* (optionally *Agent waits for
+  it*) and one *Run when the thread settles*. A repository can share them in
+  `.rustcode/actions.json`:
+  `{ "actions": [{ "name": "Install", "command": "bun install",
+  "runOnWorktreeCreate": true, "wait": true }, { "name": "Clean", "command":
+  "rm -rf dist", "runOnSettle": true }] }`. The file wins a slot both fill.
+  The app sends its own in `session/new` (`_meta.rustcode.worktree.hooks`);
+  the engine merges them, records them on the worktree and runs them there
+  (`engine/src/project_hooks.rs`), so delegates started by `start_session`
+  get the same setup. The create action starts when the worktree is made;
+  with *wait* the thread's first turn is held until it exits (at most 10
+  minutes), and a failure is told to the agent at the top of that turn with
+  the output tail. The settle action runs in the background when the thread
+  is marked settled.
 - **Window.** The window opens at the size it was last closed with
   (`webview.rs` keeps it as logical points in `window.json` under the app's
   config folder; closing the window or quitting writes it, and a missing or

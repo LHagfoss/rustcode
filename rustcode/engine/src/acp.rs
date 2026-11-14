@@ -4133,7 +4133,13 @@ async fn serve_connection(
                         // it runs on if the client goes, and only its answer
                         // is lost.
                         spawn_turn(async move {
-                            let result = external.prompt(request.prompt).await;
+                            // A worktree whose setup the project waits for holds the
+                            // turn until it is done; a failure is the agent's first read.
+                            let mut prompt = request.prompt;
+                            if let Some(note) = crate::project_hooks::wait_setup(&turn_session).await {
+                                prompt.insert(0, ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(note)));
+                            }
+                            let result = external.prompt(prompt).await;
                             remote.note_turn_returned(&turn_session);
                             match result {
                                 Ok(stop_reason) => {
@@ -4223,6 +4229,12 @@ async fn serve_connection(
                     // The turn belongs to the engine, not this connection: it
                     // runs on if the client goes, and only its answer is lost.
                     spawn_turn(async move {
+                        // A worktree whose setup the project waits for holds the turn
+                        // until it is done; a failure is the agent's first read.
+                        let text = match crate::project_hooks::wait_setup(&session_id).await {
+                            Some(note) => format!("{note}{text}"),
+                            None => text,
+                        };
                         let result = prompt::run_prompt(
                             Arc::clone(&state),
                             cwd,

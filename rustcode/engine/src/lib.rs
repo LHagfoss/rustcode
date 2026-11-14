@@ -46,6 +46,7 @@ pub use orchestration::mcp_server::run_outside as run_mcp_connect;
 pub use orchestration::outside::TOKEN_ENV as MCP_CONNECT_TOKEN_ENV;
 mod platform;
 pub mod preview;
+mod project_hooks;
 pub mod prompt_commands;
 pub mod provider_auth;
 pub mod pull_requests;

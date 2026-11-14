@@ -263,6 +263,7 @@ import {
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
+import { projectKey as actionsProjectKey, projectActions, worktreeHooks } from "./projectActions";
 import { projectChoice, projectKey } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
 import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
@@ -3348,6 +3349,10 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
     const w: JsonObject = { repo: options.worktree.repo };
     if (options.worktree.branch) w.branch = options.worktree.branch;
     if (options.worktree.title) w.title = options.worktree.title;
+    // The project's setup and settle actions (state/projectActions.ts); the engine runs them in the
+    // worktree, the repository's own `.rustcode/actions.json` winning a slot both fill.
+    const hooks = worktreeHooks(projectActions(actionsProjectKey(options.worktree.repo)));
+    if (hooks) w.hooks = hooks as unknown as JsonObject;
     meta.worktree = w;
   }
   // The engine keeps this in the thread's own metadata, so pruning the link

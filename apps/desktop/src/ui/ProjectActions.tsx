@@ -121,6 +121,9 @@ interface Row {
   id?: string;
   name: string;
   command: string;
+  onCreate?: boolean;
+  wait?: boolean;
+  onSettle?: boolean;
 }
 
 let nextKey = 0;
@@ -166,33 +169,92 @@ export function ProjectActionsEditor() {
             </Dialog.Title>
             <p id="project-actions-hint" className="text-callout text-fg-muted">
               Commands you run often in this project. Each runs in its own tab of the thread's terminal (⌘J),
-              in its folder; worktrees of the project share the list. Kept on this computer.
+              in its folder; worktrees of the project share the list. Kept on this computer. One action can
+              set up each new worktree (the agent can wait for it) and one can run when a worktree thread
+              settles; a repository's .rustcode/actions.json wins over these.
             </p>
             <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
               {rows.map((row, i) => (
-                <div key={row.key} className="flex items-center gap-2">
-                  <input
-                    aria-label={`Action ${i + 1} name`}
-                    className={cx(inputClass, "w-[140px] shrink-0")}
-                    placeholder="Dev server"
-                    value={row.name}
-                    onChange={(e) => update(row.key, { name: e.target.value })}
-                  />
-                  <input
-                    aria-label={`Action ${i + 1} command`}
-                    className={cx(inputClass, "min-w-0 flex-1 font-mono")}
-                    placeholder="bun run dev"
-                    spellCheck={false}
-                    value={row.command}
-                    onChange={(e) => update(row.key, { command: e.target.value })}
-                  />
-                  <ClusterButton
-                    label={`Remove action ${i + 1}`}
-                    tooltip="Remove"
-                    onClick={() => setRows((list) => list.filter((r) => r.key !== row.key))}
-                  >
-                    <Trash2 size={13} />
-                  </ClusterButton>
+                <div key={row.key} className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <input
+                      aria-label={`Action ${i + 1} name`}
+                      className={cx(inputClass, "w-[140px] shrink-0")}
+                      placeholder="Dev server"
+                      value={row.name}
+                      onChange={(e) => update(row.key, { name: e.target.value })}
+                    />
+                    <input
+                      aria-label={`Action ${i + 1} command`}
+                      className={cx(inputClass, "min-w-0 flex-1 font-mono")}
+                      placeholder="bun run dev"
+                      spellCheck={false}
+                      value={row.command}
+                      onChange={(e) => update(row.key, { command: e.target.value })}
+                    />
+                    <ClusterButton
+                      label={`Remove action ${i + 1}`}
+                      tooltip="Remove"
+                      onClick={() => setRows((list) => list.filter((r) => r.key !== row.key))}
+                    >
+                      <Trash2 size={13} />
+                    </ClusterButton>
+                  </div>
+                  <div className="flex items-center gap-3 pl-1 text-caption text-fg-muted">
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        className="accent-[var(--rc-accent)]"
+                        checked={!!row.onCreate}
+                        onChange={(e) =>
+                          setRows((list) =>
+                            list.map((r) =>
+                              r.key === row.key
+                                ? {
+                                    ...r,
+                                    onCreate: e.target.checked,
+                                    wait: e.target.checked ? r.wait : false,
+                                  }
+                                : e.target.checked
+                                  ? { ...r, onCreate: false, wait: false }
+                                  : r,
+                            ),
+                          )
+                        }
+                      />
+                      Run when a worktree is created
+                    </label>
+                    {row.onCreate && (
+                      <label className="flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          className="accent-[var(--rc-accent)]"
+                          checked={!!row.wait}
+                          onChange={(e) => update(row.key, { wait: e.target.checked })}
+                        />
+                        Agent waits for it
+                      </label>
+                    )}
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        className="accent-[var(--rc-accent)]"
+                        checked={!!row.onSettle}
+                        onChange={(e) =>
+                          setRows((list) =>
+                            list.map((r) =>
+                              r.key === row.key
+                                ? { ...r, onSettle: e.target.checked }
+                                : e.target.checked
+                                  ? { ...r, onSettle: false }
+                                  : r,
+                            ),
+                          )
+                        }
+                      />
+                      Run when the thread settles
+                    </label>
+                  </div>
                 </div>
               ))}
             </div>

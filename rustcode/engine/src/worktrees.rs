@@ -37,6 +37,9 @@ struct Record {
     worktree: Worktree,
     #[serde(default)]
     session_ids: Vec<String>,
+    /// The project actions that run on their own in this worktree (#3725).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hooks: Option<crate::project_hooks::Hooks>,
 }
 
 /// Why a request failed; `reason` goes to `error.data.reason`.
@@ -253,6 +256,18 @@ fn record_path(path: &Path) -> Option<PathBuf> {
 fn load_record(path: &Path) -> Option<Record> {
     let text = std::fs::read_to_string(record_path(path)?).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// The hooks recorded for the worktree at `path` when it was created.
+pub(crate) fn hooks_of(path: &Path) -> Option<crate::project_hooks::Hooks> {
+    load_record(path)?.hooks
+}
+
+fn save_hooks(path: &Path, hooks: &crate::project_hooks::Hooks) {
+    if let Some(mut record) = load_record(path) {
+        record.hooks = Some(hooks.clone()).filter(|hooks| !hooks.is_empty());
+        save_record(&record);
+    }
 }
 
 fn save_record(record: &Record) {
@@ -506,6 +521,7 @@ pub(crate) fn create(request: &CreateRequest) -> Result<Worktree, WorktreeError>
     save_record(&Record {
         worktree: worktree.clone(),
         session_ids: Vec::new(),
+        hooks: None,
     });
     Ok(worktree)
 }
@@ -1809,6 +1825,7 @@ pub(crate) fn attach(session_id: &str, worktree: &Worktree) {
     let mut record = load_record(&worktree.path).unwrap_or_else(|| Record {
         worktree: worktree.clone(),
         session_ids: Vec::new(),
+        hooks: None,
     });
     if !record.session_ids.iter().any(|id| id == session_id) {
         record.session_ids.push(session_id.to_owned());
@@ -1929,6 +1946,15 @@ pub(crate) fn prepare_new(
     };
     let worktree = create(&asked).map_err(WorktreeError::into_acp)?;
     request.cwd = worktree.path.clone();
+    // The project's own setup (`bun install`) starts now, in the worktree; a
+    // waiting one holds the thread's first turn (`project_hooks::wait_setup`).
+    let hooks = crate::project_hooks::resolve(&worktree.path, request.meta.as_ref());
+    if !hooks.is_empty() {
+        save_hooks(&worktree.path, &hooks);
+    }
+    if let Some(hook) = hooks.create {
+        crate::project_hooks::start_create(&worktree.path, hook);
+    }
     Ok((request, Some(worktree)))
 }
 
