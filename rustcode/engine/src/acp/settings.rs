@@ -29,6 +29,7 @@ pub(crate) const SETTINGS_FILE: &str = "settings.json";
 /// one the registry declares is stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingType {
+    Object,
     Boolean,
     Number,
     Text,
@@ -43,6 +44,7 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
     static REGISTRY: OnceLock<Vec<(&'static str, SettingType, Value)>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         vec![
+            ("computer-use", SettingType::Object, json!({})),
             ("default-permission-mode", SettingType::Text, json!("ask")),
             ("resume-after-restart", SettingType::Boolean, json!(true)),
             ("continue-after-limit", SettingType::Boolean, json!(true)),
@@ -132,6 +134,7 @@ fn read_values(path: &PathBuf) -> Map<String, Value> {
 
 fn value_matches(kind: SettingType, value: &Value) -> bool {
     match kind {
+        SettingType::Object => value.is_object(),
         SettingType::Boolean => value.is_boolean(),
         SettingType::Number => value.as_f64().is_some_and(|n| n.is_finite()),
         SettingType::Text => value.is_string(),
@@ -180,7 +183,11 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
         let (key, _, default) = registry_entry(key).expect("checked above");
         values.insert(
             key.to_owned(),
-            stored.get(key).cloned().unwrap_or_else(|| default.clone()),
+            if key == "computer-use" {
+                crate::computer_use::settings_value()
+            } else {
+                stored.get(key).cloned().unwrap_or_else(|| default.clone())
+            },
         );
     }
     let stored_keys: Vec<String> = stored.keys().cloned().collect();
@@ -211,6 +218,11 @@ pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_p
         if !value_matches(kind, value) {
             return Err(agent_client_protocol::Error::invalid_params()
                 .data(format!("setting '{known}' has the wrong type")));
+        }
+        if known == "computer-use" {
+            crate::computer_use::save_settings(value)
+                .map_err(|e| agent_client_protocol::Error::invalid_params().data(e))?;
+            continue;
         }
         values.insert(known.to_owned(), value.clone());
     }

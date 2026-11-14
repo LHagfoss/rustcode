@@ -4097,6 +4097,11 @@ export class MockEngine {
         this.presence = params.enabled === true;
         return { enabled: this.presence, discordDetected: true };
       case "_rustcode/settings/get": {
+        this.serverSettings["computer-use"] ??= {
+          enabled: false,
+          allowed_domains: [],
+          browser_available: false,
+        };
         const keys = arr(params.keys).flatMap((key) => (typeof key === "string" ? [key] : []));
         const values = keys.length
           ? Object.fromEntries(

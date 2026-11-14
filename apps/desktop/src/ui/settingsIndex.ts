@@ -17,6 +17,11 @@ export interface SettingEntry {
 }
 
 export const SETTINGS_INDEX: SettingEntry[] = [
+  {
+    section: "agents",
+    title: "Computer use",
+    keywords: "browser chrome chromium allowlist domains approval headless",
+  },
   // ------------------------------------------------------------ General
   {
     section: "general",
