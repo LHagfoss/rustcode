@@ -1108,16 +1108,20 @@ mod tests {
 
     #[test]
     fn an_unknown_address_is_never_encrypted() {
+        // A public address or name is public.
         for address in [
             "203.0.113.9:17879",
             "example.org",
-            "not an address at all",
             "",
             "[2001:db8::1]:17879",
         ] {
             let route = Route::new(address);
             assert_eq!(route.kind, RouteKind::Public, "{address}");
             assert!(!route.is_encrypted(), "{address}");
+        }
+        // A bare name is taken for a LAN host, and a LAN host is never encrypted.
+        for address in ["not an address at all", "studio", "studio.local"] {
+            assert!(!Route::new(address).is_encrypted(), "{address}");
         }
     }
 
