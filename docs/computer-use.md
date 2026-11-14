@@ -10,7 +10,10 @@ approval channels, denial and cancellation fail closed.
 
 ## Enable
 
-This preview is **off by default** and config-only. In your user
+This preview is **off by default**. Open **Settings → Harnesses → Computer use**
+on this machine, enable Browser tools and add allowed domains. The section
+reports when Chrome/Chromium needs installing. Every action asks for approval.
+Only headless mode is currently supported. You can also edit your user
 `~/.config/rustcode/config.toml` (or `RUSTCODE_CONFIG_DIR/config.toml`), add:
 
 ```toml
@@ -49,4 +52,4 @@ locations, visible text capped at 32000 characters, CSS click and text insertion
 Navigation may return before a page finishes loading; read again after a slow
 page settles. Calls time out, and a failed or cancelled call closes that
 thread's browser. Popups are blocked. No arbitrary JavaScript tool, desktop
-control, uploads, downloads UI, Windows integration or Settings UI is provided.
+control, uploads, downloads UI, Windows integration is provided.
