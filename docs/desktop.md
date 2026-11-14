@@ -622,6 +622,11 @@ composer's keys stay outside the table.
   itself shows as working with a quiet "Background task finished" line saying
   why it ran again. A call whose task state never comes back can then only
   leave the wrong waiting line, never a row spinning forever.
+- **Open in Editor.** The header's project button (and the project picker
+  anywhere) offers *Open in Editor* beside *Open in Finder* and *Open in
+  Terminal*: the thread's folder opens in the first editor with a command
+  line tool installed, VS Code, Cursor or Zed (`open_folder_in_editor` in
+  `src-tauri/src/native.rs`); with none, a toast says which to install.
 - **Pull requests.** A panel lists the project's pull requests
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
@@ -886,11 +891,6 @@ composer's keys stay outside the table.
   attached count.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
-- **Open in Editor.** The header's project button (and the project picker
-  anywhere) offers *Open in Editor* beside *Open in Finder* and *Open in
-  Terminal*: the thread's folder opens in the first editor with a command
-  line tool installed, VS Code, Cursor or Zed (`open_folder_in_editor` in
-  `src-tauri/src/native.rs`); with none, a toast says which to install.
 - **Window.** The window opens at the size it was last closed with
   (`webview.rs` keeps it as logical points in `window.json` under the app's
   config folder; closing the window or quitting writes it, and a missing or
