@@ -2007,11 +2007,13 @@ From the SwiftUI app, still missing or partial:
 - A file reference that is changed in the turn does not open the Changes
   or Review diff yet.
 - Sticky turn bar, stream pacing, quote in reply.
-- The auto-approve (YOLO) toggle on approval cards.
+- Switching a thread to Full access from an approval card. The composer's
+  permission menu and Settings › Permissions set the mode, and a card offers
+  Always allow for that call.
 - Subagents' verification status and background agents of threads off
   screen (subagents of a thread whose agents were listed nest under it).
 - Pull request line comments and the diff view in the review.
-- Changes panel: branch mode, renames' old paths, syntax colours in diffs.
+- Changes panel: branch mode, renames' old paths.
 - Localhost preview, the Smart UI agent preview (`smart_ui_preview`,
   `smartUi = 2`). `rustcode-viz` cards have Copy source but not Copy as
   Text or VoiceOver summaries.
@@ -2019,9 +2021,7 @@ From the SwiftUI app, still missing or partial:
   are not offered.
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
-- GitHub sign-in flow, model account switching (Connections is read-only),
-  keybinding editor, Discord presence, revoking a paired device (Settings ›
-  Remote access lists them; `rustcode remote revoke` in a terminal revokes).
+- GitHub sign-in flow, model account switching (Connections is read-only).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The
   Smart UI `rcui://` path was checked by unit test and the page itself in
