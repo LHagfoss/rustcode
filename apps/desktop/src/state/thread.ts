@@ -321,11 +321,23 @@ export const PULL_MARK = "<!-- rustcode:pull -->";
 export const withPullMark = (text: string) => `${text}\n\n${PULL_MARK}`;
 
 /**
+ * The marker the note that a workflow run ended carries (`state/workflows.ts`): the app tells the
+ * thread that started the run, so it reads as a notice row ("Workflow review: done").
+ */
+export const WORKFLOW_MARK = "<!-- rustcode:workflow -->";
+
+/** A workflow run's ending for the thread that started it, marked as the app's own. */
+export const withWorkflowMark = (text: string) => `${text}\n\n${WORKFLOW_MARK}`;
+
+/**
  * Whether a message is the app's own notice: continuing the thread after a compaction or a restart,
- * or a linked pull request's news. Each shows as a notice row of its first line.
+ * a linked pull request's news, or a workflow run's end. Each shows as a notice row of its first line.
  */
 export const isContinueMessage = (text: string) =>
-  text.includes(CONTINUE_MARK) || text.includes(RESUME_MARK) || text.includes(PULL_MARK);
+  text.includes(CONTINUE_MARK) ||
+  text.includes(RESUME_MARK) ||
+  text.includes(PULL_MARK) ||
+  text.includes(WORKFLOW_MARK);
 
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;

@@ -19,8 +19,10 @@ import {
 import { AGENT_WORD, type AgentState } from "../state/delegates";
 import { delegateStatusInputs, readDelegatePull, stopDelegate } from "../state/host";
 import { selectThread, useApp } from "../state/store";
+import { liveRuns, loadWorkflowRuns, useThreadRuns } from "../state/workflows";
 import { AgentMarks } from "./AgentStack";
 import { cx, Spinner, Tooltip } from "./primitives";
+import { WorkflowStatusRow } from "./WorkflowRuns";
 
 const TINT: Record<AgentState, string> = {
   working: "bg-accent",
@@ -104,7 +106,8 @@ function StatusLine({
 }
 
 /**
- * Pinned above the composer while a thread has delegates working or waiting, and folded to one line
+ * Pinned above the composer while a thread has delegates working or waiting (or a workflow run going:
+ * its row comes first, always shown, with its own Stop), and folded to one line
  * until opened: the harness icons of what is live, how many delegates there are, and what needs the
  * reader in its own tint. Opened, it lists a row per delegate (state, idle time, account and model,
  * branch, pull request and checks) with Open and Stop, scrolled inside a bounded height; Escape folds
@@ -115,6 +118,11 @@ export function DelegateStatusPanel({ threadId }: { threadId: string }) {
   const [rows, setRows] = useState<DelegateStatusRow[]>([]);
   const [folded, setFolded] = useState(true);
   const header = useRef<HTMLButtonElement>(null);
+  // A workflow run the thread started is this panel's too: one place for what the thread has going.
+  const active = liveRuns(useThreadRuns(threadId));
+  useEffect(() => {
+    void loadWorkflowRuns(threadId);
+  }, [threadId]);
   useEffect(() => {
     const read = () => {
       const state = useApp.getState();
@@ -145,7 +153,7 @@ export function DelegateStatusPanel({ threadId }: { threadId: string }) {
     const timer = setInterval(load, PULL_REFRESH_MS);
     return () => clearInterval(timer);
   }, [live, open]);
-  if (!live) return null;
+  if (!live && !active.length) return null;
   const attention = panelAttention(rows);
   const rowsId = `delegate-status-${threadId}`;
   return (
@@ -159,42 +167,52 @@ export function DelegateStatusPanel({ threadId }: { threadId: string }) {
       }}
       className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in"
     >
-      <button
-        ref={header}
-        type="button"
-        aria-expanded={!folded}
-        aria-controls={folded ? undefined : rowsId}
-        onClick={() => setFolded(!folded)}
-        className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-lg px-2 text-left text-caption text-fg-muted hover:bg-fill-subtle active:bg-fill-strong"
-      >
-        <ChevronDown
-          size={12}
-          aria-hidden
-          className={cx("shrink-0 text-fg-faint transition-transform duration-200", folded && "-rotate-90")}
-        />
-        <AgentMarks agents={panelMarks(rows)} size="sidebar" tone="surface" live={false} />
-        <span
-          className={cx(
-            "min-w-0 truncate",
-            attention === "needs" && "text-warning",
-            attention === "failed" && "text-danger",
-          )}
-        >
-          {panelLabel(rows)}
-        </span>
-        {rows.some((row) => row.state === "working") && <Spinner size={9} className="text-accent" />}
-      </button>
-      {!folded && (
-        <div id={rowsId} className="flex max-h-[min(240px,35vh)] flex-col gap-0.5 overflow-y-auto">
-          {rows.map((row) => (
-            <StatusLine
-              key={row.id}
-              row={row}
-              onOpen={selectThread}
-              stop={(r) => void stopDelegate(threadId, r.id)}
+      {active.map((run) => (
+        <WorkflowStatusRow key={run.id} run={run} threadId={threadId} />
+      ))}
+      {live && (
+        <>
+          <button
+            ref={header}
+            type="button"
+            aria-expanded={!folded}
+            aria-controls={folded ? undefined : rowsId}
+            onClick={() => setFolded(!folded)}
+            className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-lg px-2 text-left text-caption text-fg-muted hover:bg-fill-subtle active:bg-fill-strong"
+          >
+            <ChevronDown
+              size={12}
+              aria-hidden
+              className={cx(
+                "shrink-0 text-fg-faint transition-transform duration-200",
+                folded && "-rotate-90",
+              )}
             />
-          ))}
-        </div>
+            <AgentMarks agents={panelMarks(rows)} size="sidebar" tone="surface" live={false} />
+            <span
+              className={cx(
+                "min-w-0 truncate",
+                attention === "needs" && "text-warning",
+                attention === "failed" && "text-danger",
+              )}
+            >
+              {panelLabel(rows)}
+            </span>
+            {rows.some((row) => row.state === "working") && <Spinner size={9} className="text-accent" />}
+          </button>
+          {!folded && (
+            <div id={rowsId} className="flex max-h-[min(240px,35vh)] flex-col gap-0.5 overflow-y-auto">
+              {rows.map((row) => (
+                <StatusLine
+                  key={row.id}
+                  row={row}
+                  onOpen={selectThread}
+                  stop={(r) => void stopDelegate(threadId, r.id)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </section>
   );

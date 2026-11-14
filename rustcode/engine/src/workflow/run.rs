@@ -195,17 +195,25 @@ impl Run {
         if let Err(reason) = self.store.save(&record) {
             crate::dbg_log!("workflow {}: {reason}", record.id);
         }
+        super::announce(&record.thread, &record.id);
+    }
+
+    /// What stops this run: firing it ends the script and interrupts the
+    /// workers still running (`drive`).
+    pub(super) fn stopper(&self) -> CancellationToken {
+        self.cancel.clone()
     }
 
     fn record_call(&self, call: CallRecord) {
-        let run_id = {
+        let (thread, run_id) = {
             let mut inner = self.lock();
             inner.known.insert(call.key.clone(), call.clone());
-            inner.record.id.clone()
+            (inner.record.thread.clone(), inner.record.id.clone())
         };
         if let Err(reason) = self.store.append_call(&run_id, &call) {
             crate::dbg_log!("workflow {run_id}: {reason}");
         }
+        super::announce(&thread, &run_id);
     }
 
     /// The synchronous half of `agent()`: take the call's place in the order,
@@ -565,6 +573,7 @@ pub(super) fn new_record(
         logs: Vec::new(),
         result: None,
         error: None,
+        woken: false,
     }
 }
 
