@@ -943,6 +943,18 @@ fn delegates(targets: &[String]) -> Value {
                 "project": project_of(target, &meta),
                 "pull": Value::Null,
             });
+            if let Some(cleanup) = link_book()
+                .iter()
+                .rev()
+                .find(|link| {
+                    link["target"].as_str() == Some(target.as_str())
+                        && link.get("cleanup").is_some()
+                })
+                .and_then(|link| link.get("cleanup"))
+            {
+                row["pull"] = cleanup.get("pull").cloned().unwrap_or(Value::Null);
+                row["branch"] = cleanup.get("branch").cloned().unwrap_or(Value::Null);
+            }
             if let Some(worktree) = worktree {
                 row["branch"] = worktree.get("branch").cloned().unwrap_or(Value::Null);
                 row["worktree"] = worktree;

@@ -166,6 +166,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
+    title: "Let delegates use my named accounts without asking",
+    keywords: "trust local named login accounts approval delegates",
+  },
+  {
+    section: "agents",
     title: "Threads can start and message other threads",
     keywords: "orchestration subagents spawn compare message agents",
   },

@@ -6,6 +6,7 @@
 // (state/host.ts). Pure: no store, no engine.
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
+import type { DelegatePull } from "../acp/rustcode";
 import { plainPath } from "../acp/types";
 import type { ThreadStatus, Worktree } from "../acp/v2";
 import { answerPreview } from "./answerPreview";
@@ -391,6 +392,8 @@ export function linkThreads(links: readonly Link[], states?: readonly LinkState[
 
 /** One thread working for another: from the message (or the start) to the answer. */
 export interface Link {
+  /** PR outcome retained independently of the removed checkout. */
+  cleanup?: { at: number; branch?: string; pull?: { [K in keyof DelegatePull]: DelegatePull[K] } };
   /** `<orchestrator>/<n>`. */
   id: string;
   orchestrator: string;
@@ -494,10 +497,17 @@ export const failure = (code: string, message: string, linksLeft?: number): Fail
   message,
   ...(linksLeft === undefined ? {} : { linksLeft }),
 });
+/** What a failure says when whoever made it gave no words: never an empty reason (issue 3711). */
+export const failureMessage = (f: Failure): string =>
+  f.message.trim() ||
+  (f.code === "denied"
+    ? "the user did not allow it, or dismissed the approval"
+    : `it failed (${f.code}) and no reason was reported`);
+
 export const failureJson = (f: Failure): JsonObject => ({
   error: {
     code: f.code,
-    message: f.message,
+    message: failureMessage(f),
     ...(f.linksLeft === undefined ? {} : { links_left: f.linksLeft }),
   },
 });
@@ -1582,8 +1592,24 @@ export const hasGrant = (book: LinkBook, caller: string, key: string) =>
 export const delegateAccountKey = (machine: string, harness: string, account: string | null) =>
   JSON.stringify(["delegate-account", machine, harness, account]);
 
-export const accountsNeedApproval = (book: LinkBook, caller: string, keys: string[]) =>
-  keys.some((key) => !hasGrant(book, caller, key));
+export const accountsNeedApproval = (book: LinkBook, caller: string, keys: string[], trustLocal = false) =>
+  keys.some((key) => {
+    if (trustLocal) {
+      try {
+        const [kind, machine, , account] = JSON.parse(key);
+        if (
+          kind === "delegate-account" &&
+          machine === "local" &&
+          typeof account === "string" &&
+          account.length > 0
+        )
+          return false;
+      } catch {
+        /* An unknown key always needs an explicit grant. */
+      }
+    }
+    return !hasGrant(book, caller, key);
+  });
 
 export function grant(book: LinkBook, caller: string, key: string): LinkBook {
   if (hasGrant(book, caller, key)) return book;
@@ -3064,3 +3090,12 @@ export interface GrantAsk {
 }
 
 export type GrantChoice = "always" | "once" | "deny";
+
+/** Capture the last branch and PR before deleting a delegate's checkout. */
+export function retainDelegateCleanup(
+  book: LinkBook,
+  target: string,
+  cleanup: NonNullable<Link["cleanup"]>,
+): LinkBook {
+  return { ...book, links: book.links.map((link) => (link.target === target ? { ...link, cleanup } : link)) };
+}

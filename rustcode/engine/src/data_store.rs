@@ -4736,6 +4736,18 @@ mod tests {
     }
 
     #[test]
+    fn account_grant_survives_store_reopen_without_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let key = json!(["delegate-account", "local", "codex", "work"]).to_string();
+        let book = json!({"links": [], "grants": {"parent": [key]}, "counters": {}, "fanOuts": []});
+        save_link_book_at(&path, &book).unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        assert_eq!(loaded["book"]["grants"], book["grants"]);
+        assert!(loaded["book"]["grants"]["other"].is_null());
+    }
+
+    #[test]
     fn the_apps_save_cannot_undo_a_link_the_engine_runs() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(DATA_FILE);

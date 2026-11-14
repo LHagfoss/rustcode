@@ -1127,6 +1127,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_failure_with_no_text_still_names_the_tool_and_says_why() {
+        let empty = CallAnswer {
+            success: false,
+            content: " ".to_owned(),
+        };
+        let text = response_content("start_session", &empty)[0]["text"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(text.contains("start_session failed"), "{text}");
+        assert!(text.contains("no reason"), "{text}");
+        // A success keeps what it said, and a failure keeps its own words.
+        let said = CallAnswer {
+            success: false,
+            content: "error: no".to_owned(),
+        };
+        assert_eq!(
+            response_content("start_session", &said)[0]["text"],
+            "error: no"
+        );
+    }
+
     #[tokio::test]
     async fn a_pull_request_link_is_answered_by_the_server_without_the_app() {
         // A socket nothing listens on: a link does not need the app either.
@@ -1739,6 +1762,13 @@ fn response_content(tool: &str, answer: &CallAnswer) -> Value {
                 return json!([{"type":"image","mimeType":"image/png","data":data}]);
             }
         }
+    }
+    // A failure with no text would reach the harness as `Error calling tool (name): ` and nothing
+    // after it; it always says why (issue 3711).
+    if !answer.success && answer.content.trim().is_empty() {
+        return json!([{"type":"text","text":format!(
+            "error: {tool} failed and RustCode gave no reason; the thread's debug log may say more"
+        )}]);
     }
     json!([{"type":"text","text":answer.content}])
 }

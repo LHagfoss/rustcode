@@ -36,7 +36,6 @@ import {
 import { memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { effortLabel, modelName } from "../acp/types";
-import { clip } from "../lib/clip";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
 import { hasTimeline } from "../lib/trace";
@@ -59,12 +58,23 @@ import {
   diffCounts,
   formatDuration,
   messageTime,
+  noticeLine,
+  stripMarks,
   type TranscriptItem,
   type TurnCompletion,
   thoughtHeadings,
+  toolInFlight,
   wakeLine,
 } from "../state/thread";
-import { displayTool, orchestrationTool, runIdOf, sessionIdOf, usefulSummary } from "../state/toolNames";
+import {
+  displayTool,
+  failureReason,
+  orchestrationTool,
+  runIdOf,
+  sessionIdOf,
+  unwrapToolError,
+  usefulSummary,
+} from "../state/toolNames";
 import { type Waiting, waitingLabel, waitingNext, waitingTitle } from "../state/waiting";
 import { harnessId, wakeNotice } from "../state/wakeNotice";
 import { DiffView } from "./DiffView";
@@ -105,7 +115,7 @@ export const UserRow = memo(function UserRow({
   after?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const { text, images: markers } = useMemo(() => splitImageMarkers(item.text), [item.text]);
+  const { text, images: markers } = useMemo(() => splitImageMarkers(stripMarks(item.text)), [item.text]);
   // A message another thread sent with its id: the heading becomes a link to that thread, and the
   // ids under it are not shown. One from before the ids reads as it was written.
   const sender = useMemo(() => {
@@ -129,7 +139,7 @@ export const UserRow = memo(function UserRow({
   if (item.wake) return <WakeRow text={item.text} flat />;
   // The app carrying the thread on after it compacted it: the same kind of divider.
   if (item.continued) {
-    return <NoticeRow item={{ kind: "notice", id: item.id, text: wakeLine(item.text), tone: "info" }} />;
+    return <NoticeRow item={{ kind: "notice", id: item.id, text: noticeLine(item.text), tone: "info" }} />;
   }
   return (
     <div className="group flex flex-col items-end">
@@ -541,7 +551,7 @@ export function ToolDetail({
       ) : (
         <>
           {input && <TextBox label="Input" text={input} />}
-          {item.output && <TextBox label="Output" text={item.output} />}
+          {item.output && <TextBox label="Output" text={unwrapToolError(item.output) || item.output} />}
           {!input && !item.output && <span className="text-caption text-fg-faint">No output</span>}
         </>
       )}
@@ -562,7 +572,9 @@ export const ToolRow = memo(function ToolRow({
   const kind = inferToolKind(item);
   const [open, setOpen] = useState(kind === "edit" && item.diffs.length > 0 && item.diffs.length <= 2);
   const Icon = KIND_ICON[kind] ?? Wrench;
-  const running = item.status === "pending" || item.status === "in_progress";
+  // Only a turn that runs has a call in flight: a row its turn left open does not spin.
+  const turnRunning = useApp((s) => (threadId ? !!s.threads[threadId]?.running : true));
+  const running = toolInFlight(item.status, turnRunning);
   const failed = item.status === "failed";
   const detail = toolDetail(item, kind);
   // MCP calls come named `mcp__server__tool`: the row says what they did instead.
@@ -581,8 +593,7 @@ export const ToolRow = memo(function ToolRow({
   // A command whose title already is the command line shows it once.
   const shownDetail = trimmed && !title.includes(trimmed) ? trimmed : undefined;
   // Why it failed, on the row itself: the first line of what it printed, when no exit code says it.
-  const reason =
-    failed && item.exitCode === undefined ? clip(item.output?.trim().split("\n")[0] ?? "", 120) : "";
+  const reason = failed && item.exitCode === undefined ? failureReason(item.output) : "";
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   return (
     <div>

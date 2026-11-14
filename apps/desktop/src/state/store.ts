@@ -579,6 +579,8 @@ export interface AppState {
   threadLimit: number;
   /** How many delegates may run at once across this app (Settings › Harnesses). */
   totalLimit: number;
+  /** Trust this computer's named logins for delegation (default off). */
+  trustDelegateAccounts: boolean;
   /** Agents may read threads of every project, not only the calling thread's (Settings › Harnesses). */
   readAcrossProjects: boolean;
   /**
@@ -753,6 +755,7 @@ const STORAGE = {
   orchestration: "rustcode.orchestration",
   threadLimit: "rustcode.threadLimit",
   totalLimit: "rustcode.totalLimit",
+  trustDelegateAccounts: "rustcode.trustDelegateAccounts",
   readAcrossProjects: "rustcode.readAcrossProjects",
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   systemNotifications: "rustcode.systemNotifications",
@@ -823,6 +826,7 @@ export const SETTINGS_DEFAULTS = {
   orchestration: true,
   threadLimit: DEFAULT_DELEGATES_PER_THREAD,
   totalLimit: DEFAULT_DELEGATES_TOTAL,
+  trustDelegateAccounts: false,
   readAcrossProjects: true,
   smartUi: true,
   autoCompact: DEFAULT_AUTO_COMPACT,
@@ -918,6 +922,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   orchestration: storedFlag(STORAGE.orchestration, SETTINGS_DEFAULTS.orchestration),
   threadLimit: storedThreadLimit(STORAGE.threadLimit, SETTINGS_DEFAULTS.threadLimit),
   totalLimit: loadTotalLimit(),
+  trustDelegateAccounts: storedFlag(STORAGE.trustDelegateAccounts, false),
   // On unless turned off: reading knows no project boundary, so an agent asked
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
@@ -6402,6 +6407,11 @@ export function setHeaderButtons(shown: HeaderButtonId[]) {
   store(STORAGE.headerButtons, JSON.stringify({ shown, known: HEADER_BUTTON_IDS }));
 }
 
+export function setTrustDelegateAccounts(on: boolean) {
+  set({ trustDelegateAccounts: on });
+  store(STORAGE.trustDelegateAccounts, on ? "1" : "0");
+}
+
 export function setReadAcrossProjects(on: boolean) {
   set({ readAcrossProjects: on });
   store(STORAGE.readAcrossProjects, on ? "1" : "0");
@@ -8367,6 +8377,7 @@ export function resetForTests() {
     signedOutLogins: {},
     orchestration: false,
     orchestrationPending: false,
+    trustDelegateAccounts: false,
     readAcrossProjects: false,
     links: { links: [], grants: {}, counters: {}, fanOuts: [] },
     grant: null,

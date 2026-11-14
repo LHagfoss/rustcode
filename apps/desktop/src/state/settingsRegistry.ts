@@ -117,6 +117,7 @@ export type ServerSettingKey =
   | "orchestration"
   | "delegates-total"
   | "delegates-per-thread"
+  | "trust-delegate-accounts"
   | "read-across-projects"
   | "delegate-presets"
   | "limit-fallback"
@@ -172,6 +173,12 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
     label: "Let agents read threads in other projects",
     type: "boolean",
     default: true,
+  },
+  {
+    key: "trust-delegate-accounts",
+    label: "Let delegates use my named accounts without asking",
+    type: "boolean",
+    default: false,
   },
   { key: "delegate-presets", label: "Delegate presets", type: "list", default: [] },
   { key: "limit-fallback", label: "Switch a delegate at a limit", type: "boolean", default: false },

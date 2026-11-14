@@ -1510,13 +1510,32 @@ pub(crate) fn retry_hint(name: &str, args: &Value) -> &'static str {
 
 /// The client's answer as the tool's result: its `error` as a failure,
 /// the rest as JSON for the model.
+/// What a failure says when the app sent a code and no message (issue 3711).
+fn default_reason(code: &str) -> &'static str {
+    match code {
+        "denied" => "the user did not allow it, or dismissed the approval",
+        "unavailable" => "the app could not do it right now",
+        "not_found" => "the thread or project was not found",
+        "target_unavailable" => "the target thread is not available",
+        "not_allowed" => "this thread is not allowed to do that",
+        "conflict" => "it conflicts with the state of the thread",
+        "timeout" => "it timed out waiting for the app or the user",
+        _ => "the app reported no reason; the thread's debug log may say more",
+    }
+}
+
 fn output(name: &str, value: Value) -> ToolExecutionOutput {
     if let Some(error) = value.get("error") {
         let code = error
             .get("code")
             .and_then(Value::as_str)
             .unwrap_or("failed");
-        let message = error.get("message").and_then(Value::as_str).unwrap_or("");
+        // A failure never reaches the model without a reason: an app that sent none gets the one its
+        // code implies, so the caller (and the row the user reads) can tell what to do next.
+        let message = match error.get("message").and_then(Value::as_str).map(str::trim) {
+            Some(message) if !message.is_empty() => message,
+            _ => default_reason(code),
+        };
         let kind = match code {
             "denied" => ToolErrorKind::PermissionDenied,
             "unavailable" => ToolErrorKind::UnavailableDependency,
@@ -3174,6 +3193,55 @@ mod tests {
         assert!(!busy.success);
         assert!(busy.content.contains("wait_session on one first"));
         assert!(busy.content.contains("links_left: 0"));
+    }
+
+    #[tokio::test]
+    async fn a_failure_without_a_message_still_says_why() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        struct Answering(Value);
+        impl PreviewClient for Answering {
+            fn request(&self, _params: Value) -> crate::preview::PreviewFuture {
+                let answer = self.0.clone();
+                Box::pin(async move { Ok(answer) })
+            }
+        }
+        let client =
+            |answer: Value| -> Option<Arc<dyn PreviewClient>> { Some(Arc::new(Answering(answer))) };
+        for answer in [
+            json!({"error": {"code": "denied"}}),
+            json!({"error": {"code": "denied", "message": "  "}}),
+        ] {
+            let refused = execute_with(
+                client(answer),
+                &cancel,
+                START_SESSION,
+                &json!({"prompt": "go"}),
+            )
+            .await;
+            assert!(!refused.success);
+            assert!(
+                refused.content.contains("dismissed the approval"),
+                "{}",
+                refused.content
+            );
+            assert!(
+                !refused.content.trim_end().ends_with(':'),
+                "{}",
+                refused.content
+            );
+        }
+        let unknown = execute_with(
+            client(json!({"error": {"code": "weird", "message": ""}})),
+            &cancel,
+            START_SESSION,
+            &json!({"prompt": "go"}),
+        )
+        .await;
+        assert!(
+            unknown.content.contains("reported no reason"),
+            "{}",
+            unknown.content
+        );
     }
 
     #[tokio::test]

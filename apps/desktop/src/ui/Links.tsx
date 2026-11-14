@@ -22,7 +22,7 @@ import { runningAgents, runningSubagents } from "../state/delegates";
 import { linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import { type Link, type LinkState, linkStatusText } from "../state/orchestration";
 import { modeLabel } from "../state/permissions";
-import { selectThread, setView, useApp } from "../state/store";
+import { openSettings, selectThread, setView, useApp } from "../state/store";
 import { AgentRow, SubagentRow, useNow } from "./AgentViews";
 import { GrantWhy } from "./GrantWhy";
 import { cx, Pill, Tooltip } from "./primitives";
@@ -203,6 +203,16 @@ export function GrantDialog() {
               </span>
             )}
           </div>
+          <button
+            type="button"
+            className="text-left text-callout text-accent"
+            onClick={() => {
+              resolveGrant("deny");
+              openSettings("agents");
+            }}
+          >
+            Named account approval settings…
+          </button>
           <pre className="selectable m-0 max-h-[180px] overflow-auto rounded-lg bg-fill-subtle p-3 font-sans text-callout whitespace-pre-wrap">
             {grant.detail}
           </pre>
