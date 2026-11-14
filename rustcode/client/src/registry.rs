@@ -54,7 +54,10 @@ impl RouteKind {
     }
 
     /// Whether traffic over this route is encrypted by the network itself
-    /// rather than plain on the LAN.
+    /// rather than plain on the LAN. Only a tunnel encrypts, the rule the
+    /// gateway applies to its own connections (#3701): a LAN, a loopback or
+    /// a public address never does, and an address nothing is known about is
+    /// a public one.
     pub fn is_encrypted(self) -> bool {
         matches!(self, Self::Vpn | Self::Tailscale)
     }
@@ -185,6 +188,12 @@ impl Route {
         }
     }
 
+    /// Whether the network this route runs over encrypts the traffic: only
+    /// a tunnel does ([`RouteKind::is_encrypted`]).
+    pub fn is_encrypted(&self) -> bool {
+        self.kind.is_encrypted()
+    }
+
     /// The name of the network this route is on, for a person: the product
     /// when known, otherwise the kind.
     pub fn network_name(&self) -> String {
@@ -194,6 +203,33 @@ impl Route {
             None if self.kind == RouteKind::Vpn => "the VPN".to_owned(),
             None => "the LAN".to_owned(),
         }
+    }
+}
+
+/// A connected machine that is now reached over another kind of network
+/// than it was: the LAN where it was a tunnel, or the other way round.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteChange {
+    pub from: Route,
+    pub to: Route,
+}
+
+impl RouteChange {
+    /// The change from `previous` to `now`, when there was a previous route
+    /// and the network differs. Another address on the same network is not a
+    /// change worth telling anyone about.
+    pub fn between(previous: Option<&Route>, now: &Route) -> Option<Self> {
+        let previous = previous?;
+        let same = previous.kind == now.kind && previous.provider == now.provider;
+        (!same).then(|| Self {
+            from: previous.clone(),
+            to: now.clone(),
+        })
+    }
+
+    /// Moving off a tunnel onto a network that does not encrypt.
+    pub fn is_downgrade(&self) -> bool {
+        self.from.is_encrypted() && !self.to.is_encrypted()
     }
 }
 
@@ -1060,6 +1096,49 @@ mod tests {
             Route::new(address),
             Utc::now(),
         )
+    }
+
+    #[test]
+    fn only_a_tunnel_is_encrypted() {
+        assert!(!Route::new("192.168.1.20:17879").is_encrypted());
+        assert!(!Route::new("127.0.0.1:17879").is_encrypted());
+        assert!(Route::reported("100.90.16.237:17879", "overlay", Some("netbird")).is_encrypted());
+        assert!(Route::new("host.tail1234.ts.net").is_encrypted());
+    }
+
+    #[test]
+    fn an_unknown_address_is_never_encrypted() {
+        for address in [
+            "203.0.113.9:17879",
+            "example.org",
+            "not an address at all",
+            "",
+            "[2001:db8::1]:17879",
+        ] {
+            let route = Route::new(address);
+            assert_eq!(route.kind, RouteKind::Public, "{address}");
+            assert!(!route.is_encrypted(), "{address}");
+        }
+    }
+
+    #[test]
+    fn a_route_change_from_a_tunnel_to_the_lan_is_a_downgrade() {
+        let overlay = Route::reported("100.90.16.237:17879", "overlay", Some("netbird"));
+        let lan = Route::new("192.168.1.20:17879");
+
+        let change = RouteChange::between(Some(&overlay), &lan).unwrap();
+        assert!(change.is_downgrade());
+        assert!(!change.to.is_encrypted());
+
+        // The other way is a change, but not a downgrade.
+        let change = RouteChange::between(Some(&lan), &overlay).unwrap();
+        assert!(!change.is_downgrade());
+        assert!(change.to.is_encrypted());
+
+        // Another address on the same network is not worth a notice, and a
+        // first connection has nothing to change from.
+        assert!(RouteChange::between(Some(&lan), &Route::new("192.168.1.30:17879")).is_none());
+        assert!(RouteChange::between(None, &lan).is_none());
     }
 
     #[test]

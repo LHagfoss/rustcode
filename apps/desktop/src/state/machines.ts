@@ -89,6 +89,15 @@ export interface RouteProbe {
   at: string;
 }
 
+/** A machine that moved to another kind of network while this app held it. */
+export interface MachineRouteChange {
+  seq: number;
+  from: MachineRoute;
+  to: MachineRoute;
+  /** From a tunnel to a network that does not encrypt. */
+  downgrade: boolean;
+}
+
 /** A saved machine, as `machines_list` reports it. */
 export interface Machine {
   id: string;
@@ -109,6 +118,11 @@ export interface Machine {
   routes: MachineRoute[];
   /** The route in use, or the one it will try first. */
   route: MachineRoute | null;
+  /**
+   * The latest time this app reached the machine over another kind of network than before (the
+   * LAN where it was a tunnel). `seq` counts them, so each is told once.
+   */
+  routeChange?: MachineRouteChange | null;
   state: MachineState;
   /** Why it is not connected, or null while it is (or has not tried yet). */
   reason?: MachineReason | null;
@@ -621,13 +635,49 @@ export function routeName(route: MachineRoute | null | undefined, kind?: string)
 
 /**
  * One route as people read it: `LAN · Unencrypted`, `NetBird · Encrypted`.
- * Only a LAN route is plain: everything else travels through a network that
- * encrypts it.
+ * Only a tunnel encrypts (the shell applies the gateway's own
+ * rule): a LAN or a public address never does.
  */
 export function routeLabel(route: MachineRoute | null | undefined): string {
   if (!route) return "No route saved";
   return `${routeName(route)} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
 }
+
+/** One change of route, as a toast says it: `Studio: Now on LAN · Unencrypted`. */
+export interface RouteChangeNotice {
+  machineId: string;
+  text: string;
+  /** A move off a tunnel is an error tone; any other change is plain information. */
+  tone: "info" | "error";
+}
+
+/**
+ * The route changes `machines` report that `seen` has not told yet. A machine's first listing in a
+ * window only records where it stands: a change from before the window opened is not news. `seen`
+ * is updated, so the same change is told once however often the list is read.
+ */
+export function routeChangeNotices(
+  machines: readonly Machine[],
+  seen: Map<string, number>,
+): RouteChangeNotice[] {
+  const notices: RouteChangeNotice[] = [];
+  for (const machine of machines) {
+    const change = machine.routeChange;
+    const told = seen.get(machine.id);
+    seen.set(machine.id, change?.seq ?? 0);
+    // A machine listed for the first time only records where it stands.
+    if (!change || told === undefined || change.seq <= told) continue;
+    notices.push({
+      machineId: machine.id,
+      text: `${machineName(machine)}: Now on ${routeLabel(change.to)}`,
+      tone: change.downgrade ? "error" : "info",
+    });
+  }
+  return notices;
+}
+
+/** The changes already told in this window, by machine. */
+const toldRouteChanges = new Map<string, number>();
 
 /**
  * What one machine row says under its name: the route it is on, or what is
@@ -940,6 +990,7 @@ export async function refreshMachines(): Promise<void> {
       const rows = loadThreadList(machine.id);
       if (rows.length) cached[machine.id] = rows;
     }
+    for (const notice of routeChangeNotices(machines, toldRouteChanges)) toast(notice.text, notice.tone);
     useMachines.setState({
       machines,
       offlineSince: since,

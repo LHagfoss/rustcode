@@ -40,6 +40,7 @@ import {
   refreshMachines,
   refreshServerService,
   resetMachinesForTests,
+  routeChangeNotices,
   routeLabel,
   routeName,
   START_RETRY_WAITS_MS,
@@ -826,5 +827,55 @@ describe("a route's last test", () => {
     expect(probeTone(null)).toBe("idle");
     expect(probeTone({ outcome: "reachable", latencyMs: 1, detail: null, at })).toBe("ok");
     expect(probeTone({ outcome: "refused", latencyMs: 1, detail: null, at })).toBe("bad");
+  });
+});
+
+describe("route change notices", () => {
+  const lan = { kind: "lan", address: "192.168.1.20:17879", encrypted: false };
+  const tunnel = { kind: "vpn", provider: "netbird", address: "100.90.16.237:17879", encrypted: true };
+  const studio = (change?: { seq: number; downgrade: boolean }): Machine =>
+    ({
+      id: "studio",
+      name: "Studio",
+      platform: "macos",
+      version: null,
+      routes: [lan, tunnel],
+      route: lan,
+      state: "connected",
+      detail: null,
+      hint: null,
+      retryInSecs: null,
+      addedAt: "2026-11-01T00:00:00Z",
+      lastConnectedAt: null,
+      routeChange: change ? { ...change, from: tunnel, to: lan } : null,
+    }) as Machine;
+
+  test("moving from a tunnel to the LAN says so once, as an error", () => {
+    const seen = new Map<string, number>();
+    expect(routeChangeNotices([studio()], seen)).toEqual([]);
+    const moved = studio({ seq: 1, downgrade: true });
+    expect(routeChangeNotices([moved], seen)).toEqual([
+      { machineId: "studio", text: "Studio: Now on LAN · Unencrypted", tone: "error" },
+    ]);
+    // Read again: the same change is not news.
+    expect(routeChangeNotices([moved], seen)).toEqual([]);
+  });
+
+  test("a change from before the window opened is not told", () => {
+    const seen = new Map<string, number>();
+    expect(routeChangeNotices([studio({ seq: 3, downgrade: true })], seen)).toEqual([]);
+    expect(routeChangeNotices([studio({ seq: 3, downgrade: true })], seen)).toEqual([]);
+  });
+
+  test("moving onto a tunnel is information and names it encrypted", () => {
+    const seen = new Map<string, number>([["studio", 1]]);
+    const back: Machine = {
+      ...studio(),
+      route: tunnel,
+      routeChange: { seq: 2, downgrade: false, from: lan, to: tunnel },
+    };
+    expect(routeChangeNotices([back], seen)).toEqual([
+      { machineId: "studio", text: "Studio: Now on NetBird · Encrypted", tone: "info" },
+    ]);
   });
 });

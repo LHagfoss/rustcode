@@ -8,10 +8,13 @@
 
 use crate::cli::MachineCommands;
 use anyhow::{Context, Result, bail, ensure};
+use rustcode::remote_gateway::address::{
+    ConnectionPath, ConnectionRoute, OverlayProvider as GatewayProvider,
+};
 use rustcode_client::machine::{APPROVAL_TIMEOUT, normalize_code, platform};
 use rustcode_client::{
     ClientKind, Connector, DiscoveredMachine, Machine, MachineRegistry, PAIRING_CODE_DIGITS, Route,
-    RouteFailure, Session, TokenStore, browse_async,
+    RouteFailure, RouteKind, Session, TokenStore, browse_async,
 };
 use std::io::{BufRead, Read, Write};
 use std::time::Duration;
@@ -25,6 +28,9 @@ const MAX_CODE_INPUT_BYTES: u64 = 64;
 struct Row {
     machine: Machine,
     route: String,
+    /// The network the connection runs over and whether it is encrypted,
+    /// classified as the gateway does (#3701). Only a connected machine has one.
+    network: Option<ConnectionRoute>,
     state: State,
     /// What to check when one kind of route answers and another does not,
     /// e.g. a NetBird address that is blocked while the LAN works.
@@ -165,6 +171,7 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
         let mut row = Row {
             machine: machine.clone(),
             route: route_list(machine),
+            network: None,
             state: State::NoToken,
             hint: None,
             threads: None,
@@ -177,6 +184,7 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
         match connector.connect_raced(machine, &tokens).await {
             Ok(connected) => {
                 row.route = connected.route.address.clone();
+                row.network = Some(connection_route(&connected.route));
                 row.state = State::Connected;
                 if !connected.learned.is_empty() {
                     learned.push((machine.host_id.clone(), connected.learned.clone()));
@@ -271,6 +279,7 @@ fn print_rows(rows: &[Row]) {
         "NAME".to_owned(),
         "PLATFORM".to_owned(),
         "ROUTE".to_owned(),
+        "NETWORK".to_owned(),
         "STATE".to_owned(),
     ]];
     for row in rows {
@@ -282,6 +291,7 @@ fn print_rows(rows: &[Row]) {
             } else {
                 row.route.clone()
             },
+            network_label(row.network.as_ref()),
             row.state.label(),
         ]);
     }
@@ -291,6 +301,48 @@ fn print_rows(rows: &[Row]) {
             println!("  {line}");
         }
     }
+}
+
+/// A route this computer dialled as the gateway describes a connection it
+/// accepted (#3701), so both ends use the same words and the same rule: only
+/// a tunnel encrypts. A client cannot see the interface it used, so the kind
+/// of address it dialled stands in; a public or unknown address is `other`.
+fn connection_route(route: &Route) -> ConnectionRoute {
+    let loopback = route.address.parse::<std::net::SocketAddr>().map_or_else(
+        |_| {
+            rustcode_client::transport::host_part(&route.address)
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        },
+        |address| address.ip().is_loopback(),
+    );
+    let (path, provider) = match route.kind {
+        _ if loopback => (ConnectionPath::Loopback, None),
+        RouteKind::Lan => (ConnectionPath::Lan, None),
+        RouteKind::Vpn | RouteKind::Tailscale => (
+            ConnectionPath::Overlay,
+            route.provider.map(|provider| match provider {
+                rustcode_client::OverlayProvider::Netbird => GatewayProvider::Netbird,
+                rustcode_client::OverlayProvider::Tailscale => GatewayProvider::Tailscale,
+                rustcode_client::OverlayProvider::Zerotier => GatewayProvider::Zerotier,
+            }),
+        ),
+        RouteKind::Public => (ConnectionPath::Other, None),
+    };
+    ConnectionRoute {
+        path,
+        provider,
+        local_address: route.address.clone(),
+        encrypted: path == ConnectionPath::Overlay,
+    }
+}
+
+/// The network a connected machine is on and whether it is encrypted, in the
+/// words `rustcode remote status` uses: `LAN (not encrypted)`,
+/// `NetBird (encrypted by the tunnel)`. A machine that is not connected is on
+/// no network.
+fn network_label(network: Option<&ConnectionRoute>) -> String {
+    network.map_or_else(|| "—".to_owned(), ConnectionRoute::label)
 }
 
 /// What is printed under the table for one machine: what happened to it, the
@@ -314,6 +366,12 @@ fn print_json(rows: &[Row]) {
                 "platform": row.machine.platform,
                 "device_id": row.machine.device_id,
                 "route": row.route,
+                "network": row.network.as_ref().map(|network| serde_json::json!({
+                    "path": network.path,
+                    "provider": network.provider,
+                    "encrypted": network.encrypted,
+                    "label": network.label(),
+                })),
                 "routes": row.machine.routes.iter().map(|route| serde_json::json!({
                     "kind": route.kind.as_str(),
                     "address": route.address,
@@ -1021,6 +1079,59 @@ mod tests {
         );
     }
 
+    /// `machines list` names the network of a connected machine with the
+    /// gateway's own words, and never calls a plain or unknown one encrypted.
+    #[test]
+    fn the_network_column_says_whether_the_route_is_encrypted() {
+        let label = |route: Route| network_label(Some(&connection_route(&route)));
+        assert_eq!(
+            label(Route::new("192.168.1.20:17879")),
+            "LAN (not encrypted)"
+        );
+        assert_eq!(
+            label(Route::reported(
+                "100.90.16.237:17879",
+                "overlay",
+                Some("netbird")
+            )),
+            "NetBird (encrypted by the tunnel)"
+        );
+        // The same machine reached over its LAN after a tunnel is plain again.
+        assert_eq!(
+            label(Route::new("192.168.1.20:17879")),
+            "LAN (not encrypted)"
+        );
+        // An address nothing is known about is not a tunnel.
+        assert_eq!(
+            label(Route::new("203.0.113.9:17879")),
+            "an unrecognised network (not encrypted)"
+        );
+        assert_eq!(
+            label(Route::new("127.0.0.1:17879")),
+            "this computer (not encrypted)"
+        );
+        // Not connected: no network.
+        assert_eq!(network_label(None), "—");
+
+        // One rule on both ends: the client's own answer never disagrees.
+        for address in [
+            "192.168.1.20:17879",
+            "127.0.0.1:17879",
+            "[::1]:17879",
+            "100.90.16.237:17879",
+            "host.tail1234.ts.net",
+            "203.0.113.9:17879",
+            "example.org",
+        ] {
+            let route = Route::new(address);
+            assert_eq!(
+                connection_route(&route).encrypted,
+                route.is_encrypted(),
+                "{address}"
+            );
+        }
+    }
+
     #[test]
     fn a_table_pads_columns_and_leaves_no_trailing_spaces() {
         let table = columns(&[
@@ -1149,6 +1260,7 @@ mod tests {
                 chrono::Utc::now(),
             ),
             route: "192.168.1.20:17879".into(),
+            network: None,
             state: State::Connected,
             hint: Some("Not reachable over NetBird (100.90.16.237:17879).".into()),
             threads: Some(vec!["Fix the login form".into(), "Bump the version".into()]),
