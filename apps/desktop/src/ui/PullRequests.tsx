@@ -499,7 +499,9 @@ function PullThreadSheet({
   }, [pull.number, pull.url]);
   const start = async () => {
     setStarting(true);
-    const id = await startPullThread(cwd, pull, pullThreadMessage(pull, detail, parts, instruction));
+    const id = await startPullThread(cwd, pull, (prepared) =>
+      pullThreadMessage(pull, detail, parts, instruction, prepared),
+    );
     setStarting(false);
     if (!id) return;
     setPanel(null);

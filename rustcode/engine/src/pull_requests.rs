@@ -9,7 +9,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// How long one `gh` call may take before it is given up.
@@ -1729,18 +1729,37 @@ mod tests {
 // ------------------------------------------------- a pull request's branch here
 
 /// The local branch a pull request's work continues on, made ready for a
-/// worktree (#3727): fetched from the remote, tracking the branch the pull
-/// request pushes to. `read_only` when the head is a fork that does not let
-/// maintainers push; `note` says what that means.
+/// worktree (#3727): fetched from the remote, brought up to the pull request's
+/// head, tracking the branch the pull request pushes to. `read_only` when the
+/// head is a fork that does not let maintainers push. Opening the same pull
+/// request again lands on the same branch (#3743): a fork's branch is recorded
+/// in `branch.<name>.rustcode-pull`, and `worktree` names the worktree that
+/// already has it checked out, for the thread to start in instead of a new one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullBranch {
     pub branch: String,
     pub head_ref: String,
     pub cross_repository: bool,
     pub read_only: bool,
+    /// What the user and the agent should know: how to push, why the branch
+    /// is not at the head.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The fork to push to when the local branch has another name than the
+    /// head, so a plain `git push` would not reach the pull request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub push_url: Option<String>,
+    /// Why the branch was left behind or beside the pull request's head.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale: Option<String>,
+    /// A worktree (not the main checkout) that already has the branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<PathBuf>,
 }
+
+/// The branch config key that records which pull request a fork's local
+/// branch was made for.
+const PULL_KEY: &str = "rustcode-pull";
 
 fn git_ok(dir: &Path, args: &[&str]) -> Result<String, String> {
     crate::worktrees::git_timed(dir, args, Duration::from_secs(120))
@@ -1759,13 +1778,105 @@ fn local_branch_exists(repo: &Path, branch: &str) -> bool {
     .is_ok()
 }
 
-/// The local name a fork's branch takes: its own name when that is free, else
-/// `owner-name`, as `gh pr checkout` names it.
-pub(crate) fn fork_branch_name(head: &str, owner: &str, taken: impl Fn(&str) -> bool) -> String {
+/// The branches recorded for pull request `number` in `git config
+/// --get-regexp` output (`branch.<name>.rustcode-pull <number>` lines).
+pub(crate) fn recorded_pull_branches(config: &str, number: u64) -> Vec<String> {
+    let suffix = format!(".{PULL_KEY}");
+    config
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(' ')?;
+            let name = key.strip_prefix("branch.")?.strip_suffix(suffix.as_str())?;
+            let recorded = value.trim().parse::<u64>().ok()?;
+            (recorded == number && !name.is_empty()).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// The local name a fork's branch takes: the one recorded for this pull
+/// request when it still exists, else its own name when that is free, else
+/// `owner-name` (as `gh pr checkout` names it), numbered past any taken one.
+pub(crate) fn fork_branch_name(
+    head: &str,
+    owner: &str,
+    number: u64,
+    recorded: Option<&str>,
+    taken: impl Fn(&str) -> bool,
+) -> String {
+    if let Some(recorded) = recorded {
+        return recorded.to_owned();
+    }
     if !taken(head) {
         return head.to_owned();
     }
-    format!("{owner}-{head}")
+    let base = if owner.is_empty() {
+        format!("pr-{number}-{head}")
+    } else {
+        format!("{owner}-{head}")
+    };
+    if !taken(&base) {
+        return base;
+    }
+    (2..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|name| !taken(name))
+        .unwrap_or(base)
+}
+
+/// The worktree `git worktree list --porcelain` shows with `branch` checked out.
+pub(crate) fn worktree_holding(porcelain: &str, branch: &str) -> Option<PathBuf> {
+    let wanted = format!("branch refs/heads/{branch}");
+    let mut path = None;
+    for line in porcelain.lines() {
+        if let Some(found) = line.strip_prefix("worktree ") {
+            path = Some(PathBuf::from(found));
+        } else if line == wanted {
+            return path;
+        }
+    }
+    None
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    canonical(a) == canonical(b)
+}
+
+/// Move `branch` to `tip` (the pull request's head, fetched) when that only
+/// moves it forward, in the worktree that has it checked out when there is
+/// one. Answers why it stayed where it was, if it did. Makes the branch when
+/// it does not exist yet.
+fn bring_up_to_date(
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    holder: Option<&Path>,
+) -> Result<Option<String>, String> {
+    let local = format!("refs/heads/{branch}");
+    let Ok(current) = git_ok(repo, &["rev-parse", "--verify", "--quiet", &local]) else {
+        git_ok(repo, &["branch", "--no-track", branch, tip])?;
+        return Ok(None);
+    };
+    let current = current.trim().to_owned();
+    if current == tip {
+        return Ok(None);
+    }
+    if git_ok(repo, &["merge-base", "--is-ancestor", &current, tip]).is_err() {
+        return Ok(Some(format!(
+            "The local branch {branch} has commits the pull request's head does not, so it was left as it is instead of moved to the head."
+        )));
+    }
+    let moved = match holder {
+        // The user's own checkout is theirs to update.
+        Some(path) if same_path(path, repo) => {
+            Err(format!("it is checked out in {}", path.display()))
+        }
+        Some(path) => git_ok(path, &["merge", "--ff-only", "--quiet", tip]).map(drop),
+        None => git_ok(repo, &["update-ref", &local, tip, &current]).map(drop),
+    };
+    Ok(moved.err().map(|why| {
+        format!("The local branch {branch} is behind the pull request's head and could not be fast-forwarded: {why}")
+    }))
 }
 
 /// Fetch pull request `number`'s head into a local branch of the repository
@@ -1801,22 +1912,28 @@ pub async fn prepare_branch(cwd: &Path, number: u64) -> Result<PullBranch, PullE
             code: "failed",
             message,
         };
+        let holder = |branch: &str| {
+            git_ok(&repo, &["worktree", "list", "--porcelain"])
+                .ok()
+                .and_then(|list| worktree_holding(&list, branch))
+        };
         if !cross {
-            if local_branch_exists(&repo, &head) {
-                // Bring it up to date when it only moves forward and no checkout holds it.
-                let _ = git_ok(&repo, &["fetch", "origin", &format!("{head}:{head}")]);
-            } else {
-                git_ok(
-                    &repo,
-                    &[
-                        "fetch",
-                        "origin",
-                        &format!("refs/heads/{head}:refs/heads/{head}"),
-                    ],
-                )
-                .map_err(failed)?;
-            }
-            let _ = git_ok(&repo, &["fetch", "origin", &head]);
+            // The remote-tracking branch is the head; the local one follows it.
+            git_ok(
+                &repo,
+                &[
+                    "fetch",
+                    "origin",
+                    &format!("+refs/heads/{head}:refs/remotes/origin/{head}"),
+                ],
+            )
+            .map_err(failed)?;
+            let tip = git_ok(&repo, &["rev-parse", &format!("refs/remotes/origin/{head}")])
+                .map_err(failed)?
+                .trim()
+                .to_owned();
+            let held = holder(&head);
+            let stale = bring_up_to_date(&repo, &head, &tip, held.as_deref()).map_err(failed)?;
             let _ = git_ok(
                 &repo,
                 &["branch", &format!("--set-upstream-to=origin/{head}"), &head],
@@ -1826,26 +1943,52 @@ pub async fn prepare_branch(cwd: &Path, number: u64) -> Result<PullBranch, PullE
                 head_ref: head,
                 cross_repository: false,
                 read_only: false,
-                note: None,
+                note: stale.clone(),
+                push_url: None,
+                stale,
+                worktree: held.filter(|path| !same_path(path, &repo)),
             });
         }
-        let branch = fork_branch_name(&head, &owner, |b| local_branch_exists(&repo, b));
-        if !local_branch_exists(&repo, &branch) {
-            git_ok(
-                &repo,
-                &[
-                    "fetch",
-                    "origin",
-                    &format!("refs/pull/{number}/head:refs/heads/{branch}"),
-                ],
-            )
-            .map_err(failed)?;
-        }
+        // The pull request's head, fetched under a ref of its own so nothing
+        // the user has checked out moves before it is known to be safe.
+        let scratch = format!("refs/rustcode/pull-head/{number}");
+        git_ok(
+            &repo,
+            &[
+                "fetch",
+                "origin",
+                &format!("+refs/pull/{number}/head:{scratch}"),
+            ],
+        )
+        .map_err(failed)?;
+        let tip = git_ok(&repo, &["rev-parse", &scratch]).map(|tip| tip.trim().to_owned());
+        let _ = git_ok(&repo, &["update-ref", "-d", &scratch]);
+        let tip = tip.map_err(failed)?;
+        let pattern = format!(r"^branch\..*\.{PULL_KEY}$");
+        let config = git_ok(&repo, &["config", "--get-regexp", &pattern]).unwrap_or_default();
+        let recorded = recorded_pull_branches(&config, number)
+            .into_iter()
+            .find(|branch| local_branch_exists(&repo, branch));
+        let branch = fork_branch_name(&head, &owner, number, recorded.as_deref(), |b| {
+            local_branch_exists(&repo, b)
+        });
+        let held = holder(&branch);
+        let stale = bring_up_to_date(&repo, &branch, &tip, held.as_deref()).map_err(failed)?;
+        git_ok(
+            &repo,
+            &[
+                "config",
+                &format!("branch.{branch}.{PULL_KEY}"),
+                &number.to_string(),
+            ],
+        )
+        .map_err(failed)?;
         // Keep fork provenance outside the checkout, where its action file cannot change it.
         git_ok(&repo, &["config", &format!("branch.{branch}.rustcodeUntrustedActions"), "true"])
             .map_err(failed)?;
         let read_only = !can_modify || owner.is_empty() || name.is_empty();
-        let note = if read_only {
+        let mut push_url = None;
+        let how = if read_only {
             Some(format!(
                 "This pull request comes from a fork that does not allow maintainer edits: commits stay on the local branch {branch}."
             ))
@@ -1859,8 +2002,16 @@ pub async fn prepare_branch(cwd: &Path, number: u64) -> Result<PullBranch, PullE
                 git_ok(&repo, &["config", &key, value]).map_err(failed)?;
             }
             (branch != head).then(|| {
-                format!("Push with `git push {fork} HEAD:{head}`: the local branch is named {branch}.")
+                let note = format!(
+                    "Push with `git push {fork} HEAD:{head}`: the local branch is named {branch}."
+                );
+                push_url = Some(fork);
+                note
             })
+        };
+        let note = match (how, stale.clone()) {
+            (Some(how), Some(stale)) => Some(format!("{how} {stale}")),
+            (how, stale) => how.or(stale),
         };
         Ok(PullBranch {
             branch,
@@ -1868,6 +2019,9 @@ pub async fn prepare_branch(cwd: &Path, number: u64) -> Result<PullBranch, PullE
             cross_repository: true,
             read_only,
             note,
+            push_url,
+            stale,
+            worktree: held.filter(|path| !same_path(path, &repo)),
         })
     })
     .await
@@ -1879,14 +2033,106 @@ pub async fn prepare_branch(cwd: &Path, number: u64) -> Result<PullBranch, PullE
 
 #[cfg(test)]
 mod pull_branch_tests {
-    use super::fork_branch_name;
+    use super::{
+        bring_up_to_date, fork_branch_name, git_ok, recorded_pull_branches, worktree_holding,
+    };
+    use std::path::{Path, PathBuf};
+
+    fn commit(dir: &Path, file: &str) -> String {
+        std::fs::write(dir.join(file), file).unwrap();
+        git_ok(dir, &["add", "-A"]).unwrap();
+        git_ok(dir, &["commit", "-q", "-m", file]).unwrap();
+        git_ok(dir, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_owned()
+    }
+
+    #[test]
+    fn a_reused_branch_is_brought_up_to_the_head_only_forward() {
+        let (_dir, repo) = crate::worktrees::tests::repo();
+        let first = git_ok(&repo, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_owned();
+        // The first open makes the branch at the head.
+        assert_eq!(bring_up_to_date(&repo, "fix", &first, None), Ok(None));
+        // The pull request moved on: the branch follows it.
+        let second = commit(&repo, "a.txt");
+        assert_eq!(bring_up_to_date(&repo, "fix", &second, None), Ok(None));
+        let at = git_ok(&repo, &["rev-parse", "fix"]).unwrap();
+        assert_eq!(at.trim(), second);
+        // A worktree that has it checked out is fast-forwarded in place.
+        let wt = repo.parent().unwrap().join("wt-fix");
+        git_ok(
+            &repo,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "fix"],
+        )
+        .unwrap();
+        let third = commit(&repo, "b.txt");
+        assert_eq!(bring_up_to_date(&repo, "fix", &third, Some(&wt)), Ok(None));
+        assert!(wt.join("b.txt").exists());
+        // Local work the head does not have stays, and the note says so.
+        commit(&wt, "local.txt");
+        let stale = bring_up_to_date(&repo, "fix", &third, Some(&wt)).unwrap();
+        assert!(stale.unwrap().contains("left as it is"));
+        assert!(wt.join("local.txt").exists());
+    }
 
     #[test]
     fn a_fork_branch_keeps_its_name_unless_taken() {
-        assert_eq!(fork_branch_name("fix", "alice", |_| false), "fix");
+        assert_eq!(fork_branch_name("fix", "alice", 7, None, |_| false), "fix");
         assert_eq!(
-            fork_branch_name("main", "alice", |b| b == "main"),
+            fork_branch_name("main", "alice", 7, None, |b| b == "main"),
             "alice-main"
         );
+        assert_eq!(
+            fork_branch_name("main", "alice", 7, None, |b| b == "main"
+                || b == "alice-main"),
+            "alice-main-2"
+        );
+        assert_eq!(
+            fork_branch_name("fix", "", 7, None, |b| b == "fix"),
+            "pr-7-fix"
+        );
+    }
+
+    #[test]
+    fn a_second_open_reuses_the_recorded_branch() {
+        // The first open made `fix` and recorded it; `fix` is taken now, and
+        // the second open lands on it instead of making `alice-fix`.
+        let config = "branch.other.rustcode-pull 3\nbranch.fix.rustcode-pull 7\n";
+        let recorded = recorded_pull_branches(config, 7);
+        assert_eq!(recorded, vec!["fix".to_owned()]);
+        assert_eq!(
+            fork_branch_name(
+                "fix",
+                "alice",
+                7,
+                recorded.first().map(String::as_str),
+                |_| true
+            ),
+            "fix"
+        );
+        assert!(recorded_pull_branches(config, 8).is_empty());
+        // A branch name with dots keeps them.
+        assert_eq!(
+            recorded_pull_branches("branch.release.v1.2.rustcode-pull 9", 9),
+            vec!["release.v1.2".to_owned()]
+        );
+        assert!(recorded_pull_branches("", 7).is_empty());
+    }
+
+    #[test]
+    fn the_worktree_holding_a_branch_is_found() {
+        let list = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
+                    worktree /wt/fix\nHEAD def\nbranch refs/heads/fix\n\n\
+                    worktree /wt/detached\nHEAD 123\ndetached\n";
+        assert_eq!(
+            worktree_holding(list, "fix"),
+            Some(PathBuf::from("/wt/fix"))
+        );
+        assert_eq!(worktree_holding(list, "main"), Some(PathBuf::from("/repo")));
+        assert_eq!(worktree_holding(list, "fi"), None);
     }
 }

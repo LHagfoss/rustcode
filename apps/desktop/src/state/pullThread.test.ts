@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { Json } from "../acp/jsonrpc";
 import type { PullDetail } from "../acp/rustcode";
-import { DEFAULT_PULL_INSTRUCTION, linkedPullThread, pullThreadMessage } from "./pullThread";
+import {
+  DEFAULT_PULL_INSTRUCTION,
+  linkedPullThread,
+  type PreparedPullBranch,
+  parsePullBranch,
+  pullThreadMessage,
+} from "./pullThread";
 
 const pull = {
   number: 7,
@@ -53,6 +59,85 @@ describe("pullThreadMessage", () => {
     );
     expect(none.startsWith("Try it locally.")).toBe(true);
     expect(none).not.toContain("## ");
+  });
+
+  const parts = { body: false, comments: false, checks: false };
+  const fork = (over: Partial<PreparedPullBranch>): PreparedPullBranch => ({
+    branch: "fix/login",
+    headRef: "fix/login",
+    crossRepository: true,
+    readOnly: false,
+    ...over,
+  });
+
+  test("names the branch the engine prepared (issue 3743)", () => {
+    const same = pullThreadMessage(pull, detail, parts, "", fork({}));
+    expect(same).toContain(
+      "on the pull request's branch `fix/login` (into `main`). Pushing updates the pull request.",
+    );
+
+    const renamed = pullThreadMessage(
+      pull,
+      detail,
+      parts,
+      "",
+      fork({ branch: "alice-fix/login", pushUrl: "https://github.com/alice/r.git" }),
+    );
+    expect(renamed).toContain(
+      "on the local branch `alice-fix/login`, made from the pull request's head `fix/login`",
+    );
+    expect(renamed).toContain("`git push https://github.com/alice/r.git HEAD:fix/login`");
+    expect(renamed).not.toContain("Pushing updates the pull request.");
+  });
+
+  test("a fork without maintainer edits does not claim a push updates the pull request", () => {
+    const text = pullThreadMessage(
+      pull,
+      detail,
+      parts,
+      "",
+      fork({ branch: "alice-fix/login", readOnly: true }),
+    );
+    expect(text).toContain("commits stay on this branch: pushing does not update the pull request.");
+    expect(text).not.toContain("Pushing updates the pull request.");
+    expect(text).not.toContain("git push");
+  });
+
+  test("says when the branch was not brought up to the head", () => {
+    const text = pullThreadMessage(
+      pull,
+      detail,
+      parts,
+      "",
+      fork({ stale: "The local branch fix/login has commits." }),
+    );
+    expect(text).toContain("The local branch fix/login has commits.");
+  });
+});
+
+describe("parsePullBranch", () => {
+  test("reads the engine's answer", () => {
+    expect(
+      parsePullBranch({
+        branch: "alice-fix",
+        head_ref: "fix",
+        cross_repository: true,
+        read_only: false,
+        push_url: "https://github.com/alice/r.git",
+        worktree: "/wt/alice-fix",
+      }),
+    ).toEqual({
+      branch: "alice-fix",
+      headRef: "fix",
+      crossRepository: true,
+      readOnly: false,
+      note: undefined,
+      pushUrl: "https://github.com/alice/r.git",
+      stale: undefined,
+      worktree: "/wt/alice-fix",
+    });
+    expect(parsePullBranch({ head_ref: "fix" })).toBeUndefined();
+    expect(parsePullBranch(undefined)).toBeUndefined();
   });
 });
 

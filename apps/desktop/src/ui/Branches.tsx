@@ -7,6 +7,7 @@ import { CornerUpLeft, GitFork, MessageSquareQuote } from "lucide-react";
 import { useMemo } from "react";
 import { type Branch, type BranchKind, branchLine, originLine, originOf } from "../state/branches";
 import { peekThread, selectThread, useApp } from "../state/store";
+import { Tooltip } from "./primitives";
 
 const Glyph = ({ kind, size }: { kind: BranchKind; size: number }) =>
   kind === "fork" ? <GitFork size={size} /> : <MessageSquareQuote size={size} />;
@@ -18,11 +19,10 @@ export function OriginChip({ threadId }: { threadId: string }) {
   if (!origin) return null;
   const line = originLine(origin);
   const open = origin.listed && origin.id ? origin.id : undefined;
-  return (
+  const chip = (
     <button
       type="button"
       disabled={!open}
-      title={open ? `Open ${origin.title}` : `${origin.title} is no longer in the list`}
       onClick={() => open && selectThread(open)}
       className="flex min-w-0 max-w-[260px] shrink items-center gap-1 rounded-sm px-1 text-caption text-fg-muted enabled:hover:bg-fill-subtle enabled:hover:text-fg disabled:cursor-default"
     >
@@ -31,6 +31,13 @@ export function OriginChip({ threadId }: { threadId: string }) {
       <span className="min-w-0 truncate font-medium">{line.title}</span>
       {open && <CornerUpLeft size={10} className="shrink-0 text-fg-faint" />}
     </button>
+  );
+  if (open) return <Tooltip label={`Open ${origin.title}`}>{chip}</Tooltip>;
+  // A disabled button takes no pointer, so the tip hangs on a span that can.
+  return (
+    <Tooltip label={`${origin.title} is no longer in the list`}>
+      <span className="flex min-w-0 max-w-[260px] shrink">{chip}</span>
+    </Tooltip>
   );
 }
 
@@ -41,14 +48,15 @@ export function BranchRow({ branch }: { branch: Branch }) {
     <div className="flex h-6 items-center justify-center gap-1.5 text-caption text-fg-faint">
       <Glyph kind={branch.kind} size={11} />
       <span>{line.label}</span>
-      <button
-        type="button"
-        title={branch.kind === "fork" ? "Open the fork" : "Open the side chat beside this thread"}
-        onClick={() => (branch.kind === "fork" ? selectThread(branch.id) : peekThread(branch.id))}
-        className="min-w-0 max-w-[60%] truncate rounded-sm font-medium text-fg-muted hover:text-fg hover:underline"
-      >
-        {line.title}
-      </button>
+      <Tooltip label={branch.kind === "fork" ? "Open the fork" : "Open the side chat beside this thread"}>
+        <button
+          type="button"
+          onClick={() => (branch.kind === "fork" ? selectThread(branch.id) : peekThread(branch.id))}
+          className="min-w-0 max-w-[60%] truncate rounded-sm font-medium text-fg-muted hover:text-fg hover:underline"
+        >
+          {line.title}
+        </button>
+      </Tooltip>
     </div>
   );
 }

@@ -13,16 +13,23 @@ export interface TerminalTab {
   title: string;
   /** The project action this tab was opened for, so running it again reuses the tab. */
   action?: string;
+  /** Its shell exited, so closing it stops nothing. */
+  exited?: boolean;
 }
 
 export interface TerminalTabs {
   tabs: TerminalTab[];
   /** The tab shown for each folder. */
   active: Record<string, string>;
+  /** Folders in the order the panel showed them, least recently used first. */
+  used?: string[];
 }
 
 /** At most this many shells per folder: each one is a process. */
 export const MAX_TABS_PER_FOLDER = 8;
+
+/** At most this many folders keep their shells; opening one more closes the least recently used. */
+export const MAX_FOLDERS = 4;
 
 let nextId = 0;
 const newId = () => `term-${Date.now().toString(36)}-${nextId++}`;
@@ -56,12 +63,57 @@ export function withNewTab(
     return { state: { ...state, active: { ...state.active, [cwd]: last.id } }, tab: last };
   }
   const tab: TerminalTab = { id, cwd, title: init.title ?? shellTitle(list), action: init.action };
-  return { state: { tabs: [...state.tabs, tab], active: { ...state.active, [cwd]: id } }, tab };
+  return { state: { ...state, tabs: [...state.tabs, tab], active: { ...state.active, [cwd]: id } }, tab };
 }
 
 /** A folder has a shell to show: its first tab is made when it has none. */
 export function withFolder(state: TerminalTabs, cwd: string): TerminalTabs {
   return tabsOf(state, cwd).length ? state : withNewTab(state, cwd).state;
+}
+
+/** The folders that have tabs, in the order they first got one. */
+export function foldersOf(state: TerminalTabs): string[] {
+  return [...new Set(state.tabs.map((t) => t.cwd))];
+}
+
+/**
+ * A folder probably has a process worth keeping: a project action (a dev server, a watcher) whose
+ * shell has not exited. A plain shell's own children are not visible from here.
+ */
+export function folderBusy(state: TerminalTabs, cwd: string): boolean {
+  return tabsOf(state, cwd).some((t) => t.action && !t.exited);
+}
+
+/**
+ * The panel showed `cwd`: it gets its first shell, becomes the most recently used folder, and
+ * when that leaves more than `MAX_FOLDERS` folders with shells, the least recently used one other
+ * than `cwd` is closed, preferring one with nothing running. Its tabs leave the state, so nothing
+ * mounts them again; `evicted` names it and says whether something was running there. Only the
+ * panel being opened calls this, so a hidden panel never closes a shell.
+ */
+export function withOpenedFolder(
+  state: TerminalTabs,
+  cwd: string,
+): { state: TerminalTabs; evicted?: { cwd: string; busy: boolean } } {
+  let next = withFolder(state, cwd);
+  const used = next.used ?? [];
+  if (used[used.length - 1] !== cwd) next = { ...next, used: [...used.filter((d) => d !== cwd), cwd] };
+  const folders = foldersOf(next);
+  if (folders.length <= MAX_FOLDERS) return { state: next };
+  const order = next.used ?? [];
+  const byAge = folders.filter((d) => d !== cwd).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const victim = byAge.find((d) => !folderBusy(next, d)) ?? (byAge[0] as string);
+  const busy = folderBusy(next, victim);
+  const active = { ...next.active };
+  delete active[victim];
+  return {
+    state: {
+      tabs: next.tabs.filter((t) => t.cwd !== victim),
+      active,
+      used: order.filter((d) => d !== victim),
+    },
+    evicted: { cwd: victim, busy },
+  };
 }
 
 /** The tab a project action runs in: the one it opened before, else a new one named after it. */
@@ -89,7 +141,7 @@ export function withoutTab(state: TerminalTabs, id: string): TerminalTabs {
     if (next && next.id !== id) active[tab.cwd] = next.id;
     else delete active[tab.cwd];
   }
-  return { tabs, active };
+  return { ...state, tabs, active };
 }
 
 /** Shows the tab `step` places from the active one in its folder, wrapping round. */
@@ -100,6 +152,13 @@ export function withStep(state: TerminalTabs, cwd: string, step: number): Termin
   const at = list.indexOf(current);
   const next = list[(at + step + list.length) % list.length] as TerminalTab;
   return { ...state, active: { ...state.active, [cwd]: next.id } };
+}
+
+/** Records whether a tab's shell has exited (a restart clears it). */
+export function withExited(state: TerminalTabs, id: string, exited: boolean): TerminalTabs {
+  const tab = state.tabs.find((t) => t.id === id);
+  if (!tab || !!tab.exited === exited) return state;
+  return { ...state, tabs: state.tabs.map((t) => (t.id === id ? { ...t, exited } : t)) };
 }
 
 export function withTitle(state: TerminalTabs, id: string, title: string): TerminalTabs {
@@ -115,8 +174,12 @@ export const useTerminalTabs = create<TerminalTabs>(() => ({ tabs: [], active: {
 const apply = (fn: (s: TerminalTabs) => TerminalTabs) =>
   useTerminalTabs.setState(fn(useTerminalTabs.getState()));
 
-export function ensureTerminalFolder(cwd: string): void {
-  apply((s) => withFolder(s, cwd));
+/** The panel shows `cwd`; returns the folder it closed to stay under `MAX_FOLDERS`, if any. */
+export function openTerminalFolder(cwd: string): { cwd: string; busy: boolean } | undefined {
+  const current = useTerminalTabs.getState();
+  const next = withOpenedFolder(current, cwd);
+  if (next.state !== current) useTerminalTabs.setState(next.state, true);
+  return next.evicted;
 }
 
 export function addTerminalTab(cwd: string): TerminalTab {
@@ -141,6 +204,10 @@ export function showTerminalTab(cwd: string, id: string): void {
 
 export function stepTerminalTab(cwd: string, step: number): void {
   apply((s) => withStep(s, cwd, step));
+}
+
+export function markTerminalExited(id: string, exited: boolean): void {
+  apply((s) => withExited(s, id, exited));
 }
 
 export function titleTerminalTab(id: string, title: string): void {
