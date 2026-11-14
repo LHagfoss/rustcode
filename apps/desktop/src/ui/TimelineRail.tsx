@@ -392,19 +392,28 @@ export const TimelineRail = memo(function TimelineRail({
               </span>
             )}
             {rewind && (
-              <Pill
-                size="sm"
-                disabled={rewind.disabled}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  goRewind();
-                }}
-                aria-label={`Rewind to before turn ${rewind.turn}`}
-                title={rewind.note}
-                className="mt-2"
-              >
-                <History size={12} /> Rewind here
-              </Pill>
+              // A disabled button takes no pointer, so its tip hangs on the span around it.
+              <Tooltip label={rewind.note}>
+                {rewind.disabled ? (
+                  <span className="mt-2 inline-flex">
+                    <Pill size="sm" disabled aria-label={`Rewind to before turn ${rewind.turn}`}>
+                      <History size={12} /> Rewind here
+                    </Pill>
+                  </span>
+                ) : (
+                  <Pill
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      goRewind();
+                    }}
+                    aria-label={`Rewind to before turn ${rewind.turn}`}
+                    className="mt-2"
+                  >
+                    <History size={12} /> Rewind here
+                  </Pill>
+                )}
+              </Tooltip>
             )}
           </div>
         )}
