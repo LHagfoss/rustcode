@@ -4014,6 +4014,31 @@ export class MockEngine {
             "Binary files a/apps/desktop/public/icon.png and b/apps/desktop/public/icon.png differ",
           ].join("\n"),
         };
+      case "_rustcode/pulls/references":
+        return {
+          references: [
+            { number: 2795, title: "feat(desktop): add the login form", kind: "pull", state: "open" },
+            {
+              number: 2788,
+              title: "feat(desktop): Tauri desktop app on every harness",
+              kind: "pull",
+              state: "open",
+            },
+            {
+              number: 2781,
+              title: "fix(engine): keep the steer queue across a restart",
+              kind: "pull",
+              state: "open",
+            },
+            {
+              number: 2770,
+              title: "The composer loses its focus ring after sending",
+              kind: "issue",
+              state: "open",
+            },
+            { number: 2702, title: "Draft helper drops the last line", kind: "issue", state: "closed" },
+          ],
+        };
       case "_rustcode/pulls/thread": {
         const action = obj(params.action);
         const kind = str(action?.kind);

@@ -2101,6 +2101,21 @@ pub(crate) struct PullReviewRequest {
     pub comments: Vec<crate::pull_requests::ReviewComment>,
 }
 
+/// The repository's newest issues and pull requests, for `#` completion in a
+/// comment field (#3769). Answers `{references: [...]}` or `{error}`.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/pulls/references", response = serde_json::Value)]
+pub(crate) struct PullReferencesRequest {
+    pub cwd: std::path::PathBuf,
+}
+
 /// Reply to, resolve or unresolve one review conversation, or add a line
 /// comment, from the pull request's diff view (#3768). Answers
 /// `{done: {resolved?}}` or `{error: {code, message}}`; `uncertain` means
@@ -3855,6 +3870,19 @@ async fn serve_connection(
                     let diff = crate::pull_requests::diff(&request.cwd, request.number).await;
                     responder.respond(match diff {
                         Ok(diff) => serde_json::to_value(diff).unwrap_or_default(),
+                        Err(error) => serde_json::json!({ "error": error }),
+                    })?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: PullReferencesRequest, responder, connection| {
+                connection.spawn(async move {
+                    let read = crate::pull_requests::references(&request.cwd).await;
+                    responder.respond(match read {
+                        Ok(references) => serde_json::json!({ "references": references }),
                         Err(error) => serde_json::json!({ "error": error }),
                     })?;
                     Ok(())
