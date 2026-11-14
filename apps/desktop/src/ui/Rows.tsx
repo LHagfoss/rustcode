@@ -38,6 +38,7 @@ import type { Json } from "../acp/jsonrpc";
 import { effortLabel, modelName } from "../acp/types";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
+import { type ArgRow, type ToolBody, toolBody } from "../lib/toolBody";
 import { hasTimeline } from "../lib/trace";
 import { splitReply } from "../smartui/parse";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
@@ -72,7 +73,6 @@ import {
   orchestrationTool,
   runIdOf,
   sessionIdOf,
-  unwrapToolError,
   usefulSummary,
 } from "../state/toolNames";
 import { type Waiting, waitingLabel, waitingNext, waitingTitle } from "../state/waiting";
@@ -495,9 +495,10 @@ export function DiffCount({ added, removed }: { added: number; removed: number }
   );
 }
 
-function TextBox({ text, label }: { text: string; label: string }) {
+function TextBox({ text, label, shown: display }: { text: string; label: string; shown?: string }) {
   const [all, setAll] = useState(false);
-  const lines = text.replace(/\n$/, "").split("\n");
+  // `text` is what Copy copies; `display` is how it reads, where the two differ (a command's `~`).
+  const lines = (display ?? text).replace(/\n$/, "").split("\n");
   // Folds only when that hides a few lines, not one.
   const folds = lines.length > 17;
   const shown = all || !folds ? lines : lines.slice(0, 14);
@@ -523,17 +524,71 @@ function TextBox({ text, label }: { text: string; label: string }) {
   );
 }
 
-function inputWithoutSummary(input: Json | undefined): string | undefined {
-  if (input === undefined || input === null) return undefined;
-  if (typeof input !== "object" || Array.isArray(input)) return JSON.stringify(input, null, 2);
-  const { summary: _summary, ...rest } = input;
-  return Object.keys(rest).length ? JSON.stringify(rest, null, 2) : undefined;
+/** A call's arguments as key/value rows: scalars beside their key, long text and objects under it. */
+function ArgRows({ rows }: { rows: ArgRow[] }) {
+  if (!rows.length) return null;
+  return (
+    <div>
+      <span className="mb-1 block font-semibold text-caption text-fg-muted">Arguments</span>
+      <dl className="m-0 flex flex-col gap-1 rounded-md bg-fill-subtle p-2 text-caption">
+        {rows.map((row) => (
+          <div
+            key={row.key}
+            className={cx(
+              "group/arg flex min-w-0 gap-x-2",
+              row.shape === "inline" ? "items-baseline" : "flex-col",
+            )}
+          >
+            <div className="flex min-w-0 shrink-0 items-center gap-1">
+              <dt className="font-mono text-fg-muted">{row.key}</dt>
+              {row.shape !== "inline" && (
+                <span className="opacity-0 group-hover/arg:opacity-100 group-focus-within/arg:opacity-100">
+                  <CopyButton text={row.value} iconOnly label={`Copy ${row.key}`} />
+                </span>
+              )}
+            </div>
+            <dd
+              className={cx(
+                "selectable m-0 min-w-0 font-mono text-fg leading-[15px] break-words",
+                row.shape === "json" && "max-h-[240px] overflow-auto whitespace-pre pl-2",
+                row.shape === "text" && "max-h-[240px] overflow-auto whitespace-pre-wrap",
+              )}
+              dir="auto"
+            >
+              {row.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/** A shell call: the command line, what it printed, and how it exited. */
+function CommandBody({ body }: { body: Extract<ToolBody, { kind: "command" }> }) {
+  return (
+    <>
+      {body.command && <TextBox label="Command" text={body.command} shown={displayCommand(body.command)} />}
+      <ArgRows rows={body.args} />
+      {body.output && <TextBox label="Output" text={body.output} />}
+      {body.exitCode !== undefined && (
+        <span className={cx("font-mono text-caption", body.exitCode === 0 ? "text-fg-faint" : "text-danger")}>
+          Exit code {body.exitCode}
+        </span>
+      )}
+      {!body.command && !body.output && body.exitCode === undefined && (
+        <span className="text-caption text-fg-faint">No output</span>
+      )}
+    </>
+  );
 }
 
 /**
- * A tool call's detail: its diffs, or the input and output it read and printed.
- * Shared by the tool row's expander and a turn's Trace, so both format a call
- * the same way and both offer Copy.
+ * A tool call's detail, by what the call did (lib/toolBody.ts): its diffs, a
+ * command with its output and exit code, a search or read with what it found,
+ * or any other call's arguments as key/value rows. Shared by the tool row's
+ * expander and a turn's Trace, so both format a call the same way and both
+ * offer Copy.
  */
 export function ToolDetail({
   item,
@@ -543,16 +598,20 @@ export function ToolDetail({
   /** Padding around the detail, for a host that draws its own indent. */
   className?: string;
 }) {
-  const input = inputWithoutSummary(item.input);
+  const body = useMemo(() => toolBody(item, inferToolKind(item)), [item]);
   return (
     <div className={cx("flex flex-col gap-2", className)}>
-      {item.diffs.length > 0 ? (
+      {body.kind === "diff" ? (
         item.diffs.map((diff, i) => <DiffView key={i} diff={diff} />)
+      ) : body.kind === "command" ? (
+        <CommandBody body={body} />
       ) : (
         <>
-          {input && <TextBox label="Input" text={input} />}
-          {item.output && <TextBox label="Output" text={unwrapToolError(item.output) || item.output} />}
-          {!input && !item.output && <span className="text-caption text-fg-faint">No output</span>}
+          <ArgRows rows={body.args} />
+          {body.output && (
+            <TextBox label={body.kind === "lookup" ? body.outputLabel : "Output"} text={body.output} />
+          )}
+          {!body.args.length && !body.output && <span className="text-caption text-fg-faint">No output</span>}
         </>
       )}
     </div>

@@ -117,6 +117,7 @@ import {
   setRecapWhileAway,
   setReduceTransparency,
   setRoundedFont,
+  setShowToolCalls,
   setSmartUi,
   setSystemNotifications,
   setTheme,
@@ -529,6 +530,7 @@ function ChatPage() {
   const smartUi = useApp((s) => s.smartUi);
   const smartUiPending = useApp((s) => s.smartUiPending);
   const chatWidth = useApp((s) => s.chatWidth);
+  const showToolCalls = useApp((s) => s.showToolCalls);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   const [nextPrompt, setNextPromptState] = useState(nextPromptEnabled);
@@ -561,6 +563,14 @@ function ChatPage() {
         hint="It runs in the chat, sandboxed, with no network. Its buttons send a message only when you click them."
       >
         <Switch label="Smart UI" checked={smartUi} onChange={setSmartUi} />
+      </Row>
+      <Row
+        title="Show tool calls"
+        reset={showToolCalls ? undefined : () => setShowToolCalls(SETTINGS_DEFAULTS.showToolCalls)}
+        subtitle="Show the commands, reads and edits a turn makes."
+        hint="Off, a turn shows its “Worked for” line and the reply. Approvals, questions, errors, plans and changed files still show."
+      >
+        <Switch label="Show tool calls" checked={showToolCalls} onChange={setShowToolCalls} />
       </Row>
       {smartUiPending && (
         <Row title="Restart the server to apply" subtitle="The server reads this setting when it starts.">

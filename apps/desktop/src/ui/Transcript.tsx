@@ -574,12 +574,13 @@ export function Transcript({
   // The rows the last render drew: an unchanged row keeps its object, so its memoised component
   // skips a streamed chunk (state/fold.ts keepUnchangedRows).
   const drawnRows = useRef<Row[]>([]);
+  const showTools = useApp((s) => s.showToolCalls);
   const rows = useMemo<Row[]>(() => {
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each,
     // and the same quiet notice said back to back reads as one row with its count.
     const shown = searching ? ALL_OPEN : open;
     const grouped: Row[] = collapseRepeats(
-      collapseNotices(groupTools(foldTurns(visible, thread.running, shown), shown)),
+      collapseNotices(groupTools(foldTurns(visible, thread.running, shown, { showTools }), shown)),
       (item) => item.kind === "user" && item.text === RESUME_TEXT,
     ).filter(
       // The turn that just finished keeps its live header for a moment instead of its fold
@@ -729,6 +730,7 @@ export function Transcript({
     childRequests,
     settleEnd,
     branches,
+    showTools,
   ]);
   // Footers of folded turns: their time is in the summary row, not repeated. The turn that just
   // finished still counts as folded while its live header holds the place of that summary row.

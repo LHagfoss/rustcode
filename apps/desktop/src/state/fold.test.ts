@@ -527,3 +527,51 @@ test("a turn under a second reads as 1s", () => {
   const fold = rows.find((r) => "fold" in r);
   expect(fold && "fold" in fold ? foldLabel(fold.fold, (ms) => `${ms / 1000}s`) : "").toBe("Worked for 1s");
 });
+
+describe("Show tool calls off", () => {
+  const items = [
+    user("u1"),
+    thought("t1"),
+    tool("read", "completed", "a.ts"),
+    error("e1"),
+    tool("run"),
+    reply("r1"),
+    end("end1"),
+    user("u2"),
+    thought("t2"),
+    tool("live"),
+    reply("r2"),
+  ];
+
+  test("a finished turn keeps its Worked for line, with nothing to open", () => {
+    const fold = turnFoldKey("end1");
+    const rows = foldTurns(items, true, new Set([fold]), { showTools: false });
+    const head = rows.find((r) => "fold" in r && r.fold.key === fold);
+    expect(head && "fold" in head && head.fold).toMatchObject({ open: false, steps: 0, files: 1 });
+    // The error notice and the reply stay; the calls and thoughts do not, even with the fold opened.
+    expect(keys(rows).slice(0, 5)).toEqual(["u1", `[${fold}]`, "e1", "r1", "end1"]);
+  });
+
+  test("a running turn draws no tool calls, but keeps its thoughts and replies", () => {
+    const rows = foldTurns(items, true, new Set(), { showTools: false });
+    expect(keys(rows).slice(5)).toEqual(["u2", "t2", "r2"]);
+  });
+
+  test("threads a turn started still show", () => {
+    const started: TranscriptItem = {
+      kind: "tool",
+      id: "start",
+      title: "mcp__rustcode__start_session",
+      status: "completed",
+      diffs: [],
+    };
+    const rows = foldTurns([user("u"), tool("x"), started], true, new Set(), { showTools: false });
+    expect(keys(rows)).toEqual(["u", "start"]);
+  });
+
+  test("on by default", () => {
+    const fold = turnFoldKey("end1");
+    const rows = foldTurns(items, false, new Set([fold]));
+    expect(keys(rows)).toContain("read");
+  });
+});
