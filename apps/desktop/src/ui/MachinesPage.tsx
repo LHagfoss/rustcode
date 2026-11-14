@@ -56,8 +56,9 @@ import {
   useMachines,
   versionSkew,
 } from "../state/machines";
-import { openMachineSettings, useApp } from "../state/store";
+import { openMachineSettings, refreshRemote, useApp } from "../state/store";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
+import { connectionDirection, peerInbound } from "./connectionDirection";
 import {
   environmentAddress,
   environmentOutdated,
@@ -70,7 +71,7 @@ import {
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import { Spinner } from "./primitives";
-import { Action, Chip, Group, Loading, Row } from "./settingsKit";
+import { Action, Chip, Group, Row } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
 
 /** How often the page asks the shell where the environments stand. */
@@ -93,7 +94,11 @@ export function MachinesPage() {
   useEffect(() => {
     if (!hasShell()) return;
     void refreshMachines();
-    const timer = setInterval(() => void refreshMachines(), POLL_MS);
+    void refreshRemote();
+    const timer = setInterval(() => {
+      void refreshMachines();
+      void refreshRemote();
+    }, POLL_MS);
     return () => clearInterval(timer);
   }, []);
 
@@ -109,10 +114,13 @@ export function MachinesPage() {
     void localAppVersion().then(setLocal);
   }, []);
 
-  if (!ready) return <Loading error={error} onRetry={() => void refreshMachines()} />;
-
   return (
     <>
+      {!ready && (
+        <p role="status" className="mb-4 text-callout text-fg-muted">
+          Updating environments…
+        </p>
+      )}
       {error && <p className="mb-6 text-callout text-warning">Could not read the environments: {error}</p>}
 
       <Group
@@ -316,12 +324,15 @@ export function MachineRow({
   const name = machineName(machine);
   const status = environmentStatus(machine);
   const recovery = environmentRecovery(machine);
+  const devices = useApp((s) => s.remote?.devices);
   const connected = machine.state === "connected";
+  const direction = connectionDirection(connected, peerInbound(machine.id, devices ?? []), name);
   const facts = [
     platform,
     machine.version ? `RustCode ${machine.version}` : undefined,
     machine.lastConnectedAt ? `Last seen ${lastSeen(machine.lastConnectedAt, now)}` : "Not reached yet",
     threads,
+    machine.route?.probe?.latencyMs != null ? `Route latency ${machine.route.probe.latencyMs} ms` : undefined,
   ].filter(Boolean);
   return (
     <Row
@@ -348,6 +359,7 @@ export function MachineRow({
       }
       subtitle={
         <>
+          <span className="block">{direction}</span>
           {/* Online: where it is and how it travels. Otherwise what is wrong, then the route it tries. */}
           <span className="selectable block">
             {connected ? environmentRoute(machine) : machineLine(machine)}

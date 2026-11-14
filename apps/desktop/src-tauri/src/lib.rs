@@ -100,6 +100,7 @@ pub fn run() {
             native::open_path,
             native::skill_create,
             native::open_in_editor,
+            native::open_folder_in_editor,
             native::haptic,
             notify::notify_show,
             notify::notify_permission,

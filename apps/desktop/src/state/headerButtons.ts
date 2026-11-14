@@ -8,7 +8,15 @@
 // default, after the buttons the user arranged.
 
 /** The header's buttons, in the order a fresh install shows them. */
-export const HEADER_BUTTON_IDS = ["status", "plan", "pulls", "terminal", "details", "changes"] as const;
+export const HEADER_BUTTON_IDS = [
+  "status",
+  "plan",
+  "actions",
+  "pulls",
+  "terminal",
+  "details",
+  "changes",
+] as const;
 
 export type HeaderButtonId = (typeof HEADER_BUTTON_IDS)[number];
 

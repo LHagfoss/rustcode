@@ -343,15 +343,22 @@ export function AccountsList({ harness }: { harness: Harness }) {
  * regains focus, with each account's sign-in read, so Check is rarely needed.
  * It does not start a harness: listing models is Check's.
  */
+let lastAutoDetect = 0;
+let autoDetectPending = false;
+
 export function useAutoDetect() {
   useEffect(() => {
-    let last = 0;
     const detect = () => {
       // A focus that follows a focus within seconds asks nothing new.
-      if (Date.now() - last < 3000) return;
-      last = Date.now();
+      if (autoDetectPending || Date.now() - lastAutoDetect < 30_000) return;
+      lastAutoDetect = Date.now();
+      autoDetectPending = true;
       const ids = useApp.getState().harnesses?.harnesses.map((h) => h.id) ?? [];
-      checkHarnessAccounts(false, ids, false).catch(() => undefined);
+      checkHarnessAccounts(false, ids, false)
+        .catch(() => undefined)
+        .finally(() => {
+          autoDetectPending = false;
+        });
     };
     detect();
     window.addEventListener("focus", detect);

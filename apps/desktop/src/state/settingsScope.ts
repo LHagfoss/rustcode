@@ -19,6 +19,7 @@ import type { Harness, HarnessSnapshot } from "../acp/types";
 import { Method, parseHarnessSnapshot } from "../acp/types";
 import { readStorage, writeStorage } from "../lib/storage";
 import { useMachines } from "./machines";
+import { settingsReadCache } from "./settingsReadCache";
 import {
   failureSummary,
   missingSettingValues,
@@ -230,9 +231,18 @@ export function serverValueDiffers(
 }
 
 /** Read every server setting from one machine, and cache what it answers. */
-export async function loadServerSettings(host: string, force = false): Promise<void> {
+const settingsReads = settingsReadCache();
+const settingsRevision = new Map<string, number>();
+
+export function loadServerSettings(host: string, force = false): Promise<void> {
+  return settingsReads.read(host, () => readServerSettings(host), force);
+}
+
+async function readServerSettings(host: string): Promise<void> {
+  if ([...writesInFlight.keys()].some((key) => key.startsWith(`${host}\u0000`))) return;
+  const revision = settingsRevision.get(host);
   const key = valueKey(host, "*");
-  if (!force && useSettingValues.getState().loading[key]) return;
+
   useSettingValues.setState((state) => ({ loading: { ...state.loading, [key]: true } }));
   try {
     if (host === LOCAL_HOST) {
@@ -240,16 +250,16 @@ export async function loadServerSettings(host: string, force = false): Promise<v
         await seedLocalSettings(host);
         const answer = await machineRequest(host, "_rustcode/settings/get", {}, 10_000);
         const values = obj(obj(answer)?.values);
-        if (values) remember(host, values);
-        else remember(host, localValues());
+        if (values && revision === settingsRevision.get(host)) remember(host, values);
+        else if (revision === settingsRevision.get(host)) remember(host, localValues());
       } catch {
         // An older server has no `_rustcode/settings`: the app keeps them.
-        remember(host, localValues());
+        if (revision === settingsRevision.get(host)) remember(host, localValues());
       }
     } else {
       const answer = await machineRequest(host, "_rustcode/settings/get", {}, 10_000);
       const values = obj(obj(answer)?.values);
-      if (values) remember(host, values);
+      if (values && revision === settingsRevision.get(host)) remember(host, values);
     }
   } finally {
     useSettingValues.setState((state) => {
@@ -335,25 +345,57 @@ export function hydrateLocalServerSettings(): Promise<void> {
   return hydration;
 }
 
-/** The newest write of each `host\u0000key`, so an older answer never undoes a newer choice. */
-const writeTokens = new Map<string, number>();
-
 /** Write one setting to one machine; the local app follows it at once. */
+export const useSettingsSave = create<{ pending: number; error: string | null; saved: boolean }>(() => ({
+  pending: 0,
+  error: null,
+  saved: false,
+}));
+const writesInFlight = new Map<string, Promise<void>>();
+const confirmedValues = new Map<string, Json | undefined>();
+const writeVersions = new Map<string, number>();
+
 export async function writeServerSetting(host: string, key: ServerSettingKey, value: Json): Promise<void> {
-  const slot = valueKey(host, key);
-  const token = (writeTokens.get(slot) ?? 0) + 1;
-  writeTokens.set(slot, token);
-  const answer = await machineRequest(host, "_rustcode/settings/set", { values: { [key]: value } }, 10_000);
-  const values = obj(obj(answer)?.values);
-  // A second click while the first was on its way: that answer still holds the first value.
-  const superseded = writeTokens.get(slot) !== token;
-  if (values) {
-    if (superseded) {
-      const { [key]: _stale, ...rest } = values;
-      remember(host, rest);
-    } else remember(host, values);
+  const cacheKey = valueKey(host, key);
+  if (!writesInFlight.has(cacheKey))
+    confirmedValues.set(cacheKey, useSettingValues.getState().values[cacheKey]);
+  const version = (writeVersions.get(cacheKey) ?? 0) + 1;
+  writeVersions.set(cacheKey, version);
+  settingsRevision.set(host, (settingsRevision.get(host) ?? 0) + 1);
+  remember(host, { [key]: value });
+  useSettingsSave.setState((s) => ({ pending: s.pending + 1, error: null, saved: false }));
+  const prior = writesInFlight.get(cacheKey);
+  const task = (async () => {
+    await prior?.catch(() => undefined);
+    try {
+      await machineRequest(host, "_rustcode/settings/set", { values: { [key]: value } }, 10_000);
+      // A full response can contain old values for other writes; commit only this key.
+      confirmedValues.set(cacheKey, value);
+      if (host === LOCAL_HOST) applyLocalSettings({ [key]: value });
+      useSettingsSave.setState({ saved: true });
+    } catch (error) {
+      if (writeVersions.get(cacheKey) === version) {
+        const previous = confirmedValues.get(cacheKey);
+        useSettingValues.setState((s) => {
+          const values = { ...s.values };
+          if (previous === undefined) delete values[cacheKey];
+          else values[cacheKey] = previous;
+          return { values };
+        });
+      }
+      useSettingsSave.setState({ error: errorText(error), saved: false });
+      throw error;
+    } finally {
+      settingsReads.invalidate(host);
+      useSettingsSave.setState((s) => ({ pending: s.pending - 1 }));
+    }
+  })();
+  writesInFlight.set(cacheKey, task);
+  try {
+    await task;
+  } finally {
+    if (writesInFlight.get(cacheKey) === task) writesInFlight.delete(cacheKey);
   }
-  if (host === LOCAL_HOST && !superseded) applyLocalSettings({ [key]: value });
 }
 
 // ------------------------------------------------------------ the row hook

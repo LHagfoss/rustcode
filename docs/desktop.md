@@ -636,6 +636,11 @@ composer's keys stay outside the table.
   itself shows as working with a quiet "Background task finished" line saying
   why it ran again. A call whose task state never comes back can then only
   leave the wrong waiting line, never a row spinning forever.
+- **Open in Editor.** The header's project button (and the project picker
+  anywhere) offers *Open in Editor* beside *Open in Finder* and *Open in
+  Terminal*: the thread's folder opens in the first editor with a command
+  line tool installed, VS Code, Cursor or Zed (`open_folder_in_editor` in
+  `src-tauri/src/native.rs`); with none, a toast says which to install.
 - **Pull requests.** A panel lists the project's pull requests
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
@@ -900,6 +905,15 @@ composer's keys stay outside the table.
   attached count.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
+- **Project actions.** The header's ⚡ menu lists the project's quick
+  actions (named commands such as *Dev server* · `bun run dev`); picking one
+  opens the terminal and runs it in the thread's folder. *Add Action…* /
+  *Edit Actions…* open an editor of name and command rows (⌘⏎ saves). A
+  main checkout and its worktrees share one list (keyed by the session's
+  `repo`), kept in this app's storage only (`rustcode.projectActions`,
+  `state/projectActions.ts`). ⌘K lists them as `Run: ‹name›` with *Edit
+  project actions…*. A thread on another computer shows the button disabled,
+  like the terminal.
 - **Window.** The window opens at the size it was last closed with
   (`webview.rs` keeps it as logical points in `window.json` under the app's
   config folder; closing the window or quitting writes it, and a missing or
@@ -929,6 +943,15 @@ composer's keys stay outside the table.
   paths); an edit needs none, since its diff header names the file and its
   `+N −M`. An answered card settles into one line (`Allowed edit src/app.ts ·
   once`) for a moment.
+  Plan mode's "ready to code?" (a `switch_mode` call carrying the plan, as
+  Claude Code's ExitPlanMode sends it) is not a tool to allow: the row reads
+  *Plan ready* with the plan's title and its Markdown rendered (folded past
+  360px, *Show the whole plan*, Copy), and the bar asks *Plan ready: ‹title›.
+  Start building?* with *Keep planning* (esc), *Build* (⏎, the harness's
+  ask-for-each-edit answer) and the harness's other ways to build under
+  *More* by their own names. It carries no risk badge, and it settles as
+  *Plan approved · ‹answer›* or *Kept planning* (`lib/approval.ts`
+  `proposedPlan`).
   A timed grant is kept by the engine beside the permanent always-allow
   rules and listed with its minutes left under Details › Allowed, where
   Revoke drops it. Keys 1–9 still pick in the engine's order. A child thread's approval or question
@@ -1061,7 +1084,7 @@ composer's keys stay outside the table.
   their top.
 - **Thread header buttons.** The chat header's buttons come from one
   registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): status,
-  plan, pull requests, terminal, details, changes. Settings › Chat › Thread
+  plan, project actions, pull requests, terminal, details, changes. Settings › Chat › Thread
   header buttons lists them as Shown and Hidden: drag a row to reorder it or
   move it across (pointer capture, so the webview's own drops never see it),
   ⌥↑/⌥↓ moves a focused row, and each row's Show/Hide button does the same

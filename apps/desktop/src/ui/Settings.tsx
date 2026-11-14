@@ -1,3 +1,4 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
 import { dirname } from "../lib/paths";
 import { appPlatform, currentPlatform } from "../lib/platform";
@@ -35,7 +36,7 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { type PayloadCapture, parsePayloadCapture } from "../acp/rustcode";
 import { Method } from "../acp/types";
@@ -94,6 +95,7 @@ import {
   useScope,
   useScopedDefaultHarness,
   useScopedSetting,
+  useSettingsSave,
 } from "../state/settingsScope";
 import {
   APP_VERSION,
@@ -134,23 +136,33 @@ import {
   useUpdates,
 } from "../state/updates";
 import { AddHarnessForm } from "./AddHarness";
-import { CapabilitiesPage } from "./Capabilities";
+
+const CapabilitiesPage = lazy(() => import("./Capabilities").then((m) => ({ default: m.CapabilitiesPage })));
+
 import { DelegatePresetsGroup } from "./DelegatePresets";
-import { DiagnosticsPage } from "./DiagnosticsPage";
+
+const DiagnosticsPage = lazy(() => import("./DiagnosticsPage").then((m) => ({ default: m.DiagnosticsPage })));
+
 import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { LimitFallbackGroup } from "./LimitFallback";
 import { MachineSettingsPage } from "./MachineSettingsPage";
 import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { OutsideAgentsPage } from "./OutsideAgentsPage";
-import { PermissionsPage } from "./PermissionsPage";
+
+const OutsideAgentsPage = lazy(() =>
+  import("./OutsideAgentsPage").then((m) => ({ default: m.OutsideAgentsPage })),
+);
+const PermissionsPage = lazy(() => import("./PermissionsPage").then((m) => ({ default: m.PermissionsPage })));
+
 import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
 import { ScopedHarnessList } from "./ScopedHarnesses";
 import { ScopedValue, SettingsScopeBar } from "./SettingsScope";
 import { ShortcutsPage } from "./ShortcutSettings";
-import { StatisticsPage } from "./StatisticsPage";
+
+const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
+
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
@@ -166,7 +178,8 @@ import {
   useEngineData,
   useRowResets,
 } from "./settingsKit";
-import { UsagePage } from "./UsagePage";
+
+const UsagePage = lazy(() => import("./UsagePage").then((m) => ({ default: m.UsagePage })));
 
 interface Page {
   id: SettingsSection;
@@ -1813,6 +1826,16 @@ export function Settings() {
   const [active, setActive] = useState(0);
   const field = useRef<HTMLInputElement>(null);
   const results = useMemo(() => searchSettings(query), [query]);
+  const resultsScroll = useRef<HTMLDivElement>(null);
+  const virtualResults = useVirtualizer({
+    count: query.trim() ? results.length : 0,
+    getScrollElement: () => resultsScroll.current,
+    estimateSize: () => 48,
+    overscan: 5,
+  });
+  useEffect(() => {
+    if (query.trim()) virtualResults.scrollToIndex(active, { align: "auto" });
+  }, [active, query, virtualResults]);
   // The row to land on, set when a result is picked and cleared once it is lit.
   const [landing, setLanding] = useState<{ section: SettingsSection; title: string } | null>(null);
   // The panel takes focus when it opens: keys then land inside it, never on the
@@ -1941,27 +1964,44 @@ export function Settings() {
                   <Kbd>/</Kbd>
                 )}
               </div>
-              <div className="scroll-stable flex min-h-0 flex-1 flex-col gap-4 pb-1">
+              <div ref={resultsScroll} className="scroll-stable flex min-h-0 flex-1 flex-col gap-4 pb-1">
                 {query.trim() ? (
                   results.length ? (
-                    <div role="listbox" aria-label="Settings results" className="flex flex-col gap-0.5">
-                      {results.map((r, i) => (
-                        <button
-                          key={`${r.section}:${r.title}`}
-                          type="button"
-                          role="option"
-                          aria-selected={i === active}
-                          onMouseMove={() => setActive(i)}
-                          onClick={() => pick(r)}
-                          className={cx(
-                            "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
-                            i === active ? "bg-fill" : "hover:bg-fill",
-                          )}
-                        >
-                          <span className="w-full truncate font-medium text-body">{r.title}</span>
-                          <span className="text-caption text-fg-faint">{pageLabel(r.section)}</span>
-                        </button>
-                      ))}
+                    <div
+                      role="listbox"
+                      aria-label="Settings results"
+                      className="relative shrink-0"
+                      style={{ height: virtualResults.getTotalSize() }}
+                    >
+                      {virtualResults.getVirtualItems().map((item) => {
+                        const i = item.index;
+                        const r = results[i]!;
+                        return (
+                          <button
+                            key={`${r.section}:${r.title}`}
+                            style={{
+                              position: "absolute",
+                              top: item.start,
+                              height: item.size,
+                              width: "100%",
+                            }}
+                            aria-posinset={i + 1}
+                            aria-setsize={results.length}
+                            type="button"
+                            role="option"
+                            aria-selected={i === active}
+                            onMouseMove={() => setActive(i)}
+                            onClick={() => pick(r)}
+                            className={cx(
+                              "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
+                              i === active ? "bg-fill" : "hover:bg-fill",
+                            )}
+                          >
+                            <span className="w-full truncate font-medium text-body">{r.title}</span>
+                            <span className="text-caption text-fg-faint">{pageLabel(r.section)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   ) : (
                     <p className="px-2 py-1.5 text-caption text-fg-muted">
@@ -2002,23 +2042,25 @@ export function Settings() {
               <PanelHeader label={label} />
               <main className="scroll-stable min-h-0 flex-1">
                 <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
-                  {section === "general" && <GeneralPage />}
-                  {section === "chat" && <ChatPage />}
-                  {section === "permissions" && <PermissionsPage />}
-                  {section === "agents" && <AgentsPage />}
-                  {section === "connections" && <ConnectionsPage />}
-                  {section === "capabilities" && <CapabilitiesPage />}
-                  {section === "remote" && <RemoteAccessPage />}
-                  {section === "outside" && <OutsideAgentsPage />}
-                  {section === "machines" &&
-                    (machine ? <MachineSettingsPage id={machine} /> : <MachinesPage />)}
-                  {section === "appearance" && <AppearancePage />}
-                  {section === "keyboard" && <ShortcutsPage />}
-                  {section === "usage" && <UsagePage />}
-                  {section === "statistics" && <StatisticsPage />}
-                  {section === "advanced" && <AdvancedPage />}
-                  {section === "diagnostics" && <DiagnosticsPage />}
-                  {section === "about" && <AboutPage />}
+                  <Suspense fallback={<Loading error={null} />}>
+                    {section === "general" && <GeneralPage />}
+                    {section === "chat" && <ChatPage />}
+                    {section === "permissions" && <PermissionsPage />}
+                    {section === "agents" && <AgentsPage />}
+                    {section === "connections" && <ConnectionsPage />}
+                    {section === "capabilities" && <CapabilitiesPage />}
+                    {section === "remote" && <RemoteAccessPage />}
+                    {section === "outside" && <OutsideAgentsPage />}
+                    {section === "machines" &&
+                      (machine ? <MachineSettingsPage id={machine} /> : <MachinesPage />)}
+                    {section === "appearance" && <AppearancePage />}
+                    {section === "keyboard" && <ShortcutsPage />}
+                    {section === "usage" && <UsagePage />}
+                    {section === "statistics" && <StatisticsPage />}
+                    {section === "advanced" && <AdvancedPage />}
+                    {section === "diagnostics" && <DiagnosticsPage />}
+                    {section === "about" && <AboutPage />}
+                  </Suspense>
                 </div>
               </main>
             </div>
@@ -2036,6 +2078,7 @@ export function Settings() {
  * (settingsKit.tsx › RowResets).
  */
 function PanelHeader({ label }: { label: string }) {
+  const save = useSettingsSave();
   const resets = useRowResets();
   return (
     <header className="rule-b flex h-12 shrink-0 items-center gap-3 ps-4 pe-2">
@@ -2051,6 +2094,15 @@ function PanelHeader({ label }: { label: string }) {
         </ol>
       </nav>
       <div className="ms-auto flex shrink-0 items-center gap-1">
+        <span role="status" className="text-caption text-fg-muted">
+          {save.pending
+            ? "Saving…"
+            : save.error
+              ? `Could not save: ${save.error}`
+              : save.saved
+                ? "Saved"
+                : ""}
+        </span>
         {resets.count > 0 && (
           <Action
             quiet
