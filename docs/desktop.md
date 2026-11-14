@@ -622,6 +622,11 @@ composer's keys stay outside the table.
   itself shows as working with a quiet "Background task finished" line saying
   why it ran again. A call whose task state never comes back can then only
   leave the wrong waiting line, never a row spinning forever.
+- **Open in Editor.** The header's project button (and the project picker
+  anywhere) offers *Open in Editor* beside *Open in Finder* and *Open in
+  Terminal*: the thread's folder opens in the first editor with a command
+  line tool installed, VS Code, Cursor or Zed (`open_folder_in_editor` in
+  `src-tauri/src/native.rs`); with none, a toast says which to install.
 - **Pull requests.** A panel lists the project's pull requests
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or

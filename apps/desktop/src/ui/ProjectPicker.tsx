@@ -4,12 +4,22 @@
 // with the thread's folder (Finder, Terminal, copy the path, another thread there). Both places
 // read the thread's own folder from the store, so a move from either shows in both.
 
-import { Check, Copy, FolderOpen, FolderPlus, GitBranch, SquarePen, SquareTerminal } from "lucide-react";
+import {
+  Check,
+  Code,
+  Copy,
+  FolderOpen,
+  FolderPlus,
+  GitBranch,
+  SquarePen,
+  SquareTerminal,
+} from "lucide-react";
 import { type ReactElement, type ReactNode, useMemo, useState } from "react";
 import { projectName } from "../acp/types";
 import { folderRows, matchSpans, middleEllipsis } from "../lib/folderList";
-import { canOpenTerminal, openPath, openTerminalAt, pickFolder } from "../lib/native";
+import { canOpenTerminal, openFolderInEditor, openPath, openTerminalAt, pickFolder } from "../lib/native";
 import { fileManagerName } from "../lib/platform";
+import { hasShell } from "../lib/shell";
 import { pickProject } from "../state/folders";
 import { registeredProjects } from "../state/projectBook";
 import { isCurrentProject, moveBlockedReason } from "../state/projectPick";
@@ -205,6 +215,11 @@ function FolderActions({ cwd, host, remote }: { cwd: string; host: string; remot
       {!remote && (
         <CardMenuItem onSelect={() => openPath(cwd)}>
           <FolderOpen size={13} className="text-fg-muted" /> Open in {fileManagerName()}
+        </CardMenuItem>
+      )}
+      {!remote && hasShell() && (
+        <CardMenuItem onSelect={() => void openFolderInEditor(cwd).catch((e) => toast(String(e), "error"))}>
+          <Code size={13} className="text-fg-muted" /> Open in Editor
         </CardMenuItem>
       )}
       {!remote && canOpenTerminal() && (
