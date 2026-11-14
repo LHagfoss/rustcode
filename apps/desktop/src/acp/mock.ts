@@ -5166,20 +5166,22 @@ export class MockEngine {
             ? MOCK_KIT
             : /\b(hover|trend|graph)\b/i.test(prompt)
               ? MOCK_CHARTS
-              : /\bview\b/i.test(prompt)
-                ? MOCK_VIEW
-                : /\bcharts?\b/i.test(prompt)
-                  ? MOCK_VIZ
-                  : [
-                      "Done. ",
-                      "I updated the greeting in `src/app.ts` ",
-                      "and the tests pass.\n\n",
-                      "```ts\n",
-                      'const greeting = "hello, world";\n',
-                      "export default greeting;\n",
-                      "```\n\n",
-                      "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-                    ];
+              : /\btable\b/i.test(prompt)
+                ? MOCK_TABLE
+                : /\bview\b/i.test(prompt)
+                  ? MOCK_VIEW
+                  : /\bcharts?\b/i.test(prompt)
+                    ? MOCK_VIZ
+                    : [
+                        "Done. ",
+                        "I updated the greeting in `src/app.ts` ",
+                        "and the tests pass.\n\n",
+                        "```ts\n",
+                        'const greeting = "hello, world";\n',
+                        "export default greeting;\n",
+                        "```\n\n",
+                        "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+                      ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -5212,6 +5214,25 @@ export const MOCK_VIZ = [
   "```\n\n",
   "```rustcode-viz\n",
   '{"version":1,"type":"checklist","title":"Orchestrator v2","items":[{"label":"Worktrees","status":"done"},{"label":"Checkpoints","status":"in_progress"},{"label":"Fan-out compare","status":"todo","note":"needs the engine"}]}\n',
+  "```\n",
+];
+
+/** A Smart UI reply with a wide, wrapping table in tabs: long code paths and badges that must fit the reply's width. */
+export const MOCK_TABLE = [
+  "Here are the open gaps.\n\n",
+  "```rustcode-ui v1\n",
+  "<title>Open gaps</title>\n",
+  '<div class="rc-col rc-gap-3">\n',
+  '<div class="rc-tabs">\n',
+  '<div role="tablist"><button role="tab" data-rc-tab="a">Open gaps (11)</button><button role="tab" data-rc-tab="b">Closed</button></div>\n',
+  '<section data-rc-panel="a">\n',
+  '<table class="rc-table" data-rc-sort>\n',
+  "<thead><tr><th>#</th><th>What</th><th>Elsewhere</th><th>RustCode today</th><th>Size</th><th>Kind</th></tr></thead>\n<tbody>\n",
+  '<tr><td class="rc-num">8</td><td><b>Files in question answers</b></td><td>Attach or paste a file into an agent\'s question</td><td>Question form has no attachments (<code>apps/desktop/src/ui/AttentionCards.tsx</code>)</td><td>S</td><td><span class="rc-badge rc-info">Improve</span></td></tr>\n',
+  '<tr><td class="rc-num">11</td><td><b>Harness presets</b></td><td>Cursor, Kiro, Grok, Antigravity as first-class providers</td><td>Codex, Claude Code, Gemini, OpenCode, Pi; others only as a hand-added ACP command</td><td>S each</td><td><span class="rc-badge rc-info">New</span></td></tr>\n',
+  "</tbody></table>\n</section>\n",
+  '<section data-rc-panel="b"><div class="rc-list"><div class="rc-item">Nothing closed yet</div></div></section>\n',
+  "</div></div>\n",
   "```\n",
 ];
 

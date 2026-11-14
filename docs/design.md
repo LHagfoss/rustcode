@@ -1040,7 +1040,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `text-body text-fg-muted`, the summary in `text-body text-fg-faint`, the
   chevron only on hover. It stays that one line while it runs, a spinner in
   the icon's place: what a call printed is never drawn under it by itself, only
-  in the card its chevron opens (Input, then Output), so a running command does
+  in the card its chevron opens (Command or Arguments, then Output), so a running command does
   not push the turn around as it prints. A command the harness sent to the
   background returned when it started, and says so quietly after its summary
   (`Started in background` in `text-caption text-fg-faint`): its task is the

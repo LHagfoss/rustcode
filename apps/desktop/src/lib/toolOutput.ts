@@ -27,3 +27,20 @@ export function stripOutputFence(text: string): string {
   if (!close || body.slice(close.index + close[0].length).trim() !== "") return text;
   return body.slice(0, close.index).replace(/\r?\n$/, "");
 }
+
+// ESC and BEL spelled out, so the pattern holds no control character in its source.
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+/** CSI sequences (colours, cursor moves), OSC sequences (titles, links) and the lone two-byte escapes. */
+const ANSI = new RegExp(
+  `${ESC}\\[[0-?]*[ -/]*[@-~]|${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)|${ESC}[@-Z\\\\-_]`,
+  "g",
+);
+
+/**
+ * A command's output without its terminal escape codes: a tool row draws text, not a terminal, so
+ * `\x1b[31m` would otherwise read as part of what the command printed.
+ */
+export function stripAnsi(text: string): string {
+  return text.includes(ESC) ? text.replace(ANSI, "") : text;
+}

@@ -1305,6 +1305,19 @@ composer's keys stay outside the table.
   actions by tool kind and "performed N other actions" for the rest, with
   "N failed" in danger. A call still running and a subagent keep their own rows; a
   search opens every group (`groupTools`).
+- **Tool call detail.** Opening a tool row shows a body by what the call
+  did (`src/lib/toolBody.ts`): a command shows its command line, its output
+  with terminal escape codes stripped, and its exit code (non-zero in
+  danger); a search or read shows its arguments and its results or content;
+  any other call, MCP tools included, lists its arguments as key/value rows
+  (scalars inline, long strings wrapped, objects and lists as JSON for that
+  value only). Diffs keep the diff view, and every Copy copies the raw value.
+- **Show tool calls.** Settings › Chat › Show tool calls (on by default,
+  `rustcode.showToolCalls`). Off, a finished turn shows its "Worked for …"
+  line, which no longer opens, and the reply; a running turn shows its
+  working line, thoughts and replies but no tool rows. Approvals (at the
+  foot), questions, errors, the plan card, the change line and the threads
+  and subagents a turn started still show (`foldTurns` `showTools`).
 - **Pictures.** A pasted picture's thumbnail and a sent message's pictures
   open in a lightbox (fit to the window, ←→ between the message's
   pictures, a click zooms, Esc or a click outside closes). A reply's
@@ -2010,3 +2023,23 @@ an editable title/body sheet with the same protection. Generation failures
 leave the draft and show a quiet status message. No git write happens until
 you confirm the sheet. The selected generator also writes first-prompt titles
 for every harness; title renames made while it runs are preserved.
+
+### App links
+
+Installed desktop builds register `rustcode://` on macOS, Windows and Linux.
+Opening a link starts the app or brings its existing window forward.
+
+- `rustcode://new?prompt=Fix%20the%20build` opens a new-thread draft. The prompt
+  is plain text, capped at 8,000 characters. Read it and press Send yourself.
+  Optional `repo=owner/name` selects a matching git remote among projects on the
+  draft's environment; `harness` and `model` select installed, enabled harnesses
+  and known model ids. Unknown options are ignored. A link cannot change
+  permission mode, branch or worktree settings, or send a message.
+- `rustcode://thread/<id>` opens a known thread; remote threads use
+  `rustcode://thread/<machine-id>/<id>`. An unknown thread shows a toast.
+- `rustcode://connect/<code>` opens **Settings → Environments → Add environment**
+  with the link filled in. Press Connect to pair; opening the link never pairs.
+
+In the command palette, **Copy prompt link** copies the current composer text,
+and **Copy thread link** copies the selected thread's address. A thread's menu
+also offers **Copy link**. Thread links in messages keep their inline navigation.

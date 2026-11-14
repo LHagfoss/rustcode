@@ -28,6 +28,7 @@ import {
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { modelName, projectName } from "../acp/types";
+import { copyPromptLink, copyThreadLink } from "../state/deepLinks";
 import {
   featureMissing,
   openSettings,
@@ -92,6 +93,16 @@ export function baseActions(): PaletteAction[] {
   const s = useApp.getState();
   const harnesses = (s.harnesses?.harnesses ?? []).filter((h) => h.enabled);
   return [
+    { id: "copy-prompt-link", label: "Copy prompt link", icon: MessageSquare, run: copyPromptLink },
+    {
+      id: "copy-thread-link",
+      label: "Copy thread link",
+      icon: MessageSquare,
+      disabled: s.selectedId ? undefined : "Select a thread",
+      run: () => {
+        if (s.selectedId) copyThreadLink(s.selectedId);
+      },
+    },
     {
       id: "new",
       label: "New thread",

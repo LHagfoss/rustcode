@@ -209,10 +209,15 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
   visibility: hidden; opacity: 0; transition: opacity 80ms ease-out; }
 .rc-bar[data-rc-tip]:hover::after { visibility: visible; opacity: 1; }
 
+/* A table wraps its prose at spaces only (anywhere would let the layout squeeze a column to one
+   letter), but code, keys and links break anywhere: one long path or URL is the widest thing in
+   a row, and unbreakable it set a floor wider than the reply, so the box scrolled and clipped the
+   last column. Headings wrap at spaces too. A table that still cannot fit scrolls in its own box. */
 .rc-table { overflow-wrap: normal; font-variant-numeric: tabular-nums; }
+.rc-table :is(code, kbd, a) { overflow-wrap: anywhere; }
 .rc-table .rc-num { white-space: nowrap; }
-.rc-table-box { overflow-x: auto; }
-.rc-table th { position: sticky; top: 0; z-index: 1; font-size: var(--rc-text-size-sm); font-weight: 500; white-space: nowrap; background: var(--rc-bg);
+.rc-table-box { overflow-x: auto; overscroll-behavior-x: contain; }
+.rc-table th { position: sticky; top: 0; z-index: 1; font-size: var(--rc-text-size-sm); font-weight: 500; background: var(--rc-bg);
   border-bottom: 0; box-shadow: inset 0 -1px var(--rc-separator); }
 .rc-table tbody tr:hover > td { background: color-mix(in srgb, var(--rc-text) 4.5%, transparent); }
 .rc-table[data-rc-sort] th { cursor: pointer; user-select: none; }

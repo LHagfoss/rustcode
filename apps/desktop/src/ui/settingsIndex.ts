@@ -128,6 +128,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Smart UI",
     keywords: "interactive view chart table sandbox html agent answer",
   },
+  {
+    section: "chat",
+    title: "Show tool calls",
+    keywords: "tools calls commands reads edits steps work activity hide quiet worked for transcript",
+  },
   { section: "chat", title: "Link previews", keywords: "links chips title icon page" },
   {
     section: "chat",
