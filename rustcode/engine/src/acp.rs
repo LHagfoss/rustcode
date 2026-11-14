@@ -3374,6 +3374,32 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: crate::git_actions::StateRequest, responder, connection| {
+                connection.spawn(async move {
+                    let state = tokio::task::spawn_blocking(move || crate::git_actions::state(&request.path)).await;
+                    match state {
+                        Ok(Ok(state)) => responder.respond(state)?,
+                        Ok(Err(error)) => responder.respond_with_error(error.into_acp())?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::git_actions::RunRequest, responder, connection| {
+                connection.spawn(async move {
+                    match crate::git_actions::run(request).await {
+                        Ok(answer) => responder.respond(answer)?,
+                        Err(error) => responder.respond_with_error(error.into_acp())?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: crate::worktrees::StateRequest, responder, connection| {
                 connection.spawn(async move {
                     let states = tokio::task::spawn_blocking(move || crate::worktrees::states(&request.paths)).await;

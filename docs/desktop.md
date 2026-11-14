@@ -905,6 +905,21 @@ composer's keys stay outside the table.
   attached count.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
+- **Git actions.** The header's git pill shows the one action the thread's
+  folder calls for: *Commit* (with the number of changed files), *Pull* when
+  the branch is behind, *Push* when it has commits the remote lacks or was
+  never pushed, and *Create Pull Request* for a pushed branch without one
+  (`planGitActions` in `state/gitActions.ts`). Its menu adds *Commit & Push*,
+  the open pull request and *Refresh*. *Commit* opens a sheet with a drafted
+  message (the thread's title, else the files) and a checkbox per file; on the
+  default branch it warns and offers *Commit to new branch*, and the engine
+  refuses a default-branch commit the app did not confirm. The engine runs
+  git itself (`_rustcode/git/state`, `_rustcode/git/run`,
+  `engine/src/git_actions.rs`), so hooks and signing apply and a failure shows
+  the hook's output. A pull request opens with `gh pr create` and is linked
+  to the thread, so its checks wake it. The state reads again when a turn
+  ends and when the window regains focus. A thread on another computer shows
+  the pill disabled.
 - **Project actions.** The header's ⚡ menu lists the project's quick
   actions (named commands such as *Dev server* · `bun run dev`); picking one
   opens the terminal and runs it in the thread's folder. *Add Action…* /
