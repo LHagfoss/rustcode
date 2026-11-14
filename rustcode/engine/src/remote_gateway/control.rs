@@ -450,6 +450,10 @@ pub struct ConnectAnswer {
 pub struct ConnectionSummary {
     pub device_id: String,
     pub device_name: String,
+    /// The network this connection arrived over and whether it is encrypted.
+    /// Absent from a gateway before this was reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<super::address::ConnectionRoute>,
 }
 
 /// Everything needed to show pairing details. Secrets stay redacted in

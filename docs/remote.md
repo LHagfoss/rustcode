@@ -27,7 +27,8 @@ unchanged.
 > alter the traffic, including your prompts and the session output. **NetBird
 > is the recommended path**: its tunnel encrypts the traffic between phone and
 > Mac. Use a plain LAN address only on a network you trust. Never forward the
-> port to the internet.
+> port to the internet. The threat model, what each route protects and the
+> comparison with direct TLS are in [remote-security.md](remote-security.md).
 
 ## Quick start
 
@@ -160,7 +161,7 @@ kept.
 | **Pairing** | The challenge on screen, its countdown, the wrong codes left, a lockout, and *Paired ‹name›* once a device pairs. |
 | **A phone asking to connect** | A card in the window's corner, over any page: *‹name› wants to connect*, the platform and address, *Deny* and *Accept*. Accept shows the code to enter on the phone (large, with *Copy* and its countdown) until the phone pairs or the code runs out. See [Connection requests](#connection-requests). |
 | **Remote access › Asking to connect** | The same requests with the same answers, while any are open. |
-| **Paired devices** | How many devices are paired, with their names and when each was last seen. *Revoke* forgets one and disconnects it at once, as `rustcode remote revoke` does. |
+| **Paired devices** | How many devices are paired, with their names and when each was last seen. A connected device also shows the route it arrived over and whether that route is encrypted (`LAN · Unencrypted`, `NetBird · Encrypted`, `VPN · Encrypted`, `This computer`), judged from the address it dialled. *Revoke* forgets one and disconnects it at once, as `rustcode remote revoke` does. |
 | **Remote access › Refused connections** | Devices the gateway turned away, newest first, for a quarter of an hour after each stopped trying: an app that speaks another remote protocol version, a pairing code that did not work, an unknown or revoked pairing, or an app that was refused before it could say anything. Each says what happened and what to do, so a phone whose only message is that it cannot connect is answered here. See [Refused connections](#refused-connections). |
 | **Routes** | The addresses the phone can dial this computer at, best first: each LAN address it listens on, each overlay address (NetBird, Tailscale or ZeroTier, with its provider when the interface name says) and the machine's `.local` name. The handshake reports the same list, so a phone learns it and keeps using the first route that answers. |
 | A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
@@ -198,7 +199,10 @@ count of held-back threads on the machine's) and, for the machine,
 route's `address`, `kind` `lan`, `overlay`, `hostname` or `public`, and the
 `provider` of an overlay address) from the gateway's own status, plus `devices` (each paired device's `id`, `name`, `kind` `phone`,
 `desktop` or `cli`, `platform`, `hostId`, `lastSeenAt` and, on the machine's
-answer, `connected`), `connectRequests` (open: `id`, `deviceName`,
+answer, `connected` and, while connected, `routes`: one entry per open
+connection with `path` `loopback`, `lan`, `overlay` or `other`, the overlay's
+`provider`, the `localAddress` it dialled and `encrypted`, true only for an
+overlay), `connectRequests` (open: `id`, `deviceName`,
 `deviceKind`, `platform`,
 `remoteAddr`, `ageSecs`, `expiresInSecs`, `state` `pending` or `approved`) and
 `endedConnectRequests` (the last eight: `id`, `deviceName`, `end`, `deviceId`
@@ -276,7 +280,7 @@ remote access on is the short moment before it has registered.
 | `rustcode remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
-| `rustcode remote status` | The running gateway: every address the WebSocket listener is bound to, one line each with its interface and the kind of network it is on (so an `auto` bind shows its LAN and its overlay addresses), and the advertised address with whether each follows address changes; who started it (the RustCode server, the app or a terminal), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
+| `rustcode remote status` | The running gateway: every address the WebSocket listener is bound to, one line each with its interface and the kind of network it is on (so an `auto` bind shows its LAN and its overlay addresses), and the advertised address with whether each follows address changes; who started it (the RustCode server, the app or a terminal), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected (with the network each arrived over and whether it is encrypted), the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
 
 One gateway runs per configuration directory. A second `remote serve` is
@@ -1103,7 +1107,7 @@ the gateway's TCP port; Windows asks the first time the gateway listens.
 
 ## Security posture
 
-- **Transport:** no TLS. On a plain LAN anyone on the network can read and
+- **Transport:** no TLS (the full threat model is in [remote-security.md](remote-security.md)). On a plain LAN anyone on the network can read and
   alter the traffic. Use it only on a network you trust; NetBird encrypts the
   traffic end to end and is the recommended path off the home LAN. Never
   forward the port to the internet. The app shows an unencrypted-LAN banner

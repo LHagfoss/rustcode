@@ -149,6 +149,70 @@ export interface RemoteDevice {
   lastSeenAt?: number;
   /** Connected right now (the machine's answer only). */
   connected?: boolean;
+  /**
+   * The networks its open connections arrived over, one per connection, when the gateway says
+   * (the machine's answer only; absent from an engine that does not classify them).
+   */
+  routes?: RemoteConnectionRoute[];
+}
+
+/** The kind of network a connected device reached this computer over. */
+export type ConnectionPath = "loopback" | "lan" | "overlay" | "other";
+
+const CONNECTION_PATHS: readonly ConnectionPath[] = ["loopback", "lan", "overlay", "other"];
+
+/** One connection's network, as the gateway classifies the address the device dialled. */
+export interface RemoteConnectionRoute {
+  path: ConnectionPath;
+  /** The overlay product, when the interface names one. */
+  provider?: OverlayProvider;
+  /** The `host:port` on this computer the device dialled. */
+  localAddress: string;
+  /**
+   * The network encrypts the traffic. Only a tunnel does: the gateway itself speaks plain
+   * WebSocket, so a LAN connection is never encrypted whatever else is reported.
+   */
+  encrypted: boolean;
+}
+
+const PROVIDER_LABELS: Record<OverlayProvider, string> = {
+  netbird: "NetBird",
+  tailscale: "Tailscale",
+  zerotier: "ZeroTier",
+};
+
+/**
+ * Where a connection runs and whether it is encrypted, in a chip's few words: `LAN · Unencrypted`,
+ * `NetBird · Encrypted`, `VPN · Encrypted`. A connection from this computer never leaves it.
+ */
+export function connectionRouteLabel(route: RemoteConnectionRoute): string {
+  if (route.path === "loopback") return "This computer";
+  const network =
+    route.path === "lan"
+      ? "LAN"
+      : route.path === "overlay"
+        ? ((route.provider && PROVIDER_LABELS[route.provider]) ?? "VPN")
+        : "Other network";
+  return `${network} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
+}
+
+/** A device's routes without repeats: two connections over the same network read as one. */
+export function distinctConnectionRoutes(
+  routes: readonly RemoteConnectionRoute[] | undefined,
+): RemoteConnectionRoute[] {
+  const seen = new Set<string>();
+  return (routes ?? []).filter((route) => {
+    const key = `${route.localAddress}|${connectionRouteLabel(route)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** The chip's tone: encrypted is `ok`, a plain network is `warn`, a local client is `idle`. */
+export function connectionRouteTone(route: RemoteConnectionRoute): "ok" | "warn" | "idle" {
+  if (route.path === "loopback") return "idle";
+  return route.encrypted ? "ok" : "warn";
 }
 
 /** The pairing challenge the gateway is counting down, as the machine's answer reports it. */
@@ -319,6 +383,29 @@ function parseConnectRequest(value: Json | undefined): RemoteConnectRequest[] {
   ];
 }
 
+/** The connection routes of one device, dropping anything malformed. */
+function parseConnectionRoutes(value: Json | undefined): RemoteConnectionRoute[] {
+  return (
+    arr(value)?.flatMap((entry) => {
+      const route = obj(entry);
+      const path = CONNECTION_PATHS.find((known) => known === str(route?.path));
+      const localAddress = str(route?.localAddress);
+      if (!route || !path || !localAddress) return [];
+      const receivedProvider = str(route.provider);
+      const provider = OVERLAY_PROVIDERS.find((known) => known === receivedProvider);
+      return [
+        {
+          path,
+          ...(provider ? { provider } : {}),
+          localAddress,
+          // Only a tunnel encrypts; a plain network is never labelled so, whatever the frame says.
+          encrypted: path === "overlay" && bool(route.encrypted) === true,
+        },
+      ];
+    }) ?? []
+  );
+}
+
 function parseDevice(value: Json | undefined): RemoteDevice[] {
   const entry = obj(value);
   const id = str(entry?.id);
@@ -335,6 +422,8 @@ function parseDevice(value: Json | undefined): RemoteDevice[] {
   if (Number.isFinite(seen)) device.lastSeenAt = seen;
   const connected = bool(entry.connected);
   if (connected !== undefined) device.connected = connected;
+  const routes = parseConnectionRoutes(entry.routes);
+  if (routes.length > 0) device.routes = routes;
   return [device];
 }
 

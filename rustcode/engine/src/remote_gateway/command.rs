@@ -695,12 +695,22 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
         format!("  paired devices {}", status.paired_devices),
     ]);
     for device in &status.devices {
-        let connected = status
+        let connections: Vec<_> = status
             .connections
             .iter()
-            .any(|connection| connection.device_id == device.id);
-        let seen = if connected {
-            ", connected".to_owned()
+            .filter(|connection| connection.device_id == device.id)
+            .collect();
+        let seen = if !connections.is_empty() {
+            let mut routes: Vec<String> = connections
+                .iter()
+                .filter_map(|connection| connection.route.as_ref().map(|route| route.label()))
+                .collect();
+            routes.dedup();
+            if routes.is_empty() {
+                ", connected".to_owned()
+            } else {
+                format!(", connected over {}", routes.join(" and "))
+            }
         } else {
             device
                 .last_seen_at
@@ -1104,6 +1114,12 @@ mod tests {
             connections: vec![ConnectionSummary {
                 device_id: "aa".into(),
                 device_name: "phone".into(),
+                route: Some(super::super::address::ConnectionRoute {
+                    path: super::super::address::ConnectionPath::Lan,
+                    provider: None,
+                    local_address: "192.168.31.237:17879".into(),
+                    encrypted: false,
+                }),
             }],
             pairing_open: true,
             loopback_only: false,
@@ -1170,7 +1186,7 @@ mod tests {
             "recover        `rustcode remote stop && rustcode remote serve --bind auto`",
             "or `--bind 192.168.31.185` for the address it has now",
             "listening on   192.168.31.237:17879  (fixed bind)",
-            "aa  phone  (phone on ios, connected)",
+            "aa  phone  (phone on ios, connected over LAN (not encrypted))",
             "bb  pc  (desktop on windows, last seen 2026-10-20 08:15 UTC)",
             "challenge open (87 s left, 4 wrong codes allowed)",
             "idle owners    1",
