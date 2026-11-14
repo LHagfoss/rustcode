@@ -581,6 +581,11 @@ machine → project whenever a thread in that project reads them (the engine's
 "overridable" }`; `set` with `"project"` writes overrides, and `"clear": [keys]`
 removes them (without `"project"` it removes the machine's own values). Only
 `default-harness` (project-only: `{ "harness", "model"?, "effort"? }`),
+`text-generator` (project-only: `{ "id", "model"? }`; `"id": null` turns the
+generator off in that project, a missing `id` keeps the machine's selection
+with the project's `model`), `voice` (project-only: `{ "generator"?, "model"?,
+"language"?, "cleanup"? }` over the app's Voice settings; `"generator": null`
+turns dictation off there),
 `default-permission-mode`, `resume-after-restart`, `continue-after-limit`,
 `auto-compact-mode` and `auto-compact-threshold` may be overridden; any other
 key is refused. A file written before projects existed reads unchanged.
@@ -652,7 +657,11 @@ Settings › Agents › Voice is kept by the desktop app on this machine
 (`rustcode.voice` in its storage): `generator` (a text generator ID with an
 `openai` or `custom` provider, or null for Off, the default), `model`
 (default `gpt-4o-mini-transcribe`), `language` (empty detects it) and `mode`
-(`toggle` or `hold`). The key is that generator's, in the provider credential
+(`toggle` or `hold`) and `cleanup` (off by default). The key is that generator's, in the provider credential
 store. The engine sends recordings of at most 10 MB and five minutes to
-`<base URL>/audio/transcriptions` and gives up after 60 seconds.
+`<base URL>/audio/transcriptions` and gives up after 60 seconds. With
+`cleanup` on, the transcript then goes through the text generator the project
+resolves to (a `dictation_cleanup` generation: fix punctuation and
+capitalisation, drop filler words, keep the words); without one, or when it
+fails, the raw transcript is inserted with a short note.
 

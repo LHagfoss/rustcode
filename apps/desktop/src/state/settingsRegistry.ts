@@ -8,7 +8,7 @@
 // gateway and the machines list — are shown for one machine at a time and are
 // never sent to another machine.
 
-import type { Json } from "../acp/jsonrpc";
+import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { SettingsSection } from "./store";
 
 export type SettingKind = "app" | "server" | "machine";
@@ -414,8 +414,8 @@ export function mcpCopy(server: CopyableMcpServer): McpCopy | null {
 
 /**
  * What a project may set for itself (docs/desktop.md › Settings a project overrides), the same
- * list as the engine's `PROJECT_KEYS` (`rustcode/engine/src/acp/settings.rs`). `default-harness`
- * is project-only: the machine's default is the harness snapshot's, not a `settings.json` key.
+ * list as the engine's `PROJECT_KEYS` (`rustcode/engine/src/acp/settings.rs`). `default-harness`,
+ * `text-generator` and `voice` are project-only (`PROJECT_ONLY_KEYS`).
  *
  * Left out on purpose: delegation limits, wake batching, workflow limits, presets and limit
  * fallback act across every thread on the machine, so one project cannot own them; credentials,
@@ -423,6 +423,8 @@ export function mcpCopy(server: CopyableMcpServer): McpCopy | null {
  */
 export const PROJECT_SETTING_KEYS = [
   "default-harness",
+  "text-generator",
+  "voice",
   "default-permission-mode",
   "resume-after-restart",
   "continue-after-limit",
@@ -431,6 +433,33 @@ export const PROJECT_SETTING_KEYS = [
 ] as const;
 
 export type ProjectSettingKey = (typeof PROJECT_SETTING_KEYS)[number];
+
+/**
+ * Project keys with no machine value in `settings.json`: the default harness (the machine's is
+ * the harness snapshot's), the text generator `{ id, model? }` (the machine's is the selection in
+ * Text generation) and voice `{ generator?, model?, language?, cleanup? }` (the machine's is this
+ * app's Voice settings).
+ */
+export const PROJECT_ONLY_KEYS: readonly ProjectSettingKey[] = ["default-harness", "text-generator", "voice"];
+
+/** An object-valued project override such as `text-generator` or `voice`: its fields. */
+export type ProjectOverride = JsonObject;
+
+/**
+ * One field of an object override set (a value, `null` included) or removed (`undefined`), so
+ * the rest of the project's override stays. Null when nothing is left: the key is cleared and
+ * the machine's value applies again.
+ */
+export function patchProjectOverride(
+  current: ProjectOverride | undefined,
+  field: string,
+  value: Json | undefined,
+): ProjectOverride | null {
+  const next: ProjectOverride = { ...(current ?? {}) };
+  if (value === undefined) delete next[field];
+  else next[field] = value;
+  return Object.keys(next).length ? next : null;
+}
 
 /** Whether a project may override this server setting. */
 export function projectOverridable(key: string): key is ProjectSettingKey {

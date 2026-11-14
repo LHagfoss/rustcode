@@ -1,6 +1,6 @@
 // Settings › Agents › Voice: which text generator entry transcribes dictation
 // (Off by default), the model, a language hint and hold-to-talk versus
-// toggle. Kept on this machine (`lib/dictation.ts`); the key is the text
+// toggle, and whether the text generator cleans up a transcript. Kept on this machine (`lib/dictation.ts`); the key is the text
 // generator's own, in the engine's credential store.
 
 import { useEffect, useState } from "react";
@@ -13,7 +13,7 @@ import {
   writeVoiceSettings,
 } from "../lib/dictation";
 import { request } from "../state/store";
-import { inputClass, Segments, Select } from "./primitives";
+import { inputClass, Segments, Select, Switch } from "./primitives";
 import { Group, Row } from "./settingsKit";
 
 type Generator = { id: string; provider: string; model: string; baseUrl: string | null };
@@ -75,6 +75,18 @@ export function VoiceGroup() {
           placeholder="Detect"
           value={settings.language}
           onChange={(e) => save({ language: e.target.value })}
+        />
+      </Row>
+      <Row
+        title="Clean up dictated text"
+        subtitle="Fix punctuation and drop filler words with the text generator before it is inserted."
+        hint="Uses the text generator selected under Text generation, or the project's. Without one, or if it fails, the text goes in as dictated."
+      >
+        <Switch
+          label="Clean up dictated text"
+          checked={settings.cleanup}
+          disabled={off}
+          onChange={(cleanup) => save({ cleanup })}
         />
       </Row>
       <Row title="Microphone button and shortcut" subtitle="Toggle: press to start and again to finish.">

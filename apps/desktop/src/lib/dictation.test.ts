@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  cleanupNote,
   clearDictationTarget,
   type DictationState,
   dictationErrorText,
@@ -8,7 +9,9 @@ import {
   insertTranscript,
   MAX_AUDIO_BYTES,
   pickMimeType,
+  readVoiceOverride,
   recordingProblem,
+  resolveVoiceSettings,
   setDictationTarget,
   toggleDictation,
   transcribeParams,
@@ -81,10 +84,11 @@ describe("the engine request", () => {
     expect(transcribeParams(VOICE_DEFAULTS, "QUJD", "audio/webm", 1234.6)).toBeNull();
     expect(
       transcribeParams(
-        { generator: "g1", model: " ", language: " nb ", mode: "toggle" },
+        { generator: "g1", model: " ", language: " nb ", mode: "toggle", cleanup: true },
         "QUJD",
         "audio/mp4",
         1234.6,
+        "/work/app",
       ),
     ).toEqual({
       generatorId: "g1",
@@ -93,7 +97,16 @@ describe("the engine request", () => {
       audio: "QUJD",
       mimeType: "audio/mp4",
       durationMs: 1235,
+      cleanup: true,
+      project: "/work/app",
     });
+  });
+
+  test("cleanup that did not happen leaves a short note, and the raw text stays", () => {
+    expect(cleanupNote("applied")).toBeNull();
+    expect(cleanupNote(undefined)).toBeNull();
+    expect(cleanupNote("unavailable")).toContain("as dictated");
+    expect(cleanupNote("failed")).toContain("as dictated");
   });
 
   test("picks the first container the webview records", () => {
@@ -127,5 +140,38 @@ describe("the shortcut", () => {
     clearDictationTarget(listener);
     expect(toggleDictation()).toBe(false);
     expect(runs).toBe(1);
+  });
+});
+
+describe("a project's voice override", () => {
+  const machine = { ...VOICE_DEFAULTS, generator: "openai", language: "en", cleanup: false };
+
+  test("cleanup is off by default", () => {
+    expect(VOICE_DEFAULTS.cleanup).toBe(false);
+  });
+
+  test("a field the project set wins; one it left out falls through to the machine", () => {
+    expect(resolveVoiceSettings(machine, null)).toEqual(machine);
+    expect(resolveVoiceSettings(machine, {})).toEqual(machine);
+    expect(resolveVoiceSettings(machine, { cleanup: true, language: "nb" })).toEqual({
+      ...machine,
+      cleanup: true,
+      language: "nb",
+    });
+    // A project that sets `false` still wins over a machine that cleans up.
+    expect(resolveVoiceSettings({ ...machine, cleanup: true }, { cleanup: false }).cleanup).toBe(false);
+    // Off for this project only.
+    expect(resolveVoiceSettings(machine, { generator: null }).generator).toBeNull();
+    expect(resolveVoiceSettings(machine, { generator: "local" }).generator).toBe("local");
+    // The mode stays the app's.
+    expect(resolveVoiceSettings({ ...machine, mode: "hold" }, { cleanup: true }).mode).toBe("hold");
+  });
+
+  test("reads only the fields a voice override may hold", () => {
+    expect(readVoiceOverride(undefined)).toEqual({});
+    expect(readVoiceOverride("on")).toEqual({});
+    expect(
+      readVoiceOverride({ generator: null, model: " ", language: "nb", cleanup: true, mode: "hold" }),
+    ).toEqual({ generator: null, language: "nb", cleanup: true });
   });
 });

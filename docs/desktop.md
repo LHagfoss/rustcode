@@ -203,6 +203,11 @@ each machine's layer, and **Use the machine's value** removes the override.
 Those rows are the default harness, model and effort, Default access,
 Continue threads after a restart, Continue threads on their own, Auto-compact
 and its threshold (`PROJECT_SETTING_KEYS` in `src/state/settingsRegistry.ts`).
+Settings › Agents then adds **Text generation and voice in <project>**
+(`src/ui/ProjectGenerators.tsx`): the text generator and its model, and the
+transcription provider, model, language and Clean up dictated text, each on
+the machine's value until the project sets it. They are kept on this machine
+only, as the `text-generator` and `voice` overrides.
 Other server rows are read-only with a short reason: delegation limits, wake
 batching, workflow limits, presets and limit fallback act across every thread
 on a machine. Credentials, accounts, machine-only rows and app preferences are
@@ -2128,6 +2133,14 @@ minutes and is transcribed. A denied microphone, a missing provider, a
 recording that is too long or a network failure each shows a message, and the
 draft stays as it was. The audio is never stored: it is not in the thread's
 history, the logs or a file.
+
+**Clean up dictated text** (off by default) runs the transcript through the
+text generator before it reaches the draft: punctuation and capitalisation are
+fixed and filler words such as "um" are dropped, without changing what was
+said. With no text generator, or when that call fails, the raw transcript goes
+in and a short note says so; there is no error dialog. A project can set its
+own provider, model, language and cleanup, and its own text generator
+(Settings a project overrides, above).
 
 On macOS the app's `Info.plist` carries `NSMicrophoneUsageDescription`, so
 the system asks for the microphone the first time.

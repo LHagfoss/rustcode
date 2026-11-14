@@ -108,10 +108,8 @@ pub(crate) async fn generate_session_title(
     if session_id.is_empty() || !wants_generated_title(prompt) {
         return None;
     }
-    if crate::text_generation::load()
-        .ok()
-        .is_some_and(|c| c.selected.is_some())
-    {
+    let project = crate::config::load_session_repo(session_id);
+    if crate::text_generation::configured_for(project.as_deref()) {
         if !state.lock().await.config.generate_session_titles {
             return None;
         }
@@ -121,6 +119,7 @@ pub(crate) async fn generate_session_title(
             prompt: Some(prompt.into()),
             path: None,
             files: vec![],
+            project,
         })
         .await
         .ok()?;

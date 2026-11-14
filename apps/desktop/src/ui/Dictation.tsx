@@ -7,6 +7,7 @@
 import { Loader2, Mic, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  cleanupNote,
   clearDictationTarget,
   type DictationEvent,
   type DictationState,
@@ -15,11 +16,14 @@ import {
   formatElapsed,
   MAX_RECORDING_MS,
   pickMimeType,
+  readVoiceOverride,
   readVoiceSettings,
   recordingProblem,
+  resolveVoiceSettings,
   setDictationTarget,
   TRANSCRIBE_METHOD,
   transcribeParams,
+  type VoiceSettings,
 } from "../lib/dictation";
 import { openSettings, request, shortcutHint, toast } from "../state/store";
 import { cx, Tooltip } from "./primitives";
@@ -45,8 +49,35 @@ export interface Dictation {
   hold: boolean;
 }
 
-/** Records and transcribes; `insert` puts the text at the caret, `active` says this composer answers the shortcut. */
-export function useDictation(insert: (text: string) => void, active: boolean): Dictation {
+/**
+ * This machine's Voice settings as a thread in `project` reads them: the project's `voice`
+ * override from this machine's engine over the app's own (docs/desktop.md › Settings a project
+ * overrides). Without a project, or when the engine has no answer, the app's own.
+ */
+async function voiceSettingsFor(project: string | null): Promise<VoiceSettings> {
+  const machine = readVoiceSettings();
+  if (!project) return machine;
+  try {
+    const answer = await request<{ project?: { overrides?: Record<string, unknown> } }>(
+      "_rustcode/settings/get",
+      { keys: [], project },
+      5_000,
+    );
+    return resolveVoiceSettings(machine, readVoiceOverride(answer?.project?.overrides?.voice));
+  } catch {
+    return machine;
+  }
+}
+
+/**
+ * Records and transcribes; `insert` puts the text at the caret, `active` says this composer
+ * answers the shortcut, and `project` (this machine's folder) picks the project's overrides.
+ */
+export function useDictation(
+  insert: (text: string) => void,
+  active: boolean,
+  project: string | null = null,
+): Dictation {
   const [state, setState] = useState<DictationState>({ kind: "idle" });
   const stateRef = useRef(state);
   const [elapsed, setElapsed] = useState(0);
@@ -82,17 +113,22 @@ export function useDictation(insert: (text: string) => void, active: boolean): D
     [dispatch, release],
   );
 
+  const projectRef = useRef(project);
+  projectRef.current = project;
+
   const start = useCallback(async () => {
-    const settings = readVoiceSettings();
+    if (dictationStep(stateRef.current, { type: "start" }) === stateRef.current) return;
+    dispatch({ type: "start" });
+    const settings = await voiceSettingsFor(projectRef.current);
     setHold(settings.mode === "hold");
+    if (stateRef.current.kind !== "starting") return;
     if (!settings.generator) {
       // Nothing is recorded until a provider is chosen: the button leads to the choice.
+      dispatch({ type: "discard" });
       toast("Choose a transcription provider to dictate.", "info");
       openSettings("agents");
       return;
     }
-    if (dictationStep(stateRef.current, { type: "start" }) === stateRef.current) return;
-    dispatch({ type: "start" });
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined")
         throw new Error("This window cannot record audio.");
@@ -130,14 +166,28 @@ export function useDictation(insert: (text: string) => void, active: boolean): D
       const problem = recordingProblem(blob.size, duration);
       if (problem) return fail(problem);
       try {
-        const params = transcribeParams(readVoiceSettings(), await toBase64(blob), blob.type, duration);
+        const settings = await voiceSettingsFor(projectRef.current);
+        const params = transcribeParams(
+          settings,
+          await toBase64(blob),
+          blob.type,
+          duration,
+          projectRef.current,
+        );
         if (!params) throw new Error("Choose a transcription provider in Settings › Agents › Voice.");
-        const answer = await request<{ text?: string | null }>(TRANSCRIBE_METHOD, params, 75_000);
+        // Cleanup adds a text generator call (45 s at most) after the transcription.
+        const answer = await request<{ text?: string | null; cleanup?: string }>(
+          TRANSCRIBE_METHOD,
+          params,
+          params.cleanup ? 125_000 : 75_000,
+        );
         if (stateRef.current.kind !== "transcribing") return;
         const text = answer?.text?.trim() ?? "";
         dispatch({ type: "transcribed" });
         if (text) insertRef.current(text);
         else toast("No speech was recognized.", "info");
+        const note = text ? cleanupNote(answer?.cleanup) : null;
+        if (note) toast(note, "info");
       } catch (error) {
         fail(error);
       }
