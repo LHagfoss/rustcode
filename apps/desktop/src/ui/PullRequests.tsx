@@ -391,7 +391,7 @@ function PullView({
               </Pill>
             )}
             <Pill onClick={() => askAgent(summary)}>Ask the agent to review</Pill>
-            {!host && pullState(summary) === "open" && (
+            {!host && summary.state === "open" && (
               <Pill onClick={() => setWorking(true)}>
                 <GitBranchPlus size={11} /> Work on this in a thread
               </Pill>
