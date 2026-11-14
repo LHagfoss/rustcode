@@ -67,6 +67,10 @@ export function AddEnvironmentDialog({
   local: string | null;
 }) {
   const machines = useMachines((s) => s.machines);
+  const incomingCode = useMachines((s) => s.incomingConnectCode);
+  useEffect(() => {
+    if (open && incomingCode) setMethod("code");
+  }, [open, incomingCode]);
   const [method, setMethod] = useState<AddMethod>("code");
   // The environments there were when the dialog opened: the one that is not among them is the new one.
   const before = useRef<Set<string>>(new Set());
@@ -81,7 +85,8 @@ export function AddEnvironmentDialog({
     clearConnectError();
     // Reopened on a request already running (or Pair again): land where it is.
     const state = useMachines.getState();
-    if (state.pairing) setMethod("address");
+    if (state.incomingConnectCode) setMethod("code");
+    else if (state.pairing) setMethod("address");
     else if (state.ssh?.running) setMethod("ssh");
   }, [open]);
 
@@ -250,7 +255,14 @@ function CodePane() {
   const offer = useMachines((s) => s.connectOffer);
   const busy = useMachines((s) => s.connectBusy);
   const error = useMachines((s) => s.connectError);
-  const [code, setCode] = useState("");
+  const incoming = useMachines((s) => s.incomingConnectCode);
+  const [code, setCode] = useState(incoming ?? "");
+  useEffect(() => {
+    if (incoming) {
+      setCode(incoming);
+      useMachines.setState({ incomingConnectCode: undefined });
+    }
+  }, [incoming]);
   const [address, setAddress] = useState("");
   // The address is for a short code that carries none, so it is asked for only on request.
   const [withAddress, setWithAddress] = useState(false);

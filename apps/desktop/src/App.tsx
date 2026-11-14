@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { applyTheme, resolveTheme } from "./lib/themes";
 import { setUserReduceTransparency } from "./lib/transparency";
 import { restoreZoom } from "./lib/zoom";
+import { startDeepLinks } from "./state/deepLinks";
 import { runShortcut } from "./state/shortcuts";
 import { closeConfirm, openSettings, setOnboarding, setView, shortcutFor, useApp } from "./state/store";
 import { startUpdateChecks } from "./state/updates";
@@ -149,6 +150,7 @@ function ConfirmDialog() {
 }
 
 export function App() {
+  useEffect(() => startDeepLinks(), []);
   useTheme();
   useShortcuts();
   useAwayWatch();

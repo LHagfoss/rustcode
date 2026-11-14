@@ -1,4 +1,5 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
+import { copyThreadLink } from "../state/deepLinks";
 // The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
 // the app's brand under it (its mark, name and version), then one list: pinned
 // threads first, then one Threads list (by project when asked) that leads with
@@ -385,6 +386,9 @@ function ThreadMenuItems({
       )}
       <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
         <Wrench size={13} /> Repair Thread
+      </Item>
+      <Item className={menuItem} onSelect={() => copyThreadLink(session.id)}>
+        <Copy size={13} /> Copy link
       </Item>
       <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
         <Copy size={13} /> Copy Thread ID

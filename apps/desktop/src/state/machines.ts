@@ -294,6 +294,7 @@ interface MachinesStore {
   /** A route test is running now. */
   probing: boolean;
   /** The Add environment dialog is open (Settings › Environments, or the new-thread selector asked). */
+  incomingConnectCode?: string;
   addOpen: boolean;
 }
 

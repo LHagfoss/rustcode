@@ -1994,3 +1994,23 @@ From the SwiftUI app, still missing or partial:
 ### Windows child processes
 
 New non-interactive engine process launches must use `platform::command` or `platform::tokio_command`; shared core code uses `rustcode_command::hidden_command`, and the desktop shell uses `process::command`. These helpers prevent console windows when the engine runs under the desktop app. PTY-backed interactive terminals retain their own console handling.
+
+### App links
+
+Installed desktop builds register `rustcode://` on macOS, Windows and Linux.
+Opening a link starts the app or brings its existing window forward.
+
+- `rustcode://new?prompt=Fix%20the%20build` opens a new-thread draft. The prompt
+  is plain text, capped at 8,000 characters. Read it and press Send yourself.
+  Optional `repo=owner/name` selects a matching git remote among projects on the
+  draft's environment; `harness` and `model` select installed, enabled harnesses
+  and known model ids. Unknown options are ignored. A link cannot change
+  permission mode, branch or worktree settings, or send a message.
+- `rustcode://thread/<id>` opens a known thread; remote threads use
+  `rustcode://thread/<machine-id>/<id>`. An unknown thread shows a toast.
+- `rustcode://connect/<code>` opens **Settings → Environments → Add environment**
+  with the link filled in. Press Connect to pair; opening the link never pairs.
+
+In the command palette, **Copy prompt link** copies the current composer text,
+and **Copy thread link** copies the selected thread's address. A thread's menu
+also offers **Copy link**. Thread links in messages keep their inline navigation.
