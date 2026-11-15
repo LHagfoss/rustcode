@@ -100,15 +100,28 @@ function messageMarkdown(text: string): string {
   return slash ? `\`${COMMAND_MARK}${slash.command}\` ${slash.rest}` : text;
 }
 
+/**
+ * A message's Edit and Retry: shown on hover with Copy, and dimmed rather than removed while a
+ * turn runs (`aria-disabled` keeps the tooltip that says why).
+ */
+const MESSAGE_ACTION =
+  "inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 aria-disabled:cursor-default aria-disabled:text-fg-faint aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-faint";
+
 export const UserRow = memo(function UserRow({
   item,
   threadId,
+  busy,
   rewind,
   before,
   after,
 }: {
   item: Item<"user">;
   threadId?: string;
+  /**
+   * A turn runs: Edit and Retry keep their place but are off until it ends, so the message's
+   * actions are the same three whether the thread runs or not.
+   */
+  busy?: boolean;
   /** Edit and Retry take the thread back to this message (`_rustcode/rewind`). */
   rewind?: boolean;
   /** The message after this one is the sender's too. */
@@ -258,24 +271,34 @@ export const UserRow = memo(function UserRow({
           <>
             <Tooltip
               label={
-                rewind ? "Edit and resend: the thread goes back to this message" : "Edit in the composer"
+                busy
+                  ? "Stop the turn to edit"
+                  : rewind
+                    ? "Edit and resend: the thread goes back to this message"
+                    : "Edit in the composer"
               }
             >
               <button
                 type="button"
                 aria-label="Edit message"
-                onClick={() => editMessage(threadId, item.id)}
-                className="inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                aria-disabled={busy || undefined}
+                onClick={() => !busy && editMessage(threadId, item.id)}
+                className={MESSAGE_ACTION}
               >
                 <Pencil size={12} />
               </button>
             </Tooltip>
-            <Tooltip label={rewind ? "Retry: send it again from here" : "Send it again"}>
+            <Tooltip
+              label={
+                busy ? "Stop the turn to retry" : rewind ? "Retry: send it again from here" : "Send it again"
+              }
+            >
               <button
                 type="button"
                 aria-label="Retry message"
-                onClick={() => retryMessage(threadId, item.id)}
-                className="inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                aria-disabled={busy || undefined}
+                onClick={() => !busy && retryMessage(threadId, item.id)}
+                className={MESSAGE_ACTION}
               >
                 <RotateCcw size={12} />
               </button>
