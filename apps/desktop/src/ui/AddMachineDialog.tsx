@@ -1,12 +1,12 @@
-// Add environment: one dialog for every way to bring another computer in (docs/desktop.md ›
-// Several machines), after T3 Code's "Add Environment". A method switch at the top (connect code,
+// Add machine: one dialog for every way to bring another computer in (docs/desktop.md ›
+// Several machines). A method switch at the top (connect code,
 // SSH, an address on the same network or Tailscale); under it the method's own fields; once it
 // runs, its steps as they go; and when a step fails, a plain message with the next thing to
-// try and a button that tries again with what was typed. When the environment shows up in the
+// try and a button that tries again with what was typed. When the machine shows up in the
 // list, the dialog says so and closes on Done.
 //
 // The work is `state/machines.ts`'s (the shell holds every connection); this file only asks and
-// shows. `ui/environments.ts` holds the words.
+// shows. `ui/machineLabels.ts` holds the words.
 
 import { Check, Copy, KeyRound, Minus, Search, X } from "lucide-react";
 import { Dialog } from "radix-ui";
@@ -38,25 +38,25 @@ import {
   versionSkew,
 } from "../state/machines";
 import { toast } from "../state/store";
+import { DeviceGlyphIcon } from "./MachineGlyph";
 import {
   ADD_METHODS,
   type AddMethod,
   addFailure,
   addressSteps,
   codeSteps,
-  environmentIds,
-  newEnvironment,
+  machineIds,
+  newMachine,
   type ProgressStep,
   sshProgress,
-} from "./environments";
-import { DeviceGlyphIcon } from "./MachineGlyph";
+} from "./machineLabels";
 import { Callout, copyText, cx, noTextHelpers, Segments, Spinner } from "./primitives";
 import { Action, Chip, fieldClass } from "./settingsKit";
 
 /** How often an open connect code asks the gateway whether a computer used it. */
 const POLL_MS = 3000;
 
-export function AddEnvironmentDialog({
+export function AddMachineDialog({
   open,
   onOpenChange,
   local,
@@ -72,7 +72,7 @@ export function AddEnvironmentDialog({
     if (open && incomingCode) setMethod("code");
   }, [open, incomingCode]);
   const [method, setMethod] = useState<AddMethod>("code");
-  // The environments there were when the dialog opened: the one that is not among them is the new one.
+  // The machines there were when the dialog opened: the one that is not among them is the new one.
   const before = useRef<Set<string>>(new Set());
   const [added, setAdded] = useState<Machine | null>(null);
   const machinesNow = useRef(machines);
@@ -80,7 +80,7 @@ export function AddEnvironmentDialog({
 
   useEffect(() => {
     if (!open) return;
-    before.current = environmentIds(machinesNow.current);
+    before.current = machineIds(machinesNow.current);
     setAdded(null);
     clearConnectError();
     // Reopened on a request already running (or Pair again): land where it is.
@@ -92,7 +92,7 @@ export function AddEnvironmentDialog({
 
   useEffect(() => {
     if (!open || added) return;
-    const fresh = newEnvironment(machines, before.current);
+    const fresh = newMachine(machines, before.current);
     if (fresh) setAdded(fresh);
   }, [machines, open, added]);
 
@@ -102,14 +102,14 @@ export function AddEnvironmentDialog({
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
           <Dialog.Content
-            aria-describedby="add-environment-description"
+            aria-describedby="add-machine-description"
             className="elevated pointer-events-auto flex max-h-[min(680px,calc(100vh-48px))] w-[min(560px,calc(100vw-48px))] flex-col gap-4 overflow-y-auto p-5"
           >
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
-                <Dialog.Title className="font-semibold text-title3 text-fg">Add environment</Dialog.Title>
+                <Dialog.Title className="font-semibold text-title3 text-fg">Add machine</Dialog.Title>
                 <Dialog.Description
-                  id="add-environment-description"
+                  id="add-machine-description"
                   className="m-0 pt-1 text-callout text-fg-muted"
                 >
                   Another computer running RustCode.
@@ -141,10 +141,10 @@ export function AddEnvironmentDialog({
   );
 }
 
-/** The environment is saved: say so, and what it can do now. */
+/** The machine is saved: say so, and what it can do now. */
 function Added({ machine, onDone }: { machine: Machine; onDone: () => void }) {
   return (
-    <div className="flex flex-col gap-3" data-testid="environment-added">
+    <div className="flex flex-col gap-3" data-testid="machine-added">
       <div className="flex items-center gap-3 rounded-xl bg-surface px-4 py-3">
         <DeviceGlyphIcon glyph={platformIcon(machine.platform)} size={18} />
         <div className="min-w-0 flex-1">
@@ -404,7 +404,7 @@ function OfferView({ offer, now }: { offer: ConnectOffer; now: number }) {
         </Action>
       </div>
       <p className="m-0 text-callout text-fg-muted leading-normal">
-        On the other computer: Add environment › Connect code, or{" "}
+        On the other computer: Add machine › Connect code, or{" "}
         <code className="font-mono">rustcode machines connect {offer.code}</code>. {where}
       </p>
       {offer.loopbackOnly && (
@@ -532,7 +532,7 @@ export function AccessChoice({
         <input type="radio" name="ssh-access" checked={mutual} onChange={() => onChange(true)} />
         <span>
           <b className="font-medium text-fg">Both ways:</b> {host} can also see and run all threads on this
-          computer. Each side is revoked on its own, here under Environments and there under Remote access.
+          computer. Each side is revoked on its own, here under Machines and there under Remote access.
         </span>
       </label>
     </fieldset>
@@ -543,7 +543,7 @@ export function AccessChoice({
 
 /**
  * An address on this network or a tailnet: found automatically (Bonjour, and the overlay
- * addresses saved environments reported) or typed. Asking puts a request on that computer; its
+ * addresses saved machines reported) or typed. Asking puts a request on that computer; its
  * owner accepts and the code it then shows is typed here.
  */
 function AddressPane({ local }: { local: string | null }) {
@@ -584,7 +584,7 @@ function AddressPane({ local }: { local: string | null }) {
       )}
       <Field
         title="Found on this network"
-        hint="Bonjour finds a computer on this network; a saved environment's NetBird, Tailscale or ZeroTier address appears once it has been paired. Both computers need RustCode running with remote access on."
+        hint="Bonjour finds a computer on this network; a saved machine's NetBird, Tailscale or ZeroTier address appears once it has been paired. Both computers need RustCode running with remote access on."
       >
         <div className="flex flex-col divide-y divide-border overflow-hidden rounded-xl bg-surface">
           {(discovered ?? []).map((found) => (
@@ -629,7 +629,7 @@ function AddressPane({ local }: { local: string | null }) {
               if (event.key === "Enter") ask(address);
             }}
             placeholder="192.168.1.20 or studio.local:17879"
-            aria-label="Environment address"
+            aria-label="Machine address"
             {...noTextHelpers}
             className={cx(fieldClass, "min-w-0 flex-1 font-mono")}
           />

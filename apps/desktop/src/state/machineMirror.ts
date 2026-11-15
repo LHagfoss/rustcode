@@ -1,4 +1,4 @@
-// The durable copy of other environments' threads (docs/data-store.md › Thread mirror).
+// The durable copy of other machines' threads (docs/data-store.md › Thread mirror).
 //
 // `state/machineCache.ts` keeps a bounded copy in the web view's storage so a machine that is away
 // still draws. This keeps everything the app reads from a machine on this computer's disk, through

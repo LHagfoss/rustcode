@@ -324,17 +324,17 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "audit log outside agent calls tools denied declined history",
   },
 
-  // ------------------------------------------------------------ Environments
+  // ------------------------------------------------------------ Machines
   {
     section: "machines",
-    title: "Environments",
+    title: "Machines",
     keywords:
-      "machines machine computers other computer add environment pair pairing connect code ssh address tailscale netbird zerotier vpn bonjour discover found nearby network run on this computer this mac this pc local server runs here install background service route lan unencrypted encrypted online offline connecting reconnect retrying expired revoked last seen threads rename remove forget pair again version update",
+      "machines machine computers environments other computer add machine pair pairing connect code ssh address tailscale netbird zerotier vpn bonjour discover found nearby network run on this computer this mac this pc local server runs here install background service route lan unencrypted encrypted online offline connecting reconnect retrying expired revoked last seen threads rename remove forget pair again version update",
   },
   {
     section: "machines",
-    title: "No other environments yet",
-    keywords: "add environment machine computer remote other pair empty",
+    title: "No other machines yet",
+    keywords: "add machine environment computer remote other pair empty",
   },
 
   // ------------------------------------------------------------ Appearance

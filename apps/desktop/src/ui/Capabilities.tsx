@@ -206,7 +206,7 @@ export function CapabilitiesPage() {
     for (const failure of result.failures) toast(`${failure.name}: ${failure.message}`, "error");
     if (reason && local && result.succeeded.length) {
       toast(
-        `Added to ${local.name} only: ${reason}. The other environments did not get it; set it up there yourself.`,
+        `Added to ${local.name} only: ${reason}. The other machines did not get it; set it up there yourself.`,
         "info",
       );
     } else if (isAdd && result.succeeded.length) {
@@ -214,8 +214,8 @@ export function CapabilitiesPage() {
       const blanked = keys.length > 0 && result.succeeded.some((machine) => !machine.local);
       toast(
         blanked
-          ? `Added to ${result.succeeded.length} environments. ${keys.join(", ")} ${keys.length === 1 ? "stays" : "stay"} on this computer; set ${keys.length === 1 ? "it" : "them"} on the others.`
-          : `Added to ${result.succeeded.length} ${result.succeeded.length === 1 ? "environment" : "environments"}.`,
+          ? `Added to ${result.succeeded.length} machines. ${keys.join(", ")} ${keys.length === 1 ? "stays" : "stay"} on this computer; set ${keys.length === 1 ? "it" : "them"} on the others.`
+          : `Added to ${result.succeeded.length} ${result.succeeded.length === 1 ? "machine" : "machines"}.`,
         "success",
       );
     }
@@ -243,13 +243,12 @@ export function CapabilitiesPage() {
       </div>
       {online.length === 0 && (
         <p className="mb-6 rounded-lg bg-warning/10 px-3 py-2 text-callout">
-          No connected environment. Add one in Settings › Environments to read or change its skills and MCP
-          servers.
+          No connected machine. Add one in Settings › Machines to read or change its skills and MCP servers.
         </p>
       )}
       {writes.length > 1 && (
         <Group
-          title="Add to all environments"
+          title="Add to all machines"
           action={
             <Action size="sm" onClick={() => setAddingAll(!addingAll)} aria-expanded={addingAll}>
               <Plus size={12} /> Add server to all
@@ -307,7 +306,7 @@ function MachineCapabilities({
       <Group title={showName ? machine.name : undefined}>
         <Row
           title="Offline — keeps its skills and servers"
-          subtitle="Connect the environment in Settings › Environments to read or change them."
+          subtitle="Connect the machine in Settings › Machines to read or change them."
         />
       </Group>
     );
@@ -395,7 +394,7 @@ function CopyMenu({
       value: `machine:${machine.host}`,
       label: `Copy to ${machine.name}`,
     })),
-    ...(others.length > 1 ? [{ value: "all", label: "Copy to all environments" }] : []),
+    ...(others.length > 1 ? [{ value: "all", label: "Copy to all machines" }] : []),
   ];
   return (
     <Select

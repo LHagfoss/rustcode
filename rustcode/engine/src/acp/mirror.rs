@@ -1,4 +1,4 @@
-//! `_rustcode/mirror`: the durable copy of other environments' threads
+//! `_rustcode/mirror`: the durable copy of other machines' threads
 //! (`docs/data-store.md` › Thread mirror).
 //!
 //! The app already reads every paired machine's thread list and the threads

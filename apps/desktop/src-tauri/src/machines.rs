@@ -1610,7 +1610,7 @@ pub async fn machines_remove(
     Ok(())
 }
 
-/// Rename a machine. The name is stamped with the time, so the environment
+/// Rename a machine. The name is stamped with the time, so the machine
 /// sync (`state/fleet.ts`) carries it to the machine and the rest of the fleet,
 /// where the newest rename wins. `None` or a blank name shows the name the
 /// machine reports again.

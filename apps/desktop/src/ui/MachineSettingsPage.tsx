@@ -2,7 +2,7 @@
 // or all, and › Several machines): what that computer is, the controls this app
 // has over it, its harnesses, and which Settings rows are shared, kept there,
 // or this app's own. Reached from the machine view's Machine settings button
-// and from Settings › Environments.
+// and from Settings › Machines.
 //
 // The page never writes another machine's values in place: a row opens the
 // setting it belongs to with **Applying to** set to this machine, so the write
@@ -58,14 +58,14 @@ export function MachineSettingsPage({ id }: { id: string }) {
   const machine = useMachines((state) => state.machines.find((entry) => entry.id === id));
   if (!machine) {
     return (
-      <Group title="Environment">
+      <Group title="Machine">
         <Row
           title="That machine is no longer saved"
-          subtitle="It was removed on this computer. Back to Environments lists the others."
+          subtitle="It was removed on this computer. Back to Machines lists the others."
         >
           <Action onClick={() => openSettings("machines")}>
             <ArrowLeft size={13} />
-            Environments
+            Machines
           </Action>
         </Row>
       </Group>
@@ -90,11 +90,11 @@ function MachineSettings({ machine }: { machine: Machine }) {
       <div className="mb-3 flex items-center gap-2 px-4">
         <Action quiet size="sm" onClick={() => openSettings("machines")}>
           <ArrowLeft size={13} />
-          Environments
+          Machines
         </Action>
       </div>
 
-      <Group title="Environment">
+      <Group title="Machine">
         <div className="flex flex-col gap-3 p-4">
           <div className="flex min-w-0 items-start gap-3">
             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-fill">
@@ -151,7 +151,7 @@ function MachineSettings({ machine }: { machine: Machine }) {
       <Group title="Controls">
         <Row
           title="Pause new threads here"
-          subtitle="The connection and the threads already on it stay as they are; Run on refuses this environment until it is resumed."
+          subtitle="The connection and the threads already on it stay as they are; Run on refuses this machine until it is resumed."
         >
           <Switch
             label={`Pause new threads on ${name}`}

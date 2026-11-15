@@ -792,7 +792,7 @@ describe("a machine's local name and icon", () => {
       setLocalIdentity({ displayName: "  Desk Mac  ", icon: "studio", tint: "2" });
       expect(selfName()).toBe("Desk Mac");
       expect(localIdentity()).toMatchObject({ displayName: "Desk Mac", icon: "studio", tint: "2" });
-      // A rename is stamped, so the environment sync can tell which one is newest.
+      // A rename is stamped, so the machine sync can tell which one is newest.
       expect(Date.parse(localIdentity().nameUpdatedAt ?? "")).toBeGreaterThan(0);
       expect(JSON.parse(data.get("rustcode.localMachineIdentity") ?? "null")).toMatchObject({
         displayName: "Desk Mac",

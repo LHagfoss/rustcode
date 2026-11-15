@@ -1,6 +1,5 @@
-// What the Environments page, the Add environment dialog and the new-thread selector say about a
-// saved machine, in one place (docs/desktop.md › Several machines). "Environment" is the name
-// people see, after T3 Code; `Machine` stays the name in code, the shell and the protocol.
+// What the Machines page, the Add machine dialog and the new-thread selector say about a
+// saved machine, in one place (docs/desktop.md › Several machines).
 //
 // Pure functions over `state/machines.ts` values, so the words are testable without a page.
 
@@ -19,18 +18,16 @@ import {
 import { compareVersions } from "../state/updates";
 
 /** What a row's dot and chip say at a glance: the four states people tell apart. */
-export type EnvironmentStatusKind = "online" | "connecting" | "offline" | "attention";
+export type MachineStatusKind = "online" | "connecting" | "offline" | "attention";
 
-export interface EnvironmentStatus {
-  kind: EnvironmentStatusKind;
+export interface MachineStatus {
+  kind: MachineStatusKind;
   label: string;
   tone: "ok" | "warn" | "bad" | "idle";
 }
 
 /** Online, connecting, offline, or a state the user has to act on. */
-export function environmentStatus(
-  machine: Pick<Machine, "state" | "retryInSecs" | "reason">,
-): EnvironmentStatus {
+export function machineStatus(machine: Pick<Machine, "state" | "retryInSecs" | "reason">): MachineStatus {
   switch (machine.state) {
     case "connected":
       return { kind: "online", label: "Online", tone: "ok" };
@@ -50,11 +47,11 @@ export function environmentStatus(
 }
 
 /**
- * Whether an environment runs an older RustCode than this app: the row says so and how to update
+ * Whether a machine runs an older RustCode than this app: the row says so and how to update
  * it. A development build (`DEV_APP_VERSION`) is older than everything, so it never says it, and
- * an environment that has not reported a version is not called outdated.
+ * a machine that has not reported a version is not called outdated.
  */
-export function environmentOutdated(
+export function machineOutdated(
   remote: string | null | undefined,
   local: string | null | undefined,
 ): boolean {
@@ -67,7 +64,7 @@ export function environmentOutdated(
  * (platform, version, when it was last seen) and who told us. Read-only: knowing a computer is
  * not access to it, and it is paired on its own.
  */
-export interface KnownEnvironment {
+export interface KnownMachine {
   id: string;
   name: string;
   platform: string;
@@ -77,12 +74,12 @@ export interface KnownEnvironment {
   outdated: boolean;
 }
 
-export function knownEnvironment(
+export function knownMachine(
   entry: FleetEntry,
   via: string | null,
   local: string | null,
   now: number,
-): KnownEnvironment {
+): KnownMachine {
   const facts = [
     platformName(entry.platform),
     entry.version ? `RustCode ${entry.version}` : undefined,
@@ -94,26 +91,26 @@ export function knownEnvironment(
     platform: entry.platform,
     facts,
     via,
-    outdated: environmentOutdated(entry.version, local),
+    outdated: machineOutdated(entry.version, local),
   };
 }
 
-/** The address an environment is reached on (or tried first), or null before one is saved. */
-export function environmentAddress(machine: Pick<Machine, "route" | "routes">): string | null {
+/** The address a machine is reached on (or tried first), or null before one is saved. */
+export function machineAddress(machine: Pick<Machine, "route" | "routes">): string | null {
   return machine.route?.address ?? machine.routes[0]?.address ?? null;
 }
 
 /** `192.168.1.31:17879 · LAN · Unencrypted`: where it is, and how it travels. */
-export function environmentRoute(machine: Pick<Machine, "route" | "routes">): string {
+export function machineRoute(machine: Pick<Machine, "route" | "routes">): string {
   const route = machine.route ?? machine.routes[0] ?? null;
   if (!route) return "No route saved";
   return `${route.address} · ${routeLabel(route)}`;
 }
 
-/** The one action a row offers to bring the environment back, by what is wrong with it. */
-export type EnvironmentRecovery = "connect" | "reconnect" | "pair" | null;
+/** The one action a row offers to bring the machine back, by what is wrong with it. */
+export type MachineRecovery = "connect" | "reconnect" | "pair" | null;
 
-export function environmentRecovery(machine: Pick<Machine, "state" | "paused">): EnvironmentRecovery {
+export function machineRecovery(machine: Pick<Machine, "state" | "paused">): MachineRecovery {
   switch (machine.state) {
     case "connected":
       return null;
@@ -129,7 +126,7 @@ export function environmentRecovery(machine: Pick<Machine, "state" | "paused">):
 }
 
 /** The words of the recovery button. */
-export function recoveryLabel(recovery: Exclude<EnvironmentRecovery, null>): string {
+export function recoveryLabel(recovery: Exclude<MachineRecovery, null>): string {
   switch (recovery) {
     case "connect":
       return "Connect";
@@ -143,11 +140,11 @@ export function recoveryLabel(recovery: Exclude<EnvironmentRecovery, null>): str
 // ---------------------------------------------------------------- the new-thread selector
 
 /** One row of the selector a new thread starts from. */
-export interface EnvironmentChoice {
+export interface MachineChoice {
   /** The machine id, or `""` for this computer (`LOCAL_HOST`). */
   id: string;
   name: string;
-  status: EnvironmentStatus;
+  status: MachineStatus;
   /** Whether a thread can start there now. */
   available: boolean;
   /** The row's second line: its address, or why it cannot be chosen. */
@@ -155,23 +152,23 @@ export interface EnvironmentChoice {
 }
 
 /**
- * The environments a new thread can run on, this computer first. One that is away or paused is
+ * The machines a new thread can run on, this computer first. One that is away or paused is
  * listed, so the user sees why it is missing, but cannot be chosen (`setNewThreadHost` refuses it).
  */
-export function environmentChoices(
+export function machineChoices(
   machines: readonly Machine[],
   local: { name: string },
   nameOf: (machine: Machine) => string,
-): EnvironmentChoice[] {
-  const here: EnvironmentChoice = {
+): MachineChoice[] {
+  const here: MachineChoice = {
     id: "",
     name: local.name,
     status: { kind: "online", label: "Online", tone: "ok" },
     available: true,
     detail: "This computer",
   };
-  const others = machines.map((machine): EnvironmentChoice => {
-    const status = environmentStatus(machine);
+  const others = machines.map((machine): MachineChoice => {
+    const status = machineStatus(machine);
     const paused = machine.paused === true;
     const available = machine.state === "connected" && !paused;
     return {
@@ -179,13 +176,13 @@ export function environmentChoices(
       name: nameOf(machine),
       status,
       available,
-      detail: paused ? "Paused for new threads" : available ? environmentRoute(machine) : status.label,
+      detail: paused ? "Paused for new threads" : available ? machineRoute(machine) : status.label,
     };
   });
   return [here, ...others];
 }
 
-// ---------------------------------------------------------------- the Add environment dialog
+// ---------------------------------------------------------------- the Add machine dialog
 
 export type AddMethod = "code" | "ssh" | "address";
 
@@ -206,7 +203,7 @@ export interface ProgressStep {
 export function codeSteps(busy: boolean, failed: boolean): ProgressStep[] {
   return [
     { key: "check", label: "Check the code", state: failed ? "failed" : busy ? "running" : "todo" },
-    { key: "save", label: "Connect and save the environment", state: "todo" },
+    { key: "save", label: "Connect and save the machine", state: "todo" },
   ];
 }
 
@@ -222,7 +219,7 @@ export function addressSteps(
     `Ask ${there} to connect`,
     `Accept the request on ${there}`,
     `Type the code ${there} shows`,
-    "Pair and save the environment",
+    "Pair and save the machine",
   ];
   // The step in progress: asking has been sent once a stage exists, so "waiting" is on step two.
   const active = stage ? order.indexOf(stage) + 1 : failed ? 0 : -1;
@@ -296,18 +293,18 @@ export function addFailure(method: AddMethod, raw: string): AddFailure {
   }
 }
 
-/** Whether a state is one the dialog may call a success when a new environment shows up. */
+/** Whether a state is one the dialog may call a success when a new machine shows up. */
 export function isConnectedState(state: MachineState): boolean {
   return state === "connected";
 }
 
-/** The ids of the saved environments, for telling a new one from the ones already there. */
-export function environmentIds(machines: readonly Pick<Machine, "id">[]): Set<string> {
+/** The ids of the saved machines, for telling a new one from the ones already there. */
+export function machineIds(machines: readonly Pick<Machine, "id">[]): Set<string> {
   return new Set(machines.map((machine) => machine.id));
 }
 
-/** The environment that appeared since `before`, when exactly one did. */
-export function newEnvironment(machines: readonly Machine[], before: ReadonlySet<string>): Machine | null {
+/** The machine that appeared since `before`, when exactly one did. */
+export function newMachine(machines: readonly Machine[], before: ReadonlySet<string>): Machine | null {
   const added = machines.filter((machine) => !before.has(machine.id));
   return added.length === 1 ? added[0]! : null;
 }

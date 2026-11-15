@@ -1,14 +1,13 @@
-// Settings › Environments: where this app's threads can run (an "environment" is what the app
-// calls a machine: a computer running RustCode, after T3 Code; `Machine` stays the name in code,
-// the shell and the protocol).
+// Settings › Machines: where this app's threads can run (a machine is a computer running
+// RustCode; docs/terminology.md › Machine).
 //
 // This computer first — the RustCode server the app starts itself — then every other computer the
 // app is paired with, each with a live status (online, connecting, offline), the address and route
 // it is reached over, the RustCode version it runs and its recovery action (Connect, Reconnect, Pair
 // again), a rename (shared across the fleet, `state/fleet.ts`) and Remove. Computers only known
-// through a paired one are listed read-only below them, with a Pair button. "Add environment" opens one dialog with every way in
-// (`ui/AddEnvironmentDialog.tsx`): a connect code, SSH, or an address on the same network or a
-// tailnet; the new-thread selector (`ui/EnvironmentSelector.tsx`) can open it too.
+// through a paired one are listed read-only below them, with a Pair button. "Add machine" opens one dialog with every way in
+// (`ui/AddMachineDialog.tsx`): a connect code, SSH, or an address on the same network or a
+// tailnet; the new-thread selector (`ui/MachineSelector.tsx`) can open it too.
 //
 // The app's Rust shell holds each machine's connection supervisor (an app cannot dial a gateway
 // from the web view), so this page only asks, lists and explains; `state/machines.ts` keeps what it
@@ -17,7 +16,7 @@
 // This computer's row also says whether the RustCode server is installed as a background service —
 // the server that keeps this computer reachable with the app closed, and that Settings › Remote
 // access installs when network access is turned on. Threads this app runs stay in the app and end
-// with it. A row of another environment says which RustCode version it runs, so an old one is a
+// with it. A row of another machine says which RustCode version it runs, so an old one is a
 // sentence with a command, not a silent connection failure.
 
 import { Plus, RefreshCw, Server, SquareTerminal } from "lucide-react";
@@ -46,7 +45,7 @@ import {
   removeMachine,
   selfName,
   serverLine,
-  setAddEnvironmentOpen,
+  setAddMachineOpen,
   setLocalIdentity,
   setMachineDisplayName,
   setMachineIcon,
@@ -59,24 +58,24 @@ import {
 } from "../state/machines";
 import { refreshRemote } from "../state/remoteAccess";
 import { openMachineSettings, useApp } from "../state/store";
-import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
+import { AddMachineDialog } from "./AddMachineDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
-import {
-  environmentAddress,
-  environmentOutdated,
-  environmentRecovery,
-  environmentRoute,
-  environmentStatus,
-  knownEnvironment,
-  recoveryLabel,
-} from "./environments";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
+import {
+  knownMachine,
+  machineAddress,
+  machineOutdated,
+  machineRecovery,
+  machineRoute,
+  machineStatus,
+  recoveryLabel,
+} from "./machineLabels";
 import { Spinner } from "./primitives";
 import { Action, Chip, Group, Row } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
 
-/** How often the page asks the shell where the environments stand. */
+/** How often the page asks the shell where the machines stand. */
 const POLL_MS = 3000;
 
 export function MachinesPage() {
@@ -91,7 +90,7 @@ export function MachinesPage() {
   const [now, setNow] = useState(() => Date.now());
   const [local, setLocal] = useState<string | null>(null);
 
-  // The shell learns about an environment on its own (a retry that worked, a pairing ended
+  // The shell learns about a machine on its own (a retry that worked, a pairing ended
   // there), so the page keeps asking while it is open.
   useEffect(() => {
     if (!hasShell()) return;
@@ -120,20 +119,20 @@ export function MachinesPage() {
     <>
       {!ready && (
         <p role="status" className="mb-4 text-callout text-fg-muted">
-          Updating environments…
+          Updating machines…
         </p>
       )}
-      {error && <p className="mb-6 text-callout text-warning">Could not read the environments: {error}</p>}
+      {error && <p className="mb-6 text-callout text-warning">Could not read the machines: {error}</p>}
 
       <Group
-        title="Environments"
+        title="Machines"
         action={
-          <Action prominent onClick={() => setAddEnvironmentOpen(true)}>
+          <Action prominent onClick={() => setAddMachineOpen(true)}>
             <Plus size={13} />
-            Add environment
+            Add machine
           </Action>
         }
-        hint="Choose where a thread runs under Run on when you start it. A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing an environment forgets its pairing here; it keeps listing this computer until you revoke it there."
+        hint="Choose where a thread runs under Run on when you start it. A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing a machine forgets its pairing here; it keeps listing this computer until you revoke it there."
       >
         <ThisComputer />
         {machines.map((machine) => (
@@ -145,22 +144,22 @@ export function MachinesPage() {
             local={local}
           />
         ))}
-        <KnownEnvironments now={now} local={local} />
-        {machines.length === 0 && <NoEnvironments />}
+        <KnownMachines now={now} local={local} />
+        {machines.length === 0 && <NoMachines />}
         {adding && !addOpen && (
           <Row
-            title="Adding an environment…"
+            title="Adding a machine…"
             subtitle="A connection is in progress. Open the dialog to see where it stands."
           >
             <Spinner />
-            <Action onClick={() => setAddEnvironmentOpen(true)}>Show progress</Action>
+            <Action onClick={() => setAddMachineOpen(true)}>Show progress</Action>
           </Row>
         )}
       </Group>
 
       {machines.length > 0 && <ThreadMirrorGroup />}
 
-      <AddEnvironmentDialog open={addOpen} onOpenChange={setAddEnvironmentOpen} local={local} />
+      <AddMachineDialog open={addOpen} onOpenChange={setAddMachineOpen} local={local} />
     </>
   );
 }
@@ -262,14 +261,14 @@ function ThisComputer() {
  * who told us, so the fleet is visible from any one computer. Knowing one is not access to it; it
  * is paired on its own, with **Pair** (`state/fleet.ts`).
  */
-function KnownEnvironments({ now, local }: { now: number; local: string | null }) {
+function KnownMachines({ now, local }: { now: number; local: string | null }) {
   const machines = useMachines((s) => s.machines);
   const entries = useFleet((s) => s.entries);
   const known = knownOnly(entries, machines);
   return (
     <>
       {known.map((entry) => {
-        const row = knownEnvironment(entry, viaName(entry, machines, entries), local, now);
+        const row = knownMachine(entry, viaName(entry, machines, entries), local, now);
         return (
           <Row
             key={row.id}
@@ -288,7 +287,7 @@ function KnownEnvironments({ now, local }: { now: number; local: string | null }
             status={row.facts.join(" · ")}
             badge={<Chip tone="idle">Not paired</Chip>}
           >
-            <Action onClick={() => setAddEnvironmentOpen(true)}>
+            <Action onClick={() => setAddMachineOpen(true)}>
               <Plus size={12} /> Pair
             </Action>
           </Row>
@@ -298,15 +297,15 @@ function KnownEnvironments({ now, local }: { now: number; local: string | null }
   );
 }
 
-function NoEnvironments() {
+function NoMachines() {
   return (
     <Row
-      title="No other environments yet"
+      title="No other machines yet"
       subtitle="Add a computer running RustCode to see its threads here, and to start threads on it."
     >
-      <Action onClick={() => setAddEnvironmentOpen(true)}>
+      <Action onClick={() => setAddMachineOpen(true)}>
         <Plus size={13} />
-        Add environment
+        Add machine
       </Action>
     </Row>
   );
@@ -326,7 +325,7 @@ export function MachineRow({
 }) {
   const platform = platformName(machine.platform);
   const threads = threadLabel(count);
-  const outdated = environmentOutdated(machine.version, local);
+  const outdated = machineOutdated(machine.version, local);
   // The facts already carry its version: the line says only what updates it.
   const skew = outdated
     ? `Update it there: ${updateAdvice(machine.platform ?? "")}`
@@ -335,8 +334,8 @@ export function MachineRow({
       : null;
   const hint = machine.hint;
   const name = machineName(machine);
-  const status = environmentStatus(machine);
-  const recovery = environmentRecovery(machine);
+  const status = machineStatus(machine);
+  const recovery = machineRecovery(machine);
   const devices = useApp((s) => s.remote?.devices);
   const connected = machine.state === "connected";
   const direction = connectionDirection(connected, peerInbound(machine.id, devices ?? []), name);
@@ -363,15 +362,13 @@ export function MachineRow({
           {/* Online: where it is and how it travels. Otherwise what is wrong, cut to one line
               (all of it on hover and when selected), then the route it tries. */}
           {connected ? (
-            <span className="selectable block">{environmentRoute(machine)}</span>
+            <span className="selectable block">{machineRoute(machine)}</span>
           ) : (
             <>
               <span className="selectable block truncate" title={machineLine(machine)}>
                 {machineLine(machine)}
               </span>
-              {environmentAddress(machine) && (
-                <span className="selectable block">{environmentRoute(machine)}</span>
-              )}
+              {machineAddress(machine) && <span className="selectable block">{machineRoute(machine)}</span>}
             </>
           )}
           {/* What updates it, when it runs another version than this app. */}
@@ -430,7 +427,7 @@ function PairAgainAction({ machine }: { machine: Machine }) {
       onClick={() => {
         if (!address) return;
         void askMachine(address, machineName(machine));
-        setAddEnvironmentOpen(true);
+        setAddMachineOpen(true);
       }}
     >
       <RefreshCw size={12} /> Pair again

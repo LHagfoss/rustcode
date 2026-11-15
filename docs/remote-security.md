@@ -101,7 +101,7 @@ Where this shows:
 - Settings › Remote access › Paired devices: a chip per connected device,
   `LAN · Unencrypted`, `NetBird · Encrypted`, `Tailscale · Encrypted`,
   `VPN · Encrypted`, `This computer`.
-- Settings › Environments: a machine this computer connects to shows
+- Settings › Machines: a machine this computer connects to shows
   `LAN · Unencrypted` or `NetBird · Encrypted` for the route in use
   (`apps/desktop/src/state/machines.ts`: `routeLabel`). A client cannot see
   which interface it used, so it judges the route it dialled by its kind

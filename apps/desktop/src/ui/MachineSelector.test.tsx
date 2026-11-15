@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Tooltip } from "radix-ui";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Machine } from "../state/machines";
-import { EnvironmentSelectorView } from "./EnvironmentSelector";
+import { MachineSelectorView } from "./MachineSelector";
 
 const LAN = { kind: "lan", address: "192.168.1.31:17879", encrypted: false };
 const STUDIO: Machine = {
@@ -24,12 +24,12 @@ const LOCAL = { displayName: "My Mac", icon: null, tint: null };
 function render(machines: Machine[], host: string): string {
   return renderToStaticMarkup(
     <Tooltip.Provider>
-      <EnvironmentSelectorView machines={machines} local={LOCAL} host={host} />
+      <MachineSelectorView machines={machines} local={LOCAL} host={host} />
     </Tooltip.Provider>,
   );
 }
 
-describe("the environment selector", () => {
+describe("the machine selector", () => {
   test("is hidden until a second computer is paired", () => {
     expect(render([], "")).toBe("");
   });
@@ -40,7 +40,7 @@ describe("the environment selector", () => {
     expect(html).toContain("My Mac");
   });
 
-  test("names the environment the next thread runs on", () => {
+  test("names the machine the next thread runs on", () => {
     expect(render([STUDIO], "gw-1")).toContain('aria-label="Run on: Studio"');
     expect(render([{ ...STUDIO, displayName: "Office Mac" }], "gw-1")).toContain(
       'aria-label="Run on: Office Mac"',

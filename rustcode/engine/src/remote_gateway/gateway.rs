@@ -116,7 +116,7 @@ pub struct GatewayConfig {
 /// This machine's name as its user knows it, for a device to show next to
 /// the address. Printable characters only, and short.
 ///
-/// A name the owner gave this environment (`crate::fleet`) replaces the one
+/// A name the owner gave this machine (`crate::fleet`) replaces the one
 /// the operating system gave; it is read when a gateway starts.
 pub(super) fn host_name() -> Option<String> {
     crate::fleet::own_name_override().or_else(os_host_name)
