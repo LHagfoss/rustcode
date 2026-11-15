@@ -6,6 +6,7 @@ import { onThemesChanged, refreshThemes } from "./themeActions";
 
 export { createTheme, setActiveTheme } from "./themeActions";
 
+import { refreshAgents, startAgentPolling } from "./agentActions";
 import {
   inheritedModeOf,
   permissionModeOf,
@@ -13,7 +14,6 @@ import {
   refreshGrants,
   setPermissionMode,
 } from "./approvals";
-
 import {
   appChoices,
   effortMemory,
@@ -26,6 +26,12 @@ import {
   setNewThreadChoice,
   switchThreadHarness,
 } from "./harnessActions";
+
+export { agentHistory, hasAgents, refreshAgents, startAgentPolling } from "./agentActions";
+
+import { refreshCheckpoints } from "./checkpointActions";
+
+export { refreshCheckpoints, returnToAttempt, rewindCheckpoint, turnDiff } from "./checkpointActions";
 
 export {
   accountSlug,
@@ -127,13 +133,7 @@ import {
   str,
 } from "../acp/jsonrpc";
 import type { RemoteStatus } from "../acp/remote";
-import {
-  agentActive,
-  harnessPlanKey,
-  type PlanUsage,
-  parseAgentList,
-  type SubagentInfo,
-} from "../acp/rustcode";
+import { harnessPlanKey, type PlanUsage, type SubagentInfo } from "../acp/rustcode";
 import type { Transport } from "../acp/transport";
 import {
   type AgentInfo,
@@ -161,14 +161,8 @@ import {
 } from "../acp/types";
 import {
   type Checkpoint,
-  checkpointsByTurn,
-  type PatchFile,
-  parseCheckpoints,
-  parseRestoreAnswer,
-  parseTurnDiff,
   parseWorktree,
   parseWorktreeList,
-  type RestoreAnswer,
   removeRefusal,
   STATUS_LABEL,
   statusInUpdate,
@@ -206,7 +200,7 @@ import {
   windowTitle,
 } from "./announceThreads";
 import { uploadPromptImages } from "./attachmentTransfer";
-import { type Attempt, splitAtTurn, transcriptTurns } from "./attempts";
+import type { Attempt } from "./attempts";
 import {
   type AutoCompactSettings,
   automaticCompactionText,
@@ -6261,167 +6255,7 @@ export async function removeWorktree(id: string): Promise<void> {
   });
 }
 
-// ---------------------------------------------------------------- checkpoints
-
-export async function refreshCheckpoints(id: string): Promise<void> {
-  // Checkpoints are files on the machine that ran the turn: this computer cannot read another's.
-  if (threadIsRemote(id) || !connection || !get().features.checkpoints) return;
-  try {
-    const list = parseCheckpoints(
-      await connection.request(V2Method.checkpointList, { session_id: id }, 15_000),
-    );
-    set((s) => ({ checkpoints: { ...s.checkpoints, [id]: list } }));
-  } catch {
-    // A thread outside a git repository has none.
-  }
-}
-
-/** What one turn changed: its checkpoint against the next (or the working tree). */
-export async function turnDiff(id: string, turn: number): Promise<PatchFile[]> {
-  return parseTurnDiff(await engine().request(V2Method.checkpointDiff, { session_id: id, turn }, 30_000));
-}
-
-/**
- * Rewind to before turn N: put the files back to that turn's checkpoint, and the conversation with them
- * when the harness can rewind. With `keep`, the state it abandons is kept as a checkpoint first,
- * so the attempt it leaves can be returned to. The restored files and the reloaded conversation
- * are the feedback; the caller says what happened to the transcript.
- */
-async function restoreCheckpoint(
-  id: string,
-  turn: number,
-  { rewind, keep }: { rewind: boolean; keep: boolean },
-): Promise<RestoreAnswer | undefined> {
-  try {
-    const result = await engine().request(
-      V2Method.checkpointRestore,
-      { session_id: id, turn, rewind, keep },
-      60_000,
-    );
-    const answer = parseRestoreAnswer(result);
-    if (answer.conversation === "rewound") {
-      // The conversation changed under the app: load it again.
-      updateThread(id, (t) => ({ ...t, loaded: false }));
-      set((s) => {
-        const { [id]: _gone, ...threads } = s.threads;
-        return { threads };
-      });
-      await openThread(id);
-    }
-    void refreshCheckpoints(id);
-    return answer;
-  } catch (error) {
-    toast(`Could not rewind: ${errorText(error)}`, "error");
-    return undefined;
-  }
-}
-
-/** Whether this engine keeps the state a rewind abandons, so there is a way back to it. */
-function keepsAbandonedState(): boolean {
-  return !!get().agent?.checkpointAttempts;
-}
-
-/**
- * Rewind to a turn's checkpoint. The turns it leaves stay in the app as an earlier attempt, faded
- * under a divider below the transcript (`state/attempts.ts`), and the state they ended in is kept,
- * so "go back to this attempt" can put the files there again. A harness that cannot rewind its
- * conversation gets the files only, and says so: the thread stays as it is.
- */
-export async function rewindCheckpoint(id: string, checkpoint: Checkpoint): Promise<void> {
-  const thread = get().threads[id];
-  if (!thread || thread.running) return;
-  const rewind = canRewind(thread);
-  const keep = rewind && keepsAbandonedState();
-  const go = () => void runRewind(id, checkpoint.turn, { rewind, keep });
-  if (!rewind) {
-    askConfirm({
-      title: `Put the files back to before turn ${checkpoint.turn}?`,
-      message:
-        "This harness cannot rewind the conversation, so the thread stays as it is and only the files go back. Later messages are kept.",
-      action: "Files Only",
-      destructive: true,
-      run: go,
-    });
-    return;
-  }
-  if (!keep) {
-    askConfirm({
-      title: `Rewind to before turn ${checkpoint.turn}?`,
-      message:
-        "The files and the conversation go back to before this turn. This server cannot keep the state it leaves, so there is no way back to it.",
-      action: "Rewind",
-      destructive: true,
-      run: go,
-    });
-    return;
-  }
-  go();
-}
-
-/** The rewind itself: what it abandons becomes an attempt, then the thread reads from the cut. */
-async function runRewind(
-  id: string,
-  turn: number,
-  { rewind, keep }: { rewind: boolean; keep: boolean },
-): Promise<void> {
-  const thread = get().threads[id];
-  if (!thread) return;
-  const tail = abandonsAt(thread, turn);
-  const answer = await restoreCheckpoint(id, turn, { rewind, keep });
-  if (!answer) return;
-  if (answer.conversation !== "rewound") {
-    toast(
-      answer.rewindError
-        ? `The files went back to before turn ${turn}. The conversation stayed: ${answer.rewindError}`
-        : `The files went back to before turn ${turn}. The conversation stayed.`,
-      answer.rewindError ? "error" : "success",
-    );
-    return;
-  }
-  if (!tail) {
-    toast(`The files went back to before turn ${turn}.`, "success");
-    return;
-  }
-  const attempt: Attempt = {
-    id: localId("attempt"),
-    at: Date.now(),
-    turn,
-    head: answer.kept,
-    items: tail,
-  };
-  set((s) => ({ attempts: { ...s.attempts, [id]: [attempt, ...(s.attempts[id] ?? [])] } }));
-}
-
-/** The turns a rewind to `turn` abandons: from the message that started it to the transcript's end. */
-function abandonsAt(thread: ThreadState, turn: number): TranscriptItem[] | undefined {
-  const byEnd = checkpointsByTurn(transcriptTurns(thread.items), get().checkpoints[thread.id] ?? []);
-  const end = Object.entries(byEnd).find(([, checkpoint]) => checkpoint.turn === turn)?.[0];
-  if (!end) return undefined;
-  return splitAtTurn(thread.items, end)?.tail;
-}
-
-/**
- * Go back to an earlier attempt: the files return to where it ended. The conversation cannot
- * follow (its messages are out of the thread's context for good), so the transcript stays as it
- * reads, and the confirm says so rather than pretending the two go together.
- */
-export function returnToAttempt(threadId: string, attemptId: string): void {
-  const attempt = get().attempts[threadId]?.find((a) => a.id === attemptId);
-  const thread = get().threads[threadId];
-  if (!attempt || attempt.head === undefined || !thread || thread.running) return;
-  const head = attempt.head;
-  askConfirm({
-    title: "Go back to this attempt?",
-    message:
-      "The files go back to where this attempt ended. Its messages cannot: they are no longer in the thread's context, so the thread keeps reading as it does now.",
-    action: "Restore the Files",
-    run: () => {
-      void restoreCheckpoint(threadId, head, { rewind: false, keep: false }).then((answer) => {
-        if (answer) toast("Files restored to the earlier attempt", "success");
-      });
-    },
-  });
-}
+// ---------------------------------------------------------------- views
 
 export function setNewWorktree(change: Partial<AppState["newWorktree"]>) {
   set((s) => ({ newWorktree: { ...s.newWorktree, ...change } }));
@@ -6540,59 +6374,6 @@ export function toggleRightPanel() {
   const s = get();
   const next = s.panel ? null : (panelForThread(s, s.selectedId) ?? DEFAULT_PANEL);
   set({ panel: next, panelByThread: keptPanels(s.selectedId, next) });
-}
-
-/** Whether the thread's harness lists subagents (`_rustcode/agents`). */
-export function hasAgents(thread?: ThreadState): boolean {
-  return !!get().agent?.agents && (thread?.harness?.capabilities.subagents ?? true);
-}
-
-export async function refreshAgents(id: string): Promise<SubagentInfo[]> {
-  const thread = get().threads[id];
-  const conn = connectionForThread(id);
-  if (!conn || !hasAgents(thread)) return [];
-  try {
-    const agents = parseAgentList(
-      await conn.request(Method.agents, { sessionId: splitThreadKey(id).id, action: "list" }, 10_000),
-    );
-    set((s) => ({ agents: { ...s.agents, [id]: agents } }));
-    return agents;
-  } catch {
-    return get().agents[id] ?? [];
-  }
-}
-
-/** A child's conversation, folded like a replayed thread. */
-export async function agentHistory(id: string, agentId: number): Promise<ThreadState> {
-  const conn = connectionForThread(id);
-  if (!conn) throw new Error("That computer is not connected.");
-  const result = (await conn.request(
-    Method.agents,
-    { sessionId: splitThreadKey(id).id, action: "history", id: agentId },
-    15_000,
-  )) as JsonObject | null;
-  let state = emptyThread(`${id}#${agentId}`, get().threads[id]?.cwd ?? "");
-  for (const update of Array.isArray(result?.updates) ? result.updates : []) {
-    state = applyUpdate(state, parseSessionUpdate({ sessionId: id, update }));
-  }
-  return finishLoad(state);
-}
-
-let agentTimer: ReturnType<typeof setInterval> | null = null;
-
-/** Poll the shown thread's agents while its turn runs or a child works, as the SwiftUI app does. */
-export function startAgentPolling() {
-  if (agentTimer) return;
-  agentTimer = setInterval(() => {
-    const s = get();
-    const id = s.selectedId;
-    const thread = id ? s.threads[id] : undefined;
-    if (!id || !thread || s.status !== "ready" || !hasAgents(thread)) return;
-    const known = s.agents[id];
-    if (thread.running || known?.some(agentActive) || (known === undefined && thread.loaded)) {
-      void refreshAgents(id);
-    }
-  }, 2000);
 }
 
 /**
