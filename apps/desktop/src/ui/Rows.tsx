@@ -487,8 +487,10 @@ export const AssistantRow = memo(function AssistantRow({
         />
       </div>
     );
+  // A view stands apart from the prose around it: 20px between segments, where 8px ran
+  // the sentence after a view into its last row.
   return (
-    <div className="flex flex-col gap-2 selectable px-1">
+    <div className="flex flex-col gap-5 selectable px-1">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown

@@ -5669,24 +5669,26 @@ export class MockEngine {
           ? MOCK_DASH
           : /\bkit\b/i.test(prompt)
             ? MOCK_KIT
-            : /\b(hover|trend|graph)\b/i.test(prompt)
-              ? MOCK_CHARTS
-              : /\btable\b/i.test(prompt)
-                ? MOCK_TABLE
-                : /\bview\b/i.test(prompt)
-                  ? MOCK_VIEW
-                  : /\bcharts?\b/i.test(prompt)
-                    ? MOCK_VIZ
-                    : [
-                        "Done. ",
-                        "I updated the greeting in `src/app.ts` ",
-                        "and the tests pass.\n\n",
-                        "```ts\n",
-                        'const greeting = "hello, world";\n',
-                        "export default greeting;\n",
-                        "```\n\n",
-                        "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-                      ];
+            : /\bproposal\b/i.test(prompt)
+              ? MOCK_PROPOSAL
+              : /\b(hover|trend|graph)\b/i.test(prompt)
+                ? MOCK_CHARTS
+                : /\btable\b/i.test(prompt)
+                  ? MOCK_TABLE
+                  : /\bview\b/i.test(prompt)
+                    ? MOCK_VIEW
+                    : /\bcharts?\b/i.test(prompt)
+                      ? MOCK_VIZ
+                      : [
+                          "Done. ",
+                          "I updated the greeting in `src/app.ts` ",
+                          "and the tests pass.\n\n",
+                          "```ts\n",
+                          'const greeting = "hello, world";\n',
+                          "export default greeting;\n",
+                          "```\n\n",
+                          "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+                        ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -5742,6 +5744,29 @@ export const MOCK_TABLE = [
 ];
 
 /** A Smart UI reply: a themed chart and a button that asks a follow-up through `rustcode.send`. */
+/** A proposal in tabs: a plan, titled points, an item written as one sentence, then prose after the view. */
+export const MOCK_PROPOSAL = [
+  "The issue is buildable as four PRs, and I would add two tools instead of four.\n\n",
+  "```rustcode-ui v1\n<title>Plan and decisions</title>\n",
+  '<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="plan">How I would build it</button>',
+  '<button role="tab" data-rc-tab="go">Decisions</button></div>\n',
+  '<section data-rc-panel="plan">\n',
+  '<p class="rc-lead">Use case: "turn off auto-compact" should be one approved tool call, not a hand edit of <code>settings.json</code>.</p>\n',
+  '<ol class="rc-steps">\n',
+  '<li class="rc-step rc-todo"><b>PR 1: one action table, reads everywhere.</b> The CLI verbs, the MCP schemas and <code>docs/cli.md</code> are generated from it.</li>\n',
+  '<li class="rc-step rc-todo"><b>PR 2: settings writes.</b> <code>settings set/reset</code> with <code>--project</code>, and the before/after approval card.</li>\n',
+  '<li class="rc-step rc-todo"><b>PR 3: secrets, CLI only.</b> <code>account add/check/remove</code>. Never as MCP tools.</li>\n',
+  "</ol>\n<h3>Where I would deviate from the issue</h3>\n",
+  '<ul class="rc-list">\n',
+  '<li class="rc-item"><b>Two new tools, not four</b><p>There are already about 45 tools. Add <code>manage_settings</code> and <code>manage_capabilities</code>; extend <code>transfer_session</code> in place.</p></li>\n',
+  '<li class="rc-item"><b>Keep <code>list_harnesses</code>.</b> Folding it into <code>manage_harnesses</code> renames a tool every prompt already uses.</li>\n',
+  "</ul>\n</section>\n",
+  '<section data-rc-panel="go"><p>No prerequisites needed.</p>',
+  '<div class="rc-row rc-gap-2"><button data-primary data-rc-send="GO">GO: PR 1 and 2</button><button data-rc-send="Update the issue first">Update the issue first</button></div></section>\n',
+  "</div>\n```\n\n",
+  "Say GO and I start with PR 1.",
+];
+
 export const MOCK_VIEW = [
   "Here are this week's test runs. Pick a day to dig in.\n\n",
   "```rustcode-ui v1\n",

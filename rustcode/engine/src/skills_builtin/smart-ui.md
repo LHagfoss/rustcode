@@ -86,8 +86,7 @@ so leave out margins (16 px; 28 px inside `.rc-dash`). A `.rc-card` is already a
   `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`.
 - Tabs: `.rc-tabs` > `[role=tablist]` > `button[role=tab][data-rc-tab=a]` and `section[data-rc-panel=a]`.
 - Layout: `.rc-row .rc-col .rc-grid .rc-gap-1` … `.rc-gap-4 .rc-card .rc-scroll`.
-  Blocks are spaced for you, in panels and sections too: add no margins. A subheading
-  between blocks is an `h3`; `.rc-num` keeps a short column on one line.
+  `.rc-num` keeps a short column on one line.
 
 ## Charts (Chart.js, bundled)
 
@@ -134,17 +133,17 @@ and a large `data-size="xl"` line chart with `rcMarks`. All in one `.rc-dash`.
 All kit, no CSS: the same intent reads the same way in every turn.
 
 - Ranking: `<div class="rc-bars"><div class="rc-bar"><span>engine</span><i style="width:100%"></i><b>42 s</b></div><div class="rc-bar rc-bad"><span>auth</span><i style="width:25%"></i><b>10.5 s</b></div></div>`
+- A point and its why: `<li class="rc-item"><b>Two tools</b><p>Extend the old one.</p></li>`
 
 ## Design
 
 - No outer card, border, background or title banner. One view per question.
-- Fits a 320 px column, and grows to the height its content needs: relative widths, no `vh`.
-- Useful before any interaction; a control's effect shows next to it.
-- Real controls with `aria-label` where a label is missing; pre-aggregate.
-- Hover is an extra, never the only way to read a value.
+- Fits a 320 px column, relative widths, no `vh`. Hover is an extra, never the only way to read a value.
+- Each row: a bold lead, label or number, then at most two short sentences.
+- Body text full strength; `.rc-lead`, `.rc-muted`, `.rc-stat-note` for one aside only.
+- One idea per row. A panel's parts: an `h3`, then its block, no wrapper `div`.
+- Tabs only for two to four parts; actions last, the recommended one `data-primary`.
 
 ## Before you send
 
-Run `smart_ui_check` whenever it is listed, fix every problem it reports, then
-write the fence. It catches the sandbox's refusals and the style the kit
-already sets: a colour, a font size, a fixed height, a card inside a card.
+Run `smart_ui_check` whenever it is listed and fix what it reports.
