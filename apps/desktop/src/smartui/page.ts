@@ -113,6 +113,10 @@ body { position: relative; color: var(--rc-text); font: var(--rc-text-size)/1.5 
    root, so the measured height came up 12px short and the view's foot was clipped.
    \`flow-root\` keeps any child margin inside the root, where the measurement sees it. */
 #rc-root, #rc-stream { display: flow-root; }
+/* The browser's own block margins go here, at zero specificity, and nowhere else: a
+   \`margin: 0\` on a tag or kit class (h3, p, .rc-steps, .rc-list) outranked the rhythm below, so a
+   tab panel ran its lead, its plan and its next heading together with no gap. */
+:where(h1, h2, h3, h4, p, ol, ul, pre, hr, blockquote, figure) { margin: 0; }
 #rc-root > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template),
 #rc-stream > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template) { margin-top: 16px; }
 /* The same rhythm one level down, in the blocks that hold other blocks: a tab panel, a section,
@@ -120,13 +124,17 @@ body { position: relative; color: var(--rc-text); font: var(--rc-text-size)/1.5 
    a tree's indent) still wins; the layouts that space their own children are left out. */
 :where(section, [data-rc-panel], details, .rc-card, .rc-col:not([class*="rc-gap-"])):where(:not(.rc-row, .rc-grid, .rc-stats, .rc-hero, .rc-head, .rc-bars, .rc-list, .rc-steps, .rc-dash))
   > :where(:not(title, style, script, summary)) ~ :where(:not(title, style, script, summary)) { margin-top: 16px; }
+/* A heading opens a new part, so it stands a little further from the block before it. */
+:where(section, [data-rc-panel], details, .rc-card, .rc-col:not([class*="rc-gap-"])):where(:not(.rc-row, .rc-grid, .rc-stats, .rc-hero, .rc-head, .rc-bars, .rc-list, .rc-steps, .rc-dash))
+  > :where(:not(title, style, script, summary)) ~ :where(h1, h2, h3, h4) { margin-top: 24px; }
 /* A label or heading names the block under it, so it sits close to that block. */
 :where(section, [data-rc-panel], details, .rc-card, .rc-col:not([class*="rc-gap-"])):where(:not(.rc-row, .rc-grid, .rc-stats, .rc-hero, .rc-head, .rc-bars, .rc-list, .rc-steps, .rc-dash))
   > :where(.rc-label, h1, h2, h3, h4) + :where(:not(title, style, script)) { margin-top: 6px; }
+:is(#rc-root, #rc-stream) > :not(title, style, script, link, meta, template) ~ :is(h1, h2, h3, h4) { margin-top: 24px; }
 :is(#rc-root, #rc-stream, #rc-root .rc-dash, #rc-stream .rc-dash) > :is(.rc-label, h1, h2, h3, h4) + :not(title, style, script) { margin-top: 6px; }
-h1, h2, h3, h4 { margin: 0; font-size: var(--rc-text-size); font-weight: 600; line-height: 1.3; }
+h1, h2, h3, h4 { font-size: var(--rc-text-size); font-weight: 600; line-height: 1.3; }
 h1 { font-size: var(--rc-text-size-title); }
-p { margin: 0; } p + p { margin-top: 8px; }
+p + p { margin-top: 8px; }
 small, .rc-muted { color: var(--rc-muted); }
 a { color: var(--rc-accent); }
 table { border-collapse: collapse; width: 100%; font-size: var(--rc-text-size-sm); }
@@ -147,8 +155,8 @@ button:active { opacity: 0.75; }
 button.primary, button[data-primary] { background: var(--rc-accent); color: var(--rc-accent-text); border-color: transparent; }
 button:disabled { opacity: 0.45; cursor: default; }
 code, kbd, pre { font-family: var(--rc-mono); font-size: var(--rc-text-size-sm); }
-pre { background: var(--rc-surface); padding: 8px 10px; border-radius: var(--rc-radius); overflow: auto; margin: 0; }
-hr { border: 0; border-top: 1px solid var(--rc-separator); margin: 0; }
+pre { background: var(--rc-surface); padding: 8px 10px; border-radius: var(--rc-radius); overflow: auto; }
+hr { border: 0; border-top: 1px solid var(--rc-separator); }
 canvas { max-width: 100%; }
 .rc-row { display: flex; flex-wrap: wrap; align-items: center; }
 .rc-col { display: flex; flex-direction: column; }
@@ -160,8 +168,8 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-card { background: var(--rc-surface); border-radius: var(--rc-radius); padding: 10px 12px; }
 .rc-scroll { max-height: 320px; overflow: auto; }
 
-.rc-title { font-size: var(--rc-text-size-title); font-weight: 600; line-height: 1.3; margin: 0; }
-.rc-lead { color: var(--rc-muted); margin: 0; }
+.rc-title { font-size: var(--rc-text-size-title); font-weight: 600; line-height: 1.3; }
+.rc-lead { color: var(--rc-muted); }
 .rc-lead :is(b, strong) { color: var(--rc-text); font-weight: 600; }
 /* A title on the left and a muted caption (source, range, time) on the right. */
 .rc-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 16px; }
@@ -260,7 +268,7 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
   vector-effect: non-scaling-stroke; }
 .rc-spark-area { fill: currentColor; opacity: 0.14; }
 
-.rc-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.rc-list { display: flex; flex-direction: column; padding: 0; list-style: none; }
 .rc-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 6px 0;
   border-bottom: 1px solid var(--rc-separator); }
 .rc-item:last-child { border-bottom: 0; }
@@ -269,18 +277,26 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-item > .rc-badge, .rc-item > .rc-chip { flex: none; }
 .rc-item > :last-child:not(:first-child) { font-variant-numeric: tabular-nums; }
 .rc-item > div, .rc-item > p { flex: 0 0 100%; margin: 0; }
+/* An item written as a sentence (bold lead, words, code) reads as one paragraph: as flex items,
+   each bold, code and run of text became its own box, spread across the row. The runtime marks
+   any item with bare text in it. A titled point (a <b>, then a <p>) puts its body under the title. */
+.rc-item.rc-prose { display: block; }
+.rc-item:is(.rc-prose, :has(> div, > p)) { padding: 8px 0; }
+.rc-item:has(> div, > p) { row-gap: 2px; }
 
-.rc-steps { margin: 0; padding: 0; list-style: none; }
+.rc-steps { padding: 0; list-style: none; }
 .rc-step { position: relative; padding: 0 0 12px 20px; }
 .rc-step:last-child { padding-bottom: 0; }
-.rc-step::before { content: ""; position: absolute; left: 1px; top: 6px; width: 8px; height: 8px; border-radius: 50%;
+.rc-step::before { content: ""; position: absolute; left: 1px; top: calc(0.75em - 4px); width: 8px; height: 8px; border-radius: 50%;
   background: var(--rc-faint); }
-.rc-step::after { content: ""; position: absolute; left: 4.5px; top: 18px; bottom: -2px; width: 1px; background: var(--rc-separator); }
+.rc-step::after { content: ""; position: absolute; left: 4.5px; top: calc(0.75em + 8px); bottom: -2px; width: 1px; background: var(--rc-separator); }
 .rc-step:last-child::after { display: none; }
 .rc-done::before { background: var(--rc-success); }
 .rc-active::before { background: var(--rc-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc-accent) 22%, transparent); }
 .rc-failed::before { background: var(--rc-danger); }
-.rc-todo { color: var(--rc-muted); }
+/* A plan that has not started reads at full strength; once some steps are done or running,
+   the ones still to do step back. */
+.rc-steps:has(.rc-done, .rc-active, .rc-failed) .rc-todo { color: var(--rc-muted); }
 .rc-todo::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--rc-faint); }
 
 .rc-details { border-bottom: 1px solid var(--rc-separator); }
@@ -613,6 +629,15 @@ ${KIT_SCRIPT}
       box.className = "rc-table-box";
       table.replaceWith(box);
       box.append(table);
+    }
+    // An item with bare text in it is a sentence, not a label and a value: lay it out as one.
+    for (const item of document.querySelectorAll(".rc-item:not(.rc-prose)")) {
+      for (const node of item.childNodes) {
+        if (node.nodeType === 3 && node.textContent.trim()) {
+          item.classList.add("rc-prose");
+          break;
+        }
+      }
     }
     for (const table of document.querySelectorAll("table.rc-table[data-rc-sort]")) {
       for (const heading of (table.tHead ? table.tHead.rows[0].cells : [])) heading.tabIndex = 0;

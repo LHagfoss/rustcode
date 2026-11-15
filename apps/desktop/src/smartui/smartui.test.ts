@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MOCK_CHARTS, MOCK_DASH, MOCK_KIT, MOCK_VIEW } from "../acp/mock";
+import { MOCK_CHARTS, MOCK_DASH, MOCK_KIT, MOCK_PROPOSAL, MOCK_VIEW } from "../acp/mock";
 import {
   AutoRun,
   claimLive,
@@ -353,7 +353,7 @@ describe("smart ui", () => {
   });
 
   test("the mock's views are kit only, on the theme and the rhythm", () => {
-    for (const lines of [MOCK_VIEW, MOCK_KIT, MOCK_CHARTS, MOCK_DASH]) {
+    for (const lines of [MOCK_VIEW, MOCK_KIT, MOCK_CHARTS, MOCK_DASH, MOCK_PROPOSAL]) {
       const source = splitReply(lines.join(""))
         .filter((p) => p.kind === "ui")
         .map((p) => p.source)
@@ -368,6 +368,32 @@ describe("smart ui", () => {
     expect(BASE_CSS).toContain(".rc-item > div, .rc-item > p { flex: 0 0 100%; margin: 0; }");
     expect(BASE_CSS).toContain(".rc-item > .rc-badge, .rc-item > .rc-chip { flex: none; }");
     expect(BASE_CSS).toContain(".rc-item > * { min-width: 0; overflow-wrap: anywhere; }");
+  });
+
+  test("an item written as a sentence reads as one paragraph", () => {
+    // A bold lead, words and code in one item were flex items each, spread across the row.
+    expect(BASE_CSS).toContain(".rc-item.rc-prose { display: block; }");
+    expect(
+      buildPage(
+        "<title>t</title>",
+        "tok",
+        pageTheme("dark", () => "#000"),
+      ),
+    ).toContain('item.classList.add("rc-prose")');
+  });
+
+  test("no tag or kit class zeroes a margin the panel rhythm sets", () => {
+    // `p { margin: 0 }`, `h3 { margin: 0 }`, `.rc-steps { margin: 0 }` outranked the
+    // zero-specificity rhythm, so a tab panel's lead, plan and next heading touched.
+    expect(BASE_CSS).toContain(
+      ":where(h1, h2, h3, h4, p, ol, ul, pre, hr, blockquote, figure) { margin: 0; }",
+    );
+    for (const rule of BASE_CSS.match(
+      /^(h1, h2, h3, h4|p|pre|hr|\.rc-title|\.rc-lead|\.rc-list|\.rc-steps) \{[^}]*\}/gm,
+    ) ?? [])
+      expect(rule).not.toContain("margin");
+    // A heading opens a new part, a little further from the block before it.
+    expect(BASE_CSS).toContain("~ :where(h1, h2, h3, h4) { margin-top: 24px; }");
   });
 
   test("a table's long code and links wrap so it fits the reply", () => {
