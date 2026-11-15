@@ -5347,7 +5347,8 @@ mod tests {
                 "truncated",
                 "mcp_server",
                 "command_name",
-                "error_kind"
+                "error_kind",
+                "harness_tool"
             ]
         );
         drop(first);
