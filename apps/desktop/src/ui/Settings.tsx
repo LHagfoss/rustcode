@@ -334,9 +334,6 @@ function GeneralPage() {
             {defaultCwd ? "Change folder" : "Choose folder"}
           </Action>
         </Row>
-        <Row title="Harness, model and effort" subtitle="Which harness runs a new thread by default.">
-          <Action onClick={() => openSettings("agents")}>Open Harnesses</Action>
-        </Row>
         <Row
           title="Access"
           subtitle="What threads may do without asking, by default and per project."

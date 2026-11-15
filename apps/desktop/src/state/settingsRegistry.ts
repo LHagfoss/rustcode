@@ -43,7 +43,6 @@ export const SECTION_KIND: Record<SettingsSection, SettingKind> = {
 const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[] = [
   // General keeps app preferences and this computer's own rows beside the server settings.
   { section: "general", title: "Default project folder", kind: "machine" },
-  { section: "general", title: "Harness, model and effort", kind: "server" },
   { section: "general", title: "Access", kind: "server" },
   { section: "general", title: "Continue threads after a restart", kind: "server" },
   { section: "general", title: "Continue threads on their own", kind: "server" },
