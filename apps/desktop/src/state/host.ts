@@ -306,6 +306,17 @@ function scheduleSave() {
   saveTimer = setTimeout(() => void flushSave(), SAVE_DEBOUNCE_MS);
 }
 
+/**
+ * Forgets the engine's copy of the book and drops a save still waiting to go: a test's debounced
+ * save otherwise fires after the next test has no engine and prints "the link book was not saved".
+ */
+export function resetLinkBook(): void {
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  engineLinks = undefined;
+  savedText = undefined;
+}
+
 /** Sends the book now, if it differs from what the store already has. */
 async function flushSave(): Promise<void> {
   clearTimeout(saveTimer);
