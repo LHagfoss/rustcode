@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseSessionUpdate, type SessionUpdate } from "../acp/types";
 import { sentMessages } from "./compose";
 import type { Link } from "./orchestration";
+import { createdPull } from "./pullWatch";
 import {
   agentStepLabel,
   appendSteer,
@@ -83,6 +84,24 @@ describe("thread reducer", () => {
     ]);
     expect(s.items).toHaveLength(1);
     expect(s.items[0]).toMatchObject({ kind: "tool", status: "completed", output: "a\nb\n", exitCode: 0 });
+  });
+
+  test("an input that arrives in an update fills the call, so a created pull request is seen", () => {
+    const s = apply([
+      { kind: "toolCall", id: "c", title: "Terminal", diffs: [] },
+      { kind: "toolCallUpdate", id: "c", input: { command: "gh pr create --fill" }, diffs: [] },
+      {
+        kind: "toolCallUpdate",
+        id: "c",
+        status: "completed",
+        output: "https://github.com/o/r/pull/7",
+        diffs: [],
+      },
+    ]);
+    const item = s.items[0];
+    expect(item).toMatchObject({ kind: "tool", input: { command: "gh pr create --fill" } });
+    if (item?.kind !== "tool") throw new Error("no tool row");
+    expect(createdPull(item.input, item.output ?? "")).toEqual({ repo: "o/r", number: 7 });
   });
 
   test("an auto-allowed call says so on its own row, and later updates keep it", () => {
