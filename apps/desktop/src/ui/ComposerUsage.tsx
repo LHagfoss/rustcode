@@ -16,9 +16,8 @@ import {
 import type { SessionUsage } from "../acp/types";
 import { useHoverTip } from "../lib/hover";
 import { layoutTiles } from "../lib/treemap";
+import { autoCompactBeforeUsage, autoCompactThresholdFor } from "../state/autoCompactRun";
 import {
-  autoCompactBeforeUsage,
-  autoCompactThresholdFor,
   onlyCachedPlan,
   openSettings,
   planKeyFor,

@@ -77,6 +77,7 @@ import { onFileDrop, openTerminalAt, openThreadLog, revealPath } from "../lib/na
 import { hasShell } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
 import { delegateCount, liveSubagents, type StackAgent } from "../state/agentStack";
+import { autoCompactOffFor, setAutoCompactForThread } from "../state/autoCompactRun";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { useCheckoutBranch } from "../state/checkoutBranch";
 import { type ChildInfo, childInfo } from "../state/children";
@@ -161,7 +162,6 @@ import { snoozePresets, wakeLabel } from "../state/snooze";
 import {
   askConfirm,
   askCustomSnooze,
-  autoCompactOffFor,
   dismissPendingSetup,
   errorText,
   featureMissing,
@@ -170,7 +170,6 @@ import {
   renameThread,
   repairThread,
   selectThread,
-  setAutoCompactForThread,
   setPinned,
   setSectionOrder,
   setThreadStatus,

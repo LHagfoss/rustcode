@@ -6,6 +6,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
 import type { SessionSummary, SessionUsage } from "../acp/types";
 import { DEFAULT_AUTO_COMPACT } from "./autoCompact";
+import {
+  scheduleAutoCompact,
+  setAutoCompactForThread,
+  setAutoCompactMode,
+  setAutoCompactThreshold,
+} from "./autoCompactRun";
 import { emptyExtras, sentMessages } from "./compose";
 import { foldTurns } from "./fold";
 import type { Link } from "./orchestration";
@@ -17,11 +23,7 @@ import {
   markUnread,
   resetForTests,
   runPrompt,
-  scheduleAutoCompact,
   selectThread,
-  setAutoCompactForThread,
-  setAutoCompactMode,
-  setAutoCompactThreshold,
   setSnoozed,
   trashThread,
   updateThread,

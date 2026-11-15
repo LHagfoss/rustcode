@@ -331,7 +331,7 @@ export async function loadScopeSettings(machines: ScopeMachine[]): Promise<void>
 
 /** Apply a server's values to the local app, so its behaviour follows them. */
 function applyLocalSettings(values: Record<string, Json | undefined>): void {
-  void import("./store").then((store) => {
+  void Promise.all([import("./store"), import("./autoCompactRun")]).then(([store, autoCompact]) => {
     const text = (key: ServerSettingKey) => {
       const value = values[key];
       return typeof value === "string" ? value : undefined;
@@ -351,9 +351,10 @@ function applyLocalSettings(values: Record<string, Json | undefined>): void {
     const limit = bool("continue-after-limit");
     if (limit !== undefined) store.setContinueAfterLimit(limit);
     const compact = text("auto-compact-mode");
-    if (compact === "off" || compact === "size" || compact === "cache") store.setAutoCompactMode(compact);
+    if (compact === "off" || compact === "size" || compact === "cache")
+      autoCompact.setAutoCompactMode(compact);
     const threshold = number("auto-compact-threshold");
-    if (threshold !== undefined) store.setAutoCompactThreshold(threshold);
+    if (threshold !== undefined) autoCompact.setAutoCompactThreshold(threshold);
     const orchestration = bool("orchestration");
     if (orchestration !== undefined) store.setOrchestration(orchestration);
     const total = number("delegates-total");
