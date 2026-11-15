@@ -7,9 +7,9 @@ mod connections;
 mod cursor;
 pub(crate) mod data;
 mod edit_diff;
-mod environment;
 mod harnesses;
 mod hosted;
+mod machine_sync;
 mod mcp_app;
 mod mirror;
 mod outside;
@@ -2810,9 +2810,9 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: environment::EnvironmentSyncRequest, responder, connection| {
+            async move |request: machine_sync::MachineSyncRequest, responder, connection| {
                 connection.spawn(async move {
-                    match environment::sync(request) {
+                    match machine_sync::sync(request) {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder
                             .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),

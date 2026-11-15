@@ -1,20 +1,20 @@
-// Settings › Environments › Thread copies: whether this computer keeps its own copy of the threads
-// it reads from other environments, and which projects it leaves out (docs/data-store.md › Thread
+// Settings › Machines › Thread copies: whether this computer keeps its own copy of the threads
+// it reads from other machines, and which projects it leaves out (docs/data-store.md › Thread
 // mirror, `state/machineMirror.ts`). The copy is read-only and on this computer's disk; the
-// environment that runs a thread stays its owner.
+// machine that runs a thread stays its owner.
 
 import { useEffect, useState } from "react";
 import { type MirrorStatus, readMirrorStatus, setMirrorSettings } from "../state/machineMirror";
 import { Switch } from "./primitives";
 import { fieldClass, Group, Row } from "./settingsKit";
 
-/** What the page says the copy holds: "Holding 12 threads from 2 environments." */
+/** What the page says the copy holds: "Holding 12 threads from 2 machines." */
 export function mirrorLine(status: MirrorStatus | null): string {
   if (!status) return "Not available: this computer's server did not answer.";
   const hosts = Object.values(status.hosts);
   const threads = hosts.reduce((sum, host) => sum + host.threads, 0);
   if (!threads) return status.enabled ? "Nothing copied yet." : "Off. Nothing is copied.";
-  const from = hosts.length === 1 ? "1 environment" : `${hosts.length} environments`;
+  const from = hosts.length === 1 ? "1 machine" : `${hosts.length} machines`;
   const held = `${threads === 1 ? "1 thread" : `${threads} threads`} from ${from}`;
   return status.enabled ? `Holding ${held}.` : `Off. Still holding ${held}; they stay readable.`;
 }
@@ -53,15 +53,15 @@ export function ThreadMirrorGroup() {
   return (
     <Group
       title="Thread copies"
-      hint="The environment that runs a thread stays its owner. A copy is read-only and never deleted when the original is."
+      hint="The machine that runs a thread stays its owner. A copy is read-only and never deleted when the original is."
     >
       <Row
-        title="Keep a copy of other environments' threads"
+        title="Keep a copy of other machines' threads"
         subtitle={loaded ? mirrorLine(status) : "Reading…"}
         hint="Their threads stay readable here when they are offline, wiped or removed."
       >
         <Switch
-          label="Keep a copy of other environments' threads"
+          label="Keep a copy of other machines' threads"
           checked={status?.enabled ?? true}
           onChange={(enabled) => apply({ enabled })}
         />

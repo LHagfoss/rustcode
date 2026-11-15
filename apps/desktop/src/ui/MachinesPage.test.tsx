@@ -30,7 +30,7 @@ function render(machine: Machine): string {
   );
 }
 
-describe("an environment row", () => {
+describe("a machine row", () => {
   test("says an unreachable route once", () => {
     const html = render(MACHINE);
     expect(html.split("Not reachable over the VPN").length - 1).toBe(1);

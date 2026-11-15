@@ -1,8 +1,8 @@
-// The environment selector: where a new thread runs (docs/desktop.md › Several machines), after
-// T3 Code's "Run on" selector. This computer first, then each paired environment with its live
+// The machine selector: where a new thread runs (docs/desktop.md › Several machines), after
+// T3 Code's "Run on" selector. This computer first, then each paired machine with its live
 // status and the address it is reached on; one that is away is listed, so the user sees why it
-// cannot be picked, but is not selectable. Its last rows leave the list: "Add environment…" opens
-// the Add environment dialog on Settings › Environments, and "Manage environments" opens the page.
+// cannot be picked, but is not selectable. Its last rows leave the list: "Add machine…" opens
+// the Add machine dialog on Settings › Machines, and "Manage machines" opens the page.
 //
 // Hidden until a second computer is paired: a selector with one choice is noise. A thread that
 // exists already has its machine, so this is the new-thread strip's own control. The composer
@@ -18,14 +18,14 @@ import {
   machineTint,
   platformIcon,
   selfName,
-  setAddEnvironmentOpen,
+  setAddMachineOpen,
   useLocalIdentity,
   useMachines,
 } from "../state/machines";
 import { openSettings, setNewThreadHost, useApp } from "../state/store";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
-import { type EnvironmentChoice, environmentChoices } from "./environments";
 import { DeviceGlyphIcon } from "./MachineGlyph";
+import { type MachineChoice, machineChoices } from "./machineLabels";
 import { cx } from "./primitives";
 
 // The composer footer's button (`footerButton` in ui/Composer.tsx): quiet until hovered, and its
@@ -33,22 +33,22 @@ import { cx } from "./primitives";
 const footerButton =
   "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
-const DOT: Record<EnvironmentChoice["status"]["kind"], string> = {
+const DOT: Record<MachineChoice["status"]["kind"], string> = {
   online: "bg-success",
   connecting: "animate-pulse bg-fg-muted",
   offline: "bg-fg-faint",
   attention: "bg-warning",
 };
 
-export function EnvironmentSelector() {
+export function MachineSelector() {
   const machines = useMachines((s) => s.machines);
   const local = useLocalIdentity();
   const host = useApp((s) => s.newThreadHost);
-  return <EnvironmentSelectorView machines={machines} local={local} host={host} />;
+  return <MachineSelectorView machines={machines} local={local} host={host} />;
 }
 
 /** The selector over what it is given: the store's machines and this computer's own identity. */
-export function EnvironmentSelectorView({
+export function MachineSelectorView({
   machines,
   local,
   host,
@@ -62,7 +62,7 @@ export function EnvironmentSelectorView({
   if (!machines.length) return null;
   const here = platformIcon(platform === "mac" ? "macos" : platform);
   const current = machines.find((machine) => machine.id === host);
-  const choices = environmentChoices(machines, { name: local.displayName ?? selfName() }, machineName);
+  const choices = machineChoices(machines, { name: local.displayName ?? selfName() }, machineName);
   const label = current ? machineName(current) : choices[0]!.name;
   const glyphOf = (id: string) => {
     const machine = machines.find((entry) => entry.id === id);
@@ -129,15 +129,15 @@ export function EnvironmentSelectorView({
           className="gap-2"
           onSelect={() => {
             openSettings("machines");
-            setAddEnvironmentOpen(true);
+            setAddMachineOpen(true);
           }}
         >
           <Plus size={14} className="shrink-0 text-fg-muted" />
-          <span className="text-body text-fg">Add environment…</span>
+          <span className="text-body text-fg">Add machine…</span>
         </CardMenuItem>
         <CardMenuItem className="gap-2" onSelect={() => openSettings("machines")}>
           <Settings2 size={14} className="shrink-0 text-fg-muted" />
-          <span className="text-body text-fg">Manage environments</span>
+          <span className="text-body text-fg">Manage machines</span>
         </CardMenuItem>
       </div>
     </CardPopover>

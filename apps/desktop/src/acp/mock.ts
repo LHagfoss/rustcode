@@ -2421,7 +2421,7 @@ export class MockEngine {
   /** Review conversations resolved or unresolved through `_rustcode/pulls/thread`. */
   private pullResolved = new Map<string, boolean>();
   private fleet = new Map<string, JsonObject>();
-  /** This computer's own chosen name and when it was chosen (`environment.json`). */
+  /** This computer's own chosen name and when it was chosen (`machine.json`). */
   private ownName: { name: string; at: string } | null = null;
   private threads: MockThread[];
   private harnesses: HarnessSnapshot;
@@ -2649,7 +2649,7 @@ export class MockEngine {
   }
 
   /** `_rustcode/environment/sync` (`rustcode/engine/src/fleet.rs`): merge a report, answer with ours. */
-  private environmentSync(ask: JsonObject): JsonObject {
+  private machineSync(ask: JsonObject): JsonObject {
     const from = obj(ask.from);
     const fromId = str(from?.hostId) ?? "";
     for (const raw of [...arr(ask.entries), ...(from ? [from as Json] : [])]) {
@@ -3723,7 +3723,7 @@ export class MockEngine {
       case "_rustcode/workflows/wake":
         return { claimed: false };
       case "_rustcode/environment/sync":
-        return this.environmentSync(obj(params) ?? {});
+        return this.machineSync(obj(params) ?? {});
       case "_rustcode/pulls":
         return { list: { provider: "github", hasMore: false, pulls: MOCK_PULLS } };
       case "_rustcode/project/read": {

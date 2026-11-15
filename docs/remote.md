@@ -621,23 +621,24 @@ holds until encrypted transport (#2651) lands.
   would send them to a network they are not on. Those routes are still kept
   and dialled, but only after every route that can answer.
 
-### Environment names and the fleet
+### Machine names and the fleet
 
 Pairing is trust between two computers. On top of it, paired computers share
 *metadata* about themselves and about each other, so a name chosen on one
 computer shows on all of them and every computer can see the whole fleet, not
 only the computers it paired with directly. Nothing here grants access: a
 computer that is only *known* through a peer has no address, token or route
-saved, and is paired on its own (**Pair** in Settings › Environments).
+saved, and is paired on its own (**Pair** in Settings › Machines).
 
 - **What travels:** a computer's id (its gateway id), its name and the time that
   name was chosen, its platform, its RustCode version and when some computer
   last had word from it. Nothing else.
 - **How:** `_rustcode/environment/sync`, an ACP request over the connection a
-  pairing already opened (`engine/src/acp/environment.rs`; it is on the gateway's
-  relay allowlist). The caller sends itself and everything it knows; the other
+  pairing already opened (`engine/src/acp/machine_sync.rs`; it is on the gateway's
+  relay allowlist). The method keeps its older name so computers on earlier
+  versions still answer it. The caller sends itself and everything it knows; the other
   computer merges that and answers with itself and everything *it* knows. The
-  desktop app runs it against its own engine and every connected environment
+  desktop app runs it against its own engine and every connected machine
   when a connection comes up, when a name changes and every minute
   (`apps/desktop/src/state/fleet.ts`).
 - **Merge:** last writer wins per computer (`engine/src/fleet.rs`). A name is a
@@ -646,17 +647,19 @@ saved, and is paired on its own (**Pair** in Settings › Environments).
   operating system's) has no time and loses to any rename. Platform, version
   and last-seen come from the more recent report. An entry about a computer
   that was never reported on for 90 days is forgotten.
-- **Storage:** a computer's own name is `environment.json` in the configuration
-  directory (without it the gateway announces the operating system's name; a
-  gateway reads it when it starts, so a new pairing sees the new name).
+- **Storage:** a computer's own name is `machine.json` in the configuration
+  directory (earlier versions wrote `environment.json`, which is still read
+  until the next rename writes `machine.json`; without either the gateway
+  announces the operating system's name; a gateway reads it when it starts, so
+  a new pairing sees the new name).
   What it learned of the others is `fleet.json`. A paired machine's name is its
   `display_name` with `name_updated_at` in `machines.json`.
-- **Rename:** renaming an environment stamps the name with the time. The next
+- **Rename:** renaming a machine stamps the name with the time. The next
   sync sends it to that computer, which adopts it as its own name when it is
   newer than the one it has, and from there it spreads to every computer that
   syncs with either. A computer that was offline keeps its old name until it
   syncs; the first sync after it reconnects brings the newest one. Renaming
-  this computer announces it the same way, to every connected environment.
+  this computer announces it the same way, to every connected machine.
 - **Known through another:** a computer this one is not paired with is listed
   read-only, with who told us and when it was last seen. The list is only as
   fresh as that last report, so its row says *last seen*, never *online*.
@@ -669,11 +672,11 @@ A connect code pairs two computers by carrying one string from one to the
 other: no request to accept, and no address to look up when the code carries
 it.
 
-1. On the computer to be reached: Settings › Environments › **Add environment** › Connect code › **Create connect code**
+1. On the computer to be reached: Settings › Machines › **Add machine** › Connect code › **Create connect code**
    (or `rustcode machines code`). It shows `K7MQ-29XH-TP4W-NRD6` with **Copy**
    and **Copy link**, the address the code carries, and a countdown with
    *Waiting for a computer…*, which becomes *Paired ‹name›*.
-2. On the other computer: Settings › Environments › **Add environment** › Connect code › **I have a code**, paste the code or the link, **Connect** (or
+2. On the other computer: Settings › Machines › **Add machine** › Connect code › **I have a code**, paste the code or the link, **Connect** (or
    `rustcode machines connect <code>`). It is paired, its token stored, and
    the first computer's threads appear.
 
@@ -786,7 +789,7 @@ reach this one too ([Mutual access](#mutual-access)).
 Pairing grants access in one direction: the computer that redeems a connect
 code can reach the computer that created it. Connect over SSH can grant the
 other direction as well, in the same step, so nobody repeats an opaque pairing
-by hand: Add environment › SSH › **Both ways**, or `--mutual`.
+by hand: Add machine › SSH › **Both ways**, or `--mutual`.
 
 | Choice | This computer reaches `box` | `box` reaches this computer |
 | --- | --- | --- |
@@ -806,14 +809,14 @@ by hand: Add environment › SSH › **Both ways**, or `--mutual`.
   `rustcode machines connect <link>` over SSH on `box`. The code lives ten
   minutes and works once; it is withdrawn when the step fails.
 - **Two pairings.** Each direction is its own pairing with its own token:
-  `box` is a saved environment here, and `box` is a paired device on this
+  `box` is a saved machine here, and `box` is a paired device on this
   computer (under Settings › Remote access › Paired devices and
   `rustcode remote devices`). Ending one never ends the other: *Forget* on the
-  environment (or `rustcode machines remove`) ends this computer's access to
+  machine (or `rustcode machines remove`) ends this computer's access to
   `box`; *Revoke* on the device (or `rustcode remote revoke`) ends `box`'s
-  access to this computer. Settings › Environments › ‹box› › **Access** shows
+  access to this computer. Settings › Machines › ‹box› › **Access** shows
   both with their own button; a device counts as `box` when its `hostId` is
-  the environment's id.
+  the machine's id.
 - **When it cannot.** The one-way pairing is already saved and stays; the page
   and `--json` (`mutual_error`, `access: "one_way"`) say why and what to do:
   - `box` is offline or SSH no longer signs in: the SSH sentence of that step
@@ -830,11 +833,11 @@ by hand: Add environment › SSH › **Both ways**, or `--mutual`.
 
 ### In the desktop app
 
-Settings › **Environments** is the same pairing without a terminal: *This Mac* (or
+Settings › **Machines** is the same pairing without a terminal: *This Mac* (or
 *This PC*) first — the app's own RustCode server — then one row per saved
-environment (a machine; the app says *environment*, after T3 Code), each with a live
+machine, each with a live
 status (*Online*, *Connecting*, *Offline*), its address and route, the RustCode version it runs
-and its actions (*Connect* / *Reconnect* / *Pair again*, *Rename*, *Settings*, *Remove*). **Add environment**
+and its actions (*Connect* / *Reconnect* / *Pair again*, *Rename*, *Settings*, *Remove*). **Add machine**
 opens one dialog with the ways in: *Connect code*, *SSH* and *Address*, each with its steps and, when
 one fails, a plain message with **Try again**. `?machines=paired|connect|offline|revoked`
 in the mock shows the page without a second computer; `connect` starts with one
@@ -844,11 +847,11 @@ are all visible at once.
 
 | In the app | What it does |
 | --- | --- |
-| **Add environment › SSH** | A host field and *Install or update RustCode there when needed* (on by default), *Who can reach whom* (*One way*, the default: this computer reaches the host and not the other way round; *Both ways*: the host also sees and runs all threads on this computer), then the steps of [Connect over SSH](#connect-over-ssh) ticking off, each with its detail, and the failed step's sentence. A second direction that fails leaves the connection one way and says why under the steps. |
-| **Environments › ‹environment› › Access** | The direction in the title (*Both ways*, *This computer → it*, *It → this computer*), then one row per direction: whether this computer reaches the environment (*Allowed* or *Ended*, removed with Forget) and whether the environment reaches this computer (*Allowed* with **Revoke**, or *Not allowed* with how to allow it). |
-| **Add environment › Connect code** | *Create connect code* shows a code for another computer to pair with this one ([Connect codes](#connect-codes)); *I have a code* takes a code or link created there, with an optional address for a short code that carries none. |
-| **Add environment › Address › Found on this network** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
-| **Add environment › Address › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
+| **Add machine › SSH** | A host field and *Install or update RustCode there when needed* (on by default), *Who can reach whom* (*One way*, the default: this computer reaches the host and not the other way round; *Both ways*: the host also sees and runs all threads on this computer), then the steps of [Connect over SSH](#connect-over-ssh) ticking off, each with its detail, and the failed step's sentence. A second direction that fails leaves the connection one way and says why under the steps. |
+| **Machines › ‹machine› › Access** | The direction in the title (*Both ways*, *This computer → it*, *It → this computer*), then one row per direction: whether this computer reaches the machine (*Allowed* or *Ended*, removed with Forget) and whether the machine reaches this computer (*Allowed* with **Revoke**, or *Not allowed* with how to allow it). |
+| **Add machine › Connect code** | *Create connect code* shows a code for another computer to pair with this one ([Connect codes](#connect-codes)); *I have a code* takes a code or link created there, with an optional address for a short code that carries none. |
+| **Add machine › Address › Found on this network** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
+| **Add machine › Address › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
 | **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
 | A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Reconnecting…* (a machine that is away while the app retries it on its own), *Offline*, what a machine that answered and would not serve said — *Server not running*, *Version mismatch*, *Not allowed*, *Busy*, *Refused* — and *Needs pairing* — the route **in use** (else the one it answered on last) under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then when it was last reached and how many threads it has. **Remove** sits in a row of its own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
@@ -1288,7 +1291,7 @@ Client requests and notifications are restricted to these exact methods:
 - `_rustcode/settings/get`, `_rustcode/settings/set`
 - `_rustcode/skills/add`, `_rustcode/skills/get`
 - `_rustcode/environment/sync`: names, versions and last-seen times of the fleet
-  ([Environment names and the fleet](#environment-names-and-the-fleet))
+  ([Machine names and the fleet](#machine-names-and-the-fleet))
 - `_rustcode/threads/search`, `_rustcode/data/activity`, `_rustcode/project/read`,
   `_rustcode/project/clone` and `_rustcode/worktrees/state`: what an agent on the
   paired computer reads and does here (`docs/orchestrator.md` › Machines)

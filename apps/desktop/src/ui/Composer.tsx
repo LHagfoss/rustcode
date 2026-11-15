@@ -145,11 +145,11 @@ import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { threadMachine } from "./composerFooterLayout";
 import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
-import { EnvironmentSelector } from "./EnvironmentSelector";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkChip } from "./LinkChip";
 import { DeviceGlyphIcon } from "./MachineGlyph";
+import { MachineSelector } from "./MachineSelector";
 import { ModelPicker } from "./ModelPicker";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import { cx, MenuQuickActions, noTextHelpers, Pill, Tooltip } from "./primitives";
@@ -1797,7 +1797,7 @@ export const Composer = memo(function Composer({
           what it says. */}
       <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex items-center gap-4 px-2 pt-[14px] pb-1.5 text-callout text-fg-muted">
         <div className="flex min-w-0 items-center gap-1">
-          {!thread && <EnvironmentSelector />}
+          {!thread && <MachineSelector />}
           {thread && <ThreadMachineChip host={host} />}
           <FolderMenu thread={thread} cwd={cwd} host={host} />
           {!thread && !newThreadHost && <WorktreeToggle draft={draft} compact={compact} />}

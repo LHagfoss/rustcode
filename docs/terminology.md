@@ -34,7 +34,7 @@ repository depends on them.
 | **Delegate** | A thread working for another thread (`start_session`, `fan_out`, `message_session`), which the orchestrating thread is told about when it finishes or asks. It is a thread of its own, listed in the sidebar; a *link* in code. | The wake notice ("Delegate finished: …"), `link_id`, the orchestration tools and docs. |
 | **Harness** | What runs a thread's turns: RustCode's built-in harness or an external coding agent such as Codex or Claude Code. Chosen when the thread starts ([harnesses.md](harnesses.md)). | The new-thread picker, onboarding, Settings; `_meta.rustcode.harness` in ACP. |
 | **Provider** | A model API the built-in harness calls (OpenAI, Anthropic, Copilot, an OpenAI-compatible server). An external harness has its own models and sign-in, not RustCode's providers. | Settings → providers, `[[providers]]` in the config. |
-| **Environment** | A computer running RustCode that this app can run threads on: this computer, or one paired over a connect code, SSH or an address. The app says *environment* (Settings › Environments, *Add environment*, the Run on selector), after T3 Code. Code, the shell and the protocol keep `machine` (`Machine`, `machines_*`, `machines.json`, `machines.rs`, `?machines=`). | Settings › Environments, the new-thread Run on selector, the Add environment dialog. |
+| **Machine** | A computer running RustCode that this app can run threads on: this computer, or one paired over a connect code, SSH or an address. Never *environment* ([Machine](#machine)). Code, the shell and the protocol say `machine` too (`Machine`, `machines_*`, `machines.json`, `machines.rs`, `?machines=`). | Settings › Machines, the new-thread Run on selector, the Add machine dialog, `list_machines`. |
 | **Plan** | The agent's task list (`todo_write`): what it proposes to do, step by step. | The task plan; never proof that a step ran. |
 
 ## Harness, provider, agent
@@ -72,22 +72,27 @@ Where both words appear today they mean the same:
 | `/session` | (unchanged command name) | Slash commands keep their names |
 | `SessionStore`, `selectedSession`, `session_id` | (unchanged) | Internal code identifiers |
 
-## Environment = machine
+## Machine
 
-The apps call a computer a thread can run on an **environment**, as T3 Code
-does. The word is user-facing only: `Machine`, `useMachines`, the
-`machines_*` shell commands, `machines.json`, `rustcode machines …` and the
-`machine` field new threads accept keep their names, so no stored file, CLI
-script or protocol client changes. Write *environment* in UI text and docs
-about the app, and *machine* in code and the CLI.
+A computer a thread can run on is a **machine**, in the apps, the docs, the
+CLI and the code alike: Settings › Machines, *Add machine*, the Run on
+selector, `Machine`, `useMachines`, the `machines_*` shell commands,
+`machines.json`, `rustcode machines …`, the `machine` field new threads accept
+and the `list_machines` orchestration tool. Do not call it an *environment*:
+that word means a process's environment variables, or a harness's sandbox.
 
-An environment's **name** is shared across the fleet: a rename on one computer
+The apps said *environment* for a while (after T3 Code). What that left behind
+keeps working: the fleet sync's wire method is still
+`_rustcode/environment/sync`, so older paired computers answer it, and a
+computer's own name written to `environment.json` by those versions is still
+read until the next rename writes `machine.json`.
+
+A machine's **name** is shared across the fleet: a rename on one computer
 is stamped and reaches every paired computer, and the newest rename wins
-([Environment names and the fleet](remote.md#environment-names-and-the-fleet)).
-An environment this computer only *knows of* through a paired one is **known**,
+([Machine names and the fleet](remote.md#machine-names-and-the-fleet)).
+A machine this computer only *knows of* through a paired one is **known**,
 not paired: it is listed read-only until it is paired on its own. The code says
-`fleet` (`fleet.rs`, `fleet.json`, `state/fleet.ts`) and the protocol
-`_rustcode/environment/sync`.
+`fleet` (`fleet.rs`, `fleet.json`, `state/fleet.ts`).
 
 ## What stays "session"
 

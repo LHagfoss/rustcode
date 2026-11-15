@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "../acp/transport";
 import { parseDeepLink, promptLink, threadLink, threadReference } from "../lib/deepLinks";
-import { setAddEnvironmentOpen, useMachines } from "./machines";
+import { setAddMachineOpen, useMachines } from "./machines";
 import { projectsOn, remoteRepository } from "./projects";
 import {
   harnessesOn,
@@ -23,12 +23,12 @@ export function openDeepLink(raw: string): void {
   if (link.kind === "connect") {
     useMachines.setState({ incomingConnectCode: link.code });
     openSettings("machines");
-    setAddEnvironmentOpen(true);
+    setAddMachineOpen(true);
   } else if (link.kind === "thread") {
     if (s.sessions.some((session) => session.id === link.id) || s.threads[link.id]) {
       openSettings(null);
       selectThread(link.id);
-    } else toast("Thread not found on connected environments", "error");
+    } else toast("Thread not found on connected machines", "error");
   } else {
     const host = s.newThreadHost;
     const project = link.repo
