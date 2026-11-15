@@ -17,7 +17,7 @@ const SLACK = 100;
 const OVERSIZED: Record<string, number> = {
   "state/store.ts": 6600,
   "acp/mock.ts": 7400,
-  "state/host.ts": 6300,
+  "state/host.ts": 3100,
   "state/orchestration.ts": 3200,
   "ui/Sidebar.tsx": 2800,
   "ui/Composer.tsx": 2200,

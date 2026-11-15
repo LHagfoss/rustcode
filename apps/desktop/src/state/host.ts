@@ -8,61 +8,74 @@
 // The store imports this module and this module imports the store; nothing
 // here touches the store at load time.
 
-import { bool, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
-import {
-  cleanupRefusal,
-  type DelegatePull,
-  harnessPlanKey,
-  parseMergeOutcome,
-  parsePullError,
-  parsePullList,
-  parsePullState,
-  pullErrorTitle,
-} from "../acp/rustcode";
+import { type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
 import {
   delegateParent,
   type Harness,
-  type HarnessModel,
   type HarnessSnapshot,
   Method,
-  type PermissionOption,
-  type PermissionRequest,
   plainPath,
   projectName,
 } from "../acp/types";
-import {
-  type HandoffRefusal,
-  handoffRefusal,
-  parseHandoff,
-  parseWorktreeStates,
-  type ThreadStatus,
-  V2Method,
-  type WorktreeState,
-} from "../acp/v2";
-import { optionScope } from "../lib/approval";
 import { currentPlatform } from "../lib/platform";
-import { hasShell, shellCall } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
-import { childTitle, titleFrom } from "../lib/title";
+import { titleFrom } from "../lib/title";
+import { unavailableReason } from "./harness";
+import { cleanupWorktree, handoffWorktree, mergeWhenGreen, worktreeStatus } from "./hostDelegates";
 import {
-  type AttachedFile,
-  attachedExtras,
-  attachmentRefusal,
-  attachmentRoots,
-  MAX_ATTACHMENT_FILES,
-} from "./attachments";
-import type { ComposeExtras } from "./compose";
-import { isStatusQuery, type StatusInput, type StatusPull, statusRows } from "./delegateStatus";
-import { LINK_AGENT_STATE } from "./delegates";
-import { restoreChoice, selectOption, unavailableReason, usableHarnesses } from "./harness";
-import { usageOf } from "./harnessUsage";
+  addLink,
+  answerRequest,
+  configureSession,
+  deliver,
+  type FanOutCall,
+  interruptSession,
+  listPendingRequests,
+  manageQueue,
+  message,
+  organizeThreads,
+  read,
+  type StartCall,
+  transferSession,
+  updateSession,
+} from "./hostManage";
 import {
-  accountLabelOf,
-  accountNameOf,
-  accountSignedOut,
-  childAccountFor,
-  newThreadAccountOn,
-} from "./logins";
+  cloneProject,
+  cloneProjectOn,
+  createProject,
+  readProject,
+  readProjectOn,
+  removeProject,
+  updateProject,
+} from "./hostProjects";
+import {
+  FILTERED_MODELS,
+  LISTED_MODELS,
+  listHarnesses,
+  listProjects,
+  listWorktrees,
+  searchSessions,
+} from "./hostReads";
+import {
+  deleteScheduledTask,
+  listPullRequests,
+  listScheduledTasks,
+  runScheduledTaskNow,
+  scheduleTask,
+  threadStatus,
+} from "./hostSchedule";
+import {
+  accessOf,
+  activityFrom,
+  childMode,
+  choiceLabel,
+  deliverOwn,
+  fanOut,
+  narrowed,
+  ownMode,
+  start,
+  wait,
+} from "./hostStart";
+import { accountSignedOut } from "./logins";
 import {
   LOCAL_MACHINE_ID,
   localAppVersion,
@@ -77,25 +90,18 @@ import {
   useMachines,
 } from "./machines";
 import {
-  type ApprovalChoice,
   accountsNeedApproval,
-  activeDescendants,
   activityOf,
   advanceLink,
-  ancestorsOf,
   askingIds,
   capped,
-  checkManage,
   checkMessage,
   checkQueryData,
   checkStart,
-  cleanProjectPath,
   contextNote,
-  cutForAll,
   type DelegateLimits,
   delegateAccountKey,
   delegated,
-  delivered,
   emptyBook,
   type Failure,
   type FanOut,
@@ -116,48 +122,27 @@ import {
   type LinkBook,
   type LinkState,
   latestReply,
-  linkResult,
   linksLeft,
   listSessions,
-  liveState,
-  MAX_DELEGATES,
   MAX_DELEGATES_PER_THREAD,
   MAX_PROJECTS,
-  MAX_PULL_REQUESTS,
-  MAX_QUEUE_ITEMS,
-  MAX_WORKTREE_PULLS,
-  MAX_WORKTREES,
   markDelivered,
   mergeBooks,
-  nextId,
   nextWakeAt,
-  noteEvent,
-  noteLinkEvent,
   orphanedLinks,
-  type PullStateChoice,
-  pageOf,
   parseBook,
   parseCall,
-  parseDelivered,
   projectOf,
   prune,
-  QUEUE_PREVIEW_CHARS,
   queueWake,
   quietBelow,
   quietTree,
   type RuleThread,
-  reachesThread,
-  reachOf,
-  renderRead,
   reopenLinks,
   restateLinks,
-  retainDelegateCleanup,
-  retireCleanedLinks,
   sameProject,
-  sameReach,
   shownState,
   type TurnAnswer,
-  unheard,
   updateLink,
   usageScope,
   type Wake,
@@ -171,15 +156,7 @@ import {
   wakesDue,
 } from "./orchestration";
 import { revokeThreadGrant } from "./permissionGrants";
-import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
-import {
-  forgetProject,
-  projectEntry,
-  projectLabel,
-  registeredProjects,
-  registerProject,
-  updateProjectEntry,
-} from "./projectBook";
+import { delegationAllowed, modeLabel } from "./permissions";
 import {
   isDataFolder,
   isRootFolder,
@@ -188,8 +165,7 @@ import {
   projectsOn,
   remoteRepository,
 } from "./projects";
-import { rememberPullSummaries } from "./pullQueries";
-import { QUEUE_REASON, wakeDelivery } from "./queue";
+import { wakeDelivery } from "./queue";
 import {
   parseQueueBook,
   pendingRows,
@@ -201,52 +177,28 @@ import {
 } from "./queues";
 import {
   type AppState,
-  answerPermission,
-  answerQuestionOptions,
-  answerQuestionText,
   cancel,
-  clearFinished,
   connectionFor,
   createSession,
-  defaultModeFor,
   dropInternetWait,
   dropLimitWait,
-  effortMemory,
-  ensureHarnessModels,
   errorText,
   harnessesOn,
-  isKeptUnlisted,
-  lastAccountFor,
   loadMachineHarnesses,
-  localChoices,
-  markUnread,
   openThread,
   permissionModeOf,
-  planCacheStale,
-  refreshReadPlanLogins,
   releaseLimitWaitLink,
-  removeQueued,
-  renameThread,
   request,
   resumeQueue,
   runPrompt,
-  searchThreads,
-  sendDecisionFor,
-  sendQueuedNow,
   sessionById,
-  setConfigOption,
   setPermissionMode,
-  setSnoozed,
   setThreadStatus,
-  setThreadsStatus,
   statusOf,
   steer,
   steeringOf,
-  switchThreadHarness,
   toast,
-  togglePin,
   turnState,
-  updateQueued,
   updateThread,
   useApp,
 } from "./store";
@@ -258,10 +210,18 @@ import {
   type QueuedPrompt,
   type TranscriptItem,
   turnCompletion,
-  withPullMark,
 } from "./thread";
 import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
-import { orchestrationTool } from "./toolNames";
+
+export {
+  answerStatusLocally,
+  delegateStatusInputs,
+  mergeResultNotice,
+  readDelegatePull,
+} from "./hostDelegates";
+export { deliver, manageTarget, targetMachine } from "./hostManage";
+export { noProviderPullList } from "./hostSchedule";
+export { activityFrom, orchestrationCallDropped, stateOf } from "./hostStart";
 
 const BOOK_KEY = "rustcode.threadLinks";
 /** How long a change waits before it is written to the store: a run of tool calls is one save. */
@@ -420,14 +380,14 @@ function watchEngineLinks() {
   engineWatch = setTimeout(check, ENGINE_LINK_CHECK_MS);
 }
 
-function setBook(fn: (book: LinkBook) => LinkBook) {
+export function setBook(fn: (book: LinkBook) => LinkBook) {
   const next = prune(fn(useApp.getState().links));
   useApp.setState({ links: next });
   keepLocally(next);
   scheduleSave();
 }
 
-const book = () => useApp.getState().links;
+export const book = () => useApp.getState().links;
 
 /** Settings › Permissions: forget one "Allow for This Thread" answer, so the thread asks again. */
 export function forgetThreadGrant(caller: string, key: string) {
@@ -435,7 +395,7 @@ export function forgetThreadGrant(caller: string, key: string) {
 }
 
 /** The two delegate limits (Settings › Orchestration): one thread's own, and the machine's total. */
-const delegateLimits = (): DelegateLimits => ({
+export const delegateLimits = (): DelegateLimits => ({
   perThread: useApp.getState().threadLimit,
   total: useApp.getState().totalLimit,
 });
@@ -447,7 +407,7 @@ const delegateLimits = (): DelegateLimits => ({
  * chain, so a call starts when the one before it has finished, failed or not.
  */
 let linkGate: Promise<unknown> = Promise.resolve();
-function withLinkGate<T>(run: () => Promise<T>): Promise<T> {
+export function withLinkGate<T>(run: () => Promise<T>): Promise<T> {
   const next = linkGate.then(run, run);
   linkGate = next.then(
     () => undefined,
@@ -465,13 +425,13 @@ if (typeof window !== "undefined") {
  * The links each parent is blocked on in `wait_session` right now: a wake for
  * one of them would be a duplicate, so it is held back while the wait runs.
  */
-const waiting = new Map<string, Set<string>>();
+export const waiting = new Map<string, Set<string>>();
 
 /** How often a wait looks again, unless it is ended early (a dropped call, a newer wait). */
-const WAIT_CHECK_MS = 300;
+export const WAIT_CHECK_MS = 300;
 
 /** One `wait_session` in flight: the links it holds, and how it ends early. */
-interface Wait {
+export interface Wait {
   caller: string;
   links: Set<string>;
   /** Why it ended without an answer, when it did: its call was dropped, or a newer wait took it over. */
@@ -483,17 +443,17 @@ interface Wait {
 }
 
 /** Which wait holds each `caller/link`, and the waits the engine can name by call id. */
-const holds = new Map<string, Wait>();
-const calls = new Map<string, Wait>();
+export const holds = new Map<string, Wait>();
+export const calls = new Map<string, Wait>();
 /**
  * What the last few calls handed over. An answer a wait has already sent is
  * dropped by the engine when the harness stopped waiting at that very moment:
  * the marks it set go back, and the ordinary wake delivers what nobody read.
  */
-const handedBy = new Map<string, HeardMark[]>();
-const HANDED_KEPT = 16;
+export const handedBy = new Map<string, HeardMark[]>();
+export const HANDED_KEPT = 16;
 
-const holdKey = (caller: string, link: string) => `${caller}\n${link}`;
+export const holdKey = (caller: string, link: string) => `${caller}\n${link}`;
 
 /**
  * A call the engine can drop that waits on more than a link: `merge_when_green`
@@ -502,20 +462,20 @@ const holdKey = (caller: string, link: string) => `${caller}\n${link}`;
  * never merge afterwards. Each step checks `dropped`, and `onDrop` ends what is
  * waiting right now: the approval card, the engine's merge loop.
  */
-interface Droppable {
+export interface Droppable {
   caller: string;
   dropped: boolean;
   onDrop: Set<() => void>;
 }
-const droppable = new Map<string, Droppable>();
+export const droppable = new Map<string, Droppable>();
 
-const trackCall = (callId: string, caller: string): Droppable => {
+export const trackCall = (callId: string, caller: string): Droppable => {
   const call: Droppable = { caller, dropped: false, onDrop: new Set() };
   droppable.set(callId, call);
   return call;
 };
 
-const droppedFailure = (): Failure =>
+export const droppedFailure = (): Failure =>
   failure("cancelled", "the call was dropped before it finished, so nothing was merged");
 
 /** The timer that re-checks a coalescing window; one at a time. */
@@ -541,7 +501,7 @@ export function resetWaits(): void {
   wakeTimer = undefined;
 }
 
-function ruleThread(s: AppState, id: string): RuleThread | undefined {
+export function ruleThread(s: AppState, id: string): RuleThread | undefined {
   const summary = s.sessions.find((x) => x.id === id);
   const thread = s.threads[id];
   if (!summary && !thread) return undefined;
@@ -658,7 +618,7 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   schedule: "Changed scheduled work",
 };
 
-async function permitted(
+export async function permitted(
   caller: RuleThread,
   key: string,
   question: GrantAsk,
@@ -832,7 +792,7 @@ function machineState(saved: Machine | undefined, connected: boolean): string {
 }
 
 /** What every machine-aware answer carries, so an agent can tell where a thread runs. */
-function machineFields(machine: MachineRef): JsonObject {
+export function machineFields(machine: MachineRef): JsonObject {
   return { machine: machine.name, machine_id: machine.id };
 }
 
@@ -932,7 +892,7 @@ function managedOn(
 }
 
 /** One request to the engine of `host`: this computer's, or a paired machine's over its connection. */
-async function requestOn<T = Json>(
+export async function requestOn<T = Json>(
   host: string,
   method: string,
   params: JsonObject,
@@ -948,7 +908,7 @@ async function requestOn<T = Json>(
  * `null` for a folder with none. Only an answer is kept, so a read that failed
  * is tried again by the next call.
  */
-const repositories = new Map<string, string | null>();
+export const repositories = new Map<string, string | null>();
 /** How long one folder's git read may take while a call matches projects. */
 const REPOSITORY_READ_MS = 10_000;
 
@@ -971,7 +931,7 @@ async function repositoryOf(host: string, path: string): Promise<string | null |
  * names a project only once a thread runs there, and a clone is where the
  * next thread starts.
  */
-const clonedOn = new Map<string, string[]>();
+export const clonedOn = new Map<string, string[]>();
 
 /** For tests: forget every folder's repository and every clone made on a machine. */
 export function forgetMachineProjectsForTests(): void {
@@ -980,7 +940,7 @@ export function forgetMachineProjectsForTests(): void {
 }
 
 /** A machine's projects: what its threads name, newest first, then what was cloned there from here. */
-function machineProjects(host: string): Project[] {
+export function machineProjects(host: string): Project[] {
   const listed = projectsOn(useApp.getState().sessions, host);
   const cloned = (clonedOn.get(host) ?? [])
     .filter((path) => !listed.some((project) => project.path === path))
@@ -1370,7 +1330,7 @@ function sessionsOnMachine(
  * last (B6). The app's own data folder is never a project, however a
  * machine's thread list names it (issue 3524).
  */
-async function projectOnMachine(
+export async function projectOnMachine(
   machine: MachineRef,
   caller: RuleThread,
   asked: string | undefined,
@@ -1814,7 +1774,7 @@ async function receiptSave(
 }
 
 /** A read that asked for every project and may not have it: say so, rather than answer half. */
-function reachRefused(): JsonObject {
+export function reachRefused(): JsonObject {
   return failureJson(
     failure(
       "not_allowed",
@@ -1824,7 +1784,7 @@ function reachRefused(): JsonObject {
 }
 
 /** Every thread the app lists, as the rules see it. */
-function allThreads(): RuleThread[] {
+export function allThreads(): RuleThread[] {
   const st = useApp.getState();
   return st.sessions.flatMap((x) => ruleThread(st, x.id) ?? []);
 }
@@ -2104,3192 +2064,10 @@ async function perform(
 }
 
 // ---------------------------------------------------------------- reads: no approval
-
-/** Models listed per harness: an agent's context pays for each one. */
-const LISTED_MODELS = 12;
-/** Models a `model` filter returns: every match worth picking from, still bounded. */
-const FILTERED_MODELS = 50;
-/** Said beside `omitted_models`, so an agent narrows instead of guessing at what it cannot see. */
-const MODEL_FILTER_HINT = "pass model to search the omitted ones";
-/** Said when a `model` filter matched nothing, so an agent narrows it again. */
-const MODEL_MISS_HINT = "no model matches; pass a shorter substring";
-
-/** Whether a model matches a `model` filter: its id or its name, either case. */
-const matchesModel = (m: HarnessModel, filter: string) =>
-  m.id.toLowerCase().includes(filter) || m.name.toLowerCase().includes(filter);
-
-/**
- * The models this project's threads ran on, most recent first, per harness: the
- * models an agent is likeliest to want are the ones the user already uses here.
- */
-function usedModels(caller: RuleThread): Map<string, string[]> {
-  const reach = reachOf(caller);
-  const recent = useApp
-    .getState()
-    .sessions.filter((t) => t.harness && t.model && sameProject(reach, t.worktree?.repo || t.repo || t.cwd))
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  const out = new Map<string, string[]>();
-  for (const t of recent) {
-    const used = out.get(t.harness!) ?? [];
-    if (!used.includes(t.model!)) used.push(t.model!);
-    out.set(t.harness!, used);
-  }
-  return out;
-}
-
-/**
- * A harness's models in the order that matters: the one a new thread on it starts
- * with, then the ones this project's threads used recently, then the harness's own
- * order. A `filter` narrows to the models whose id or name contains it.
- */
-function orderedModels(
-  h: Harness,
-  configured: string | null,
-  used: string[],
-  filter: string | undefined,
-): HarnessModel[] {
-  // Only the models it lists lead: a remembered one this listing no longer has
-  // is not offered.
-  const ids = new Set(h.models.map((m) => m.id));
-  const lead = [configured, ...used].filter((id): id is string => !!id && ids.has(id));
-  const rank = new Map<string, number>();
-  for (const id of lead) if (!rank.has(id)) rank.set(id, rank.size);
-  const models = filter ? h.models.filter((m) => matchesModel(m, filter)) : [...h.models];
-  // The sort is stable, so the rest stay in the harness's own order.
-  return models.sort((a, b) => (rank.get(a.id) ?? lead.length) - (rank.get(b.id) ?? lead.length));
-}
-
-/** The efforts every listed model shares, when they share one and it is not empty. */
-function sharedEfforts(models: HarnessModel[]): string[] | undefined {
-  const first = models[0]?.efforts ?? [];
-  if (!first.length) return undefined;
-  const same = models.every(
-    (m) => m.efforts.length === first.length && m.efforts.every((effort, i) => effort === first[i]),
-  );
-  return same ? first : undefined;
-}
-
-async function listHarnesses(
-  caller: RuleThread,
-  asked: { harness?: string; model?: string } = {},
-): Promise<JsonObject> {
-  const snapshot = useApp.getState().harnesses;
-  const harnesses = snapshot?.harnesses ?? [];
-  const signedOut = useApp.getState().signedOutLogins;
-  await Promise.all(harnesses.filter((h) => !unavailableReason(h)).map((h) => ensureHarnessModels(h.id)));
-  const fresh = useApp.getState().harnesses?.harnesses ?? harnesses;
-  // The models a listing just brought in are the ones on record now, so the
-  // choice a new thread starts on is restored against those, not the snapshot
-  // taken before the ask.
-  const current: HarnessSnapshot | undefined = snapshot ? { ...snapshot, harnesses: fresh } : undefined;
-  const wanted = asked.harness?.toLowerCase();
-  // An id is exact and wins; a display name may be shared by a harness the user
-  // added, so several matches are refused rather than one picked silently.
-  const byId = wanted ? fresh.filter((h) => h.id.toLowerCase() === wanted) : fresh;
-  const named = wanted && !byId.length ? fresh.filter((h) => h.name.toLowerCase() === wanted) : byId;
-  if (wanted && !named.length) {
-    return failureJson(
-      failure(
-        "invalid",
-        `no harness “${asked.harness}”; list_harnesses has ${fresh.map((h) => h.id).join(", ")}`,
-      ),
-    );
-  }
-  if (wanted && named.length > 1) {
-    return failureJson(
-      failure(
-        "invalid",
-        `“${asked.harness}” names ${named.length} harnesses; pass the id: ${named.map((h) => h.id).join(", ")}`,
-      ),
-    );
-  }
-  const listed = named;
-  const filter = asked.model?.toLowerCase();
-  const used = usedModels(caller);
-  // What a new thread on each harness starts with: the same rule the composer uses.
-  const remembered = localChoices();
-  const efforts = effortMemory();
-  const configuredModels = current
-    ? new Map(fresh.map((h) => [h.id, restoreChoice(current, h.id, remembered, efforts).model]))
-    : undefined;
-  // Each login's plan windows come from the cache Settings › Usage and the
-  // composer's meter fill, never from a read this call starts: a model's tool
-  // call must not raise a Keychain prompt or an Anthropic request of its own.
-  // A stale cache is refreshed in the background so that the next call has
-  // newer numbers (`refreshReadPlanLogins`): the default login and the account
-  // of the thread on screen, plus every named login that was read before, since
-  // those are the accounts an agent is choosing between. It honours the pauses
-  // and the read's rate limit, and it is not awaited: this answer is what the
-  // cache holds now.
-  const cache = useApp.getState().planCache;
-  if (planCacheStale(cache)) refreshReadPlanLogins();
-  const usage = (harness: string, account?: string | null) =>
-    usageOf(cache[harnessPlanKey(harness, account)]);
-  return {
-    current: { harness: caller.harness ?? "rustcode", ...ranWith(caller.id) },
-    harnesses: listed.map((h) => {
-      const reason = unavailableReason(h);
-      const models = orderedModels(h, configuredModels?.get(h.id) ?? null, used.get(h.id) ?? [], filter);
-      const shown = models.slice(0, filter ? FILTERED_MODELS : LISTED_MODELS);
-      const omitted = models.length - shown.length;
-      const shared = sharedEfforts(shown);
-      const entries = shown.map((m) => ({
-        id: m.id,
-        name: m.name,
-        ...(shared || !m.efforts.length ? {} : { efforts: m.efforts }),
-      }));
-      // The harness's own login has no id, so its windows sit on the harness
-      // entry: they are what a thread runs on with no `account`. A named
-      // login's own numbers sit on its entry, and are never swapped with it.
-      const own = usage(h.id);
-      return {
-        id: h.id,
-        name: h.name,
-        available: !reason,
-        ...(own ? { usage: own } : {}),
-        // The logins start_session and fan_out may name; the harness's own sign-in has no id.
-        ...(h.accounts?.length
-          ? {
-              accounts: h.accounts.map((a) => {
-                const numbers = usage(h.id, a.id);
-                return {
-                  id: a.id,
-                  name: a.name,
-                  auth: a.auth,
-                  // The plan read saw this login signed out: naming it is refused.
-                  ...(accountSignedOut(h.id, a.id, signedOut) ? { signed_out: true } : {}),
-                  ...(numbers ? { usage: numbers } : {}),
-                };
-              }),
-            }
-          : {}),
-        ...(reason
-          ? { reason }
-          : {
-              // The efforts every listed model shares sit here once, not on each.
-              ...(shared ? { efforts: shared } : {}),
-              models: entries,
-              ...(omitted ? { omitted_models: omitted, filter: MODEL_FILTER_HINT } : {}),
-              ...(!entries.length && filter ? { filter: MODEL_MISS_HINT } : {}),
-            }),
-      };
-    }),
-  };
-}
-
-/**
- * What a paired machine's own index finds for `query`, keyed as this app
- * keys its threads; empty for a short query or an engine without the index.
- */
-async function searchThreadsOn(host: string, query: string): Promise<Record<string, string>> {
-  if (query.trim().length < 3) return {};
-  try {
-    const result = await requestOn<{ results?: { session_id?: string; snippet?: string }[] } | null>(
-      host,
-      "_rustcode/threads/search",
-      { query, limit: 30 },
-      30_000,
-    );
-    const hits: Record<string, string> = {};
-    for (const hit of result?.results ?? []) {
-      if (hit.session_id) hits[threadKey(host, hit.session_id)] = hit.snippet ?? "";
-    }
-    return hits;
-  } catch {
-    return {};
-  }
-}
-
-/**
- * `search_sessions`: titles and what was said, from the index of the computer
- * the threads run on. A named machine's threads are all of its threads, as
- * `list_sessions` lists them, each with its project there.
- */
-async function searchSessions(
-  all: RuleThread[],
-  caller: RuleThread,
-  query: string,
-  allProjects = false,
-  machine?: MachineRef,
-): Promise<JsonObject> {
-  const host = machine?.host ?? "";
-  const said = host ? await searchThreadsOn(host, query) : await searchThreads(query);
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const matches = all
-    .filter((t) => (host ? splitThreadKey(t.id).host === host : allProjects || reachesThread(caller, t)))
-    .filter((t) => t.id in said || words.every((w) => t.title.toLowerCase().includes(w)))
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, 30);
-  return {
-    ...(machine ? machineFields(machine) : {}),
-    sessions: matches.map((t) => ({
-      session_id: t.id,
-      title: t.title,
-      status: t.status ?? (t.running ? "running" : "idle"),
-      ...(allProjects ? { project: projectOf(t) } : {}),
-      ...(said[t.id] ? { snippet: said[t.id] } : {}),
-    })),
-  };
-}
-
-/** `list_worktrees`: this project's worktree threads, every project's, or every one a named machine has. */
-function listWorktrees(
-  all: RuleThread[],
-  caller: RuleThread,
-  allProjects = false,
-  machine?: MachineRef,
-): JsonObject {
-  const host = machine?.host ?? "";
-  const reached = (t: RuleThread) =>
-    host ? splitThreadKey(t.id).host === host : allProjects || reachesThread(caller, t);
-  return {
-    ...(machine ? machineFields(machine) : {}),
-    worktrees: all.flatMap((t) =>
-      t.worktree && reached(t)
-        ? [
-            {
-              session_id: t.id,
-              title: t.title,
-              ...(allProjects ? { project: projectOf(t) } : {}),
-              branch: t.worktree.branch,
-              path: t.worktree.path,
-            },
-          ]
-        : [],
-    ),
-  };
-}
-
-/**
- * `list_projects`: every project the user has a thread in or registered,
- * most recently updated first. A registered folder with no thread yet shows
- * with 0, so a project created or cloned before its first thread is there.
- */
-function listProjects(s: AppState): JsonObject {
-  const byPath = new Map<string, { path: string; threads: number; working: boolean; updatedAt: number }>();
-  for (const x of s.sessions) {
-    // A thread whose machine never recorded its folder has no project to count (issue 3425).
-    if (x.workspaceUnknown) continue;
-    const path = projectOf({ folder: x.cwd, worktree: x.worktree });
-    if (!path || isRootFolder(path) || isDataFolder(path)) continue;
-    const entry = byPath.get(path) ?? { path, threads: 0, working: false, updatedAt: 0 };
-    entry.threads += 1;
-    entry.working ||= !!s.threads[x.id]?.running || x.status === "running";
-    entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
-    byPath.set(path, entry);
-  }
-  for (const { path, entry } of registeredProjects()) {
-    if (byPath.has(path)) continue;
-    byPath.set(path, {
-      path,
-      threads: 0,
-      working: false,
-      updatedAt: entry.registeredAt ?? 0,
-    });
-  }
-  const projects = [...byPath.values()]
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_PROJECTS)
-    .map((p) => ({ path: p.path, name: projectLabel(p.path), threads: p.threads, working: p.working }));
-  return { projects };
-}
-
 // ---------------------------------------------------------------- projects
-
-/** A folder as the project book files it, the same rule `projectOf` reads. */
-const projectPath = (path: string) => cleanProjectPath(path);
-
-/** The threads that run in `path`, for a project's row: never a worktree's other repository. */
-function projectThreads(path: string): { threads: number; working: boolean } {
-  const s = useApp.getState();
-  let threads = 0;
-  let working = false;
-  for (const x of s.sessions) {
-    if (projectOf({ folder: x.cwd, worktree: x.worktree }) !== path) continue;
-    threads += 1;
-    working ||= !!s.threads[x.id]?.running || x.status === "running";
-  }
-  return { threads, working };
-}
-
-/** A path as the engine resolved it: what `_rustcode/project/*` answered. */
-function projectAnswer(facts: JsonObject, path: string, extra: JsonObject = {}): JsonObject {
-  const entry = projectEntry(path);
-  return {
-    project: {
-      ...facts,
-      path,
-      name: projectLabel(path),
-      ...projectThreads(path),
-      ...(entry?.harness ? { harness: entry.harness } : {}),
-      ...(entry?.model ? { model: entry.model } : {}),
-      registered: !!entry?.registeredAt,
-      ...extra,
-    },
-  };
-}
-
-/** The engine's project call, answered as a failure the agent can read. */
-async function askProject(
-  method: string,
-  params: JsonObject,
-  timeoutMs: number,
-): Promise<JsonObject | Failure> {
-  try {
-    return await request<JsonObject>(method, params, timeoutMs);
-  } catch (error) {
-    if (error instanceof RpcError) {
-      // -32602 is JSON-RPC's `invalid_params`: the folder is not there.
-      return failure(error.code === -32602 ? "not_found" : "target_unavailable", error.message);
-    }
-    return failure("target_unavailable", `the project could not be read: ${errorText(error)}`);
-  }
-}
-
-/** Why a path may not be read: this thread's project, or another while the setting allows it. */
-function projectRefusal(caller: RuleThread, path: string): Failure | null {
-  if (sameProject(path, reachOf(caller))) return null;
-  if (useApp.getState().readAcrossProjects) return null;
-  return failure(
-    "not_allowed",
-    "that project is outside this thread's; turn on “Let agents read threads in other projects” in Settings › Orchestration",
-  );
-}
-
-/**
- * `read_project`: one folder's git facts and the app's own entry for it —
- * display name, default harness and model, thread count. A read: no approval.
- */
-async function readProject(caller: RuleThread, path: string): Promise<JsonObject> {
-  const asked = projectPath(path);
-  const refused = projectRefusal(caller, asked);
-  if (refused) return failureJson(refused);
-  const facts = await askProject(Method.projectRead, { path: asked }, 15_000);
-  if (isFailure(facts)) return failureJson(facts);
-  return projectAnswer(facts, projectPath(String(facts.path ?? asked)));
-}
-
-/**
- * `read_project` on a paired machine: that folder's git facts, read by the
- * engine there, and how many of its threads this app lists. The user named the
- * machine, so the cross-project setting (this computer's) does not apply.
- */
-async function readProjectOn(machine: MachineRef, path: string): Promise<JsonObject> {
-  const asked = projectPath(path);
-  let facts: JsonObject;
-  try {
-    facts = await requestOn<JsonObject>(machine.host, Method.projectRead, { path: asked }, 15_000);
-  } catch (error) {
-    const code = error instanceof RpcError && error.code === -32602 ? "not_found" : "target_unavailable";
-    return failureJson(failure(code, `${machine.name} could not read ${asked}: ${errorText(error)}`));
-  }
-  const at = projectPath(String(facts.path ?? asked));
-  repositories.set(`${machine.host}\n${at}`, remoteRepository(str(facts.remote)));
-  const threads = useApp
-    .getState()
-    .sessions.filter(
-      (x) =>
-        (x.host ?? LOCAL_HOST) === machine.host &&
-        sameProject(projectOf({ folder: x.cwd, worktree: x.worktree }), at),
-    );
-  return {
-    ...machineFields(machine),
-    project: {
-      ...facts,
-      path: at,
-      name: projectName(at),
-      threads: threads.length,
-      working: threads.some((x) => !!useApp.getState().threads[x.id]?.running || x.status === "running"),
-    },
-  };
-}
-
-/** A folder's parent, on whichever platform wrote it. */
-const parentFolder = (path: string) => path.replace(/[\\/]+$/, "").replace(/[\\/][^\\/]*$/, "");
-
-/**
- * `clone_project` on a paired machine: `git clone` by the engine there. The
- * parent is the call's, else the one folder that machine's projects share;
- * with several it asks for one rather than pick. The clone is remembered as
- * one of that machine's projects, so the next `start_session` finds it by
- * its repository.
- */
-async function cloneProjectOn(
-  machine: MachineRef,
-  caller: RuleThread,
-  call: { url: string; parent?: string; name?: string },
-): Promise<JsonObject> {
-  const parents = [
-    ...new Set(machineProjects(machine.host).map((project) => parentFolder(project.path))),
-  ].filter(Boolean);
-  const parent = call.parent ? projectPath(call.parent) : parents.length === 1 ? parents[0]! : "";
-  if (!parent) {
-    return failureJson(
-      failure(
-        "invalid",
-        parents.length
-          ? `pass parent: the folder on ${machine.name} to clone into, such as ${parents.slice(0, 10).join(", ")}`
-          : `pass parent: the absolute folder on ${machine.name} to clone into`,
-      ),
-    );
-  }
-  const no = await permitted(caller, `project:clone@${machine.id}:${call.url}`, {
-    kind: "project",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: call.name ? `${parent}/${call.name}` : parent,
-    detail: `It would run git clone on ${call.url} in ${parent} on ${machine.name}. A large repository over a slow link can take minutes.`,
-    machine: machine.name,
-  });
-  if (no) return failureJson(no);
-  let facts: JsonObject;
-  try {
-    facts = await requestOn<JsonObject>(
-      machine.host,
-      Method.projectClone,
-      { url: call.url, parent, ...(call.name ? { name: call.name } : {}) },
-      620_000,
-    );
-  } catch (error) {
-    const code = error instanceof RpcError && error.code === -32602 ? "not_found" : "target_unavailable";
-    return failureJson(failure(code, `the clone on ${machine.name} failed: ${errorText(error)}`));
-  }
-  const at = projectPath(String(facts.path ?? parent));
-  const cloned = clonedOn.get(machine.host) ?? [];
-  if (!cloned.includes(at)) clonedOn.set(machine.host, [...cloned, at]);
-  repositories.set(`${machine.host}\n${at}`, remoteRepository(str(facts.remote) ?? call.url));
-  return {
-    ...machineFields(machine),
-    project: { ...facts, path: at, name: projectName(at), threads: 0, created: true },
-  };
-}
-
-/** `create_project`: register an existing folder, or make a new one a repository. */
-async function createProject(
-  caller: RuleThread,
-  call: { path: string; init?: boolean },
-): Promise<JsonObject> {
-  const path = projectPath(call.path);
-  const no = await permitted(caller, `project:${path}`, {
-    kind: "project",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: path,
-    detail: `It would register ${path} as a project${call.init === false ? "" : ", making it a git repository if it is not one"}.`,
-  });
-  if (no) return failureJson(no);
-  const facts = await askProject(Method.projectCreate, { path, init: call.init ?? true }, 60_000);
-  if (isFailure(facts)) return failureJson(facts);
-  const resolved = projectPath(String(facts.path ?? path));
-  registerProject(resolved);
-  return projectAnswer(facts, resolved, { created: true });
-}
-
-/** `clone_project`: `git clone` into a parent folder, through the engine, then register it. */
-async function cloneProject(
-  caller: RuleThread,
-  call: { url: string; parent?: string; name?: string },
-): Promise<JsonObject> {
-  const s = useApp.getState();
-  const parent = projectPath(call.parent || projectOf(caller) || s.projectCwd || s.defaultCwd);
-  if (!parent) {
-    return failureJson(failure("failed", "there is no folder to clone into; pass parent"));
-  }
-  const no = await permitted(caller, `project:clone:${call.url}`, {
-    kind: "project",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: call.name ? `${parent}/${call.name}` : parent,
-    detail: `It would run git clone on ${call.url} in ${parent} and register the result as a project. A large repository over a slow link can take minutes.`,
-  });
-  if (no) return failureJson(no);
-  const facts = await askProject(
-    Method.projectClone,
-    { url: call.url, parent, ...(call.name ? { name: call.name } : {}) },
-    620_000,
-  );
-  if (isFailure(facts)) return failureJson(facts);
-  const resolved = projectPath(String(facts.path ?? parent));
-  registerProject(resolved);
-  return projectAnswer(facts, resolved, { created: true });
-}
-
-/** `update_project`: a display name, and the harness and model new threads there start on. */
-async function updateProject(
-  caller: RuleThread,
-  call: { path: string; name?: string; harness?: string; model?: string },
-): Promise<JsonObject> {
-  const path = projectPath(call.path);
-  const harnesses = useApp.getState().harnesses?.harnesses ?? [];
-  if (call.harness && !harnesses.some((h) => h.id === call.harness)) {
-    return failureJson(
-      failure(
-        "not_found",
-        `no harness ${call.harness}; list_harnesses shows the ids${harnesses.length ? ` (${harnesses.map((h) => h.id).join(", ")})` : ""}`,
-      ),
-    );
-  }
-  // A model without a harness still says what it is: the folder's new threads start on it.
-  const on = call.harness ?? call.model;
-  const no = await permitted(caller, `project:${path}`, {
-    kind: "project",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: path,
-    detail: `It would ${[
-      call.name && `call it “${call.name}”`,
-      on && `start new threads there on ${on}${call.harness && call.model ? ` with ${call.model}` : ""}`,
-    ]
-      .filter(Boolean)
-      .join(" and ")}. The folder itself is not touched.`,
-  });
-  if (no) return failureJson(no);
-  const entry = updateProjectEntry(path, {
-    name: call.name,
-    harness: call.harness,
-    model: call.model,
-  });
-  return projectAnswer({}, path, {
-    ...(entry.name ? { name: entry.name } : {}),
-  });
-}
-
-/** `remove_project`: forget the folder; its files and its threads stay. */
-async function removeProject(caller: RuleThread, call: { path: string }): Promise<JsonObject> {
-  const path = projectPath(call.path);
-  const no = await permitted(caller, `remove-project:${path}`, {
-    kind: "project",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: path,
-    detail: `It would unregister ${path} as a project. The folder and every file in it stay on disk, and its threads stay; only its display name and defaults go.`,
-  });
-  if (no) return failureJson(no);
-  const known = forgetProject(path);
-  return { path, removed: true, known, files_deleted: false };
-}
-
 // ---------------------------------------------------------------- scheduled work
-
-/** The user's IANA time zone, which a cron with none is read in. */
-function userTimeZone(): string | undefined {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** How a schedule reads in the approval card. */
-function scheduleText(schedule: {
-  kind: "cron" | "at";
-  expression?: string;
-  timezone?: string;
-  at?: string;
-}): string {
-  if (schedule.kind === "cron") {
-    return `every cron ${schedule.expression}${schedule.timezone ? ` (${schedule.timezone})` : ""}`;
-  }
-  return `once at ${schedule.at}`;
-}
-
-/** The engine's scheduler call, answered as a failure the agent can read. */
-async function askScheduler(method: string, params: JsonObject, timeoutMs = 30_000): Promise<JsonObject> {
-  try {
-    return await request<JsonObject>(method, params, timeoutMs);
-  } catch (error) {
-    if (error instanceof RpcError) {
-      return failureJson(failure("target_unavailable", error.message));
-    }
-    return failureJson(failure("target_unavailable", `the scheduler did not answer: ${errorText(error)}`));
-  }
-}
-
-/** `schedule_task`: a prompt the daemon runs on its schedule, with no thread open. */
-async function scheduleTask(
-  caller: RuleThread,
-  call: {
-    prompt: string;
-    schedule: { kind: "cron"; expression: string; timezone?: string } | { kind: "at"; at: string };
-    project?: string;
-    name?: string;
-    modelProfile?: string;
-  },
-): Promise<JsonObject> {
-  const workspace = projectPath(call.project || projectOf(caller) || useApp.getState().projectCwd);
-  if (!workspace) {
-    return failureJson(failure("failed", "this thread has no project folder; pass project"));
-  }
-  // A cron is read in the user's own zone unless the call named one: the app knows it, the engine only guesses.
-  const timezone = call.schedule.kind === "cron" ? call.schedule.timezone || userTimeZone() : undefined;
-  const schedule =
-    call.schedule.kind === "cron"
-      ? {
-          kind: "cron" as const,
-          expression: call.schedule.expression,
-          ...(timezone ? { timezone } : {}),
-        }
-      : call.schedule;
-  const title = call.name || call.prompt.trim().split("\n")[0]?.slice(0, 60) || "this task";
-  const no = await permitted(caller, "schedule:new", {
-    kind: "schedule",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: title,
-    detail: `It would add “${title}” to the scheduler: ${scheduleText(schedule)}, running in ${workspace} with no thread open. The daemon must be running for it to fire.`,
-  });
-  if (no) return failureJson(no);
-  return askScheduler(Method.scheduledCreate, {
-    prompt: call.prompt,
-    workspace,
-    schedule,
-    ...(call.name ? { name: call.name } : {}),
-    ...(call.modelProfile ? { modelProfile: call.modelProfile } : {}),
-  });
-}
-
-/** `list_scheduled_tasks`: what the daemon holds, and whether it is running. */
-async function listScheduledTasks(): Promise<JsonObject> {
-  return askScheduler(Method.scheduledList, {}, 20_000);
-}
-
-/**
- * What the list says a task is called and where it runs, so a card names it
- * rather than a `task-1723…` id. The daemon may not answer: the changing call
- * then reads as it did before, still naming the id it was given.
- */
-async function scheduledTaskName(id: string): Promise<string> {
-  const listed = await askScheduler(Method.scheduledList, {}, 20_000);
-  const tasks = Array.isArray(listed.tasks) ? listed.tasks : [];
-  const task = tasks.find((entry) => obj(entry)?.id === id);
-  const name = str(obj(task)?.name);
-  const workspace = str(obj(task)?.workspace);
-  if (!name && !workspace) return "that scheduled task";
-  return `“${name ?? id}”${workspace ? `, which runs in ${workspace}` : ""}`;
-}
-
-/** `delete_scheduled_task`: the task leaves the scheduler at once. */
-async function deleteScheduledTask(caller: RuleThread, id: string): Promise<JsonObject> {
-  const task = await scheduledTaskName(id);
-  const no = await permitted(caller, `schedule:delete:${id}`, {
-    kind: "schedule",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: id,
-    detail: `It would delete ${task}. It stops at once, and its run history goes with it.`,
-  });
-  if (no) return failureJson(no);
-  return askScheduler(Method.scheduledDelete, { id });
-}
-
-/** `run_scheduled_task_now`: one run now, with the schedule left as it is. */
-async function runScheduledTaskNow(caller: RuleThread, id: string): Promise<JsonObject> {
-  const task = await scheduledTaskName(id);
-  const no = await permitted(caller, `schedule:run:${id}`, {
-    kind: "schedule",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: id,
-    detail: `It would run ${task} now, and keep its schedule. Its prompt runs with no thread open.`,
-  });
-  if (no) return failureJson(no);
-  return askScheduler(Method.scheduledRun, { id });
-}
-
-/** Why a pull request read failed, in the shape the agent reads: `{ error: { code, message } }`. */
-function pullFailure(error: { code: string; message: string }): Failure {
-  return failure(
-    error.code === "failed" ? "failed" : "target_unavailable",
-    `${pullErrorTitle(error.code)}: ${error.message}`,
-  );
-}
-
-/** `list_pull_requests`: the caller's project's pull requests, through the panel's own call. */
-/**
- * `list_pull_requests`: this project's, read by `gh` on this computer, or on a
- * named machine in its checkout of this project's repository (found as
- * `start_session` finds it), with that machine's own `gh` login.
- */
-async function listPullRequests(
-  caller: RuleThread,
-  state: PullStateChoice,
-  machine: MachineRef = localMachine(),
-): Promise<JsonObject> {
-  const cwd = machine.host ? await projectOnMachine(machine, caller, undefined) : projectOf(caller);
-  if (isFailure(cwd)) return failureJson(cwd);
-  if (!cwd) return failureJson(failure("failed", "this thread has no project folder"));
-  let result: Json;
-  try {
-    result = await requestOn(machine.host, Method.pulls, { cwd, state, limit: MAX_PULL_REQUESTS }, 60_000);
-  } catch (error) {
-    return failureJson(failure("target_unavailable", `pull requests could not be read: ${errorText(error)}`));
-  }
-  const error = parsePullError(result);
-  const unsupported = noProviderPullList(
-    error,
-    machine.host ? { ...machineFields(machine), project: cwd } : {},
-  );
-  if (unsupported) return unsupported;
-  if (error) return failureJson(pullFailure(error));
-  const pulls = parsePullList(result).pulls;
-  // The answer also seeds the panel's header: a pull opened after the agent's
-  // read draws its title, state and checks before its own detail is read.
-  if (!machine.host) rememberPullSummaries(cwd, pulls);
-  return {
-    ...(machine.host ? { ...machineFields(machine), project: cwd } : {}),
-    pull_requests: pulls.map((p) => ({
-      number: p.number,
-      title: p.title,
-      state: p.state,
-      branch: p.headRef,
-      ...(p.url ? { url: p.url } : {}),
-    })),
-  };
-}
-/** An unsupported remote is an empty list with an explanation, not a failed read. */
-export function noProviderPullList(
-  error: { code: string } | null | undefined,
-  machine: JsonObject,
-): JsonObject | null {
-  return error?.code === "no_provider" ? { ...machine, pull_requests: [], note: NO_PROVIDER_NOTE } : null;
-}
-/** What a read says when the project's remote is not on GitHub: no pull requests exist to read. */
-const NO_PROVIDER_NOTE = "no pull request provider for this remote";
-
-/** A thread's pull request and checks, read through the engine's `gh` call. */
-async function delegatePull(
-  target: RuleThread,
-  host = splitThreadKey(target.id).host,
-): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure; note?: string }> {
-  const retained = [...book().links]
-    .reverse()
-    .find((link) => link.target === target.id && link.cleanup)?.cleanup;
-  if (!target.worktree && retained) return { branch: retained.branch, pull: retained.pull };
-  const cwd = projectOf(target);
-  if (!cwd) return { error: failure("failed", "this thread has no project folder") };
-  const worktree = target.worktree;
-  try {
-    // Ask for the branch the worktree is on now, not the recorded one: a
-    // delegate may have renamed it, and the engine echoes the branch it was
-    // asked for, so naming the recorded one would hide the rename (and its
-    // pull request) from status, merge and cleanup.
-    // A thread on another machine is read by `gh` there, in its own folders.
-    let answer = parsePullState(
-      await requestOn(host, Method.pullState, { cwd: worktree?.path ?? cwd }, 60_000),
-    );
-    // A remote on another forge has no pull requests to read: that is an answer, not a failure.
-    if (answer.error?.code === "no_provider") return { note: NO_PROVIDER_NOTE };
-    // A detached HEAD has no branch to look up, so fall back to the recorded
-    // one rather than reporting no pull request at all.
-    if (answer.error && worktree?.branch) {
-      answer = parsePullState(
-        await requestOn(host, Method.pullState, { cwd, branch: worktree.branch }, 60_000),
-      );
-    }
-    if (answer.error?.code === "no_provider") return { note: NO_PROVIDER_NOTE };
-    if (answer.error) return { error: pullFailure(answer.error) };
-    return { branch: answer.branch, pull: answer.pull };
-  } catch (error) {
-    return {
-      error: failure("target_unavailable", `the pull request could not be read: ${errorText(error)}`),
-    };
-  }
-}
-
-/**
- * The delegates a thread has on `host` ("" is this computer): the targets of
- * its links, newest first, one row each, capped so the gh reads stay well
- * inside the request timeout.
- */
-function delegateTargets(caller: RuleThread, host: string): { targets: RuleThread[]; omitted: number } {
-  const ids = new Set(
-    book()
-      .links.filter((link) => link.orchestrator === caller.id && splitThreadKey(link.target).host === host)
-      .map((l) => l.target),
-  );
-  ids.delete(caller.id);
-  const all = [...ids].reverse().flatMap((id) => ruleThread(useApp.getState(), id) ?? []);
-  return { targets: all.slice(0, MAX_DELEGATES), omitted: Math.max(0, all.length - MAX_DELEGATES) };
-}
-
-/**
- * `thread_status`: where each delegate stands — worktree, branch, pull request
- * and checks — in one call, instead of combining read_session, list_pull_requests
- * and a shell poll of `gh pr checks`. A read: no approval, same project. The
- * delegates are read concurrently, so a dozen do not add up to a timeout.
- */
-async function threadStatus(
-  caller: RuleThread,
-  target: string | undefined,
-  host: string,
-): Promise<JsonObject> {
-  const asked = target ? undefined : delegateTargets(caller, host);
-  const targets = target ? [manageTarget(caller, target, true)] : (asked?.targets ?? []);
-  const entries: RuleThread[] = [];
-  for (const entry of targets) {
-    if (isFailure(entry)) return failureJson(entry);
-    if (entry.id === caller.id) {
-      return failureJson(
-        failure("not_allowed", "a thread reports its own pull request through list_pull_requests"),
-      );
-    }
-    entries.push(entry);
-  }
-  const settled = await Promise.allSettled(
-    entries.map(async (entry) => {
-      // Another machine's branch and pull request are read by `gh` in its own
-      // folders, over its connection, and its recorded activity is asked of
-      // it too: that carries the provider error a failed remote turn left
-      // (issue 3525).
-      const [state, activity] = await Promise.all([
-        delegatePull(entry),
-        entry.running
-          ? activityFrom(entry.id, { order: "newest", limit: 1 }).then((read) => read.answer ?? null)
-          : null,
-      ]);
-      return { entry, state, activity };
-    }),
-  );
-  const delegates: JsonObject[] = [];
-  for (const result of settled) {
-    if (result.status === "rejected") {
-      delegates.push({ error: { code: "failed", message: errorText(result.reason) } });
-      continue;
-    }
-    const { entry, state, activity } = result.value;
-    const recorded = Array.isArray(activity?.items) ? obj(activity.items[0]) : undefined;
-    const recordedAt = typeof recorded?.at === "string" ? Date.parse(recorded.at) : NaN;
-    const transcript = useApp.getState().threads[entry.id];
-    const transcriptAt = activityOf(transcript?.items ?? [], transcript?.children).lastAt;
-    const times = [transcriptAt, Number.isFinite(recordedAt) ? recordedAt : undefined].filter(
-      (time): time is number => time !== undefined,
-    );
-    const lastAt = times.length ? Math.max(...times) : entry.updatedAt;
-    delegates.push({
-      session_id: entry.id,
-      title: entry.title,
-      ...(targetMachine(entry.id) ? { machine: targetMachine(entry.id) } : {}),
-      status: entry.status ?? (entry.running ? "running" : "idle"),
-      ...(entry.running && lastAt !== undefined ? { idle_ms: Math.max(0, Date.now() - lastAt) } : {}),
-      ...(entry.running && activity?.last_provider_error
-        ? { last_provider_error: activity.last_provider_error }
-        : {}),
-      project: projectOf(entry),
-      // The worktree's and the pull request's branch are named only where they differ from `branch`.
-      ...(entry.worktree
-        ? {
-            worktree: {
-              path: entry.worktree.path,
-              ...(entry.worktree.branch !== state.branch ? { branch: entry.worktree.branch } : {}),
-            },
-          }
-        : {}),
-      ...(state.branch ? { branch: state.branch } : {}),
-      pull: state.pull
-        ? {
-            number: state.pull.number,
-            title: state.pull.title,
-            state: state.pull.state,
-            merged: state.pull.merged,
-            draft: state.pull.draft,
-            ...(state.pull.branch !== state.branch ? { branch: state.pull.branch } : {}),
-            head_sha: state.pull.headSha,
-            ci: state.pull.ci,
-            failing: state.pull.failing,
-            pending: state.pull.pending,
-            passed: state.pull.passed,
-            ...(state.pull.url ? { url: state.pull.url } : {}),
-          }
-        : null,
-      ...(state.note ? { pull_note: state.note } : {}),
-      ...(state.error ? { error: { code: state.error.code, message: state.error.message } } : {}),
-    });
-  }
-  return {
-    delegates,
-    ...(asked?.omitted ? { omitted_delegates: asked.omitted } : {}),
-    ...(delegates.length === 0 ? { note: "this thread has no delegates; start one with start_session" } : {}),
-  };
-}
-
 // ---------------------------------------------------------------- delegate status (issue 3651)
-
-/** How long a read pull request stands before the next read; the panel and "status" share it. */
-const PULL_READ_TTL_MS = 30_000;
-const pullReads = new Map<string, { at: number; value: StatusPull }>();
-const pullFlights = new Map<string, Promise<StatusPull>>();
-
-/** The pull request last read for a delegate, however old; undefined before the first read. */
-export function cachedDelegatePull(id: string): StatusPull | undefined {
-  return pullReads.get(id)?.value;
-}
-
-/**
- * A delegate's pull request and checks, the same read `thread_status` makes (`delegatePull`), kept
- * for {@link PULL_READ_TTL_MS} and shared by every caller in flight, so a panel that redraws and a
- * "status" typed meanwhile cost one `gh` read. A delegate outside a worktree has no branch of its
- * own to look up, so it reads as having none without asking.
- */
-export function readDelegatePull(id: string, maxAgeMs = PULL_READ_TTL_MS): Promise<StatusPull> {
-  const retained = [...book().links].reverse().find((link) => link.target === id && link.cleanup)?.cleanup;
-  if (retained && !ruleThread(useApp.getState(), id)?.worktree)
-    return Promise.resolve({ pull: retained.pull ?? null });
-  const hit = pullReads.get(id);
-  if (hit && Date.now() - hit.at < maxAgeMs) return Promise.resolve(hit.value);
-  const flying = pullFlights.get(id);
-  if (flying) return flying;
-  const entry = ruleThread(useApp.getState(), id);
-  if (!entry?.worktree) {
-    const retained = [...book().links].reverse().find((link) => link.target === id && link.cleanup)?.cleanup;
-    return Promise.resolve({ pull: retained?.pull ?? null });
-  }
-  const read = delegatePull(entry)
-    .then((state): StatusPull => {
-      const value: StatusPull = state.error
-        ? { pull: null, note: state.error.message }
-        : { pull: state.pull ?? null, ...(state.note ? { note: state.note } : {}) };
-      pullReads.set(id, { at: Date.now(), value });
-      return value;
-    })
-    .finally(() => pullFlights.delete(id));
-  pullFlights.set(id, read);
-  return read;
-}
-
-/** The delegates a thread has, newest first and one per thread, for the status panel and reply. */
-export function delegateStatusInputs(s: AppState, orchestrator: string, max = Infinity): StatusInput[] {
-  const seen = new Set<string>();
-  const out: StatusInput[] = [];
-  const links = s.links.links;
-  for (let i = links.length - 1; i >= 0 && out.length < max; i--) {
-    const link = links[i]!;
-    if (link.orchestrator !== orchestrator || link.target === orchestrator || seen.has(link.target)) continue;
-    seen.add(link.target);
-    const thread = s.threads[link.target];
-    const session = sessionById(s, link.target);
-    const activity = activityOf(thread?.items ?? []);
-    out.push({
-      id: link.target,
-      title: session?.title || link.targetTitle,
-      state: LINK_AGENT_STATE[stateOf(s, link)],
-      lastAt: activity.lastAt ?? session?.updatedAt,
-      lastTool: activity.lastTool,
-      harness: link.harness ?? thread?.harness?.id ?? session?.harness,
-      account: thread?.harness?.account ?? session?.account,
-      model:
-        (thread?.configOptions && selectOption(thread.configOptions, "model")?.current) || session?.model,
-      branch: thread?.worktree?.branch ?? session?.worktree?.branch,
-      cleaned: !!link.cleanup,
-      pull: link.cleanup ? { pull: link.cleanup.pull ?? null } : cachedDelegatePull(link.target),
-    });
-  }
-  return out;
-}
-
-/**
- * A bare "status" in a thread that has delegates is answered here, from what the app already
- * knows: the user's message and a local reply row go into the transcript, and no model turn runs
- * (each one resent the whole context and cost as much as any other). The pull requests are read
- * after the row is drawn and fill in as they arrive. False for a thread with no delegates, where
- * the model answers as it always did.
- */
-export function answerStatusLocally(threadId: string, text: string): boolean {
-  if (!isStatusQuery(text)) return false;
-  const s = useApp.getState();
-  if (!s.threads[threadId]) return false;
-  const inputs = delegateStatusInputs(s, threadId);
-  if (!inputs.length) return false;
-  const now = Date.now();
-  const rows = statusRows(inputs, now);
-  const statusId = localId("status");
-  updateThread(threadId, (t) => ({
-    ...t,
-    items: [
-      ...t.items,
-      { kind: "user", id: localId("user"), text: text.trim(), at: now },
-      { kind: "status", id: statusId, at: now, rows },
-    ],
-  }));
-  for (const row of rows) {
-    if (row.pull && Date.now() - now < PULL_READ_TTL_MS) continue;
-    void readDelegatePull(row.id).then((pull) =>
-      updateThread(threadId, (t) => ({
-        ...t,
-        items: t.items.map((item) =>
-          item.kind === "status" && item.id === statusId
-            ? { ...item, rows: item.rows.map((r) => (r.id === row.id ? { ...r, pull } : r)) }
-            : item,
-        ),
-      })),
-    );
-  }
-  return true;
-}
-
-/**
- * `merge_when_green`: waits for a delegate's checks and squash-merges, with the
- * semantics of scripts/pr-merge.sh (advisory jobs ignored, two quiet rounds,
- * a failing check stops it). The engine waits; the app asks the user first.
- */
-async function mergeWhenGreen(
-  caller: RuleThread,
-  call: Extract<ReturnType<typeof parseCall>, { tool: "merge_when_green" }>,
-): Promise<JsonObject> {
-  const tracked = call.callId ? trackCall(call.callId, caller.id) : undefined;
-  try {
-    return await mergeTracked(caller, call, tracked);
-  } finally {
-    if (call.callId && droppable.get(call.callId) === tracked) droppable.delete(call.callId);
-  }
-}
-
-async function mergeTracked(
-  caller: RuleThread,
-  call: Extract<ReturnType<typeof parseCall>, { tool: "merge_when_green" }>,
-  tracked: Droppable | undefined,
-): Promise<JsonObject> {
-  const target = call.number ? caller : manageTarget(caller, call.target);
-  if (isFailure(target)) return failureJson(target);
-  const state = await delegatePull(target);
-  if (tracked?.dropped) return failureJson(droppedFailure());
-  if (state.error) return failureJson(state.error);
-  if (state.note) return failureJson(failure("not_found", state.note));
-  const pull = state.pull;
-  if (!pull) {
-    return failureJson(
-      failure("not_found", `“${target.title}” has no pull request on ${state.branch ?? "its branch"} yet`),
-    );
-  }
-  if (call.number && pull.number !== call.number)
-    return failureJson(failure("not_allowed", "the PR number must match this thread’s current branch"));
-  if (pull.merged) {
-    return {
-      session_id: target.id,
-      number: pull.number,
-      merged: true,
-      state: "merged",
-      ...(pull.url ? { url: pull.url } : {}),
-    };
-  }
-  const no = await permitted(
-    caller,
-    `merge:${target.id}:${pull.number}`,
-    {
-      kind: "merge",
-      caller: caller.id,
-      callerTitle: caller.title,
-      target: target.title,
-      detail: `It would wait for pull request #${pull.number}'s checks and squash-merge it once every one passes, then delete its branch. A failing check stops it and reports the names.`,
-    },
-    tracked,
-  );
-  if (no) return failureJson(no);
-  // Nothing merges for a call that was dropped while it waited for the approval.
-  if (tracked?.dropped) return failureJson(droppedFailure());
-  const finishMerge = async (): Promise<JsonObject> => {
-    // The engine's merge loop runs under the call's id, so a drop ends it before it merges.
-    const mergeId = call.number ? undefined : call.callId;
-    const stopMerge = () => {
-      if (mergeId) void request(Method.pullMergeCancel, { mergeId }, 10_000).catch(() => {});
-    };
-    if (tracked) tracked.onDrop.add(stopMerge);
-    let result: Json;
-    try {
-      result = await request(
-        Method.pullMerge,
-        {
-          cwd: projectOf(target),
-          number: pull.number,
-          ...(state.branch ? { branch: state.branch } : {}),
-          timeoutMs: call.timeoutMs,
-          ...(mergeId ? { mergeId } : {}),
-        },
-        call.timeoutMs + 120_000,
-      );
-    } catch (error) {
-      // The app gives up on the answer, so the loop must not go on to merge unseen.
-      stopMerge();
-      return failureJson(failure("failed", `the merge did not answer: ${errorText(error)}`));
-    } finally {
-      tracked?.onDrop.delete(stopMerge);
-    }
-    const error = parsePullError(result);
-    if (error) return failureJson(pullFailure(error));
-    const outcome = parseMergeOutcome(result);
-    if (!outcome) return failureJson(failure("failed", "the engine answered without a merge result"));
-    if (outcome.merged) {
-      // The branch's story is part of the link's: the chip's list says it merged.
-      setBook((b) => noteLinkEvent(b, caller.id, target.id, "merged"));
-    }
-    return {
-      session_id: target.id,
-      number: outcome.number,
-      state: outcome.state,
-      merged: outcome.merged,
-      ...(outcome.url ? { url: outcome.url } : {}),
-      ...(outcome.failing.length ? { failing: outcome.failing } : {}),
-      waited_secs: outcome.waitedSecs,
-      detail: outcome.message,
-    };
-  };
-  if (call.number) {
-    void finishMerge().then((result) => deliver(caller.id, mergeResultNotice(pull.number, result), "", ""));
-    return {
-      number: pull.number,
-      state: "watching",
-      detail: "Merge approved and handed to RustCode. End the turn; the result will wake this thread.",
-    };
-  }
-  return finishMerge();
-}
-
-/** Keep the full result for the agent beneath the persistent, human-readable notice line. */
-export function mergeResultNotice(number: number, result: JsonObject): string {
-  const summary =
-    str(result.detail) || str(obj(result.error)?.message) || str(result.state) || "Merge failed";
-  return withPullMark(`Pull request #${number}: ${summary}\n\n${JSON.stringify(result)}`);
-}
-
-/**
- * `cleanup_worktree`: removes a merged delegate's worktree and branch, then
- * settles it, after the engine confirms nothing unique is lost (git cherry,
- * allowing a squash merge's content). A branch the delegate renamed after this
- * read is accepted by the engine when that branch's pull request merged. Refuses
- * a dirty worktree or one still running. The user approves it.
- */
-async function cleanupWorktree(
-  caller: RuleThread,
-  call: Extract<ReturnType<typeof parseCall>, { tool: "cleanup_worktree" }>,
-): Promise<JsonObject> {
-  const target = manageTarget(caller, call.target);
-  if (isFailure(target)) return failureJson(target);
-  if (target.id === caller.id) {
-    return failureJson(failure("not_allowed", "a thread cannot clean up the checkout it runs in"));
-  }
-  if (!target.worktree) {
-    return failureJson(failure("not_allowed", `“${target.title}” does not run in a worktree`));
-  }
-  if (target.running) {
-    return failureJson(failure("conflict", `“${target.title}” is working; wait for its turn to finish`));
-  }
-  // A pull request read that fails leaves `merged` false, so the engine falls
-  // back to the worktree's own `git cherry` check, which is the stricter one.
-  const state = await delegatePull(target);
-  const merged = state.pull?.merged ?? false;
-  const branch = target.worktree.branch;
-  const no = await permitted(caller, `cleanup:${target.id}`, {
-    kind: "cleanup",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    detail: `It would remove the worktree at ${target.worktree.path} and delete the branch ${branch}${merged ? " (its pull request merged)" : ""}, then ${call.settle ? "settle the thread" : "leave the thread as it is"}. It refuses when anything there would be lost.`,
-  });
-  if (no) return failureJson(no);
-  let result: Json;
-  try {
-    result = await request(
-      V2Method.worktreeCleanup,
-      {
-        path: target.worktree.path,
-        branch,
-        headSha: state.pull?.headSha ?? "",
-        merged,
-      },
-      120_000,
-    );
-  } catch (error) {
-    if (error instanceof RpcError) {
-      const reason = cleanupRefusal(error.data);
-      if (reason) {
-        // "unknown" is not a refusal to fix but a git that could not answer.
-        const code = reason === "unknown" ? "target_unavailable" : "conflict";
-        // The engine's detail (which commits or files, which branch) is in
-        // `error.data.message`; `error.message` alone is "Invalid params".
-        return failureJson(failure(code, `${reason}: ${errorText(error)}`));
-      }
-    }
-    return failureJson(failure("failed", `the worktree could not be cleaned up: ${errorText(error)}`));
-  }
-  setBook((b) =>
-    retainDelegateCleanup(b, target.id, {
-      at: Date.now(),
-      branch: state.branch ?? branch,
-      ...(state.pull ? { pull: state.pull } : {}),
-    }),
-  );
-  const cleanup = obj(result)?.cleanup;
-  // The worktree is gone and the engine moved the thread back to the
-  // repository; the store must not keep offering the old folder.
-  const repo = projectOf(target);
-  useApp.setState((s) => ({
-    sessions: s.sessions.map((x) => (x.id === target.id ? { ...x, worktree: undefined, cwd: repo } : x)),
-  }));
-  updateThread(target.id, (t) => ({ ...t, worktree: undefined, cwd: repo }));
-  const answer: JsonObject = {
-    session_id: target.id,
-    removed: bool(obj(cleanup)?.removed) ?? true,
-    branch: str(obj(cleanup)?.branch) ?? branch,
-    branch_removed: bool(obj(cleanup)?.branch_removed) ?? false,
-  };
-  // A branch the delegate renamed: the engine removes the recorded one too
-  // when it holds nothing unique, and says so.
-  const recorded = str(obj(cleanup)?.recorded_branch);
-  if (recorded) {
-    answer.recorded_branch = recorded;
-    answer.recorded_branch_removed = bool(obj(cleanup)?.recorded_branch_removed) ?? false;
-  }
-  setBook((b) => noteLinkEvent(b, caller.id, target.id, "cleaned"));
-  if (call.settle) {
-    setBook((b) => retireCleanedLinks(b, target.id));
-    await setThreadStatus(target.id, "done");
-    answer.settled = true;
-  }
-  return answer;
-}
-
-/**
- * `worktree_status`: where the worktree threads stand — the branch each one is
- * on, its distance from the ref it tracks, how many files are uncommitted, its
- * last commit, and the pull request its branch heads. The git reads are one
- * engine call; the `gh` reads are bounded like `thread_status`'s. A read: no
- * approval.
- */
-/** The worktree threads this computer runs, and so can read git for. */
-function localWorktrees(): RuleThread[] {
-  return allThreads().filter((t) => t.worktree && !isRemoteThread(t.id));
-}
-
-async function worktreeStatus(
-  caller: RuleThread,
-  call: Extract<ReturnType<typeof parseCall>, { tool: "worktree_status" }>,
-  machine: MachineRef = localMachine(),
-): Promise<JsonObject> {
-  const host = machine.host;
-  const where = useApp.getState().readAcrossProjects;
-  if (call.allProjects && !where && !host) return reachRefused();
-  const entries: RuleThread[] = [];
-  // A named machine's worktrees are read by the engine there, every one it has:
-  // its folders are in no project of this computer's.
-  const all = host
-    ? allThreads().filter((t) => t.worktree && splitThreadKey(t.id).host === host)
-    : localWorktrees();
-  if (call.target) {
-    const target = manageTarget(caller, call.target, !!host);
-    if (isFailure(target)) return failureJson(target);
-    if (!target.worktree) {
-      return { worktrees: [], note: `“${target.title}” does not run in a worktree` };
-    }
-    entries.push(target);
-  } else {
-    const rows = all.filter((t) => host || call.allProjects || reachesThread(caller, t));
-    entries.push(...rows.slice(0, MAX_WORKTREES));
-  }
-  const omitted = call.target ? 0 : Math.max(0, all.length - entries.length);
-  if (!entries.length) {
-    return {
-      worktrees: [],
-      note: "no worktree threads here; start one with start_session and worktree",
-    };
-  }
-  // One engine call reads every worktree's branch, distance and changed files:
-  // a git process per path, not a `git` command from the agent.
-  const paths = entries.flatMap((t) => (t.worktree ? [t.worktree.path] : []));
-  let states: WorktreeState[] = [];
-  let stateError: string | undefined;
-  try {
-    states = parseWorktreeStates(await requestOn(host, V2Method.worktreeState, { paths }, 60_000));
-  } catch (error) {
-    stateError = errorText(error);
-  }
-  // A pull request is one `gh` read, run together and capped like `thread_status`.
-  const asking = entries.slice(0, MAX_WORKTREE_PULLS);
-  const pulls = await Promise.allSettled(asking.map((entry) => delegatePull(entry, host)));
-  const worktrees = entries.map((entry, index) => {
-    const state = states.find((row) => row.path === entry.worktree?.path);
-    const read = index < pulls.length ? pulls[index] : undefined;
-    const pull = read?.status === "fulfilled" ? read.value : undefined;
-    return {
-      session_id: entry.id,
-      title: entry.title,
-      ...(call.allProjects || host ? { project: projectOf(entry) } : {}),
-      status: entry.status ?? (entry.running ? "running" : "idle"),
-      branch: state?.branch ?? entry.worktree?.branch ?? "",
-      path: state?.path ?? entry.worktree?.path ?? "",
-      ...(state ? { exists: state.exists } : {}),
-      // The ref is named wherever a count is given, so `ahead: 3` is never
-      // ambiguous about what it is ahead of.
-      ...(state?.against ? { against: state.against } : {}),
-      ...(state?.ahead === undefined ? {} : { ahead: state.ahead }),
-      ...(state?.behind === undefined ? {} : { behind: state.behind }),
-      ...(state?.dirty === undefined ? {} : { dirty: state.dirty }),
-      ...(state?.lastCommit ? { last_commit: state.lastCommit } : {}),
-      ...(state?.lastCommitSubject ? { last_commit_subject: state.lastCommitSubject } : {}),
-      ...(state?.error ? { error: { code: "unavailable", message: state.error } } : {}),
-      ...(pull?.error
-        ? { pull_error: { code: pull.error.code, message: pull.error.message } }
-        : pull
-          ? {
-              ...(pull.note ? { pull_note: pull.note } : {}),
-              pull: pull.pull
-                ? {
-                    number: pull.pull.number,
-                    title: pull.pull.title,
-                    state: pull.pull.state,
-                    merged: pull.pull.merged,
-                    draft: pull.pull.draft,
-                    ...(pull.pull.branch !== (state?.branch ?? entry.worktree?.branch)
-                      ? { branch: pull.pull.branch }
-                      : {}),
-                    ...(pull.pull.url ? { url: pull.pull.url } : {}),
-                  }
-                : null,
-            }
-          : {}),
-    };
-  });
-  const pullsOmitted = entries.length - asking.length;
-  return {
-    worktrees,
-    ...(omitted ? { omitted_worktrees: omitted } : {}),
-    ...(pullsOmitted ? { pulls_omitted: pullsOmitted } : {}),
-    ...(stateError ? { note: `each worktree's git state could not be read: ${stateError}` } : {}),
-  };
-}
-
-/** The failure code each handoff refusal answers with: the reason itself says what to fix. */
-const HANDOFF_CODES: Record<HandoffRefusal, string> = {
-  no_worktree: "not_allowed",
-  has_worktree: "not_allowed",
-  not_checkout: "not_allowed",
-  dirty: "conflict",
-  dirty_checkout: "conflict",
-  unpushed_checkout: "conflict",
-  ignored_files: "conflict",
-  detached_checkout: "conflict",
-  not_git: "target_unavailable",
-  no_folder: "target_unavailable",
-  unknown: "target_unavailable",
-  failed: "failed",
-};
-
-/**
- * `handoff_worktree`: move a delegate's work into the user's checkout (so they
- * continue locally), or a thread out of the checkout into a worktree of its
- * own. The engine refuses rather than force — a dirty worktree or checkout, a
- * checkout on another branch with commits no remote has, a running thread —
- * and nothing is stashed, rebased, reset or deleted. The user approves it.
- */
-async function handoffWorktree(
-  caller: RuleThread,
-  call: Extract<ReturnType<typeof parseCall>, { tool: "handoff_worktree" }>,
-): Promise<JsonObject> {
-  const target = manageTarget(caller, call.target);
-  if (isFailure(target)) return failureJson(target);
-  const toCheckout = call.to === "checkout";
-  if (toCheckout && !target.worktree) {
-    return failureJson(
-      failure(
-        "not_allowed",
-        `“${target.title}” does not run in a worktree, so there is no branch to hand over`,
-      ),
-    );
-  }
-  if (!toCheckout && target.worktree) {
-    return failureJson(failure("not_allowed", `“${target.title}” already runs in a worktree`));
-  }
-  // A thread mid-turn would keep writing in a folder it is losing.
-  if (target.running) {
-    return failureJson(failure("conflict", `“${target.title}” is working; wait for its turn to finish`));
-  }
-  const checkout = projectOf(target);
-  const worktree = target.worktree;
-  const no = await permitted(caller, `handoff:${target.id}:${call.to}`, {
-    kind: "handoff",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    detail: toCheckout
-      ? `It would remove the worktree at ${worktree?.path}, switch your checkout ${checkout} to ${worktree?.branch}, and move “${target.title}” there so you can continue locally. It refuses when your checkout has uncommitted changes or holds commits no remote has, or the worktree has uncommitted or ignored files. Nothing is stashed, rebased or reset, and the branch keeps every commit.`
-      : `It would create a worktree on a new branch from your checkout's HEAD and move “${target.title}” into it, leaving your checkout untouched. It refuses when your checkout has uncommitted changes.`,
-  });
-  if (no) return failureJson(no);
-  let result: Json;
-  try {
-    result = await request(
-      V2Method.worktreeHandoff,
-      { sessionId: target.id, to: call.to, title: target.title },
-      120_000,
-    );
-  } catch (error) {
-    if (error instanceof RpcError) {
-      const reason = handoffRefusal(error.data);
-      if (reason) {
-        // The reason names what to fix, and the engine's detail (which files,
-        // which commits, which branch) follows it; `error.message` alone is
-        // "Invalid params".
-        return failureJson(failure(HANDOFF_CODES[reason], `${reason}: ${errorText(error)}`));
-      }
-    }
-    return failureJson(failure("failed", `the handoff did not happen: ${errorText(error)}`));
-  }
-  const moved = parseHandoff(result);
-  if (!moved?.moved) {
-    return failureJson(failure("failed", "the engine answered without a handoff"));
-  }
-  // The thread's folder follows the move; the store must not keep the old one.
-  if (moved.to === "checkout") {
-    const repo = moved.path ?? checkout;
-    useApp.setState((s) => ({
-      sessions: s.sessions.map((x) => (x.id === target.id ? { ...x, worktree: undefined, cwd: repo } : x)),
-    }));
-    updateThread(target.id, (t) => ({ ...t, worktree: undefined, cwd: repo }));
-  } else {
-    const path = moved.path ?? target.folder;
-    const at = { path, branch: moved.branch ?? "", repo: moved.repo ?? checkout };
-    useApp.setState((s) => ({
-      sessions: s.sessions.map((x) => (x.id === target.id ? { ...x, worktree: at, cwd: path } : x)),
-    }));
-    updateThread(target.id, (t) => ({ ...t, worktree: at, cwd: path }));
-  }
-  setBook((b) => noteLinkEvent(b, caller.id, target.id, "handed_off"));
-  return {
-    session_id: target.id,
-    to: moved.to,
-    moved: true,
-    ...(moved.worktreeRemoved === undefined ? {} : { worktree_removed: moved.worktreeRemoved }),
-    ...(moved.switched === undefined ? {} : { switched: moved.switched }),
-    ...(moved.branch ? { branch: moved.branch } : {}),
-    ...(moved.path ? { path: moved.path } : {}),
-    ...(moved.detail ? { detail: moved.detail } : {}),
-  };
-}
-
 // ---------------------------------------------------------------- managing threads
-
-type UpdateCall = Extract<ReturnType<typeof parseCall>, { tool: "update_session" }>;
-type ConfigureCall = Extract<ReturnType<typeof parseCall>, { tool: "configure_session" }>;
-
-const STATUS_OF_CHOICE = { active: "idle", review: "review", settled: "done" } as const;
-
-/** The thread a management tool acts on: the caller's own when none is named. */
-/**
- * The thread a management call acts on. A thread on another machine is only
- * reachable when the call named that machine (`machine`): the app refuses to
- * act there by a bare guess, and the tools that cannot work across machines
- * say where the thread runs instead (`targetMachine`).
- */
-function manageTarget(caller: RuleThread, id: string | undefined, machine = false): RuleThread | Failure {
-  const target = id ? ruleThread(useApp.getState(), id) : caller;
-  if (!target) return failure("not_found", "no thread has that id; use list_sessions");
-  if (isRemoteThread(target.id) && !machine) {
-    return failure(
-      "not_allowed",
-      `“${target.title}” runs on ${targetMachine(target.id) ?? "another computer"}: do that there`,
-    );
-  }
-  if (isRemoteThread(target.id)) return target;
-  return checkManage(caller, target) ?? target;
-}
-
-/** The machine a thread key names, as people say it; undefined for this computer. */
-function targetMachine(id: string): string | undefined {
-  const { host } = splitThreadKey(id);
-  return host ? useApp.getState().machineNames[host] : undefined;
-}
-
-/** The changes `update_session` and `organize_threads` share, as one list. */
-interface ManagedChange {
-  title?: string;
-  pinned?: boolean;
-  unread?: boolean;
-}
-
-/** Whether a thread is the list's unread one: it finished something the user has not seen. */
-const isUnread = (id: string) => {
-  const s = useApp.getState();
-  return id in s.finished || id in s.failed;
-};
-
-/**
- * Applies a thread's title, pin and unread flag with the store calls the app's own
- * controls use, and counts the ones that did something: a value the thread already
- * has is not a change, and `unread` is a two-way flag (`true` marks it unread,
- * `false` reads it, as opening the thread does).
- */
-async function applyManagedChange(
-  target: RuleThread,
-  change: ManagedChange,
-): Promise<{ applied: number; renameFailed: boolean }> {
-  let applied = 0;
-  const live = () => ruleThread(useApp.getState(), target.id) ?? target;
-  if (change.title !== undefined && change.title !== live().title) {
-    if (!(await renameThread(target.id, change.title))) return { applied, renameFailed: true };
-    applied += 1;
-  }
-  if (change.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== change.pinned) {
-    togglePin(target.id);
-    applied += 1;
-  }
-  if (change.unread !== undefined && isUnread(target.id) !== change.unread) {
-    if (change.unread) markUnread(target.id);
-    else clearFinished(target.id);
-    applied += 1;
-  }
-  return { applied, renameFailed: false };
-}
-
-async function updateSession(caller: RuleThread, call: UpdateCall, machine = false): Promise<JsonObject> {
-  const target = manageTarget(caller, call.target, machine);
-  if (isFailure(target)) return failureJson(target);
-  // A thread's name lives on the computer that owns it (`renameThread`).
-  if (call.title && isRemoteThread(target.id)) {
-    return failureJson(
-      failure(
-        "not_allowed",
-        `a thread on ${targetMachine(target.id) ?? "another computer"} is renamed there`,
-      ),
-    );
-  }
-  if (target.id !== caller.id) {
-    const changes = [
-      call.title && `rename it to “${call.title}”`,
-      call.pinned !== undefined && (call.pinned ? "pin it" : "unpin it"),
-      call.unread && "mark it unread",
-      call.status && `set its status to ${call.status}`,
-      call.snoozedUntil ? "snooze it" : call.snoozedUntil === null && "bring it back from snooze",
-    ].filter(Boolean);
-    const no = await permitted(caller, `organize:${target.id}`, {
-      kind: "organize",
-      caller: caller.id,
-      callerTitle: caller.title,
-      target: target.title,
-      detail: `It would ${changes.join(", ")}.`,
-      machine: targetMachine(target.id),
-    });
-    if (no) return failureJson(no);
-  }
-  // An agent naming its own thread leaves a name the user chose alone (issue 3599); renaming
-  // another thread is the user's own approval above.
-  const titleStatus = call.title && target.id === caller.id ? await userTitled(target.id) : false;
-  const keepTitle = titleStatus !== false;
-  const applied = await applyManagedChange(target, {
-    title: keepTitle ? undefined : call.title,
-    pinned: call.pinned,
-    unread: call.unread,
-  });
-  if (applied.renameFailed) return failureJson(failure("failed", "the thread could not be renamed"));
-  if (call.status) await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
-  if (call.snoozedUntil !== undefined) await setSnoozed(target.id, call.snoozedUntil);
-  const after = ruleThread(useApp.getState(), target.id);
-  const until = useApp.getState().snoozed[target.id];
-  return {
-    session_id: target.id,
-    title: after?.title ?? target.title,
-    pinned: useApp.getState().pinned.includes(target.id),
-    // The status this call set, not the live one: a thread settled in the middle of its turn still
-    // runs, and answering "running" read as if the settle had been refused (issue 3529). It is
-    // settled now and leaves the active list when its turn ends; `running` says it still works.
-    status: call.status ? STATUS_OF_CHOICE[call.status] : (after?.status ?? "idle"),
-    running: !!useApp.getState().threads[target.id]?.running,
-    snoozed_until: until ? new Date(until).toISOString() : null,
-    ...(keepTitle && {
-      title_kept:
-        titleStatus === null
-          ? "Could not check whether the user named this thread; its title stays as it is."
-          : "The user named this thread, so its title stays as it is.",
-    }),
-  };
-}
-
-/** Null means the shell could not determine whether the user named the thread. */
-async function userTitled(id: string): Promise<boolean | null> {
-  if (!hasShell()) return null;
-  return shellCall<boolean>("thread_user_titled", { id }).catch(() => null);
-}
-
-type AnswerCall = Extract<ReturnType<typeof parseCall>, { tool: "answer_request" }>;
-type OrganizeCall = Extract<ReturnType<typeof parseCall>, { tool: "organize_threads" }>;
-
-type Scope = ReturnType<typeof optionScope>;
-
-/** What each scope is called when a choice cannot be answered with it. */
-const SCOPE_WORD: Record<Scope, string> = {
-  once: "allow once",
-  hour: "allow for an hour",
-  always: "allow always",
-  decline: "decline",
-  other: "another answer",
-};
-
-/**
- * The option a `choice` answers with: the scope it names, and no other. A request
- * that offers only a standing answer is refused rather than answered once, because
- * the engine records the grant the option carries, not the word the caller used.
- */
-function optionFor(request: PermissionRequest, choice: ApprovalChoice): PermissionOption | null {
-  const wanted = choice === "deny" ? "decline" : choice === "allow_always" ? "always" : "once";
-  return request.options.find((o) => optionScope(o) === wanted) ?? null;
-}
-
-/** Why a choice has no option here, naming the scopes the request does offer. */
-function scopeRefusal(request: PermissionRequest, choice: ApprovalChoice): Failure {
-  const offers = [...new Set(request.options.map(optionScope))].map((scope) => SCOPE_WORD[scope]);
-  return failure("invalid", `that request offers ${offers.join(", ")}, not “${ANSWER_LABEL[choice]}”`);
-}
-
-/** The options a question offers as answers: the allow and plain ones its card lists, not a reject. */
-const questionAnswers = (request: PermissionRequest) =>
-  request.options.filter((o) => !o.kind || o.kind === "allow_once" || o.kind === "allow_always");
-
-/** One approval's answer, in the words the grant card and the notice use. */
-const ANSWER_LABEL: Record<ApprovalChoice, string> = {
-  allow_once: "allow it once",
-  allow_always: "always allow it",
-  deny: "decline it",
-};
-
-/** How one call answers one request; a question answered by words has `text` instead of a pick. */
-interface Answering {
-  option: PermissionOption | null;
-  chosen: PermissionOption | null;
-  text: string | null;
-}
-
-/**
- * The answer one call gives one request as it is now: an approval's option, a
- * question's option by id or its text, or a question's own Decline. Checked again
- * after the user answered the card, since that request may be gone by then.
- */
-function answeringFor(request: PermissionRequest, call: AnswerCall): Answering | Failure {
-  if (request.secret)
-    return failure("not_allowed", "Secret requests can only be answered privately by the user");
-  const question = request.question;
-  if (!question) {
-    if (call.answer) return failure("invalid", "that request is an approval: give choice");
-    const option = optionFor(request, call.choice ?? "allow_once");
-    return option ? { option, chosen: null, text: null } : scopeRefusal(request, call.choice ?? "allow_once");
-  }
-  // A question's card offers the same Decline an approval's does.
-  if (call.choice === "deny") {
-    const option = optionFor(request, "deny");
-    return option ? { option, chosen: null, text: null } : scopeRefusal(request, "deny");
-  }
-  if (call.answer === undefined) {
-    return failure("invalid", "that request is a question: give answer, or choice deny to decline it");
-  }
-  const answers = questionAnswers(request);
-  const chosen = answers.find((o) => o.id === call.answer) ?? null;
-  if (chosen) return { option: chosen, chosen, text: null };
-  if (!answers.length) return failure("invalid", "that question offers no answer this call can give");
-  // The store picks the carrier option, as the card's text field does.
-  return { option: null, chosen: null, text: call.answer };
-}
-
-/**
- * `answer_request`: answer one approval or question a thread waits on. The
- * caller answers a thread below it in its own delegation tree, never itself,
- * and never one in another project; the card the user would have clicked is
- * the one this answers (`state/store.ts` `answerPermission`, `answerQuestionText`).
- */
-async function answerRequest(caller: RuleThread, call: AnswerCall): Promise<JsonObject> {
-  const target = ruleThread(useApp.getState(), call.target);
-  // Another machine's thread is in no project of this computer's: the tree rule below
-  // (a thread this one delegated to) is what lets it be answered from here.
-  const refused = target && isRemoteThread(target.id) ? null : checkManage(caller, target);
-  if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
-  if (target.id === caller.id) {
-    return failureJson(failure("not_allowed", "a thread cannot answer its own request"));
-  }
-  if (!ancestorsOf(book(), target.id).has(caller.id)) {
-    return failureJson(
-      failure(
-        "not_allowed",
-        `“${target.title}” is not a thread this one delegated to; only a thread below this one in its delegation tree can be answered`,
-      ),
-    );
-  }
-  const waiting = () =>
-    useApp.getState().threads[target.id]?.permissions.find((p) => String(p.rpcId) === call.requestId);
-  const request = waiting();
-  if (!request) {
-    return failureJson(
-      failure("not_found", "that request is not waiting any more; list_pending_requests again"),
-    );
-  }
-  const answered = answeringFor(request, call);
-  if (isFailure(answered)) return failureJson(answered);
-  const kind = request.question ? "question" : "approval";
-  const asked = capped(request.question?.text || request.title, 200).text;
-  const choice = call.answer === undefined ? (call.choice ?? "allow_once") : undefined;
-  const detail =
-    choice === "deny"
-      ? `It would decline “${asked}”`
-      : choice
-        ? `It would ${ANSWER_LABEL[choice]} “${asked}”`
-        : `It would answer “${asked}” with: ${call.answer}`;
-  // The grant names the request, not only the thread: "always" for one question or
-  // command must not answer a later, unrelated one without a card of its own.
-  const key = `answer:${target.id}:${kind}:${asked}`;
-  const no = await permitted(caller, key, {
-    kind: "answer",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    detail,
-    machine: targetMachine(target.id),
-  });
-  if (no) return failureJson(no);
-  // The user took their time: the card may have been answered in its own chat meanwhile.
-  const current = waiting();
-  if (!current) {
-    return failureJson(failure("conflict", "that request was answered before this call reached it"));
-  }
-  const now = answeringFor(current, call);
-  if (isFailure(now)) return failureJson(now);
-  if (!current.question) answerPermission(current, now.option);
-  else if (now.text !== null) answerQuestionText(current, now.text);
-  else if (now.chosen) answerQuestionOptions(current, [now.chosen]);
-  else answerPermission(current, now.option);
-  const picked = now.option ?? now.chosen;
-  return {
-    session_id: target.id,
-    request_id: call.requestId,
-    thread: target.title,
-    kind,
-    // A question answered in words or by option id reports that answer; a declined
-    // question and every approval report the choice, and the option it picked.
-    ...(call.answer !== undefined
-      ? { answer: call.answer, ...(picked ? { option: picked.name } : {}) }
-      : { choice: choice ?? "allow_once", option: picked?.name ?? "" }),
-  };
-}
-
-/**
- * `organize_threads`: the batch form of `update_session`. Every listed thread
- * of the caller's project gets the same changes, the user is asked once, and a
- * thread this caller cannot manage is skipped with the reason instead of
- * failing the batch. A change a thread already has is not made and not counted.
- */
-async function organizeThreads(caller: RuleThread, call: OrganizeCall): Promise<JsonObject> {
-  const decided: RuleThread[] = [];
-  const skipped: JsonObject[] = [];
-  for (const id of call.targets) {
-    const target = manageTarget(caller, id);
-    if (isFailure(target)) {
-      skipped.push({ session_id: id, reason: target.message });
-      continue;
-    }
-    decided.push(target);
-  }
-  if (!decided.length) {
-    return failureJson(
-      failure("not_allowed", skipped[0]?.reason?.toString() ?? "no thread of that list can be changed"),
-    );
-  }
-  const state = () => useApp.getState();
-  /** Which of the call's changes this thread does not have yet. */
-  const missing = (target: RuleThread) => ({
-    title: call.title !== undefined && call.title !== (ruleThread(state(), target.id) ?? target).title,
-    pinned: call.pinned !== undefined && state().pinned.includes(target.id) !== call.pinned,
-    unread: call.unread !== undefined && isUnread(target.id) !== call.unread,
-    archived: call.archived !== undefined && (statusOf(state(), target.id) === "done") !== call.archived,
-  });
-  const wanted = decided.filter((target) => Object.values(missing(target)).some(Boolean));
-  // Nothing to do is not a change to ask the user about: say so instead.
-  if (!wanted.length) return { changed: 0, threads: [], skipped };
-  const others = wanted.filter((target) => target.id !== caller.id);
-  if (others.length) {
-    const any = (key: keyof ReturnType<typeof missing>) => wanted.some((target) => missing(target)[key]);
-    const changes = [
-      any("title") && `rename ${others.length === 1 ? "it" : "them"} to “${call.title}”`,
-      any("pinned") && (call.pinned ? "pin" : "unpin"),
-      any("unread") && (call.unread ? "mark unread" : "mark read"),
-      any("archived") && (call.archived ? "settle" : "bring back"),
-    ].filter(Boolean);
-    const names = others.map((target) => `“${target.title}”`).join(", ");
-    const key = `organize:${decided
-      .map((target) => target.id)
-      .sort()
-      .join(",")}`;
-    const no = await permitted(caller, key, {
-      kind: "organize",
-      caller: caller.id,
-      callerTitle: caller.title,
-      target: names,
-      detail: `It would ${changes.join(", ")} ${names}.`,
-    });
-    if (no) return failureJson(no);
-  }
-  // The status of `archived` goes in one write for the batch, as the sidebar's own
-  // multi-select does it; the rest goes one thread at a time, and only where it changes.
-  const settled = wanted.filter((target) => missing(target).archived).map((target) => target.id);
-  if (settled.length) await setThreadsStatus(settled, call.archived ? "done" : "idle");
-  const threads: JsonObject[] = [];
-  for (const target of decided) {
-    const applied = await applyManagedChange(target, {
-      title: call.title,
-      pinned: call.pinned,
-      unread: call.unread,
-    });
-    if (applied.renameFailed) {
-      skipped.push({ session_id: target.id, reason: "the thread could not be renamed" });
-      continue;
-    }
-    if (!applied.applied && !settled.includes(target.id)) continue;
-    threads.push({
-      session_id: target.id,
-      title: ruleThread(state(), target.id)?.title ?? target.title,
-      pinned: state().pinned.includes(target.id),
-      unread: isUnread(target.id),
-      status: statusOf(state(), target.id),
-      archived: statusOf(state(), target.id) === "done",
-    });
-  }
-  return {
-    changed: threads.length,
-    threads,
-    ...(skipped.length ? { skipped } : {}),
-  };
-}
-
-async function interruptSession(caller: RuleThread, id: string): Promise<JsonObject> {
-  const target = manageTarget(caller, id, true);
-  if (isFailure(target)) return failureJson(target);
-  if (target.id === caller.id) return failureJson(failure("not_allowed", "a thread cannot stop itself"));
-  if (!target.running) return { session_id: target.id, interrupted: false, status: target.status ?? "idle" };
-  const no = await permitted(caller, `interrupt:${target.id}`, {
-    kind: "interrupt",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    detail:
-      "Its current turn stops, and the threads it is working through stop with it. The thread stays and can be messaged again.",
-    machine: targetMachine(target.id),
-  });
-  if (no) return failureJson(no);
-  // What goes down with it, counted before the cascade starts.
-  const stopped = activeDescendants(book(), target.id).length;
-  await cancel(target.id);
-  return { session_id: target.id, interrupted: true, stopped };
-}
-
-async function configureSession(
-  caller: RuleThread,
-  call: ConfigureCall,
-  machine = false,
-): Promise<JsonObject> {
-  const target = manageTarget(caller, call.target, machine);
-  if (isFailure(target)) return failureJson(target);
-  await openThread(target.id);
-  const options = () => useApp.getState().threads[target.id]?.configOptions ?? [];
-  const changes: [string, string][] = [];
-  if (call.model) changes.push(["model", call.model]);
-  if (call.effort) changes.push(["effort", call.effort]);
-  for (const [id, value] of changes) {
-    const option = selectOption(options(), id);
-    if (!option) return failureJson(failure("not_allowed", `${target.title} has no ${id} setting`));
-    const known = option.choices.map((c) => c.value);
-    if (!known.includes(value)) {
-      return failureJson(
-        failure("invalid", `no ${id} “${value}”; choose from ${known.slice(0, 25).join(", ")}`),
-      );
-    }
-  }
-  if (changes.length && target.id !== caller.id) {
-    const no = await permitted(caller, `configure:${target.id}`, {
-      kind: "configure",
-      caller: caller.id,
-      callerTitle: caller.title,
-      target: target.title,
-      detail: `Its next turn would run on ${changes.map(([, value]) => value).join(" · ")}.`,
-      machine: targetMachine(target.id),
-    });
-    if (no) return failureJson(no);
-  }
-  // An agent's own configuring is not the user's pick: it leaves the effort memory alone
-  // (state/store.ts `setConfigOption`).
-  for (const [id, value] of changes) await setConfigOption(target.id, id, value, { remember: false });
-  return {
-    session_id: target.id,
-    harness: target.harness ?? "rustcode",
-    access: permissionModeOf(useApp.getState(), target.id),
-    ...ranWith(target.id),
-  };
-}
-
-async function transferSession(caller: RuleThread, id: string, harness: string): Promise<JsonObject> {
-  const target = manageTarget(caller, id);
-  if (isFailure(target)) return failureJson(target);
-  if (target.id === caller.id) return failureJson(failure("not_allowed", "a thread cannot move itself"));
-  if (target.running)
-    return failureJson(failure("busy", `${target.title} is working; stop it or wait for it first`));
-  const listed = useApp.getState().harnesses?.harnesses ?? [];
-  const to = listed.find((h) => h.id === harness);
-  if (!to) {
-    return failureJson(
-      failure("invalid", `no harness “${harness}”; choose from ${listed.map((h) => h.id).join(", ")}`),
-    );
-  }
-  const reason = unavailableReason(to);
-  if (reason) return failureJson(failure("not_allowed", `${to.name} is not available: ${reason}`));
-  if (target.harness === harness) return { session_id: target.id, harness, moved: false };
-  const no = await permitted(caller, `transfer:${target.id}`, {
-    kind: "transfer",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    detail: `It would continue on ${to.name}, which gets the conversation so far with its next message.`,
-  });
-  if (no) return failureJson(no);
-  await openThread(target.id);
-  // The login a new thread on that harness would start on, as the picker moves
-  // a thread: its remembered account, never a harness login the picker no
-  // longer offers. A harness with no named accounts passes `null`, exactly as
-  // before accounts existed.
-  const account = newThreadAccountOn(to, lastAccountFor(harness), useApp.getState().signedOutLogins);
-  if (!(await switchThreadHarness(target.id, harness, account))) {
-    return failureJson(failure("failed", "the thread could not be moved"));
-  }
-  return { session_id: target.id, harness, moved: true, ...ranWith(target.id) };
-}
-
-/** What this project's open threads wait on. Only what they ask: answering stays with the user. */
-function listPendingRequests(caller: RuleThread, machine?: MachineRef): JsonObject {
-  const s = useApp.getState();
-  const rank = machine?.host;
-  const waiting = Object.values(s.threads)
-    .filter((t) => t.permissions.length)
-    .map((thread) => ({ thread, rule: ruleThread(s, thread.id) }))
-    .filter(({ rule }) => {
-      if (!rule) return false;
-      // A named machine is the whole answer; without one, every thread this
-      // thread reaches, wherever it runs.
-      if (machine) return splitThreadKey(rule.id).host === rank;
-      return reachesThread(caller, rule);
-    })
-    .flatMap(({ thread, rule }) => thread.permissions.map((request) => ({ thread, rule, request })))
-    // Oldest first, as docs/orchestrator.md says: the card that has waited longest comes first.
-    .sort((a, b) => (a.request.at ?? 0) - (b.request.at ?? 0));
-  const requests = waiting.map(({ thread, rule, request }) => ({
-    session_id: thread.id,
-    request_id: String(request.rpcId),
-    ...(targetMachine(thread.id) ? { machine: targetMachine(thread.id) } : {}),
-    title: rule?.title ?? "",
-    kind: request.secret ? "secret" : request.question ? "question" : "approval",
-    asks: request.question?.text ?? request.title,
-    // An approval's choices and a question's answers, in the order the card lists them.
-    options: request.options.map((o) => ({ id: o.id, name: o.name })),
-  }));
-  return { requests };
-}
-
-async function read(
-  caller: RuleThread,
-  targetId: string,
-  lastTurns: number,
-  offset: number,
-): Promise<JsonObject> {
-  const target = ruleThread(useApp.getState(), targetId);
-  // Reading another machine's thread is that machine's to allow; the app adds
-  // nothing to the rule, since the user named the machine and approves the read.
-  const refused = checkMessage(
-    caller,
-    target,
-    book(),
-    true,
-    useApp.getState().readAcrossProjects || isRemoteThread(targetId),
-  );
-  if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
-  // Its project only matters to the user when it is not the caller's.
-  const elsewhere = sameProject(projectOf(target), projectOf(caller))
-    ? ""
-    : ` It is in ${projectOf(target)}, another project.`;
-  const no = await permitted(caller, target.id, {
-    kind: "read",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    detail: `Its last ${lastTurns} turn${lastTurns === 1 ? "" : "s"}: your messages and its replies, no tool output.${elsewhere}`,
-    machine: targetMachine(target.id),
-  });
-  if (no) return failureJson(no);
-  const openError = await openThread(target.id);
-  if (openError) return failureJson(failure("target_unavailable", openError));
-  const items = useApp.getState().threads[target.id]?.items ?? [];
-  const turns = turnsOf(items).slice(-lastTurns);
-  // One rendered answer, then a page of it: pages join with nothing lost or repeated.
-  const rendered = renderRead({
-    session_id: target.id,
-    title: target.title,
-    status: target.status ?? "idle",
-    project: projectOf(target),
-    turns: turns.map((t) => ({
-      user: String(t.user ?? ""),
-      assistant: String(t.assistant ?? ""),
-      files_changed: Number(t.files_changed ?? 0),
-    })),
-  });
-  const page = pageOf(rendered, offset);
-  if (isFailure(page)) return failureJson(page);
-  return {
-    session_id: target.id,
-    title: target.title,
-    status: target.status ?? "idle",
-    project: projectOf(target),
-    offset: page.offset,
-    text: page.text,
-    ...(page.nextOffset === null ? { complete: true } : { next_offset: page.nextOffset }),
-  };
-}
-
-/** A thread's turns as `read_session` gives them: the message, the last reply and how many files changed. */
-export function turnsOf(items: TranscriptItem[]): JsonObject[] {
-  const out: JsonObject[] = [];
-  let current: { user: string; assistant: string; start: number } | null = null;
-  const close = (end: number) => {
-    if (!current) return;
-    const files = turnCompletion(items, end)?.files.length ?? 0;
-    out.push({ user: current.user, assistant: current.assistant, files_changed: files });
-  };
-  items.forEach((item, i) => {
-    if (item.kind === "user") {
-      close(i);
-      current = { user: item.text, assistant: "", start: i };
-    } else if (item.kind === "assistant" && current) {
-      current.assistant = item.text;
-    }
-  });
-  close(items.length);
-  return out;
-}
-
-/**
- * The files a message carries: each under the caller's project or worktree,
- * measured by the shell (the web view cannot stat a file). `src-tauri`'s
- * `attached_files` enforces the same roots and the 5 MB ceiling for the paths
- * the pure rule above accepted.
- */
-async function attachmentFiles(
-  caller: RuleThread,
-  paths: readonly string[],
-): Promise<AttachedFile[] | Failure> {
-  if (!paths.length) return [];
-  if (paths.length > MAX_ATTACHMENT_FILES) {
-    return failure("invalid", `a message attaches at most ${MAX_ATTACHMENT_FILES} files`);
-  }
-  const roots = attachmentRoots(caller);
-  for (const path of paths) {
-    const refused = attachmentRefusal(path, roots);
-    if (refused) return refused;
-  }
-  try {
-    return await shellCall<AttachedFile[]>("attached_files", { paths: [...paths], roots });
-  } catch (error) {
-    return failure("invalid", `the files could not be attached: ${errorText(error)}`);
-  }
-}
-
-function message(
-  caller: RuleThread,
-  targetId: string,
-  text: string,
-  attachments: readonly string[] = [],
-  steerNow = false,
-  wait = false,
-): Promise<JsonObject> {
-  return withLinkGate(() => messageNow(caller, targetId, text, attachments, steerNow, wait));
-}
-
-/** Do not message a settled or archived thread. */
-function messageTargetRefusal(state: AppState, targetId: string): Failure | null {
-  if (targetId in state.archived) {
-    return failure("conflict", "that thread is archived; unarchive it before messaging");
-  }
-  const target = ruleThread(state, targetId);
-  if (target && statusOf(state, targetId) === "done") {
-    return failure("conflict", "that thread is settled; set it to idle before messaging");
-  }
-  return null;
-}
-
-async function messageNow(
-  caller: RuleThread,
-  targetId: string,
-  text: string,
-  attachments: readonly string[] = [],
-  steerNow = false,
-  /** `wait: false` is one-way: no link, so the caller never shows Waiting and nothing comes back (issue 3544). */
-  wait = false,
-): Promise<JsonObject> {
-  const state = useApp.getState();
-  const target = ruleThread(state, targetId);
-  // A thread on another machine is not this app's project topic to check: the
-  // user named that machine, and the card below is the gate.
-  const remote = isRemoteThread(targetId);
-  const refused = checkMessage(caller, target, book(), false, false, delegateLimits(), remote, !wait);
-  if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
-  const unavailable = messageTargetRefusal(state, targetId);
-  if (unavailable) return failureJson(unavailable);
-  // The files are checked before the user is asked about a message that could not carry
-  // all of them, so a refusal never costs an approval.
-  const files = await attachmentFiles(caller, attachments);
-  if (isFailure(files)) return failureJson(files);
-  const extras = files.length ? attachedExtras(files) : undefined;
-  const withFiles = files.length
-    ? `${text}\n\n${files.length === 1 ? "1 file attached" : `${files.length} files attached`}: ${files.map((f) => f.name).join(", ")}`
-    : text;
-  const no = await permitted(caller, target.id, {
-    kind: "message",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    detail: steerNow
-      ? `Deliver into the running turn if supported; otherwise queue.\n\n${withFiles}`
-      : withFiles,
-    ...(!sameReach(caller, target) ? { project: projectOf(target) } : {}),
-    machine: targetMachine(target.id),
-  });
-  if (no) return failureJson(no);
-  // The user took their time: look again.
-  const afterPermission = useApp.getState();
-  const current = ruleThread(afterPermission, targetId);
-  const again = checkMessage(caller, current, book(), false, false, delegateLimits(), remote, !wait);
-  if (again) return failureJson(again);
-  const stopped = messageTargetRefusal(afterPermission, targetId);
-  if (stopped) return failureJson(stopped);
-  // A thread whose last turn failed, or whose harness process was stopped for idling, is opened
-  // and prompted like any other: the engine starts its harness again with the prompt, as it does
-  // when the user types there. Only a thread that cannot be opened at all is unavailable.
-  const openError = await openThread(target.id);
-  const afterOpen = useApp.getState();
-  const openedTarget = ruleThread(afterOpen, targetId);
-  const noLongerReachable = checkMessage(
-    caller,
-    openedTarget,
-    book(),
-    false,
-    false,
-    delegateLimits(),
-    remote,
-    !wait,
-  );
-  if (noLongerReachable) return failureJson(noLongerReachable);
-  const noLongerAvailable = messageTargetRefusal(afterOpen, targetId);
-  if (noLongerAvailable) return failureJson(noLongerAvailable);
-  const thread = afterOpen.threads[target.id];
-  if (openError || !thread || thread.openFailed) {
-    return failureJson(failure("target_unavailable", openError ?? "that thread could not be opened"));
-  }
-  const busy = thread.running;
-  const session = afterOpen.sessions.find((x) => x.id === target.id);
-  const harnessName = session?.harness
-    ? afterOpen.harnesses?.harnesses.find((h) => h.id === session.harness)?.name
-    : undefined;
-  const id = wait
-    ? addLink({
-        orchestrator: caller.id,
-        target: target.id,
-        orchestratorTitle: caller.title,
-        targetTitle: target.title,
-        message: text,
-        state: busy ? "queued" : "working",
-        harness: session?.harness,
-        harnessName,
-        model: session?.model,
-      })
-    : undefined;
-  // The sender's id (and the link it waits on) rides under the heading, so the target can tell two
-  // senders with the same title apart and the app links the sender's name (issue 3539).
-  const sent = delivered(text, caller.title, { session: caller.id, link: id });
-  let delivery: "steered" | "queued" | "started";
-  if (
-    steerNow &&
-    busy &&
-    sendDecisionFor(thread, extras).action === "steer" &&
-    (await steer(target.id, sent, extras, caller.id, id))
-  ) {
-    delivery = "steered";
-    if (id) linkSteered(target.id, id, sent);
-  } else {
-    const before = new Set(useApp.getState().threads[target.id]?.queue.map((q) => q.id));
-    deliver(target.id, sent, id, caller.id, extras);
-    delivery = useApp.getState().threads[target.id]?.queue.some((q) => !before.has(q.id))
-      ? "queued"
-      : "started";
-  }
-  return {
-    ...(id ? { link_id: id } : { return_to: "none" }),
-    receipt: delivery,
-    delivered: delivery,
-    session_id: target.id,
-    title: target.title,
-    ...(files.length ? { attachments: files.map((f) => f.path) } : {}),
-  };
-}
-
-function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
-  let id = "";
-  setBook((b) => {
-    const next = nextId(b, link.orchestrator);
-    id = next.id;
-    const at = Date.now();
-    // The first event is what made the link: a thread started on a harness and model, or a message
-    // sent into one, which is the line the chip's tip opens with.
-    const meta = [link.harnessName ?? link.harness, link.model].filter(Boolean).join(" · ");
-    const first = noteEvent({ ...link, id, createdAt: at }, link.started ? "started" : "message", at, meta);
-    // Then the state it is in from this moment: a queued message reads `Queued`, a turn that starts
-    // at once reads `Working`, without waiting for the next transition to write it.
-    const seeded =
-      link.state === "queued" || link.state === "working"
-        ? noteEvent(first, link.state === "queued" ? "queued" : "working", at)
-        : first;
-    return { ...next.book, links: [...next.book.links, seeded] };
-  });
-  return id;
-}
-
-/** After the turn the target runs, never into it: the same queue a typed message uses. */
-export function deliver(
-  target: string,
-  text: string,
-  link: string | undefined,
-  from: string,
-  extras?: ComposeExtras,
-) {
-  const thread = useApp.getState().threads[target];
-  if (thread?.running) {
-    // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
-    updateThread(target, (t) => ({
-      ...t,
-      queue: [
-        ...t.queue,
-        {
-          id: localId("queued"),
-          text,
-          ...(link ? { link } : {}),
-          from,
-          queuedAt: Date.now(),
-          ...(extras ? { extras } : {}),
-        },
-      ],
-    }));
-  } else {
-    void runPrompt(target, text, extras, { link, sender: from });
-  }
-}
-
-/** The ids of messages that left a queue in this window: they started, or a person took them out. */
-function sentQueueIds(): readonly string[] {
-  // The book that records them is read the way start-up reads it, and kept once read (state/host.ts
-  // `restoreQueuedThreads`); a window that never restored a queue reads storage here instead.
-  return (queueBook ?? parseQueueBook(storedQueues())).acked;
-}
-
-/** A queued message that is no longer waiting: it started, or nothing ever had its id. */
-function goneFromQueue(queueId: string | undefined): Failure {
-  return sentQueueIds().includes(queueId ?? "")
-    ? failure("conflict", "that message has already started, so it cannot be changed")
-    : failure("not_found", "no queued message of that thread has that queue_id; list them again");
-}
-
-/**
- * What a queued message says, without the `delivered` attribution: that line is the app's, so an
- * agent reads its own text back and an edit says only what it says (`manageQueue`).
- */
-function bodyOf(item: QueuedPrompt, from: string): string {
-  const said = parseDelivered(item.text);
-  return said && said.title === from ? said.body : item.text;
-}
-
-/** One queued message as `manage_queue` lists it: which one, what it says, and when it waits. */
-function listedQueueItem(item: QueuedPrompt, caller: RuleThread): JsonObject {
-  return {
-    queue_id: item.id,
-    preview: bodyOf(item, caller.title).slice(0, QUEUE_PREVIEW_CHARS),
-    ...(item.queuedAt ? { queued_at: new Date(item.queuedAt).toISOString() } : {}),
-  };
-}
-
-type ManageQueueCall = Extract<ReturnType<typeof parseCall>, { tool: "manage_queue" }>;
-
-/**
- * `manage_queue`: what this thread queued on another one while it was busy, and the three things it
- * may still do to those messages. Only a message this thread queued (`from`) is its own; anything
- * else in that queue belongs to the user or to another thread and is reported as a count. A message
- * that has started left the queue and cannot be touched. `steer` delivers one now, by the same rule
- * ⌘⏎ follows (`sendDecisionFor`), so a harness that takes no message mid-turn is refused rather
- * than quietly queued again.
- */
-async function manageQueue(caller: RuleThread, call: ManageQueueCall): Promise<JsonObject> {
-  const target = ruleThread(useApp.getState(), call.target);
-  // Only the caller's own queued messages are exposed below, in any project.
-  // Slot, mailbox and chain rules were checked when the message queued.
-  const refused = checkMessage(caller, target, book(), true, true);
-  if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
-  const waiting = () => useApp.getState().threads[target.id]?.queue ?? [];
-  const mine = (id: string | undefined) => waiting().find((q) => q.id === id);
-
-  if (call.action === "list") {
-    const thread = useApp.getState().threads[target.id];
-    const own = waiting()
-      .filter((q) => !q.wake && q.from === caller.id)
-      .slice(0, MAX_QUEUE_ITEMS);
-    const others = waiting().filter((q) => !q.wake && q.from !== caller.id).length;
-    return {
-      session_id: target.id,
-      title: target.title,
-      running: !!thread?.running,
-      ...(thread?.queueHeld ? { held: true } : {}),
-      queued: own.map((item) => listedQueueItem(item, caller)),
-      // What waits there that this thread may not touch: the user's own messages, or another
-      // thread's. Count only: their text is not this thread's to read.
-      ...(others ? { others } : {}),
-    };
-  }
-
-  const item = mine(call.queueId);
-  if (!item) return failureJson(goneFromQueue(call.queueId));
-  if (item.from !== caller.id) {
-    return failureJson(failure("not_allowed", "that message was not queued by this thread"));
-  }
-  const verb =
-    call.action === "edit"
-      ? "Change a queued message to"
-      : call.action === "cancel"
-        ? "Drop a queued message from"
-        : "Send a queued message now to";
-  const no = await permitted(caller, target.id, {
-    kind: "message",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    ...(!sameReach(caller, target) ? { project: projectOf(target) } : {}),
-    detail: `${verb}: ${call.action === "edit" ? (call.text ?? "").trim() : bodyOf(item, caller.title).slice(0, QUEUE_PREVIEW_CHARS)}`,
-  });
-  if (no) return failureJson(no);
-  // The user took their time: the message may have started meanwhile.
-  const again = mine(call.queueId);
-  if (!again) return failureJson(goneFromQueue(call.queueId));
-  if (again.from !== caller.id) {
-    return failureJson(failure("not_allowed", "that message was not queued by this thread"));
-  }
-
-  switch (call.action) {
-    case "edit": {
-      const text = (call.text ?? "").trim();
-      // Delivered the way `message` delivered it, so the target still reads who asked.
-      updateQueued(
-        target.id,
-        again.id,
-        delivered(text, caller.title, { session: caller.id, ...(again.link ? { link: again.link } : {}) }),
-      );
-      // The link card says what was sent, so it says the new text now.
-      const link = again.link;
-      if (link) setBook((b) => updateLink(b, link, { message: text }));
-      return { session_id: target.id, queue_id: again.id, preview: text.slice(0, QUEUE_PREVIEW_CHARS) };
-    }
-    case "cancel": {
-      // The same removal the row's own ✕ makes: its link never answers, and it cannot come back.
-      removeQueued(target.id, again.id);
-      return { session_id: target.id, queue_id: again.id, cancelled: true };
-    }
-    case "steer": {
-      const thread = useApp.getState().threads[target.id];
-      if (!thread?.running) {
-        return failureJson(failure("conflict", "no turn is running in that thread to steer into"));
-      }
-      const verdict = sendDecisionFor(thread, again.extras);
-      if (verdict.action === "interruptRestart") {
-        // Stopping the turn to take it is not steering: this call only steers.
-        return failureJson(failure("not_allowed", "this harness cannot steer"));
-      }
-      if (verdict.action === "queue") {
-        return failureJson(
-          failure(
-            "not_allowed",
-            verdict.reason === "harness"
-              ? "this harness cannot steer"
-              : `it cannot go into the turn now: ${QUEUE_REASON[verdict.reason].toLowerCase()}`,
-          ),
-        );
-      }
-      if (!(await sendQueuedNow(target.id, again.id))) {
-        return failureJson(failure("conflict", "the turn would not take it now, so it is still queued"));
-      }
-      return { session_id: target.id, queue_id: again.id, steered: true };
-    }
-  }
-}
-
-type StartCall = Extract<ReturnType<typeof parseCall>, { tool: "start_session" }>;
-type FanOutCall = Extract<ReturnType<typeof parseCall>, { tool: "fan_out" }>;
-
-/** Checks a harness id against the engine's list; the default when none is named. */
-/**
- * The harness a delegated thread runs on: it must be installed, turned on and
- * signed in (the same rule as the picker), else the error names the ones that
- * can run now, so the agent can pick again (issue 2799).
- */
-function harnessFor(name: string | undefined): Harness | Failure {
-  const snapshot = useApp.getState().harnesses;
-  const id = name ?? snapshot?.default.harness ?? "rustcode";
-  const h = snapshot?.harnesses.find((x) => x.id === id || x.name.toLowerCase() === id.toLowerCase());
-  if (!h) return failure("invalid", `no harness “${id}”; the ones that can run now are ${usableIds()}`);
-  const reason = unavailableReason(h);
-  if (reason)
-    return failure("not_allowed", `${h.name} cannot run a thread: ${reason}. Usable now: ${usableIds()}`);
-  return h;
-}
-
-/**
- * The account a delegated thread runs on: the named login the agent asked for
- * (`start_session`'s or a `fan_out` entry's `account`), checked against that
- * harness's accounts, else the parent's own on the same harness, else the one
- * a new thread would start on (`state/logins.ts`, `docs/harnesses.md`).
- */
-function accountFor(caller: RuleThread, harness: Harness, asked?: string): string | null | Failure {
-  const s = useApp.getState();
-  const pick = childAccountFor(
-    harness,
-    asked,
-    {
-      harness: caller.harness,
-      account: s.threads[caller.id]?.harness?.account ?? s.sessions.find((x) => x.id === caller.id)?.account,
-    },
-    s.signedOutLogins,
-  );
-  if (!("refused" in pick)) return pick.account;
-  const refusal = pick.refused;
-  switch (refusal.kind) {
-    case "ambiguous":
-      return failure(
-        "invalid",
-        `${harness.name} has more than one account matching “${refusal.asked}” (${refusal.matches.join(", ")}); name one of those ids`,
-      );
-    case "signedOut":
-      return failure(
-        "not_allowed",
-        `${harness.name} account “${refusal.name}” (${refusal.account}) is signed out; sign it in in Settings › Harnesses or pick another login (${refusal.available.join(", ")})`,
-      );
-    case "unknown":
-      return failure(
-        "invalid",
-        refusal.available.length
-          ? `${harness.name} has no account “${refusal.asked}”; its named accounts are ${refusal.available.join(", ")}`
-          : `${harness.name} has no named accounts; it runs on its own sign-in, so leave account out`,
-      );
-  }
-}
-
-const usableIds = () => {
-  const snapshot = useApp.getState().harnesses;
-  return (
-    (snapshot
-      ? usableHarnesses(snapshot)
-          .map((h) => h.id)
-          .join(", ")
-      : "") || "rustcode"
-  );
-};
-
-/**
- * The model a delegated thread asks for, checked against what the harness
- * lists (asked for once if it has not listed them yet). An unknown id would
- * be ignored by the harness and the child would quietly run on its default,
- * so it is refused with the closest matches instead.
- */
-async function modelFor(harness: string, model: string | undefined): Promise<string | undefined | Failure> {
-  if (!model) return undefined;
-  await ensureHarnessModels(harness);
-  const h = useApp.getState().harnesses?.harnesses.find((x) => x.id === harness);
-  const models = h?.models ?? [];
-  if (!models.length) return model;
-  const wanted = model.toLowerCase();
-  const exact = models.find((m) => m.id.toLowerCase() === wanted || m.name.toLowerCase() === wanted);
-  if (exact) return exact.id;
-  // "deepseek-v4-pro" for "deepseek/deepseek-v4-pro": a provider prefix left off, when only one fits.
-  const suffixed = models.filter((m) => m.id.toLowerCase().endsWith(`/${wanted}`));
-  if (suffixed.length === 1) return suffixed[0]!.id;
-  const close = models
-    .filter(
-      (m) =>
-        m.id.toLowerCase().includes(wanted) || wanted.includes(m.id.toLowerCase().split("/").pop() ?? ""),
-    )
-    .slice(0, 5)
-    .map((m) => m.id);
-  const offer = (close.length ? close : models.slice(0, 8).map((m) => m.id)).join(", ");
-  return failure(
-    "invalid",
-    `${h?.name ?? harness} has no model “${model}”; ${close.length ? "closest" : "some it lists"}: ${offer}`,
-  );
-}
-
-/** "Claude Code · Work · opus · high" for the approval card: what will actually run. */
-const choiceLabel = (name: string, account?: string, model?: string, effort?: string) =>
-  [name, account, model, effort].filter(Boolean).join(" · ");
-
-/** The model, effort and account the new thread reports it runs on, for the caller's answer. */
-function ranWith(id: string): JsonObject {
-  const options = useApp.getState().threads[id]?.configOptions ?? [];
-  const model = selectOption(options, "model")?.current;
-  const effort = selectOption(options, "effort")?.current;
-  const account = useApp.getState().threads[id]?.harness?.account;
-  return {
-    ...(model ? { model } : {}),
-    ...(effort ? { effort } : {}),
-    ...(account ? { account } : {}),
-  };
-}
-
-/** The project a new thread starts in: the caller's, or one the user has opened before. */
-function projectFor(caller: RuleThread, asked: string | undefined): string | Failure {
-  const own = projectOf(caller);
-  if (!asked || sameProject(asked, own)) return own;
-  const known = useApp.getState().sessions.some((x) => sameProject(x.worktree?.repo || x.cwd, asked));
-  if (!known) return failure("not_allowed", "that folder is not a project the user has opened in RustCode");
-  return asked.replace(/\/+$/, "");
-}
-
-/** `session/new` for a link, in a worktree when asked (or by default in a git project). */
-async function newThread(
-  project: string,
-  harness: string,
-  options: {
-    model?: string;
-    effort?: string;
-    account?: string | null;
-    title?: string;
-    task: string;
-    worktree?: boolean;
-    /** The thread starting this one, recorded in the child's metadata. */
-    parent?: string;
-    /** What the new thread may do without asking (`childMode`), fixed before the user is asked. */
-    access: PermissionMode;
-  },
-): Promise<string> {
-  // The orchestrator names it when it gave a title, and the task itself does otherwise: a session
-  // made without one takes the message it is sent as its title, and the sidebar then shows
-  // "From thread “parent” (agent)…" for good.
-  const title = childTitle(options.title, options.task);
-  const { access, ...rest } = options;
-  const id = await createThreadFor(project, harness, { ...rest, title });
-  // Before its first turn, so nothing it does runs broader than the thread that started it.
-  setPermissionMode(id, access);
-  // The orchestrator named it; without this the first message ("From thread …") would.
-  if (hasShell()) await shellCall("thread_rename", { id, title }).catch(() => undefined);
-  return id;
-}
-
-/**
- * What a delegated thread runs at: the lower of its parent's access and the default access of the
- * project it starts in (Settings › Permissions), which is what a new thread there would get anyway.
- * The parent's own limit is the one that counts, so an Ask or Auto-edit parent never hands out Full
- * access. Applied at every depth, a grandchild can only be narrower still.
- */
-function childMode(caller: RuleThread, project: string): PermissionMode {
-  const s = useApp.getState();
-  return effectiveMode(permissionModeOf(s, caller.id), defaultModeFor(s, project));
-}
-
-/** `mode`, lowered to what the call asked for (a delegate preset's access, issue 3391); never raised. */
-const narrowed = (mode: PermissionMode, asked: PermissionMode | undefined): PermissionMode =>
-  asked ? effectiveMode(mode, asked) : mode;
-
-/** What a thread may do without asking, as the orchestration answers report it. */
-const accessOf = (id: string): PermissionMode => permissionModeOf(useApp.getState(), id);
-
-/**
- * What a standalone thread runs at: its project's default access (Settings › Permissions), the
- * same as a thread the user starts by hand. It is the user's own thread, not a
- * delegate, so the caller's own limit is not what bounds it.
- */
-const ownMode = (project: string): PermissionMode => defaultModeFor(useApp.getState(), project);
-
-/**
- * The first message of a standalone thread: the prompt as the user's own, with
- * no "From thread" header and no delegate report to end with (issue 3443).
- */
-function deliverOwn(target: string, text: string) {
-  // The thread was created a moment ago, so it is not running: the prompt is
-  // its first turn, as if the user had typed it.
-  void runPrompt(target, text);
-}
-
-async function createThreadFor(
-  project: string,
-  harness: string,
-  options: {
-    model?: string;
-    effort?: string;
-    account?: string | null;
-    title: string;
-    worktree?: boolean;
-    parent?: string;
-  },
-): Promise<string> {
-  const wantWorktree = (options.worktree ?? true) && !!useApp.getState().features.worktrees;
-  try {
-    return await createSession({
-      cwd: project,
-      harness,
-      account: options.account ?? undefined,
-      model: options.model,
-      effort: options.effort,
-      title: options.title,
-      parent: options.parent,
-      worktree: wantWorktree ? { repo: project, title: options.title } : undefined,
-    });
-  } catch (error) {
-    // The default (a worktree) does not apply outside a git repository: start in the folder.
-    if (wantWorktree && options.worktree === undefined && /git|repositor/i.test(errorText(error))) {
-      return createSession({
-        cwd: project,
-        harness,
-        account: options.account ?? undefined,
-        model: options.model,
-        effort: options.effort,
-        title: options.title,
-        parent: options.parent,
-      });
-    }
-    throw error;
-  }
-}
-
-function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
-  return withLinkGate(() => startNow(caller, call));
-}
-
-async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject> {
-  // A standalone thread is not a delegate: it takes no delegation slot, so the
-  // depth and slot rules (which bound how much work one thread hands out) do
-  // not apply to it.
-  const standalone = call.standalone === true;
-  if (!standalone) {
-    const refused = checkStart(caller, book(), 1, delegateLimits());
-    if (refused) return failureJson(refused);
-  }
-  const project = projectFor(caller, call.project);
-  if (isFailure(project)) return failureJson(project);
-  const harness = harnessFor(call.harness);
-  if (isFailure(harness)) return failureJson(harness);
-  const model = await modelFor(harness.id, call.model);
-  if (isFailure(model)) return failureJson(model);
-  // Resolved before the user is asked, so the card names the login and the thread gets exactly it.
-  const account = accountFor(caller, harness, call.account);
-  if (isFailure(account)) return failureJson(account);
-  const title = call.title ?? titleFrom(call.prompt, 60);
-  const other = !sameProject(project, projectOf(caller));
-  // Fixed before the user is asked, so the card says what the thread runs at and the thread gets
-  // exactly that, however long the card waits.
-  const access = narrowed(standalone ? ownMode(project) : childMode(caller, project), call.access);
-  const no = await permitted(
-    caller,
-    other ? `start:${project}` : "start",
-    {
-      kind: "start",
-      caller: caller.id,
-      callerTitle: caller.title,
-      target: title,
-      detail: call.prompt,
-      project: other ? project : undefined,
-      harnesses: [choiceLabel(harness.name, accountLabelOf(harness, account), model, call.effort)],
-      access,
-      worktree: call.worktree ?? true,
-      standalone: standalone || undefined,
-    },
-    undefined,
-    harness.accounts?.length ? [delegateAccountKey("local", harness.id, account)] : [],
-  );
-  if (no) return failureJson(no);
-  if (!standalone) {
-    const again = checkStart(caller, book(), 1, delegateLimits());
-    if (again) return failureJson(again);
-  }
-  let id: string;
-  try {
-    // The task is the title's fallback: whatever the prompt starts with, a child never goes
-    // unnamed and so never takes the delivered message as its title.
-    id = await newThread(project, harness.id, {
-      ...call,
-      model,
-      title,
-      task: call.prompt,
-      access,
-      parent: standalone ? undefined : caller.id,
-      account,
-    });
-  } catch (error) {
-    return failureJson(failure("failed", `the thread could not start: ${errorText(error)}`));
-  }
-  if (standalone) {
-    deliverOwn(id, call.prompt);
-    return {
-      session_id: id,
-      receipt: "started",
-      title,
-      harness: harness.id,
-      access: accessOf(id),
-      standalone: true,
-      ...ranWith(id),
-    };
-  }
-  const link = addLink({
-    orchestrator: caller.id,
-    target: id,
-    orchestratorTitle: caller.title,
-    targetTitle: title,
-    message: call.prompt,
-    state: "working",
-    started: true,
-    harness: harness.id,
-    harnessName: harness.name,
-    model,
-    account: account ?? undefined,
-  });
-  deliver(id, delegated(call.prompt, caller.title), link, caller.id);
-  return {
-    session_id: id,
-    link_id: link,
-    receipt: "started",
-    title,
-    harness: harness.id,
-    access: accessOf(id),
-    ...ranWith(id),
-    links_left: linksLeft(book(), caller.id, delegateLimits()),
-  };
-}
-
-function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
-  return withLinkGate(() => fanOutNow(caller, call));
-}
-
-async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
-  const standalone = call.standalone === true;
-  if (!standalone) {
-    const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
-    if (refused) return failureJson(refused);
-  }
-  const chosen: { harness: Harness; model?: string; effort?: string; account: string | null }[] = [];
-  const targets = new Set<string>();
-  for (const entry of call.harnesses) {
-    const h = harnessFor(entry.harness);
-    if (isFailure(h)) return failureJson(h);
-    const model = await modelFor(h.id, entry.model);
-    if (isFailure(model)) return failureJson(model);
-    const account = accountFor(caller, h, entry.account);
-    if (isFailure(account)) return failureJson(account);
-    // Two entries that resolve to the same target would run one task twice, and the engine
-    // has only compared the arguments as they came in ('Work' and 'work' are one login).
-    const key = [h.id, model ?? "", entry.effort ?? "", account ?? ""].join("\u0000");
-    if (targets.has(key)) {
-      return failureJson(
-        failure(
-          "invalid",
-          `harnesses resolves to the same target twice: ${choiceLabel(h.name, accountLabelOf(h, account), model, entry.effort)}; give each entry a different harness, model, effort or account`,
-        ),
-      );
-    }
-    targets.add(key);
-    chosen.push({ harness: h, model, effort: entry.effort, account });
-  }
-  const project = projectFor(caller, call.project);
-  if (isFailure(project)) return failureJson(project);
-  const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = narrowed(standalone ? ownMode(project) : childMode(caller, project), call.access);
-  const other = !sameProject(project, projectOf(caller));
-  const no = await permitted(
-    caller,
-    other ? `start:${project}` : "start",
-    {
-      kind: "fan_out",
-      caller: caller.id,
-      callerTitle: caller.title,
-      target: title,
-      detail: call.prompt,
-      project: other ? project : undefined,
-      harnesses: chosen.map((h) =>
-        choiceLabel(h.harness.name, accountLabelOf(h.harness, h.account), h.model, h.effort),
-      ),
-      access,
-      worktree: true,
-      standalone: standalone || undefined,
-    },
-    undefined,
-    chosen
-      .filter((h) => h.harness.accounts?.length)
-      .map((h) => delegateAccountKey("local", h.harness.id, h.account)),
-  );
-  if (no) return failureJson(no);
-  if (!standalone) {
-    const again = checkStart(caller, book(), chosen.length, delegateLimits());
-    if (again) return failureJson(again);
-  }
-  const fanId = localId("fan");
-  const out: JsonObject[] = [];
-  const linkIds: string[] = [];
-  for (const h of chosen) {
-    // The account names the thread too when it has one, so two logins of one harness read apart.
-    const threadTitle = [title, h.harness.name, accountNameOf(h.harness, h.account)]
-      .filter(Boolean)
-      .join(" · ");
-    try {
-      const id = await newThread(project, h.harness.id, {
-        model: h.model,
-        effort: h.effort,
-        account: h.account,
-        title: threadTitle,
-        task: call.prompt,
-        parent: standalone ? undefined : caller.id,
-        access,
-      });
-      if (standalone) {
-        deliverOwn(id, call.prompt);
-        out.push({ session_id: id, harness: h.harness.id, access: accessOf(id), ...ranWith(id) });
-        continue;
-      }
-      const link = addLink({
-        orchestrator: caller.id,
-        target: id,
-        orchestratorTitle: caller.title,
-        targetTitle: threadTitle,
-        message: call.prompt,
-        state: "working",
-        started: true,
-        harness: h.harness.id,
-        harnessName: h.harness.name,
-        model: h.model,
-        account: h.account ?? undefined,
-        fanOut: fanId,
-      });
-      linkIds.push(link);
-      out.push({
-        session_id: id,
-        link_id: link,
-        harness: h.harness.id,
-        access: accessOf(id),
-        ...ranWith(id),
-      });
-      deliver(id, delegated(call.prompt, caller.title), link, caller.id);
-    } catch (error) {
-      // The reason, not the name of the error class: the harness says why it could not start.
-      out.push({ harness: h.harness.id, ...failureJson(failure("failed", errorText(error))) });
-    }
-  }
-  if (linkIds.length) {
-    const group: FanOut = {
-      id: fanId,
-      orchestrator: caller.id,
-      title,
-      prompt: call.prompt,
-      links: linkIds,
-      createdAt: Date.now(),
-    };
-    setBook((b) => ({ ...b, fanOuts: [...b.fanOuts, group] }));
-  }
-  if (standalone) return { links: out, standalone: true };
-  return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id, delegateLimits()) };
-}
-
-/**
- * A link's state now: what its target thread does, folded onto the record
- * ({@link liveState}). A running turn that waits on an approval or a question
- * needs the user, and a link a restart could not resume reads live again while
- * its thread keeps working.
- */
-export function stateOf(s: AppState, link: Link) {
-  return liveState(link, activityOfThread(s, link.target));
-}
-
-/** What a thread the app may not have open does now: its live turn, else what the list reports. */
-function activityOfThread(s: AppState, id: string): ThreadStatus | undefined {
-  const open = s.threads[id];
-  if (open?.permissions.length) return "needs_input";
-  if (open?.running) return "running";
-  // The list's index, not a scan: `stateOf` runs in selectors on each store change (state/store.ts).
-  return sessionById(s, id)?.status;
-}
-
-/**
- * One thread's activity from the data store of the computer it runs on: this
- * computer's, or the paired machine's own, over that machine's connection. No
- * answer (an older engine, a channel that went away) is said by its callers,
- * never passed on as an empty list that reads as a thread that did nothing
- * (issue 3525).
- */
-async function activityFrom(
-  thread: string,
-  params: JsonObject,
-  timeoutMs = 20_000,
-): Promise<{ answer?: JsonObject; error?: string }> {
-  const conn = connectionFor(splitThreadKey(thread).host);
-  if (!conn) return { error: "it is not connected" };
-  try {
-    const answer = await conn.request<JsonObject>(
-      Method.dataActivity,
-      { sessionId: splitThreadKey(thread).id, ...params },
-      timeoutMs,
-    );
-    return { answer };
-  } catch (error) {
-    return { error: errorText(error) };
-  }
-}
-
-/** Why a link to a thread the app can no longer find failed: its row and its tip say the same. */
-const REASON_THREAD_GONE = "That thread is gone.";
-
-/**
- * Whether a link's thread has gone: no list names it and the app keeps no row for it. A thread
- * this window made there, or another client announced, is listed only once a `session/list`
- * catches up, which on a first turn is after the message that started it: the keep-unlisted set
- * (`state/store.ts` `isKeptUnlisted`) says which unlisted rows are still due. A thread with a
- * `threads` copy is no exception — every link target made in this window has one — so the copy
- * is not what tells an unlisted thread from a gone one (issue 3523).
- */
-const vanished = (s: AppState, target: string) =>
-  !s.sessions.some((x) => x.id === target) && !isKeptUnlisted(target);
-
-/**
- * `wait_session`: blocks until one of the links settles or asks the user, or
- * the timeout passes. Each answer carries what the app already knows about the
- * child (idle time, last tool, turns), so a timeout says whether it is
- * thinking or stuck. While it runs, this parent is registered as waiting, so
- * no wake repeats what the wait itself returns.
- *
- * A wait ends without an answer when nobody can read one any more: its call was
- * dropped by the harness (`callId`, see {@link orchestrationCallDropped}), its
- * own transcript row finished, or a newer wait took its links over. Its links
- * are then free at once, and anything that settles comes as the ordinary wake.
- */
-async function wait(
-  callerId: string,
-  ids: string[],
-  timeoutMs: number,
-  callId?: string,
-  all = false,
-): Promise<JsonObject> {
-  const mine = [...new Set(ids)].filter(
-    (id) => book().links.find((l) => l.id === id)?.orchestrator === callerId,
-  );
-  if (!mine.length) return failureJson(failure("not_found", "no such link from this thread"));
-  const deadline = Date.now() + timeoutMs;
-  const until = new Date(deadline).toISOString();
-  const me: Wait = { caller: callerId, links: new Set(mine), nudge: () => {}, handed: [] };
-  // The newest wait on a link takes it over: two waits holding one link could each hand its
-  // answer over, and only one of them is being read.
-  for (const id of mine) {
-    const held = holds.get(holdKey(callerId, id));
-    if (held && held !== me) {
-      held.ended = "taken";
-      held.nudge();
-    }
-    holds.set(holdKey(callerId, id), me);
-    const set = waiting.get(callerId) ?? new Set<string>();
-    set.add(id);
-    waiting.set(callerId, set);
-  }
-  if (callId) calls.set(callId, me);
-  // Some harnesses drop a call without the engine hearing of it (a tool timeout
-  // inside the harness): the caller's own row for the call then ends while the
-  // wait runs. Only a caller with one wait row in flight is certainly looking at
-  // its own, and a wrong guess costs no answer: a released link comes as a wake.
-  const row = waitRowOf(callerId);
-  const endEarly = (why: "dropped" | "taken"): JsonObject => {
-    me.ended = why;
-    return {
-      status: why === "taken" ? "taken_over" : "dropped",
-      waited_until: until,
-      links: [],
-      note:
-        why === "taken"
-          ? "A newer wait_session took these links over, so this one stopped: read that answer. Anything that settles still comes as a wake; do not poll."
-          : "This call was dropped (the harness stopped waiting for it), so the wait stopped and its links are free. Anything that settles comes as a wake; do not poll.",
-    };
-  };
-  /**
-   * What the parent is told the link is now. A child that settled but whose own subtree still works
-   * has not answered yet: it says it works, with how long it has been quiet, rather than hand back
-   * the answer of a turn that only started the work below it.
-   */
-  const shownOf = (link: Link): LinkState => {
-    const state = stateOf(useApp.getState(), link);
-    return (state === "done" || state === "failed") && !subtreeQuiet(link.target) ? "working" : state;
-  };
-  const result = (link: Link, shown = shownOf(link)) => {
-    const s = useApp.getState();
-    const now = Date.now();
-    const activity = activityOf(s.threads[link.target]?.items ?? [], s.threads[link.target]?.children);
-    // A settled link with no answer still has one: the target's last reply, read now.
-    const reply = link.answer?.trim()
-      ? link
-      : filledWith(link, latestReply(s.threads[link.target]?.items ?? []));
-    return linkResult(reply, shown, statusOf(s, link.target), { now, activity });
-  };
-  // The link's answer is out with this reply: no wake may repeat it. A link whose state goes out
-  // with a timeout is handed over the same way, so a child that settles just as the wait gives up
-  // does not come back a second time as a wake.
-  const handOne = (link: Link, shown = shownOf(link)) => {
-    if (shown === "done" || shown === "failed" || shown === "needs_user") {
-      me.handed.push(markHeard(link, shown, Date.now()));
-    }
-    return result(link, shown);
-  };
-  const hand = (link: Link, shown = shownOf(link)) => ({ links: [handOne(link, shown)] });
-  /** A wave's answer: every ready link in one reply, each answer cut to {@link ALL_ANSWER_CHARS}. */
-  const handAll = (ready: Link[]) => ({ links: ready.map((link) => cutForAll(handOne(link))) });
-  /** The pause before looking again, cut short when the wait ends early. */
-  const rest = () => {
-    if (me.ended) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const done = () => {
-        clearTimeout(timer);
-        me.nudge = () => {};
-        resolve();
-      };
-      timer = setTimeout(done, WAIT_CHECK_MS);
-      me.nudge = done;
-    });
-  };
-  try {
-    for (;;) {
-      if (me.ended) return endEarly(me.ended);
-      if (row && !waitRowRuns(callerId, row)) return endEarly("dropped");
-      const s = useApp.getState();
-      // The turn that asked is over (the user stopped it, or the harness dropped the call): nobody
-      // will read this answer, and holding the links back would keep their wakes from arriving.
-      // A thread the app holds no state for keeps waiting: it cannot tell whether a turn runs.
-      const caller = s.threads[callerId];
-      const ready: Link[] = [];
-      let pending = false;
-      let asking = false;
-      if (caller && !caller.running) {
-        return {
-          status: "timeout",
-          waited_until: until,
-          links: mine.flatMap((id) => {
-            const link = book().links.find((l) => l.id === id);
-            return link ? [result(link)] : [];
-          }),
-          note: "The turn that waited has ended, so the wait stopped. Anything that settles still comes as a wake; do not poll.",
-        };
-      }
-      for (const id of mine) {
-        const link = book().links.find((l) => l.id === id);
-        if (!link) continue;
-        if (isActive(link.state) && vanished(s, link.target)) {
-          setBook((b) =>
-            updateLink(b, id, {
-              state: "failed",
-              answer: REASON_THREAD_GONE,
-              error: REASON_THREAD_GONE,
-            }),
-          );
-          // Failed now: the next look hands it over with the rest.
-          pending = true;
-          continue;
-        }
-        const now = stateOf(s, link);
-        if (now === "done" || now === "failed") {
-          // Settled, but it works on: the answer is the one after its subtree is quiet.
-          if (subtreeQuiet(link.target)) {
-            if (!all) return hand(link);
-            ready.push(link);
-          } else pending = true;
-          continue;
-        }
-        if (!isActive(now) || now === "needs_user") {
-          if (!all) return hand(link);
-          ready.push(link);
-          asking ||= now === "needs_user";
-        } else pending = true;
-      }
-      // With `all`, one answer for the whole wave: once every link is ready, or sooner when one
-      // waits for the user, who may be needed before the rest can finish.
-      if (all && ready.length && (asking || !pending)) return handAll(ready);
-      if (Date.now() >= deadline) {
-        return {
-          status: "timeout",
-          waited_until: until,
-          links: mine.flatMap((id) => {
-            const link = book().links.find((l) => l.id === id);
-            return link ? [hand(link)] : [];
-          }),
-          note: "Still running. You are woken when it finishes or asks; do not poll with sleeps.",
-        };
-      }
-      await rest();
-    }
-  } finally {
-    if (callId && calls.get(callId) === me) calls.delete(callId);
-    // What this wait handed over, for a call whose answer turns out to be dropped unread.
-    if (callId && me.handed.length) {
-      handedBy.set(callId, me.handed);
-      while (handedBy.size > HANDED_KEPT) handedBy.delete(handedBy.keys().next().value!);
-    }
-    for (const id of mine) {
-      if (holds.get(holdKey(callerId, id)) !== me) continue;
-      holds.delete(holdKey(callerId, id));
-      const set = waiting.get(callerId);
-      set?.delete(id);
-      if (set && !set.size) waiting.delete(callerId);
-    }
-    wakeTick();
-  }
-}
-
-/**
- * The caller's own row for a call the app can watch: its `wait_session` row
- * still in flight. Only a lone one is certainly this wait's, so a second call in
- * parallel leaves this off rather than watching another call's row.
- */
-function waitRowOf(callerId: string): string | undefined {
-  const rows = (useApp.getState().threads[callerId]?.items ?? []).filter(
-    (item) =>
-      item.kind === "tool" &&
-      (item.status === "pending" || item.status === "in_progress") &&
-      orchestrationTool(item.title) === "wait_session",
-  );
-  return rows.length === 1 ? rows[0]!.id : undefined;
-}
-
-/** Whether that row still runs: one that ended, or that a reload took away, says the call is gone. */
-function waitRowRuns(callerId: string, row: string): boolean {
-  const item = (useApp.getState().threads[callerId]?.items ?? []).find((i) => i.id === row);
-  return !!item && item.kind === "tool" && (item.status === "pending" || item.status === "in_progress");
-}
-
-/**
- * The engine says a call was dropped before it answered (a harness's own tool
- * timeout, a cancel, the MCP server closing): its wait ends where it is, without
- * marking anything heard, so a child that settles comes as the ordinary wake and
- * an answer already sent — which the engine drops unread — is handed again.
- * `_rustcode/orchestration/cancelled`.
- */
-export function orchestrationCallDropped(params: JsonObject): void {
-  const callId = typeof params.callId === "string" ? params.callId : "";
-  if (!callId) return;
-  const session = typeof params.sessionId === "string" ? params.sessionId : undefined;
-  const pending = droppable.get(callId);
-  if (pending && (session === undefined || pending.caller === session)) {
-    pending.dropped = true;
-    for (const stop of [...pending.onDrop]) stop();
-    return;
-  }
-  const live = calls.get(callId);
-  if (live && (session === undefined || live.caller === session)) {
-    live.ended = "dropped";
-    live.nudge();
-    return;
-  }
-  const marks = handedBy.get(callId);
-  if (!marks?.length) return;
-  handedBy.delete(callId);
-  setBook((b) => unheard(b, marks));
-  wakeTick();
-}
-
 // ---------------------------------------------------------------- the queue across restarts
 
 /**
@@ -5304,7 +2082,7 @@ export function orchestrationCallDropped(params: JsonObject): void {
  */
 
 /** The book as it is in memory: read once, on the first change after start-up. */
-let queueBook: QueueBook | undefined;
+export let queueBook: QueueBook | undefined;
 /** The book as storage last took it: a change that serialises the same is not written again. */
 let keptQueues: string | undefined;
 /** Putting a saved queue back changes the store, which notifies again: the nested pass is skipped. */
@@ -5316,7 +2094,7 @@ const RESTORE_MAX = 8;
 
 // No storage (a private window): the queue is this window's only, as before. A web view whose
 // storage is full keeps the queue in memory instead.
-function storedQueues(): string | null {
+export function storedQueues(): string | null {
   return readStorage(QUEUES_KEY);
 }
 
@@ -5514,7 +2292,7 @@ function wakeContext(now: number): WakeContext {
 }
 
 /** A link with the target's last reply when it holds no answer of its own. */
-function filledWith(link: Link, reply: string): Link {
+export function filledWith(link: Link, reply: string): Link {
   if (!reply.trim()) return link;
   const { text, truncated } = capped(reply);
   return { ...link, answer: text, truncated };
@@ -5701,7 +2479,7 @@ export function wakeDelivered(links: readonly string[] | undefined, asking: read
  * question it was told about): mark it heard, so no wake repeats it. The mark is
  * returned so a call whose answer is dropped unread can take it back.
  */
-function markHeard(link: Link, state: LinkState, now: number): HeardMark {
+export function markHeard(link: Link, state: LinkState, now: number): HeardMark {
   const request = useApp.getState().threads[link.target]?.permissions[0]?.rpcId;
   const asked = request === undefined ? undefined : String(request);
   const change =
