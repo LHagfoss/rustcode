@@ -29,9 +29,15 @@ keeps only the token's SHA-256, in `<config>/outside-agents.json` (mode 0600).
 
 | Level | May |
 | --- | --- |
-| Read-only (default) | `whoami`, `list_sessions`, `search_sessions`, `list_projects`, `read_session`, `wait_session`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines` |
+| Read-only (default) | `whoami`, `list_sessions`, `search_sessions`, `list_projects`, `read_session`, `wait_session`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines`, and `manage_settings` with `list` or `get` |
 | Delegate | Read-only, plus `start_session`, `fan_out`, `message_session` and `interrupt_session` |
 | Manage | Delegate, plus `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` |
+| Admin | Manage, plus `manage_settings` with `set` or `reset`: RustCode's own settings |
+
+A tool's level can depend on what the call does: `manage_settings` reads at
+Read-only and writes only at Admin (`required_scope_for`), and a refusal names
+the level the call needs. Harness accounts, connections and outside-agent
+tokens are never offered to an outside agent at any level.
 
 The engine checks the level on every call, so lowering an app's access or
 revoking it applies to its next call. A tool that is not classified in
@@ -132,7 +138,7 @@ protected-resource path) and `/.well-known/oauth-authorization-server`.
 An unauthenticated MCP request returns a Bearer challenge with the metadata URL.
 Use a public `client_id` identifying your app, an exact loopback HTTP callback
 on `127.0.0.1`, `response_type=code`, `resource` equal to the MCP URL, one scope
-(`read_only`, `delegate`, or `manage`), `state`, and an S256 PKCE challenge.
+(`read_only`, `delegate`, `manage` or `admin`), `state`, and an S256 PKCE challenge.
 Only S256 is supported. Client registration and remote callbacks are not
 supported in this localhost slice.
 

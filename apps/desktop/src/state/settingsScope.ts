@@ -205,7 +205,7 @@ interface ValuesStore {
 }
 
 /** Keyed by `host\u0000setting`, so one store holds every machine's values. */
-const useSettingValues = create<ValuesStore>(() => ({ values: {}, loading: {} }));
+export const useSettingValues = create<ValuesStore>(() => ({ values: {}, loading: {} }));
 
 const valueKey = (host: string, key: string) => `${host}\u0000${key}`;
 
@@ -371,6 +371,29 @@ function applyLocalSettings(values: Record<string, Json | undefined>): void {
     const batch = number("wake-batch-seconds");
     if (batch !== undefined) store.setWakeBatchSeconds(batch);
   });
+}
+
+/**
+ * `_rustcode/settings/changed`: a machine's `settings.json` changed, written by
+ * the CLI, an agent's `manage_settings`, another window or a hand edit. The
+ * cache follows it, and on this machine the app applies it at once. A write
+ * this window still has in flight wins: its own answer settles the value.
+ */
+export function onServerSettingsChanged(host: string, params: JsonObject): void {
+  const values = obj(params.values);
+  if (!values) return;
+  const pending = new Set(
+    [...writesInFlight.keys()]
+      .filter((key) => key.startsWith(`${host}\u0000`))
+      .map((key) => key.slice(host.length + 1)),
+  );
+  const settled: JsonObject = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (!pending.has(key) && value !== undefined) settled[key] = value;
+  }
+  settingsRevision.set(host, (settingsRevision.get(host) ?? 0) + 1);
+  remember(host, settled);
+  if (host === LOCAL_HOST) applyLocalSettings(settled);
 }
 
 let hydration: Promise<void> | null = null;

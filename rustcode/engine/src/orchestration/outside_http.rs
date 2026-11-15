@@ -213,10 +213,10 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
     let result = match (req.method.as_str(), path) {
         ("GET", "/.well-known/oauth-protected-resource")
         | ("GET", "/.well-known/oauth-protected-resource/mcp") => {
-            json!({"resource":resource,"authorization_servers":[server.base],"scopes_supported":["read_only","delegate","manage"],"bearer_methods_supported":["header"]})
+            json!({"resource":resource,"authorization_servers":[server.base],"scopes_supported":["read_only","delegate","manage","admin"],"bearer_methods_supported":["header"]})
         }
         ("GET", "/.well-known/oauth-authorization-server") => {
-            json!({"issuer":server.base,"authorization_endpoint":format!("{}/authorize",server.base),"token_endpoint":format!("{}/token",server.base),"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"scopes_supported":["read_only","delegate","manage"]})
+            json!({"issuer":server.base,"authorization_endpoint":format!("{}/authorize",server.base),"token_endpoint":format!("{}/token",server.base),"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"scopes_supported":["read_only","delegate","manage","admin"]})
         }
         ("GET", "/authorize") => {
             let q = fields(query.as_bytes());
@@ -232,6 +232,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                 "read_only" => Some(outside::Scope::ReadOnly),
                 "delegate" => Some(outside::Scope::Delegate),
                 "manage" => Some(outside::Scope::Manage),
+                "admin" => Some(outside::Scope::Admin),
                 _ => None,
             };
             if get("response_type") != "code"

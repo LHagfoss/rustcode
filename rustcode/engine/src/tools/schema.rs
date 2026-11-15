@@ -965,6 +965,7 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::RUN_SCHEDULED_TASK_NOW,
     crate::orchestration::WORKTREE_STATUS,
     crate::orchestration::HANDOFF_WORKTREE,
+    crate::manage::MANAGE_SETTINGS,
 ];
 
 /// Whether a read-only child agent's gate runs `tool`, so it is worth

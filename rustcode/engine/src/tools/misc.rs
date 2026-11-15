@@ -3725,6 +3725,17 @@ fn browser_unavailable(_: &Value) -> Result<String, String> {
     Err("Browser runtime unavailable".into())
 }
 
+pub const MANAGE_SETTINGS: Tool = Tool {
+    name: crate::manage::MANAGE_SETTINGS,
+    description: "Read and change RustCode's own settings (settings.json): list them with values, defaults, types and accepted values; get one; set or reset one for this machine or a project. Reads answer at once; set and reset show the user the value before and after, and change nothing unless they allow it. Only change a setting when the user asks.",
+    arguments: r#"{"action":"list|get|set|reset","key":"optional auto-compact-threshold","value":"optional 200000","project":"optional absolute folder"}"#,
+    handler: ask_user_question_unavailable,
+    requires_confirmation: false,
+    schema: crate::manage::settings_schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 pub const REQUEST_SECRET: Tool = Tool {
     name: crate::orchestration::secret::TOOL_NAME,
     description: "Ask for a credential privately, not in chat. Saves to an untracked dotenv destination; env=true sets $NAME for later commands. Never print it.",

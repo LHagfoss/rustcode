@@ -112,6 +112,8 @@ pub(crate) enum Topic {
     PullWatches,
     /// `_rustcode/workflows/changed`, after a workflow list request.
     Workflows,
+    /// `_rustcode/settings/changed`, after `_rustcode/settings/get` or `/set`.
+    Settings,
 }
 
 /// One session as one connection has it.

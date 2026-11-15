@@ -99,6 +99,14 @@ pub enum Commands {
         command: Option<SessionCommands>,
     },
 
+    /// Read and change RustCode's server settings (`settings.json`), the
+    /// values Settings in the app shows; writes go through the running server
+    #[command(alias = "setting")]
+    Settings {
+        #[command(subcommand)]
+        command: SettingsCommands,
+    },
+
     /// List, show, create, validate and set themes (terminal and desktop app)
     Theme {
         #[command(subcommand)]
@@ -821,6 +829,51 @@ pub enum ThemeCommands {
     Validate { target: Option<String> },
     /// Print the user themes directory, or a theme's file
     Path { name: Option<String> },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum SettingsCommands {
+    /// Every setting with its value, where the value comes from, and its default
+    #[command(alias = "ls")]
+    List {
+        /// A project's folder: the values a thread there gets, with its overrides
+        #[arg(long)]
+        project: Option<std::path::PathBuf>,
+        /// Print the settings as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// One setting's value, type, default and accepted values
+    Get {
+        key: String,
+        #[arg(long)]
+        project: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change one setting, on this machine or as a project's override
+    #[command(after_help = "Examples:
+  rustcode settings set continue-after-limit false
+  rustcode settings set auto-compact-threshold 200000
+  rustcode settings set default-permission-mode edits --project ~/code/app")]
+    Set {
+        key: String,
+        /// The new value: true/false, a number, one of the accepted values, or JSON for a list
+        value: String,
+        #[arg(long)]
+        project: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove this machine's value (or the project's override), so the
+    /// default (or the machine's value) applies again
+    Reset {
+        key: String,
+        #[arg(long)]
+        project: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1903,6 +1956,39 @@ mod tests {
         ] {
             assert!(mcp_add(args).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn parses_settings_commands() {
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "settings", "list", "--json"])
+                .unwrap()
+                .command,
+            Some(Commands::Settings {
+                command: SettingsCommands::List {
+                    project: None,
+                    json: true
+                }
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "settings", "set", "continue-after-limit", "false"])
+                .unwrap()
+                .command,
+            Some(Commands::Settings {
+                command: SettingsCommands::Set { key, value, project: None, json: false }
+            }) if key == "continue-after-limit" && value == "false"
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "rustcode", "setting", "reset", "default-permission-mode", "--project", "/work/a"
+            ])
+            .unwrap()
+            .command,
+            Some(Commands::Settings {
+                command: SettingsCommands::Reset { key, project: Some(_), .. }
+            }) if key == "default-permission-mode"
+        ));
     }
 
     #[test]

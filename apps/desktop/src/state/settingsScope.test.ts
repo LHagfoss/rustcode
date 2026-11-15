@@ -3,7 +3,13 @@
 // with one error per harness instead of waiting on each in turn.
 
 import { describe, expect, test } from "bun:test";
-import { checkMachineHarnesses, harnessCheckLine, shouldAutoLoadHarness } from "./settingsScope";
+import {
+  checkMachineHarnesses,
+  harnessCheckLine,
+  onServerSettingsChanged,
+  shouldAutoLoadHarness,
+  useSettingValues,
+} from "./settingsScope";
 import { LOCAL_HOST } from "./threadKeys";
 
 describe("shouldAutoLoadHarness", () => {
@@ -43,5 +49,22 @@ describe("checkMachineHarnesses", () => {
 
   test("no harness, no request", async () => {
     expect(await checkMachineHarnesses("no-such-machine", [])).toEqual({});
+  });
+});
+
+describe("onServerSettingsChanged", () => {
+  test("a change made outside the app lands in that machine's cache", () => {
+    onServerSettingsChanged("studio", {
+      values: { "auto-compact-threshold": 200_000, "continue-after-limit": false },
+    });
+    const values = useSettingValues.getState().values;
+    expect(values["studio\u0000auto-compact-threshold"]).toBe(200_000);
+    expect(values["studio\u0000continue-after-limit"]).toBe(false);
+  });
+
+  test("a notification without values changes nothing", () => {
+    const before = useSettingValues.getState().values;
+    onServerSettingsChanged("studio", {});
+    expect(useSettingValues.getState().values).toBe(before);
   });
 });

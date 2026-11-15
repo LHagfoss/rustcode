@@ -33,6 +33,7 @@ mod harness_usage;
 pub mod home;
 mod install_hints;
 mod keep_awake;
+pub mod manage;
 pub mod mcp;
 mod memory;
 mod message_origin;

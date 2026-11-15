@@ -402,6 +402,23 @@ impl Hub {
         if request.tool == super::ask_user::TOOL_NAME {
             return self.ask_user(&request, cancel).await;
         }
+        if crate::manage::is_tool(&request.tool) {
+            let approval = match self.questions_for(&request) {
+                Some(asker) => crate::manage::Approval::Ask {
+                    asker,
+                    session_id: request.session_id.clone(),
+                },
+                None => crate::manage::Approval::Unavailable(
+                    "this thread has no RustCode window to show the approval in",
+                ),
+            };
+            let answer =
+                crate::manage::answer(&request.tool, &request.args, approval, cancel).await;
+            return CallAnswer {
+                success: answer.success,
+                content: answer.content,
+            };
+        }
         if crate::workflow::is_tool(&request.tool) {
             return workflow_call(&request, client, version, cancel).await;
         }

@@ -2495,12 +2495,17 @@ async fn serve_connection(
         )
         .on_receive_request(
             async |request: settings::GetSettingsRequest, responder, _connection| {
+                // A client that reads settings follows a change made elsewhere.
+                server.clients.subscribe(client_id, clients::Topic::Settings);
+                settings::start_watching(&server.clients);
                 responder.respond(settings::read(request)?)
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async |request: settings::SetSettingsRequest, responder, _connection| {
+                server.clients.subscribe(client_id, clients::Topic::Settings);
+                settings::start_watching(&server.clients);
                 responder.respond(settings::write(request)?)
             },
             agent_client_protocol::on_receive_request!(),

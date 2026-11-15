@@ -1511,6 +1511,8 @@ async fn execute_tool_batch_validated(
                     None,
                     std::time::Duration::ZERO,
                 )
+            } else if crate::manage::is_tool(&name_clone) {
+                (crate::manage::execute(&state_clone, &cancel_token_clone, &name_clone, &args_clone).await, None, std::time::Duration::ZERO)
             } else if name_clone == crate::orchestration::secret::TOOL_NAME {
                 (crate::orchestration::secret::execute(&state_clone, &cancel_token_clone, &args_clone).await, None, std::time::Duration::ZERO)
             } else if crate::orchestration::is_tool(&name_clone) {
