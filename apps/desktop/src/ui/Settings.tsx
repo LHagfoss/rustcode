@@ -331,18 +331,18 @@ function GeneralPage() {
           status={defaultCwd || "None chosen"}
         >
           <Action onClick={() => void pickFolder(defaultCwd).then((p) => p && setDefaultCwd(p))}>
-            Choose…
+            {defaultCwd ? "Change folder" : "Choose folder"}
           </Action>
         </Row>
         <Row title="Harness, model and effort" subtitle="Which harness runs a new thread by default.">
-          <Action onClick={() => openSettings("agents")}>Harnesses…</Action>
+          <Action onClick={() => openSettings("agents")}>Open Harnesses</Action>
         </Row>
         <Row
           title="Access"
           subtitle="What threads may do without asking, by default and per project."
           status={permissionLabel(defaultAccess.value ?? SETTINGS_DEFAULTS.defaultPermissionMode)}
         >
-          <Action onClick={() => openSettings("permissions")}>Permissions…</Action>
+          <Action onClick={() => openSettings("permissions")}>Open Permissions</Action>
         </Row>
       </Group>
       <Group title="Threads">
@@ -679,7 +679,7 @@ function AgentsPage() {
               </Chip>
             ) : undefined
           }
-          footer="A thread can still switch harness and model from the composer."
+          hint="A thread can still switch harness and model from the composer."
         >
           {scoped.project && (
             <div className="px-4 pb-2">
@@ -1351,7 +1351,7 @@ function AppearancePage() {
               </Action>
             )}
             <Action quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
-              <Plus size={12} /> New theme…
+              <Plus size={12} /> New theme
             </Action>
           </div>
         }

@@ -255,7 +255,7 @@ export function DiagnosticsPage() {
         >
           <Action onClick={() => void saveReport()}>
             <Download size={13} />
-            Save…
+            Save to file
           </Action>
           <Action prominent onClick={() => void copyReport()}>
             <Copy size={13} />
@@ -476,7 +476,7 @@ function ServerLog() {
           }
         >
           <Download size={13} />
-          Save…
+          Save to file
         </Action>
       </div>
       <pre

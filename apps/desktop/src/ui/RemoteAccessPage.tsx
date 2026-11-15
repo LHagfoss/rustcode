@@ -178,11 +178,12 @@ export function RemoteAccessPage() {
 
       <Group
         title="Remote access"
-        footer="Shared with the RustCode app on your phone through the remote gateway (docs/remote.md). Plain LAN traffic is authenticated but not encrypted: use NetBird away from a trusted network."
+        hint="Shared with the RustCode app on your phone through the remote gateway (docs/remote.md). Plain LAN traffic is authenticated but not encrypted: use NetBird away from a trusted network."
       >
         <Row
           title="Network access"
-          subtitle="Starts the gateway and lets paired devices reach every thread on this computer, across all projects, not only the ones open here. Turning it off stops remote access for this computer, including a share a terminal started; paired devices stay paired."
+          subtitle="Let paired devices reach every thread on this computer."
+          hint="Starts the gateway, across all projects, not only the ones open here. Off stops remote access for this computer, including a share a terminal started; paired devices stay paired."
           status={status}
         >
           <Switch
@@ -194,12 +195,13 @@ export function RemoteAccessPage() {
         </Row>
         <Row
           title="RustCode server"
-          subtitle="Installs the RustCode server as a background service: it stays up when the app closes, and starts when you log in. It runs the remote gateway, so paired devices still reach this computer with the app closed. Threads that live in it keep running; the threads this app starts still run in its own engine and end with it, until RustCode uses the server. Turning network access on installs it when it is not installed."
+          subtitle="Keeps this computer reachable with the app closed. Starts when you log in."
+          hint="A background service that runs the remote gateway. Threads that live in it keep running; the threads this app starts still run in its own engine and end with it. Turning network access on installs it when it is not installed."
           status={
             <>
-              <span className="tabular">{serverLine(server)}</span>
+              {server && !server.installed ? <span className="tabular">{serverLine(server)}</span> : null}
               {server?.gateway.remoteEnabled || server?.gateway.running ? (
-                <span className="block pt-0.5">Gateway: {gatewayLine(server.gateway, server.installed)}</span>
+                <span className="block">Gateway: {gatewayLine(server.gateway, server.installed)}</span>
               ) : null}
               {server?.problems.map((problem) => (
                 <span key={problem.code} className="block pt-0.5 text-warning">
@@ -220,7 +222,8 @@ export function RemoteAccessPage() {
         </Row>
         <Row
           title="Gateway address"
-          subtitle="The address a phone on this network dials. The terminal's `/remote status` shows the same one."
+          subtitle="What a phone on this network dials."
+          hint="The terminal's `/remote status` shows the same address."
           status={
             gateway?.advertisedAddress ? (
               <span>
@@ -251,7 +254,8 @@ export function RemoteAccessPage() {
         </Row>
         <Row
           title="Pair a device"
-          subtitle={`Shows a QR code and an eight-digit code for the phone's Scan QR. The code lasts two minutes and works once; a new one replaces it. ${WRONG_CODES_ALLOWED} wrong codes are allowed.`}
+          subtitle="A phone or another computer scans the QR code or types the eight-digit code."
+          hint={`The code lasts two minutes and works once; a new one replaces it. ${WRONG_CODES_ALLOWED} wrong codes are allowed.`}
           status={
             unavailable
               ? "Remote access needs the remote gateway, which this host does not build."
@@ -264,7 +268,7 @@ export function RemoteAccessPage() {
         >
           <Action prominent disabled={unavailable || busy !== null} onClick={pair}>
             {busy === "pair" ? <Spinner /> : <Smartphone size={13} />}
-            Pair a device
+            Show pairing code
           </Action>
         </Row>
       </Group>
@@ -309,7 +313,7 @@ export function RemoteAccessPage() {
 
       <Group
         title={`Paired devices · ${devices.length}`}
-        footer="A pairing stays until you revoke it here, so a device does not have to pair again. Revoke disconnects it at once."
+        hint="A pairing stays until you revoke it here, so a device does not have to pair again. Revoke disconnects it at once."
       >
         {devices.length ? (
           devices.map((device) => (
@@ -317,7 +321,7 @@ export function RemoteAccessPage() {
               key={device.id}
               title={device.name}
               subtitle={`${deviceLabel(device.kind, device.platform)} · ${lastSeenLabel(device, now)}`}
-              status={connectionDirection(
+              hint={connectionDirection(
                 peerOutbound(device.hostId, machines),
                 device.connected === true,
                 device.name,
@@ -340,14 +344,14 @@ export function RemoteAccessPage() {
         ) : (
           <Row
             title="No devices paired yet"
-            subtitle="A phone or another computer's RustCode app appears here once it scans the QR code, enters the eight-digit code, or asks to connect and you accept."
+            subtitle="Scan the QR code or enter the eight-digit code on your phone to pair it."
           />
         )}
       </Group>
 
       <Group
         title="Routes"
-        footer="Your phone tries these addresses in order and keeps using the first that answers. It learns them here, so pairing once is enough to reconnect on another network. Plain LAN traffic is authenticated but not encrypted: prefer the VPN or host name away from a trusted network."
+        hint="Your phone tries these addresses in order and keeps using the first that answers. It learns them here, so pairing once is enough to reconnect on another network. Plain LAN traffic is authenticated but not encrypted: prefer the VPN or host name away from a trusted network."
       >
         {gateway?.routes && gateway.routes.length > 0 ? (
           gateway.routes.map((route) => (
@@ -410,7 +414,7 @@ export function RefusedConnectionsGroup({ refused }: { refused: RemoteRefusedCon
   return (
     <Group
       title="Refused connections"
-      footer="A device that could not get in is listed here for a quarter of an hour after it stopped trying. Nothing was shared with it: no thread, no prompt and no code was accepted."
+      hint="A device that could not get in is listed here for a quarter of an hour after it stopped trying. Nothing was shared with it: no thread, no prompt and no code was accepted."
     >
       {refused.map((entry) => {
         const copy = refusalCopy(entry);

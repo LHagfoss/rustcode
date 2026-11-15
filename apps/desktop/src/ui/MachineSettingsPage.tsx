@@ -175,7 +175,7 @@ function Access({ machine }: { machine: Machine }) {
   return (
     <Group
       title={`Access · ${access.label}`}
-      footer="The two directions are separate pairings. Ending one leaves the other as it is."
+      hint="The two directions are separate pairings. Ending one leaves the other as it is."
     >
       <Row title="This computer reaches it" subtitle={access.outboundText}>
         <Chip tone={access.outbound ? "ok" : "bad"}>{access.outbound ? "Allowed" : "Ended"}</Chip>
@@ -204,7 +204,7 @@ function Routes({ machine }: { machine: Machine }) {
           {probing ? "Testing…" : "Test routes"}
         </Action>
       }
-      footer="Test routes opens a plain connection to each address, with no sign-in, and shows whether it answers and how fast. The app tries the LAN first and the VPN when the LAN does not answer."
+      hint="Test routes opens a plain connection to each address, with no sign-in, and shows whether it answers and how fast. The app tries the LAN first and the VPN when the LAN does not answer."
     >
       {machine.routes.length === 0 && (
         <Row title="No route saved" subtitle="Pair the machine again to add one." />

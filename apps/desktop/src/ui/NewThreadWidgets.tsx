@@ -301,7 +301,7 @@ function PullsCard({ project }: { project: string }) {
         <div className="flex flex-1 flex-col gap-2">
           <Nothing>Connect GitHub to see this project's pull requests.</Nothing>
           <Pill quiet size="sm" className="self-start" onClick={() => openSettings("connections")}>
-            Connections…
+            Connect GitHub
           </Pill>
         </div>
       ) : pulls === undefined ? (

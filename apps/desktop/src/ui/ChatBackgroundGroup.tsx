@@ -66,7 +66,7 @@ export function ChatBackgroundGroup() {
       >
         <div className="flex shrink-0 items-center gap-2">
           {banner.name && <Action onClick={() => void removeBanner()}>Remove</Action>}
-          <Action onClick={choose}>{banner.name ? "Change…" : "Choose image…"}</Action>
+          <Action onClick={choose}>{banner.name ? "Change image" : "Choose image"}</Action>
         </div>
       </Row>
       {banner.name && (

@@ -54,7 +54,7 @@ export function PermissionsPage() {
       <RememberedGroup />
       <Group
         title="Still asks at Full access"
-        footer="Nothing else asks a Full-access thread. The card of each of these says why it appears."
+        hint="Nothing else asks a Full-access thread. The card of each of these says why it appears."
       >
         {ALWAYS_ASKS.map((item) => (
           <Row key={item.title} title={item.title} subtitle={item.why} />
@@ -230,7 +230,7 @@ function RememberedGroup() {
             className="text-accent hover:underline"
             onClick={() => openSettings("orchestration")}
           >
-            “Let delegates use my named accounts without asking” in Orchestration…
+            “Let delegates use my named accounts without asking” in Orchestration
           </button>
         </>
       }

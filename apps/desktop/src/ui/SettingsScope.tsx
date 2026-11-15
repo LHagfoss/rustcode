@@ -18,7 +18,7 @@ import {
   useScopeProjects,
 } from "../state/settingsScope";
 import { Tooltip } from "./primitives";
-import { Action, Select } from "./settingsKit";
+import { Action, HintTip, Select } from "./settingsKit";
 
 const THIS = "this";
 const ALL = "all";
@@ -64,14 +64,20 @@ export function SettingsScopeBar({ machineOnly = false }: { machineOnly?: boolea
     <div className="mb-6 flex flex-col gap-2 rounded-xl bg-surface px-4 py-3">
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <div className="font-medium text-body text-fg">{machineOnly ? "Showing" : "Applying to"}</div>
-          <div className="max-w-[70ch] text-callout text-fg-muted">
-            {machineOnly
-              ? "These settings belong to the machine you pick."
-              : project
-                ? `Rows a project can set change for ${project.name} only. The rest apply to every project.`
-                : "Server settings change on the machine you pick. App preferences stay here."}
+          <div className="flex items-center gap-1.5 font-medium text-body text-fg">
+            {machineOnly ? "Showing" : "Applying to"}
+            <HintTip label={machineOnly ? "Showing" : "Applying to"}>
+              {machineOnly
+                ? "These settings belong to the machine you pick."
+                : "Server settings change on the machine you pick. App preferences stay on this computer. A project changes only the rows a project can set; the rest apply to every project."}
+            </HintTip>
           </div>
+          {/* Only a picked project changes what a row means, so only then is there a line to read. */}
+          {!machineOnly && project && (
+            <div className="max-w-[70ch] text-callout text-fg-muted">
+              Project rows change for {project.name} only.
+            </div>
+          )}
         </div>
         {!machineOnly && (
           <Select

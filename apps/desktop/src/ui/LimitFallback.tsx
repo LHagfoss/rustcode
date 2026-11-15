@@ -133,7 +133,7 @@ function RuleForm({
   const [busy, setBusy] = useState(false);
   const error = ruleError(rules, form, initial?.from);
   const options = (current: string) => [
-    { value: "", label: "Choose…" },
+    { value: "", label: "Choose a harness" },
     ...harnesses.map((h) => ({ value: h.id, label: h.name })),
     ...(current && !harnesses.some((h) => h.id === current) ? [{ value: current, label: current }] : []),
   ];

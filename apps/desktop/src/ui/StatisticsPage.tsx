@@ -744,10 +744,10 @@ function PlanLimits({ names }: { names: Map<string, string> }) {
       title="Usage limits"
       action={
         <Action quiet size="sm" onClick={() => openSettings("usage")}>
-          Usage…
+          Open Usage
         </Action>
       }
-      footer="Read from each subscription's own sign-in, as in Settings › Usage."
+      hint="Read from each subscription's own sign-in, as in Settings › Usage."
     >
       <div className="flex flex-col gap-4 px-4 py-4">
         {plans.map((plan) => {

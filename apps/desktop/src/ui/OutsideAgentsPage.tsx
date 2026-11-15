@@ -60,9 +60,8 @@ export function OutsideAgentsPage() {
   return (
     <>
       <p className="mb-5 max-w-[70ch] px-4 text-callout text-fg-muted">
-        Let another app use RustCode's threads: read them, start work, or message a thread. Each app gets a
-        token of its own with an access level you choose, and you can change or revoke it here at any time.
-        The token is only for RustCode's tools on this computer; it opens nothing else.
+        Let another app read, start or message RustCode threads. Each app gets its own token, only for
+        RustCode on this computer, and you can revoke it here.
       </p>
       {!status.available && (
         <Group title="Not available here">
@@ -100,7 +99,7 @@ export function OutsideAgentsPage() {
       )}
       <Group
         title="Connected apps"
-        footer="Read-only apps never ask. Above that, each change is put to you here first unless you turn that off for the app."
+        hint="Read-only apps never ask. Above that, each change is put to you here first unless you turn that off for the app."
       >
         {status.grants.length === 0 ? (
           <Row
@@ -119,7 +118,7 @@ export function OutsideAgentsPage() {
       />
       <Group
         title="Recent activity"
-        footer="Who called which tool and how it ended. Arguments and answers are not kept."
+        hint="Who called which tool and how it ended. Arguments and answers are not kept."
       >
         {status.recent.length === 0 ? (
           <Row title="Nothing yet" subtitle="Calls from connected apps appear here." />
@@ -225,7 +224,7 @@ function ConnectGroup({
   return (
     <Group
       title="Connect an app"
-      footer="Pick the app and what it may do. RustCode makes a token and the config to paste into that app; the token is shown once."
+      hint="Pick the app and what it may do. RustCode makes a token and the config to paste into that app; the token is shown once."
     >
       <Row title="App" subtitle="Which app will connect.">
         <Select
@@ -261,7 +260,12 @@ function ConnectGroup({
           <Switch label="Ask before changes" checked={ask} onChange={setAsk} />
         </Row>
       )}
-      <Row title="Connect" subtitle={full ? "The most apps are connected; revoke one first." : undefined}>
+      <Row
+        title="Create its token and config"
+        subtitle={
+          full ? "The most apps are connected; revoke one first." : "Shown once, to paste into that app."
+        }
+      >
         <Action prominent disabled={disabled || full || busy} onClick={() => void connect()}>
           <Plug size={14} />
           {busy ? "Connecting…" : "Connect app"}
