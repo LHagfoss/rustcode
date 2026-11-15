@@ -2,6 +2,10 @@
 // Components read slices with `useApp(selector)` and call the actions below.
 
 import { create } from "zustand";
+import { onThemesChanged, refreshThemes } from "./themeActions";
+
+export { createTheme, setActiveTheme } from "./themeActions";
+
 import {
   AcpConnection,
   ConnectionClosedError,
@@ -95,7 +99,7 @@ import { trashName } from "../lib/platform";
 import { type QuestionChoice, shapeQuestionAnswer } from "../lib/questionAnswer";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
-import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
+import { ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
 import {
   applyWindowTitle,
@@ -1987,78 +1991,6 @@ async function refreshCommands(conn: AcpConnection): Promise<void> {
     set({ baseCommands: update.commands });
   } catch {
     // No catalog: a new thread shows what its harness last advertised, if anything.
-  }
-}
-
-// ---------------------------------------------------------------- themes
-
-/** The project whose `.rustcode/themes` the engine lists too. */
-function themeParams(): JsonObject {
-  const s = get();
-  const cwd = (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd;
-  return cwd ? { cwd } : {};
-}
-
-/** Lists the engine's themes; an engine without them keeps the built-in ones. */
-async function refreshThemes(conn: AcpConnection): Promise<void> {
-  try {
-    const themes = parseThemes(await conn.request(ThemeMethod.list, themeParams(), 10_000));
-    if (connection !== conn) return;
-    set((s) => ({ themes, features: { ...s.features, themes: true } }));
-  } catch (error) {
-    if (connection !== conn) return;
-    const missing = error instanceof RpcError && error.isMethodNotFound;
-    set((s) => ({ themes: null, features: { ...s.features, themes: missing ? false : s.features.themes } }));
-  }
-}
-
-/** `_rustcode/themes/changed`: a theme file changed, or the CLI picked another theme. */
-function onThemesChanged(params: JsonObject) {
-  if (!Array.isArray(params.themes)) {
-    if (connection) void refreshThemes(connection);
-    return;
-  }
-  const themes = parseThemes(params);
-  const changed = themes.active !== get().themes?.active;
-  set({ themes, features: { ...get().features, themes: true } });
-  // Picked elsewhere (the CLI, another window): follow it, mode and all.
-  if (changed) adoptTheme(themes.active);
-}
-
-function adoptTheme(name: string) {
-  const theme = (get().themes?.themes ?? BUILTIN_THEMES).find((t) => t.name === name);
-  if (!theme) return;
-  set({ themeActive: name, theme: theme.mode });
-  store(STORAGE.themeActive, name);
-  store(STORAGE.theme, theme.mode);
-}
-
-/** Picks a theme: it applies at once, and the engine saves it when it has themes. */
-export async function setActiveTheme(name: string): Promise<void> {
-  adoptTheme(name);
-  // The theme changes under the pointer, and the picker shows the name: no toast to say so.
-  if (!get().features.themes || !connection) return;
-  try {
-    const themes = parseThemes(await connection.request(ThemeMethod.set, { name, ...themeParams() }, 10_000));
-    set({ themes });
-  } catch (error) {
-    toast(`Could not save the theme: ${errorText(error)}`, "error");
-  }
-}
-
-/**
- * Makes a new theme file from `from` through the engine. Null when the
- * engine cannot (the UI then shows the CLI command instead).
- */
-export async function createTheme(name: string, from: string): Promise<string | null> {
-  if (!get().features.themes || !connection) return null;
-  try {
-    const result = obj(await connection.request(ThemeMethod.create, { name, from }, 10_000));
-    if (connection) await refreshThemes(connection);
-    return str(result?.path) ?? "";
-  } catch (error) {
-    if (error instanceof RpcError && error.isMethodNotFound) return null;
-    throw error;
   }
 }
 
