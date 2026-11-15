@@ -33,6 +33,45 @@ import { refreshCheckpoints } from "./checkpointActions";
 
 export { refreshCheckpoints, returnToAttempt, rewindCheckpoint, turnDiff } from "./checkpointActions";
 
+import {
+  askConfirm,
+  cancelEdit,
+  pruneSidebarOrder,
+  renameThread,
+  rewindTo,
+  threadDeleted,
+} from "./threadActions";
+
+export {
+  askConfirm,
+  cancelEdit,
+  canRewind,
+  closeConfirm,
+  dismissInbox,
+  editMessage,
+  forgetSidebarOrder,
+  pruneSidebarOrder,
+  renameThread,
+  restoreInbox,
+  retryMessage,
+  retryThread,
+  setArchived,
+  setPinned,
+  setSectionOrder,
+  threadDeleted,
+  togglePin,
+  trashThread,
+} from "./threadActions";
+
+import {
+  clearStatusMark,
+  reconcileStatusMarks,
+  sessionById,
+  setThreadStatus,
+  statusOf,
+  unsettleThreads,
+} from "./threadStatus";
+
 export {
   accountSlug,
   accountsOf,
@@ -66,6 +105,16 @@ export {
   switchThreadAccount,
   switchThreadHarness,
 } from "./harnessActions";
+export {
+  clearStatusMark,
+  sessionById,
+  setThreadStatus,
+  setThreadsStatus,
+  settleThread,
+  settleThreads,
+  statusOf,
+  unsettleThreads,
+} from "./threadStatus";
 
 import {
   CLAUDE_CODE,
@@ -185,8 +234,7 @@ import {
   SHORTCUTS_KEY,
 } from "../lib/keys";
 import { dismissOverlays } from "../lib/overlays";
-import { trashName } from "../lib/platform";
-import { setShellTransport, shellCall } from "../lib/shell";
+import { setShellTransport } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
 import { ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
@@ -224,16 +272,13 @@ import {
   withSkills,
 } from "./commands";
 import {
-  type Attachment,
   type ComposeExtras,
   carriesExtras,
   composedText,
   emptyExtras,
   hasExtras,
   promptBlocks,
-  type SentAttachment,
   sentAttachments,
-  splitImageMarkers,
 } from "./compose";
 import type { ConnectCode } from "./connectRequests";
 import { contextPercent } from "./details";
@@ -255,7 +300,6 @@ import {
 import {
   answerOrchestration,
   answerStatusLocally,
-  clearWaitingLinks,
   interruptedLinks,
   linkFinished,
   linkStarted,
@@ -270,7 +314,6 @@ import {
   orchestrationCallDropped,
   queuedLinkDropped,
   reconcileLinks,
-  releaseLimitWaitsFrom,
   requeueUnreadSteers,
   resetLinkBook,
   resetWaits,
@@ -285,8 +328,7 @@ import {
   wakeDelivered,
   wakeTick,
 } from "./host";
-import type { InboxItem } from "./inbox";
-import { dismissRows, type InboxDismissals, restoreRows } from "./inboxDismissed";
+import { dismissRows, type InboxDismissals } from "./inboxDismissed";
 import {
   INTERNET_POLL_MS,
   INTERNET_RESUME_TEXT,
@@ -313,13 +355,10 @@ import { loadTranscript, saveTranscript, threadFromTranscript } from "./machineC
 import { loadMirroredTranscript, mirrorTranscript, setMirrorRequest } from "./machineMirror";
 import {
   changesFor,
-  forgetThreadOutbox,
   type OutboxChange,
   pendingStatus,
-  queueChange,
   removeChange,
   resolveChange,
-  storedStatus,
   useOutbox,
 } from "./machineOutbox";
 import {
@@ -336,7 +375,6 @@ import {
   DEFAULT_DELEGATES_TOTAL,
   failure,
   failureJson,
-  forget,
   type GrantAsk,
   type LinkBook,
   latestReply,
@@ -390,7 +428,7 @@ import {
   withoutScheduled,
 } from "./schedule";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
-import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
+import type { SidebarOrder } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
 import {
   appendNotice,
@@ -413,8 +451,6 @@ import {
   startCompaction,
   type ThreadState,
   type TranscriptItem,
-  truncateBefore,
-  userIndexOf,
   waitingOn,
   wakeTurn,
   withContinueMark,
@@ -1502,7 +1538,7 @@ function scopeInbound(message: Inbound, host: string): Inbound {
  * one set: `refreshSessions` here, `mergeMachineLists` and `machines.ts` `readThreads` for a
  * machine (issue 3523).
  */
-const keptUnlistedThreads = new Map<string, { summary: SessionSummary; at: number }>();
+export const keptUnlistedThreads = new Map<string, { summary: SessionSummary; at: number }>();
 
 /** How long a thread the app knows about waits for a list to name it. */
 const KEEP_UNLISTED_MS = 5 * 60_000;
@@ -1625,7 +1661,7 @@ function releaseAnnouncements(own: string | undefined): void {
 }
 
 // Pending changes cover stale machine lists until the owner answers.
-const remoteStatusPending = new Map<
+export const remoteStatusPending = new Map<
   string,
   { status: "review" | "done" | "idle"; confirmed: ThreadStatus; tail: Promise<void>; version: number }
 >();
@@ -1684,7 +1720,7 @@ function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): vo
  * What a toast adds when some of `ids` run on a machine that is away: that the change waits for it.
  * `lead` ends the sentence before it, when the toast's own text has no full stop.
  */
-function syncNote(ids: readonly string[], lead = ""): string {
+export function syncNote(ids: readonly string[], lead = ""): string {
   const names = [
     ...new Set(
       ids
@@ -2784,7 +2820,7 @@ export async function setSnoozed(id: string, at: number | null): Promise<boolean
   return true;
 }
 
-function applySnooze(id: string, at: number | null) {
+export function applySnooze(id: string, at: number | null) {
   const { [id]: _, ...rest } = get().snoozed;
   const snoozed = at === null ? rest : { ...rest, [id]: at };
   set({ snoozed });
@@ -2860,7 +2896,7 @@ export function markUnread(id: string) {
   set((s) => ({ finished: { ...s.finished, [id]: Date.now() } }));
 }
 
-function without(map: Record<string, number>, id: string): Record<string, number> {
+export function without(map: Record<string, number>, id: string): Record<string, number> {
   if (!(id in map)) return map;
   const { [id]: _, ...rest } = map;
   return rest;
@@ -3741,392 +3777,6 @@ export function dismissPendingSetup() {
 }
 
 // ---------------------------------------------------------------- thread actions
-
-export function askConfirm(confirm: NonNullable<AppState["confirm"]>) {
-  set({ confirm });
-}
-
-export function closeConfirm() {
-  set({ confirm: null });
-}
-
-/** Whether the thread can be taken back to one of its messages. */
-export function canRewind(thread: ThreadState): boolean {
-  return !!get().agent?.rewind && (thread.harness?.capabilities.rewind ?? true) && !thread.running;
-}
-
-async function rewindTo(id: string, itemId: string, text: string): Promise<boolean> {
-  const thread = get().threads[id];
-  if (!thread) return false;
-  const userIndex = userIndexOf(thread, itemId);
-  if (userIndex < 0) return false;
-  try {
-    const conn = connectionForThread(id);
-    if (!conn) throw new Error("That computer is not connected.");
-    await conn.request(Method.rewind, { sessionId: splitThreadKey(id).id, userIndex, text }, 10_000);
-  } catch (error) {
-    toast(`Could not rewind: ${errorText(error)}`, "error");
-    return false;
-  }
-  updateThread(id, (t) => truncateBefore(t, itemId));
-  return true;
-}
-
-/** Retry: the thread goes back to just before the message and sends it again (after a confirm when later messages go too). */
-export function retryMessage(id: string, itemId: string) {
-  const thread = get().threads[id];
-  const item = thread?.items.find((i) => i.id === itemId);
-  if (!thread || item?.kind !== "user") return;
-  const extras = { ...emptyExtras, attachments: pastesOf(item.attachments, item.text) };
-  const go = async () => {
-    if (canRewind(thread)) {
-      if (await rewindTo(id, itemId, item.text)) void runPrompt(id, item.text, extras);
-    } else void submit(item.text, extras);
-  };
-  const later = messagesAfter(thread, itemId);
-  if (later > 0 && canRewind(thread)) {
-    askConfirm({
-      title: "Retry this message?",
-      message:
-        later === 1
-          ? "The message after it and its reply will be removed."
-          : `The ${later} messages after it and their replies will be removed.`,
-      action: "Retry",
-      destructive: true,
-      run: () => void go(),
-    });
-  } else void go();
-}
-
-/**
- * Put rows away without answering them: a failure nobody will retry, a request the
- * user would rather answer in the thread itself. Only the inbox row and its count
- * change — a failed turn still shows in the transcript and a request still waits in
- * its chat — and the row comes back if the thread asks again (state/inboxDismissed.ts).
- * One Undo toast puts back every row of this call.
- */
-export function dismissInbox(items: readonly InboxItem[]): void {
-  if (!items.length) return;
-  const keys = items.map((item) => item.key);
-  const next = dismissRows(get().inboxDismissed, items);
-  set({ inboxDismissed: next });
-  store(STORAGE.inboxDismissed, JSON.stringify(next));
-  const title = items.length === 1 ? items[0]!.title : "";
-  toast(items.length === 1 ? `Dismissed "${title}"` : `Dismissed ${items.length} items`, "info", {
-    id: items.length === 1 ? `inbox-dismiss:${keys[0]}` : "inbox-dismiss",
-    action: { label: "Undo", run: () => restoreInbox(keys) },
-  });
-}
-
-/** Undo: the rows go back in the inbox exactly as they were. */
-export function restoreInbox(keys: readonly string[]): void {
-  const before = get().inboxDismissed;
-  const next = restoreRows(before, keys);
-  if (next === before) return;
-  set({ inboxDismissed: next });
-  store(STORAGE.inboxDismissed, JSON.stringify(next));
-}
-
-/** Retry a thread's failed turn: the inbox's action for a failure. The thread is
- * opened first when the app has not read it, because the message to send again
- * lives in its transcript; its last message is the one the failure answered.
- */
-export async function retryThread(id: string): Promise<void> {
-  if (!get().threads[id]?.loaded) await openThread(id);
-  const thread = get().threads[id];
-  if (!thread) return;
-  for (let i = thread.items.length - 1; i >= 0; i--) {
-    const item = thread.items[i]!;
-    if (item.kind !== "user") continue;
-    // Retried: the failure is answered, so the inbox and the row stop saying Failed.
-    clearFinished(id);
-    retryMessage(id, item.id);
-    return;
-  }
-  // Nothing to send again (an empty transcript): at least show the thread.
-  selectThread(id);
-}
-
-/**
- * The pastes a sent message kept, back in a message that is sent again: a retry or an edit must
- * carry the log the message was about, or the model is asked about text it cannot see. Only a
- * message sent before pastes went into the text has these; one written since carries the text
- * itself, so `at` puts them back at its end, where the chip used to send them.
- */
-function pastesOf(attachments: SentAttachment[] | undefined, text: string): Attachment[] {
-  return (attachments ?? []).flatMap((a) =>
-    a.kind === "text" && a.text
-      ? [{ id: localId("paste"), kind: "text" as const, text: a.text, at: text.length }]
-      : [],
-  );
-}
-
-/** Edit: the message goes back to the composer; sending it rewinds the thread to it first. */
-export function editMessage(id: string, itemId: string) {
-  const thread = get().threads[id];
-  const item = thread?.items.find((i) => i.id === itemId);
-  if (!thread || item?.kind !== "user") return;
-  const text = splitImageMarkers(item.text).text;
-  // What the message held past the text comes back with it, as the chips it was written as. The
-  // composer's own paste chips go: the draft is this message now, not the one edited before it.
-  const pastes = pastesOf(item.attachments, text);
-  setExtras(id, (e) => ({
-    ...e,
-    attachments: [...e.attachments.filter((a) => a.kind !== "text"), ...pastes],
-  }));
-  set((s) => ({
-    drafts: { ...s.drafts, [id]: text },
-    editing: canRewind(thread)
-      ? { ...s.editing, [id]: { itemId, userIndex: userIndexOf(thread, itemId), original: item.text } }
-      : s.editing,
-  }));
-}
-
-export function cancelEdit(key: string) {
-  set((s) => {
-    const { [key]: _gone, ...editing } = s.editing;
-    return { editing };
-  });
-}
-
-/**
- * Pin or unpin threads: the app's list first, so the sidebar answers at once, then the engine, one
- * request each. A failure puts back only the threads the engine refused, and says so once for the
- * whole selection rather than once per thread (ui/Sidebar.tsx acts on a multi-selection).
- */
-export function setPinned(ids: string[], on: boolean) {
-  const before = get().pinned;
-  const wanted = new Set(ids);
-  const next = on
-    ? [...ids.filter((id) => !before.includes(id)), ...before]
-    : before.filter((id) => !wanted.has(id));
-  set({ pinned: next });
-  store(STORAGE.pinned, JSON.stringify(next));
-  const many = ids.length > 1;
-  if (!get().features.pins) return;
-  // A pin is kept by the computer the thread runs on: a machine's threads go over that machine's
-  // connection, with the machine's own id (`state/threadKeys.ts`). A local thread with no engine
-  // keeps the app's pin, as before.
-  const groups = new Map<AcpConnection, string[]>();
-  const unreachable: string[] = [];
-  const queued: string[] = [];
-  for (const id of ids) {
-    const conn = connectionForThread(id);
-    if (conn) groups.set(conn, [...(groups.get(conn) ?? []), id]);
-    // A paired machine that is away gets the pin when it is back (`state/machineOutbox.ts`).
-    else if (threadIsRemote(id) && machineOfThread(id)) {
-      queueChange({ kind: "pin", key: id, value: on, base: before.includes(id), at: Date.now() });
-      queued.push(id);
-    } else if (threadIsRemote(id)) unreachable.push(id);
-  }
-  if (queued.length) toast(`${on ? "Pinned" : "Unpinned"}.${syncNote(queued)}`, "info");
-  if (!groups.size && !unreachable.length) return;
-  type PinResult = { id: string; ok: true } | { id: string; ok: false; error: unknown };
-  void Promise.all<PinResult>([
-    ...[...groups].flatMap(([conn, group]) =>
-      group.map((id) =>
-        conn.request(V2Method.sessionPin, { session_id: splitThreadKey(id).id, pinned: on }, 10_000).then(
-          (): PinResult => ({ id, ok: true }),
-          (error: unknown): PinResult =>
-            error instanceof RpcError && error.isMethodNotFound ? { id, ok: true } : { id, ok: false, error },
-        ),
-      ),
-    ),
-    ...unreachable.map(
-      (id): PinResult => ({ id, ok: false, error: new Error("That computer is not connected.") }),
-    ),
-  ]).then((results) => {
-    const failed = results.filter((r): r is { id: string; ok: false; error: unknown } => !r.ok);
-    if (!failed.length) return;
-    const refused = new Set(failed.map((f) => f.id));
-    // Unpinning: keep what was pinned before, less the ones the engine took. Pinning: drop the
-    // ones it refused and leave the rest.
-    const pinned = on
-      ? get().pinned.filter((id) => !refused.has(id))
-      : before.filter((id) => !wanted.has(id) || refused.has(id));
-    set({ pinned });
-    store(STORAGE.pinned, JSON.stringify(pinned));
-    const first = errorText(failed[0]!.error);
-    toast(
-      many
-        ? `Could not ${on ? "pin" : "unpin"} ${failed.length} of ${ids.length} threads: ${first}`
-        : `Could not ${on ? "pin" : "unpin"} the thread: ${first}`,
-      "error",
-    );
-  });
-}
-
-export function togglePin(id: string) {
-  setPinned([id], !get().pinned.includes(id));
-}
-
-/**
- * Arrange one sidebar section (`state/sidebarOrder.ts`): the ids in the order the user left them,
- * kept in app storage beside `pinned`, so a drag or ⌥↑/↓ outlives the window.
- */
-export function setSectionOrder(key: string, ids: string[]) {
-  const sidebarOrder = { ...get().sidebarOrder, [key]: ids };
-  set({ sidebarOrder });
-  store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
-}
-
-/** The arrangement, written only when it changed (`state/sidebarOrder.ts`). */
-function saveSidebarOrder(next: SidebarOrder, before: SidebarOrder) {
-  if (next === before) return;
-  set({ sidebarOrder: next });
-  store(STORAGE.sidebarOrder, JSON.stringify(next));
-}
-
-/**
- * A thread that is gone keeps no place in any section's arrangement: without this a trashed thread
- * would leave its id in app storage for good. A no-op when it had no place.
- */
-export function forgetSidebarOrder(ids: readonly string[]) {
-  saveSidebarOrder(withoutThreads(get().sidebarOrder, ids), get().sidebarOrder);
-}
-
-/**
- * The arrangement limited to the threads the engine still lists: a thread trashed from another app,
- * or before this field existed, loses its place here. Callers pass the whole list — a capped one is
- * not the whole list and prunes nothing (state/store.ts `refreshSessions`).
- */
-export function pruneSidebarOrder(known: readonly string[]) {
-  const ids = new Set(known);
-  saveSidebarOrder(
-    keepThreads(get().sidebarOrder, (id) => ids.has(id)),
-    get().sidebarOrder,
-  );
-}
-
-export function setArchived(id: string, on: boolean) {
-  const archived = { ...get().archived };
-  if (on) {
-    if (get().threads[id]?.running) {
-      toast("Stop the running turn before archiving this thread.", "info");
-      return;
-    }
-    archived[id] = Date.now();
-  } else delete archived[id];
-  set({ archived });
-  store(STORAGE.archived, JSON.stringify(archived));
-  // Delegates waiting out a usage limit for this thread stop waiting for it.
-  if (on) releaseLimitWaitsFrom(id);
-
-  if (on && get().selectedId === id) startNewThread();
-}
-
-/**
- * Renames a thread. `user` is a name the user typed: the thread records that they chose it, and an
- * agent naming its own thread with `update_session` leaves it alone (issue 3599).
- */
-export async function renameThread(
-  id: string,
-  title: string,
-  options: { user?: boolean } = {},
-): Promise<boolean> {
-  // A thread's name lives on the computer that owns it, and renaming one is that computer's
-  // folder (`thread_rename` is this shell's): another machine's thread is not renamed from here.
-  if (threadIsRemote(id)) {
-    toast("A thread on another computer is renamed on that computer.", "info");
-    return false;
-  }
-  try {
-    const saved = await shellCall<string>("thread_rename", { id, title, user: !!options.user });
-    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: saved } : x)) }));
-    updateThread(id, (t) => ({ ...t, title: saved }));
-    return true;
-  } catch (error) {
-    toast(`Could not rename the thread: ${errorText(error)}`, "error");
-    return false;
-  }
-}
-
-/** Take a thread out of every list, mark and stored place a trashed thread leaves behind. */
-function forgetThreadRow(id: string): void {
-  keptUnlistedThreads.delete(id);
-  forgetThreadOutbox(id);
-  tombstoneThread(id);
-  const { [id]: _gone, ...threads } = get().threads;
-  const archived = { ...get().archived };
-  delete archived[id];
-  const pinned = get().pinned.filter((x) => x !== id);
-  const autoCompactOff = { ...get().autoCompactOff };
-  delete autoCompactOff[id];
-  forgetAutoCompact(id);
-  applySnooze(id, null);
-  clearStatusMark(id);
-  set((s) => {
-    const peeking = s.peekId === id;
-    return {
-      threads,
-      archived,
-      pinned,
-      autoCompactOff,
-      sessions: s.sessions.filter((x) => x.id !== id),
-      links: forget(s.links, id),
-      finished: without(s.finished, id),
-      failed: without(s.failed, id),
-      // A thread in the panel's Thread tab that no longer exists is not shown,
-      // and the panel does not stay open on the tab it was in.
-      peekId: peeking ? null : s.peekId,
-      ...(peeking && s.panel === "peek" ? { panel: null } : {}),
-    };
-  });
-  // Its place in the sidebar's arrangement goes with it, or the stored order keeps an id forever.
-  forgetSidebarOrder([id]);
-  store(STORAGE.archived, JSON.stringify(archived));
-  store(STORAGE.pinned, JSON.stringify(pinned));
-  store(STORAGE.autoCompactOff, JSON.stringify(autoCompactOff));
-}
-
-/**
- * A thread trashed by another client on this engine (`_rustcode/threads/deleted`): the app on the
- * machine and the app that started the thread there see the row go together. The machine's own
- * list cache drops it too (`state/machines.ts`).
- */
-export function threadDeleted(params: unknown) {
-  const key = str(obj(params)?.sessionId);
-  if (!key) return;
-  // Links into the trashed thread failed: their parents may now have something to hear.
-  forgetThreadRow(key);
-  wakeTick();
-  if (get().selectedId === key) startNewThread();
-}
-
-/** Move a thread's folder to the Trash, closing it in the engine first, as the SwiftUI app does. */
-export async function trashThread(id: string): Promise<boolean> {
-  // A thread that still runs is stopped first, forced when it will not stop, so moving it to the
-  // Trash works in every state (issue 3652).
-  if (get().threads[id]?.running && !(await stopNow(id))) {
-    toast(`Could not stop the running turn before moving this thread to the ${trashName()}.`, "error");
-    return false;
-  }
-  // Its delegates stop with it: forgetting their links would free slots they still hold.
-  await stopLinksFrom(id);
-  if (get().threads[id] && get().agent?.closeSession) await closeThread(id);
-  try {
-    await shellCall("thread_trash", { id });
-  } catch (error) {
-    toast(errorText(error), "error");
-    return false;
-  }
-  // Every other client on this engine drops the row; an older engine has no such request.
-  try {
-    await connectionForThread(id)?.request(Method.threadDelete, { sessionId: splitThreadKey(id).id }, 10_000);
-  } catch {
-    // The folder is gone either way.
-  }
-  forgetThreadRow(id);
-  // A machine whose link is down never heard of it: its list cache drops the row here.
-  if (threadIsRemote(id)) {
-    const { host, id: raw } = splitThreadKey(id);
-    void import("./machines").then((m) => m.forgetMachineThread(host, raw));
-  }
-  // Links into the trashed thread failed: their parents may now have something to hear.
-  wakeTick();
-  if (get().selectedId === id) startNewThread();
-  return true;
-}
 
 // ---------------------------------------------------------------- turns
 
@@ -5895,283 +5545,7 @@ export function setTotalLimit(limit: number) {
   store(STORAGE.totalLimit, String(n));
 }
 
-// ---------------------------------------------------------------- status and views
-
-/**
- * What a thread is doing, for chips and the board: running or needs input
- * from the live turn, else review or done as the engine (or the app, on an
- * older engine) keeps it.
- */
-// The thread list by id, built once per list: selectors in every sidebar row run on each store
-// change (60 times a second while a reply streams), so a scan of 500 sessions per row adds up.
-const sessionIndex = new WeakMap<SessionSummary[], Map<string, SessionSummary>>();
-export function sessionById(s: AppState, id: string): SessionSummary | undefined {
-  let index = sessionIndex.get(s.sessions);
-  if (!index) {
-    index = new Map();
-    for (const x of s.sessions) if (!index.has(x.id)) index.set(x.id, x); // First wins, as `find` did.
-    sessionIndex.set(s.sessions, index);
-  }
-  return index.get(id);
-}
-
-export function statusOf(s: AppState, id: string): ThreadStatus {
-  const t = s.threads[id];
-  if (t?.permissions.length) return "needs_input";
-  if (t?.running) return "running";
-  // The engine's list says it works and this window has no turn for it (`reconcileRunState`).
-  if (s.engineRunning[id]) return "running";
-  const listed = sessionById(s, id)?.status;
-  // A thread this window holds no stream for (never opened, or reset by a restart) has only the
-  // engine's list to go by, and the list is read every few seconds (`startRunStatePoll`).
-  if (!t?.loaded && !threadIsRemote(id) && engineBusy(listed)) return listed as ThreadStatus;
-  const pending = remoteStatusPending.get(id);
-  if (pending) return pending.status;
-  const queued = threadIsRemote(id) ? pendingStatus(id) : undefined;
-  if (queued) return queued;
-  const mark = threadIsRemote(id) ? undefined : s.statusMarks[id];
-  if (listed === "done" || listed === "review") return mark ?? listed;
-  return mark ?? "idle";
-}
-
-function saveMarks(marks: Record<string, ThreadStatus>) {
-  set({ statusMarks: marks });
-  store(STORAGE.statusMarks, JSON.stringify(marks));
-}
-
-/**
- * Drop the marks the engine contradicts: it reports a status now, so a different one is the newer
- * truth — a settle or a review from the CLI, or another window — and the row has to say that. A
- * mark still covers an engine that reports no status at all (an older build, or a thread the list
- * has not caught up with).
- */
-function reconcileStatusMarks(listed: SessionSummary[]) {
-  const next = { ...get().statusMarks };
-  let dropped = false;
-  for (const x of listed) {
-    const mark = next[x.id];
-    if (!x.status || mark === undefined || mark === x.status) continue;
-    delete next[x.id];
-    dropped = true;
-  }
-  if (dropped) saveMarks(next);
-}
-
-export function clearStatusMark(id: string) {
-  const { [id]: _gone, ...rest } = get().statusMarks;
-  if (_gone) saveMarks(rest);
-}
-
-/** Mark a thread for review, done, or back to idle; stored by the engine when it can, else by the app. */
-export function setThreadStatus(id: string, status: "review" | "done" | "idle"): Promise<number> {
-  return setThreadsStatus([id], status);
-}
-
-/**
- * The same for several threads at once: the app's list first, then the engine one request each.
- * Whatever fails is reported in one toast for the selection, not one per thread.
- */
-export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
-  if (status === "done") clearWaitingLinks(ids.filter((id) => !threadIsRemote(id)));
-  const remote = ids.filter(threadIsRemote);
-  const remoteRequests = remote.map(async (id) => {
-    const conn = connectionForThread(id);
-    if (!conn) {
-      // A paired machine that is away gets the change when it is back (`state/machineOutbox.ts`);
-      // the row shows it now.
-      if (!machineOfThread(id)) {
-        toast("Could not save the status: That computer is not connected.", "error");
-        return 1;
-      }
-      queueChange({
-        kind: "status",
-        key: id,
-        value: status,
-        base: storedStatus(statusOf(get(), id)),
-        at: Date.now(),
-      });
-      set((s) => ({
-        sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)),
-        ...(status === "done"
-          ? {
-              failed: Object.fromEntries(Object.entries(s.failed).filter(([key]) => key !== id)),
-              finished: without(s.finished, id),
-            }
-          : {}),
-      }));
-      return 0;
-    }
-    let pending = remoteStatusPending.get(id);
-    if (!pending) {
-      pending = { status, confirmed: statusOf(get(), id), tail: Promise.resolve(), version: 0 };
-      remoteStatusPending.set(id, pending);
-    }
-    pending.status = status;
-    const version = ++pending.version;
-    const entry = pending;
-    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)) }));
-    let failed = false;
-    const request = entry.tail.then(async () => {
-      try {
-        await conn.request(V2Method.sessionStatus, { session_id: splitThreadKey(id).id, status }, 10_000);
-        entry.confirmed = status;
-        clearStatusMark(id);
-        if (status === "done") {
-          set((s) => ({
-            failed: Object.fromEntries(Object.entries(s.failed).filter(([key]) => key !== id)),
-            finished: without(s.finished, id),
-          }));
-        }
-      } catch (error) {
-        failed = true;
-        toast(`Could not save the status: ${errorText(error)}`, "error");
-      }
-      if (entry.version === version) {
-        remoteStatusPending.delete(id);
-        set((s) => ({
-          sessions: s.sessions.map((x) => (x.id === id ? { ...x, status: entry.confirmed } : x)),
-        }));
-      }
-    });
-    entry.tail = request;
-    await request;
-    return failed ? 1 : 0;
-  });
-  const remoteErrors = () =>
-    Promise.all(remoteRequests).then((results) => results.reduce<number>((a, b) => a + b, 0));
-  ids = ids.filter((id) => !threadIsRemote(id));
-  if (!ids.length) return remoteErrors();
-  const wanted = new Set(ids);
-  set((s) => ({
-    sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)),
-    // A settled thread asks nothing of the user: a turn of it that failed is no longer theirs to
-    // retry (`cleanup_worktree`, a fan-out's losers, a delegate its parent replaced), so its
-    // Inbox card goes with the settle.
-    ...(status === "done"
-      ? {
-          failed: Object.fromEntries(Object.entries(s.failed).filter(([id]) => !wanted.has(id))),
-          // A settled thread is read: its unseen finish is not news to come back to.
-          finished: Object.fromEntries(Object.entries(s.finished).filter(([id]) => !wanted.has(id))),
-        }
-      : {}),
-  }));
-  if (status === "idle") for (const id of ids) clearStatusMark(id);
-  else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
-  for (const id of ids) scheduleAutoCompact(id);
-  if (!get().features.status) return remoteErrors();
-  // The status is kept by the computer the thread runs on, one request each on its own connection.
-  const groups = new Map<AcpConnection, string[]>();
-  const errors: unknown[] = [];
-  for (const id of ids) {
-    const conn = connectionForThread(id);
-    if (conn) groups.set(conn, [...(groups.get(conn) ?? []), id]);
-    // A local thread with no engine keeps the mark in the app only, as before; a machine's thread
-    // that cannot be reached is said, since the machine will not have it.
-    else if (threadIsRemote(id)) errors.push(new Error("That computer is not connected."));
-  }
-  for (const [conn, group] of groups) {
-    for (const id of group) {
-      try {
-        await conn.request(V2Method.sessionStatus, { session_id: splitThreadKey(id).id, status }, 10_000);
-        // The engine keeps it now; the app's mark only covers the gap until the list says so.
-      } catch (error) {
-        if (!(error instanceof RpcError && error.isMethodNotFound)) errors.push(error);
-      }
-    }
-  }
-  if (errors.length) {
-    const first = errorText(errors[0]);
-    toast(
-      ids.length === 1
-        ? `Could not save the status: ${first}`
-        : `Could not save the status of ${errors.length} of ${ids.length} threads: ${first}`,
-      "error",
-    );
-  }
-  return errors.length + (await remoteErrors());
-}
-
-/**
- * Settles threads (marks them Done) because the user asked: one Undo toast puts
- * each back the way it was (review stays review, the rest go back to idle).
- *
- * Settling the thread on screen in the chat leaves it, with the panel, for the
- * new-thread screen in the same folder; the board, review and compare have no
- * new-thread screen, so settling there stays on that view. A caller that is
- * not the user — an agent's `organize`, a fan-out's cleanup, a thread merged on
- * the engine — calls `setThreadStatus` instead, which never moves the screen.
- */
-export async function settleThreads(ids: string[]): Promise<void> {
-  const state = get();
-  const before = ids.map((id) => ({ id, status: statusOf(state, id) })).filter((x) => x.status !== "done");
-  if (!before.length) {
-    toast("Already settled", "info");
-    return;
-  }
-  const optimistic = before.every((x) => threadIsRemote(x.id) && connectionForThread(x.id));
-  const saving = setThreadsStatus(
-    before.map((x) => x.id),
-    "done",
-  );
-  if (!optimistic && (await saving)) return;
-  if (
-    get().view.kind === "chat" &&
-    get().selectedId === state.selectedId &&
-    state.selectedId &&
-    before.some((x) => x.id === state.selectedId)
-  ) {
-    startNewThread();
-  }
-  const title =
-    before.length === 1
-      ? sessionById(state, before[0]!.id)?.title || get().threads[before[0]!.id]?.title || "New thread"
-      : "";
-  const toastId = toast(
-    `${before.length === 1 ? `Settled "${title}"` : `Settled ${before.length} threads`}${syncNote(
-      before.map((x) => x.id),
-      ".",
-    )}`,
-    "info",
-    {
-      action: {
-        label: "Undo",
-        run: () => {
-          const review = before.filter((x) => x.status === "review").map((x) => x.id);
-          const rest = before.filter((x) => x.status !== "review").map((x) => x.id);
-          if (review.length) void setThreadsStatus(review, "review");
-          if (rest.length) void setThreadsStatus(rest, "idle");
-        },
-      },
-    },
-  );
-  if (optimistic && (await saving)) dismissToast(toastId);
-}
-
-/** Settles one thread, with the same Undo and the same rule about leaving the screen. */
-export function settleThread(id: string): Promise<void> {
-  return settleThreads([id]);
-}
-
-/**
- * Unsettles the settled threads among `ids` (the sidebar's selection bar and
- * the selection's menu): a Review mark on the others stays Review. Quiet on
- * purpose — the toast confirms the change and offers no Undo.
- *
- * `quiet` is for a message sent to a settled thread: it moves back to the
- * active list because the user wrote to it, not because they asked to unsettle
- * anything, so the send says nothing about it.
- */
-export function unsettleThreads(ids: string[], options: { quiet?: boolean } = {}): void {
-  const state = get();
-  const settled = ids.filter((id) => (state.statusMarks[id] ?? sessionById(state, id)?.status) === "done");
-  if (!settled.length) return;
-  void setThreadsStatus(settled, "idle");
-  if (options.quiet) return;
-  toast(
-    `${settled.length === 1 ? "Unsettled" : `Unsettled ${settled.length} threads`}${syncNote(settled, ".")}`,
-    "info",
-  );
-}
+// ---------------------------------------------------------------- views and worktrees
 
 export function setView(view: AppState["view"]) {
   dismissOverlays();
