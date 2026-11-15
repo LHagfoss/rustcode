@@ -749,7 +749,9 @@ export const ToolRow = memo(function ToolRow({
           )}
           <DiffCount {...counts} />
           {item.exitCode !== undefined && item.exitCode !== 0 && (
-            <span className="font-mono text-caption text-danger">exit {item.exitCode}</span>
+            <span className="shrink-0 whitespace-nowrap font-mono text-caption text-danger">
+              exit {item.exitCode}
+            </span>
           )}
           {item.autoAllowed && (
             <Tooltip label={`Allowed by ${item.autoAllowed}`}>
