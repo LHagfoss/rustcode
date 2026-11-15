@@ -26,7 +26,7 @@ import { isCurrentProject, moveBlockedReason } from "../state/projectPick";
 import { startNewThread, toast, useApp, useMachineOfThread } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { CardMenuItem, CardPopover, type CardTriggerProps, menuKeys } from "./cardPopover";
-import { cx, MenuSearchField } from "./primitives";
+import { cx, type MenuQuickAction, MenuQuickActions, MenuSearchField, menuSeparator } from "./primitives";
 
 /** How much of a path a row shows before it is cut in the middle. */
 const PATH_CHARS = 30;
@@ -113,6 +113,7 @@ export function ProjectPicker({
       }}
       trigger={trigger}
     >
+      {thread && <FolderActions cwd={cwd} host={host} remote={!!threadMachine} />}
       {thread && (
         <div data-menu-static className="px-3 pt-1 pb-0.5">
           <div className="truncate text-caption text-fg-muted">{middleEllipsis(cwd, PATH_CHARS + 10)}</div>
@@ -195,12 +196,6 @@ export function ProjectPicker({
           <FolderPlus size={13} className="text-fg-muted" /> Choose Folder…
         </CardMenuItem>
       )}
-      {thread && (
-        <>
-          <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
-          <FolderActions cwd={cwd} host={host} remote={!!threadMachine} />
-        </>
-      )}
     </CardPopover>
   );
 }
@@ -210,32 +205,58 @@ export function ProjectPicker({
  * this one can copy the path, but neither Finder nor a terminal on this Mac can open it.
  */
 function FolderActions({ cwd, host, remote }: { cwd: string; host: string; remote?: boolean }) {
+  const actions: MenuQuickAction[] = [
+    ...(!remote
+      ? [
+          {
+            label: fileManagerName(),
+            description: `Open in ${fileManagerName()}`,
+            icon: <FolderOpen />,
+            onSelect: () => openPath(cwd),
+          },
+        ]
+      : []),
+    ...(!remote && hasShell()
+      ? [
+          {
+            label: "Editor",
+            description: "Open in Editor",
+            icon: <Code />,
+            onSelect: () => void openFolderInEditor(cwd).catch((e) => toast(String(e), "error")),
+          },
+        ]
+      : []),
+    ...(!remote && canOpenTerminal()
+      ? [
+          {
+            label: "Terminal",
+            description: "Open in Terminal",
+            icon: <SquareTerminal />,
+            onSelect: () => void openTerminalAt(cwd).catch((e) => toast(String(e), "error")),
+          },
+        ]
+      : []),
+    {
+      label: "Copy Path",
+      icon: <Copy />,
+      onSelect: () => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info")),
+    },
+  ];
   return (
     <>
-      {!remote && (
-        <CardMenuItem onSelect={() => openPath(cwd)}>
-          <FolderOpen size={13} className="text-fg-muted" /> Open in {fileManagerName()}
-        </CardMenuItem>
+      {actions.length >= 3 ? (
+        <MenuQuickActions Item={CardMenuItem} actions={actions} />
+      ) : (
+        actions.map((action) => (
+          <CardMenuItem key={action.label} onSelect={action.onSelect}>
+            {action.icon} {action.description ?? action.label}
+          </CardMenuItem>
+        ))
       )}
-      {!remote && hasShell() && (
-        <CardMenuItem onSelect={() => void openFolderInEditor(cwd).catch((e) => toast(String(e), "error"))}>
-          <Code size={13} className="text-fg-muted" /> Open in Editor
-        </CardMenuItem>
-      )}
-      {!remote && canOpenTerminal() && (
-        <CardMenuItem onSelect={() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error"))}>
-          <SquareTerminal size={13} className="text-fg-muted" /> Open in Terminal
-        </CardMenuItem>
-      )}
-      <CardMenuItem
-        onSelect={() => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info"))}
-      >
-        <Copy size={13} className="text-fg-muted" /> Copy Path
-      </CardMenuItem>
-      <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
       <CardMenuItem onSelect={() => startNewThread(cwd, host || undefined)}>
         <SquarePen size={13} className="text-fg-muted" /> New Thread Here
       </CardMenuItem>
+      <div className={menuSeparator} />
     </>
   );
 }

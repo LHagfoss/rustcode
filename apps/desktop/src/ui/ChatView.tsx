@@ -52,7 +52,6 @@ import {
   setPanel,
   setTerminalOpen,
   setThreadStatus,
-  settleThread,
   setView,
   statusOf,
   useApp,
@@ -100,6 +99,7 @@ import { RightPanel } from "./RightPanel";
 import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
 import { StatusChip, useThreadStatus } from "./Status";
+import { ThreadQuickActions } from "./ThreadQuickActions";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
 import { WhileAwayCard } from "./WhileAway";
 
@@ -184,7 +184,8 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
           )}
         </button>
       </DropdownMenu.Trigger>
-      <MenuContent align="end">
+      <MenuContent align="end" className="w-[280px]">
+        <ThreadQuickActions threadId={threadId} />
         <DropdownMenu.Item className={menuItem} onSelect={() => setView({ kind: "review", threadId })}>
           <FileDiff size={13} /> Review Changes
         </DropdownMenu.Item>
@@ -192,15 +193,6 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
         {status !== "review" && (
           <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "review")}>
             <Eye size={13} /> Mark for Review
-          </DropdownMenu.Item>
-        )}
-        {status === "done" ? (
-          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>
-            <CircleDashed size={13} /> Unsettle
-          </DropdownMenu.Item>
-        ) : (
-          <DropdownMenu.Item className={menuItem} onSelect={() => settleThread(threadId)}>
-            <CircleCheck size={13} /> Settle
           </DropdownMenu.Item>
         )}
         {status === "review" && (

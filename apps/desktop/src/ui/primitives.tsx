@@ -11,6 +11,7 @@ import {
 import {
   type ButtonHTMLAttributes,
   type ComponentProps,
+  type ComponentType,
   forwardRef,
   type KeyboardEvent,
   type ReactNode,
@@ -21,6 +22,7 @@ import {
 } from "react";
 import { useHoverTip } from "../lib/hover";
 import { useIntentRest } from "../lib/intent";
+import { quickActionTarget } from "../lib/menuNavigation";
 import { errorText, toast } from "../state/store";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
@@ -243,6 +245,89 @@ export const menuItemDanger = "text-danger data-[highlighted]:bg-danger/12";
 export const menuSeparator = "mx-2 my-1 h-px shrink-0 bg-separator";
 export const menuLabel = "px-2 pt-1.5 pb-1 text-caption text-fg-faint";
 
+export interface MenuQuickAction {
+  label: string;
+  /** The full action, when the square's short label needs context. */
+  description?: string;
+  icon: ReactNode;
+  onSelect: () => void;
+  disabled?: boolean;
+  checked?: boolean;
+}
+
+/** Works with either Radix menu's Item or a CardMenuItem, retaining its activation and close behavior. */
+export function MenuQuickActions({
+  Item,
+  actions,
+}: {
+  Item: ComponentType<{
+    children: ReactNode;
+    className: string;
+    onSelect: () => void;
+    disabled?: boolean;
+    role?: "menuitem" | "menuitemcheckbox";
+    "aria-label"?: string;
+    "aria-checked"?: boolean;
+  }>;
+  actions: MenuQuickAction[];
+}) {
+  if (!actions.length) return null;
+  return (
+    <div
+      role="group"
+      aria-label="Quick actions"
+      data-menu-quick-actions=""
+      className="mb-1 grid shrink-0 gap-1"
+      style={{ gridTemplateColumns: `repeat(${actions.length}, minmax(0, 1fr))` }}
+    >
+      {actions.map((action) => (
+        <Tooltip key={action.label} label={action.description ?? action.label}>
+          <Item
+            role={action.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+            aria-checked={action.checked}
+            aria-label={action.description ?? action.label}
+            disabled={action.disabled}
+            onSelect={action.onSelect}
+            className={cx(
+              "flex aspect-square min-w-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl p-1 text-caption text-fg outline-none hover:bg-fill focus-visible:bg-fill active:bg-fill-strong data-[highlighted]:bg-fill data-[disabled]:cursor-default data-[disabled]:opacity-40 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-fill-subtle [&_svg]:size-4 [&_svg]:shrink-0",
+              action.checked ? "bg-fill-strong" : "bg-fill-subtle",
+            )}
+          >
+            <span aria-hidden>{action.icon}</span>
+            <span className="w-full truncate text-center">{action.label}</span>
+          </Item>
+        </Tooltip>
+      ))}
+    </div>
+  );
+}
+
+/** Leave submenu keys, typeahead, Home/End, activation and dismissal to the menu implementation. */
+export function menuQuickActionKeys(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.defaultPrevented) return false;
+  const panel = event.currentTarget;
+  const row = panel.querySelector<HTMLElement>("[data-menu-quick-actions]");
+  if (!row) return false;
+  const items = [...panel.querySelectorAll<HTMLElement>('[role^="menuitem"]')].filter(
+    (item) =>
+      !item.hasAttribute("disabled") &&
+      !item.hasAttribute("data-disabled") &&
+      item.closest('[role="menu"]') === panel,
+  );
+  const quick = items.filter((item) => row.contains(item));
+  const target = quickActionTarget(
+    event.key,
+    items.indexOf(document.activeElement as HTMLElement),
+    quick.length,
+    items.length,
+  );
+  if (target === null) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  items[target]?.focus();
+  return true;
+}
+
 /** A popover's surface: width and anything else its content needs goes after it. */
 export const popoverSurface =
   "elevated rounded-2xl z-50 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-y-auto p-3";
@@ -267,6 +352,7 @@ export function MenuContent({
   sideOffset = 6,
   className,
   children,
+  onKeyDownCapture,
   ...rest
 }: ComponentProps<typeof RadixDropdownMenu.Content>) {
   return (
@@ -277,6 +363,10 @@ export function MenuContent({
         collisionPadding={surfaceCollisionPadding}
         className={cx(menuSurface, className)}
         {...rest}
+        onKeyDownCapture={(event) => {
+          onKeyDownCapture?.(event);
+          menuQuickActionKeys(event);
+        }}
       >
         {children}
       </RadixDropdownMenu.Content>
@@ -288,6 +378,7 @@ export function MenuContent({
 export function ContextMenuSurface({
   className,
   children,
+  onKeyDownCapture,
   ...rest
 }: ComponentProps<typeof RadixContextMenu.Content>) {
   return (
@@ -296,6 +387,10 @@ export function ContextMenuSurface({
         collisionPadding={surfaceCollisionPadding}
         className={cx(menuSurface, className)}
         {...rest}
+        onKeyDownCapture={(event) => {
+          onKeyDownCapture?.(event);
+          menuQuickActionKeys(event);
+        }}
       >
         {children}
       </RadixContextMenu.Content>

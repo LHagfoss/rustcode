@@ -27,7 +27,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { cx, menuItem, surfaceCollisionPadding, Tooltip } from "./primitives";
+import { cx, menuItem, menuQuickActionKeys, surfaceCollisionPadding, Tooltip } from "./primitives";
 import { TITLEBAR_HEIGHT } from "./Titlebar";
 
 /** Anything floating-ui can position against: here, the control that opens a panel. */
@@ -279,6 +279,7 @@ export function CardMenuItem({
  * popover rather than Radix's own menu. Enter and Space are the rows' own buttons.
  */
 export function menuKeys(event: ReactKeyboardEvent<HTMLElement>) {
+  if (menuQuickActionKeys(event)) return;
   const panel = event.currentTarget;
   const rows = [...panel.querySelectorAll<HTMLElement>("[data-menu-row], [role='option']")].filter(
     (row) => !row.hasAttribute("disabled") && !row.closest("[data-menu-static]"),
