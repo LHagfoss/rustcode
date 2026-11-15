@@ -7,13 +7,7 @@ import { onThemesChanged, refreshThemes } from "./themeActions";
 export { createTheme, setActiveTheme } from "./themeActions";
 
 import { refreshAgents, startAgentPolling } from "./agentActions";
-import {
-  inheritedModeOf,
-  permissionModeOf,
-  type ResolvedApproval,
-  refreshGrants,
-  setPermissionMode,
-} from "./approvals";
+import { permissionModeOf, type ResolvedApproval, refreshGrants, setPermissionMode } from "./approvals";
 import {
   appChoices,
   effortMemory,
@@ -23,7 +17,6 @@ import {
   noteChoice,
   refreshHarnesses,
   rememberModelEffort,
-  setNewThreadChoice,
   switchThreadHarness,
 } from "./harnessActions";
 
@@ -33,14 +26,7 @@ import { refreshCheckpoints } from "./checkpointActions";
 
 export { refreshCheckpoints, returnToAttempt, rewindCheckpoint, turnDiff } from "./checkpointActions";
 
-import {
-  askConfirm,
-  cancelEdit,
-  pruneSidebarOrder,
-  renameThread,
-  rewindTo,
-  threadDeleted,
-} from "./threadActions";
+import { askConfirm, pruneSidebarOrder, renameThread, threadDeleted } from "./threadActions";
 
 export {
   askConfirm,
@@ -69,7 +55,6 @@ import {
   sessionById,
   setThreadStatus,
   statusOf,
-  unsettleThreads,
 } from "./threadStatus";
 
 export {
@@ -299,11 +284,9 @@ import {
 } from "./headerButtons";
 import {
   answerOrchestration,
-  answerStatusLocally,
   interruptedLinks,
   linkFinished,
   linkStarted,
-  linkSteered,
   linksFinished,
   linksOf,
   linksReopened,
@@ -312,7 +295,6 @@ import {
   linkWaitStarted,
   loadBook,
   orchestrationCallDropped,
-  queuedLinkDropped,
   reconcileLinks,
   requeueUnreadSteers,
   resetLinkBook,
@@ -351,6 +333,7 @@ import {
   waitHolds,
 } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins } from "./logins";
+import { lostTurn, lostTurnStatus, reloadThread, resetLostTurns, resumeLostTurns } from "./lostTurns";
 import { loadTranscript, saveTranscript, threadFromTranscript } from "./machineCache";
 import { loadMirroredTranscript, mirrorTranscript, setMirrorRequest } from "./machineMirror";
 import {
@@ -377,7 +360,6 @@ import {
   failureJson,
   type GrantAsk,
   type LinkBook,
-  latestReply,
   MACHINE_LOST_TURN,
   MAX_DELEGATES_PER_THREAD,
   MAX_DELEGATES_TOTAL,
@@ -388,21 +370,12 @@ import {
   WAKE_BATCH_MAX_S,
 } from "./orchestration";
 import { clearPageCache } from "./pageCache";
-import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
+import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { projectKey as actionsProjectKey, projectActions, worktreeHooks } from "./projectActions";
 import { projectChoice, projectKey } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
-import { type PreparedPullBranch, parsePullBranch } from "./pullThread";
 import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
-import {
-  nextQueued,
-  QUEUE_REASON,
-  type QueueReason,
-  type SendDecision,
-  type SteeringCapabilities,
-  sendDecision,
-  type TurnState,
-} from "./queue";
+import { nextQueued } from "./queue";
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { resetRemoteStatusReads } from "./remoteAccess";
 import type { PairingChallenge } from "./remotePairing";
@@ -415,42 +388,27 @@ import {
   resumeVerdict,
 } from "./restartResume";
 import { type DriftReads, engineBusy, FORCE_STOP_MS, noDrift, pollDelay, reconcileRuns } from "./runState";
-import {
-  addScheduled,
-  dueScheduled,
-  parseScheduleBook,
-  persistableSchedule,
-  SCHEDULED_KEY,
-  type ScheduleBook,
-  type ScheduledMessage,
-  type ScheduleRefusal,
-  scheduledCount,
-  withoutScheduled,
-} from "./schedule";
+import { parseScheduleBook, SCHEDULED_KEY, type ScheduleBook } from "./schedule";
+import { resetScheduledSends, restoreScheduled } from "./scheduledSends";
+import { acceptsImages, removeQueued, threadHarness } from "./sendActions";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import type { SidebarOrder } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
 import {
   appendNotice,
-  appendSteer,
   applyUpdate,
   beginQuietTurn,
   beginTurn,
-  departQueued,
-  dropDeparted,
   emptyThread,
   finishLoad,
   finishTurn,
   foldingBatch,
   localId,
-  messagesAfter,
-  type QueuedPrompt,
   RESUME_MARK,
   requeueSteers,
   settleEveryWait,
   startCompaction,
   type ThreadState,
-  type TranscriptItem,
   waitingOn,
   wakeTurn,
   withContinueMark,
@@ -472,6 +430,41 @@ import { noticeOnlyHistory, userTypedPrompt } from "./topLevel";
 import { readableTurnError } from "./turnError";
 import { waitingOn as backgroundWork } from "./waiting";
 import { onWorkflowChanged, subscribeWorkflows } from "./workflows";
+
+export { lostTurn, setLostMachineMsForTests } from "./lostTurns";
+
+export {
+  continueDueScheduled,
+  removeScheduled,
+  restoreScheduled,
+  scheduleMessage,
+  sendScheduledNow,
+} from "./scheduledSends";
+export {
+  acceptsImages,
+  cancelQueuedEdit,
+  endQueuedEdit,
+  forkThread,
+  moveQueued,
+  openSideChat,
+  quoteMessage,
+  removeQueued,
+  resumeQueue,
+  runCommandAction,
+  saveQueuedEdit,
+  sendDecisionFor,
+  sendQueuedNow,
+  sendSideChatToParent,
+  startPullThread,
+  startQueuedEdit,
+  steer,
+  steeringOf,
+  steerOrSubmit,
+  submit,
+  threadHarness,
+  turnState,
+  updateQueued,
+} from "./sendActions";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -2833,7 +2826,7 @@ export function applySnooze(id: string, at: number | null) {
  * queue behind a running one, or a steer into it. A message the app sends instead is not a write
  * and leaves the snooze alone (`runPrompt`).
  */
-function wakeOnWrite(id: string) {
+export function wakeOnWrite(id: string) {
   if (id in get().snoozed) setSnoozed(id, null);
 }
 
@@ -3642,7 +3635,10 @@ function projectDefaultChoice(
  * so ⏎ on the new-thread screen is answered at once. A second send while it runs starts nothing; a
  * setup that failed is sent again with `retryPendingSetup`.
  */
-async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtras): Promise<string | null> {
+export async function createThread(
+  firstMessage = "",
+  extras: ComposeExtras = emptyExtras,
+): Promise<string | null> {
   const s = get();
   if (!s.projectCwd) throw new Error("Choose a project folder for this thread first.");
   const setup = beginSetup(get().pendingSetup, {
@@ -3821,1001 +3817,7 @@ export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExt
   if (hasExtras(get().extras[key])) noteTyping(key);
 }
 
-// ---------------------------------------------------------------- sending later
-
-/**
- * A message written now and sent at a time the user picked (state/schedule.ts): the card over the
- * composer counts down, Send now sends it at once, Delete drops it, and a restart keeps it because
- * every change is written to app storage. When its time comes it goes out on the thread's normal send
- * path, so its command, links, pictures, model, effort and permissions are the ones the composer
- * had; a thread that is busy then queues it like any follow-up.
- */
-function writeScheduled(next: ScheduleBook) {
-  set({ scheduled: next });
-  store(SCHEDULED_KEY, JSON.stringify(persistableSchedule(next)));
-  syncScheduleTimer();
-}
-
-/** The book as storage has it: read at start-up, and between tests as a window that just started. */
-export function restoreScheduled(): void {
-  set({ scheduled: parseScheduleBook(stored(SCHEDULED_KEY)) });
-  syncScheduleTimer();
-}
-
-/**
- * Schedule the composer's message for `due`: the message, or why it could not be (the composer
- * keeps its text and attachments then, and says so). Not connected is `offline`.
- */
-export function scheduleMessage(
-  threadId: string,
-  text: string,
-  extras: ComposeExtras,
-  due: number,
-): ScheduledMessage | { refused: ScheduleRefusal | "offline" } {
-  if (get().status !== "ready") return { refused: "offline" };
-  if (!text.trim() && !hasExtras(extras)) return { refused: "empty" };
-  if (!(due > Date.now())) return { refused: "time" };
-  const item: ScheduledMessage = {
-    id: localId("scheduled"),
-    text,
-    due,
-    ...(carriesExtras(extras) ? { extras } : {}),
-  };
-  const next = addScheduled(get().scheduled, threadId, item);
-  if ("refused" in next) return next;
-  writeScheduled(next.book);
-  return item;
-}
-
-/** Delete: the message never goes out. */
-export function removeScheduled(threadId: string, id: string): void {
-  const next = withoutScheduled(get().scheduled, threadId, id);
-  if (next !== get().scheduled) writeScheduled(next);
-}
-
-/** Send now: take it out of the book and send it on the thread's normal path. */
-export async function sendScheduledNow(threadId: string, id: string): Promise<boolean> {
-  const item = get().scheduled[threadId]?.find((row) => row.id === id);
-  if (!item) return false;
-  if (get().status !== "ready") {
-    toast("Not connected: the message stays scheduled.", "error");
-    return false;
-  }
-  const outcome = await deliverScheduled(threadId, item);
-  if (outcome === "wait") {
-    toast("Not connected: the message stays scheduled.", "error");
-    return false;
-  }
-  removeScheduled(threadId, id);
-  return outcome === "sent";
-}
-
-/**
- * Open the thread if it is not, then send: a busy turn takes it as its next message (runPrompt).
- * `wait` keeps the message for another try — its computer is away, or the engine is not connected
- * yet — while a thread that no longer exists is `gone` and one the user deleted meanwhile is too.
- */
-async function deliverScheduled(threadId: string, item: ScheduledMessage): Promise<"sent" | "gone" | "wait"> {
-  if (threadIsGone(threadId)) {
-    toast("That thread is gone, so its scheduled message was dropped.", "error");
-    return "gone";
-  }
-  // A thread on a paired computer that is away, or an engine that is not up: the message waits for
-  // it rather than being lost, and the timer tries again.
-  if (!connectionForThread(threadId)) return "wait";
-  if (!get().threads[threadId]?.loaded) {
-    await openThread(threadId);
-    for (let i = 0; i < 100 && !get().threads[threadId]?.loaded; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  if (!get().threads[threadId]?.loaded) return "wait";
-  // Deleted while the thread was opening: nothing goes out.
-  if (!get().scheduled[threadId]?.some((row) => row.id === item.id)) return "gone";
-  const extras = item.extras;
-  const thread = get().threads[threadId]!;
-  // A turn runs, or the queue is held by a stopped turn, or messages wait in it: this goes behind
-  // them and Resume starts the head, exactly as a message typed meanwhile does (`submit`).
-  if (thread.running || thread.queue.length || thread.queueHeld) {
-    unsettleThreads([threadId], { quiet: true });
-    wakeOnWrite(threadId);
-    updateThread(threadId, (t) => ({
-      ...t,
-      queue: [
-        ...t.queue,
-        {
-          id: localId("queued"),
-          text: item.text,
-          ...(extras && carriesExtras(extras) ? { extras } : {}),
-        },
-      ],
-    }));
-    // Held for Resume: nothing starts until the user presses it. A queue with no turn starts its head.
-    if (!thread.running && !thread.queueHeld) void resumeQueue(threadId);
-    return "sent";
-  }
-  void runPrompt(threadId, item.text, extras ?? emptyExtras);
-  return "sent";
-}
-
-let scheduleTimer: ReturnType<typeof setInterval> | null = null;
-let sendingScheduled = false;
-
-/**
- * One slow timer while something is scheduled: a card's countdown ticks in the UI, and this only has
- * to notice that a time has come, even after the Mac slept past it.
- */
-function syncScheduleTimer() {
-  const waiting = scheduledCount(get().scheduled) > 0;
-  if (waiting && !scheduleTimer) {
-    const timer = setInterval(() => void continueDueScheduled(), 1000) as unknown as ReturnType<
-      typeof setInterval
-    > & { unref?: () => void };
-    // A timer does not keep the process alive (a test, or a window with nothing left to do).
-    timer.unref?.();
-    scheduleTimer = timer;
-  } else if (!waiting && scheduleTimer) {
-    clearInterval(scheduleTimer);
-    scheduleTimer = null;
-  }
-}
-
-/** Every message whose time has come goes out, the soonest first. */
-export async function continueDueScheduled(now = Date.now()): Promise<void> {
-  if (sendingScheduled || get().status !== "ready") return;
-  const due = dueScheduled(get().scheduled, now);
-  if (!due.length) return;
-  sendingScheduled = true;
-  try {
-    for (const { threadId, item } of due) {
-      const outcome = await deliverScheduled(threadId, item);
-      // One that waits for its computer stays; anything else has had its one turn out of the book.
-      if (outcome !== "wait") removeScheduled(threadId, item.id);
-    }
-  } finally {
-    sendingScheduled = false;
-  }
-}
-
-/** The harness a thread runs on, or a new thread would start on. */
-export function threadHarness(thread?: ThreadState) {
-  const s = get();
-  // A thread's harness is the one its own machine lists; a new thread's is the one the computer
-  // **Run on** names (docs/desktop.md › Several machines).
-  const snapshot = harnessesOn(s, thread ? splitThreadKey(thread.id).host : s.newThreadHost);
-  const id = thread
-    ? (thread.harness?.id ?? "rustcode")
-    : (s.newThread?.harness ?? snapshot?.default.harness);
-  return snapshot?.harnesses.find((h) => h.id === id);
-}
-
-/** Whether the thread's harness takes image blocks. */
-export function acceptsImages(thread?: ThreadState): boolean {
-  const caps = thread?.harness?.capabilities ?? threadHarness(thread)?.capabilities;
-  if (caps && !(threadHarness(thread)?.builtin ?? false)) return caps.images;
-  return get().agent?.promptImages ?? true;
-}
-
-/** ⏎: send, or queue behind a running turn. False when no thread could start (the draft stays). */
-/**
- * Commands the app answers itself, by the action the engine advertises with
- * each one (`_meta.rustcode.action`): nothing goes to the engine as a prompt.
- * Returns whether the command was one of them.
- */
-export function runCommandAction(text: string, from: string | null): boolean {
-  const s = get();
-  const command = commandsFor(s, from).find((c) => c.name === text);
-  if (!command || command.action === "execute") return false;
-  const thread = from ? s.threads[from] : undefined;
-  switch (command.action) {
-    case "new_session": {
-      // A fresh thread on the same project, harness, model and effort, selected and empty; in a
-      // new thread it keeps the folder and the choice already made there.
-      const choice = newThreadChoice(s);
-      const model = thread ? selectOption(thread.configOptions, "model")?.current : choice?.model;
-      const effort = thread ? selectOption(thread.configOptions, "effort")?.current : choice?.effort;
-      const harness =
-        thread?.harness?.id ?? (from ? s.sessions.find((x) => x.id === from)?.harness : choice?.harness);
-      // `/new` in a thread starts on that thread's computer, in its folder, even before it is
-      // open; in a new thread, on the current Run on.
-      const listed = from ? s.sessions.find((x) => x.id === from) : undefined;
-      startNewThread(
-        thread?.cwd ?? listed?.cwd ?? (from ? undefined : s.projectCwd),
-        from ? splitThreadKey(from).host : s.newThreadHost,
-      );
-      if (harness) setNewThreadChoice({ harness, model: model ?? null, effort: effort ?? null });
-      return true;
-    }
-    case "model_picker":
-      set((s) => ({ modelPickerAsk: s.modelPickerAsk + 1 }));
-      return true;
-    case "session_picker":
-      setSwitcher(true);
-      return true;
-    case "copy_response": {
-      const reply = [...(thread?.items ?? [])].reverse().find((i) => i.kind === "assistant");
-      if (reply?.kind === "assistant" && reply.text.trim()) {
-        void navigator.clipboard.writeText(reply.text).then(
-          () => void toast("Copied the last reply", "success"),
-          (error) => void toast(`Could not copy: ${errorText(error)}`, "error"),
-        );
-      } else toast("There is no reply to copy yet");
-      return true;
-    }
-    default:
-      return false;
-  }
-}
-
-export async function submit(text: string, extras: ComposeExtras = emptyExtras): Promise<boolean> {
-  // A worktree still setting up owns the new-thread screen: sending again must not make a second.
-  const trimmed = text.trim();
-  if (!trimmed && !hasExtras(extras)) return false;
-  // A command the app answers itself, typed alone or left as a bare token.
-  const bare = !hasExtras(extras)
-    ? trimmed
-    : !trimmed && extras.command && !extras.links.length && !extras.attachments.length
-      ? extras.command.name
-      : null;
-  if (bare && runCommandAction(bare, get().selectedId)) return true;
-  let id = get().selectedId;
-  // The thread is made for this message, so the new-thread screen already draws its row: it must not
-  // fly in again when the thread takes the screen over (lib/sendFlight.ts).
-  const madeHere = !id;
-  try {
-    if (!id) {
-      const started = await createThread(text, extras);
-      // A setup that failed keeps the message and its attachments on the thread's own bubble, with
-      // Retry: the field stays clear rather than holding a second copy. One that could not start at
-      // all (another is still going) leaves the draft in the composer, as it was.
-      if (!started) return !!get().pendingSetup?.failure;
-      id = started;
-    }
-  } catch (error) {
-    toast(`Could not start the thread: ${errorText(error)}`, "error");
-    return false;
-  }
-  const thread = get().threads[id];
-  if (!thread) return false;
-  if (trimmed === "/cancel" && !hasExtras(extras)) {
-    await cancel(id);
-    return true;
-  }
-  // A bare "status" in a thread with delegates is answered from what the app knows, with no turn.
-  if (!hasExtras(extras) && !get().editing[id] && answerStatusLocally(id, trimmed)) return true;
-  const edit = get().editing[id];
-  if (edit && !thread.running) {
-    cancelEdit(id);
-    const later = messagesAfter(thread, edit.itemId);
-    const go = async () => {
-      if (await rewindTo(id!, edit.itemId, edit.original)) {
-        unsettleThreads([id!], { quiet: true });
-        void runPrompt(id!, text, extras);
-      }
-    };
-    if (later > 0) {
-      askConfirm({
-        title: "Send the edited message?",
-        message: `The thread goes back to the message you edited; ${later === 1 ? "the message after it and its reply" : `the ${later} messages after it and their replies`} will be removed.`,
-        action: "Send",
-        destructive: true,
-        run: () => void go(),
-      });
-    } else void go();
-    return true;
-  }
-  if (trimmed !== "/fork" || hasExtras(extras)) {
-    unsettleThreads([id], { quiet: true });
-    // Its message may wait behind the running turn: the thread comes back all the same.
-    wakeOnWrite(id);
-  }
-  if (thread.running) {
-    updateThread(id, (t) => ({
-      ...t,
-      queue: [
-        ...t.queue,
-        // The text as it was written: a paste's offset is an offset in it, and the row composes the
-        // two when it draws and when the turn runs (`composedText`).
-        { id: localId("queued"), text, extras: carriesExtras(extras) ? extras : undefined },
-      ],
-    }));
-    return true;
-  }
-  if (trimmed === "/fork" && !hasExtras(extras)) {
-    void forkThread(id);
-    return true;
-  }
-  // Messages a stopped turn held keep their place: a new one goes behind them and Resumes the queue,
-  // so nothing the user wrote is skipped or reordered.
-  if (thread.queue.length) {
-    updateThread(id, (t) => ({
-      ...t,
-      queue: [
-        ...t.queue,
-        { id: localId("queued"), text, extras: carriesExtras(extras) ? extras : undefined },
-      ],
-    }));
-    void resumeQueue(id);
-    return true;
-  }
-  void runPrompt(id, text, extras, { alreadyShown: madeHere });
-  return true;
-}
-
-/**
- * `/fork` copies the chat into a new thread and leaves this one open (the
- * engine's rule). The reply does not name the new thread, so the list is
- * compared before and after, and a toast offers to open it.
- */
-export async function forkThread(id: string): Promise<void> {
-  const before = new Set(get().sessions.map((x) => x.id));
-  await runPrompt(id, "/fork");
-  await refreshSessions();
-  const fork = get().sessions.find((x) => !before.has(x.id));
-  if (!fork) return;
-  toast(`Forked into "${fork.title || "a new thread"}"`, "success", {
-    action: { label: "Open", run: () => selectThread(fork.id) },
-  });
-}
-
-/** The text of a message as a quote: every line behind `> `, ready to be followed by a question. */
-export function quoteMessage(text: string): string {
-  const lines = text.trim().split("\n");
-  return `${lines.map((line) => (line ? `> ${line}` : ">")).join("\n")}\n\n`;
-}
-
-/**
- * "Ask in a side chat": a new thread beside `parentId` on the same harness, model, effort and
- * folder (never a new worktree), whose composer starts with `message` quoted. It opens in the
- * panel's Thread tab so the parent stays on screen; closing the panel keeps the thread, and the
- * sidebar and the parent's transcript list it. The engine records the parent (relationship
- * `side_chat`) in the new thread's own metadata.
- */
-export async function openSideChat(parentId: string, message: string): Promise<string | undefined> {
-  const parent = get().threads[parentId];
-  if (!parent || !message.trim()) return undefined;
-  // An engine that predates the relationship ignores it and would list the side chat as a delegate.
-  if (!get().agent?.lineage) {
-    toast("Side chats need a newer RustCode engine. Update RustCode and restart.", "error");
-    return undefined;
-  }
-  const choice = (configId: string) => parent.configOptions.find((o) => o.id === configId)?.current;
-  const title = sessionById(get(), parentId)?.title || parent.title;
-  try {
-    const id = await createSession({
-      // The folder the parent runs in, its worktree included: a side chat reads the same files.
-      cwd: parent.cwd,
-      harness: parent.harness?.id,
-      account: parent.harness?.account,
-      model: choice("model") ?? null,
-      effort: choice("effort") ?? null,
-      parent: parentId,
-      relationship: "side_chat",
-      title: title ? `Side chat: ${title}` : "Side chat",
-    });
-    // Never broader than the thread it was asked from, as for a delegate (state/permissions.ts).
-    setPermissionMode(id, effectiveMode(permissionModeOf(get(), parentId), inheritedModeOf(get(), parentId)));
-    setDraft(id, quoteMessage(message));
-    peekThread(id);
-    return id;
-  } catch (error) {
-    toast(`Could not open a side chat: ${error instanceof Error ? error.message : String(error)}`, "error");
-    return undefined;
-  }
-}
-
-/**
- * "Work on this in a thread" (issue 3727): a worktree thread on pull request `number`'s head branch
- * (`_rustcode/pulls/branch` fetches it, a fork's too), with `message` in its composer to read and
- * edit before sending, and the pull request linked so new checks and comments wake it. Runs on the
- * harness a new thread in `cwd` would. `message` is written from the branch the engine prepared, so
- * it names the branch's real name and what a push does (issue 3743); a worktree that already has the
- * branch is where the thread starts, rather than a second one. Answers the thread's id, or undefined
- * after a toast.
- */
-export async function startPullThread(
-  cwd: string,
-  pull: { number: number; title: string; url?: string },
-  message: (branch: PreparedPullBranch) => string,
-): Promise<string | undefined> {
-  const s = get();
-  try {
-    const answer = obj(
-      await engine().request("_rustcode/pulls/branch", { cwd, number: pull.number }, 180_000),
-    );
-    const branch = parsePullBranch(answer?.branch);
-    if (!branch)
-      throw new Error(str(obj(answer?.error)?.message) ?? "The pull request's branch could not be fetched.");
-    const choice =
-      projectThreadChoice(s, cwd) ??
-      newThreadChoice({
-        newThread: s.newThread,
-        harnesses: s.harnesses,
-        remoteHarnesses: s.remoteHarnesses,
-        newThreadHost: LOCAL_HOST,
-        projectCwd: cwd,
-      });
-    const harness = harnessesOn(s, LOCAL_HOST)?.harnesses.find((h) => h.id === choice?.harness);
-    const id = await createSession({
-      cwd: branch.worktree ?? cwd,
-      harness: choice?.harness,
-      account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
-      model: choice?.model,
-      effort: choice?.effort,
-      ...(branch.worktree ? {} : { worktree: { repo: cwd, branch: branch.branch, title: pull.title } }),
-      select: true,
-      title: `#${pull.number} ${pull.title}`.slice(0, 80),
-    });
-    const note = branch.note;
-    setDraft(id, message(branch));
-    const repo = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\//.exec(pull.url ?? "")?.[1];
-    const worktreeCwd = get().threads[id]?.cwd ?? cwd;
-    void engine()
-      .request(
-        "_rustcode/pulls/watch/start",
-        {
-          sessionId: splitThreadKey(id).id,
-          cwd: worktreeCwd,
-          number: pull.number,
-          ...(repo ? { repo } : {}),
-          link: true,
-        },
-        60_000,
-      )
-      .catch(() => {});
-    if (note) toast(note, "info", { persist: true });
-    return id;
-  } catch (error) {
-    toast(`Could not open #${pull.number} in a thread: ${errorText(error)}`, "error");
-    return undefined;
-  }
-}
-
-/** Add a side-chat answer to its parent's editable draft. */
-export function sendSideChatToParent(id: string, answer: string): boolean {
-  const parent = sessionById(get(), id)?.parent;
-  if (parent?.relationship !== "side_chat" || !parent.id || !answer.trim()) return false;
-  const draft = get().drafts[parent.id] ?? "";
-  setDraft(parent.id, draft ? `${draft}\n\n${answer}` : answer);
-  toast("Added to the main thread draft", "success");
-  return true;
-}
-
-/**
- * ⌘⏎: hand the running turn a message to read after its current step, else send. What it does is
- * `sendDecision`'s answer for this message, the same one the composer's hint and the queued row's
- * Send now read, so nothing here disagrees with what the app says it will do.
- */
-export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyExtras): Promise<boolean> {
-  const id = get().selectedId;
-  const thread = id ? get().threads[id] : undefined;
-  const trimmed = text.trim();
-  if (!id || !thread?.running || !get().agent?.steer) return submit(text, extras);
-  // Nothing typed and nothing attached: take what waits first, by the row's own rule.
-  if (!trimmed && !hasExtras(extras)) {
-    const next = thread.queue[0];
-    if (next) return sendQueuedNow(id, next.id);
-    return submit(text, extras);
-  }
-  unsettleThreads([id], { quiet: true });
-  // A steer or a queued row leaves no turn of its own behind to read the snooze: it is the user
-  // writing in the thread, so the thread comes back here (`submit` does the same).
-  wakeOnWrite(id);
-  const verdict = sendDecisionFor(thread, extras);
-  if (verdict.action === "steer" && (await steer(id, text, extras))) return true;
-  if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
-  // A steer the engine refused (the turn ended or began waiting on the user meanwhile) waits too.
-  return queueMessage(id, text, extras, verdict.action === "queue" ? verdict.reason : "refused");
-}
-
-/** A message that does not steer waits for the next turn, saying why it waits. */
-async function queueMessage(
-  id: string,
-  text: string,
-  extras: ComposeExtras,
-  reason: QueueReason,
-): Promise<boolean> {
-  if (carriesExtras(extras)) {
-    // Submitted rather than parked, so the chips and the ids a mention stands for go with it.
-    const sent = await submit(text, extras);
-    if (sent) toast(QUEUE_REASON[reason]);
-    return sent;
-  }
-  updateThread(id, (t) => ({
-    ...t,
-    queue: [...t.queue, { id: localId("queued"), text }],
-  }));
-  toast(QUEUE_REASON[reason]);
-  return true;
-}
-
-/**
- * Stop the running turn and send this message in its place: what `sendDecision` answers for a
- * harness that takes neither a steer nor the queue. The message goes to the head of the queue for
- * the stop to land, and a turn this stopped runs it on (`thread.ts` `finishTurn` keeps the queue
- * for Resume otherwise).
- */
-async function restartWith(id: string, text: string, extras: ComposeExtras): Promise<boolean> {
-  updateThread(id, (t) => ({
-    ...t,
-    queue: [
-      {
-        id: localId("queued"),
-        text,
-        extras: carriesExtras(extras) ? extras : undefined,
-        restart: true,
-      },
-      ...t.queue,
-    ],
-  }));
-  await cancel(id);
-  return true;
-}
-
-/** The steering record of the harness a thread runs on: the snapshot's is the fresher of the two. */
-export function steeringOf(thread?: ThreadState): SteeringCapabilities {
-  const own = thread?.harness?.capabilities.steering;
-  const fresh = threadHarness(thread)?.capabilities.steering;
-  if (!own)
-    return (
-      fresh ?? {
-        live: false,
-        attachments: false,
-        while_awaiting_user: true,
-        interrupt_restart: true,
-        queue: true,
-      }
-    );
-  if (!fresh) return own;
-  // A harness that learned to steer after this thread started is `live` in the snapshot only.
-  return {
-    ...own,
-    live: own.live || fresh.live,
-    attachments: own.attachments || fresh.attachments,
-  };
-}
-
-/** What the thread's turn is doing, for the one send rule. */
-export function turnState(thread?: ThreadState): TurnState {
-  return {
-    running: thread?.running ?? false,
-    awaitingUser: (thread?.permissions.length ?? 0) > 0,
-  };
-}
-
-/** What sending `extras` to this thread now would do: steer, queue (with the reason), or restart. */
-export function sendDecisionFor(
-  thread: ThreadState | undefined,
-  extras: ComposeExtras | undefined,
-): SendDecision {
-  return sendDecision(extras, steeringOf(thread), turnState(thread));
-}
-
-/**
- * Hands the running turn a message to read after its current step (`_rustcode/steer`). False when the
- * engine will not take one now. Exported for the wake a busy parent gets for a child's question
- * (state/host.ts `sendWake`), which is sent by the same rule as a typed message.
- */
-export async function steer(
-  id: string,
-  text: string,
-  extras?: ComposeExtras,
-  sender?: string,
-  link?: string,
-): Promise<boolean> {
-  const thread = get().threads[id];
-  // What the turn reads: the typed text with its command, links and long pastes in place.
-  const full = composedText(text, extras ?? emptyExtras);
-  const conditions = {
-    images: acceptsImages(thread),
-    builtin: threadHarness(thread)?.builtin ?? true,
-  };
-  const prompt =
-    extras && (extras.attachments.length || extras.command?.action === "skill")
-      ? promptBlocks(text, extras, {
-          images: conditions.images,
-          builtin: conditions.builtin,
-          cwd: thread?.cwd ?? "",
-          advertised: advertisedCommands(get(), id),
-        })
-      : undefined;
-  try {
-    const conn = connectionForThread(id);
-    if (!conn) return false;
-    const sessionId = splitThreadKey(id).id;
-    const result = (await conn.request(
-      Method.steer,
-      {
-        sessionId,
-        text: full,
-        ...(prompt ? { prompt } : {}),
-        ...(sender && parseDelivered(text)
-          ? {
-              _meta: {
-                rustcode: {
-                  origin: {
-                    kind: "agent",
-                    threads: [
-                      {
-                        sessionId: sender,
-                        title: parseDelivered(text)?.title ?? "",
-                        ...(link ? { linkId: link } : {}),
-                      },
-                    ],
-                  },
-                },
-              },
-            }
-          : {}),
-      },
-      10_000,
-    )) as JsonObject | null;
-    if (result?.accepted !== true) return false;
-    updateThread(id, (t) => appendSteer(t, full, Date.now(), extras && sentAttachments(extras)));
-    // The steered row in the transcript says it was read after the current step.
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Send now: steer a queued message into the running turn, by the same rule ⌘⏎ follows. One the rule
- * refuses stays queued and says why; one the engine refuses stays queued too.
- */
-export async function sendQueuedNow(id: string, queuedId: string): Promise<boolean> {
-  const thread = get().threads[id];
-  const item = thread?.queue.find((q) => q.id === queuedId);
-  if (!item || !thread) return false;
-  const verdict = sendDecisionFor(thread, item.extras);
-  if (verdict.action === "queue") {
-    toast(QUEUE_REASON[verdict.reason]);
-    return false;
-  }
-  unsettleThreads([id], { quiet: true });
-  if (verdict.action === "interruptRestart") {
-    removeQueued(id, queuedId);
-    return restartWith(id, item.text, item.extras ?? emptyExtras);
-  }
-  if (await steer(id, item.text, item.extras, item.from, item.link)) {
-    removeQueued(id, queuedId);
-    glideAway(id, item);
-    // A delegate's message that was waiting: the turn it went into answers its link.
-    linkSteered(id, item.link, item.text);
-    return true;
-  }
-  toast(QUEUE_REASON.refused);
-  return false;
-}
-
-/** How long a queued row takes to leave the stack, gliding up toward the transcript (index.css). */
-const STEER_GLIDE_MS = 240;
-
-/**
- * A queued row a steer took keeps the stack's place while it glides out, so the row itself leaves
- * instead of vanishing from under the reader; it is dropped once the glide is over.
- */
-function glideAway(id: string, item: QueuedPrompt) {
-  updateThread(id, (t) => departQueued(t, item));
-  setTimeout(() => updateThread(id, (t) => dropDeparted(t, item.id)), STEER_GLIDE_MS);
-}
-
-/**
- * Resume: the first message a stopped or failed turn held starts a turn of its own. The rest follow
- * it, each when the turn before completes; a new message sent meanwhile waits behind them.
- */
-export async function resumeQueue(id: string): Promise<boolean> {
-  const thread = get().threads[id];
-  if (!thread || thread.running) return false;
-  const next = nextQueued(thread.queue, { running: false });
-  updateThread(id, (t) => ({ ...t, queueHeld: undefined }));
-  if (!next) return false;
-  removeQueued(id, next.id);
-  await runPrompt(id, next.text, next.extras, {
-    fromView: next.fromView,
-    link: next.link,
-    sender: next.from,
-    resumeLinks: next.resume,
-    wake: next.wake,
-    wakeLinks: next.wakeLinks,
-    wakeAsking: next.wakeAsking,
-    // A resumed row is the app's, not the user's: the thread stays where it was in the sidebar.
-    automatic: next.resume !== undefined,
-  });
-  return true;
-}
-
-/**
- * Open a queued message in the composer (its pencil, or ↑ at the start of an empty one). The item
- * stays where it waits, marked as being edited, and whatever the composer held comes back when the
- * edit ends. A message another thread sent cannot be edited: sending it again would lose its link.
- */
-export function startQueuedEdit(id: string, queuedId: string): boolean {
-  const item = get().threads[id]?.queue.find((q) => q.id === queuedId);
-  if (!item || item.link || item.wake) return false;
-  const before = { text: get().drafts[id] ?? "", extras: get().extras[id] ?? emptyExtras };
-  set({ queuedEdit: { threadId: id, queuedId, ...before } });
-  setDraft(id, item.text);
-  setExtras(id, () => item.extras ?? emptyExtras);
-  return true;
-}
-
-/** ⏎ or the check button on a queued message being edited: saved where it waits, never sent. */
-export function saveQueuedEdit(): boolean {
-  const edit = get().queuedEdit;
-  if (!edit) return false;
-  updateQueued(edit.threadId, edit.queuedId, get().drafts[edit.threadId] ?? "", get().extras[edit.threadId]);
-  restoreComposer(edit);
-  return true;
-}
-
-/** Esc or Cancel: the queued message stays as it was, and the composer gets its own message back. */
-export function cancelQueuedEdit(): boolean {
-  const edit = get().queuedEdit;
-  if (!edit) return false;
-  restoreComposer(edit);
-  return true;
-}
-
-/**
- * The item left the queue while it was being edited (it started, or was removed): the edit ends. What
- * was typed stays in the composer when it was empty before the edit, and is dropped when it was not.
- */
-export function endQueuedEdit(): void {
-  const edit = get().queuedEdit;
-  if (!edit) return;
-  if (!edit.text.trim() && !hasExtras(edit.extras)) {
-    set({ queuedEdit: null });
-    return;
-  }
-  restoreComposer(edit);
-}
-
-function restoreComposer(edit: NonNullable<AppState["queuedEdit"]>): void {
-  set({ queuedEdit: null });
-  setDraft(edit.threadId, edit.text);
-  setExtras(edit.threadId, () => edit.extras);
-}
-
-export function removeQueued(id: string, queuedId: string) {
-  const link = get().threads[id]?.queue.find((q) => q.id === queuedId)?.link;
-  updateThread(id, (t) => ({ ...t, queue: t.queue.filter((q) => q.id !== queuedId) }));
-  if (link) queuedLinkDropped(link);
-  // Editing a message that just left the queue (it started, or it was removed): the edit ends.
-  if (get().queuedEdit?.queuedId === queuedId) endQueuedEdit();
-}
-
-/** A queued message edited where it waits; its attachments are replaced with the composer's. */
-export function updateQueued(id: string, queuedId: string, text: string, extras?: ComposeExtras) {
-  const trimmed = text.trim();
-  updateThread(id, (t) => {
-    const item = t.queue.find((q) => q.id === queuedId);
-    if (!item) return t;
-    const next = extras ?? item.extras;
-    // Its attachments stay; one with attachments survives an emptied text. The text is kept as it
-    // was written, since a paste is spliced at its offset when the message is composed.
-    if (!trimmed && !hasExtras(next)) return { ...t, queue: t.queue.filter((q) => q.id !== queuedId) };
-    return {
-      ...t,
-      queue: t.queue.map((q) => (q.id === queuedId ? { ...q, text, extras: next } : q)),
-    };
-  });
-}
-
-/** Move a queued message one place earlier (-1) or later (1). */
-export function moveQueued(id: string, queuedId: string, by: -1 | 1) {
-  updateThread(id, (t) => {
-    const at = t.queue.findIndex((q) => q.id === queuedId);
-    const to = at + by;
-    if (at < 0 || to < 0 || to >= t.queue.length) return t;
-    const queue = t.queue.slice();
-    [queue[at], queue[to]] = [queue[to]!, queue[at]!];
-    return { ...t, queue };
-  });
-}
-
-/**
- * How long the app waits for a machine's channel to come back before it gives a lost turn up:
- * past it the machine is unreachable, and the links it was answering are told so. Every read the
- * machine answers pushes it out, so a turn that is still running there is followed for as long as
- * it runs.
- */
-export const LOST_MACHINE_MS = 2 * 60_000;
-
-/** How often a lost turn the machine has not spoken about is looked at again (`LOST_MACHINE_MS`). */
-export const LOST_RECHECK_MS = 30_000;
-
-/** A turn on another machine whose prompt request died with that machine's connection. */
-interface LostTurn {
-  /** This window's key for the thread, `‹host›/‹session›`. */
-  thread: string;
-  host: string;
-  /** The links the turn was answering: nothing else settles them once it is handed here. */
-  links: string[];
-  /** When the machine has been silent long enough to give up (`LOST_MACHINE_MS`). */
-  deadline: number;
-  /** The next look at the machine, or the give-up, whichever comes first. */
-  timer?: ReturnType<typeof setTimeout>;
-  /** A read of the machine is in flight: a second one would settle the same links twice. */
-  busy?: boolean;
-  /** The thread has been read again since the machine said the turn still runs there. */
-  following?: boolean;
-}
-
-/** The lost turns this window is following, by thread key. */
-const lostTurns = new Map<string, LostTurn>();
-
-/** Tests only: `LOST_MACHINE_MS`, shortened so a test need not wait two minutes. */
-let lostMachineMs = LOST_MACHINE_MS;
-export function setLostMachineMsForTests(ms: number): void {
-  lostMachineMs = ms;
-}
-
-/**
- * A turn on another machine whose prompt request died with the machine's connection: the turn goes
- * on there. Nothing is settled from the rows that had arrived — a half-written answer is not an
- * answer — so the links keep working until the machine can be asked how the thread ended
- * (`settleLostTurn`), or for `LOST_MACHINE_MS` if its channel never comes back (issue 3440).
- */
-export function lostTurn(thread: string, links: readonly (string | undefined)[]): void {
-  const host = splitThreadKey(thread).host;
-  const ids = links.filter((link): link is string => typeof link === "string");
-  if (!host || !ids.length) return;
-  // A second prompt can be lost on the same thread: it is followed by the record already there, so
-  // the links of both are answered by the turn the machine ends with, never one of them orphaned.
-  const before = lostTurns.get(thread);
-  if (before) {
-    before.links = [...new Set([...before.links, ...ids])];
-    before.deadline = Date.now() + lostMachineMs;
-    void lookAtLostTurn(before);
-    return;
-  }
-  const record: LostTurn = { thread, host, links: ids, deadline: Date.now() + lostMachineMs };
-  lostTurns.set(thread, record);
-  void lookAtLostTurn(record);
-}
-
-/**
- * One look at a lost turn's machine, then the next look before the deadline. A machine that
- * answers resets the deadline (`askMachine`), so this repeats only while the turn runs there or
- * while the machine is away; `LOST_RECHECK_MS` bounds how fast, `LOST_MACHINE_MS` how long.
- */
-async function lookAtLostTurn(record: LostTurn): Promise<void> {
-  if (lostTurns.get(record.thread) !== record) return;
-  clearTimeout(record.timer);
-  if (Date.now() >= record.deadline) return giveUpLostTurn(record);
-  await askMachine(record);
-  if (lostTurns.get(record.thread) !== record) return;
-  const next = Math.min(record.deadline, Date.now() + LOST_RECHECK_MS);
-  record.timer = setTimeout(() => void lookAtLostTurn(record), Math.max(0, next - Date.now()));
-}
-
-/** A machine's channel was opened again: ask it about the turns this window lost with it. */
-function resumeLostTurns(host: string): void {
-  for (const record of lostTurns.values()) if (record.host === host) void askMachine(record);
-}
-
-/**
- * A machine reported what one of its threads does (`session/update` `session_info_update`, read by
- * `onSessionUpdate`): a lost turn whose thread stopped running there is read and settled now.
- */
-function lostTurnStatus(thread: string, status: ThreadStatus): void {
-  const record = lostTurns.get(thread);
-  if (record && status !== "running" && status !== "needs_input") void askMachine(record);
-}
-
-/**
- * Ask the machine how the lost turn's thread ended, if it can be asked now. A turn still running
- * there keeps the links working and waits for the machine's next word about that thread; one that
- * ended is settled from what the thread holds (`settleLostTurn`).
- */
-async function askMachine(record: LostTurn): Promise<void> {
-  if (record.busy || lostTurns.get(record.thread) !== record) return;
-  const conn = connectionFor(record.host);
-  // No channel yet: `resumeLostTurns` asks again when the machine is back, and the deadline gives up.
-  if (!conn) return;
-  record.busy = true;
-  try {
-    const status = await machineStatusOf(conn, record.thread);
-    // A thread the machine no longer lists is not one it can be asked about: the deadline says so.
-    if (!status || lostTurns.get(record.thread) !== record) return;
-    // It answered about this thread, so it is reachable, and it has longer to report.
-    record.deadline = Date.now() + lostMachineMs;
-    if (status === "running") {
-      // Still working there. The delegate's own chat is read again once (the machine's rows, not
-      // the failure the drop wrote), and the answer arrives when the machine says it stopped.
-      if (!record.following) {
-        record.following = true;
-        void reloadThread(record.thread);
-      }
-      return;
-    }
-    await settleLostTurn(record);
-  } catch {
-    // The channel went again: its return asks once more, and the deadline bounds the wait.
-  } finally {
-    record.busy = false;
-  }
-}
-
-/** What a machine says one of its threads does, from its own `session/list` pages. */
-async function machineStatusOf(conn: AcpConnection, thread: string): Promise<ThreadStatus | undefined> {
-  const { id } = splitThreadKey(thread);
-  let cursor: string | undefined;
-  for (let page = 0; page < 10; page++) {
-    const params: JsonObject = cursor ? { cursor } : {};
-    const result = parseSessionList(await conn.request(Method.sessionList, params, 10_000));
-    const found = result.sessions.find((x) => x.id === id);
-    if (found) return found.status;
-    cursor = result.nextCursor;
-    if (!cursor) break;
-  }
-  return undefined;
-}
-
-/**
- * The lost turn's thread no longer runs: read it again from the machine (the replay a reopened
- * thread gets) and settle its links by what the turn left — its answer, or the failure it ended in.
- */
-async function settleLostTurn(record: LostTurn): Promise<void> {
-  if (lostTurns.get(record.thread) !== record) return;
-  // The thread as the machine has it now, not as this window last saw it. A replay it stops
-  // answering is no end of the turn: the recheck and the deadline still hold the links.
-  if (!(await reloadThread(record.thread))) return;
-  lostTurns.delete(record.thread);
-  clearTimeout(record.timer);
-  const rows = lastTurnRows(get().threads[record.thread]);
-  const answer = latestReply(rows);
-  // The turn's own answer, never the one before it: a turn that wrote none settled on nothing.
-  if (answer.trim()) linksFinished(record.links, record.thread, "completed", undefined, rows);
-  else linksFinished(record.links, record.thread, "failed", turnErrorIn(rows) ?? MACHINE_LOST_TURN, rows);
-}
-
-/**
- * A thread's rows for the turn that ended last, as its replay holds them: after its last prompt,
- * so a turn that answered nothing does not take the answer of the turn before it.
- */
-function lastTurnRows(thread: ThreadState | undefined): TranscriptItem[] {
-  const items = thread?.items ?? [];
-  const from = items.findLastIndex((item) => item.kind === "user");
-  return from < 0 ? items : items.slice(from);
-}
-
-/**
- * What a thread's rows say about how its last turn ended: its last notice (the engine's stop,
- * limit or failure marker, which a replay carries), an error-toned one first. A turn the machine
- * ended in one is that failure, not the connection's.
- */
-function turnErrorIn(items: readonly TranscriptItem[]): string | undefined {
-  let notice: string | undefined;
-  for (let i = items.length - 1; i >= 0; i--) {
-    const item = items[i]!;
-    if (item.kind !== "notice") continue;
-    if (item.tone === "error") return item.text;
-    notice ??= item.text;
-  }
-  return notice;
-}
-
-/** The machine never came back inside the bound: its links are told so, with the sentence for it. */
-function giveUpLostTurn(record: LostTurn): void {
-  if (!lostTurns.delete(record.thread)) return;
-  clearTimeout(record.timer);
-  const rows = lastTurnRows(get().threads[record.thread]);
-  linksFinished(record.links, record.thread, "failed", MACHINE_LOST_TURN, rows);
-}
-
-/**
- * A thread read again from its machine, as opening it after a restart does: its replay, not ours.
- * Answers whether that replay arrived; one the machine did not give leaves the thread as it was.
- */
-async function reloadThread(thread: string): Promise<boolean> {
-  if (!connectionForThread(thread)) return false;
-  updateThread(thread, (t) => ({ ...t, loaded: false, openFailed: false }));
-  await openThread(thread);
-  const after = get().threads[thread];
-  return !!after?.loaded && !after.openFailed;
-}
+// ---------------------------------------------------------------- running a turn
 
 export async function runPrompt(
   id: string,
@@ -5916,9 +4918,7 @@ export function resetForTests() {
   waitTimer = null;
   upSince.clear();
   sending.clear();
-  if (scheduleTimer) clearInterval(scheduleTimer);
-  scheduleTimer = null;
-  sendingScheduled = false;
+  resetScheduledSends();
   clearPageCache();
   stopPlanPolling();
   resetWaits();
@@ -5931,9 +4931,7 @@ export function resetForTests() {
   creatingSessions = 0;
   forgetAutoCompact();
   // A lost turn's timers outlive a test file, and its links belong to that file's book.
-  for (const record of lostTurns.values()) clearTimeout(record.timer);
-  lostTurns.clear();
-  lostMachineMs = LOST_MACHINE_MS;
+  resetLostTurns();
   driftReads = noDrift;
   clearTimeout(runPollTimer);
   runPollTimer = undefined;
