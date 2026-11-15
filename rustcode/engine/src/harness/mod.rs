@@ -321,6 +321,21 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         requires: Some("pi"),
         native_questions: false,
     },
+    // Perch (`perchai-cli`) speaks ACP with its `acp` subcommand. It has no
+    // `--version`; `perch status` prints `Perch CLI 2.4.132 · Not signed in.`,
+    // which gives both the version and the sign-in.
+    KnownHarness {
+        id: "perch",
+        name: "Perch",
+        kind: HarnessKind::Acp,
+        command: &["perch", "acp"],
+        login_command: Some(&["perch", "login"]),
+        install_hint: Some("npm install -g perchai-cli"),
+        version: Some(("perch", &["status"])),
+        auth_probe: Some(AuthProbe::Text(&["perch", "status"])),
+        requires: None,
+        native_questions: false,
+    },
 ];
 
 pub(crate) fn known(id: &str) -> Option<&'static KnownHarness> {
@@ -1486,6 +1501,7 @@ mod tests {
                 "gemini",
                 "opencode",
                 "pi",
+                "perch",
                 "my-agent"
             ]
         );

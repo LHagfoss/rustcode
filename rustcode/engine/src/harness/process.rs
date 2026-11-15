@@ -3,9 +3,9 @@
 //! debug log. Killing a harness kills its whole group, so tools it started
 //! go with it.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, ChildStdin, ChildStdout};
 
@@ -18,9 +18,30 @@ fn live_groups() -> &'static Mutex<HashSet<i32>> {
 pub(crate) struct HarnessProcess {
     child: Mutex<Option<Child>>,
     group: Option<i32>,
+    /// The child's last stderr lines, so a harness that exits before the ACP
+    /// handshake says why (`Unknown interactive flag: --acp`).
+    stderr_tail: Arc<Mutex<VecDeque<String>>>,
 }
 
+/// How many of the child's last stderr lines [`HarnessProcess::stderr_tail`] keeps.
+const STDERR_TAIL_LINES: usize = 8;
+
 impl HarnessProcess {
+    /// The child's last stderr lines, joined, or `None` when it wrote none.
+    pub(crate) fn stderr_tail(&self) -> Option<String> {
+        let tail = self
+            .stderr_tail
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let text = tail
+            .iter()
+            .map(|line| line.trim_end())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then_some(text)
+    }
+
     /// The harness's process id: the root of the tree whose children a turn is
     /// waiting on ([`super::child_activity`]).
     pub(crate) fn pid(&self) -> Option<u32> {
@@ -223,11 +244,20 @@ pub(crate) fn spawn_with(
         .map_err(|error| format!("could not start {program}: {error}"))?;
     let stdout = child.stdout.take().ok_or("harness stdout unavailable")?;
     let stdin = child.stdin.take().ok_or("harness stdin unavailable")?;
+    let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
     if let Some(stderr) = child.stderr.take() {
         let harness_id = harness_id.to_owned();
+        let tail = Arc::clone(&stderr_tail);
         tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                {
+                    let mut tail = tail.lock().unwrap_or_else(|error| error.into_inner());
+                    if tail.len() == STDERR_TAIL_LINES {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line.clone());
+                }
                 match &log_session {
                     Some(session) => crate::logger::append_line_for_session(
                         session,
@@ -249,6 +279,7 @@ pub(crate) fn spawn_with(
         HarnessProcess {
             child: Mutex::new(Some(child)),
             group,
+            stderr_tail,
         },
         stdout,
         stdin,

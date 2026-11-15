@@ -70,9 +70,12 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState<"adding" | "verifying" | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // The harness this form added itself: it is in the list while it is verified
+  // (and until a failed one is removed), and must not read as a name clash.
+  const [ownId, setOwnId] = useState<string | null>(null);
   const errors = validateHarnessForm(
     form,
-    harnesses.map((h) => h.name),
+    harnesses.filter((h) => h.id !== ownId).map((h) => h.name),
   );
   // Problems show once the user tried to add; before that the form is only being filled in.
   const shown = submitted ? errors : { args: [], env: [] };
@@ -86,8 +89,9 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
     if (hasFormErrors(errors) || busy) return;
     const request = buildHarnessRequest(
       form,
-      harnesses.map((h) => h.id),
+      harnesses.filter((h) => h.id !== ownId).map((h) => h.id),
     );
+    setOwnId(request.id);
     setFailure(null);
     setBusy("adding");
     let created = false;

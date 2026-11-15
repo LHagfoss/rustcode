@@ -144,6 +144,7 @@ latter, and groups those apart. Detection is cached for a minute; `set` and
 | `opencode` | `acp` | `opencode acp` | `opencode --version` | `unknown` |
 | `cursor` | `acp` | `agent acp` | `agent --version` | `unknown` |
 | `pi` | `acp` | `npx -y pi-acp` (pi's RPC mode adapted to ACP) | `pi --version` | `unknown` |
+| `perch` | `acp` | `perch acp` | `perch status` | `perch status` (`Not signed in.` is signed out) |
 
 Commands are looked up on the engine's `PATH` and then the login shell's, so
 an app started from the Dock finds what the terminal finds. On Windows a bare

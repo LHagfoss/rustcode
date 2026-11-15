@@ -456,8 +456,10 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   `state/harnessForm.ts`): a name, an executable, one literal argument per row
   and environment rows. The command is started directly, never through a
   shell. It is added turned off, checked (the ACP handshake and a model list),
-  and turned on only if that worked; a failure shows the error text in the form
-  and removes it again. A verified one lists under *Added by you*, appears in
+  and turned on only if that worked; a failure shows the engine's reason in the
+  form, with the last lines the command wrote to stderr when it exited before
+  the handshake (a wrong flag), and removes it again. While it is checked, the
+  form's own entry in the list is not a name clash. A verified one lists under *Added by you*, appears in
   the model picker like any other harness, and has *Remove* under *Details*.
   RustCode searches no ACP registry. The command and what it supports fold under *Details*. On a card whose
   harness has named logins (Claude Code, Codex), *Accounts* lists each named login (its own `CLAUDE_CONFIG_DIR` or

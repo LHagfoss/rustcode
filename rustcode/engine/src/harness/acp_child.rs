@@ -389,6 +389,47 @@ fn config_server(server: &crate::config::McpServerConfig) -> Value {
     }
 }
 
+/// The sign-in command an agent advertised in `initialize`: an `authMethods`
+/// entry of type `terminal` runs the harness's own program with its `args`
+/// (Perch's `perch login`).
+fn terminal_login(harness: &ResolvedHarness, initialized: &Value) -> Option<String> {
+    let program = harness.command.first()?;
+    initialized
+        .get("authMethods")?
+        .as_array()?
+        .iter()
+        .filter(|method| method.get("type").and_then(Value::as_str) == Some("terminal"))
+        .find_map(|method| {
+            let args = method
+                .get("args")?
+                .as_array()?
+                .iter()
+                .map(|arg| arg.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()?;
+            Some(
+                std::iter::once(program.clone())
+                    .chain(args)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+        })
+}
+
+/// `error` with what the harness last wrote to stderr: a command that exits
+/// before the handshake (a wrong flag, a missing login) says why there, and the
+/// handshake error alone is only "connection closed".
+async fn with_stderr(error: String, process: Option<&HarnessProcess>) -> String {
+    let Some(process) = process else {
+        return error;
+    };
+    // The reader may still be on its way to the last line the child wrote.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    match process.stderr_tail() {
+        Some(tail) => format!("{error}\n{tail}"),
+        None => error,
+    }
+}
+
 impl AcpAdapter {
     pub(crate) async fn connect(
         harness: &ResolvedHarness,
@@ -422,8 +463,11 @@ impl AcpAdapter {
                 }),
                 HANDSHAKE_TIMEOUT,
             )
-            .await
-            .map_err(describe)?;
+            .await;
+        let initialized = match initialized {
+            Ok(initialized) => initialized,
+            Err(error) => return Err(with_stderr(describe(error), process.as_ref()).await),
+        };
         let capabilities = initialized.get("agentCapabilities");
         let load_session = capabilities
             .and_then(|capabilities| capabilities.get("loadSession"))
@@ -520,11 +564,15 @@ impl AcpAdapter {
                 .await
                 .map_err(|error| {
                     if error.code == -32000 {
-                        format!(
+                        let mut text = format!(
                             "{} needs you to sign in first ({})",
                             harness.name,
                             error.describe()
-                        )
+                        );
+                        if let Some(login) = terminal_login(harness, &initialized) {
+                            text.push_str(&format!(": run `{login}` in a terminal"));
+                        }
+                        text
                     } else {
                         describe(error)
                     }

@@ -124,11 +124,14 @@ fn account_auth_with(
     "needs_login"
 }
 
-/// What a harness's own sign-in status command said. Only the Codex CLI's own
-/// `Not logged in` (printed with exit 1) is a sign-out; a non-zero exit for any
-/// other reason is no answer at all.
+/// What a harness's own sign-in status command said. Only the CLI's own
+/// sign-out line is a sign-out: Codex's `Not logged in` (printed with exit 1)
+/// or Perch's `Not signed in.` (exit 0). A non-zero exit for any other reason
+/// is no answer at all.
 fn status_says_signed_in(success: bool, output: &str) -> Option<bool> {
-    if output.to_ascii_lowercase().contains("not logged in") {
+    let output = output.to_ascii_lowercase();
+    // Codex says `Not logged in`, Perch `Not signed in.`
+    if output.contains("not logged in") || output.contains("not signed in") {
         return Some(false);
     }
     success.then_some(true)
@@ -510,6 +513,10 @@ mod tests {
 
     #[test]
     fn versions_parse() {
+        assert_eq!(
+            parse_version("Perch CLI 2.4.132 · Not signed in. Run `perch login`.").as_deref(),
+            Some("2.4.132")
+        );
         assert_eq!(
             parse_version("2026.03.11-6dfa30c\n").as_deref(),
             Some("2026.03.11-6dfa30c")
@@ -1014,6 +1021,13 @@ mod tests {
     fn only_the_harnesss_own_not_logged_in_is_a_sign_out() {
         // The Codex CLI exits 1 with this line when the login is gone.
         assert_eq!(status_says_signed_in(false, "Not logged in\n"), Some(false));
+        assert_eq!(
+            status_says_signed_in(
+                true,
+                "Perch CLI 2.4.132 · Not signed in. Run `perch login`."
+            ),
+            Some(false)
+        );
         assert_eq!(
             status_says_signed_in(true, "Logged in using ChatGPT"),
             Some(true)

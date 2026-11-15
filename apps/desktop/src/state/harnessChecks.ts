@@ -6,7 +6,7 @@
 import { create } from "zustand";
 import type { Harness } from "../acp/types";
 import { type CheckEntry, type CheckResult, failedResult, readyResult, settledEarly } from "./harnessCheck";
-import { checkHarnessAccounts, fetchHarnessModels, useApp } from "./store";
+import { checkHarnessAccounts, errorText, fetchHarnessModels, useApp } from "./store";
 
 interface ChecksState {
   byHarness: Record<string, CheckEntry>;
@@ -52,7 +52,7 @@ async function check(id: string): Promise<CheckResult> {
     await checkHarnessAccounts(true, [id], false);
     result = await settle(id);
   } catch (error) {
-    result = failedResult(error);
+    result = failedResult(errorText(error));
   }
   put(id, { result });
   return result;
@@ -116,7 +116,7 @@ export function runAllHarnessChecks(): Promise<CheckResult[]> {
             release();
           }
         } catch (error) {
-          result = failedResult(error);
+          result = failedResult(errorText(error));
         }
         put(id, { result });
         done++;
