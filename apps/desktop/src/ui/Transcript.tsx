@@ -1414,7 +1414,8 @@ export function Transcript({
                       <SelectableMessage threadId={thread.id}>
                         <UserRow
                           item={item}
-                          threadId={thread.running || peek ? undefined : thread.id}
+                          threadId={peek ? undefined : thread.id}
+                          busy={thread.running}
                           rewind={rewind}
                           // Consecutive messages from the same side soften the corners they share.
                           after={rows[v.index - 1]?.item?.kind === "user"}
