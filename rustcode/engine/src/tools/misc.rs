@@ -3736,6 +3736,17 @@ pub const MANAGE_SETTINGS: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+pub const MANAGE_CAPABILITIES: Tool = Tool {
+    name: crate::manage::MANAGE_CAPABILITIES,
+    description: "List and change what RustCode threads can use: turn a skill or MCP server on or off, restart an MCP server, pick the default harness (and model) for new threads, or switch the theme. Lists answer at once; every change asks the user first. Only change one when the user asks.",
+    arguments: r#"{"kind":"skill|mcp|harness|theme","action":"list|enable|disable|restart|default|set","name":"optional","model":"optional","effort":"optional"}"#,
+    handler: ask_user_question_unavailable,
+    requires_confirmation: false,
+    schema: crate::manage::capabilities::schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 pub const REQUEST_SECRET: Tool = Tool {
     name: crate::orchestration::secret::TOOL_NAME,
     description: "Ask for a credential privately, not in chat. Saves to an untracked dotenv destination; env=true sets $NAME for later commands. Never print it.",

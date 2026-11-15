@@ -29,13 +29,13 @@ keeps only the token's SHA-256, in `<config>/outside-agents.json` (mode 0600).
 
 | Level | May |
 | --- | --- |
-| Read-only (default) | `whoami`, `list_sessions`, `search_sessions`, `list_projects`, `read_session`, `wait_session`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines`, and `manage_settings` with `list` or `get` |
+| Read-only (default) | `whoami`, `list_sessions`, `search_sessions`, `list_projects`, `read_session`, `wait_session`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines`, and the lists and reads of `manage_settings` and `manage_capabilities` |
 | Delegate | Read-only, plus `start_session`, `fan_out`, `message_session` and `interrupt_session` |
 | Manage | Delegate, plus `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` |
-| Admin | Manage, plus `manage_settings` with `set` or `reset`: RustCode's own settings |
+| Admin | Manage, plus the changes of `manage_settings` (`set`, `reset`) and `manage_capabilities` (skills, MCP servers, the default harness and the theme) |
 
-A tool's level can depend on what the call does: `manage_settings` reads at
-Read-only and writes only at Admin (`required_scope_for`), and a refusal names
+A tool's level can depend on what the call does: `manage_settings` and
+`manage_capabilities` read at Read-only and write only at Admin (`required_scope_for`), and a refusal names
 the level the call needs. Harness accounts, connections and outside-agent
 tokens are never offered to an outside agent at any level.
 

@@ -442,6 +442,29 @@ requests `_rustcode/capabilities`, `_rustcode/capabilities/set` and
 `_rustcode/capabilities/mcp/{add,remove}` (see
 [acp.md](acp.md#skills-and-mcp-servers)).
 
+From a terminal, the same toggles and the default harness:
+
+```sh
+rustcode skill list [--json]
+rustcode skill disable cloudflare
+rustcode mcp disable files          # also: enable, restart
+rustcode harness list [--json]      # * marks the default for new threads
+rustcode harness default codex --model gpt-5 --effort high
+rustcode theme set nord
+```
+
+They go through the running server when there is one (it runs the MCP
+servers, so a toggle starts or stops the server at once and `restart`
+reconnects it); without one they change `config.toml` only, and `restart` says
+there is nothing running to restart. An agent does the same with the
+`manage_capabilities` tool of the `rustcode` MCP server (`{ "kind": "skill" |
+"mcp" | "harness" | "theme", "action": "list" | "enable" | "disable" |
+"restart" | "default" | "set", "name"?, "model"?, "effort"? }`): lists answer
+at once, and each change shows the thread's approval card first, e.g.
+`Change the default harness for new threads: claude-code → codex with gpt-5`.
+A list never carries a server's target, headers or environment, or an
+account's login. An outside agent needs Admin access to change anything.
+
 ## YOLO by default
 
 YOLO auto-approves tool calls that would otherwise ask for confirmation. It is
