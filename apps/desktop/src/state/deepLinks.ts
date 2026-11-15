@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "../acp/transport";
-import { parseDeepLink, promptLink, threadLink } from "../lib/deepLinks";
+import { parseDeepLink, promptLink, threadLink, threadReference } from "../lib/deepLinks";
 import { setAddEnvironmentOpen, useMachines } from "./machines";
 import { projectsOn, remoteRepository } from "./projects";
 import {
@@ -63,7 +63,13 @@ export function copyPromptLink(): void {
   copyLink(promptLink(s.drafts[s.selectedId ?? "new"] ?? ""));
 }
 export function copyThreadLink(id: string): void {
-  copyLink(threadLink(id));
+  copyLink(threadLink(threadReference(id)));
+}
+export function copyThreadId(id: string): void {
+  void navigator.clipboard.writeText(threadReference(id)).then(
+    () => toast("Thread ID copied"),
+    () => toast("Could not copy thread ID", "error"),
+  );
 }
 function copyLink(link: string): void {
   void navigator.clipboard.writeText(link).then(
