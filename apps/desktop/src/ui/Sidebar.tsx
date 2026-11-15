@@ -1,12 +1,12 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
 import { copyThreadLink } from "../state/deepLinks";
-// The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
-// the app's brand under it (its mark, name and version), then one list: pinned
-// threads first, then one Threads list (by project when asked) that leads with
-// the threads running now, then the Snoozed and Settled shelves at the foot, each
-// folding on its own header. Threads are searched from ⌘K, which also holds the
-// buttons that used to sit here (new thread, add project, settings, pull
-// requests, usage). A section header never folds.
+// The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
+// Settings), the Needs you row, the toolbar (search, the sort and filter menu and
+// New thread; ui/SidebarToolbar.tsx, optional), then one list: pinned threads
+// first, then one Threads list (by project when asked) in the chosen sort, then
+// the Snoozed and Settled shelves at the foot, each folding on its own header.
+// ⌘K searches threads too, and holds the actions (add project, pull requests,
+// usage). A section header never folds.
 // Every thread row is one fixed grid of 3 lines, each a left and a right part, so
 // each row is the same height and each thing has one place (`ROW_GRID`). The left
 // parts hold the title, then the project and computer, then the branch or what the
@@ -103,7 +103,15 @@ import {
 import { type PendingSetup, pendingSummary } from "../state/setup";
 import { type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
-import { PREF, usePref, useSidebarDensity } from "../state/sidebarPrefs";
+import {
+  PREF,
+  SETTLE_AFTER_DEFAULT_DAYS,
+  settleAfterDays,
+  settleAfterMs,
+  usePref,
+  useSidebarDensity,
+  useSidebarSort,
+} from "../state/sidebarPrefs";
 import {
   type CompactMark,
   cleanFolds,
@@ -136,6 +144,7 @@ import {
   shelfOpen,
   sortSection,
   threadDiff,
+  threadMatches,
   visibleRows,
 } from "../state/sidebarRows";
 import { snoozePresets, wakeLabel } from "../state/snooze";
@@ -201,6 +210,7 @@ import {
   Tooltip,
 } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
+import { SidebarToolbar } from "./SidebarToolbar";
 import { useThreadDrag } from "./sidebarDrag";
 import { ThreadHoverCard } from "./ThreadHoverCard";
 import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
@@ -1634,6 +1644,17 @@ export function Sidebar() {
     return () => clearInterval(t);
   }, []);
   const [onlyProject] = usePref(PREF.onlyProject, false);
+  // The toolbar over the list (ui/SidebarToolbar.tsx), the order it chose, and when an idle
+  // thread settles on its own (Settings › Appearance).
+  const [toolbarOn] = usePref(PREF.toolbar, true);
+  const [sort] = useSidebarSort();
+  const [settleDays] = usePref<number>(PREF.settleAfterDays, SETTLE_AFTER_DEFAULT_DAYS);
+  const settleMs = settleAfterMs(settleAfterDays(settleDays));
+  // The search narrows the list as it is typed; it is this window's, not a stored preference, and
+  // goes when the toolbar is hidden.
+  const [rawQuery, setQuery] = useState("");
+  const query = toolbarOn ? rawQuery.trim() : "";
+  const searching = query !== "";
   // The projects folded under "group by project" (`project:<path>`); the shelves keep their own.
   const [folded, setFolded] = usePref<string[]>(PREF.folded, NO_FOLDS);
   // A section header never folds, so a `working` or `threads` entry an older release stored would
@@ -1699,9 +1720,11 @@ export function Sidebar() {
   const filtered = useMemo(
     () =>
       sessions.filter(
-        (s) => !onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd,
+        (s) =>
+          (!onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd) &&
+          threadMatches(s, query),
       ),
-    [sessions, onlyProject, projectCwd],
+    [sessions, onlyProject, projectCwd, query],
   );
   // The threads waiting on work they handed out, though no turn of theirs runs: the Threads list
   // holds them beside the ones running (state/waiting.ts).
@@ -1821,13 +1844,15 @@ export function Sidebar() {
     // row will be, so it keeps its place when it becomes one.
     const pendingRow =
       pending &&
+      !searching &&
       (!onlyProject || !projectCwd || pending.cwd === projectCwd || pending.worktree?.repo === projectCwd)
         ? pendingSummary(pending)
         : null;
     for (const s of filtered) {
       // A delegated thread has no row of its own, unless the filter left the open one with no row
       // to hang under (`orphanOpen`).
-      if (parentOf.has(s.id) && s.id !== orphanOpen) continue;
+      // A search shows a delegate that matches as a row of its own, saying which thread it is under.
+      if (parentOf.has(s.id) && s.id !== orphanOpen && !searching) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
       // Settled: threads settled (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
@@ -1836,7 +1861,7 @@ export function Sidebar() {
         placeThread({
           pinned: pinned.includes(s.id),
           settled: status === "done",
-          aged: status !== "review" && idleSettled(s.updatedAt, now),
+          aged: status !== "review" && idleSettled(s.updatedAt, now, settleMs),
           snoozed: !!snoozed[s.id],
           needs: flagged.has(`${s.id}:n`),
           working: flagged.has(`${s.id}:w`),
@@ -1860,12 +1885,13 @@ export function Sidebar() {
       wakeAt: snoozed[s.id],
       running: works(s.id),
       needs: flagged.has(`${s.id}:n`),
+      title: s.title || "New thread",
     });
     // The order the user arranged comes over the section's own (state/sidebarOrder.ts): a row that
     // was dragged or ⌥↑/↓'d is drawn where it was put, and the rows nobody arranged keep the order
     // their section gives them (state/sidebarRows.ts `sortSection`).
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
-      applyOrder(sortSection(id, items, keyOf), layout[sectionOrderKey(id, project)]);
+      applyOrder(sortSection(id, items, keyOf, sort), layout[sectionOrderKey(id, project)]);
     // The threads by project, when the pref is on and there is more than one project.
     const grouped = sidebarProjects(active);
     let projects: ProjectGroup[] | undefined;
@@ -1916,6 +1942,9 @@ export function Sidebar() {
     projectCwd,
     orphanOpen,
     layout,
+    sort,
+    settleMs,
+    searching,
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
@@ -1944,6 +1973,8 @@ export function Sidebar() {
   // whatever `folded` holds, so an id an older release stored can never shut a list with no control
   // to open it.
   const isOpen = (id: string) => {
+    // A search shows every match, in a shut shelf or folder too.
+    if (searching) return true;
     if (isShelf(id, layoutMode)) return shelfIsOpen[id];
     if (id.startsWith("project:")) return !folded.includes(id);
     return true;
@@ -1954,7 +1985,7 @@ export function Sidebar() {
     else if (id === "settled") setSettledStored(!isOpen(id));
     else setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
   };
-  const settledLimit = Math.max(settledShown, settledAt + 1);
+  const settledLimit = searching ? Number.POSITIVE_INFINITY : Math.max(settledShown, settledAt + 1);
 
   // Which list each drawn row arranges, and the rows drawn in it: a drag and ⌥↑/↓ both move a row
   // inside the one list it was drawn in — a section, or one project's run of rows under its heading
@@ -2430,6 +2461,16 @@ export function Sidebar() {
           </Cluster>
         </TitlebarRow>
         <NeedsYouRow />
+        {toolbarOn && (
+          <SidebarToolbar
+            query={rawQuery}
+            onQuery={setQuery}
+            onOpenFirst={() => {
+              const first = orderIds[0];
+              if (first) selectThread(rowIdOf(first));
+            }}
+          />
+        )}
         <nav
           ref={list}
           data-focus-default
@@ -2447,7 +2488,11 @@ export function Sidebar() {
           {!sessionsLoaded && <ThreadRowsSkeleton />}
           {sessionsLoaded && !filtered.length && (
             <div className="px-2 py-3 text-callout text-fg-muted">
-              {onlyProject ? "No threads in this project yet." : "No threads yet."}
+              {searching
+                ? `No threads match “${query}”.`
+                : onlyProject
+                  ? "No threads in this project yet."
+                  : "No threads yet."}
             </div>
           )}
           <div className="flex min-h-full flex-col">

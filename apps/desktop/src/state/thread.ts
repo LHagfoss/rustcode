@@ -1301,9 +1301,12 @@ export function formatDuration(ms: number): string {
 /** How long a thread rests untouched before the sidebar settles it on its own. */
 export const SETTLE_AFTER_MS = 3 * 86_400_000;
 
-/** Whether a thread last active at `at` has been idle long enough to settle. */
-export function idleSettled(at: number | undefined, now = Date.now()): boolean {
-  return at !== undefined && now - at >= SETTLE_AFTER_MS;
+/**
+ * Whether a thread last active at `at` has been idle long enough to settle. `afterMs` is the
+ * user's choice (Settings › Appearance › Settle idle threads); 0 never settles one.
+ */
+export function idleSettled(at: number | undefined, now = Date.now(), afterMs = SETTLE_AFTER_MS): boolean {
+  return afterMs > 0 && at !== undefined && now - at >= afterMs;
 }
 
 /** A running turn's clock: `0:42`, `12:03`, `1:02:03`. */

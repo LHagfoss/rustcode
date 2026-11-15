@@ -469,6 +469,8 @@ export interface OrderKey {
   pinRank?: number;
   /** When its snooze ends. */
   wakeAt?: number;
+  /** Its title, for the `title` sort. */
+  title?: string;
 }
 
 /** After every real time: a thread with no mark of its own sorts behind the ones that have one. */
@@ -486,11 +488,51 @@ const LAST = Number.MAX_SAFE_INTEGER;
  * and a row the user arranged still keeps its place over this order
  * (`state/sidebarOrder.ts` `applyOrder`).
  */
-export function sortSection<T>(section: SectionId, items: readonly T[], key: (item: T) => OrderKey): T[] {
+export function sortSection<T>(
+  section: SectionId,
+  items: readonly T[],
+  key: (item: T) => OrderKey,
+  sort: "activity" | "recent" | "title" = "activity",
+): T[] {
   if (section === "settled") return [...items];
   const keyed = items.map((item) => ({ item, at: key(item) }));
-  keyed.sort((a, b) => compare(section, a.at, b.at));
+  // The chosen sort orders the one Threads list; Pinned, Working and Snoozed keep their own order.
+  const own = section === "pinned" || section === "working" || section === "snoozed";
+  keyed.sort((a, b) =>
+    own || sort === "activity"
+      ? compare(section, a.at, b.at)
+      : sort === "recent"
+        ? b.at.backAt - a.at.backAt
+        : (a.at.title ?? "").localeCompare(b.at.title ?? "", undefined, { sensitivity: "base" }) ||
+          b.at.backAt - a.at.backAt,
+  );
   return keyed.map((row) => row.item);
+}
+
+/** What the sidebar's search reads of a thread: its title, project folder and branch. */
+export interface Searchable {
+  title?: string;
+  cwd?: string;
+  worktree?: { branch?: string; repo?: string } | null;
+}
+
+/**
+ * Whether a thread matches the sidebar's search: every word of the query is in its title, its
+ * project's folder name or its branch, ignoring case. An empty query matches every thread.
+ */
+export function threadMatches(thread: Searchable, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const base = (path?: string) => path?.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  const hay = [
+    thread.title ?? "",
+    base(thread.cwd),
+    base(thread.worktree?.repo),
+    thread.worktree?.branch ?? "",
+  ]
+    .join(" ")
+    .toLowerCase();
+  return words.every((word) => hay.includes(word));
 }
 
 function compare(section: SectionId, a: OrderKey, b: OrderKey): number {
