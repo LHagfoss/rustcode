@@ -196,25 +196,30 @@ fn prompt_input_with(
         match block {
             ContentBlock::Text(block) => text.push_str(&block.text),
             ContentBlock::Image(image) => {
-                let extension = match image.mime_type.to_ascii_lowercase().as_str() {
-                    "image/png" => "png",
-                    "image/jpeg" | "image/jpg" => "jpg",
-                    "image/gif" => "gif",
-                    "image/webp" => "webp",
-                    other => {
-                        return Err(format!(
-                            "unsupported image type {other}; use PNG, JPEG, GIF or WebP"
-                        ));
-                    }
+                let Some(extension) = crate::controller::image_extension(&image.mime_type) else {
+                    return Err(format!(
+                        "unsupported image type {}; use PNG, JPEG, GIF or WebP",
+                        image.mime_type
+                    ));
                 };
                 if image.data.len() > MAX_ENCODED_IMAGE_LEN {
                     return Err("images must be 20 MiB or smaller".into());
                 }
-                let bytes = STANDARD
-                    .decode(image.data.trim())
-                    .map_err(|error| format!("image data is not valid base64: {error}"))?;
-                let path = save_image(&bytes, extension)
-                    .map_err(|error| format!("could not save the image: {error}"))?;
+                // Kept already (`materialize_images`): the marker names that file.
+                let stored = image
+                    .uri
+                    .as_deref()
+                    .and_then(crate::controller::stored_image);
+                let path = match stored {
+                    Some(path) => path,
+                    None => {
+                        let bytes = STANDARD
+                            .decode(image.data.trim())
+                            .map_err(|error| format!("image data is not valid base64: {error}"))?;
+                        save_image(&bytes, extension)
+                            .map_err(|error| format!("could not save the image: {error}"))?
+                    }
+                };
                 if !text.is_empty() && !text.ends_with(char::is_whitespace) {
                     text.push('\n');
                 }

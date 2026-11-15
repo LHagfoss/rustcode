@@ -108,6 +108,7 @@ import {
   windowStatus,
   windowTitle,
 } from "./announceThreads";
+import { uploadPromptImages } from "./attachmentTransfer";
 import { type Attempt, splitAtTurn, transcriptTurns } from "./attempts";
 import {
   type AutoCompactMode,
@@ -1149,6 +1150,11 @@ export function dismissToast(id: string) {
  * reason wins when there is one.
  */
 export function errorText(error: unknown): string {
+  // A paired computer's gateway refuses a method it does not relay: one on an older RustCode
+  // than this app, which says so instead of "not permitted over remote ACP".
+  if (error instanceof RpcError && str(obj(error.data)?.code) === "unauthorized_access") {
+    return "The computer this thread runs on does not take that from another computer yet; update RustCode there.";
+  }
   if (error instanceof RpcError) {
     const detail = rpcReason(error.data);
     if (detail) return detail;
@@ -5298,7 +5304,8 @@ export async function runPrompt(
   let failure: string | undefined;
   let unused: string[] = [];
   try {
-    const request: JsonObject = { sessionId: splitThreadKey(id).id, prompt };
+    const sent = threadIsRemote(id) ? await remotePromptImages(conn, id, prompt) : prompt;
+    const request: JsonObject = { sessionId: splitThreadKey(id).id, prompt: sent };
     // The access level rides on every prompt: a harness that sandboxes its own shell (Codex) leaves
     // the sandbox for Full access, on this machine and on a remote one alike.
     request._meta = {
@@ -5521,6 +5528,30 @@ async function forceStopIfStuck(id: string, turnStartedAt: number | undefined): 
     if (get().agent?.closeSession) void reloadThread(id);
   } finally {
     forcingStops.delete(id);
+  }
+}
+
+/** Below this a prompt fits one frame of a paired computer's connection (1 MiB), with room to spare. */
+const INLINE_PROMPT_CHARS = 900_000;
+
+/**
+ * A remote thread's images go ahead of its prompt, in chunks under the connection's 1 MiB frame
+ * (state/attachmentTransfer.ts), and the prompt names each by the file the machine kept. A machine
+ * on a RustCode from before the upload takes them inline, only when the prompt fits a frame.
+ */
+async function remotePromptImages(conn: AcpConnection, id: string, prompt: Json[]): Promise<Json[]> {
+  if (!prompt.some((block) => obj(block)?.type === "image")) return prompt;
+  try {
+    return await uploadPromptImages(
+      (method, params, timeout) => conn.request(method, params, timeout),
+      prompt,
+    );
+  } catch (error) {
+    if (!(error instanceof RpcError && error.isMethodNotFound)) throw error;
+    if (JSON.stringify(prompt).length < INLINE_PROMPT_CHARS) return prompt;
+    throw new Error(
+      `${machineOfThread(id) ?? "That computer"} runs an older RustCode that cannot take an image this large from another computer. Update RustCode there, or send a smaller image.`,
+    );
   }
 }
 

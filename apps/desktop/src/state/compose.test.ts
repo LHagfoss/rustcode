@@ -184,7 +184,26 @@ describe("compose", () => {
   });
 
   test("replayed image markers and URLs in text", () => {
-    expect(splitImageMarkers("look\n![image](file:///tmp/a.png)\n")).toEqual({ text: "look", images: 1 });
+    expect(splitImageMarkers("look\n![image](file:///tmp/a.png)\n")).toEqual({
+      text: "look",
+      images: 1,
+      paths: ["/tmp/a.png"],
+      lost: 0,
+    });
+    // An external harness's thread from before its images were kept: the line is a lost image.
+    expect(splitImageMarkers("this is our thread\n[image]\n![image](file:///c/attachments/b.png)")).toEqual({
+      text: "this is our thread",
+      images: 2,
+      paths: ["/c/attachments/b.png"],
+      lost: 1,
+    });
+    // `[image]` inside a sentence is the writer's own text.
+    expect(splitImageMarkers("an [image] tag")).toEqual({
+      text: "an [image] tag",
+      images: 0,
+      paths: [],
+      lost: 0,
+    });
     expect(splitUrls("see https://a.dev/x. ok")).toEqual([
       { text: "see " },
       { url: "https://a.dev/x" },

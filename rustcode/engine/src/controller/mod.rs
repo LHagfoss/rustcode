@@ -67,7 +67,11 @@ pub use apply::{
     cancel_question_for_question, cancel_turn_for_turn, refresh_workspace_location_async,
     spawn_observed_orchestrator,
 };
-pub use attachments::save_image_attachment;
+pub use attachments::{
+    IMAGE_CHUNK_BYTES, IMAGE_MARKER, ImageChunk, UploadAnswer, image_extension, image_marker,
+    materialize_images, read_image_chunk, save_image_attachment, stored_image, stored_image_marker,
+    upload_image_chunk,
+};
 pub use config::{
     AgentMode, ApiProtocol, AppConfig, ModelProfile, MonthlyUsage, SandboxMode, SessionMeta,
     ToolProtocol, config_dir, effort_choices, effort_label, sandbox_effective_description,

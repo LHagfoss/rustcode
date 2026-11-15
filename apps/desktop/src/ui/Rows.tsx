@@ -18,6 +18,7 @@ import {
   Globe,
   Hourglass,
   Image as ImageIcon,
+  ImageOff,
   Layers,
   MessageCircleQuestion,
   MessageSquareQuote,
@@ -34,7 +35,7 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
-import { Fragment, memo, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { effortLabel, modelName } from "../acp/types";
 import { type AnsiLine, ansiClass } from "../lib/ansi";
@@ -43,6 +44,7 @@ import { observeSize } from "../lib/resize";
 import { type ArgRow, type ToolBody, toolBody } from "../lib/toolBody";
 import { hasTimeline } from "../lib/trace";
 import { splitReply } from "../smartui/parse";
+import { storedImage, storedImageNow } from "../state/attachmentImages";
 import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state/compose";
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { stateOf } from "../state/host";
@@ -100,6 +102,72 @@ function messageMarkdown(text: string): string {
   return slash ? `\`${COMMAND_MARK}${slash.command}\` ${slash.rest}` : text;
 }
 
+/** An image a message recorded whose file is not on the thread's computer (any more). */
+function ImageUnavailable() {
+  return (
+    <span
+      title="The image file is no longer on the computer this thread ran on"
+      className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted"
+    >
+      <ImageOff size={12} /> Image unavailable
+    </span>
+  );
+}
+
+/**
+ * A picture a replayed message names, read back from the computer the thread runs on. Clicking it
+ * opens every picture of the message that has loaded.
+ */
+function StoredImage({ threadId, path, all }: { threadId: string; path: string; all: readonly string[] }) {
+  const [src, setSrc] = useState<string | null | undefined>(() => storedImageNow(threadId, path));
+  useEffect(() => {
+    let live = true;
+    const now = storedImageNow(threadId, path);
+    if (now !== undefined) setSrc(now);
+    else void storedImage(threadId, path).then((url) => live && setSrc(url));
+    return () => {
+      live = false;
+    };
+  }, [threadId, path]);
+  const name = path.split(/[\\/]/).pop() || "Image";
+  if (src === null) return <ImageUnavailable />;
+  if (src === undefined) {
+    return (
+      <span
+        role="img"
+        aria-label={`Loading ${name}`}
+        className="flex h-[96px] w-[128px] items-center justify-center rounded-lg bg-fill-subtle text-fg-faint"
+      >
+        <ImageIcon size={16} />
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-label={`Open ${name}`}
+      className="rounded-lg"
+      onClick={() => {
+        const pictures = all.flatMap((p) => {
+          const url = storedImageNow(threadId, p);
+          return url ? [{ src: url, alt: p.split(/[\\/]/).pop() || "Image" }] : [];
+        });
+        openLightbox(
+          pictures,
+          pictures.findIndex((x) => x.src === src),
+        );
+      }}
+    >
+      <img
+        src={src}
+        alt={name}
+        title={name}
+        className="max-h-[160px] max-w-[240px] cursor-zoom-in rounded-lg object-cover shadow-1"
+      />
+    </button>
+  );
+}
+
 export const UserRow = memo(function UserRow({
   item,
   threadId,
@@ -117,7 +185,7 @@ export const UserRow = memo(function UserRow({
   after?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const { text, images: markers } = useMemo(() => splitImageMarkers(stripMarks(item.text)), [item.text]);
+  const { text, paths, lost } = useMemo(() => splitImageMarkers(stripMarks(item.text)), [item.text]);
   // A message another thread sent with its id: the heading becomes a link to that thread, and the
   // ids under it are not shown. One from before the ids reads as it was written.
   const sender = useMemo(() => {
@@ -135,7 +203,11 @@ export const UserRow = memo(function UserRow({
     return observeSize(el, measure);
   }, []);
   const attachments = item.attachments ?? [];
-  const placeholders = attachments.some((a) => a.kind === "image") ? 0 : markers;
+  // A message sent from here shows the pictures it carried; a replayed one reads its files back
+  // from the computer the thread runs on, and an image whose file is gone says so.
+  const sentHere = attachments.some((a) => a.kind === "image");
+  const stored = sentHere ? [] : paths;
+  const gone = sentHere ? 0 : lost;
   // A turn the app woke the thread for (a delegate finished, or asks): a
   // divider row like a compaction, never a message that reads as the user's.
   if (item.wake) return <WakeRow text={item.text} flat />;
@@ -145,7 +217,7 @@ export const UserRow = memo(function UserRow({
   }
   return (
     <div className="group flex flex-col items-end">
-      {(attachments.length > 0 || placeholders > 0) && (
+      {(attachments.length > 0 || stored.length > 0 || gone > 0) && (
         <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
           {attachments.map((a, i) =>
             // A message sent before a paste went into the text keeps the chip it was written as: the
@@ -189,13 +261,11 @@ export const UserRow = memo(function UserRow({
               </span>
             ),
           )}
-          {Array.from({ length: placeholders }, (_, i) => (
-            <span
-              key={`m${i}`}
-              className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted"
-            >
-              <ImageIcon size={12} /> Image
-            </span>
+          {stored.map((path, i) => (
+            <StoredImage key={`s${i}`} threadId={threadId ?? ""} path={path} all={stored} />
+          ))}
+          {Array.from({ length: gone }, (_, i) => (
+            <ImageUnavailable key={`g${i}`} />
           ))}
         </div>
       )}
