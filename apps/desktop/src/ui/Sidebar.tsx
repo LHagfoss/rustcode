@@ -23,6 +23,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDashed,
+  CircleDot,
   Clock,
   CloudUpload,
   Copy,
@@ -313,35 +314,27 @@ function ThreadMenuItems({
             onClear?.();
           }}
         >
-          <CircleCheck size={13} /> Mark {n} Unread
+          <CircleDot size={13} /> Mark {n} Unread
         </Item>
       </>
     );
   }
+  // Most used first (pin, rename, unread, snooze), then the thread's state and what it changed,
+  // then the worktree's own actions; the occasional tools sit under More, and Trash last.
   return (
     <>
-      {status !== "review" && (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "review")}>
-          <Eye size={13} /> Mark for Review
+      <Item className={menuItem} onSelect={() => togglePin(session.id)}>
+        {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+        {pinned ? "Unpin" : "Pin"}
+      </Item>
+      {!remote && (
+        <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
+          <Pencil size={13} /> Rename…
         </Item>
       )}
-      {status === "done" ? (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
-          <CircleDashed size={13} /> Unsettle
-        </Item>
-      ) : (
-        <Item className={menuItem} onSelect={() => settleThread(session.id)}>
-          <CircleCheck size={13} /> Settle
-        </Item>
-      )}
-      {status === "review" && (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
-          <CircleDashed size={13} /> Clear Status
-        </Item>
-      )}
-      {statusMissing && (
-        <div className="px-2 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
-      )}
+      <Item className={menuItem} onSelect={() => markUnread(session.id)}>
+        <CircleDot size={13} /> Mark Unread
+      </Item>
       {snoozed ? (
         <Item className={menuItem} onSelect={() => snoozeThread(session.id, null)}>
           <Clock size={13} /> Unsnooze
@@ -375,49 +368,37 @@ function ThreadMenuItems({
           </Menu.Portal>
         </Menu.Sub>
       )}
+      <Separator className={menuSeparator} />
+      {status === "done" ? (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
+          <CircleDashed size={13} /> Unsettle
+        </Item>
+      ) : (
+        <Item className={menuItem} onSelect={() => settleThread(session.id)}>
+          <CircleCheck size={13} /> Settle
+        </Item>
+      )}
+      {status !== "review" && (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "review")}>
+          <Eye size={13} /> Mark for Review
+        </Item>
+      )}
+      {status === "review" && (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
+          <CircleDashed size={13} /> Clear Status
+        </Item>
+      )}
+      {statusMissing && (
+        <div className="px-2 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
+      )}
       {!remote && (
         <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
           <FileDiff size={13} /> Review Changes
         </Item>
       )}
-      <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
-        <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
-      </Item>
-      <Item className={menuItem} onSelect={() => markUnread(session.id)}>
-        <CircleCheck size={13} /> Mark Unread
-      </Item>
-      <Separator className={menuSeparator} />
-      <Item className={menuItem} onSelect={() => togglePin(session.id)}>
-        {pinned ? <PinOff size={13} /> : <Pin size={13} />}
-        {pinned ? "Unpin" : "Pin"}
-      </Item>
-      {!remote && (
-        <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
-          <Pencil size={13} /> Rename…
-        </Item>
-      )}
-      <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
-        <Wrench size={13} /> Repair Thread
-      </Item>
       <Item className={menuItem} onSelect={() => copyThreadLink(session.id)}>
-        <Copy size={13} /> Copy link
+        <Copy size={13} /> Copy Link
       </Item>
-      <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
-        <Copy size={13} /> Copy Thread ID
-      </Item>
-      {!remote && (
-        <Item
-          className={menuItem}
-          disabled={!canFiles}
-          onSelect={() =>
-            void openThreadLog(session.id).catch((e) =>
-              toast(`Could not open the thread log: ${errorText(e)}`, "error"),
-            )
-          }
-        >
-          <FileText size={13} /> Open Thread Log
-        </Item>
-      )}
       {worktree && (
         <>
           <Separator className={menuSeparator} />
@@ -443,6 +424,46 @@ function ThreadMenuItems({
           )}
         </>
       )}
+      <Separator className={menuSeparator} />
+      {/* What a thread needs now and then, not every day: kept one level down so the menu leads
+          with what is used. */}
+      <Menu.Sub>
+        <Menu.SubTrigger className={menuItem}>
+          <Ellipsis size={13} /> More
+          <ChevronRight size={12} strokeWidth={2.5} className="ml-auto text-fg-faint" />
+        </Menu.SubTrigger>
+        <Menu.Portal>
+          <Menu.SubContent
+            sideOffset={4}
+            alignOffset={-5}
+            collisionPadding={surfaceCollisionPadding}
+            className={menuSurface}
+          >
+            <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
+              <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
+            </Item>
+            <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
+              <Copy size={13} /> Copy Thread ID
+            </Item>
+            {!remote && (
+              <Item
+                className={menuItem}
+                disabled={!canFiles}
+                onSelect={() =>
+                  void openThreadLog(session.id).catch((e) =>
+                    toast(`Could not open the thread log: ${errorText(e)}`, "error"),
+                  )
+                }
+              >
+                <FileText size={13} /> Open Thread Log
+              </Item>
+            )}
+            <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
+              <Wrench size={13} /> Repair Thread
+            </Item>
+          </Menu.SubContent>
+        </Menu.Portal>
+      </Menu.Sub>
       {!remote && (
         <>
           <Separator className={menuSeparator} />
