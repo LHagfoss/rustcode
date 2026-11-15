@@ -27,6 +27,7 @@ import {
   Clock,
   CloudUpload,
   Copy,
+  CornerUpLeft,
   Ellipsis,
   Eye,
   FileDiff,
@@ -79,6 +80,14 @@ import { delegateCount, liveSubagents, type StackAgent } from "../state/agentSta
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { useCheckoutBranch } from "../state/checkoutBranch";
 import { type ChildInfo, childInfo } from "../state/children";
+import {
+  type DelegateOrigin,
+  delegateOriginOf,
+  detachedDelegates,
+  originFrom,
+  originText,
+  sameProject,
+} from "../state/delegateOrigin";
 import { addDroppedFolders } from "../state/folders";
 import { stateOf } from "../state/host";
 import { hasPendingChange, useOutbox } from "../state/machineOutbox";
@@ -269,6 +278,14 @@ function ThreadMenuItems({
   // what would act on this computer's copy of the path (`revealPath`, `worktree_remove`, review).
   const machineName = useMachines((s) => s.machines.find((m) => m.id === session.host)?.name);
   const remote = !!session.host;
+  // The thread this one was started from, to open from here: the keyboard's way to the row's
+  // "from" line, and the only one in compact rows.
+  const sessions = useApp((s) => s.sessions);
+  const links = useApp((s) => s.links.links);
+  const origin = useMemo(
+    () => (bulk && bulk.length > 1 ? undefined : delegateOriginOf(sessions, session.id, links)),
+    [bulk, sessions, session.id, links],
+  );
   // The selection's menu: every hook is read above, so the early return keeps the hooks in order.
   if (bulk && bulk.length > 1) {
     const n = bulk.length;
@@ -334,6 +351,14 @@ function ThreadMenuItems({
   return (
     <>
       <ThreadQuickActions threadId={session.id} Item={Item} />
+      {origin?.listed && origin.id && (
+        <Item className={menuItem} onSelect={() => selectThread(origin.id!)}>
+          <CornerUpLeft size={13} />
+          <span className="min-w-0 truncate">
+            Open “{origin.title}”{origin.project ? ` · ${origin.project}` : ""}
+          </span>
+        </Item>
+      )}
       {!remote && (
         <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
           <Pencil size={13} /> Rename…
@@ -726,7 +751,7 @@ const ThreadRow = memo(function ThreadRow({
   context,
   grouped,
   now,
-  hint,
+  from,
   pull,
   agents,
   navActive,
@@ -747,8 +772,11 @@ const ThreadRow = memo(function ThreadRow({
   /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
   grouped: boolean;
   now: number;
-  /** No parent row above it (a search result, or a filtered-out parent): the thread it belongs under. */
-  hint?: string;
+  /**
+   * No parent row above it (a search result, or a parent in another project the filter left out):
+   * the thread it came from, which its third line names and opens.
+   */
+  from?: DelegateOrigin;
   /** The thread's branch's pull request, from the project's read (state/pulls.ts). */
   pull?: PullRequest;
   /** Threads this one started and still runs: the stack on its second line, in place of child rows. */
@@ -890,8 +918,15 @@ const ThreadRow = memo(function ThreadRow({
         : "font-medium text-fg",
   );
   // What the third line says in place of the branch: the request it waits on, else the thread it
-  // belongs under (a search result whose parent row is not drawn).
-  const ask = request ? (request.question ? request.question.text : request.title) : hint;
+  // came from (a search result, or a delegate whose parent's row is in another project).
+  const ask = request ? (request.question ? request.question.text : request.title) : undefined;
+  const fromText = from ? originText(from) : undefined;
+  // The line opens the thread it came from; the row itself still opens this one.
+  const openFrom = (e: React.MouseEvent) => {
+    if (!from?.listed || !from.id || e.shiftKey || primaryModifier(e)) return;
+    e.stopPropagation();
+    selectThread(from.id);
+  };
   // Where it runs: another computer always says so, and once machines are paired this one does too,
   // so every row in a mixed list names its computer.
   const place =
@@ -994,6 +1029,15 @@ const ThreadRow = memo(function ThreadRow({
                       </span>
                     )}
                     <LinkBadge threadId={session.id} />
+                    {fromText && (
+                      <Tooltip label={`Started ${fromText}`}>
+                        <CornerUpLeft
+                          size={12}
+                          className="shrink-0 text-fg-faint"
+                          aria-label={`Started ${fromText}`}
+                        />
+                      </Tooltip>
+                    )}
                     <span className={cx(titleTint, renaming && "invisible")}>
                       {session.title || "New thread"}
                     </span>
@@ -1104,6 +1148,25 @@ const ThreadRow = memo(function ThreadRow({
                         <span className="min-w-0 truncate" title={ask}>
                           {ask}
                         </span>
+                      ) : from && fromText ? (
+                        <Tooltip
+                          label={
+                            from.listed ? `Open ${from.title}` : `${from.title} is no longer in the list`
+                          }
+                        >
+                          <span
+                            className={cx(
+                              "flex min-w-0 items-center gap-1",
+                              from.listed && "rounded-sm hover:text-fg hover:underline",
+                            )}
+                            onClick={openFrom}
+                          >
+                            <CornerUpLeft size={12} className="shrink-0" />
+                            {/* The title gives way first: the project says where to look. */}
+                            <span className="min-w-0 truncate">from {from.title}</span>
+                            {from.project && <span className="shrink-0">· {from.project}</span>}
+                          </span>
+                        </Tooltip>
                       ) : gitBranch ? (
                         <>
                           <GitBranch size={12} className="shrink-0" />
@@ -1744,7 +1807,7 @@ export function Sidebar() {
   // (state/topLevel.ts) — the parent survives link pruning in the thread's own metadata. Every
   // session is asked, not the filtered list: a project filter or a search changes what is drawn,
   // never who a thread belongs to.
-  const parentOf = useMemo(() => {
+  const ownerOf = useMemo(() => {
     const known = new Set(sessions.map((s) => s.id));
     const parentOf = new Map<string, string>();
     for (const s of sessions) {
@@ -1763,7 +1826,34 @@ export function Sidebar() {
     }
     return parentOf;
   }, [sessions, links, pinned, messaged]);
+  // A delegate started from another project, with the list filtered to its own: its parent's row is
+  // not drawn, so it takes a row of its own here, marked with where it came from, rather than
+  // vanishing from the project it works in (state/delegateOrigin.ts). A search already draws every
+  // match as a row; with no filter its parent is drawn and it nests there, never twice in one list.
+  const detached = useMemo(
+    () => (searching ? new Set<string>() : detachedDelegates(new Set(filtered.map((s) => s.id)), ownerOf)),
+    [filtered, ownerOf, searching],
+  );
+  // The parents the list draws its rows under: every nested thread's, but a detached one's.
+  const parentOf = useMemo(() => {
+    if (!detached.size) return ownerOf;
+    const next = new Map(ownerOf);
+    for (const id of detached) next.delete(id);
+    return next;
+  }, [ownerOf, detached]);
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
+  // A row with no parent row above it says which thread it came from, and that thread's project
+  // when it is another one: a search result, a delegate started from another project, or the open
+  // delegate whose parent the filter left out. One object per thread, so the memoized rows keep it.
+  const origins = useMemo(() => {
+    const out = new Map<string, DelegateOrigin>();
+    for (const s of filtered) {
+      const above = ownerOf.get(s.id);
+      if (!above) continue;
+      out.set(s.id, originFrom(s, above, byId.get(above), s.parent?.title?.trim()));
+    }
+    return out;
+  }, [filtered, ownerOf, byId]);
   // The threads with a row of their own, before the open delegate's chain is drawn under its parent.
   const topRows = useMemo(
     () => new Set(filtered.filter((s) => !parentOf.has(s.id)).map((s) => s.id)),
@@ -1787,23 +1877,28 @@ export function Sidebar() {
   // The last delegate drawn under each row, kept while it folds away: an unmount would skip the
   // animation, and the session is no longer in the chain by then.
   const lastSubs = useRef(new Map<string, SessionSummary>());
+  // The threads a drawn row's stack and branch rows are read from: a search keeps to its matches,
+  // and the project filter does not, so a parent still shows the delegates it started in another
+  // project, nested as usual.
+  const kin = searching ? filtered : sessions;
   const childrenByParent = useMemo(() => {
     const map: Record<string, SessionSummary[]> = {};
-    for (const s of filtered) {
+    for (const s of kin) {
       const parent = parentOf.get(s.id);
       if (parent) map[parent] = [...(map[parent] ?? []), s];
     }
     // Ids, so a list that reorders on an update does not reorder the stack's icons.
     for (const list of Object.values(map)) list.sort((a, b) => a.id.localeCompare(b.id));
     return map;
-  }, [filtered, parentOf]);
+  }, [kin, parentOf]);
 
   // The forks and side chats below a row, drawn as indented rows so they can be found again (a
   // delegate is not drawn: it is the agent's, and shows as its parent's stack). Branches of
   // branches and of delegates come too, and the open one is drawn by the chain. Capped to the
   // newest few, with a "+N more" row that opens the rest.
   const [allBranches, setAllBranches] = useState<ReadonlySet<string>>(new Set());
-  const chainIds = useMemo(() => new Set(chain.map((c) => c.id)), [chain]);
+  // The open chain is drawn by itself, and a detached thread is a row of its own already.
+  const chainIds = useMemo(() => new Set([...chain.map((c) => c.id), ...detached]), [chain, detached]);
   const branchesUnder = useCallback(
     (rootId: string) =>
       branchRows(
@@ -2048,7 +2143,7 @@ export function Sidebar() {
     // A child reads by the same live state its own row and the delegate tree use: a link a restart
     // marked interrupted says nothing when its thread kept working (`state/host.ts` `stateOf`).
     const linked = new Map(s.links.links.filter((l) => l.started).map((l) => [l.target, l] as const));
-    return filtered
+    return kin
       .map((c) => {
         if (!parentOf.has(c.id)) return "";
         const link = linked.get(c.id);
@@ -2358,14 +2453,6 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  // A row that has no parent row above it says which thread it belongs under: a search result, or
-  // the open delegate whose parent the filter left out.
-  const hintFor = (s: SessionSummary): string | undefined => {
-    const above = parentOf.get(s.id);
-    if (!above) return undefined;
-    const title = byId.get(above)?.title || "another thread";
-    return `in ${title}`;
-  };
   const rowFor = (s: SessionSummary, grouped: boolean, hint = true) => (
     <ThreadRow
       session={s}
@@ -2376,7 +2463,7 @@ export function Sidebar() {
       grouped={grouped}
       pull={pullOf(s)}
       now={now}
-      hint={hint ? hintFor(s) : undefined}
+      from={hint ? origins.get(s.id) : undefined}
       agents={stacks.get(s.id)}
       navActive={s.id === currentId}
       picked={picked.has(s.id)}
@@ -2395,10 +2482,13 @@ export function Sidebar() {
     if (current && sub) lastSubs.current.set(parentId, current);
     const child = current ?? lastSubs.current.get(parentId);
     if (!child || depth > 8) return null;
+    // A delegate in another project than the heading it hangs under names its own project.
+    const above = byId.get(parentId);
+    const ownHeading = grouped && (!above || sameProject(child, above));
     return (
       <OpenChild
-        row={current ? rowFor(current, grouped, false) : null}
-        deeper={openBelow(child.id, grouped, depth + 1)}
+        row={current ? rowFor(current, ownHeading, false) : null}
+        deeper={openBelow(child.id, ownHeading, depth + 1)}
       />
     );
   };
