@@ -17,17 +17,6 @@ export interface SettingEntry {
 }
 
 export const SETTINGS_INDEX: SettingEntry[] = [
-  {
-    section: "agents",
-    title: "Computer use",
-    keywords: "browser chrome chromium allowlist domains approval headless",
-  },
-  {
-    section: "agents",
-    title: "Voice",
-    keywords:
-      "dictation dictate microphone speech transcribe transcription whisper talk clean up cleanup punctuation filler",
-  },
   // ------------------------------------------------------------ General
   {
     section: "general",
@@ -177,38 +166,74 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
+    title: "Text generation",
+    keywords: "titles commit message git drafts generator openai anthropic custom endpoint model key",
+  },
+
+  // ------------------------------------------------------------ Orchestration
+  {
+    section: "orchestration",
     title: "Let delegates use my named accounts without asking",
     keywords: "trust local named login accounts approval delegates",
   },
   {
-    section: "agents",
+    section: "orchestration",
     title: "Threads can start and message other threads",
     keywords: "orchestration subagents spawn compare message agents",
   },
   {
-    section: "agents",
+    section: "orchestration",
     title: "Delegation",
     keywords: "orchestration delegates delegate slots limit concurrent children total",
   },
   {
-    section: "agents",
+    section: "orchestration",
     title: "Delegates across all threads",
     keywords: "orchestration delegation total machine wide global slots limit concurrent running at once",
   },
   {
-    section: "agents",
+    section: "orchestration",
     title: "Delegates one thread can run at once",
     keywords: "orchestration delegation per thread parallel slots limit concurrent children",
   },
   {
-    section: "agents",
+    section: "orchestration",
     title: "Merge delegate wakes within",
     keywords: "orchestration delegation wake batch window finished stalled orchestrator turn cost seconds",
   },
   {
-    section: "agents",
+    section: "orchestration",
     title: "Let agents read threads in other projects",
     keywords: "orchestration read search across all projects privacy agents",
+  },
+  {
+    section: "orchestration",
+    title: "Workflows",
+    keywords: "workflow run workers concurrency agent calls budget time limit timeout minutes durable script",
+  },
+  {
+    section: "orchestration",
+    title: "Delegate presets",
+    keywords: "preset delegate harness model instructions start_session fan_out saved",
+  },
+  {
+    section: "orchestration",
+    title: "Switch a delegate at a limit",
+    keywords:
+      "limit fallback usage limit rate limit another provider model claude codex switch continue reset",
+  },
+
+  // ------------------------------------------------------------ Voice & computer use
+  {
+    section: "voice",
+    title: "Voice",
+    keywords:
+      "dictation dictate microphone mic speech transcribe transcription whisper talk clean up cleanup punctuation filler",
+  },
+  {
+    section: "voice",
+    title: "Computer use",
+    keywords: "browser tools chrome chromium allowlist allowed domains approval headless",
   },
 
   // ------------------------------------------------------------ Connections

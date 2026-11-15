@@ -10,8 +10,9 @@ approval channels, denial and cancellation fail closed.
 
 ## Enable
 
-This preview is **off by default**. Open **Settings → Harnesses → Computer use**
-on this machine, enable Browser tools and add allowed domains. The section
+This preview is **off by default**. Open **Settings → Voice & computer use** on
+this machine, turn on the switch in the **Computer use** title (Browser tools)
+and add allowed domains. The section
 reports when Chrome/Chromium needs installing. Every action asks for approval.
 Only headless mode is currently supported. You can also edit your user
 `~/.config/rustcode/config.toml` (or `RUSTCODE_CONFIG_DIR/config.toml`), add:

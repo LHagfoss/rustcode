@@ -864,6 +864,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   longer a person may need goes in `hint`, a tip behind a small info mark after
   the title (`Row` and `Group` in `settingsKit`), opened on hover or keyboard
   focus. Group footers follow the same rule.
+- **Settings feature switch:** a section that turns one feature on (Voice,
+  Computer use) carries its switch at the right of its name (`Group`'s
+  `enabled` and `onEnabledChange`). Off, the section is that one line and its
+  card and footer fold away, so an unused feature costs one row; on, its rows
+  show under it.
 - **Settings row, reset:** a row keeps the reset button of the bullet below
   where the value differs from its default.
 - **Tooltip:** `tipSurface px-2 py-1` (see Tooltips and hover cards).

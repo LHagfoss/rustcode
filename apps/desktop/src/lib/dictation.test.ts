@@ -13,9 +13,13 @@ import {
   recordingProblem,
   resolveVoiceSettings,
   setDictationTarget,
+  subscribeVoiceSettings,
   toggleDictation,
   transcribeParams,
+  transcribingGenerators,
   VOICE_DEFAULTS,
+  voiceSettingsSnapshot,
+  writeVoiceSettings,
 } from "./dictation";
 
 const idle: DictationState = { kind: "idle" };
@@ -173,5 +177,31 @@ describe("a project's voice override", () => {
     expect(
       readVoiceOverride({ generator: null, model: " ", language: "nb", cleanup: true, mode: "hold" }),
     ).toEqual({ generator: null, language: "nb", cleanup: true });
+  });
+});
+
+describe("the Voice settings as Settings changes them", () => {
+  test("a write tells every listener, and the snapshot stays one object until then", () => {
+    let calls = 0;
+    const stop = subscribeVoiceSettings(() => {
+      calls += 1;
+    });
+    const before = voiceSettingsSnapshot();
+    expect(voiceSettingsSnapshot()).toBe(before);
+    writeVoiceSettings({ ...VOICE_DEFAULTS, generator: "g1" });
+    expect(calls).toBe(1);
+    stop();
+    writeVoiceSettings({ ...VOICE_DEFAULTS });
+    expect(calls).toBe(1);
+  });
+
+  test("only OpenAI-compatible generators can transcribe, in their order", () => {
+    const list = [
+      { id: "a", provider: "anthropic" },
+      { id: "c", provider: "custom" },
+      { id: "o", provider: "openai" },
+    ];
+    expect(transcribingGenerators(list).map((g) => g.id)).toEqual(["c", "o"]);
+    expect(transcribingGenerators([{ id: "a", provider: "anthropic" }])).toEqual([]);
   });
 });

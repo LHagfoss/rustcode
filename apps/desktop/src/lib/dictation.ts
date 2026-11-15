@@ -4,7 +4,7 @@
 // own; `ui/Dictation.tsx` drives the microphone and the composer.
 //
 // Nothing is recorded or sent until a transcription provider is chosen: the
-// provider is a text generator entry (Settings › Agents › Text generation) on
+// provider is a text generator entry (Settings › Harnesses › Text generation) on
 // an OpenAI-compatible endpoint, so its key stays in the engine's credential
 // store and is never read here.
 
@@ -63,6 +63,11 @@ export const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 /** Text generator providers with an OpenAI-compatible `/audio/transcriptions` endpoint. */
 export const TRANSCRIBING_PROVIDERS = ["openai", "custom"] as const;
 
+/** The text generator entries that can transcribe, in the order Text generation lists them. */
+export function transcribingGenerators<T extends { provider: string }>(generators: readonly T[]): T[] {
+  return generators.filter((g) => (TRANSCRIBING_PROVIDERS as readonly string[]).includes(g.provider));
+}
+
 const KEY = "rustcode.voice";
 export const VOICE_DEFAULTS: VoiceSettings = {
   generator: null,
@@ -87,8 +92,30 @@ export function readVoiceSettings(): VoiceSettings {
   }
 }
 
+const voiceListeners = new Set<() => void>();
+let voiceSnapshot: VoiceSettings | null = null;
+
 export function writeVoiceSettings(next: VoiceSettings) {
   writeStorage(KEY, JSON.stringify(next));
+  voiceSnapshot = null;
+  for (const listener of voiceListeners) listener();
+}
+
+/**
+ * This machine's Voice settings as one stable object until they are written again, for
+ * `useSyncExternalStore`: the composer's microphone shows and hides as Settings changes them.
+ */
+export function voiceSettingsSnapshot(): VoiceSettings {
+  voiceSnapshot ??= readVoiceSettings();
+  return voiceSnapshot;
+}
+
+/** Called after every `writeVoiceSettings`; returns the unsubscribe. */
+export function subscribeVoiceSettings(listener: () => void): () => void {
+  voiceListeners.add(listener);
+  return () => {
+    voiceListeners.delete(listener);
+  };
 }
 
 // ---------------------------------------------------------------- the recorder's states

@@ -1,4 +1,4 @@
-// Settings › Harnesses › Delegate presets (issue 3391): named sets of harness,
+// Settings › Orchestration › Delegate presets (issue 3391): named sets of harness,
 // model, effort, account, access, worktree and instructions an agent passes to
 // `start_session` or a `fan_out` entry as `preset`. They are the
 // `delegate-presets` server setting; the engine expands them
@@ -46,7 +46,8 @@ export function DelegatePresetsGroup() {
           </Action>
         ) : undefined
       }
-      footer="An agent passes a preset's name as preset to start_session or a fan_out entry; list_harnesses lists them. Arguments the agent passes itself override the preset, its instructions go before the prompt, and its access can only lower what the delegate would get."
+      footer="Saved harness, model and instructions an agent can start a delegate with."
+      hint="An agent passes a preset's name as preset to start_session or a fan_out entry; list_harnesses lists them. Arguments the agent passes itself override the preset, its instructions go before the prompt, and its access can only lower what the delegate would get."
     >
       {editing === null && (
         <PresetForm

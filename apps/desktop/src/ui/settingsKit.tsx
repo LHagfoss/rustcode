@@ -49,7 +49,7 @@ import {
   sameValue,
 } from "../state/pageCache";
 import { request, useApp } from "../state/store";
-import { cx, menuItem, rowInset, Skeleton, Tooltip } from "./primitives";
+import { cx, menuItem, rowInset, Skeleton, Switch, Tooltip } from "./primitives";
 
 /** A section's name, above its card: `text-base` in `fg`, at the card's own inset. */
 export function SectionTitle({
@@ -78,6 +78,9 @@ export function Group({
   hint,
   action,
   disabled,
+  enabled,
+  onEnabledChange,
+  switchLabel,
 }: {
   title?: ReactNode;
   children: ReactNode;
@@ -88,7 +91,24 @@ export function Group({
   action?: ReactNode;
   /** The group has no effect right now: its controls are disabled and it reads as off. */
   disabled?: boolean;
+  /**
+   * A feature the group turns on: a switch in the title row. Off, the group is that one row
+   * and its card and footer fold away; on, its rows show.
+   */
+  enabled?: boolean;
+  onEnabledChange?: (enabled: boolean) => void;
+  /** The switch's accessible name; the title when it is text. */
+  switchLabel?: string;
 }) {
+  const feature = onEnabledChange !== undefined;
+  const folded = feature && !enabled;
+  const toggle = feature ? (
+    <Switch
+      label={switchLabel ?? (typeof title === "string" ? title : "Turn this on")}
+      checked={Boolean(enabled)}
+      onChange={onEnabledChange}
+    />
+  ) : null;
   return (
     <section
       className="mb-6 scroll-mt-5"
@@ -106,18 +126,29 @@ export function Group({
             title
           )
         }
-        action={action}
+        action={
+          toggle ? (
+            <>
+              {!folded && action}
+              {toggle}
+            </>
+          ) : (
+            action
+          )
+        }
       />
-      <fieldset
-        disabled={disabled}
-        className={cx(
-          "rule-rows m-0 min-w-0 overflow-hidden rounded-xl border-0 bg-surface p-0",
-          disabled && "opacity-60",
-        )}
-      >
-        {children}
-      </fieldset>
-      {footer && <div className="mt-2 max-w-[70ch] px-4 text-caption text-fg-muted">{footer}</div>}
+      {!folded && (
+        <fieldset
+          disabled={disabled}
+          className={cx(
+            "rule-rows m-0 min-w-0 overflow-hidden rounded-xl border-0 bg-surface p-0",
+            disabled && "opacity-60",
+          )}
+        >
+          {children}
+        </fieldset>
+      )}
+      {footer && !folded && <div className="mt-2 max-w-[70ch] px-4 text-caption text-fg-muted">{footer}</div>}
     </section>
   );
 }

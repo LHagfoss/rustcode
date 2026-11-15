@@ -31,6 +31,9 @@ describe("setting kinds", () => {
     expect(rowKind("permissions", "Default access")).toBe("server");
     expect(rowKind("permissions", "Projects")).toBe("app");
     expect(rowKind("agents", "Harnesses")).toBe("server");
+    expect(rowKind("orchestration", "Delegation")).toBe("server");
+    expect(rowKind("voice", "Voice")).toBe("machine");
+    expect(rowKind("voice", "Computer use")).toBe("machine");
     expect(rowKind("capabilities", "MCP servers")).toBe("server");
     expect(rowKind("connections", "GitHub")).toBe("machine");
     expect(rowKind("general", "Default project folder")).toBe("machine");
@@ -40,6 +43,8 @@ describe("setting kinds", () => {
   test("only pages with server rows show the Applying to selector", () => {
     expect(pageHasServerSettings("general")).toBe(true);
     expect(pageHasServerSettings("agents")).toBe(true);
+    expect(pageHasServerSettings("orchestration")).toBe(true);
+    expect(pageIsMachineOnly("voice")).toBe(true);
     expect(pageHasServerSettings("capabilities")).toBe(true);
     expect(pageHasServerSettings("appearance")).toBe(false);
     expect(pageHasServerSettings("chat")).toBe(false);

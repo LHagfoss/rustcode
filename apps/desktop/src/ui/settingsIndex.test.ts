@@ -53,12 +53,25 @@ describe("settings search", () => {
     }
   });
 
+  test("voice, computer use and orchestration land on their own pages, not Harnesses", () => {
+    expect(searchSettings("dictation")[0]?.section).toBe("voice");
+    expect(searchSettings("computer use")[0]?.section).toBe("voice");
+    expect(searchSettings("workflows")[0]?.section).toBe("orchestration");
+    expect(searchSettings("delegate presets")[0]?.section).toBe("orchestration");
+    expect(searchSettings("merge delegate wakes")[0]?.section).toBe("orchestration");
+    const harnesses = SETTINGS_INDEX.filter((entry) => entry.section === "agents").map((e) => e.title);
+    expect(harnesses).not.toContain("Voice");
+    expect(harnesses).not.toContain("Delegation");
+  });
+
   test("a page id from an older build still opens a page", () => {
     // The Harnesses page kept its old `agents` id and Engine became Advanced;
     // nothing else moved.
     expect(settingsSection("harnesses")).toBe("agents");
     expect(settingsSection("engine")).toBe("advanced");
     expect(settingsSection("usage")).toBe("usage");
+    expect(settingsSection("orchestration")).toBe("orchestration");
+    expect(settingsSection("voice")).toBe("voice");
     expect(settingsSection("no-such-page")).toBe("general");
     expect(settingsSection(null)).toBeNull();
   });

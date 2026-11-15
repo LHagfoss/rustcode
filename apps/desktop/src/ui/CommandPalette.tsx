@@ -69,7 +69,9 @@ export type { PaletteAction };
 const SETTINGS: [SettingsSection, string][] = [
   ["general", "General"],
   ["chat", "Chat"],
-  ["agents", "Harnesses: install, sign in, models and orchestration"],
+  ["agents", "Harnesses: install, sign in, models and text generation"],
+  ["orchestration", "Orchestration: delegates, workflows and presets"],
+  ["voice", "Voice & computer use: dictation and browser tools"],
   ["connections", "Connections"],
   ["capabilities", "Capabilities: skills and MCP servers"],
   ["remote", "Remote access: phones and paired devices"],

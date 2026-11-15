@@ -653,7 +653,7 @@ With none selected, existing thread title and git draft behavior is retained.
 Requests are tool-free, limited to 24,000 input characters and 45 seconds.
 ### Voice dictation
 
-Settings › Agents › Voice is kept by the desktop app on this machine
+Settings › Voice & computer use › Voice is kept by the desktop app on this machine
 (`rustcode.voice` in its storage): `generator` (a text generator ID with an
 `openai` or `custom` provider, or null for Off, the default), `model`
 (default `gpt-4o-mini-transcribe`), `language` (empty detects it) and `mode`

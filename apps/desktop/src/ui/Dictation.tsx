@@ -5,7 +5,7 @@
 // insertion, request shape) are `lib/dictation.ts`.
 
 import { Loader2, Mic, MicOff, Square, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   cleanupNote,
   clearDictationTarget,
@@ -21,9 +21,12 @@ import {
   recordingProblem,
   resolveVoiceSettings,
   setDictationTarget,
+  subscribeVoiceSettings,
   TRANSCRIBE_METHOD,
   transcribeParams,
+  type VoiceOverride,
   type VoiceSettings,
+  voiceSettingsSnapshot,
 } from "../lib/dictation";
 import { checkMicrophone, micBlocked, micBlockedNotice, openMicrophoneSettings } from "../lib/nativeAccess";
 import { openSettings, request, shortcutHint, toast } from "../state/store";
@@ -48,6 +51,11 @@ export interface Dictation {
   release: () => void;
   discard: () => void;
   hold: boolean;
+  /**
+   * Dictation is on where this composer is (a transcription provider is chosen on this machine
+   * or in its project): off, the microphone and its shortcut are not offered.
+   */
+  enabled: boolean;
   /** The system refuses the microphone to the app (macOS): the composer says how to allow it. */
   blocked: "denied" | "restricted" | null;
   dismissBlocked: () => void;
@@ -59,18 +67,27 @@ export interface Dictation {
  * overrides). Without a project, or when the engine has no answer, the app's own.
  */
 async function voiceSettingsFor(project: string | null): Promise<VoiceSettings> {
-  const machine = readVoiceSettings();
-  if (!project) return machine;
+  return resolveVoiceSettings(readVoiceSettings(), await voiceOverrideFor(project));
+}
+
+/** The project's `voice` override, or null without a project or an answer from the engine. */
+async function voiceOverrideFor(project: string | null): Promise<VoiceOverride | null> {
+  if (!project) return null;
   try {
     const answer = await request<{ project?: { overrides?: Record<string, unknown> } }>(
       "_rustcode/settings/get",
       { keys: [], project },
       5_000,
     );
-    return resolveVoiceSettings(machine, readVoiceOverride(answer?.project?.overrides?.voice));
+    return readVoiceOverride(answer?.project?.overrides?.voice);
   } catch {
-    return machine;
+    return null;
   }
+}
+
+/** This machine's Voice settings, read again whenever Settings writes them. */
+export function useVoiceSettings(): VoiceSettings {
+  return useSyncExternalStore(subscribeVoiceSettings, voiceSettingsSnapshot);
 }
 
 /**
@@ -91,7 +108,21 @@ export function useDictation(
   const discarded = useRef(false);
   const insertRef = useRef(insert);
   insertRef.current = insert;
-  const [hold, setHold] = useState(() => readVoiceSettings().mode === "hold");
+  const machine = useVoiceSettings();
+  const hold = machine.mode === "hold";
+  // A project can turn dictation on or off for its own threads; read once per project.
+  const [override, setOverride] = useState<VoiceOverride | null>(null);
+  useEffect(() => {
+    let live = true;
+    setOverride(null);
+    void voiceOverrideFor(project).then((next) => {
+      if (live) setOverride(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, [project]);
+  const enabled = Boolean(resolveVoiceSettings(machine, override).generator);
   const [blocked, setBlocked] = useState<"denied" | "restricted" | null>(null);
 
   const dispatch = useCallback((event: DictationEvent) => {
@@ -125,13 +156,12 @@ export function useDictation(
     if (dictationStep(stateRef.current, { type: "start" }) === stateRef.current) return;
     dispatch({ type: "start" });
     const settings = await voiceSettingsFor(projectRef.current);
-    setHold(settings.mode === "hold");
     if (stateRef.current.kind !== "starting") return;
     if (!settings.generator) {
       // Nothing is recorded until a provider is chosen: the button leads to the choice.
       dispatch({ type: "discard" });
       toast("Choose a transcription provider to dictate.", "info");
-      openSettings("agents");
+      openSettings("voice");
       return;
     }
     try {
@@ -189,7 +219,7 @@ export function useDictation(
           duration,
           projectRef.current,
         );
-        if (!params) throw new Error("Choose a transcription provider in Settings › Agents › Voice.");
+        if (!params) throw new Error("Choose a transcription provider in Settings › Voice & computer use.");
         // Cleanup adds a text generator call (45 s at most) after the transcription.
         const answer = await request<{ text?: string | null; cleanup?: string }>(
           TRANSCRIBE_METHOD,
@@ -256,7 +286,7 @@ export function useDictation(
   // The shortcut: toggle mode starts and finishes; hold mode starts on the press and
   // finishes when the key is let go.
   useEffect(() => {
-    if (!active) return;
+    if (!active || !enabled) return;
     const listener = () => {
       if (readVoiceSettings().mode !== "hold") return toggle();
       if (stateRef.current.kind === "recording" || stateRef.current.kind === "starting") return;
@@ -270,7 +300,7 @@ export function useDictation(
     };
     setDictationTarget(listener);
     return () => clearDictationTarget(listener);
-  }, [active, toggle, start, finish, discard]);
+  }, [active, enabled, toggle, start, finish, discard]);
 
   // A composer that goes away stops its microphone.
   useEffect(
@@ -293,7 +323,18 @@ export function useDictation(
 
   const dismissBlocked = useCallback(() => setBlocked(null), []);
 
-  return { state, elapsed, toggle, press, release: releaseHold, discard, hold, blocked, dismissBlocked };
+  return {
+    state,
+    elapsed,
+    toggle,
+    press,
+    release: releaseHold,
+    discard,
+    hold,
+    enabled,
+    blocked,
+    dismissBlocked,
+  };
 }
 
 /** Over the composer's tray: the microphone is refused, and where to allow it. */
@@ -334,6 +375,8 @@ export function MicrophoneNotice({ dictation }: { dictation: Dictation }) {
 export function DictationButton({ dictation }: { dictation: Dictation }) {
   const { state, elapsed, hold } = dictation;
   const binding = shortcutHint("dictate");
+  // Off, there is no microphone; a recording already under way still shows until it ends.
+  if (!dictation.enabled && (state.kind === "idle" || state.kind === "error")) return null;
   if (state.kind === "recording" || state.kind === "starting") {
     return (
       <div className="flex items-center gap-1 rc-in" role="status" aria-live="polite">
