@@ -172,7 +172,21 @@ app's `_rustcode/session/status` and the MCP `update_session` use (#3151):
 rustcode threads settle <id>...      # done: Settled in the app
 rustcode threads unsettle <id>...    # idle: back to Active, from Settled
 rustcode threads review <id>...      # review: needs a look
+rustcode threads pin <id>...         # pinned to the top of the list (unpin too)
+rustcode threads rename <id> "New title"
+rustcode threads move <id> --harness codex [--account work] [--model gpt-5]
+rustcode worktree list [--repo <folder>] [--json]
+rustcode worktree status <path>
+rustcode worktree remove <path> [--force --yes]
+rustcode worktree prune [--repo <folder>]
 ```
+
+`threads move` asks the running server, which runs the thread, to switch it
+(`_rustcode/session/harness`, as the app's harness picker does); without a
+server it refuses. `worktree remove` removes only a worktree RustCode made and,
+without `--force`, keeps one with uncommitted or unpushed work; `--force` asks
+on a terminal and needs `--yes` otherwise. `worktree prune` runs `git worktree
+prune` and never touches files.
 
 Each prints one line per thread (`settled <id> <title>`, `active <id> <title>`,
 `review <id> <title>`), so a script sees which ones changed. Ids may be unique
@@ -996,7 +1010,7 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake). `unread` is two-way: `true` marks it unread, `false` marks it read | `{ session_id, title, pinned, status, snoozed_until, title_kept? }`; `title_kept` when the caller renamed its own thread and the user had named it (the title stays) | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, stopped, status? }`, with `stopped` the links under it that stopped too; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
-| `transfer_session` | `{ session_id, harness }` | `{ session_id, harness, moved, model?, effort? }`; the thread must be idle, and a thread cannot move itself | Asked, allowed by Full access |
+| `transfer_session` | `{ session_id, harness, account?, model? }` (`account` and `model` from version 18) | `{ session_id, harness, moved, account?, model?, effort? }`; the thread must be idle, and a thread cannot move itself. Another project's thread moves when "Let agents read threads in other projects" is on, and the card names its project. An unknown account is refused with the harness's accounts | Asked, allowed by Full access |
 | `list_pending_requests` | none | `{ requests: [{ session_id, request_id, title, kind, asks, options }] }`: approvals and questions this project's open threads wait on, oldest first. `request_id` is what `answer_request` (v10) takes, and `options` the choices an approval and the answers a question offer, in the order its card lists them | None |
 | `list_projects` | none | `{ projects: [{ path, name, threads, working }] }`: every project the user has a thread in, most recently updated first, at most 50 | None |
 | `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |

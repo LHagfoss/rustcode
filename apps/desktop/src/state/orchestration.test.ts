@@ -395,9 +395,10 @@ describe("orchestration rules", () => {
 
   test("the app advertises the version whose arguments it answers", () => {
     // The engine strips `account` below 5, `attachments` below 10, `machine` below 12,
-    // `steer` below 14, `standalone` below 15 and `wait` below 17, and refuses a call that
+    // `steer` below 14, `standalone` below 15, `wait` below 17 and transfer `account`/`model`
+    // below 18, and refuses a call that
     // carries one: the app speaks the newest, so it is offered all of them.
-    expect(CAPABILITY_VERSION).toBe(17);
+    expect(CAPABILITY_VERSION).toBe(18);
   });
 
   test("message_session defaults to one-way and can request a reply", () => {

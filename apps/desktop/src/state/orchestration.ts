@@ -27,8 +27,9 @@ import { type ChildActivity, formatDuration, type QueuedPrompt, withWakeMark } f
  * reads (`answer_request`, `manage_queue`, `search_sessions`, `read_activity`,
  * `configure_session`, `update_session`, `worktree_status`, `list_worktrees`,
  * `list_pull_requests`, `read_project`, `clone_project`).
+ * Version 18 gives `transfer_session` an `account` and a `model`.
  */
-export const CAPABILITY_VERSION = 17;
+export const CAPABILITY_VERSION = 18;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -595,7 +596,7 @@ export type Call =
     }
   | { tool: "interrupt_session"; target: string; machine?: string }
   | { tool: "configure_session"; target?: string; model?: string; effort?: string; machine?: string }
-  | { tool: "transfer_session"; target: string; harness: string }
+  | { tool: "transfer_session"; target: string; harness: string; account?: string; model?: string }
   | { tool: "list_pending_requests"; machine?: string }
   | {
       tool: "answer_request";
@@ -828,7 +829,13 @@ export function parseCall(params: JsonObject): Call | Failure {
       const target = sessionReference(args.session_id) ?? "";
       const harness = s(args.harness) ?? "";
       if (!target || !harness) return failure("invalid", "session_id and harness are required");
-      return { tool: "transfer_session", target, harness };
+      return {
+        tool: "transfer_session",
+        target,
+        harness,
+        account: s(args.account)?.trim() || undefined,
+        model: s(args.model)?.trim() || undefined,
+      };
     }
     case "list_pending_requests":
       return { tool: "list_pending_requests", ...machineField(args) };

@@ -3,7 +3,10 @@
 //! The work is in `rustcode::manage`, which the `manage_settings` tool uses
 //! too; this parses, prints and exits.
 
-use crate::cli::{Commands, HarnessCommands, McpCommands, SettingsCommands, ToggleCommands};
+use crate::cli::{
+    Commands, HarnessCommands, McpCommands, SessionCommands, SettingsCommands, ToggleCommands,
+    WorktreeCommands,
+};
 use rustcode::manage::capabilities::Op;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -266,4 +269,151 @@ fn print_list(kind: &str, answer: &Value) {
             println!("* new threads start here");
         }
     }
+}
+
+/// `rustcode threads move|rename|pin|unpin`.
+pub async fn thread(command: &SessionCommands) -> Result<(), String> {
+    let saved = rustcode::config::session_ids();
+    let resolve = |raw: &str| crate::run::resolve_thread_id(raw, &saved);
+    match command {
+        SessionCommands::Move {
+            id,
+            harness,
+            account,
+            model,
+        } => {
+            let id = resolve(id)?;
+            rustcode::manage::threads::move_thread(
+                &id,
+                harness,
+                account.as_deref(),
+                model.as_deref(),
+            )
+            .await?;
+            println!(
+                "{id} continues on {harness}{}{}.",
+                account
+                    .as_deref()
+                    .map(|account| format!(" ({account})"))
+                    .unwrap_or_default(),
+                model
+                    .as_deref()
+                    .map(|model| format!(" with {model}"))
+                    .unwrap_or_default()
+            );
+        }
+        SessionCommands::Rename { id, title } => {
+            let id = resolve(id)?;
+            let title = title.trim();
+            if title.is_empty() {
+                return Err("the title is empty".to_owned());
+            }
+            rustcode::config::save_session_title(&id, title);
+            println!("renamed {id} {title}");
+        }
+        SessionCommands::Pin { ids } | SessionCommands::Unpin { ids } => {
+            let pinned = matches!(command, SessionCommands::Pin { .. });
+            for raw in ids {
+                let id = resolve(raw)?;
+                rustcode::manage::threads::set_pinned(&id, pinned)?;
+                println!("{} {id}", if pinned { "pinned" } else { "unpinned" });
+            }
+        }
+        _ => unreachable!("the other thread commands run in run.rs"),
+    }
+    Ok(())
+}
+
+/// `rustcode worktree …`.
+pub fn worktree(command: &WorktreeCommands) -> Result<(), String> {
+    let here = || std::env::current_dir().map_err(|error| error.to_string());
+    match command {
+        WorktreeCommands::List { repo, json } => {
+            let repo = match repo {
+                Some(repo) => repo.clone(),
+                None => here()?.into(),
+            };
+            let listed = rustcode::manage::threads::worktrees(&repo)?;
+            if *json {
+                return print_json(&listed);
+            }
+            let rows: Vec<Vec<String>> = listed["worktrees"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|row| {
+                    let threads: Vec<String> = row["session_ids"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(shown)
+                        .collect();
+                    let state = match (row["dirty"].as_bool(), row["ahead"].as_u64()) {
+                        (Some(true), _) => "uncommitted".to_owned(),
+                        (_, Some(ahead)) if ahead > 0 => format!("{ahead} ahead"),
+                        (Some(false), _) => "clean".to_owned(),
+                        _ => "unknown".to_owned(),
+                    };
+                    vec![
+                        shown(&row["branch"]),
+                        state,
+                        shown(&row["path"]),
+                        threads.join(", "),
+                    ]
+                })
+                .collect();
+            if rows.is_empty() {
+                println!("No RustCode worktrees for {}.", repo.display());
+            } else {
+                crate::run::print_rows(&["BRANCH", "STATE", "PATH", "THREADS"], &rows);
+            }
+            Ok(())
+        }
+        WorktreeCommands::Status { path } => {
+            print_json(&rustcode::manage::threads::worktree_state(path))
+        }
+        WorktreeCommands::Remove { path, force, yes } => {
+            if *force
+                && !*yes
+                && !confirm(&format!(
+                    "Remove {} with any uncommitted or unpushed work in it? [y/N] ",
+                    path.display()
+                ))
+            {
+                return Err("not removed; pass --yes to confirm --force".to_owned());
+            }
+            rustcode::manage::threads::remove_worktree(path, *force)?;
+            println!("Removed {}.", path.display());
+            Ok(())
+        }
+        WorktreeCommands::Prune { repo } => {
+            let repo = match repo {
+                Some(repo) => repo.clone(),
+                None => here()?.into(),
+            };
+            let said = rustcode::manage::threads::prune_worktrees(&repo)?;
+            println!(
+                "{}",
+                if said.is_empty() {
+                    "Nothing to prune."
+                } else {
+                    &said
+                }
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Ask on a terminal; no terminal is a no.
+fn confirm(question: &str) -> bool {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    print!("{question}");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).is_ok()
+        && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }

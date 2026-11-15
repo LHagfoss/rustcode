@@ -941,6 +941,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if let Some(crate::cli::Commands::Worktree { command }) = cli_args.command.as_ref() {
+        if let Err(error) = crate::manage_command::worktree(command) {
+            eprintln!("rustcode worktree: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(crate::cli::Commands::Settings { command }) = cli_args.command.as_ref() {
         if let Err(error) = crate::manage_command::settings(command).await {
             eprintln!("rustcode settings: {error}");
@@ -1086,6 +1093,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some(crate::cli::SessionCommands::Review { ids }) => {
                 run_sessions_set_status(ids, ThreadStatusChange::Review);
+            }
+            Some(
+                command @ (crate::cli::SessionCommands::Move { .. }
+                | crate::cli::SessionCommands::Rename { .. }
+                | crate::cli::SessionCommands::Pin { .. }
+                | crate::cli::SessionCommands::Unpin { .. }),
+            ) => {
+                if let Err(error) = crate::manage_command::thread(command).await {
+                    eprintln!("rustcode threads: {error}");
+                    std::process::exit(1);
+                }
             }
             // `rustcode sessions` with no subcommand lists sessions, scoped
             // to the current workspace by default (`list --all` shows every
@@ -1625,7 +1643,7 @@ fn run_sessions_set_status(ids: &[String], change: ThreadStatusChange) {
 }
 
 /// A thread id, or a unique prefix of one, resolved against the saved threads.
-fn resolve_thread_id(raw: &str, saved: &[String]) -> Result<String, String> {
+pub(crate) fn resolve_thread_id(raw: &str, saved: &[String]) -> Result<String, String> {
     let wanted = raw.trim();
     if wanted.is_empty() {
         return Err("A thread id is required.".to_owned());
