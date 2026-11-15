@@ -152,7 +152,7 @@ import { LinkChip } from "./LinkChip";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { ModelPicker } from "./ModelPicker";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
-import { cx, MenuShortcut, noTextHelpers, Pill, Tooltip } from "./primitives";
+import { cx, MenuQuickActions, noTextHelpers, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
 import { ScheduledMessages } from "./ScheduledMessages";
 import { SendLaterDialog } from "./SendLaterDialog";
@@ -2137,7 +2137,7 @@ function PlusMenu({
       label="Attach and more"
       tooltip="Attach and more"
       onKeyDown={menuKeys}
-      className="min-w-[220px]"
+      className="w-[280px]"
       trigger={
         // The one button the message is added to: the send circle's own diameter with a 16px mark, so
         // the row's two ends read as the row's two ends and sit on one line. The mark is one filled
@@ -2153,33 +2153,36 @@ function PlusMenu({
         </button>
       }
     >
-      <CardMenuItem onSelect={onAttach}>
-        <Paperclip size={13} className="text-fg-muted" /> {attachLabel}
-      </CardMenuItem>
-      <CardMenuItem
-        onSelect={onSendLater}
-        disabled={sendLaterDisabled}
-        data-disabled={sendLaterDisabled || undefined}
-        title={sendLaterDisabled ? sendLaterTip : undefined}
-      >
-        <Clock size={13} className="text-fg-muted" /> Send later…
-      </CardMenuItem>
-      <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
-      <CardMenuItem onSelect={() => startNewThread()}>
-        <SquarePen size={13} className="text-fg-muted" /> New Thread
-        <MenuShortcut>{formatBinding("mod+n")}</MenuShortcut>
-      </CardMenuItem>
-      <CardMenuItem
-        onSelect={() =>
-          void pickFolder(cwd).then((p) => {
-            if (!p) return;
-            setProjectCwd(p);
-            startNewThread(p);
-          })
-        }
-      >
-        <Folder size={13} className="text-fg-muted" /> New Thread in Folder…
-      </CardMenuItem>
+      <MenuQuickActions
+        Item={CardMenuItem}
+        actions={[
+          { label: "Attach", description: attachLabel, icon: <Paperclip />, onSelect: onAttach },
+          {
+            label: "Later",
+            description: sendLaterDisabled ? `Send later: ${sendLaterTip}` : "Send later…",
+            icon: <Clock />,
+            onSelect: onSendLater,
+            disabled: sendLaterDisabled,
+          },
+          {
+            label: "New",
+            description: `New Thread · ${formatBinding("mod+n")}`,
+            icon: <SquarePen />,
+            onSelect: () => startNewThread(),
+          },
+          {
+            label: "Folder",
+            description: "New Thread in Folder…",
+            icon: <Folder />,
+            onSelect: () =>
+              void pickFolder(cwd).then((p) => {
+                if (!p) return;
+                setProjectCwd(p);
+                startNewThread(p);
+              }),
+          },
+        ]}
+      />
     </CardPopover>
   );
 }
