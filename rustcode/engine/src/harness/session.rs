@@ -483,13 +483,56 @@ pub(crate) fn prepend_text(prompt: &mut Vec<ContentBlock>, text: String) {
     prompt.insert(at, ContentBlock::Text(TextContent::new(text)));
 }
 
-/// The text a recorded user message keeps of a prompt.
+/// What a refused option says: a harness that lists no such option for a
+/// running thread is named, so the reader knows it is the harness's limit and
+/// not the computer the thread runs on.
+fn unsupported_option(harness: &str, id: &str, error: String) -> String {
+    if error != format!("unknown config option '{id}'") {
+        return error;
+    }
+    match id {
+        "model" => format!(
+            "{harness} does not let a running thread change its model; start a new thread on the model you want, or switch the thread to another harness"
+        ),
+        "effort" => format!("{harness} does not let a running thread change its effort"),
+        other => format!("{harness} has no '{other}' option for this thread"),
+    }
+}
+
+/// The text a prompt's blocks read as, an image as `[image]`.
 pub(crate) fn prompt_text(prompt: &[ContentBlock]) -> String {
+    prompt_text_with(prompt, |_| "[image]".to_owned())
+}
+
+/// The text a recorded user message keeps of a prompt: an image is the
+/// `![image](file://…)` marker of its stored file, so the thread shows it
+/// again after a restart or on a paired computer, like a built-in thread's.
+/// One the engine could not keep is `[image]`, which a client draws as an
+/// image that is no longer there.
+pub(crate) fn recorded_prompt_text(prompt: &[ContentBlock]) -> String {
+    prompt_text_with(prompt, |image| {
+        // A prompt that did not come through `session/prompt` (steering) may
+        // still carry its bytes inline: they are kept now. A stored one is
+        // left as it is.
+        let mut blocks = [ContentBlock::Image(image.clone())];
+        let _ = crate::controller::materialize_images(&mut blocks);
+        match &blocks[0] {
+            ContentBlock::Image(kept) => crate::controller::stored_image_marker(kept),
+            _ => None,
+        }
+        .unwrap_or_else(|| "[image]".to_owned())
+    })
+}
+
+fn prompt_text_with(
+    prompt: &[ContentBlock],
+    image: impl Fn(&agent_client_protocol::schema::v1::ImageContent) -> String,
+) -> String {
     let mut parts = Vec::new();
     for block in prompt {
         match block {
             ContentBlock::Text(text) => parts.push(text.text.clone()),
-            ContentBlock::Image(_) => parts.push("[image]".to_owned()),
+            ContentBlock::Image(content) => parts.push(image(content)),
             ContentBlock::ResourceLink(link) => parts.push(format!("@{}", link.uri)),
             ContentBlock::Resource(resource) => {
                 if let Ok(value) = serde_json::to_value(&resource.resource)
@@ -1364,7 +1407,10 @@ impl ExternalSession {
         value: serde_json::Value,
     ) -> Result<Vec<SessionConfigOption>, String> {
         let adapter = self.ensure_started().await?;
-        let options = adapter.set_config(id, value).await?;
+        let options = adapter
+            .set_config(id, value)
+            .await
+            .map_err(|error| unsupported_option(&self.harness.name, id, error))?;
         // Another model answers with its own thought levels: keep them, so the
         // picker knows them the next time without a listing (`docs/harnesses.md`).
         if id == "model" {
@@ -1405,7 +1451,7 @@ impl ExternalSession {
             self.transcript
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .push_user(&prompt_text(prompt));
+                .push_user(&recorded_prompt_text(prompt));
         }
         accepted
     }
@@ -1431,7 +1477,8 @@ impl ExternalSession {
         let _mark = self.idle.begin_turn();
         // Bounds the turn for a client that opens the thread mid-turn,
         // however this function returns.
-        let _ = self.out.send(Output::TurnStarted(prompt_text(&prompt)));
+        let recorded = recorded_prompt_text(&prompt);
+        let _ = self.out.send(Output::TurnStarted(recorded.clone()));
         struct TurnBound(OutputSender);
         impl Drop for TurnBound {
             fn drop(&mut self) {
@@ -1441,7 +1488,7 @@ impl ExternalSession {
         let _bound = TurnBound(self.out.clone());
         let _status = crate::thread_status::turn(&self.id);
         if self.persist {
-            crate::checkpoints::before_turn(&self.id, &self.cwd, &prompt_text(&prompt), None).await;
+            crate::checkpoints::before_turn(&self.id, &self.cwd, &recorded, None).await;
         }
         let cancel = Arc::new(Notify::new());
         *self
@@ -1459,7 +1506,7 @@ impl ExternalSession {
         // about them until the turn ends, so the gauge is fed from the log.
         // Dropped when this function returns, whichever way the turn leaves.
         let _poll = self.spawn_live_usage();
-        let result = self.run_turn(prompt, &cancel).await;
+        let result = self.run_turn(prompt, &recorded, &cancel).await;
         *self
             .cancel
             .lock()
@@ -1802,6 +1849,7 @@ impl ExternalSession {
     async fn run_turn(
         &self,
         prompt: Vec<ContentBlock>,
+        recorded: &str,
         cancel: &Notify,
     ) -> Result<StopReason, String> {
         let adapter = self.ensure_started().await?;
@@ -1816,7 +1864,7 @@ impl ExternalSession {
         self.transcript
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .push_user(&prompt_text(&prompt));
+            .push_user(recorded);
         self.save_history();
         let mut prompt = prompt;
         let handed = handoff.is_some();
@@ -1982,6 +2030,33 @@ impl ExternalSession {
 #[cfg(test)]
 mod launch_tests {
     use super::*;
+
+    #[test]
+    fn a_refused_model_change_names_the_harness_not_the_computer() {
+        let said = unsupported_option(
+            "Gemini CLI",
+            "model",
+            "unknown config option 'model'".into(),
+        );
+        assert!(said.starts_with("Gemini CLI does not let a running thread change its model"));
+        // Any other refusal is the harness's own words.
+        assert_eq!(
+            unsupported_option("Codex", "model", "rate limited".into()),
+            "rate limited"
+        );
+    }
+
+    #[test]
+    fn a_prompt_reads_an_unkept_image_as_image() {
+        let prompt = [
+            ContentBlock::Text(TextContent::new("look")),
+            ContentBlock::Image(agent_client_protocol::schema::v1::ImageContent::new(
+                "",
+                "image/png",
+            )),
+        ];
+        assert_eq!(prompt_text(&prompt), "look\n[image]");
+    }
     use crate::harness::config::HarnessAccount;
 
     fn account(harness: &str, dir: &str) -> HarnessAccount {

@@ -122,6 +122,14 @@ const EXACT_METHODS: &[&str] = &[
     // The environment fleet's names, versions and last-seen times, exchanged
     // between paired computers (`crate::fleet`): metadata only.
     "_rustcode/environment/sync",
+    // A thread's own operations: moving it to another harness or one of the
+    // accounts this machine already has (a model of another harness in the
+    // picker), and the images its messages carry, read back and sent ahead in
+    // chunks under the frame limit (`acp/attachments.rs`), confined to the
+    // attachment stores.
+    "_rustcode/session/harness",
+    "_rustcode/attachments/read",
+    "_rustcode/attachments/upload",
 ];
 const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls", "_rustcode/capabilities"];
 
@@ -362,6 +370,9 @@ mod tests {
                 "_rustcode/project/clone",
                 "_rustcode/worktrees/state",
                 "_rustcode/environment/sync",
+                "_rustcode/session/harness",
+                "_rustcode/attachments/read",
+                "_rustcode/attachments/upload",
             ]
         );
         assert_eq!(
@@ -398,6 +409,9 @@ mod tests {
             "_rustcode/project/read",
             "_rustcode/project/clone",
             "_rustcode/worktrees/state",
+            "_rustcode/session/harness",
+            "_rustcode/attachments/read",
+            "_rustcode/attachments/upload",
         ] {
             assert!(allowed(method), "{method}");
         }

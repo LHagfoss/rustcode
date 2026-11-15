@@ -3382,6 +3382,15 @@ export class MockEngine {
       }
       case "session/close":
         return {};
+      case "_rustcode/attachments/read": {
+        // A kept image reads back as a picture; any other path is gone, as on an engine whose
+        // attachment was cleaned away.
+        const path = str(params.path) ?? "";
+        if (!path.includes("/attachments/")) throw new Error("that image is not kept on this computer");
+        const svg =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320"><rect width="480" height="320" fill="#5b8def"/><circle cx="360" cy="90" r="40" fill="#ffd166"/><path d="M0 320 L160 150 L300 320 Z" fill="#2a4d8f"/></svg>';
+        return { mimeType: "image/svg+xml", size: svg.length, offset: 0, data: btoa(svg), done: true };
+      }
       case "_rustcode/session/move": {
         const thread = this.thread(params.sessionId);
         const cwd = str(params.cwd);
