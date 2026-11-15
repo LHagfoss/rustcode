@@ -1,5 +1,5 @@
 //! Managing RustCode itself from an agent or a terminal (#3821): the server
-//! settings in `settings.json` first. One set of operations serves both
+//! settings in `settings.json`, and what threads can use (`capabilities`). One set of operations serves both
 //! surfaces, so they cannot drift apart:
 //!
 //! - `manage_settings`, a tool of the `rustcode` MCP server that external
@@ -21,10 +21,14 @@ use agent_client_protocol::schema::v1::{
 };
 use serde_json::{Map, Value, json};
 
+pub mod capabilities;
+
+pub use capabilities::MANAGE_CAPABILITIES;
+
 pub const MANAGE_SETTINGS: &str = "manage_settings";
 
 /// Every manage tool, for the places that route a call by name.
-pub const TOOL_NAMES: [&str; 1] = [MANAGE_SETTINGS];
+pub const TOOL_NAMES: [&str; 2] = [MANAGE_SETTINGS, MANAGE_CAPABILITIES];
 
 /// What `manage_settings` may do.
 pub const SETTINGS_ACTIONS: [&str; 4] = ["list", "get", "set", "reset"];
@@ -64,6 +68,9 @@ fn text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 
 /// Check a call before anything is read or asked.
 pub fn validate(tool: &str, args: &Value) -> Result<(), String> {
+    if tool == MANAGE_CAPABILITIES {
+        return capabilities::Op::parse(args).map(|_| ());
+    }
     if tool != MANAGE_SETTINGS {
         return Err(format!("{tool} is not a manage tool"));
     }
@@ -93,7 +100,13 @@ pub fn validate(tool: &str, args: &Value) -> Result<(), String> {
 
 /// Whether a call changes something, so the user approves it first.
 pub fn is_write(tool: &str, args: &Value) -> bool {
-    tool == MANAGE_SETTINGS && matches!(action(args), "set" | "reset")
+    match tool {
+        MANAGE_SETTINGS => matches!(action(args), "set" | "reset"),
+        // A call that does not parse is refused before it runs; it is a
+        // write for the scope check, so it never passes as a read.
+        MANAGE_CAPABILITIES => capabilities::Op::parse(args).map_or(true, |op| op.is_write()),
+        _ => false,
+    }
 }
 
 /// How a write is approved.
@@ -137,6 +150,9 @@ pub async fn answer(
     approval: Approval,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Answer {
+    if tool == MANAGE_CAPABILITIES {
+        return capabilities::answer(args, approval, cancel).await;
+    }
     if let Err(reason) = validate(tool, args) {
         return Answer::refused(format!(
             "invalid {tool} call: {reason}. Nothing was changed."
@@ -191,20 +207,9 @@ pub async fn answer(
                 shown(&before["value"]),
                 shown(&after_value)
             );
-            match approval {
-                Approval::Granted => {}
-                Approval::Unavailable(why) => {
-                    return Answer::refused(format!(
-                        "{tool} {write} needs the user's approval, and {why}. Nothing was changed. Ask the user to run `rustcode settings {write} {key}` instead."
-                    ));
-                }
-                Approval::Ask { asker, session_id } => {
-                    if !approved(&asker, &session_id, &title, args, cancel).await {
-                        return Answer::refused(format!(
-                            "the user declined {title}. Nothing was changed. Do not retry it unless the user asks."
-                        ));
-                    }
-                }
+            let hint = format!("rustcode settings {write} {key}");
+            if let Err(refusal) = gate(approval, tool, &title, &hint, args, cancel).await {
+                return refusal;
             }
             let applied = match change {
                 Change::Set(value) => set(&key, value, project.as_deref()),
@@ -224,6 +229,42 @@ pub async fn answer(
                 Err(error) => Answer::refused(format!("{error}. Nothing was changed.")),
             }
         }
+    }
+}
+
+/// Ask before a write, or say why nobody can be asked. `hint` is the
+/// command the user can run instead.
+async fn gate(
+    approval: Approval,
+    tool: &str,
+    title: &str,
+    hint: &str,
+    args: &Value,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(), Answer> {
+    match approval {
+        Approval::Granted => Ok(()),
+        Approval::Unavailable(why) => Err(Answer::refused(format!(
+            "{tool} needs the user's approval to {}, and {why}. Nothing was changed. Ask the user to run `{hint}` instead.",
+            lower_first(title)
+        ))),
+        Approval::Ask { asker, session_id } => {
+            if approved(&asker, &session_id, title, args, cancel).await {
+                Ok(())
+            } else {
+                Err(Answer::refused(format!(
+                    "the user declined: {title}. Nothing was changed. Do not retry it unless the user asks."
+                )))
+            }
+        }
+    }
+}
+
+fn lower_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 

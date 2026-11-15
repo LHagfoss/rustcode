@@ -1,8 +1,10 @@
-//! `rustcode settings …`: RustCode's server settings from a terminal (#3821).
+//! `rustcode settings|skill|harness …` and `rustcode mcp enable|disable|restart`:
+//! managing RustCode from a terminal (#3821).
 //! The work is in `rustcode::manage`, which the `manage_settings` tool uses
 //! too; this parses, prints and exits.
 
-use crate::cli::SettingsCommands;
+use crate::cli::{Commands, HarnessCommands, McpCommands, SettingsCommands, ToggleCommands};
+use rustcode::manage::capabilities::Op;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -121,5 +123,147 @@ fn shown(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Null => "-".to_owned(),
         other => other.to_string(),
+    }
+}
+
+/// The capability change or list a command asks for, and whether it wants JSON.
+pub fn capability_op(command: &Commands) -> Option<(Op, bool)> {
+    match command {
+        Commands::Skill { command } => Some(match command {
+            ToggleCommands::List { json } => (Op::List("skill".into()), *json),
+            ToggleCommands::Enable { name } => (toggle("skill", name, true), false),
+            ToggleCommands::Disable { name } => (toggle("skill", name, false), false),
+        }),
+        Commands::Harness { command } => Some(match command {
+            HarnessCommands::List { json } => (Op::List("harness".into()), *json),
+            HarnessCommands::Default {
+                harness,
+                model,
+                effort,
+            } => (
+                Op::Default {
+                    harness: harness.clone(),
+                    model: model.clone(),
+                    effort: effort.clone(),
+                },
+                false,
+            ),
+        }),
+        _ => None,
+    }
+}
+
+/// `rustcode mcp enable|disable|restart`; the other `mcp` commands edit the
+/// config themselves.
+pub fn mcp_op(command: &McpCommands) -> Option<Op> {
+    match command {
+        McpCommands::Enable { name } => Some(toggle("mcp", name, true)),
+        McpCommands::Disable { name } => Some(toggle("mcp", name, false)),
+        McpCommands::Restart { name } => Some(Op::Restart(name.clone())),
+        _ => None,
+    }
+}
+
+fn toggle(kind: &str, name: &str, enabled: bool) -> Op {
+    Op::Toggle {
+        kind: kind.to_owned(),
+        name: name.to_owned(),
+        enabled,
+    }
+}
+
+pub async fn capability(op: Op, json: bool) -> Result<(), String> {
+    let (answer, via) = rustcode::manage::capabilities::cli(&op).await?;
+    if json {
+        return print_json(&answer);
+    }
+    match &op {
+        Op::List(kind) => print_list(kind, &answer),
+        Op::Toggle {
+            kind,
+            name,
+            enabled,
+        } => {
+            let what = if kind == "mcp" { "MCP server" } else { "Skill" };
+            println!("{what} {name} is {}.", if *enabled { "on" } else { "off" });
+        }
+        Op::Restart(name) => println!("Restarted MCP server {name}."),
+        Op::Default { .. } => {
+            let default = &answer["default"];
+            println!(
+                "New threads start on {}{}.",
+                default["harness"].as_str().unwrap_or("?"),
+                default["model"]
+                    .as_str()
+                    .map(|model| format!(" with {model}"))
+                    .unwrap_or_default()
+            );
+        }
+        Op::Theme(name) => println!("Theme is {name}."),
+    }
+    if via == rustcode::manage::Via::File && op.is_write() {
+        println!("No RustCode server is running, so this changed the config file directly.");
+    }
+    Ok(())
+}
+
+fn print_list(kind: &str, answer: &Value) {
+    let on = |value: &Value| {
+        if value.as_bool() == Some(true) {
+            "on"
+        } else {
+            "off"
+        }
+    };
+    match kind {
+        "skill" => {
+            let rows: Vec<Vec<String>> = answer["skills"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|skill| {
+                    vec![
+                        shown(&skill["name"]),
+                        on(&skill["enabled"]).to_owned(),
+                        shown(&skill["source"]),
+                        shown(&skill["description"]),
+                    ]
+                })
+                .collect();
+            crate::run::print_rows(&["SKILL", "STATE", "FROM", "DESCRIPTION"], &rows);
+        }
+        _ => {
+            let default = answer["default"]["harness"].clone();
+            let rows: Vec<Vec<String>> = answer["harnesses"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|row| {
+                    let accounts: Vec<String> = row["accounts"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(shown)
+                        .collect();
+                    vec![
+                        format!(
+                            "{}{}",
+                            shown(&row["id"]),
+                            if row["id"] == default { " *" } else { "" }
+                        ),
+                        shown(&row["name"]),
+                        if row["installed"].as_bool() == Some(true) {
+                            "installed".to_owned()
+                        } else {
+                            "missing".to_owned()
+                        },
+                        shown(&row["auth"]),
+                        accounts.join(", "),
+                    ]
+                })
+                .collect();
+            crate::run::print_rows(&["HARNESS", "NAME", "INSTALLED", "AUTH", "ACCOUNTS"], &rows);
+            println!("* new threads start here");
+        }
     }
 }

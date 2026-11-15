@@ -114,7 +114,9 @@ impl Scope {
             Self::Manage => {
                 "delegate, and also the management tools (merge, clean up, projects, scheduled work) as RustCode offers them to outside agents"
             }
-            Self::Admin => "manage, and also change RustCode's own settings with `manage_settings`",
+            Self::Admin => {
+                "manage, and also change RustCode's own settings, skills, MCP servers, default harness and theme"
+            }
         }
     }
 }
@@ -142,7 +144,8 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
         | LIST_SCHEDULED_TASKS
         | WAIT_SESSION
         | WORKTREE_STATUS
-        | crate::manage::MANAGE_SETTINGS => Scope::ReadOnly,
+        | crate::manage::MANAGE_SETTINGS
+        | crate::manage::MANAGE_CAPABILITIES => Scope::ReadOnly,
         START_SESSION | MESSAGE_SESSION | FAN_OUT | INTERRUPT_SESSION | MANAGE_QUEUE => {
             Scope::Delegate
         }
@@ -202,6 +205,7 @@ pub fn implemented(tool: &str) -> bool {
             | MERGE_WHEN_GREEN
             | CLEANUP_WORKTREE
             | crate::manage::MANAGE_SETTINGS
+            | crate::manage::MANAGE_CAPABILITIES
     )
 }
 
@@ -1083,7 +1087,7 @@ pub fn instructions(grant: &Grant) -> String {
         ""
     };
     format!(
-        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_session` sends an existing thread a message, `interrupt_session` stops a running turn, and `wait_session` returns an answer. With Manage access `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` act on a thread you name with `session_id`. `manage_settings` lists and reads RustCode's settings; with Admin access it also sets and resets them. Work you start runs at Auto-edit: it can edit files but a command that needs approval is declined. Tools outside your access are not listed.",
+        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_session` sends an existing thread a message, `interrupt_session` stops a running turn, and `wait_session` returns an answer. With Manage access `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` act on a thread you name with `session_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Work you start runs at Auto-edit: it can edit files but a command that needs approval is declined. Tools outside your access are not listed.",
         grant.name,
         grant.scope.label(),
         grant.scope.meaning(),
@@ -1124,9 +1128,9 @@ pub fn tools_for(scope: Scope) -> Vec<Value> {
         }
         if crate::manage::is_tool(&name) {
             let note = if scope >= Scope::Admin {
-                "\n\n[Outside agent: set and reset need Admin access, which this connection has; the user may be asked to approve them in RustCode.]"
+                "\n\n[Outside agent: changes need Admin access, which this connection has; the user may be asked to approve them in RustCode.]"
             } else {
-                "\n\n[Outside agent: list and get only; set and reset need Admin access, which this connection does not have.]"
+                "\n\n[Outside agent: reads only; changes need Admin access, which this connection does not have.]"
             };
             if let Some(description) = entry.get("description").and_then(Value::as_str) {
                 entry["description"] = json!(format!("{description}{note}"));
@@ -1484,6 +1488,23 @@ mod tests {
             assert!(changes_things(tool, &json!({"action": action})));
         }
         assert!(!changes_things(tool, &json!({"action": "list"})));
+        let capabilities = crate::manage::MANAGE_CAPABILITIES;
+        assert_eq!(
+            required_scope_for(capabilities, &json!({"kind": "mcp", "action": "list"})),
+            Some(Scope::ReadOnly)
+        );
+        assert_eq!(
+            required_scope_for(
+                capabilities,
+                &json!({"kind": "mcp", "action": "disable", "name": "files"})
+            ),
+            Some(Scope::Admin)
+        );
+        assert_eq!(
+            required_scope_for(capabilities, &json!({"kind": "nonsense"})),
+            Some(Scope::Admin),
+            "a call that does not parse is never treated as a read"
+        );
         let listed = |scope| {
             tools_for(scope)
                 .into_iter()
@@ -1491,7 +1512,7 @@ mod tests {
                 .and_then(|entry| entry["description"].as_str().map(str::to_owned))
                 .unwrap_or_default()
         };
-        assert!(listed(Scope::ReadOnly).contains("list and get only"));
+        assert!(listed(Scope::ReadOnly).contains("reads only"));
         assert!(listed(Scope::Admin).contains("which this connection has"));
     }
 

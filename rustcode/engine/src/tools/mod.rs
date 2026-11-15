@@ -1524,6 +1524,7 @@ pub const TOOLS: &[Tool] = &[
     misc::ASK_USER_QUESTION,
     misc::REQUEST_SECRET,
     misc::MANAGE_SETTINGS,
+    misc::MANAGE_CAPABILITIES,
     misc::RUN_WORKFLOW,
     misc::WORKFLOW_STATUS,
     misc::STOP_WORKFLOW,

@@ -99,6 +99,20 @@ pub enum Commands {
         command: Option<SessionCommands>,
     },
 
+    /// List skills and turn one on or off for every project
+    #[command(alias = "skills")]
+    Skill {
+        #[command(subcommand)]
+        command: ToggleCommands,
+    },
+
+    /// List the harnesses and choose the one new threads start on
+    #[command(alias = "harnesses")]
+    Harness {
+        #[command(subcommand)]
+        command: HarnessCommands,
+    },
+
     /// Read and change RustCode's server settings (`settings.json`), the
     /// values Settings in the app shows; writes go through the running server
     #[command(alias = "setting")]
@@ -313,6 +327,12 @@ pub enum McpCommands {
     /// Remove an MCP server from the user config
     #[command(alias = "rm")]
     Remove { name: String },
+    /// Turn a configured MCP server on (the running server starts it)
+    Enable { name: String },
+    /// Turn a configured MCP server off (the running server stops it)
+    Disable { name: String },
+    /// Reconnect an MCP server in the running RustCode server
+    Restart { name: String },
 }
 
 #[derive(clap::Args, Debug)]
@@ -829,6 +849,41 @@ pub enum ThemeCommands {
     Validate { target: Option<String> },
     /// Print the user themes directory, or a theme's file
     Path { name: Option<String> },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ToggleCommands {
+    /// Every skill, on or off, and where it was found
+    #[command(alias = "ls")]
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Offer a skill to threads again
+    Enable { name: String },
+    /// Stop offering a skill to threads
+    Disable { name: String },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum HarnessCommands {
+    /// Every harness: installed, signed in, its named accounts, and the default
+    #[command(alias = "ls")]
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make a harness the default for new threads
+    Default {
+        /// The harness id, as `list` names it (claude-code, codex, rustcode, …)
+        harness: String,
+        /// The model new threads on it start with
+        #[arg(long)]
+        model: Option<String>,
+        /// The reasoning effort they start with
+        #[arg(long)]
+        effort: Option<String>,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1956,6 +2011,26 @@ mod tests {
         ] {
             assert!(mcp_add(args).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn parses_capability_commands() {
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "skill", "disable", "review"]).unwrap().command,
+            Some(Commands::Skill { command: ToggleCommands::Disable { name } }) if name == "review"
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "mcp", "restart", "files"]).unwrap().command,
+            Some(Commands::Mcp { command: McpCommands::Restart { name } }) if name == "files"
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "harness", "default", "codex", "--model", "gpt-5"])
+                .unwrap()
+                .command,
+            Some(Commands::Harness {
+                command: HarnessCommands::Default { harness, model: Some(model), effort: None }
+            }) if harness == "codex" && model == "gpt-5"
+        ));
     }
 
     #[test]

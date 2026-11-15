@@ -381,6 +381,11 @@ fn run_mcp_command(
                 println!("{}", crate::cli::mcp_server_summary(server));
             }
         }
+        crate::cli::McpCommands::Enable { .. }
+        | crate::cli::McpCommands::Disable { .. }
+        | crate::cli::McpCommands::Restart { .. } => {
+            unreachable!("toggles and restarts are handled by manage_command")
+        }
         crate::cli::McpCommands::Remove { name } => {
             rustcode::config::remove_mcp_server(name)?;
             println!("Removed MCP server: {name}");
@@ -925,6 +930,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if let Some((op, json)) = cli_args
+        .command
+        .as_ref()
+        .and_then(crate::manage_command::capability_op)
+    {
+        if let Err(error) = crate::manage_command::capability(op, json).await {
+            eprintln!("rustcode: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(crate::cli::Commands::Settings { command }) = cli_args.command.as_ref() {
         if let Err(error) = crate::manage_command::settings(command).await {
             eprintln!("rustcode settings: {error}");
@@ -1145,6 +1161,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Some(crate::cli::Commands::Mcp { command }) = cli_args.command.as_ref()
+        && let Some(op) = crate::manage_command::mcp_op(command)
+    {
+        if let Err(error) = crate::manage_command::capability(op, false).await {
+            eprintln!("rustcode mcp: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(crate::cli::Commands::Mcp { command }) = cli_args.command.as_ref() {
         if let Err(error) = run_mcp_command(command, &std::env::current_dir()?) {
             eprintln!("rustcode mcp: {error}");
