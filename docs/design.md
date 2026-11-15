@@ -629,7 +629,14 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Menu:** `menuSurface` (`elevated p-2`) with `menuItem` rows
   (`rounded-lg px-2 py-1`), highlighted `bg-fill` (not accent);
   destructive rows add `menuItemDanger`; `menuSeparator` and `menuLabel`
-  between them. **Popover:** `popoverSurface` (`elevated p-3`).
+  between them. For 3–5 frequent, icon-friendly actions, put `MenuQuickActions`
+  first: equal square columns with a 16px icon over a short caption, `fill-subtle`
+  at rest and `fill-strong` for a toggle that is on. Pass the menu's own `Item`
+  (`DropdownMenu.Item`, `ContextMenu.Item` or `CardMenuItem`) to preserve activation
+  and closing. Full action names live in accessible labels and tooltips. Left/Right
+  move across the row; Down enters the list, and Up returns to the quick row.
+  Pickers, long command names and destructive actions stay as ordinary rows.
+  **Popover:** `popoverSurface` (`elevated p-3`).
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
 - **Toast:** `.rc-toast rounded-2xl` (strong glass and a slight shadow), 380px wide, `py-1.5 pl-3 pr-1.5 text-callout`: an icon
   (info `text-fg-muted`, success `text-success`, error `text-danger`, a

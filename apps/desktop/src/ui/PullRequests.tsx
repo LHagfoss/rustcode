@@ -82,7 +82,7 @@ import {
   ClusterButton,
   cx,
   MenuContent,
-  menuItem,
+  MenuQuickActions,
   noTextHelpers,
   Pill,
   Segments,
@@ -506,29 +506,47 @@ function PullView({ cwd, host, number }: { cwd: string; host: string; number: nu
                   </Pill>
                 )}
               </DropdownMenu.Trigger>
-              <MenuContent align="start" className="min-w-[200px]">
-                {summary.url && (
-                  <DropdownMenu.Item className={menuItem} onSelect={() => openExternal(summary.url!)}>
-                    <ExternalLink size={13} className="text-fg-muted" /> Open on GitHub
-                  </DropdownMenu.Item>
-                )}
-                <DropdownMenu.Item className={menuItem} onSelect={() => askAgent(summary)}>
-                  <Bot size={13} className="text-fg-muted" /> Ask an agent to review
-                </DropdownMenu.Item>
-                {!host && summary.state === "open" && (
-                  <DropdownMenu.Item className={menuItem} onSelect={() => setWorking(true)}>
-                    <GitBranchPlus size={13} className="text-fg-muted" /> Work on this in a thread
-                  </DropdownMenu.Item>
-                )}
-                <DropdownMenu.Item
-                  className={menuItem}
-                  // A review names the head commit: it waits for a read this session,
-                  // not for a row or a saved copy that may be behind the branch.
-                  disabled={reviewing || !live || !repositoryOf(summary.url) || pullState(summary) !== "open"}
-                  onSelect={() => setReviewing(true)}
-                >
-                  <MessageSquare size={13} className="text-fg-muted" /> Write a review
-                </DropdownMenu.Item>
+              <MenuContent align="start" className="w-[280px]">
+                <MenuQuickActions
+                  Item={DropdownMenu.Item}
+                  actions={[
+                    ...(summary.url
+                      ? [
+                          {
+                            label: "GitHub",
+                            description: "Open on GitHub",
+                            icon: <ExternalLink />,
+                            onSelect: () => openExternal(summary.url!),
+                          },
+                        ]
+                      : []),
+                    {
+                      label: "Ask",
+                      description: "Ask an agent to review",
+                      icon: <Bot />,
+                      onSelect: () => askAgent(summary),
+                    },
+                    ...(!host && summary.state === "open"
+                      ? [
+                          {
+                            label: "Work",
+                            description: "Work on this in a thread",
+                            icon: <GitBranchPlus />,
+                            onSelect: () => setWorking(true),
+                          },
+                        ]
+                      : []),
+                    {
+                      label: "Review",
+                      description: "Write a review",
+                      icon: <MessageSquare />,
+                      // A review names the head commit: it waits for a read this session.
+                      disabled:
+                        reviewing || !live || !repositoryOf(summary.url) || pullState(summary) !== "open",
+                      onSelect: () => setReviewing(true),
+                    },
+                  ]}
+                />
               </MenuContent>
             </DropdownMenu.Root>
           </div>

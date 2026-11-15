@@ -1,5 +1,5 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
-import { copyThreadId, copyThreadLink } from "../state/deepLinks";
+import { copyThreadId } from "../state/deepLinks";
 // The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
 // Settings), the Needs you row, the toolbar (search, the sort and filter menu and
 // New thread; ui/SidebarToolbar.tsx, optional), then one list: pinned threads
@@ -198,6 +198,7 @@ import {
   ContextMenuSurface,
   cx,
   MenuContent,
+  MenuQuickActions,
   menuItem,
   menuItemDanger,
   menuLabel,
@@ -214,6 +215,7 @@ import { RollingNumber } from "./RollingNumber";
 import { SidebarToolbar } from "./SidebarToolbar";
 import { useThreadDrag } from "./sidebarDrag";
 import { ThreadHoverCard } from "./ThreadHoverCard";
+import { ThreadQuickActions } from "./ThreadQuickActions";
 import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
 
@@ -253,7 +255,6 @@ function ThreadMenuItems({
   bulk?: SessionSummary[];
   onClear?: () => void;
 }) {
-  const pinned = useApp((s) => s.pinned.includes(session.id));
   const autoCompactOff = useApp((s) => autoCompactOffFor(s, session.id));
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
@@ -275,66 +276,69 @@ function ThreadMenuItems({
     return (
       <>
         <div className={menuLabel}>{n} threads selected</div>
-        {!bulkAllSettled && (
-          <Item
-            className={menuItem}
-            onSelect={() => {
-              settleThreads(ids);
-              onClear?.();
-            }}
-          >
-            <CircleCheck size={13} /> Settle {n} Threads
-          </Item>
-        )}
-        {bulkSettled && (
-          <Item
-            className={menuItem}
-            onSelect={() => {
-              unsettleThreads(ids);
-              onClear?.();
-            }}
-          >
-            <CircleDashed size={13} /> Unsettle {n} Threads
-          </Item>
-        )}
-        <Item
-          className={menuItem}
-          onSelect={() => {
-            setPinned(ids, !allPinned);
-            onClear?.();
-          }}
-        >
-          {allPinned ? <PinOff size={13} /> : <Pin size={13} />}
-          {allPinned ? "Unpin" : "Pin"} {n} Threads
-        </Item>
-        <Item
-          className={menuItem}
-          onSelect={() => {
-            for (const id of ids) markUnread(id);
-            onClear?.();
-          }}
-        >
-          <CircleDot size={13} /> Mark {n} Unread
-        </Item>
+        <MenuQuickActions
+          Item={Item}
+          actions={[
+            {
+              label: allPinned ? "Unpin" : "Pin",
+              description: `${allPinned ? "Unpin" : "Pin"} ${n} Threads`,
+              icon: allPinned ? <PinOff /> : <Pin />,
+              checked: allPinned,
+              onSelect: () => {
+                setPinned(ids, !allPinned);
+                onClear?.();
+              },
+            },
+            {
+              label: "Unread",
+              description: `Mark ${n} Unread`,
+              icon: <CircleDot />,
+              onSelect: () => {
+                for (const id of ids) markUnread(id);
+                onClear?.();
+              },
+            },
+            ...(!bulkAllSettled
+              ? [
+                  {
+                    label: "Settle",
+                    description: `Settle ${n} Threads`,
+                    icon: <CircleCheck />,
+                    onSelect: () => {
+                      settleThreads(ids);
+                      onClear?.();
+                    },
+                  },
+                ]
+              : []),
+            ...(bulkSettled
+              ? [
+                  {
+                    label: "Unsettle",
+                    description: `Unsettle ${n} Threads`,
+                    icon: <CircleDashed />,
+                    onSelect: () => {
+                      unsettleThreads(ids);
+                      onClear?.();
+                    },
+                  },
+                ]
+              : []),
+          ]}
+        />
       </>
     );
   }
-  // Most used first (pin, rename, unread, snooze), then the thread's state and what it changed,
+  // Quick actions first, then rename, snooze, the thread's state and what it changed,
   // then the worktree's own actions; the occasional tools sit under More, and Trash last.
   return (
     <>
-      <Item className={menuItem} onSelect={() => togglePin(session.id)}>
-        {pinned ? <PinOff size={13} /> : <Pin size={13} />}
-        {pinned ? "Unpin" : "Pin"}
-      </Item>
+      <ThreadQuickActions threadId={session.id} Item={Item} />
       {!remote && (
         <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
           <Pencil size={13} /> Rename…
         </Item>
       )}
-      <Item className={menuItem} onSelect={() => markUnread(session.id)}>
-        <CircleDot size={13} /> Mark Unread
-      </Item>
       {snoozed ? (
         <Item className={menuItem} onSelect={() => snoozeThread(session.id, null)}>
           <Clock size={13} /> Unsnooze
@@ -369,15 +373,6 @@ function ThreadMenuItems({
         </Menu.Sub>
       )}
       <Separator className={menuSeparator} />
-      {status === "done" ? (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
-          <CircleDashed size={13} /> Unsettle
-        </Item>
-      ) : (
-        <Item className={menuItem} onSelect={() => settleThread(session.id)}>
-          <CircleCheck size={13} /> Settle
-        </Item>
-      )}
       {status !== "review" && (
         <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "review")}>
           <Eye size={13} /> Mark for Review
@@ -396,9 +391,6 @@ function ThreadMenuItems({
           <FileDiff size={13} /> Review Changes
         </Item>
       )}
-      <Item className={menuItem} onSelect={() => copyThreadLink(session.id)}>
-        <Copy size={13} /> Copy Link
-      </Item>
       {worktree && (
         <>
           <Separator className={menuSeparator} />
@@ -1191,7 +1183,7 @@ const ThreadRow = memo(function ThreadRow({
                   <Ellipsis size={14} />
                 </button>
               </DropdownMenu.Trigger>
-              <MenuContent align="start" sideOffset={4}>
+              <MenuContent align="start" sideOffset={4} className="w-[280px]">
                 <ThreadMenuItems
                   session={session}
                   Menu={DropdownMenu}
@@ -1206,7 +1198,7 @@ const ThreadRow = memo(function ThreadRow({
           </div>
         </div>
       </ContextMenu.Trigger>
-      <ContextMenuSurface>
+      <ContextMenuSurface className="w-[280px]">
         <ThreadMenuItems
           session={session}
           Menu={ContextMenu}
