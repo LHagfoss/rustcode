@@ -52,9 +52,7 @@ import {
   harnessOf,
   keepUnlisted,
   keptUnlistedThreads,
-  loading,
   type NewThreadChoice,
-  opening,
   refreshSessions,
   releaseAnnouncements,
   runPrompt,
@@ -79,6 +77,11 @@ import { sessionById } from "./threadStatus";
 // while this one loads.
 const get = () => useApp.getState();
 const set = (patch: Partial<AppState> | ((s: AppState) => Partial<AppState>)) => useApp.setState(patch);
+
+/** Sessions whose `session/load` replay is arriving. */
+export const loading = new Set<string>();
+/** The shared `session/load` for each thread; callers must not prompt before its replay finishes. */
+export const opening = new Map<string, Promise<string | null>>();
 
 /** The shortest gap between two window-focus list refreshes, see below. */
 const FOCUS_LIST_GAP_MS = 5_000;
