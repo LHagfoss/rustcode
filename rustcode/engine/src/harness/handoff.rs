@@ -129,9 +129,14 @@ fn render(message: &ChatMessage) -> Option<String> {
     match message.role.as_str() {
         "user" if !text.is_empty() => Some(format!("[user]\n{text}")),
         "assistant" => {
+            // The model's reasoning stays behind: replaying it into another
+            // model's prompt reads as copying reasoning to it, and Anthropic's
+            // safeguards then refuse every turn (`reasoning_extraction`).
+            let answer = rustcode_tool_protocol::text::strip_think_blocks(text);
+            let answer = answer.trim();
             let mut parts = Vec::new();
-            if !text.is_empty() && !message.conversation_recap {
-                parts.push(format!("[assistant]\n{text}"));
+            if !answer.is_empty() && !message.conversation_recap {
+                parts.push(format!("[assistant]\n{answer}"));
             }
             for call in &message.tool_calls {
                 parts.push(format!("[tool call] {}", cut(&call.name, 200)));
@@ -186,6 +191,27 @@ mod tests {
             !text.contains("\"from\""),
             "the switch itself is not context"
         );
+    }
+
+    #[test]
+    fn the_models_reasoning_is_not_handed_over() {
+        let mut call = ChatMessage::new("assistant", "<think>Plan the rounding.\n\n</think>");
+        call.tool_calls.push(rustcode_core::ToolCallRef {
+            id: "t1".to_owned(),
+            name: "Round the caps".to_owned(),
+            arguments: "{}".to_owned(),
+        });
+        let history = vec![
+            ChatMessage::new("user", "Cap the files"),
+            call,
+            ChatMessage::new("assistant", "<think>Check both paths</think>Done."),
+        ];
+        let text = context(&history, "claude-code", "claude-code").unwrap();
+        assert!(!text.contains("<think>"));
+        assert!(!text.contains("Plan the rounding"));
+        assert!(!text.contains("Check both paths"));
+        assert!(text.contains("[tool call] Round the caps"));
+        assert!(text.contains("[assistant]\nDone."));
     }
 
     #[test]
