@@ -507,7 +507,7 @@ export function Inbox() {
             </section>
           ) : (
             <div className="flex flex-col items-center gap-1.5 py-16 text-center">
-              <CircleCheck size={20} className="text-fg-faint" />
+              <CircleCheck size={18} className="text-fg-faint" />
               <p className="font-medium text-body text-fg-muted">Nothing needs you</p>
               <p className="text-caption text-fg-faint">
                 Approvals, questions, failed turns and delegates land here.

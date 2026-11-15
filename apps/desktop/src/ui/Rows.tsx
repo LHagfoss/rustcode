@@ -253,7 +253,7 @@ export const UserRow = memo(function UserRow({
         {long && (
           <Pill quiet className="mt-1.5 -mr-1 ml-auto" onClick={() => setOpen(!open)}>
             {open ? "Show less" : "Show full message"}
-            {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+            {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           </Pill>
         )}
       </div>
@@ -345,7 +345,7 @@ export const QuestionRow = memo(function QuestionRow({
               key={`${i}:${name}`}
               className="flex h-[22px] max-w-[240px] items-center gap-1 rounded-full bg-fill px-2 text-caption text-fg-muted"
             >
-              <Paperclip size={11} className="shrink-0" aria-hidden />
+              <Paperclip size={12} className="shrink-0" aria-hidden />
               <span className="selectable truncate">{name}</span>
             </li>
           ))}
@@ -470,7 +470,7 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
             <span className="truncate italic">· {headings.join(" · ")}</span>
           )}
           <ChevronRight
-            size={11}
+            size={12}
             className={cx("shrink-0 transition-transform duration-200", open && "rotate-90")}
           />
         </button>
@@ -779,19 +779,19 @@ export const ToolRow = memo(function ToolRow({
           {item.autoAllowed && (
             <Tooltip label={`Allowed by ${item.autoAllowed}`}>
               <span className="flex shrink-0 items-center text-fg-faint">
-                <Shield size={11} />
+                <Shield size={12} />
               </span>
             </Tooltip>
           )}
           {linkState && (
             <Tooltip label={`“${link?.targetTitle}” · ${LINK_LABEL[linkState]}`}>
               <span className="flex shrink-0 items-center">
-                <LinkStateIcon state={linkState} size={11} />
+                <LinkStateIcon state={linkState} size={12} />
               </span>
             </Tooltip>
           )}
           <ChevronRight
-            size={11}
+            size={12}
             className={cx(
               "shrink-0 text-fg-faint transition-[transform,opacity] duration-200",
               open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
@@ -806,7 +806,7 @@ export const ToolRow = memo(function ToolRow({
               onClick={() => selectThread(startedId)}
               className="flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
             >
-              <ExternalLink size={11} />
+              <ExternalLink size={12} />
             </button>
           </Tooltip>
         )}
@@ -836,7 +836,7 @@ export function SwitchRow({ item }: { item: Item<"switch"> }) {
             {modelFrom && (
               <>
                 {modelName(modelFrom)}
-                <ArrowRight size={11} className="text-fg-faint" />
+                <ArrowRight size={12} className="text-fg-faint" />
               </>
             )}
             <span className="text-fg">{modelName(modelTo)}</span>
@@ -848,7 +848,7 @@ export function SwitchRow({ item }: { item: Item<"switch"> }) {
             {effortFrom && (
               <>
                 {effortLabel(effortFrom)}
-                <ArrowRight size={11} className="text-fg-faint" />
+                <ArrowRight size={12} className="text-fg-faint" />
               </>
             )}
             <span className="text-fg">{effortLabel(effortTo)}</span>
@@ -872,7 +872,7 @@ export function HandoffRow({ item }: { item: Item<"handoff"> }) {
       <span className="flex items-center gap-1.5">
         <HarnessIcon id={item.from} size={12} />
         {name(item.from)}
-        <ArrowRight size={11} className="text-fg-faint" />
+        <ArrowRight size={12} className="text-fg-faint" />
         <HarnessIcon id={item.to} size={12} />
         <span className="text-fg">{name(item.to)}</span>
         {item.model && <span className="text-fg-faint">· {item.model}</span>}
@@ -916,9 +916,9 @@ export function WakeRow({ text, flat }: { text: string; flat?: boolean }) {
             <HarnessIcon key={d.linkId ?? i} id={harnessId(d.harness ?? "")} name={d.harness} size={13} />
           ))
         ) : notice.asking.length && !notice.finished.length ? (
-          <MessageCircleQuestion size={11} className="shrink-0 text-fg-faint" aria-hidden />
+          <MessageCircleQuestion size={12} className="shrink-0 text-fg-faint" aria-hidden />
         ) : (
-          <Layers size={11} className="shrink-0 text-fg-faint" aria-hidden />
+          <Layers size={12} className="shrink-0 text-fg-faint" aria-hidden />
         )}
         {notice.failed && <CircleX size={12} className="shrink-0 text-danger" aria-hidden />}
         <span className="shrink-0">{notice.label}</span>
@@ -975,7 +975,7 @@ export function NoticeRow({
       >
         <span className="h-px flex-1 bg-border" />
         <span className="flex min-w-0 items-center gap-1.5">
-          {item.progress ? <Spinner size={11} /> : <Layers size={11} className="shrink-0 text-fg-faint" />}
+          {item.progress ? <Spinner size={12} /> : <Layers size={12} className="shrink-0 text-fg-faint" />}
           <span className="truncate">{item.text}</span>
           {times}
           {item.setting === "auto-compact" && (
@@ -1023,7 +1023,7 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
             </span>
             <DiffCount added={completion.added} removed={completion.removed} />
             <ChevronRight
-              size={11}
+              size={12}
               className={cx("text-fg-faint transition-transform duration-200", open && "rotate-90")}
             />
           </button>
@@ -1052,7 +1052,7 @@ export function CompletionCard({ completion }: { completion: TurnCompletion }) {
         <div className="mt-1 rounded-lg bg-fill-subtle px-3 py-1.5">
           {completion.files.map((f) => (
             <div key={f.path} className="flex h-[22px] items-center gap-2 text-caption">
-              <FileText size={11} className="shrink-0 text-fg-muted" />
+              <FileText size={12} className="shrink-0 text-fg-muted" />
               <span className="min-w-0 flex-1 truncate text-left font-mono" dir="rtl">
                 <bdi>{f.path}</bdi>
               </span>
@@ -1163,12 +1163,12 @@ export const ToolGroupRow = memo(function ToolGroupRow({
         <span className="min-w-0 truncate text-callout text-fg-muted group-hover:text-fg">{group.label}</span>
         {group.failed > 0 && (
           <span className="flex shrink-0 items-center gap-0.5 text-caption text-danger">
-            <CircleX size={11} aria-hidden />
+            <CircleX size={12} aria-hidden />
             {group.failed} failed
           </span>
         )}
         <ChevronRight
-          size={11}
+          size={12}
           className={cx(
             "shrink-0 text-fg-faint transition-transform duration-200",
             group.open && "rotate-90",
@@ -1239,7 +1239,7 @@ export function TurnEndRow({
     <div className="-mt-1.5">
       {completion && <CompletionCard completion={completion} />}
       <div className="mt-1 flex h-5 items-center gap-2 text-caption text-fg-faint">
-        {item.outcome === "cancelled" && !folded && <SquareStop size={11} />}
+        {item.outcome === "cancelled" && !folded && <SquareStop size={12} />}
         {parts.length > 0 && <span className="tabular">{parts.join(" · ")}</span>}
         {(row.copy || row.fork || row.sideChat) && (
           <span className="flex items-center gap-1 [&>button]:size-5 [&>button]:text-fg-faint">

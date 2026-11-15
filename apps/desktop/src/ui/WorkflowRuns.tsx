@@ -180,7 +180,7 @@ export function WorkflowStatusRow({ run, threadId }: { run: WorkflowRun; threadI
           <Workflow size={12} aria-hidden className="shrink-0 text-fg-faint" />
           <span className="min-w-0 truncate">{runLine(run, now)}</span>
           {!run.driven && <span className="shrink-0 text-fg-faint">· resumes when this thread is open</span>}
-          <Spinner size={9} className="shrink-0 text-accent" />
+          <Spinner size={10} className="shrink-0 text-accent" />
         </button>
         <StopButton run={run} threadId={threadId} />
       </div>
@@ -221,7 +221,7 @@ export function WorkflowCard({ threadId, runId }: { threadId: string; runId: str
       className="rc-expand mt-1.5 mb-1 ml-[26px] flex flex-col gap-1 rounded-xl border border-border bg-fill-subtle px-1 py-1.5"
     >
       <div className="flex min-w-0 items-center gap-1.5 px-2 text-caption text-fg-muted">
-        <Workflow size={11} aria-hidden className="shrink-0 text-fg-faint" />
+        <Workflow size={12} aria-hidden className="shrink-0 text-fg-faint" />
         <span className="min-w-0 truncate font-medium text-fg">{runTitle(run)}</span>
         <span
           className={cx(
@@ -252,7 +252,7 @@ export function WorkflowCard({ threadId, runId }: { threadId: string; runId: str
         className="flex h-6 w-fit items-center gap-1 rounded-lg px-2 text-caption text-fg-muted hover:bg-fill-subtle active:bg-fill-strong"
       >
         <ChevronDown
-          size={11}
+          size={12}
           aria-hidden
           className={cx("text-fg-faint transition-transform duration-200", !open && "-rotate-90")}
         />

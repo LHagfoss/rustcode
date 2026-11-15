@@ -699,7 +699,7 @@ export function RemoteThreadIndicator({ sessionId }: { sessionId?: string }) {
     if (!reason) return null;
     return (
       <Chip tone="warn" title={`Not shared with paired devices: ${reason}`}>
-        <WifiOff size={11} />
+        <WifiOff size={12} />
         <span className="sr-only">Not shared with paired devices: {reason}</span>
       </Chip>
     );
@@ -711,7 +711,7 @@ export function RemoteThreadIndicator({ sessionId }: { sessionId?: string }) {
       : `${count} ${count === 1 ? "device" : "devices"} attached to this thread`;
   return (
     <Chip tone={count > 0 ? "ok" : "idle"} title={label}>
-      <Smartphone size={11} />
+      <Smartphone size={12} />
       {count > 0 ? count : <span className="sr-only">{label}</span>}
     </Chip>
   );

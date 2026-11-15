@@ -72,7 +72,7 @@ export function OverviewSection({
           className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 text-left hover:bg-fill-subtle"
         >
           <ChevronRight
-            size={11}
+            size={12}
             strokeWidth={2.5}
             className={cx("shrink-0 text-fg-faint transition-transform duration-150", !folded && "rotate-90")}
           />

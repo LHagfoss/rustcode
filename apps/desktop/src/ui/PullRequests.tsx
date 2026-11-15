@@ -105,21 +105,21 @@ function ChecksMark({ pull }: { pull: PullRequest }) {
   if (c.failed)
     return (
       <span className="flex items-center gap-1 text-danger">
-        <CircleX size={11} />
+        <CircleX size={12} />
         {c.failed} failing
       </span>
     );
   if (c.pending)
     return (
       <span className="flex items-center gap-1 text-warning">
-        <CircleDashed size={11} />
+        <CircleDashed size={12} />
         {c.pending} running
       </span>
     );
   if (c.passed)
     return (
       <span className="flex items-center gap-1 text-success">
-        <CircleCheck size={11} />
+        <CircleCheck size={12} />
         {c.passed} passed
       </span>
     );
@@ -215,7 +215,7 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullRequest; onD
           disabled={busy || !repository || (event !== "APPROVE" && !body.trim())}
           onClick={() => void submit()}
         >
-          {busy ? <Spinner size={11} /> : null} Submit review
+          {busy ? <Spinner size={12} /> : null} Submit review
         </Pill>
       </div>
     </div>
@@ -261,7 +261,7 @@ function FeedbackCard({
           </span>
         )}
         <Pill size="sm" quiet onClick={onAdd} title="Add to the thread's composer">
-          <CirclePlus size={11} /> Add to thread
+          <CirclePlus size={12} /> Add to thread
         </Pill>
       </div>
       <Markdown text={item.body} className="text-callout" />
@@ -420,7 +420,7 @@ function ChecksSection({ runs }: { runs: PullDetail["checkRuns"] }) {
         aria-expanded={open}
         className="mb-1 flex items-center gap-1 font-semibold text-caption text-fg-muted hover:text-fg"
       >
-        <ChevronRight size={11} className={cx("transition-transform", open && "rotate-90")} />
+        <ChevronRight size={12} className={cx("transition-transform", open && "rotate-90")} />
         {checksHeadline(runs)}
         {!open && rest.length > 0 && attention.length > 0 && (
           <span className="font-normal text-fg-faint">· {rest.length} passed</span>

@@ -398,7 +398,7 @@ export function CommandPalette() {
         >
           <Dialog.Title className="sr-only">Command palette</Dialog.Title>
           <div className="flex h-[52px] items-center gap-3 px-4">
-            <Search size={17} className="text-fg-muted" />
+            <Search size={16} className="text-fg-muted" />
             <input
               autoFocus
               value={query}

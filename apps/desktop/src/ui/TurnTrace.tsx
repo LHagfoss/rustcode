@@ -79,7 +79,7 @@ export function TurnTrace({
           type="button"
           className="flex h-[20px] items-center gap-1 rounded-full bg-fill-subtle px-2 font-medium text-caption text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong"
         >
-          <Activity size={11} />
+          <Activity size={12} />
           Trace
         </button>
       </Popover.Trigger>

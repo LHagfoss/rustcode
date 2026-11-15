@@ -44,7 +44,7 @@ export function SteerMark({ note, inPlan }: { note: SteerNote; inPlan?: boolean 
         inPlan ? "max-w-full" : "max-w-[min(420px,60vw)]",
       )}
     >
-      <CornerDownRight size={11} className="shrink-0 text-fg-faint" aria-hidden />
+      <CornerDownRight size={12} className="shrink-0 text-fg-faint" aria-hidden />
       <span className="shrink-0 text-fg-muted">Steered:</span>
       <span className="min-w-0 truncate">{line}</span>
     </button>

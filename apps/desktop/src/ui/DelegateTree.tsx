@@ -341,7 +341,7 @@ export function DelegateTree({
     return (
       <Tooltip label={<DelegateTip views={views} />}>
         <span className="mt-1 flex min-w-0 items-center gap-1 text-caption text-fg-muted">
-          <ListTree size={11} aria-hidden className="shrink-0 text-fg-faint" />
+          <ListTree size={12} aria-hidden className="shrink-0 text-fg-faint" />
           <span className="shrink-0 tabular">
             {total.threads} {total.threads === 1 ? "delegate" : "delegates"}
           </span>

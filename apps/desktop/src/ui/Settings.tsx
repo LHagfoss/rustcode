@@ -679,7 +679,7 @@ function AgentsPage() {
           action={
             saved ? (
               <Chip tone="ok">
-                <Check size={11} /> Saved
+                <Check size={12} /> Saved
               </Chip>
             ) : undefined
           }
@@ -706,13 +706,13 @@ function AgentsPage() {
           thisMachine ? (
             <div className="flex items-center gap-1">
               <Action quiet size="sm" onClick={() => void runAllHarnessChecks()} disabled={checking}>
-                {checking && <Spinner size={11} />}
+                {checking && <Spinner size={12} />}
                 {checkingAll
                   ? `Checking ${Math.min(checkingAll.done + 1, checkingAll.total)} of ${checkingAll.total}…`
                   : "Check all"}
               </Action>
               <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
-                <Plus size={11} />
+                <Plus size={12} />
                 Add harness
               </Action>
             </div>
