@@ -7016,6 +7016,8 @@ export class MockTransport implements Transport {
     if (command === "link_meta") return mockLinkMeta(String(args.url));
     if (command === "server_status") return this.serverStatus();
     if (command === "system_info") return MOCK_SYSTEM_INFO;
+    // Settings › About › System setup: a finished install, one step not needed.
+    if (command === "system_setup_status" || command === "system_setup_run") return MOCK_SYSTEM_SETUP;
     if (command === "resolve_binaries")
       return (args.names as string[]).map((name) =>
         ["codex", "claude-agent-acp", "gemini", "opencode"].includes(name)
@@ -7238,3 +7240,57 @@ function mockGit(threads: readonly { worktree?: MockWorktree }[], path: string):
   mockGitStates.set(path, state);
   return state;
 }
+
+/** Settings › About › System setup in the mock: the macOS steps of a finished install. */
+const MOCK_SYSTEM_SETUP = [
+  {
+    id: "quarantine",
+    title: "Clear the download quarantine flag",
+    about:
+      "macOS marks a downloaded app as quarantined, which can make its command line prompt or fail the first time. This clears the flag on RustCode.",
+    auto: true,
+    status: "done",
+    message: "No quarantine flag on RustCode.",
+    lastRun: "2026-11-14T09:00:00Z",
+  },
+  {
+    id: "signature",
+    title: "Keep one signature across updates",
+    about:
+      "Releases are signed ad hoc, so macOS sees every update as a new app and asks again for Keychain access and Background Items. A local certificate gives updates one identity.",
+    auto: true,
+    status: "done",
+    message: "RustCode has a signature that stays the same across updates.",
+    lastRun: "2026-11-14T09:00:00Z",
+  },
+  {
+    id: "cli-link",
+    title: "Put `rustcode` on your PATH",
+    about:
+      "Links `rustcode` into ~/.local/bin when no copy is on your PATH, so a terminal runs the same version as the app.",
+    auto: true,
+    status: "done",
+    message: "`rustcode` is at /Users/lars/.cargo/bin/rustcode.",
+    lastRun: "2026-11-14T09:00:00Z",
+  },
+  {
+    id: "shell-path",
+    title: "Check ~/.local/bin is on your shell's PATH",
+    about:
+      "Reads your login shell's PATH. RustCode never edits your shell profile; when the folder is missing it shows the line to add.",
+    auto: true,
+    status: "skipped",
+    message: "`rustcode` is not linked into ~/.local/bin, so there is nothing to add.",
+    lastRun: "2026-11-14T09:00:00Z",
+  },
+  {
+    id: "background-server",
+    title: "Run the RustCode server in the background",
+    about:
+      "Installs the server as a LaunchAgent, systemd user unit or logon task, so paired machines reach this computer with the app closed. See Machines.",
+    auto: false,
+    status: "done",
+    message: "The server starts when you log in.",
+    lastRun: "2026-11-14T09:00:00Z",
+  },
+];

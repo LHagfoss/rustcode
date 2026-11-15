@@ -52,6 +52,7 @@ import {
   setMachineIcon,
   threadCount,
   threadLabel,
+  updateAdvice,
   useLocalIdentity,
   useMachines,
   versionSkew,
@@ -131,8 +132,7 @@ export function MachinesPage() {
             Add environment
           </Action>
         }
-        footer="Choose where a thread runs under Run on when you start it."
-        hint="A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing an environment forgets its pairing here; it keeps listing this computer until you revoke it there."
+        hint="Choose where a thread runs under Run on when you start it. A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing an environment forgets its pairing here; it keeps listing this computer until you revoke it there."
       >
         <ThisComputer />
         {machines.map((machine) => (
@@ -191,6 +191,11 @@ function ThisComputer() {
         </>
       }
       subtitle={`Local server · ${open === 1 ? "1 thread" : `${open} threads`}`}
+      hint={
+        server?.gateway.remoteEnabled || server?.gateway.running
+          ? `Gateway: ${gatewayLine(server.gateway, server.installed)}`
+          : undefined
+      }
       status={
         <>
           <span className="tabular">Server: {serverLine(server)}</span>
@@ -202,8 +207,10 @@ function ThisComputer() {
           ) : null}
           {/* The gateway with the app closed: the server keeps it running, the
               app's own threads still end with the app (docs/remote.md). */}
-          {server?.gateway.remoteEnabled || server?.gateway.running ? (
-            <span className="block pt-0.5">Gateway: {gatewayLine(server.gateway, server.installed)}</span>
+          {server?.gateway.running ? (
+            <span className="tabular"> · Gateway on {server.gateway.address ?? "an unknown address"}</span>
+          ) : server?.gateway.remoteEnabled ? (
+            <span> · Gateway not running</span>
           ) : null}
           {server?.problems.map((problem) => (
             <span key={problem.code} className="block pt-0.5 text-warning">
@@ -318,8 +325,13 @@ export function MachineRow({
 }) {
   const platform = platformName(machine.platform);
   const threads = threadLabel(count);
-  const skew = versionSkew(machine.version, local, machine.platform);
   const outdated = environmentOutdated(machine.version, local);
+  // The facts already carry its version: the line says only what updates it.
+  const skew = outdated
+    ? `Update it there: ${updateAdvice(machine.platform ?? "")}`
+    : versionSkew(machine.version, local, machine.platform)
+      ? "Newer than this app: update RustCode here"
+      : null;
   const hint = machine.hint;
   const name = machineName(machine);
   const status = environmentStatus(machine);
@@ -339,42 +351,40 @@ export function MachineRow({
       stacked
       title={
         <>
-          <span
-            aria-hidden
-            data-status={status.kind}
-            className={`size-2 shrink-0 rounded-full ${
-              status.kind === "online"
-                ? "bg-success"
-                : status.kind === "attention"
-                  ? "bg-warning"
-                  : status.kind === "connecting"
-                    ? "animate-pulse bg-fg-muted"
-                    : "bg-fg-faint"
-            }`}
-          />
           <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={16} />
           {name}
           {outdated && <Chip tone="warn">Outdated</Chip>}
         </>
       }
+      hint={direction}
       subtitle={
         <>
-          <span className="block">{direction}</span>
-          {/* Online: where it is and how it travels. Otherwise what is wrong, then the route it tries. */}
-          <span className="selectable block">
-            {connected ? environmentRoute(machine) : machineLine(machine)}
-          </span>
-          {!connected && environmentAddress(machine) && (
+          {/* Online: where it is and how it travels. Otherwise what is wrong, cut to one line
+              (all of it on hover and when selected), then the route it tries. */}
+          {connected ? (
             <span className="selectable block">{environmentRoute(machine)}</span>
+          ) : (
+            <>
+              <span className="selectable block truncate" title={machineLine(machine)}>
+                {machineLine(machine)}
+              </span>
+              {environmentAddress(machine) && (
+                <span className="selectable block">{environmentRoute(machine)}</span>
+              )}
+            </>
           )}
-          {/* Who is older, and what updates it: the Mac Studio on 0.96 against a 1.28 app. */}
-          {skew && <span className="mt-1 block text-warning">{skew}</span>}
+          {/* What updates it, when it runs another version than this app. */}
+          {skew && <span className="block text-warning">{skew}</span>}
           {/* PR 3402's words for a route that does not answer while another does. */}
-          {hint && <span className="mt-1 block">{hint}</span>}
+          {hint && <span className="block">{hint}</span>}
         </>
       }
       status={facts.join(" · ")}
-      badge={<Chip tone={status.tone}>{status.label}</Chip>}
+      badge={
+        <span data-status={status.kind}>
+          <Chip tone={status.tone}>{status.label}</Chip>
+        </span>
+      }
     >
       {recovery === "pair" ? (
         <PairAgainAction machine={machine} />

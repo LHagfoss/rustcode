@@ -247,17 +247,19 @@ export function DiagnosticsPage() {
     <>
       <Group
         title="Debug report"
-        footer="Tokens, API keys, email addresses and your home folder are taken out. Read it before you post it."
         hint={`The server, the system, the harnesses, the last ${REPORT_LOG_LINES} server log lines and recent events, as Markdown.`}
       >
-        <Row title="Copy debug report" subtitle="This page in one block, to paste into a GitHub issue.">
+        <Row
+          title="For a GitHub issue"
+          subtitle="Secrets, emails and your home folder are taken out. Read it before you post."
+        >
           <Action onClick={() => void saveReport()}>
             <Download size={13} />
             Save…
           </Action>
           <Action prominent onClick={() => void copyReport()}>
             <Copy size={13} />
-            Copy debug report
+            Copy report
           </Action>
         </Row>
       </Group>
@@ -270,8 +272,8 @@ export function DiagnosticsPage() {
               {SERVER_STATE_LABEL[state]}
             </>
           }
-          subtitle="Runs every thread. The app starts it again when it crashes."
-          status={detail ?? TRANSPORT_LABEL[transport ?? ""]}
+          hint="Runs every thread. The app starts it again when it crashes."
+          subtitle={detail ?? TRANSPORT_LABEL[transport ?? ""]}
         >
           {shell && (
             <Action
@@ -345,7 +347,7 @@ export function DiagnosticsPage() {
         />
       </Group>
 
-      <Group title="Harnesses" footer="What Settings › Harnesses last detected, found on this app's PATH.">
+      <Group title="Harnesses" hint="What Settings › Harnesses last detected, found on this app's PATH.">
         {harnesses.length ? (
           harnesses.map((h) => (
             <div key={h.id}>
@@ -423,8 +425,7 @@ function ServerLog() {
   return (
     <Group
       title="Server log"
-      footer={`The server's stderr since the app started (the last ${SERVER_LOG_LINES} lines).`}
-      hint="Each thread also logs its turns to its own logs/debug.log. Copy and Save keep only the lines shown, with secrets and your home folder taken out."
+      hint={`The server's stderr since the app started (the last ${SERVER_LOG_LINES} lines). Each thread also logs its turns to its own logs/debug.log. Copy and Save keep only the lines shown, with secrets and your home folder taken out.`}
     >
       <div className={cx("flex flex-wrap items-center gap-2", rowInset)}>
         <Select

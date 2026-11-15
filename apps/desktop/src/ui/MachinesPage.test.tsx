@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Tooltip } from "radix-ui";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Machine } from "../state/machines";
 import { MachineRow } from "./MachinesPage";
@@ -22,7 +23,11 @@ const MACHINE: Machine = {
 };
 
 function render(machine: Machine): string {
-  return renderToStaticMarkup(<MachineRow machine={machine} count={2} now={Date.now()} local="1.29.1" />);
+  return renderToStaticMarkup(
+    <Tooltip.Provider>
+      <MachineRow machine={machine} count={2} now={Date.now()} local="1.29.1" />
+    </Tooltip.Provider>,
+  );
 }
 
 describe("an environment row", () => {
