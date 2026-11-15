@@ -695,13 +695,21 @@ pub fn shell_quote(word: &str) -> String {
 
 /// The first program in a shell command, peeling wrappers, assignments and shells.
 /// Only the program name is retained for tool-call telemetry.
+/// A leading `cd dir &&` (or another builtin that only sets up the shell) is
+/// skipped, so `cd repo && cargo check` records `cargo`; a command that is only
+/// such builtins records the first of them.
 pub(crate) fn command_name(command: &str) -> Option<String> {
+    const SETUP: &[&str] = &[
+        "cd", "pushd", "popd", "export", "set", "source", ".", "true", ":",
+    ];
     let mut found = Vec::new();
     scan(command, None, 0, &Context::default(), &mut found);
+    let first = found.first().map(|invocation| invocation.program.clone());
     found
         .into_iter()
-        .next()
         .map(|invocation| invocation.program)
+        .find(|program| !SETUP.contains(&program.as_str()))
+        .or(first)
 }
 
 /// The command an approval request asks to run, when it is a shell command:

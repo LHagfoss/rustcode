@@ -35,9 +35,9 @@ payload only when the user turns payload capture on ("Captured payloads").
 | object | holds |
 | --- | --- |
 | `threads` | one row per thread: `id`, `title`, `project`, `cwd`, `harness`, `model`, `effort`, `parent_id`, `parent_title`, `created_at`, `updated_at`, and (migration 9) `account`, `machine`, `created_with_version`, `branch`, `final_commit`, `pull_request`, `pull_request_state`, `settled_at` |
-| `turns` | one row per turn: `thread_id`, `started_at`, `finished_at`, `harness`, `model`, `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`, `tool_calls`, `status`, `duration_ms`, `time_to_first_token_ms`, `model_time_ms`, `tool_time_ms`, `context_tokens`, `context_window`, `stop_reason`, and (migration 9) `effort`, `account`, `machine`, `rustcode_version`, `diff_files`, `diff_added`, `diff_removed`, unique on `(thread_id, started_at)` |
+| `turns` | one row per turn: `thread_id`, `started_at`, `finished_at`, `harness`, `model`, `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`, `tool_calls`, `status`, `duration_ms`, `time_to_first_token_ms`, `model_time_ms`, `tool_time_ms`, `context_tokens`, `context_window`, `stop_reason`, and (migration 9) `effort`, `account`, `machine`, `rustcode_version`, `diff_files`, `diff_added`, `diff_removed`, and (migration 12) `error_kind`, unique on `(thread_id, started_at)` |
 | `approvals` | one row per approval a user was asked for: `thread_id`, `source` (`builtin`, `subagent`, `harness`), `tool_name`, `requested_at`, `decided_at`, `wait_ms`, `decision` (`allow_once`, `allow_hour`, `allow_always`, `reject`, `cancelled`, or the option kind a harness offered) |
-| `tool_calls` | one row per finished tool call: `thread_id`, `turn_id`, `tool_name`, `success`, `exit_code`, `at`, `started_at`, `duration_ms`, `output_bytes`, `truncated`, `mcp_server`, `command_name`, `error_kind` |
+| `tool_calls` | one row per finished tool call: `thread_id`, `turn_id`, `tool_name`, `success`, `exit_code`, `at`, `started_at`, `duration_ms`, `output_bytes`, `truncated`, `mcp_server`, `command_name`, `error_kind`, and (migration 12) `harness_tool` |
 | `compactions` | one row per history compaction, from any harness: `thread_id`, `turn_id`, `harness`, `model`, `at`, `duration_ms`, `trigger`, `mode`, `tokens_before`, `tokens_after`, `messages_before`, `messages_after`, `idle_secs_before`, `count`, `success`, `error_kind`, `external_id`, `source` |
 | `daily_usage` | a view over `turns`: `day`, `harness`, `model`, summed tokens, `cost_usd` and turn count |
 | `daily_compactions` | a view over `compactions`: compactions, failures, tokens before and after, reclaimed tokens and mean duration per day, harness and trigger |
@@ -131,6 +131,42 @@ FROM threads WHERE settled_at IS NOT NULL;
 SELECT decision, COUNT(*), AVG(wait_ms) FROM approvals GROUP BY 1;
 ```
 
+## Failures and tool names
+
+Migration 12 adds two columns, both `NULL` where nothing reported them:
+
+| column | meaning |
+| --- | --- |
+| `turns.error_kind` | why a failed external-harness turn failed, a short kind from its error: `unknown_session`, `rate_limited`, `usage_limit`, `auth`, `context_overflow`, `provider_error`, `timeout`, `harness_exited`, `harness_start`, `network`, `other`. The error text is not stored. The built-in harness keeps using `stop_reason` |
+| `tool_calls.harness_tool` | an external harness's own name for the tool: Claude Code's `Bash`, `Read`, `mcp__rustcode__wait_session`; a Codex item type (`commandExecution`, `fileChange`) or `mcp__<server>__<tool>`. `tool_name` stays the ACP kind (`execute`, `other`), and `mcp_server` is filled from either |
+
+A failed external tool call's `error_kind` is `exit_status` (ran and exited
+non-zero; Claude Code's `Exit code N` gives `exit_code` too),
+`permission_denied` (the harness or its permission check refused it),
+`guard_refused` (the command guard), `timeout`, `interrupted` (still running
+when the turn ended) or `failed`. `command_name` skips a leading `cd dir &&`
+and similar shell setup, so it names the program that did the work.
+
+Migration 13 recovers Claude Code compactions recorded before the detector
+knew the adapter's `_meta.jetbrains.air.contextCompaction` shape, from the
+captured `session/update` payloads that hold them.
+
+## Comparing harnesses
+
+Token columns are what each harness reported, and harnesses count
+differently:
+
+- **Claude Code** reports `input_tokens` without the cache: `cached_tokens`
+  (cache reads) and `cache_write_tokens` are separate, and the three add up
+  to the prompt.
+- **Codex** reports `input_tokens` with the cache read already inside it
+  (`cached_tokens` is the part of it that was cached), no cache writes, and
+  no cost: a ChatGPT sign-in is not billed per token. Compare a Codex
+  `input_tokens` with a Claude Code `input_tokens + cached_tokens +
+  cache_write_tokens`.
+- A turn's `model` is the one it ran on, so a thread that switched models
+  has turns on each; group by `turns.model`, not `threads.model`.
+
 ## Compactions
 
 Every compaction RustCode can see is one row, whichever harness ran it:
@@ -139,7 +175,7 @@ Every compaction RustCode can see is one row, whichever harness ran it:
 | --- | --- | --- |
 | built-in harness | `AppState::record_compaction`, where the chat card and `context.compaction` event are written | `auto_context` (the history crossed its budget) or `manual` (`/compact`) |
 | Codex | the `contextCompaction` item (`item/completed`) | `manual` for a `/compact` turn, else `harness_auto` |
-| Claude Code | the ACP adapter's synthetic `Compact conversation` tool call (`_meta.claudeCode.toolName = "compact"`), terminal update only | Claude's `trigger`: `manual`, `harness_auto` for its automatic pass, `cache_expiry` for the adapter's idle compaction |
+| Claude Code | the ACP adapter's synthetic `Compact conversation` tool call: the facts update under `_meta.jetbrains.air.contextCompaction` (current adapter), or the terminal update with `_meta.claudeCode.toolName = "compact"` (older adapter) | Claude's `trigger`: `manual`, `harness_auto` for its automatic pass, `cache_expiry` for the adapter's idle compaction |
 
 `mode` is `ai_summary` or `deterministic_record` for a RustCode compaction and
 `harness_summary` when the harness made it. Token counts, message counts and

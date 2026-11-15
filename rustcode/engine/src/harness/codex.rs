@@ -912,7 +912,12 @@ fn is_agent_thread(state: &Mutex<State>, params: &Value) -> bool {
 /// its steps under it. Any other call is left as it is.
 fn fold_under_agent(state: &Mutex<State>, params: &Value, call: ToolCall) -> ToolCall {
     match agent_row_of_call(state, params) {
-        Some(parent) => call.meta(step_meta(&parent)),
+        Some(parent) => {
+            // Keep the tool's own name (`rustcode.toolName`) beside the fold.
+            let mut meta = call.meta.clone().unwrap_or_default();
+            meta.extend(step_meta(&parent));
+            call.meta(meta)
+        }
         None => call,
     }
 }
@@ -1094,7 +1099,28 @@ fn tool_call_for(item: &Value) -> Option<ToolCall> {
         .kind(ToolKind::Read),
         _ => return None,
     };
-    Some(call.status(ToolCallStatus::InProgress))
+    let mut meta = Map::new();
+    meta.insert(
+        "rustcode".to_owned(),
+        json!({"toolName": codex_tool_name(item)}),
+    );
+    Some(call.status(ToolCallStatus::InProgress).meta(meta))
+}
+
+/// Codex's own name for a tool item, for the data store's `harness_tool`: the
+/// item type, `mcp__<server>__<tool>` for an MCP call (the shape Claude Code
+/// uses, so one query covers both), and the tool of a dynamic call.
+fn codex_tool_name(item: &Value) -> String {
+    let kind = str_field(item, "type").unwrap_or("tool");
+    match kind {
+        "mcpToolCall" => format!(
+            "mcp__{}__{}",
+            str_field(item, "server").unwrap_or("mcp"),
+            str_field(item, "tool").unwrap_or("tool")
+        ),
+        "dynamicToolCall" => str_field(item, "tool").unwrap_or(kind).to_owned(),
+        _ => kind.to_owned(),
+    }
 }
 
 /// The update a finished Codex tool item makes to its card.

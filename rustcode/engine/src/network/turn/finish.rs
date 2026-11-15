@@ -396,6 +396,7 @@ fn record_data_store_turn(
                 output_bytes: Some(message.content.len() as i64),
                 truncated: Some(result.truncated || result.payload_truncated),
                 mcp_server: None,
+                harness_tool: None,
                 command_name: result
                     .command
                     .as_deref()

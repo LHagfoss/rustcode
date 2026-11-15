@@ -367,6 +367,46 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
          FROM tool_calls
          GROUP BY substr(at, 1, 10), tool_name, command_name;",
     ),
+    // Additive: why a turn failed, and an external harness's own tool name
+    // next to the ACP kind in `tool_name`.
+    (
+        12,
+        "failure_kinds_and_harness_tools",
+        "ALTER TABLE turns ADD COLUMN error_kind TEXT;
+         ALTER TABLE tool_calls ADD COLUMN harness_tool TEXT;",
+    ),
+    // Claude Code compactions the detector missed: the adapter moved their
+    // facts to `_meta.jetbrains.air.contextCompaction`. Where payload capture
+    // kept the update, it is the row; an existing row is left alone.
+    (
+        13,
+        "backfill_claude_compactions",
+        "INSERT INTO compactions (thread_id, harness, model, at, duration_ms, trigger, mode,
+                tokens_before, tokens_after, success, external_id, source)
+         SELECT m.thread_id, m.harness,
+                (SELECT model FROM threads WHERE id = m.thread_id),
+                m.at,
+                json_extract(m.payload_json, '$.params.update._meta.jetbrains.air.contextCompaction.durationMs'),
+                CASE json_extract(m.payload_json, '$.params.update._meta.jetbrains.air.contextCompaction.trigger')
+                    WHEN 'manual' THEN 'manual'
+                    WHEN 'idle' THEN 'cache_expiry'
+                    ELSE 'harness_auto' END,
+                'harness_summary',
+                json_extract(m.payload_json, '$.params.update._meta.jetbrains.air.contextCompaction.preTokens'),
+                json_extract(m.payload_json, '$.params.update._meta.jetbrains.air.contextCompaction.postTokens'),
+                1,
+                json_extract(m.payload_json, '$.params.update.toolCallId'),
+                m.harness
+         FROM harness_rpc_messages m
+         WHERE m.thread_id IS NOT NULL
+           AND m.method = 'session/update'
+           AND m.payload_json LIKE '%contextCompaction%'
+           AND json_valid(m.payload_json)
+           AND json_extract(m.payload_json, '$.params.update.toolCallId') IS NOT NULL
+           AND (json_extract(m.payload_json, '$.params.update._meta.jetbrains.air.contextCompaction.trigger') IS NOT NULL
+                OR json_extract(m.payload_json, '$.params.update._meta.jetbrains.air.contextCompaction.preTokens') IS NOT NULL)
+         ON CONFLICT(thread_id, external_id) DO NOTHING;",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -500,6 +540,11 @@ pub struct ToolCallRow {
     pub truncated: Option<bool>,
     /// The MCP server in an `mcp__<server>__<tool>` name.
     pub mcp_server: Option<String>,
+    /// An external harness's own name for the tool (`Bash`, `Read`,
+    /// `mcp__rustcode__wait_session`, a Codex item type), where `tool_name`
+    /// holds the ACP kind (`execute`, `other`). `None` for the built-in
+    /// harness, whose `tool_name` is already the tool's name.
+    pub harness_tool: Option<String>,
     /// The first word of a shell command (`cargo`, `git`, `bun`), never the
     /// whole command.
     pub command_name: Option<String>,
@@ -545,6 +590,10 @@ pub struct TurnRow {
     pub diff_files: Option<i64>,
     pub diff_added: Option<i64>,
     pub diff_removed: Option<i64>,
+    /// Why a failed turn failed, as a short kind (`unknown_session`,
+    /// `harness_exited`, `rate_limited`, …; see [`turn_failure_kind`]),
+    /// never the error text.
+    pub error_kind: Option<String>,
     pub tool_calls: Vec<ToolCallRow>,
 }
 
@@ -2143,9 +2192,9 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                     cost_usd, tool_calls, status, duration_ms, time_to_first_token_ms,
                     model_time_ms, tool_time_ms, context_tokens, context_window, stop_reason,
                     effort, account, machine, rustcode_version, diff_files, diff_added,
-                    diff_removed)
+                    diff_removed, error_kind)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                     ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
+                     ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
              ON CONFLICT(thread_id, started_at) DO UPDATE SET
                 finished_at = excluded.finished_at,
                 harness = COALESCE(excluded.harness, turns.harness),
@@ -2171,7 +2220,8 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                 rustcode_version = COALESCE(excluded.rustcode_version, turns.rustcode_version),
                 diff_files = COALESCE(excluded.diff_files, turns.diff_files),
                 diff_added = COALESCE(excluded.diff_added, turns.diff_added),
-                diff_removed = COALESCE(excluded.diff_removed, turns.diff_removed)",
+                diff_removed = COALESCE(excluded.diff_removed, turns.diff_removed),
+                error_kind = excluded.error_kind",
             params![
                 turn.thread_id,
                 turn.started_at,
@@ -2199,6 +2249,7 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                 turn.diff_files,
                 turn.diff_added,
                 turn.diff_removed,
+                turn.error_kind,
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -2233,14 +2284,20 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
         let mcp_server = call
             .mcp_server
             .clone()
-            .or_else(|| mcp_server_of(&call.tool_name).map(str::to_owned));
+            .or_else(|| mcp_server_of(&call.tool_name).map(str::to_owned))
+            .or_else(|| {
+                call.harness_tool
+                    .as_deref()
+                    .and_then(mcp_server_of)
+                    .map(str::to_owned)
+            });
         let command_name = call.command_name.clone();
         transaction
             .execute(
                 "INSERT INTO tool_calls (thread_id, turn_id, tool_name, success, exit_code, at,
                         started_at, duration_ms, output_bytes, truncated, mcp_server,
-                        command_name, error_kind)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                        command_name, error_kind, harness_tool)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     turn.thread_id,
                     turn_id,
@@ -2255,6 +2312,7 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                     mcp_server,
                     command_name,
                     call.error_kind,
+                    call.harness_tool,
                 ],
             )
             .map_err(|error| error.to_string())?;
@@ -2478,6 +2536,89 @@ fn parse_numstat(text: &str) -> (i64, i64, i64) {
         removed += remove.parse::<i64>().unwrap_or(0);
     }
     (files, added, removed)
+}
+
+/// Why a turn failed, as a short kind from its error text. The text itself
+/// is never stored: it can hold paths, prompts or tokens.
+pub fn turn_failure_kind(error: &str) -> String {
+    let text = error.to_ascii_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
+    // An HTTP status only as a status, never as digits inside an id.
+    let status = |codes: &[u16]| {
+        codes.iter().any(|code| {
+            ["http ", "status ", "status code ", "status: ", "("]
+                .iter()
+                .any(|prefix| text.contains(&format!("{prefix}{code}")))
+        })
+    };
+    let kind = if has(&[
+        "unknown acp session",
+        "session not found",
+        "no such session",
+    ]) {
+        "unknown_session"
+    } else if status(&[429]) || has(&["rate limit", "rate_limit", "too many requests"]) {
+        "rate_limited"
+    } else if has(&[
+        "usage limit",
+        "quota",
+        "credit balance",
+        "insufficient_quota",
+    ]) {
+        "usage_limit"
+    } else if status(&[401, 403])
+        || has(&[
+            "unauthorized",
+            "forbidden",
+            "not logged in",
+            "authentication",
+            "token request failed",
+            "invalid api key",
+        ])
+    {
+        "auth"
+    } else if has(&[
+        "context window",
+        "context length",
+        "prompt is too long",
+        "too many tokens",
+    ]) {
+        "context_overflow"
+    } else if status(&[500, 502, 503, 504, 529])
+        || has(&["overloaded", "internal server error", "server error"])
+    {
+        "provider_error"
+    } else if has(&["timed out", "timeout"]) {
+        "timeout"
+    } else if has(&[
+        "exited",
+        "broken pipe",
+        "connection closed",
+        "process ended",
+        "killed",
+        "signal",
+    ]) {
+        "harness_exited"
+    } else if has(&[
+        "failed to start",
+        "spawn",
+        "not found in path",
+        "no such file",
+    ]) {
+        "harness_start"
+    } else if has(&[
+        "tls",
+        "certificate",
+        "unknownissuer",
+        "dns",
+        "connection refused",
+        "network",
+    ]) {
+        "network"
+    } else {
+        "other"
+    };
+    kind.to_owned()
 }
 
 /// The server in an `mcp__<server>__<tool>` tool name, if it is one.
@@ -6460,6 +6601,104 @@ mod tests {
         );
         assert_eq!(latency["turns"], 1);
         assert_eq!(latency["mean_duration_ms"], 9_500.0);
+    }
+
+    #[test]
+    fn harness_tools_and_failure_kinds_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let mut row = turn("t", "2026-11-01T10:00:00Z", (100, 20), "failed");
+        row.error_kind = Some(turn_failure_kind("unknown ACP session: 01a1"));
+        row.tool_calls[0].tool_name = "other".to_owned();
+        row.tool_calls[0].harness_tool = Some("mcp__rustcode__wait_session".to_owned());
+        write_turn(&connection, &row).unwrap();
+
+        let stored = one_row(&path, "SELECT error_kind FROM turns");
+        assert_eq!(stored["error_kind"], "unknown_session");
+        let tool = one_row(
+            &path,
+            "SELECT tool_name, harness_tool, mcp_server FROM tool_calls",
+        );
+        assert_eq!(tool["tool_name"], "other");
+        assert_eq!(tool["harness_tool"], "mcp__rustcode__wait_session");
+        assert_eq!(tool["mcp_server"], "rustcode");
+    }
+
+    #[test]
+    fn turn_failure_kinds_read_the_error_without_keeping_it() {
+        assert_eq!(
+            turn_failure_kind("HTTP 429 Too Many Requests"),
+            "rate_limited"
+        );
+        assert_eq!(
+            turn_failure_kind("OpenAI token request failed (HTTP 400)"),
+            "auth"
+        );
+        assert_eq!(turn_failure_kind("status 503 overloaded"), "provider_error");
+        assert_eq!(
+            turn_failure_kind("the harness process exited"),
+            "harness_exited"
+        );
+        assert_eq!(turn_failure_kind("TLS UnknownIssuer"), "network");
+        assert_eq!(turn_failure_kind("something odd"), "other");
+        // Digits inside an id are not a status.
+        assert_eq!(
+            turn_failure_kind("thread 01a1d4291-4030 went away"),
+            "other"
+        );
+    }
+
+    #[test]
+    fn captured_air_compactions_are_backfilled_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {"sessionId": "s", "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "_meta": {"jetbrains": {"air": {"contextCompaction": {
+                    "version": 1, "trigger": "manual", "preTokens": 200_000,
+                    "postTokens": 15_000, "durationMs": 30_000
+                }}}}
+            }}
+        });
+        connection
+            .execute(
+                "INSERT INTO harness_rpc_messages (thread_id, harness, direction, message_kind,
+                        method, at, payload_json)
+                 VALUES ('t', 'claude-code', 'harness_to_rustcode', 'notification',
+                        'session/update', '2026-11-14T22:24:13.712Z', ?1)",
+                [payload.to_string()],
+            )
+            .unwrap();
+        connection
+            .execute("DELETE FROM schema_migrations WHERE id = 13", [])
+            .unwrap();
+        migrate(&connection).unwrap();
+        // Running it again (a second open) adds nothing.
+        connection
+            .execute("DELETE FROM schema_migrations WHERE id = 13", [])
+            .unwrap();
+        migrate(&connection).unwrap();
+
+        let rows = query_path(
+            &path,
+            "SELECT trigger, tokens_before, tokens_after, duration_ms, external_id, success              FROM compactions",
+            10,
+        )
+        .unwrap()
+        .rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["trigger"], "manual");
+        assert_eq!(rows[0]["tokens_before"], 200_000);
+        assert_eq!(rows[0]["tokens_after"], 15_000);
+        assert_eq!(rows[0]["duration_ms"], 30_000);
+        assert_eq!(rows[0]["external_id"], "c1");
+        assert_eq!(rows[0]["success"], 1);
     }
 
     /// A thread, a turn and a tool call written with plain SQL against only
