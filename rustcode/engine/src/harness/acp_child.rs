@@ -389,6 +389,21 @@ fn config_server(server: &crate::config::McpServerConfig) -> Value {
     }
 }
 
+/// `error` with what the harness last wrote to stderr: a command that exits
+/// before the handshake (a wrong flag, a missing login) says why there, and the
+/// handshake error alone is only "connection closed".
+async fn with_stderr(error: String, process: Option<&HarnessProcess>) -> String {
+    let Some(process) = process else {
+        return error;
+    };
+    // The reader may still be on its way to the last line the child wrote.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    match process.stderr_tail() {
+        Some(tail) => format!("{error}\n{tail}"),
+        None => error,
+    }
+}
+
 impl AcpAdapter {
     pub(crate) async fn connect(
         harness: &ResolvedHarness,
@@ -422,8 +437,11 @@ impl AcpAdapter {
                 }),
                 HANDSHAKE_TIMEOUT,
             )
-            .await
-            .map_err(describe)?;
+            .await;
+        let initialized = match initialized {
+            Ok(initialized) => initialized,
+            Err(error) => return Err(with_stderr(describe(error), process.as_ref()).await),
+        };
         let capabilities = initialized.get("agentCapabilities");
         let load_session = capabilities
             .and_then(|capabilities| capabilities.get("loadSession"))
