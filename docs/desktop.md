@@ -936,22 +936,30 @@ composer's keys stay outside the table.
   thread does not carry it yet. The new-thread picker keeps the harness, model,
   effort and login picked there for the session, so opening a thread and
   coming back to a new one shows that choice rather than the default again.
-- **New thread banner.** Settings › Appearance: a wide picture over new
-  threads, drawn in coloured text (ASCII, inverted on a light background)
-  or as is, filling the whole pane from the title bar down, behind the field
-  and the cards so their glass has a picture to frost, under a frosted title
-  bar. The picture is copied into the app's data folder
-  (`src-tauri/src/banner.rs`; the setting keeps the copy's name), decoded
-  once, and the text drawn once per size on an offscreen canvas
-  (`src/lib/banner.ts`), so a resize scales the last drawing until the new
-  one is ready. It fades in, and does not move under Reduce motion.
-  Under the picture, *Darken* (0–80%, black over it), *Blur* (0–40px) and
-  *Show in threads* (off by default): on, open threads draw the same picture,
-  darkened and blurred the same, behind the transcript, under a heavier wash of
-  the pane colour (80%, against 35% on the new-thread screen): a white photo in the dark theme left
-  the body text at 4.4:1 and its muted lines at 2.0:1 under the 60% first tried, where 80% keeps
-  9.4:1 and 4.3:1. A thread is read line by line and a new thread is not. They are kept with the
-  banner (`lib/banner.ts`).
+- **Chat background.** Settings › Appearance › Chat background
+  (`ui/ChatBackgroundGroup.tsx`): a picture behind the chat, filling the whole
+  pane from the title bar down, behind the field and the cards so their glass
+  has a picture to frost, under a frosted title bar. The picture is copied into
+  the app's data folder (`src-tauri/src/banner.rs`; the setting keeps the copy's
+  name) and decoded once. *Effect* draws it in coloured text (ASCII, inverted
+  on a light background, drawn once per size on an offscreen canvas so a
+  resize scales the last drawing), as is (None), blurred and faded (Haze, CSS
+  only), or re-printed as a 4×4 Bayer Dither, a Halftone of dots on a 4px grid
+  or Scanlines. Those three run once per picture, effect and theme in a Web
+  Worker on an OffscreenCanvas (`lib/bannerEffects.worker.ts`, pure pixel
+  functions in `lib/bannerEffects.ts`), from a copy at most 2048px on its long
+  edge, and are kept as PNG blob URLs (four at most; a new picture drops the
+  old one's): a resize never renders again, and with no picture nothing runs.
+  Where there is no worker or OffscreenCanvas the picture shows as is. It fades
+  in, and does not move under Reduce motion. *Darken* (0–80%, black over it)
+  and *Blur* (0–40px) apply everywhere; *Show on* is New threads (default) or
+  All threads, and *Visibility* (0–60%, 20% by default) is how strongly an open
+  thread shows it, behind the transcript. 20% is the 80% wash of the pane
+  colour first measured: a white photo in the dark theme left the body text at
+  4.4:1 and its muted lines at 2.0:1 at 40%, where 20% keeps 9.4:1 and 4.3:1. A
+  new thread keeps a 35% wash. Kept with the banner (`lib/banner.ts`); in the
+  browser build and the mock, `showSampleBanner("dither")` from that module
+  shows a bundled sample (`src/assets/banner-sample.png`).
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
   machine's switch: **Network access** turned on starts the remote gateway
   (or uses the one the RustCode server runs, which keeps this computer

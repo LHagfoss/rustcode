@@ -5,7 +5,18 @@
 // once; a new one fades in.
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { asciiDrawing, blurScale, charWidth, type Drawing, LINE_HEIGHT, loadBanner } from "../lib/banner";
+import {
+  asciiDrawing,
+  type BannerStyle,
+  blurScale,
+  cachedEffect,
+  charWidth,
+  type Drawing,
+  LINE_HEIGHT,
+  loadBanner,
+  renderEffect,
+} from "../lib/banner";
+import { isPixelEffect } from "../lib/bannerEffects";
 import { paintsBlur } from "../lib/platform";
 import { observeSize } from "../lib/resize";
 import { cx } from "./primitives";
@@ -31,6 +42,10 @@ export function useDarkScheme(): boolean {
   return useSyncExternalStore(subscribeScheme, isDark);
 }
 
+/** The haze style: blur in px and how much of the picture shows through the pane. */
+const HAZE_BLUR = 24;
+const HAZE_OPACITY = 0.55;
+
 export function NewThreadBanner({
   name,
   style,
@@ -39,7 +54,7 @@ export function NewThreadBanner({
   className,
 }: {
   name: string;
-  style: "ascii" | "picture";
+  style: BannerStyle;
   height: number;
   /** Blur radius in px (macOS only: Windows and Linux paint none); the picture grows a little so
    * the soft edge falls outside the pane. */
@@ -51,6 +66,12 @@ export function NewThreadBanner({
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [art, setArt] = useState<Drawing | null>(null);
   const dark = useDarkScheme();
+  const effect = isPixelEffect(style) ? style : null;
+  // The print effect's PNG (rendered once in a worker, lib/banner.ts); "" when it cannot be, and
+  // then the picture shows as is.
+  const [printed, setPrinted] = useState<string | null>(() =>
+    effect ? (cachedEffect(name, effect, dark) ?? null) : null,
+  );
   // Whether a drawing shows: then a resize waits before drawing again.
   const drawn = useRef(false);
   drawn.current = !!art;
@@ -87,16 +108,37 @@ export function NewThreadBanner({
     return () => clearTimeout(t);
   }, [image, columns, rows, dark, style, name]);
 
-  const ready = style === "picture" ? !!image : !!art;
+  useEffect(() => {
+    if (!image || !effect) return;
+    let live = true;
+    setPrinted(cachedEffect(name, effect, dark) ?? null);
+    void renderEffect(name, image, effect, dark).then((url) => live && setPrinted(url ?? ""));
+    return () => {
+      live = false;
+    };
+  }, [image, effect, dark, name]);
+
+  // Drawn as an image: as is, hazed, or printed.
+  const photo =
+    style === "ascii"
+      ? null
+      : effect
+        ? printed === ""
+          ? (image?.src ?? null)
+          : printed
+        : (image?.src ?? null);
+  const haze = style === "haze";
+  const ready = style === "ascii" ? !!art : !!photo;
   const scale = art ? Math.max(width / art.width, height / art.height) : 1;
   // Windows and Linux paint no blur, the glow included (docs/design.md › Platforms).
   const blurred = paintsBlur();
-  const painted = blurred ? blur : 0;
+  // Haze is the picture blurred well past the slider and faded into the pane.
+  const painted = blurred ? (haze ? Math.max(blur, HAZE_BLUR) : blur) : 0;
 
   const layer = (glow: boolean) =>
-    style === "picture" && image ? (
+    photo ? (
       <img
-        src={image.src}
+        src={photo}
         alt=""
         draggable={false}
         className={cx("absolute inset-0 size-full object-cover", glow && "blur-[14px]")}
@@ -126,13 +168,13 @@ export function NewThreadBanner({
       <div
         className="absolute inset-0 transition-opacity duration-[250ms] ease-out"
         style={{
-          opacity: ready ? 1 : 0,
+          opacity: ready ? (haze ? HAZE_OPACITY : 1) : 0,
           ...(painted > 0
             ? { filter: `blur(${painted}px)`, transform: `scale(${blurScale(painted, width, height)})` }
             : undefined),
         }}
       >
-        {blurred && layer(true)}
+        {blurred && !haze && layer(true)}
         {layer(false)}
       </div>
     </div>

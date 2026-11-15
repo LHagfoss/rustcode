@@ -5,16 +5,22 @@ import {
   BANNER_DARKEN_DEFAULT,
   BANNER_DARKEN_MAX,
   BANNER_IN_THREADS_DEFAULT,
+  BANNER_STYLE_DEFAULT,
+  BANNER_VISIBILITY_DEFAULT,
+  BANNER_VISIBILITY_MAX,
   bannerSetting,
   blurScale,
   boundedNumber,
   crop,
   darkenOverlay,
+  inkColor,
+  parseBannerStyle,
   RAMP,
   renderAscii,
   setBannerBlur,
   setBannerDarken,
   setBannerInThreads,
+  setBannerVisibility,
 } from "./banner";
 
 function solid(width: number, height: number, rgb: [number, number, number], alpha = 255) {
@@ -125,4 +131,53 @@ test("a blurred picture grows past the pane so its soft edge is out of sight", (
   expect(blurScale(10, 0, 600)).toBe(1);
   expect(blurScale(15, 1200, 600)).toBeCloseTo(1.1);
   expect(blurScale(40, 1200, 600)).toBeGreaterThan(blurScale(10, 1200, 600));
+});
+
+test("a stored style is one the app draws, anything else the default", () => {
+  expect(parseBannerStyle("dither")).toBe("dither");
+  expect(parseBannerStyle("haze")).toBe("haze");
+  expect(parseBannerStyle("picture")).toBe("picture");
+  expect(parseBannerStyle("")).toBe(BANNER_STYLE_DEFAULT);
+  expect(parseBannerStyle("sepia")).toBe(BANNER_STYLE_DEFAULT);
+});
+
+test("visibility in threads is held to its range, the default stored as nothing", () => {
+  const storage = testStorage({ "rustcode.newThreadBannerStyle": "halftone" });
+  try {
+    setBannerVisibility(BANNER_VISIBILITY_DEFAULT);
+    expect(bannerSetting()).toMatchObject({ style: "halftone", visibility: BANNER_VISIBILITY_DEFAULT });
+    setBannerVisibility(200);
+    expect(bannerSetting().visibility).toBe(BANNER_VISIBILITY_MAX);
+    setBannerVisibility(-5);
+    expect(storage.data.get("rustcode.newThreadBannerVisibility")).toBe("0");
+    setBannerVisibility(BANNER_VISIBILITY_DEFAULT);
+    expect(storage.data.has("rustcode.newThreadBannerVisibility")).toBe(false);
+  } finally {
+    storage.done();
+  }
+});
+
+test("only paper is blank: a dark mid-tone still draws a glyph", () => {
+  const navy = solid(60, 20, [30, 30, 80]);
+  expect(renderAscii(navy, 60, 20, 30)[0]?.[0]?.ch).not.toBe(" ");
+  expect(renderAscii(solid(60, 20, [0, 0, 0]), 60, 20, 30)[0]?.[0]?.ch).toBe(" ");
+  // On light paper the same goes the other way: a pale grey inks, white does not.
+  expect(renderAscii(solid(60, 20, [220, 220, 220]), 60, 20, 30, { inverted: true })[0]?.[0]?.ch).not.toBe(
+    " ",
+  );
+});
+
+test("ink keeps its hue and is lifted off dark paper, pressed down on light", () => {
+  const [r, g, b] = inkColor(30 / 255, 30 / 255, 80 / 255, true);
+  // Still blue, and bright enough to read on black.
+  expect(b).toBeGreaterThan(r);
+  expect(b).toBeGreaterThan(g);
+  expect((Math.max(r, g, b) + Math.min(r, g, b)) / 2).toBeGreaterThan(0.4);
+  const [lr, lg, lb] = inkColor(1, 0.9, 0.6, false);
+  expect(lr).toBeGreaterThan(lb);
+  expect((Math.max(lr, lg, lb) + Math.min(lr, lg, lb)) / 2).toBeLessThan(0.55);
+  // Grey stays grey.
+  const [gr, gg, gb] = inkColor(0.5, 0.5, 0.5, true);
+  expect(gr).toBeCloseTo(gg);
+  expect(gg).toBeCloseTo(gb);
 });

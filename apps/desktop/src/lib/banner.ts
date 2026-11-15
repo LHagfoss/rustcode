@@ -7,18 +7,41 @@
 
 import { useSyncExternalStore } from "react";
 import { isTauri } from "../acp/transport";
+import { EffectCache, effectKey, fitWithin, type PixelEffect } from "./bannerEffects";
+import type { EffectRequest, EffectResponse } from "./bannerEffects.worker";
 import { shellCall } from "./shell";
 import { readStorage, writeStorage } from "./storage";
 
-export type BannerStyle = "ascii" | "picture";
+/**
+ * How the picture is drawn: in coloured text, as is, blurred and faded (haze), or re-printed by
+ * the worker as a dither, a halftone or scanlines (lib/bannerEffects.ts).
+ */
+export type BannerStyle = "ascii" | "picture" | "haze" | PixelEffect;
+
+export const BANNER_STYLES: readonly BannerStyle[] = [
+  "ascii",
+  "picture",
+  "dither",
+  "halftone",
+  "scanlines",
+  "haze",
+];
+
+/** A stored style; anything unknown is the default. */
+export function parseBannerStyle(raw: string): BannerStyle {
+  return (BANNER_STYLES as readonly string[]).includes(raw) ? (raw as BannerStyle) : BANNER_STYLE_DEFAULT;
+}
 
 const KEY = "rustcode.newThreadBanner";
 const STYLE_KEY = "rustcode.newThreadBannerStyle";
 const DARKEN_KEY = "rustcode.newThreadBannerDarken";
 const BLUR_KEY = "rustcode.newThreadBannerBlur";
 const IN_THREADS_KEY = "rustcode.newThreadBannerInThreads";
+const VISIBILITY_KEY = "rustcode.newThreadBannerVisibility";
 const DATA_KEY = "rustcode.newThreadBannerData";
 const BROWSER_NAME = "browser";
+/** The bundled sample picture, for the browser build and the mock (see {@link showSampleBanner}). */
+const SAMPLE_NAME = "sample";
 
 /** No picture until one is chosen, and then drawn in text (Settings › Appearance). */
 export const BANNER_NAME_DEFAULT = "";
@@ -31,6 +54,13 @@ export const BANNER_BLUR_DEFAULT = 0;
 export const BANNER_BLUR_MAX = 40;
 /** The picture shows behind open threads too: off, so it stays a new thread's. */
 export const BANNER_IN_THREADS_DEFAULT = false;
+/**
+ * How strongly the picture shows behind an open thread, in percent. 20% is the 80% wash of the
+ * pane colour that keeps a thread's text readable over any picture (docs/desktop.md › New thread
+ * banner), so the default is that and more is the user's call.
+ */
+export const BANNER_VISIBILITY_DEFAULT = 20;
+export const BANNER_VISIBILITY_MAX = 60;
 
 export interface BannerSetting {
   name: string;
@@ -41,6 +71,8 @@ export interface BannerSetting {
   blur: number;
   /** Whether the picture also shows behind open threads. */
   inThreads: boolean;
+  /** Percent the picture shows at behind an open thread, 0 to {@link BANNER_VISIBILITY_MAX}. */
+  visibility: number;
 }
 
 function read(key: string): string {
@@ -63,10 +95,11 @@ export function boundedNumber(raw: string, max: number, fallback: number): numbe
 function load(): BannerSetting {
   return {
     name: read(KEY),
-    style: read(STYLE_KEY) === "picture" ? "picture" : "ascii",
+    style: parseBannerStyle(read(STYLE_KEY)),
     darken: boundedNumber(read(DARKEN_KEY), BANNER_DARKEN_MAX, BANNER_DARKEN_DEFAULT),
     blur: boundedNumber(read(BLUR_KEY), BANNER_BLUR_MAX, BANNER_BLUR_DEFAULT),
     inThreads: read(IN_THREADS_KEY) === "1",
+    visibility: boundedNumber(read(VISIBILITY_KEY), BANNER_VISIBILITY_MAX, BANNER_VISIBILITY_DEFAULT),
   };
 }
 
@@ -118,6 +151,24 @@ export function setBannerInThreads(on: boolean) {
   publish();
 }
 
+/** How strongly the picture shows behind an open thread; the default is stored as nothing. */
+export function setBannerVisibility(percent: number) {
+  const value = boundedNumber(String(percent), BANNER_VISIBILITY_MAX, BANNER_VISIBILITY_DEFAULT);
+  write(VISIBILITY_KEY, value === BANNER_VISIBILITY_DEFAULT ? "" : String(value));
+  publish();
+}
+
+/**
+ * Shows the bundled sample picture, for the mock and the browser build, where there is no file to
+ * choose from a script: `(await import("/src/lib/banner.ts")).showSampleBanner("dither")`.
+ */
+export function showSampleBanner(style?: BannerStyle) {
+  if (isTauri()) return;
+  if (style) write(STYLE_KEY, style === BANNER_STYLE_DEFAULT ? "" : style);
+  write(KEY, SAMPLE_NAME);
+  publish();
+}
+
 /** The picture's black veil as a CSS colour, or null when there is none. */
 export function darkenOverlay(darken: number): string | null {
   const percent = Math.min(BANNER_DARKEN_MAX, Math.max(0, Math.round(darken)));
@@ -155,6 +206,7 @@ export async function chooseBanner(): Promise<string | null> {
     name = BROWSER_NAME;
   }
   images.delete(old);
+  effects.keepOnly(name);
   write(KEY, name);
   publish();
   return name;
@@ -164,6 +216,7 @@ export async function removeBanner() {
   const name = snapshot.name;
   if (!name) return;
   images.delete(name);
+  effects.keepOnly("");
   write(KEY, "");
   if (name === BROWSER_NAME) write(DATA_KEY, "");
   else if (isTauri()) await shellCall("banner_remove", { name }).catch(() => undefined);
@@ -208,6 +261,8 @@ export function loadBanner(name: string): Promise<HTMLImageElement | null> {
   const loading = (async () => {
     let src: string;
     if (name === BROWSER_NAME) src = read(DATA_KEY);
+    else if (name === SAMPLE_NAME && !isTauri())
+      src = (await import("../assets/banner-sample.png?url")).default;
     else if (isTauri()) {
       const file = await shellCall<{ mimeType: string; data: string }>("banner_read", { name });
       src = `data:${file.mimeType};base64,${file.data}`;
@@ -223,10 +278,94 @@ export function loadBanner(name: string): Promise<HTMLImageElement | null> {
   return loading;
 }
 
+// ---------------------------------------------------------------- print effects
+
+let worker: Worker | null | undefined;
+let nextId = 0;
+const waiting = new Map<number, (png: Blob | null) => void>();
+
+/** The effects worker; null where there is none (then the picture shows as is). */
+function effectsWorker(): Worker | null {
+  if (worker !== undefined) return worker;
+  if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined") {
+    worker = null;
+    return worker;
+  }
+  try {
+    worker = new Worker(new URL("./bannerEffects.worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (event: MessageEvent<EffectResponse>) => {
+      waiting.get(event.data.id)?.(event.data.png);
+      waiting.delete(event.data.id);
+    };
+    worker.onerror = () => {
+      worker?.terminate();
+      worker = null;
+      for (const done of waiting.values()) done(null);
+      waiting.clear();
+    };
+  } catch {
+    worker = null;
+  }
+  return worker;
+}
+
+/** Rendered effects as blob URLs, by picture, effect and theme (lib/bannerEffects.ts). */
+const effects = new EffectCache((url) => URL.revokeObjectURL(url));
+const rendering = new Map<string, Promise<string | null>>();
+
+/** The rendered effect's URL if it is ready, so a picture seen before shows at once. */
+export function cachedEffect(name: string, effect: PixelEffect, dark: boolean): string | undefined {
+  return effects.get(effectKey(name, effect, dark));
+}
+
+/**
+ * The picture re-printed with `effect`, as a blob URL: rendered once in the worker, from a copy
+ * at most 2048px on its long edge, then kept. Null when it cannot be rendered here.
+ */
+export function renderEffect(
+  name: string,
+  img: HTMLImageElement,
+  effect: PixelEffect,
+  dark: boolean,
+): Promise<string | null> {
+  const key = effectKey(name, effect, dark);
+  const ready = effects.get(key);
+  if (ready) return Promise.resolve(ready);
+  const running = rendering.get(key);
+  if (running) return running;
+  const w = effectsWorker();
+  if (!w || typeof createImageBitmap !== "function") return Promise.resolve(null);
+  const job = (async () => {
+    const size = fitWithin(img.naturalWidth, img.naturalHeight);
+    if (!size.width) return null;
+    const bitmap = await createImageBitmap(img, {
+      resizeWidth: size.width,
+      resizeHeight: size.height,
+      resizeQuality: "high",
+    });
+    const id = ++nextId;
+    const png = await new Promise<Blob | null>((resolve) => {
+      waiting.set(id, resolve);
+      w.postMessage({ id, bitmap, effect, dark } satisfies EffectRequest, [bitmap]);
+    });
+    // The picture changed while this ran: its render is not kept.
+    if (!png || snapshot.name !== name) return null;
+    const url = URL.createObjectURL(png);
+    effects.set(key, url);
+    return url;
+  })()
+    .catch(() => null)
+    .finally(() => rendering.delete(key));
+  rendering.set(key, job);
+  return job;
+}
+
 // ---------------------------------------------------------------- text art
 
 /** Lightest ink first. */
 export const RAMP = " .:-=+*#%@";
+/** Ink at or below this is paper: a blank cell. */
+const BLANK_INK = 0.02;
 /** Width over height the band is cropped to at least. */
 export const MIN_ASPECT = 3;
 /** A monospaced cell is about twice as tall as wide. */
@@ -308,7 +447,12 @@ export function renderAscii(
       const bb = a > 0 ? b / a : 0;
       const luminance = (0.2126 * rr + 0.7152 * gg + 0.0722 * bb) * coverage;
       const ink = inverted ? (1 - luminance) * coverage : luminance;
-      const step = Math.min(RAMP.length - 1, Math.floor(ink * RAMP.length));
+      // Lifted (square root) so mid-tones and shadows still draw a glyph: only paper itself, pure
+      // black on dark or pure white on light, is a blank cell.
+      const step =
+        ink <= BLANK_INK
+          ? 0
+          : Math.max(1, Math.min(RAMP.length - 1, Math.floor(Math.sqrt(ink) * RAMP.length)));
       cells.push({ ch: RAMP[step] ?? " ", r: rr, g: gg, b: bb });
     }
     rows.push(cells);
@@ -316,18 +460,59 @@ export function renderAscii(
   return rows;
 }
 
-/** The text's size: small enough that a band reads as a picture. */
-export const FONT_SIZE = 7;
-export const LINE_HEIGHT = 9;
-const FONT = `${FONT_SIZE}px "SF Mono", ui-monospace, Menlo, monospace`;
+/**
+ * The text's size: about 150 columns across a chat pane, small enough that the picture reads and
+ * large enough that each cell is a glyph rather than a dash in a run.
+ */
+export const FONT_SIZE = 12;
+export const LINE_HEIGHT = 14;
+const FONT = `600 ${FONT_SIZE}px "SF Mono", ui-monospace, Menlo, monospace`;
+
+/**
+ * A cell's colour as ink on the theme's paper, channels 0 to 1: the source's hue and saturation,
+ * its lightness lifted to a floor on dark paper (pressed below a ceiling on light), so a dark sky
+ * or a shadow still reads as its colour instead of vanishing into the background.
+ */
+export function inkColor(r: number, g: number, b: number, dark: boolean): [number, number, number] {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  let h = 0;
+  let sat = 0;
+  if (d > 0) {
+    sat = d / (1 - Math.abs(2 * l - 1));
+    if (max === r) h = ((g - b) / d + 6) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+  }
+  sat = Math.min(1, sat * 1.15);
+  const lift = dark ? 0.42 + 0.53 * l : 0.08 + 0.42 * l;
+  const c = (1 - Math.abs(2 * lift - 1)) * sat;
+  const x = c * (1 - Math.abs((h % 2) - 1));
+  const m = lift - c / 2;
+  const [r1, g1, b1] =
+    h < 1
+      ? [c, x, 0]
+      : h < 2
+        ? [x, c, 0]
+        : h < 3
+          ? [0, c, x]
+          : h < 4
+            ? [0, x, c]
+            : h < 5
+              ? [x, 0, c]
+              : [c, 0, x];
+  return [r1 + m, g1 + m, b1 + m];
+}
 
 let charWidthCache = 0;
 export function charWidth(): number {
   if (charWidthCache) return charWidthCache;
   const ctx = document.createElement("canvas").getContext("2d");
-  if (!ctx) return 4.2;
+  if (!ctx) return 7.2;
   ctx.font = FONT;
-  charWidthCache = ctx.measureText("M").width || 4.2;
+  charWidthCache = ctx.measureText("M").width || 7.2;
   return charWidthCache;
 }
 
@@ -398,7 +583,8 @@ export function asciiDrawing(
       start = end;
     };
     row.forEach((cell, x) => {
-      const color = `rgb(${Math.round(cell.r * 15) * 17} ${Math.round(cell.g * 15) * 17} ${Math.round(cell.b * 15) * 17})`;
+      const [ir, ig, ib] = inkColor(cell.r, cell.g, cell.b, dark);
+      const color = `rgb(${Math.round(ir * 15) * 17} ${Math.round(ig * 15) * 17} ${Math.round(ib * 15) * 17})`;
       if (cell.ch !== " " && color !== runColor) {
         flush(x);
         runColor = color;
