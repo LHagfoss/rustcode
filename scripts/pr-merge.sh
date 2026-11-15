@@ -8,7 +8,9 @@
 set -euo pipefail
 
 pr="${1:?usage: scripts/pr-merge.sh <pr-number>}"
-advisory='portability coverage'
+# Desktop shell (Linux/Windows) checks are required; only the root workspace's
+# explicitly named advisory jobs are excluded.
+advisory='^(macOS|Windows) portability coverage[[:space:]]'
 quiet=0
 for _ in $(seq 1 240); do
     checks="$(gh pr checks "$pr" 2>/dev/null | grep -Ev "$advisory" || true)"

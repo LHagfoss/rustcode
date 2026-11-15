@@ -3,15 +3,18 @@ name: Desktop CI
 # The Tauri desktop app in apps/desktop: the React UI (typecheck, lint, unit
 # tests, Vite build) and its own Rust shell crate. It never builds the engine.
 #
-# The UI needs no macOS, so it runs on Linux beside the shell crate (objc2,
-# WKWebView) on macOS instead of behind it: a TypeScript typecheck no longer
-# waits for a macOS runner, and the two jobs finish in the time the slower one
-# takes rather than one after the other.
+# The UI runs on Linux independently of the native shell checks. The shell
+# keeps its macOS lint/tests and checks all targets on Linux and Windows.
 on:
     pull_request:
         branches: [main]
         paths:
             - .github/workflows/desktop-ci.yml
+            - .cargo/**
+            - Cargo.toml
+            - Cargo.lock
+            - rust-toolchain*
+            - rustcode/client/**
             - apps/desktop/**
     # Builds the caches pull requests restore (see ci.yml). Only what changes
     # them: a UI merge leaves the dependencies and the shell crate as they were.
@@ -19,6 +22,11 @@ on:
         branches: [main]
         paths:
             - .github/workflows/desktop-ci.yml
+            - .cargo/**
+            - Cargo.toml
+            - Cargo.lock
+            - rust-toolchain*
+            - rustcode/client/**
             - apps/desktop/bun.lock
             - apps/desktop/package.json
             - apps/desktop/src-tauri/**
@@ -38,7 +46,7 @@ defaults:
 
 jobs:
     # Most changes here are UI: a TypeScript edit never needs the shell's
-    # macOS compile (Tauri, objc2, WebKit bindings). Only a change under
+    # platform checks (Tauri and native bindings). Only a change under
     # src-tauri, or to what it builds from, runs that job.
     changes:
         name: detect shell changes
@@ -76,7 +84,7 @@ jobs:
                   # The files API stops at 3000 entries, so a list that long is
                   # not the whole change: run the shell job rather than skip it.
                   if [[ "$(wc -l < "$changed")" -ge 3000 ]] ||
-                      grep -Eq '^(apps/desktop/src-tauri/|apps/desktop/package\.json$|apps/desktop/bun\.lock$|\.github/workflows/desktop-ci\.yml$)' "$changed"; then
+                      grep -Eq '^(apps/desktop/src-tauri/|apps/desktop/package\.json$|apps/desktop/bun\.lock$|rustcode/client/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain[^/]*$|\.github/workflows/desktop-ci\.yml$)' "$changed"; then
                       echo "The shell crate or what it builds from changed"
                       echo "shell=true" >> "$GITHUB_OUTPUT"
                   else
@@ -126,13 +134,29 @@ jobs:
                   test "$(bun scripts/bundle-version.ts)" = "$(sed -n 's/^version = "\(.*\)"/\1/p' ../../Cargo.toml | head -1)"
 
     shell:
-        name: Desktop shell
+        name: Desktop shell (${{ matrix.name }})
         needs: changes
         if: needs.changes.outputs.shell == 'true'
-        runs-on: macos-26
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: macOS
+                      os: macos-26
+                    - name: Linux
+                      os: ubuntu-24.04
+                    - name: Windows
+                      os: windows-latest
         timeout-minutes: 20
         steps:
             - uses: actions/checkout@v7
+
+            - name: Install Linux shell dependencies
+              if: runner.os == 'Linux'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
 
             - name: Install Rust
               uses: dtolnay/rust-toolchain@stable
@@ -146,13 +170,21 @@ jobs:
                   save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Format
+              if: runner.os == 'macOS'
               working-directory: apps/desktop/src-tauri
               run: cargo fmt --check
 
             - name: Check and lint the shell
+              if: runner.os == 'macOS'
               working-directory: apps/desktop/src-tauri
               run: cargo clippy --locked --all-targets -- -D warnings
 
+            - name: Check the shell on Linux and Windows
+              if: runner.os != 'macOS'
+              working-directory: apps/desktop/src-tauri
+              run: cargo check --locked --all-targets
+
             - name: Test the shell
+              if: runner.os == 'macOS'
               working-directory: apps/desktop/src-tauri
               run: cargo test --locked
