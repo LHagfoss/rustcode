@@ -7,7 +7,7 @@
 // is as tall as the longest list it can show, up to the room the window has, and only the lists
 // scroll. What the thread's harness cannot do is greyed out with the reason, from capability flags.
 
-import { Check, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
+import { Check, ChevronUp, Lock, RotateCcw, Star, UserRound, Zap } from "lucide-react";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { harnessPlanKey, leftPercent, shownWindow } from "../acp/rustcode";
 import {
@@ -19,6 +19,14 @@ import {
   modelName,
 } from "../acp/types";
 import { clip } from "../lib/clip";
+import {
+  modelKey,
+  readModelHistory,
+  recentModels,
+  rememberModel,
+  toggleFavourite,
+  writeModelHistory,
+} from "../lib/modelHistory";
 import { matchModels } from "../lib/modelSearch";
 import {
   controlDisabledReason,
@@ -546,6 +554,19 @@ function ModelPanel({
   maxHeight?: string;
 }) {
   const [filter, setFilter] = useState("");
+  const [favourites, setFavourites] = useState(() => readModelHistory("favourites"));
+  const [recents, setRecents] = useState(() => readModelHistory("recents"));
+  const toggleStar = (harness: string, model: string) => {
+    const next = toggleFavourite(favourites, { harness, model });
+    writeModelHistory("favourites", next);
+    setFavourites(next);
+  };
+  const choose = (group: ModelGroup, value: string) => {
+    const next = rememberModel(recents, { harness: group.harness.id, model: value });
+    writeModelHistory("recents", next);
+    setRecents(next);
+    onPick(group, value);
+  };
   // The harness the user is browsing, until a switch makes another one current.
   const [browsed, setBrowsed] = useState<string | null>(null);
   // The row the user moved to, named rather than numbered: the rows change under it when the
@@ -558,7 +579,27 @@ function ModelPanel({
   const provider = groups.some((g) => g.harness.id === browsed)
     ? (browsed as string)
     : (groups[0]?.harness.id ?? "");
-  const rows = useMemo(() => filterModelRows(groups, provider, filter), [groups, provider, filter]);
+  const rows = useMemo(() => {
+    const normal = filterModelRows(groups, provider, filter);
+    if (searching) return normal.map((row) => ({ ...row, section: "" }));
+    const saved = (choices: typeof favourites, section: string) =>
+      choices.flatMap((choice) => {
+        const group = groups.find((g) => g.harness.id === choice.harness);
+        const model = group?.models.find((m) => m.value === choice.model);
+        return group && model ? [{ group, model, section }] : [];
+      });
+    const pinned = new Set([...favourites, ...recentModels(recents, favourites)].map(modelKey));
+    return [
+      ...saved(favourites, "Favourites"),
+      ...saved(recentModels(recents, favourites), "Recent"),
+      ...normal
+        .filter((row) => !pinned.has(modelKey({ harness: row.group.harness.id, model: row.model.value })))
+        .map((row) => ({
+          ...row,
+          section: groups.find((g) => g.harness.id === provider)?.harness.name ?? "Models",
+        })),
+    ];
+  }, [groups, provider, filter, searching, favourites, recents]);
   // A name two providers share: its rows say which provider they come from.
   const shared = useMemo(
     () => new Map(groups.map((group) => [group.harness.id, repeatedModelNames(group.models)])),
@@ -655,7 +696,11 @@ function ModelPanel({
             if (e.target === field.current) onSearchFocus();
           }}
           onKeyDown={(e) => {
-            if (e.key === "ArrowLeft") {
+            if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "d") {
+              e.preventDefault();
+              e.stopPropagation();
+              if (row) toggleStar(row.group.harness.id, row.model.value);
+            } else if (e.key === "ArrowLeft") {
               if (!caretAtStart()) return;
               e.preventDefault();
               const buttons = railButtons();
@@ -677,7 +722,7 @@ function ModelPanel({
             } else if (e.key === "Enter") {
               if (row && !row.group.blocked) {
                 e.preventDefault();
-                onPick(row.group, row.model.value);
+                choose(row.group, row.model.value);
               }
             }
           }}
@@ -706,34 +751,66 @@ function ModelPanel({
               const providerName = shared.get(item.group.harness.id)?.has(name.toLowerCase())
                 ? modelProviderOf(item.model.value)
                 : null;
+              const starred = favourites.some(
+                (choice) =>
+                  modelKey(choice) === modelKey({ harness: item.group.harness.id, model: item.model.value }),
+              );
               return (
-                <div
-                  key={`${item.group.harness.id}:${item.model.value}`}
-                  id={`model-row-${i}`}
-                  role="option"
-                  tabIndex={-1}
-                  aria-selected={
-                    item.group.harness.id === groups[0]?.harness.id && item.model.value === current
-                  }
-                  aria-disabled={!!item.group.blocked}
-                  onMouseEnter={() => highlight(i)}
-                  onClick={() => !item.group.blocked && onPick(item.group, item.model.value)}
-                  className={cx(
-                    "flex min-h-7 cursor-pointer items-center gap-2 rounded-xl px-2 py-1",
-                    i === active && "bg-fill",
-                    item.group.blocked && "opacity-45",
+                <div role="presentation" key={`${item.section}:${item.group.harness.id}:${item.model.value}`}>
+                  {item.section && item.section !== rows[i - 1]?.section && (
+                    <div role="presentation" className={menuLabel}>
+                      {item.section}
+                    </div>
                   )}
-                >
-                  {searching && (
-                    <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
-                  )}
-                  <span className="min-w-0 flex-1 truncate text-body">{name}</span>
-                  {providerName && (
-                    <span className="shrink-0 text-caption text-fg-faint">{providerName}</span>
-                  )}
-                  {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
-                    <Check size={13} className="shrink-0 text-accent" />
-                  )}
+                  <div
+                    id={`model-row-${i}`}
+                    role="option"
+                    tabIndex={-1}
+                    aria-selected={
+                      item.group.harness.id === groups[0]?.harness.id && item.model.value === current
+                    }
+                    aria-disabled={!!item.group.blocked}
+                    onMouseEnter={() => highlight(i)}
+                    onClick={() => !item.group.blocked && choose(item.group, item.model.value)}
+                    className={cx(
+                      "group/model flex min-h-7 cursor-pointer items-center gap-2 rounded-xl px-2 py-1",
+                      i === active && "bg-fill",
+                      item.group.blocked && "opacity-45",
+                    )}
+                  >
+                    {(searching || item.section === "Favourites" || item.section === "Recent") && (
+                      <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-body">{name}</span>
+                    <Tooltip label={`${starred ? "Unstar" : "Star"} model (⌘D / Ctrl+D)`}>
+                      <button
+                        type="button"
+                        aria-label={`${starred ? "Remove" : "Add"} ${name} ${starred ? "from" : "to"} favourites`}
+                        aria-pressed={starred}
+                        onFocus={() => highlight(i)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+                        }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleStar(item.group.harness.id, item.model.value);
+                          field.current?.focus();
+                        }}
+                        className={cx(
+                          "shrink-0 rounded p-1 text-fg-muted hover:text-fg focus-visible:opacity-100 group-hover/model:opacity-100 group-focus-within/model:opacity-100",
+                          starred || i === active ? "opacity-100" : "opacity-0",
+                        )}
+                      >
+                        <Star size={12} fill={starred ? "currentColor" : "none"} />
+                      </button>
+                    </Tooltip>
+                    {providerName && (
+                      <span className="shrink-0 text-caption text-fg-faint">{providerName}</span>
+                    )}
+                    {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
+                      <Check size={13} className="shrink-0 text-accent" />
+                    )}
+                  </div>
                 </div>
               );
             })}
