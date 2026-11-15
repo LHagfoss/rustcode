@@ -25,11 +25,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
-    title: "Harness, model and effort",
-    keywords: "agent default harness which runs new thread",
-  },
-  {
-    section: "general",
     title: "Access",
     keywords: "permission mode approval full access default",
   },

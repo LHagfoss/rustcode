@@ -1141,6 +1141,16 @@
     0 0 12px color-mix(in srgb, var(--rc-bg) 55%, transparent);
 }
 
+/* Caption-sized text has thin strokes a busy picture breaks up: a closer, denser halo keeps it whole. */
+.rc-text-over-image-small {
+  text-shadow:
+    0 0 1px var(--rc-bg),
+    0 0 2px var(--rc-bg),
+    0 0 4px var(--rc-bg),
+    0 0 8px color-mix(in srgb, var(--rc-bg) 85%, transparent),
+    0 0 14px color-mix(in srgb, var(--rc-bg) 60%, transparent);
+}
+
 /* A day of the activity heatmap's grid: 2px, under the smallest radius step, on a 7px cell. */
 .rc-heat-cell {
   border-radius: 2px;
