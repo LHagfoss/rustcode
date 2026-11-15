@@ -608,8 +608,8 @@ pub const CONFIGURE_SESSION: Tool = Tool {
 
 pub const TRANSFER_SESSION: Tool = Tool {
     name: crate::orchestration::TRANSFER_SESSION,
-    description: "Move an idle thread to another harness, optionally a named account and model from list_harnesses; it takes the conversation so far with its next message. Another project's thread needs cross-project reach on. A thread cannot move itself. The user approves it.",
-    arguments: r#"{"session_id": "id from list_sessions", "harness": "codex", "account": "optional", "model": "optional"}"#,
+    description: "Move an idle thread to another harness, account or model (ids from list_harnesses); it takes the conversation so far. Not itself. The user approves it.",
+    arguments: r#"{"session_id": "id", "harness": "codex"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
