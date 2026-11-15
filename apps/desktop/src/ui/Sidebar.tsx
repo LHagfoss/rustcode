@@ -343,7 +343,7 @@ function ThreadMenuItems({
         <Menu.Sub>
           <Menu.SubTrigger className={menuItem}>
             <Clock size={13} /> Snooze
-            <ChevronRight size={11} strokeWidth={2.5} className="ml-auto text-fg-faint" />
+            <ChevronRight size={12} strokeWidth={2.5} className="ml-auto text-fg-faint" />
           </Menu.SubTrigger>
           <Menu.Portal>
             <Menu.SubContent
@@ -403,7 +403,7 @@ function ThreadMenuItems({
         <>
           <Separator className={menuSeparator} />
           <div className="flex items-center gap-1.5 px-2 pt-0.5 pb-1 text-caption text-fg-muted">
-            <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
+            <GitBranch size={12} /> <span className="truncate font-mono">{worktree.branch}</span>
           </div>
           {!remote && (
             <>
@@ -1002,10 +1002,10 @@ const ThreadRow = memo(function ThreadRow({
                     className={cx("relative shrink-0", markTint)}
                   />
                   <span className={ROW_LEFT}>
-                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                    {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-faint" />}
                     {branch && (
                       <span className="shrink-0 text-fg-faint">
-                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                        {branch === "fork" ? <GitFork size={12} /> : <MessageSquareQuote size={12} />}
                       </span>
                     )}
                     <LinkBadge threadId={session.id} />
@@ -1019,7 +1019,7 @@ const ThreadRow = memo(function ThreadRow({
                   >
                     {delegates && (
                       <span className="flex shrink-0 items-center gap-0.5 tabular">
-                        <Bot size={11} aria-hidden />
+                        <Bot size={12} aria-hidden />
                         <span className="sr-only">{delegates.title}</span>
                         <span aria-hidden>{delegates.count}</span>
                       </span>
@@ -1032,13 +1032,13 @@ const ThreadRow = memo(function ThreadRow({
                   {/* Line 1: the title, and what the thread is doing (the hover actions take its place). */}
                   <span className={ROW_LINE}>
                     <span className={ROW_LEFT}>
-                      {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                      {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-faint" />}
                       {branch && (
                         <span
                           title={branch === "fork" ? "A fork" : "A side chat"}
                           className="shrink-0 text-fg-faint"
                         >
-                          {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                          {branch === "fork" ? <GitFork size={12} /> : <MessageSquareQuote size={12} />}
                         </span>
                       )}
                       <LinkBadge threadId={session.id} />
@@ -1081,10 +1081,10 @@ const ThreadRow = memo(function ThreadRow({
                           }
                         >
                           <span aria-hidden>·</span>
-                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={11} />
+                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
                           <span className="min-w-0 truncate">{place.name}</span>
                           {unsynced && (
-                            <CloudUpload size={11} className="shrink-0" aria-label="Waiting to sync" />
+                            <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />
                           )}
                         </span>
                       )}
@@ -1097,7 +1097,7 @@ const ThreadRow = memo(function ThreadRow({
                             aria-label={delegates.title}
                             className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
                           >
-                            <Bot size={11} />
+                            <Bot size={12} />
                             {delegates.count}
                           </span>
                         </Tooltip>
@@ -1121,7 +1121,7 @@ const ThreadRow = memo(function ThreadRow({
                         </span>
                       ) : gitBranch ? (
                         <>
-                          <GitBranch size={11} className="shrink-0" />
+                          <GitBranch size={12} className="shrink-0" />
                           <span className="min-w-0 truncate" title={gitBranch}>
                             {rowBranch(gitBranch)}
                           </span>
@@ -1130,7 +1130,7 @@ const ThreadRow = memo(function ThreadRow({
                         // A folder outside git has no branch: the line names the folder instead.
                         folder && (
                           <>
-                            <Folder size={11} className="shrink-0" />
+                            <Folder size={12} className="shrink-0" />
                             <span className="min-w-0 truncate" title={folder}>
                               {folder}
                             </span>
@@ -1195,7 +1195,7 @@ const ThreadRow = memo(function ThreadRow({
                   title={`Actions · ${formatBinding("shift+f10")}`}
                   className="flex size-6 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
                 >
-                  <Ellipsis size={15} />
+                  <Ellipsis size={14} />
                 </button>
               </DropdownMenu.Trigger>
               <MenuContent align="start" sideOffset={4}>
@@ -1269,12 +1269,12 @@ const PendingRow = memo(function PendingRow({
           <span className={cx(ROW_RIGHT, "text-sub text-fg-muted", failure && "pr-6")}>
             {failure ? (
               <>
-                <CircleAlert size={11} className="text-danger" />
+                <CircleAlert size={12} className="text-danger" />
                 <span className="font-medium text-danger">Failed</span>
               </>
             ) : (
               <>
-                <Spinner size={9} />
+                <Spinner size={10} />
                 <Elapsed since={pending.startedAt} />
               </>
             )}
@@ -1297,7 +1297,7 @@ const PendingRow = memo(function PendingRow({
                 <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
                 {branch && (
                   <>
-                    <GitBranch size={11} className="ml-1 shrink-0" />
+                    <GitBranch size={12} className="ml-1 shrink-0" />
                     <span className="min-w-0 truncate">{branch}</span>
                   </>
                 )}
@@ -2464,7 +2464,7 @@ export function Sidebar() {
             aria-live="polite"
             className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-lg bg-accent/10 px-4 text-center text-callout text-fg outline-2 outline-accent outline-dashed"
           >
-            <FolderPlus size={20} className="text-accent" />
+            <FolderPlus size={18} className="text-accent" />
             Drop folders to add them as projects
           </div>
         )}

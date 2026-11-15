@@ -244,7 +244,7 @@ export function UsagePage() {
           ) : null}
         </span>
         <Action onClick={() => void load(true)} disabled={loading}>
-          {loading ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
+          {loading ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
         </Action>
       </div>
       <p className="px-4 text-caption text-fg-muted">

@@ -76,7 +76,7 @@ export function PlanCard({
     <section aria-label="Plan" className="rounded-2xl bg-surface p-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          <ListChecks size={15} className="shrink-0 text-fg-muted" />
+          <ListChecks size={16} className="shrink-0 text-fg-muted" />
           <span className="shrink-0 font-semibold text-body">Plan</span>
           <span className="min-w-0 truncate text-callout text-fg-muted tabular">
             {left ? `${left} of ${entries.length} left` : "all done"}
@@ -155,7 +155,7 @@ export function PlanCard({
           <Tooltip label={open ? "Show the plan's start" : "Show the whole plan"}>
             <Pill size="sm" quiet onClick={() => setOpen(!open)}>
               {open ? "Collapse" : `Expand · ${entries.length} steps`}
-              {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+              {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             </Pill>
           </Tooltip>
         </div>

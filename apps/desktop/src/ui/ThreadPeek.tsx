@@ -83,7 +83,7 @@ export function ThreadPeek() {
         )}
         <Pill quiet onClick={() => selectThread(id)}>
           Open
-          <ExternalLink size={11} />
+          <ExternalLink size={12} />
         </Pill>
       </div>
       <div className="relative min-h-0 flex-1">

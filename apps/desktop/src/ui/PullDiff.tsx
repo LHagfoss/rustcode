@@ -294,10 +294,10 @@ export function ConversationCard({
     return (
       <div className="my-1 font-sans">
         <Pill size="sm" quiet onClick={() => setOpen(true)} aria-expanded={false}>
-          <CircleCheck size={11} className="text-success" />
+          <CircleCheck size={12} className="text-success" />
           Resolved · {first.author || "Deleted user"}
           {replies.length > 0 && <> · {count(conversation.comments.length, "comment")}</>}
-          <ChevronRight size={11} />
+          <ChevronRight size={12} />
         </Pill>
       </div>
     );
@@ -308,7 +308,7 @@ export function ConversationCard({
       aria-label={`Conversation on ${conversation.path}${range ? `:${range}` : ""}`}
     >
       <div className="flex items-center gap-1.5 text-caption text-fg-muted">
-        <MessageSquare size={11} className="shrink-0" />
+        <MessageSquare size={12} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate font-mono">
           {range ? `${conversation.side === "LEFT" ? "base " : ""}line ${range}` : conversation.path}
         </span>
@@ -320,7 +320,7 @@ export function ConversationCard({
             aria-expanded
             className="flex shrink-0 items-center gap-1 text-success hover:underline"
           >
-            <CircleCheck size={11} /> Resolved <ChevronDown size={11} />
+            <CircleCheck size={12} /> Resolved <ChevronDown size={12} />
           </button>
         )}
         {threadId && (
@@ -329,7 +329,7 @@ export function ConversationCard({
           </Pill>
         )}
         <Pill size="sm" quiet onClick={() => addFeedbackToThread(conversationFeedback(conversation), pull)}>
-          <CirclePlus size={11} /> Add to chat
+          <CirclePlus size={12} /> Add to chat
         </Pill>
       </div>
       <CommentBody author={first.author} at={first.at} body={first.body} />
@@ -474,7 +474,7 @@ const PullFile = memo(function PullFile({
                       </span>
                       {canComment && (
                         <MessageSquarePlus
-                          size={11}
+                          size={12}
                           className="invisible absolute top-[3px] right-1.5 group-hover/g:visible"
                         />
                       )}
@@ -562,7 +562,7 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
             disabled={open.length === 0}
             onClick={() => addFeedbackToThread(unresolvedFeedback(conversations), pull)}
           >
-            <CirclePlus size={11} /> Add all unresolved
+            <CirclePlus size={12} /> Add all unresolved
           </Pill>
         </div>
         {detail?.reviewCommentsError && (
@@ -579,7 +579,7 @@ export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest
                     {item.at !== undefined && <> · {relativeAge(item.at)}</>}
                   </span>
                   <Pill size="sm" quiet onClick={() => addFeedbackToThread([item], pull)}>
-                    <CirclePlus size={11} /> Add to chat
+                    <CirclePlus size={12} /> Add to chat
                   </Pill>
                 </div>
                 <Markdown text={item.body} className="selectable text-callout" />

@@ -135,7 +135,7 @@ export function MixedChip({ breakdown }: { breakdown: ScopeBreakdownEntry[] }) {
       }
     >
       <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-warning/12 px-2 font-medium text-caption text-warning">
-        <Layers size={11} />
+        <Layers size={12} />
         Mixed
       </span>
     </Tooltip>
@@ -167,7 +167,7 @@ export function SourceChip({ project }: { project: ProjectRowState }) {
             project.source === "project" ? "bg-accent/12 text-accent" : "bg-fill-subtle text-fg-muted"
           }`}
         >
-          <Layers size={11} />
+          <Layers size={12} />
           {SOURCE_LABEL[project.source]}
         </span>
       </Tooltip>
@@ -211,7 +211,7 @@ export function ScopedValue({
 
 /** Where a page's rows are shown, for a title ("Lars's MacBook Pro"). */
 export function scopeName(value: string | undefined, machines: { host: string; name: string }[]): string {
-  return machines.find((machine) => machine.host === value)?.name ?? "this machine";
+  return machines.find((machine) => machine.host === value)?.name ?? "this environment";
 }
 
 export { scopeLabel };

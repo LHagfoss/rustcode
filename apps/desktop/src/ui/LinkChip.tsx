@@ -113,7 +113,7 @@ export function LinkChip({
           </span>
           {!onRemove && (
             <ArrowUpRight
-              size={11}
+              size={12}
               className="-ml-0.5 shrink-0 text-fg-faint group-hover/link:text-fg-muted"
             />
           )}
@@ -125,7 +125,7 @@ export function LinkChip({
             onClick={onRemove}
             className="ml-0.5 flex shrink-0 items-center text-fg-faint hover:text-fg"
           >
-            <X size={11} />
+            <X size={12} />
           </button>
         )}
       </span>

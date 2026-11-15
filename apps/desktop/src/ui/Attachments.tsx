@@ -146,7 +146,7 @@ export function AttachmentStrip({
               onClick={() => onRemove(a.id)}
               className="rc-glass absolute top-1.5 right-1.5 flex size-[20px] items-center justify-center rounded-full text-fg opacity-0 shadow-1 hover:bg-surface-3 group-hover:opacity-100 focus-visible:opacity-100"
             >
-              <X size={11} strokeWidth={2.5} />
+              <X size={12} strokeWidth={2.5} />
             </button>
           </div>
         ) : null,

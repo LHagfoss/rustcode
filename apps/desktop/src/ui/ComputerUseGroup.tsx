@@ -54,7 +54,7 @@ export function ComputerUseGroup() {
       {settings.browser_available !== true && (
         <Row
           title="Chrome/Chromium not found"
-          subtitle="Install Google Chrome or Chromium on this machine."
+          subtitle="Install Google Chrome or Chromium on this computer."
           hint="For a custom location, set computer_use.executable in config.toml."
         />
       )}

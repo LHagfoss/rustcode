@@ -268,6 +268,26 @@ describe("design system", () => {
     expect([...used].map(([, , why]) => `allowlist entry no longer matches a line: ${why}`)).toEqual([]);
   });
 
+  test("icons take a size from the scale (docs/design.md › Icons)", () => {
+    // 10 a glyph in a status dot or a caption's spinner, 12 chips and captions, 13 menus, 14
+    // toolbars and composer buttons, 16 page headers and tool rows, 18 empty states, 24 a page's
+    // own mark.
+    const SCALE = new Set([10, 12, 13, 14, 16, 18, 24]);
+    const found: string[] = [];
+    for (const path of files(join(SRC, "ui"))) {
+      const file = relative(SRC, path);
+      readFileSync(path, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          for (const match of line.matchAll(/\bsize=\{(\d+)\}/g)) {
+            if (!SCALE.has(Number(match[1])))
+              found.push(`${file}:${i + 1} icon size ${match[1]}: ${line.trim()}`);
+          }
+        });
+    }
+    expect(found).toEqual([]);
+  });
+
   test("the engine's built-in themes carry the same surfaces", () => {
     // The app applies a theme's tokens inline, so an engine built-in that still
     // holds an old fill shadows index.css: the real app shows the theme file's

@@ -334,7 +334,7 @@ export function DetailsSection({
           {lineage.parent && (
             <>
               <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-1 text-caption text-fg-faint">
-                <CornerDownRight size={11} /> {lineage.parent.live ? "Working for" : "Started from"}
+                <CornerDownRight size={12} /> {lineage.parent.live ? "Working for" : "Started from"}
               </div>
               {lineage.parent.link ? (
                 <LinkRow
@@ -360,7 +360,7 @@ export function DetailsSection({
           {lineage.messagedBy?.link && (
             <>
               <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-1 text-caption text-fg-faint">
-                <CornerDownRight size={11} /> Messaged by
+                <CornerDownRight size={12} /> Messaged by
               </div>
               <LinkRow
                 link={lineage.messagedBy.link}

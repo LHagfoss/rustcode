@@ -195,7 +195,7 @@ export function CapabilitiesPage() {
         )
       : null;
     if (reason && !local) {
-      toast(`Not added: ${reason}, and this machine is not in the chosen scope.`, "error");
+      toast(`Not added: ${reason}, and this computer is not in the chosen scope.`, "error");
       return false;
     }
     const recipients = reason && local ? [local] : writes;
@@ -206,7 +206,7 @@ export function CapabilitiesPage() {
     for (const failure of result.failures) toast(`${failure.name}: ${failure.message}`, "error");
     if (reason && local && result.succeeded.length) {
       toast(
-        `Added to ${local.name} only: ${reason}. The other machines did not get it; set it up there yourself.`,
+        `Added to ${local.name} only: ${reason}. The other environments did not get it; set it up there yourself.`,
         "info",
       );
     } else if (isAdd && result.succeeded.length) {
@@ -214,8 +214,8 @@ export function CapabilitiesPage() {
       const blanked = keys.length > 0 && result.succeeded.some((machine) => !machine.local);
       toast(
         blanked
-          ? `Added to ${result.succeeded.length} machines. ${keys.join(", ")} ${keys.length === 1 ? "stays" : "stay"} on this machine; set ${keys.length === 1 ? "it" : "them"} on the others.`
-          : `Added to ${result.succeeded.length} ${result.succeeded.length === 1 ? "machine" : "machines"}.`,
+          ? `Added to ${result.succeeded.length} environments. ${keys.join(", ")} ${keys.length === 1 ? "stays" : "stay"} on this computer; set ${keys.length === 1 ? "it" : "them"} on the others.`
+          : `Added to ${result.succeeded.length} ${result.succeeded.length === 1 ? "environment" : "environments"}.`,
         "success",
       );
     }
@@ -249,7 +249,7 @@ export function CapabilitiesPage() {
       )}
       {writes.length > 1 && (
         <Group
-          title="Add to all machines"
+          title="Add to all environments"
           action={
             <Action size="sm" onClick={() => setAddingAll(!addingAll)} aria-expanded={addingAll}>
               <Plus size={12} /> Add server to all
@@ -395,7 +395,7 @@ function CopyMenu({
       value: `machine:${machine.host}`,
       label: `Copy to ${machine.name}`,
     })),
-    ...(others.length > 1 ? [{ value: "all", label: "Copy to all machines" }] : []),
+    ...(others.length > 1 ? [{ value: "all", label: "Copy to all environments" }] : []),
   ];
   return (
     <Select
@@ -565,7 +565,7 @@ function McpRow({
           className="-mx-1.5 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-fill-subtle"
         >
           <ChevronRight
-            size={11}
+            size={12}
             strokeWidth={2.5}
             className={cx("shrink-0 text-fg-faint transition-transform duration-150", open && "rotate-90")}
           />
@@ -640,7 +640,7 @@ function McpRow({
               <>
                 <dt className="text-fg-faint">Set here</dt>
                 <dd className="m-0 text-fg-muted">
-                  {[...s.envKeys, ...s.headerKeys].join(", ")}. Values stay on this machine.
+                  {[...s.envKeys, ...s.headerKeys].join(", ")}. Values stay on this computer.
                 </dd>
               </>
             )}

@@ -97,7 +97,7 @@ function MachineSettings({ machine }: { machine: Machine }) {
         <div className="flex flex-col gap-3 p-4">
           <div className="flex min-w-0 items-start gap-3">
             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-fill">
-              <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={22} />
+              <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={24} />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -150,7 +150,7 @@ function MachineSettings({ machine }: { machine: Machine }) {
       <Group title="Controls">
         <Row
           title="Pause new threads here"
-          subtitle="The connection and the threads already on it stay as they are; Run on refuses this machine until it is resumed."
+          subtitle="The connection and the threads already on it stay as they are; Run on refuses this environment until it is resumed."
         >
           <Switch
             label={`Pause new threads on ${name}`}

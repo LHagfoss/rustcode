@@ -96,7 +96,7 @@ function FileSection({
         className="sticky top-0 z-10 -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-2 bg-surface-2 px-4 py-1.5 text-left hover:bg-fill-subtle"
       >
         <ChevronRight
-          size={11}
+          size={12}
           strokeWidth={2.5}
           className={cx(
             "shrink-0 text-fg-faint transition-transform duration-150",
@@ -247,7 +247,7 @@ export function ChangesPanel() {
             </p>
             {!data.files.length && (
               <div className="flex flex-col items-center gap-2 py-10 text-callout text-fg-muted">
-                <CircleCheck size={20} />
+                <CircleCheck size={18} />
                 No uncommitted changes
               </div>
             )}

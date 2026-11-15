@@ -232,7 +232,7 @@ export function StatisticsPage() {
                 onChange={setPeriod}
               />
               <Action onClick={() => void refresh()} disabled={refreshing}>
-                {refreshing ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
+                {refreshing ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
               </Action>
             </div>
           }
@@ -875,7 +875,7 @@ function HowThisIsCounted({ children }: { children: ReactNode }) {
   return (
     <details className="group">
       <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-caption text-fg-faint hover:text-fg-muted">
-        <ChevronRight size={11} className="shrink-0 transition-transform group-open:rotate-90" aria-hidden />
+        <ChevronRight size={12} className="shrink-0 transition-transform group-open:rotate-90" aria-hidden />
         How this is counted
       </summary>
       <div className="mt-1 space-y-1">{children}</div>
@@ -1008,7 +1008,7 @@ function NothingRecorded({
       title="Recorded usage"
       action={
         <Action onClick={() => void refresh()} disabled={refreshing}>
-          {refreshing ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
+          {refreshing ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
         </Action>
       }
       footer={error ? <span className="block text-warning">Could not refresh: {error}</span> : undefined}
