@@ -116,6 +116,8 @@ rows.
 
 ## Build and CI boundaries
 
+Desktop shell and shared client changes run blocking Linux/Windows `cargo check --all-targets` jobs in Desktop CI, alongside the macOS shell checks; UI-only changes skip them.
+
 Changes under `rustcode/` and CI helper scripts trigger the required Linux test
 and lint jobs, plus advisory macOS/Windows portability checks. The required
 test and lint jobs run in parallel so merges do not wait for their combined

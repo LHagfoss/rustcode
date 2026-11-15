@@ -129,7 +129,8 @@ instructions for work in this repository.
   `scripts/pr-merge.sh <n>` (run it in the background). It waits for every
   check except the advisory ones that take longest and never block (the
   Windows/macOS portability jobs), catches path-filtered jobs that register late, and merges
-  with `--squash --delete-branch`. (`gh pr merge --auto` needs required status
+  with `--squash --delete-branch`. Desktop shell Linux/Windows checks are blocking
+  for shell and shared client changes (UI-only changes skip them). (`gh pr merge --auto` needs required status
   checks on `main`; without them it fails with "clean status", and a plain
   merge would skip CI.)
 - Before starting the next issue in files a queued PR touches, wait for that
