@@ -682,13 +682,22 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   mount; a project's folder (`project:<path>`) is kept. Threads from every paired
   machine share the one list; a thread from another machine carries its glyph
   and name in muted text on its meta line, and a thread from this computer
-  carries none (docs/desktop.md › Several machines). The sidebar has no
-  search field or filter menu, and none of the buttons it used to carry past
-  the toggle in its toolbar: no Add project or New thread row above the list,
-  and no Pull requests or Usage row at its foot. The foot carries no buttons: **Settings** lives in the title row. Threads are found with
-  ⌘K, which also holds the view options (group by project, Working at the top,
-  one project), New thread, Add project folder, Open Settings, Open Git, Open
-  Usage and Statistics, each with the shortcut it has. A snoozed row shows when
+  carries none (docs/desktop.md › Several machines). Under the Needs you row
+  sits the sidebar's toolbar (`ui/SidebarToolbar.tsx`), on by default and
+  turned off in Settings › Appearance or ⌘K: a search field that narrows the
+  list as it is typed (title, project folder, branch; it opens shut shelves and
+  folders, ⏎ opens the first match, Esc clears), the **Sort and filter** menu
+  (sort by Activity, Last updated or Title; Only this project, Group by
+  project, Working at the top, Compact rows), and **New thread**. A filter that
+  hides threads always shows: "Only <project>" is a chip under the field with
+  its own clear button, and the menu button carries an accent dot while
+  anything differs from the default. Activity is the default sort and the only
+  one that moves rows as turns start and end. Threads settle after 3 idle days
+  unless Settings › Appearance › Settle idle threads says otherwise (Never, 1,
+  3, 7 or 14 days). The foot carries no buttons: **Settings** lives in the
+  title row. ⌘K finds threads too and holds every one of these options, plus
+  Add project folder, Open Git, Open Usage and Statistics, each with the
+  shortcut it has. A snoozed row shows when
   it wakes where the age goes. Snooze (presets, or Custom…) is a submenu of the
   row's menu. A snoozed thread keeps its place in the shelf until its time is
   up: it works, waits on an approval or a question, and finishes there without
