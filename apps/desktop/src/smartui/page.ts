@@ -112,6 +112,15 @@ body { position: relative; color: var(--rc-text); font: var(--rc-text-size)/1.5 
 #rc-root, #rc-stream { display: flow-root; }
 #rc-root > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template),
 #rc-stream > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template) { margin-top: 16px; }
+/* The same rhythm one level down, in the blocks that hold other blocks: a tab panel, a section,
+   a gap-less column, a card, an open details. Zero specificity, so a part's own margin (p + p,
+   a tree's indent) still wins; the layouts that space their own children are left out. */
+:where(section, [data-rc-panel], details, .rc-card, .rc-col:not([class*="rc-gap-"])):where(:not(.rc-row, .rc-grid, .rc-stats, .rc-hero, .rc-head, .rc-bars, .rc-list, .rc-steps, .rc-dash))
+  > :where(:not(title, style, script, summary)) ~ :where(:not(title, style, script, summary)) { margin-top: 16px; }
+/* A label or heading names the block under it, so it sits close to that block. */
+:where(section, [data-rc-panel], details, .rc-card, .rc-col:not([class*="rc-gap-"])):where(:not(.rc-row, .rc-grid, .rc-stats, .rc-hero, .rc-head, .rc-bars, .rc-list, .rc-steps, .rc-dash))
+  > :where(.rc-label, h1, h2, h3, h4) + :where(:not(title, style, script)) { margin-top: 6px; }
+:is(#rc-root, #rc-stream, #rc-root .rc-dash, #rc-stream .rc-dash) > :is(.rc-label, h1, h2, h3, h4) + :not(title, style, script) { margin-top: 6px; }
 h1, h2, h3, h4 { margin: 0; font-size: var(--rc-text-size); font-weight: 600; line-height: 1.3; }
 h1 { font-size: var(--rc-text-size-title); }
 p { margin: 0; } p + p { margin-top: 8px; }
@@ -192,12 +201,12 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-progress { height: 6px; overflow: hidden; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--rc-tint, var(--rc-accent)); }
 
-.rc-bars { display: grid; grid-template-columns: fit-content(40%) minmax(32px, 1fr) max-content; gap: 6px 10px; align-items: center; }
+.rc-bars { display: grid; grid-template-columns: fit-content(40%) minmax(32px, 1fr) max-content; gap: 10px; align-items: center; }
 .rc-bar { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; position: relative;
   font-size: var(--rc-text-size-sm); line-height: 16px; }
-.rc-bar::before { content: ""; grid-area: 1 / 2; height: 8px; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
+.rc-bar::before { content: ""; grid-area: 1 / 2; height: 14px; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-bar > span { grid-area: 1 / 1; color: var(--rc-muted); }
-.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 2px; height: 8px; border-radius: var(--rc-radius-pill); background: var(--rc-tint, var(--rc-accent)); }
+.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 4px; height: 14px; border-radius: var(--rc-radius-pill); background: var(--rc-tint, var(--rc-accent)); }
 .rc-bar > b { grid-area: 1 / 3; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
 .rc-bar:hover::before { background: color-mix(in srgb, var(--rc-text) 16%, transparent); }
 .rc-bar:hover > span, .rc-bar:hover > b { color: var(--rc-text); }

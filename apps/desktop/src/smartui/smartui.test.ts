@@ -379,6 +379,35 @@ describe("smart ui", () => {
     expect(BASE_CSS).not.toMatch(/\.rc-table th \{[^}]*white-space: nowrap/);
   });
 
+  test("blocks inside a panel, section, column, card or details keep the page's rhythm", () => {
+    // A tab panel's lead, bars, subheading, table and stats once butted against each other.
+    const nested = BASE_CSS.match(
+      /:where\(section, \[data-rc-panel\], details, \.rc-card[^{]*\{ margin-top: 16px; \}/,
+    );
+    expect(nested?.[0]).toContain("~ :where(:not(title, style, script, summary))");
+    // Layouts that space their own children are left alone.
+    expect(nested?.[0]).toContain(":where(:not(.rc-row, .rc-grid, .rc-stats, .rc-hero, .rc-head, .rc-bars");
+    expect(nested?.[0]).toContain('.rc-col:not([class*="rc-gap-"])');
+    // A label or heading sits close to the block it names, at the top level and in a dashboard too.
+    expect(BASE_CSS).toContain(
+      "> :where(.rc-label, h1, h2, h3, h4) + :where(:not(title, style, script)) { margin-top: 6px; }",
+    );
+    expect(BASE_CSS).toContain(
+      ":is(#rc-root, #rc-stream, #rc-root .rc-dash, #rc-stream .rc-dash) > :is(.rc-label, h1, h2, h3, h4) + :not(title, style, script) { margin-top: 6px; }",
+    );
+    // The dashboard keeps its wider rhythm.
+    expect(BASE_CSS).toContain(
+      "#rc-stream .rc-dash > :not(title, style, script) ~ :not(title, style, script) { margin-top: 28px; }",
+    );
+  });
+
+  test("bar rows are tall pills with room between them", () => {
+    expect(BASE_CSS).toContain("max-content; gap: 10px;");
+    expect(BASE_CSS).toMatch(/\.rc-bar::before \{[^}]*height: 14px; border-radius: var\(--rc-radius-pill\)/);
+    expect(BASE_CSS).toMatch(/\.rc-bar > i \{[^}]*height: 14px; border-radius: var\(--rc-radius-pill\)/);
+    expect(BASE_CSS).toMatch(/\.rc-badge \{[^}]*white-space: nowrap/);
+  });
+
   test("the kit is in the page's stylesheet, in variables only", () => {
     for (const name of [
       ".rc-title",
