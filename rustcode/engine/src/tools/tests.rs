@@ -5177,10 +5177,9 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // sortable-table and hover pieces, and the folded-sources rule cost about
     // 400 over the 1,592 it was; the dashboard layout (headline, context,
     // stats, chart) and the chart marks add about 170 more, paid on every turn
-    // of every external thread; the spacing, subheading and short-column line
-    // adds about 80, so it stays under 2,260.
+    // of every external thread, so it stays under 2,198 (1,998 plus 10%).
     assert!(
-        SMART_UI_HARNESS_HINT.len() < 2_260,
+        SMART_UI_HARNESS_HINT.len() < 2_198,
         "{}",
         SMART_UI_HARNESS_HINT.len()
     );
