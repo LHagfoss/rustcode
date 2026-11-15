@@ -258,6 +258,7 @@ import {
   type QueuedPrompt,
   type TranscriptItem,
   turnCompletion,
+  withPullMark,
 } from "./thread";
 import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 import { orchestrationTool } from "./toolNames";
@@ -3221,9 +3222,7 @@ async function mergeTracked(
     };
   };
   if (call.number) {
-    void finishMerge().then((result) =>
-      deliver(caller.id, `Pull request #${pull.number}: ${JSON.stringify(result)}`, "", ""),
-    );
+    void finishMerge().then((result) => deliver(caller.id, mergeResultNotice(pull.number, result), "", ""));
     return {
       number: pull.number,
       state: "watching",
@@ -3231,6 +3230,13 @@ async function mergeTracked(
     };
   }
   return finishMerge();
+}
+
+/** Keep the full result for the agent beneath the persistent, human-readable notice line. */
+export function mergeResultNotice(number: number, result: JsonObject): string {
+  const summary =
+    str(result.detail) || str(obj(result.error)?.message) || str(result.state) || "Merge failed";
+  return withPullMark(`Pull request #${number}: ${summary}\n\n${JSON.stringify(result)}`);
 }
 
 /**
