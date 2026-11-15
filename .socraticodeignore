@@ -1,0 +1,12 @@
+# What SocratiCode leaves out of its index, on top of .gitignore.
+# Generated, historical or binary content that crowds code out of search results.
+
+CHANGELOG.md
+Cargo.lock
+**/bun.lock
+**/package-lock.json
+docs/remote-protocol/**/*.json
+images/
+research/
+**/*.snap
+**/*.svg

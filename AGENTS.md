@@ -231,7 +231,11 @@ imperative ("add", not "added"), under ~72 characters. Do not prefix with
   1. **SocratiCode** (`codebase_search`, `codebase_impact`, `codebase_flow`,
      `codebase_context_search`) when you don't yet know where something lives:
      hybrid semantic search and the dependency graph find the concept and its
-     blast radius. Verify the source before acting.
+     blast radius. Verify the source before acting. Use it first for "where
+     is X handled" questions, before reaching for `rg`; pass
+     `languageFilter: "typescript"` or `"rust"` to get code rather than docs,
+     and `fileFilter` once you know the file. `.socraticodeignore` keeps
+     generated files out of the index.
   2. **ast-grep** (`ast-grep run -p '<pattern>' -l <lang> <path>`) once you know
      the syntactic shape: structural matches ignore comments/strings and
      formatting, support metavariables (`let $A = $B`, `foo($A)`), and can
