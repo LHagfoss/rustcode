@@ -33,17 +33,14 @@ import {
   useMachines,
 } from "../state/machines";
 import { expiredCodeCopy, refusalAgo, refusalCopy } from "../state/refusals";
-import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import {
-  askConfirm,
   dismissRemoteChallenge,
-  errorText,
   pairRemoteDevice,
   refreshRemote,
   setRemoteAccess,
-  toast,
-  useApp,
-} from "../state/store";
+} from "../state/remoteAccess";
+import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
+import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { connectionDirection, peerOutbound } from "./connectionDirection";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";

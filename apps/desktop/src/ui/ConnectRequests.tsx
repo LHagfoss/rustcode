@@ -19,7 +19,8 @@ import {
   promptedRequests,
   settleCode,
 } from "../state/connectRequests";
-import { answerConnectRequest, closeConnectCode, refreshRemote, toast, useApp } from "../state/store";
+import { answerConnectRequest, closeConnectCode, refreshRemote } from "../state/remoteAccess";
+import { toast, useApp } from "../state/store";
 import { copyText, Pill, Spinner } from "./primitives";
 
 /** At most this many requests are asked about at once; the gateway holds four. */
