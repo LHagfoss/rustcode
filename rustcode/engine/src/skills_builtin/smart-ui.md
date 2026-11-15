@@ -72,8 +72,7 @@ so leave out margins (16 px; 28 px inside `.rc-dash`). A `.rc-card` is already a
 - Rows: `<table class="rc-table" data-rc-sort>` sorts on a click or Enter in a
   heading (`data-rc-sort="text"` on one `th` compares it as text) and
   highlights the row under the pointer; in `.rc-scroll` its header sticks.
-  An item is a label row with an optional trailing value and may carry a description block (`div` or `p`);
-  an item written as a sentence (bare text in it) reads as one paragraph.
+  An item is a label row with an optional trailing value and may carry a description block (`div` or `p`).
   `<ul class="rc-list"><li class="rc-item"><span>Name</span><span class="rc-badge rc-ok">Ready</span></li></ul>`
 - Plans: `<ol class="rc-steps"><li class="rc-step rc-done">Built</li></ol>`, also `rc-active rc-failed rc-todo`.
 - Sources: `<details class="rc-details rc-sources"><summary>Sources</summary><ol><li><a href="https://…">Title</a></li></ol></details>`; a link opens in the browser.
@@ -87,8 +86,7 @@ so leave out margins (16 px; 28 px inside `.rc-dash`). A `.rc-card` is already a
   `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`.
 - Tabs: `.rc-tabs` > `[role=tablist]` > `button[role=tab][data-rc-tab=a]` and `section[data-rc-panel=a]`.
 - Layout: `.rc-row .rc-col .rc-grid .rc-gap-1` … `.rc-gap-4 .rc-card .rc-scroll`.
-  Blocks are spaced for you, in panels and sections too: add no margins. A subheading
-  between blocks is an `h3`; `.rc-num` keeps a short column on one line.
+  `.rc-num` keeps a short column on one line.
 
 ## Charts (Chart.js, bundled)
 
@@ -130,49 +128,22 @@ sentences with the key figures in `<b>`), an `hr`, a `.rc-stats.rc-flat` of
 three or four stats whose `.rc-stat-note` is the comparison, then a `.rc-head`
 and a large `data-size="xl"` line chart with `rcMarks`. All in one `.rc-dash`.
 
-## House style
-
-A view is read, not decoded. Free to compose, but these hold every time:
-
-- Scannable first: a label, a number or a bold lead the eye can jump between,
-  then at most two short sentences under it. A paragraph longer than that is
-  Markdown after the line before the view, not view text.
-- Body text is `--rc-text`. `.rc-lead`, `.rc-muted` and `.rc-stat-note` are for
-  one supporting line, never for the content itself.
-- One idea per row: a table row, an item, a step. Never several facts joined
-  by semicolons in one cell.
-- Sections inside a panel: an `h3`, then its block. Do not wrap blocks in a bare
-  `div`; the spacing is the panel's.
-- Tabs only for two to four parts the reader picks between; a short answer is
-  one panel.
-- Actions last: a `.rc-row.rc-gap-2` of buttons, the recommended one
-  `data-primary`.
-
 ## One example per intent
 
 All kit, no CSS: the same intent reads the same way in every turn.
 
 - Ranking: `<div class="rc-bars"><div class="rc-bar"><span>engine</span><i style="width:100%"></i><b>42 s</b></div><div class="rc-bar rc-bad"><span>auth</span><i style="width:25%"></i><b>10.5 s</b></div></div>`
-- Status list: `<ul class="rc-list"><li class="rc-item"><span>Engine</span><span class="rc-badge rc-ok">Ready</span></li></ul>`
-- Points, decisions, trade-offs (a title and why): the title in `<b>`, the
-  reason in a `<p>` under it:
-  `<ul class="rc-list"><li class="rc-item"><b>Two new tools, not four</b><p>There are already 45; extend <code>transfer_session</code> in place.</p></li></ul>`
-- Plan: `<ol class="rc-steps"><li class="rc-step rc-todo"><b>PR 1: reads.</b> One table drives the CLI and MCP.</li></ol>`;
-  steps not started read at full strength until another step is done or running.
-- Comparison: a `table.rc-table`, the thing compared in the first column,
-  a verdict as a `.rc-badge` in the last.
-- Caveat or unverified claim: `<p class="rc-callout rc-warn">…</p>`.
+- A point and its why: `<li class="rc-item"><b>Two tools</b><p>Extend the old one.</p></li>`
 
 ## Design
 
 - No outer card, border, background or title banner. One view per question.
-- Fits a 320 px column, and grows to the height its content needs: relative widths, no `vh`.
-- Useful before any interaction; a control's effect shows next to it.
-- Real controls with `aria-label` where a label is missing; pre-aggregate.
-- Hover is an extra, never the only way to read a value.
+- Fits a 320 px column, relative widths, no `vh`. Hover is an extra, never the only way to read a value.
+- Each row: a bold lead, label or number, then at most two short sentences.
+- Body text full strength; `.rc-lead`, `.rc-muted`, `.rc-stat-note` for one aside only.
+- One idea per row. A panel's parts: an `h3`, then its block, no wrapper `div`.
+- Tabs only for two to four parts; actions last, the recommended one `data-primary`.
 
 ## Before you send
 
-Run `smart_ui_check` whenever it is listed, fix every problem it reports, then
-write the fence. It catches the sandbox's refusals and the style the kit
-already sets: a colour, a font size, a fixed height, a card inside a card.
+Run `smart_ui_check` whenever it is listed and fix what it reports.
