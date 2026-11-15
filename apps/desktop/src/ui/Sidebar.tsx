@@ -609,7 +609,11 @@ const ROW_RIGHT =
  * did. It keeps the leading status dot, the harness's mark, the title and the trailing state;
  * the project, computer, branch and model move to the hover card.
  */
-const COMPACT_ROW = "flex h-[28px] items-center gap-1.5 rounded-lg px-3";
+// A grid, not a flex row: the sections fold inside an `auto` grid column (`Fold`), which grows to
+// its rows' min-content. A flex row's min-content is its whole title, so every row widened to the
+// longest one and pushed the age out of view; the title's `minmax(0,1fr)` track asks for nothing.
+const COMPACT_ROW =
+  "grid h-[28px] grid-cols-[6px_12px_minmax(0,1fr)_auto] items-center gap-x-1.5 rounded-lg px-3";
 
 /** The compact row's leading dot, in the tone the detailed row's chip takes for the same state. */
 const COMPACT_DOT: Record<CompactMark, string> = {
@@ -966,7 +970,7 @@ const ThreadRow = memo(function ThreadRow({
                     size={12}
                     className={cx("relative shrink-0", markTint)}
                   />
-                  <span className={cx(ROW_LEFT, "flex-1")}>
+                  <span className={ROW_LEFT}>
                     {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
                     {branch && (
                       <span className="shrink-0 text-fg-faint">
@@ -1226,7 +1230,7 @@ const PendingRow = memo(function PendingRow({
       >
         <RowFill selected={selected} radius={compact ? "rounded-lg" : "rounded-xl"} />
         {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
-        <span className={cx(ROW_LINE, compact && "flex-1")}>
+        <span className={cx(ROW_LINE, compact && "col-span-full")}>
           <span className={ROW_LEFT}>
             <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
           </span>
