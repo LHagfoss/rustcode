@@ -19,7 +19,16 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = join(import.meta.dir, "..");
-const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+// Chrome where it installs on macOS and Linux; `MOCK_WINDOW_CHROME` names another binary.
+const CHROME_PATHS = [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+];
+const chromePath =
+  process.env.MOCK_WINDOW_CHROME || CHROME_PATHS.find((path) => existsSync(path)) || CHROME_PATHS[0]!;
 const envPort = Number(process.env.MOCK_WINDOW_CDP_PORT);
 const CDP_PORT = Number.isInteger(envPort) && envPort > 0 ? envPort : 9223; // fixed, so every caller finds the same window
 const PORT_FROM = 1421; // 1420 belongs to `bun tauri dev` and its strict port
@@ -219,6 +228,9 @@ async function ensureChrome(show: boolean) {
     "--window-size=1512,945",
     // Headless has no display to take a scale from; pin the retina one a visible window gets.
     ...(show ? [] : ["--headless=new", "--force-device-scale-factor=2", "--hide-scrollbars"]),
+    // Headless on Linux reports no hover and no fine pointer, so `group-hover` and every
+    // `@media (hover: hover)` rule never apply: report the mouse a desktop has.
+    "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
     "about:blank",
   ];
   detach([chromePath, ...flags]);
