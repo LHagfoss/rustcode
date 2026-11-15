@@ -125,7 +125,7 @@ pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// Added by version 13: where a thread's work stands, and handing it over.
 pub const V13_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 17;
+pub const VERSION: u8 = 18;
 /// Version 14 adds mid-turn messaging.
 pub const STEER_VERSION: u8 = 14;
 /// Version 15 adds `standalone` to `start_session` and `fan_out`: the thread
@@ -137,6 +137,10 @@ pub const STEER_VERSION: u8 = 14;
 pub const STANDALONE_VERSION: u8 = 15;
 /// Version 17 adds one-way messages and `return_to` to `message_session`.
 pub const ONE_WAY_VERSION: u8 = 17;
+/// Version 18 adds `account` and `model` to `transfer_session` (#3821): an
+/// older app would move the thread on the harness's remembered login and model
+/// instead, so it never sees the fields and has a call with them refused.
+pub const TRANSFER_CHOICE_VERSION: u8 = 18;
 /// Version 12 adds `machine` to the tools that read or act on a thread: the id
 /// or name `list_machines` returned, omitted for this computer. A client that
 /// advertised less never sees the field and has it refused, so an older app
@@ -494,6 +498,12 @@ pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
             properties.remove("return_to");
         }
     }
+    if version < TRANSFER_CHOICE_VERSION && name == TRANSFER_SESSION {
+        if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.remove("account");
+            properties.remove("model");
+        }
+    }
     // An older client never sees an argument it would ignore.
     if version < ATTACHMENT_VERSION && name == MESSAGE_SESSION {
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
@@ -583,6 +593,15 @@ pub(crate) fn carries_attachments(name: &str, args: &Value) -> bool {
 }
 
 /// Whether a call tries to name a login, which only a version 5 client can do.
+/// Whether a `transfer_session` call names an account or a model, which only
+/// a [`TRANSFER_CHOICE_VERSION`] client applies.
+pub(crate) fn names_a_transfer_choice(name: &str, args: &Value) -> bool {
+    name == TRANSFER_SESSION
+        && ["account", "model"]
+            .iter()
+            .any(|key| args.get(*key).is_some_and(|value| !value.is_null()))
+}
+
 pub(crate) fn names_an_account(name: &str, args: &Value) -> bool {
     match name {
         START_SESSION => args
@@ -844,7 +863,9 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
         LIST_PROJECTS | LIST_PENDING_REQUESTS => Ok(()),
         TRANSFER_SESSION => {
             required_name(args, "session_id")?;
-            required_name(args, "harness")
+            required_name(args, "harness")?;
+            optional_name(args, "account")?;
+            optional_name(args, "model")
         }
         LIST_PULL_REQUESTS => match args.get("state") {
             None | Some(Value::Null) => Ok(()),
@@ -1414,6 +1435,15 @@ pub async fn execute_versioned(
             false,
         );
     }
+    if client.is_some() && version < TRANSFER_CHOICE_VERSION && names_a_transfer_choice(name, args)
+    {
+        return ToolExecutionOutput::failure_with_kind(
+            "error: transfer_session with account or model needs a newer RustCode app. Nothing was moved."
+                .to_owned(),
+            ToolErrorKind::UnavailableDependency,
+            false,
+        );
+    }
     // The same for files an older client would drop on the floor.
     if client.is_some() && version < ATTACHMENT_VERSION && carries_attachments(name, args) {
         return ToolExecutionOutput::failure_with_kind(
@@ -1697,7 +1727,8 @@ mod tests {
         // A newer client gets what this engine speaks.
         assert_eq!(version(json!({"rustcode": {"orchestration": 15}})), 15);
         assert_eq!(version(json!({"rustcode": {"orchestration": 16}})), 16);
-        assert_eq!(version(json!({"rustcode": {"orchestration": 17}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 17}})), 17);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 18}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"orchestration": 99}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
@@ -1736,9 +1767,10 @@ mod tests {
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
         // The newest version this engine speaks; v14 added `steer` and v15
-        // `standalone`, v16 `machine` and v17 `return_to` to existing tools, so the
+        // `standalone`, v16 `machine`, v17 `return_to` and v18 transfer `account` and
+        // `model` to existing tools, so the
         // tool list stops changing at v13.
-        assert_eq!(VERSION, 17);
+        assert_eq!(VERSION, 18);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);

@@ -1955,7 +1955,7 @@ async function perform(
       return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
     }
     case "transfer_session":
-      return transferSession(caller, call.target, call.harness);
+      return transferSession(caller, call.target, call.harness, call.account, call.model);
     case "list_pending_requests": {
       const machine = checkedMachine(call.machine);
       if (isFailure(machine)) return failureJson(machine);

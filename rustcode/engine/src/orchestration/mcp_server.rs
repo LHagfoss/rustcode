@@ -616,6 +616,13 @@ async fn call(
                     .to_owned(),
         };
     }
+    if version < super::TRANSFER_CHOICE_VERSION && super::names_a_transfer_choice(tool, &args) {
+        return CallAnswer {
+            success: false,
+            content: "error: transfer_session with account or model needs a newer RustCode app. Nothing was moved."
+                .to_owned(),
+        };
+    }
     if version < super::ONE_WAY_VERSION && super::names_wait(tool, &args) {
         return CallAnswer {
             success: false,

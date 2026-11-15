@@ -113,6 +113,14 @@ pub enum Commands {
         command: HarnessCommands,
     },
 
+    /// List RustCode's worktrees of a repository, read one, remove one, or
+    /// prune the records of worktrees whose folders are gone
+    #[command(alias = "worktrees")]
+    Worktree {
+        #[command(subcommand)]
+        command: WorktreeCommands,
+    },
+
     /// Read and change RustCode's server settings (`settings.json`), the
     /// values Settings in the app shows; writes go through the running server
     #[command(alias = "setting")]
@@ -809,6 +817,38 @@ pub enum SessionCommands {
         #[arg(required = true, value_name = "ID")]
         ids: Vec<String>,
     },
+    /// Move a thread to another harness, account or model (needs the
+    /// running server, which runs the thread)
+    Move {
+        /// Thread id, or a unique prefix of one
+        id: String,
+        /// The harness to continue on, as `rustcode harness list` names it
+        #[arg(long)]
+        harness: String,
+        /// A named account of that harness
+        #[arg(long)]
+        account: Option<String>,
+        /// The model to continue with
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// Give a thread a new title
+    Rename {
+        /// Thread id, or a unique prefix of one
+        id: String,
+        title: String,
+    },
+    /// Pin threads to the top of the app's list
+    Pin {
+        /// Thread ids, or unique prefixes of them
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
+    /// Unpin threads
+    Unpin {
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Mark threads as needing review
     Review {
         /// Thread ids, or unique prefixes of them
@@ -883,6 +923,38 @@ pub enum HarnessCommands {
         /// The reasoning effort they start with
         #[arg(long)]
         effort: Option<String>,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum WorktreeCommands {
+    /// The worktrees RustCode made for a repository (default: this folder's)
+    #[command(alias = "ls")]
+    List {
+        #[arg(long)]
+        repo: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// A worktree's branch, how far it is from what it tracks, its changed
+    /// files and last commit
+    Status { path: std::path::PathBuf },
+    /// Remove a worktree RustCode made; one with uncommitted or unpushed work
+    /// is kept unless `--force`
+    #[command(alias = "rm")]
+    Remove {
+        path: std::path::PathBuf,
+        /// Remove it even with uncommitted or unpushed work, which is lost
+        #[arg(long)]
+        force: bool,
+        /// Confirm `--force` without asking
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Drop git's records of worktrees whose folders are gone; no files change
+    Prune {
+        #[arg(long)]
+        repo: Option<std::path::PathBuf>,
     },
 }
 
@@ -2030,6 +2102,36 @@ mod tests {
             Some(Commands::Harness {
                 command: HarnessCommands::Default { harness, model: Some(model), effort: None }
             }) if harness == "codex" && model == "gpt-5"
+        ));
+    }
+
+    #[test]
+    fn parses_thread_and_worktree_commands() {
+        assert!(matches!(
+            Cli::try_parse_from([
+                "rustcode", "threads", "move", "01ab", "--harness", "codex", "--account", "work"
+            ])
+            .unwrap()
+            .command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Move { id, harness, account: Some(account), model: None })
+            }) if id == "01ab" && harness == "codex" && account == "work"
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "threads", "pin", "a", "b"]).unwrap().command,
+            Some(Commands::Sessions { command: Some(SessionCommands::Pin { ids }) }) if ids.len() == 2
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "worktree", "remove", "/tmp/w", "--force", "-y"])
+                .unwrap()
+                .command,
+            Some(Commands::Worktree {
+                command: WorktreeCommands::Remove {
+                    force: true,
+                    yes: true,
+                    ..
+                }
+            })
         ));
     }
 

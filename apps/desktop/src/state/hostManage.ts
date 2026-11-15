@@ -107,6 +107,7 @@ export function manageTarget(
   caller: RuleThread,
   id: string | undefined,
   machine = false,
+  acrossProjects = false,
 ): RuleThread | Failure {
   const target = id ? ruleThread(useApp.getState(), id) : caller;
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
@@ -116,7 +117,7 @@ export function manageTarget(
       `“${target.title}” runs on ${targetMachine(target.id) ?? "another computer"}: do that there`,
     );
   }
-  if (isRemoteThread(target.id)) return target;
+  if (isRemoteThread(target.id) || acrossProjects) return target;
   return checkManage(caller, target) ?? target;
 }
 
@@ -550,8 +551,17 @@ export async function configureSession(
   };
 }
 
-export async function transferSession(caller: RuleThread, id: string, harness: string): Promise<JsonObject> {
-  const target = manageTarget(caller, id);
+export async function transferSession(
+  caller: RuleThread,
+  id: string,
+  harness: string,
+  accountId?: string,
+  model?: string,
+): Promise<JsonObject> {
+  // Another project's thread moves too when agents may reach across projects:
+  // the move always asks, and the card names the project.
+  const across = useApp.getState().readAcrossProjects;
+  const target = manageTarget(caller, id, false, across);
   if (isFailure(target)) return failureJson(target);
   if (target.id === caller.id) return failureJson(failure("not_allowed", "a thread cannot move itself"));
   if (target.running)
@@ -565,25 +575,49 @@ export async function transferSession(caller: RuleThread, id: string, harness: s
   }
   const reason = unavailableReason(to);
   if (reason) return failureJson(failure("not_allowed", `${to.name} is not available: ${reason}`));
-  if (target.harness === harness) return { session_id: target.id, harness, moved: false };
+  const named = accountId ? to.accounts?.find((a) => a.id === accountId || a.name === accountId) : undefined;
+  if (accountId && !named) {
+    const known = (to.accounts ?? []).map((a) => a.id);
+    return failureJson(
+      failure(
+        "invalid",
+        known.length
+          ? `${to.name} has no account “${accountId}”; choose from ${known.join(", ")}`
+          : `${to.name} has no named accounts; leave account out`,
+      ),
+    );
+  }
+  if (target.harness === harness && !named && !model) return { session_id: target.id, harness, moved: false };
+  const elsewhere = sameProject(projectOf(target), projectOf(caller))
+    ? ""
+    : ` It is in ${projectOf(target)}, another project.`;
+  const on = [named && `the ${named.name} account`, model && `model ${model}`].filter(Boolean).join(" and ");
   const no = await permitted(caller, `transfer:${target.id}`, {
     kind: "transfer",
     caller: caller.id,
     callerTitle: caller.title,
     target: target.title,
-    detail: `It would continue on ${to.name}, which gets the conversation so far with its next message.`,
+    detail: `It would continue on ${to.name}${on ? ` with ${on}` : ""}, which gets the conversation so far with its next message.${elsewhere}`,
   });
   if (no) return failureJson(no);
   await openThread(target.id);
   // The login a new thread on that harness would start on, as the picker moves
-  // a thread: its remembered account, never a harness login the picker no
-  // longer offers. A harness with no named accounts passes `null`, exactly as
-  // before accounts existed.
-  const account = newThreadAccountOn(to, lastAccountFor(harness), useApp.getState().signedOutLogins);
-  if (!(await switchThreadHarness(target.id, harness, account))) {
+  // a thread: the one named, else its remembered account, never a harness login
+  // the picker no longer offers. A harness with no named accounts passes `null`,
+  // exactly as before accounts existed.
+  const account = named
+    ? named.id
+    : newThreadAccountOn(to, lastAccountFor(harness), useApp.getState().signedOutLogins);
+  if (!(await switchThreadHarness(target.id, harness, account, model ? { model } : {}))) {
     return failureJson(failure("failed", "the thread could not be moved"));
   }
-  return { session_id: target.id, harness, moved: true, ...ranWith(target.id) };
+  return {
+    session_id: target.id,
+    harness,
+    moved: true,
+    ...(named ? { account: named.id } : {}),
+    ...ranWith(target.id),
+  };
 }
 
 /** What this project's open threads wait on. Only what they ask: answering stays with the user. */
