@@ -1,3 +1,7 @@
+## [v1.36.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.36.1) - 2026-11-15
+
+### Fixes
+- The Linux and Windows apps build again, and bring their window forward when a second launch or a `rustcode://` link arrives. (#3780)
 ## [v1.36.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.36.0) - 2026-11-15
 
 ### Features
