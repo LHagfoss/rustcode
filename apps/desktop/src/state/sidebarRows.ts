@@ -211,6 +211,29 @@ export function rowStatus(read: RowStatusRead): RowStatus | undefined {
   return undefined;
 }
 
+/** The dot a compact row leads with: the state its one line has to flag before the title. */
+export type CompactMark = "needs" | "working" | "failed" | "unread";
+
+/**
+ * What a compact row's leading dot says, from the same chip the detailed row ends with: what asks
+ * for you, what works, what failed and a completion you have not seen. Waiting, review, idle and
+ * settled rows lead with no dot; their trailing icon or age says enough.
+ */
+export function compactMark(status: RowStatus | undefined): CompactMark | undefined {
+  switch (status?.kind) {
+    case "needs":
+      return "needs";
+    case "working":
+      return "working";
+    case "failed":
+      return "failed";
+    case "completed":
+      return "unread";
+    default:
+      return undefined;
+  }
+}
+
 /**
  * What a thread's calls changed, from the diffs the app already read (`_rustcode/rewind`
  * history, replayed when the thread is opened). Null when it has none to count: a thread never

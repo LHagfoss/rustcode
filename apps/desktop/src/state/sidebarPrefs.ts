@@ -1,5 +1,5 @@
 // The sidebar's view preferences (group by project, the Working shelf, one project only, which
-// shelves are open), kept in localStorage and shared: the sidebar draws from them and ⌘K changes
+// shelves are open, how dense the rows are), kept in localStorage and shared: the sidebar draws from them and ⌘K changes
 // them (ui/CommandPalette.tsx), so both read one store rather than two copies of a flag.
 
 import { useCallback, useMemo, useSyncExternalStore } from "react";
@@ -10,7 +10,24 @@ export const PREF = {
   workingSection: "rustcode.sidebar.workingSection",
   onlyProject: "rustcode.sidebar.onlyProject",
   folded: "rustcode.sidebar.folded",
+  density: "rustcode.sidebar.density",
 } as const;
+
+/**
+ * How much a thread row says: `detailed` is the three-line row (title, where it runs, the branch),
+ * `compact` one line (status, harness, title, age) with the rest on its hover card.
+ */
+export type SidebarDensity = "detailed" | "compact";
+
+export const SIDEBAR_DENSITIES: readonly { id: SidebarDensity; label: string }[] = [
+  { id: "detailed", label: "Detailed" },
+  { id: "compact", label: "Compact" },
+];
+
+/** A stored density, read leniently: anything but `compact` is the default, `detailed`. */
+export function sidebarDensity(raw: unknown): SidebarDensity {
+  return raw === "compact" ? "compact" : "detailed";
+}
 
 const listeners = new Set<() => void>();
 /** Stands in for localStorage where it is unavailable (a private window). */
@@ -57,4 +74,10 @@ export function usePref<T>(key: string, initial: T) {
   const value = useMemo(() => parse(raw, initial), [raw, initial]);
   const set = useCallback((next: T) => writePref(key, next), [key]);
   return [value, set] as const;
+}
+
+/** The sidebar's row density and its setter, shared by the sidebar, ⌘K and Settings. */
+export function useSidebarDensity() {
+  const [raw, set] = usePref<string>(PREF.density, "detailed");
+  return [sidebarDensity(raw), set as (next: SidebarDensity) => void] as const;
 }

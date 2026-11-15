@@ -131,6 +131,7 @@ describe("the actions the sidebar's buttons and filter left for ⌘K", () => {
     writePref(PREF.groupByProject, false);
     writePref(PREF.workingSection, true);
     writePref(PREF.onlyProject, false);
+    writePref(PREF.density, "detailed");
   });
 
   test("add project, pull requests, usage, statistics and the view options are all there", () => {
@@ -143,6 +144,7 @@ describe("the actions the sidebar's buttons and filter left for ⌘K", () => {
         "sidebar-group",
         "sidebar-working",
         "sidebar-only",
+        "sidebar-density",
         "settled-open",
       ]),
     );
@@ -178,6 +180,16 @@ describe("the actions the sidebar's buttons and filter left for ⌘K", () => {
       .find((a) => a.id === "sidebar-working")
       ?.run();
     expect(readPref(PREF.workingSection, true)).toBe(false);
+  });
+
+  test("compact rows toggle the sidebar's density both ways", () => {
+    const density = () => sidebarActions().find((a) => a.id === "sidebar-density");
+    expect(density()?.detail).toBe("Off");
+    density()?.run();
+    expect(readPref(PREF.density, "detailed")).toBe("compact");
+    expect(density()?.detail).toBe("On");
+    density()?.run();
+    expect(readPref(PREF.density, "detailed")).toBe("detailed");
   });
 
   test("filtering to one project needs a project", () => {
