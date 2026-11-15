@@ -27,6 +27,7 @@ import { STATUS_LABEL } from "../acp/v2";
 import { darkenOverlay, useBanner } from "../lib/banner";
 import { observeSize } from "../lib/resize";
 import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
+import { autoCompactOffFor, setAutoCompactForThread } from "../state/autoCompactRun";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
@@ -41,14 +42,12 @@ import {
 } from "../state/machines";
 import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
-  autoCompactOffFor,
   dismissPendingSetup,
   harnessesOn,
   refreshSessions,
   repairThread,
   retryPendingSetup,
   seeFailure,
-  setAutoCompactForThread,
   setPanel,
   setTerminalOpen,
   setThreadStatus,

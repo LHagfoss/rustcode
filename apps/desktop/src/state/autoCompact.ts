@@ -1,6 +1,6 @@
 // Auto-compaction decided by RustCode and run with the harness's own compaction
 // (issue 3170). The decision is pure: a clock and a usage gauge go in, one action
-// comes out. The store owns the timers and the prompt, so this file stays
+// comes out. autoCompactRun.ts owns the timers and the prompt, so this file stays
 // testable without React, the engine or a model turn.
 //
 // Two rules, as the issue proposes:
