@@ -1486,3 +1486,20 @@ fn explicit_claude_settings_are_preserved() {
         assert_eq!(meta["claudeCode"]["options"]["settings"], settings);
     }
 }
+
+#[test]
+fn a_sign_in_error_names_the_advertised_terminal_login() {
+    let perch = harness("perch", HarnessKind::Acp);
+    let initialized = json!({
+        "authMethods": [
+            {"id": "perch-browser-login", "name": "Sign in with Google or GitHub"},
+            {"type": "terminal", "id": "perch-terminal-login", "args": ["login"]}
+        ]
+    });
+    assert_eq!(
+        terminal_login(&perch, &initialized).as_deref(),
+        Some("perch login")
+    );
+    assert_eq!(terminal_login(&perch, &json!({"authMethods": []})), None);
+    assert_eq!(terminal_login(&perch, &json!({})), None);
+}

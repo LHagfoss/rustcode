@@ -389,6 +389,32 @@ fn config_server(server: &crate::config::McpServerConfig) -> Value {
     }
 }
 
+/// The sign-in command an agent advertised in `initialize`: an `authMethods`
+/// entry of type `terminal` runs the harness's own program with its `args`
+/// (Perch's `perch login`).
+fn terminal_login(harness: &ResolvedHarness, initialized: &Value) -> Option<String> {
+    let program = harness.command.first()?;
+    initialized
+        .get("authMethods")?
+        .as_array()?
+        .iter()
+        .filter(|method| method.get("type").and_then(Value::as_str) == Some("terminal"))
+        .find_map(|method| {
+            let args = method
+                .get("args")?
+                .as_array()?
+                .iter()
+                .map(|arg| arg.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()?;
+            Some(
+                std::iter::once(program.clone())
+                    .chain(args)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+        })
+}
+
 /// `error` with what the harness last wrote to stderr: a command that exits
 /// before the handshake (a wrong flag, a missing login) says why there, and the
 /// handshake error alone is only "connection closed".
@@ -538,11 +564,15 @@ impl AcpAdapter {
                 .await
                 .map_err(|error| {
                     if error.code == -32000 {
-                        format!(
+                        let mut text = format!(
                             "{} needs you to sign in first ({})",
                             harness.name,
                             error.describe()
-                        )
+                        );
+                        if let Some(login) = terminal_login(harness, &initialized) {
+                            text.push_str(&format!(": run `{login}` in a terminal"));
+                        }
+                        text
                     } else {
                         describe(error)
                     }
