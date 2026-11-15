@@ -1177,7 +1177,8 @@ fn an_agents_own_steps_fold_under_its_row() {
             json!({"type": "commandExecution", "id": "cmd10", "command": "ls"}),
         ),
     );
-    assert_eq!(own[0]["_meta"], Value::Null);
+    assert_eq!(own[0]["_meta"]["claudeCode"], Value::Null);
+    assert_eq!(own[0]["_meta"]["rustcode"]["toolName"], "commandExecution");
     // What the agent says, plans and spends stays out of the thread itself.
     for (method, params) in [
         (

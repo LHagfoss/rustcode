@@ -1571,11 +1571,21 @@ impl ExternalSession {
             ),
             _ => return None,
         };
+        // The newer adapter marks the call with
+        // `_meta.jetbrains.air.contextCompaction` and sends its facts (trigger,
+        // tokens, duration) there, in an update of their own after the
+        // `completed` status, with no status or title.
+        let air = meta
+            .and_then(|meta| meta.get("jetbrains"))
+            .and_then(|jetbrains| jetbrains.get("air"))
+            .and_then(|air| air.get("contextCompaction"));
+        let air_facts =
+            air.filter(|facts| facts.get("trigger").is_some() || facts.get("preTokens").is_some());
         let completed = matches!(
             status,
             Some(ToolCallStatus::Completed | ToolCallStatus::Failed)
         );
-        if !completed {
+        if !completed && air_facts.is_none() {
             return None;
         }
         let named_compaction = meta
@@ -1583,9 +1593,10 @@ impl ExternalSession {
             .and_then(|claude| claude.get("toolName"))
             .and_then(serde_json::Value::as_str)
             == Some("compact");
-        if !named_compaction && title != Some("Compact conversation") {
+        if !named_compaction && air.is_none() && title != Some("Compact conversation") {
             return None;
         }
+        let facts = air_facts.or(facts);
         let number = |name: &str| {
             facts
                 .and_then(|facts| facts.get(name))
@@ -1654,6 +1665,7 @@ impl ExternalSession {
                 .enumerate()
                 .filter_map(|(offset, message)| {
                     let metrics = transcript.tool_metrics.get(&(history_from + offset));
+                    let native = transcript.tool_names.get(&(history_from + offset));
                     let recorded = message.tool_result.as_ref()?;
                     if recorded.pending {
                         return None;
@@ -1668,6 +1680,7 @@ impl ExternalSession {
                         output_bytes: Some(message.content.len() as i64),
                         truncated: Some(recorded.truncated || recorded.payload_truncated),
                         mcp_server: None,
+                        harness_tool: native.cloned(),
                         command_name: recorded
                             .command
                             .as_deref()
@@ -1774,6 +1787,10 @@ impl ExternalSession {
                 stop_reason: Some(stop_reason.to_owned()),
                 effort: record.effort.clone(),
                 account: record.account.clone(),
+                error_kind: result
+                    .as_ref()
+                    .err()
+                    .map(|error| crate::data_store::turn_failure_kind(error)),
                 tool_calls,
                 ..Default::default()
             },
@@ -2031,6 +2048,40 @@ mod launch_tests {
                 .trigger,
             "cache_expiry"
         );
+    }
+
+    #[test]
+    fn the_adapters_air_compaction_facts_are_a_row() {
+        // The newer adapter: the call starts with an empty marker, completes
+        // with a bare status, then sends its facts in an update of their own.
+        let started = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "compact-9",
+            "title": "Compact conversation",
+            "kind": "think",
+            "status": "in_progress",
+            "_meta": {"jetbrains": {"air": {"version": 1, "contextCompaction": {"version": 1}}}},
+        }));
+        assert!(ExternalSession::harness_compaction(&started, "thread-1", "claude-code").is_none());
+        let facts = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "compact-9",
+            "_meta": {"jetbrains": {"air": {"contextCompaction": {
+                "version": 1,
+                "trigger": "manual",
+                "preTokens": 213_555,
+                "postTokens": 14_247,
+                "durationMs": 36_972,
+            }}}},
+        }));
+        let row = ExternalSession::harness_compaction(&facts, "thread-1", "claude-code")
+            .expect("the facts update is the row");
+        assert_eq!(row.trigger, "manual");
+        assert_eq!(row.tokens_before, Some(213_555));
+        assert_eq!(row.tokens_after, Some(14_247));
+        assert_eq!(row.duration_ms, Some(36_972));
+        assert_eq!(row.external_id.as_deref(), Some("compact-9"));
+        assert!(row.success);
     }
 
     #[test]

@@ -394,3 +394,14 @@ fn the_hook_denies_a_refused_bash_call_and_ignores_the_rest() {
     assert_eq!(hook_response(&call("Read", "git stash")), None);
     assert_eq!(hook_response("not json"), None);
 }
+
+#[test]
+fn command_name_skips_a_leading_cd() {
+    assert_eq!(
+        command_name("cd /repo && cargo check").as_deref(),
+        Some("cargo")
+    );
+    assert_eq!(command_name("cd /repo; git status").as_deref(), Some("git"));
+    assert_eq!(command_name("cd /repo").as_deref(), Some("cd"));
+    assert_eq!(command_name("rg -n foo").as_deref(), Some("rg"));
+}

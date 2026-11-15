@@ -55,6 +55,10 @@ pub(crate) struct Transcript {
     reply: String,
     live: bool,
     pub tool_metrics: HashMap<usize, (String, i64)>,
+    /// The harness's own name for each tool call (`Bash`,
+    /// `mcp__rustcode__wait_session`, a Codex item type), by `tool` message
+    /// index. The message keeps the ACP kind; this is for the data store.
+    pub tool_names: HashMap<usize, String>,
     thought: String,
     /// Tool call id → where its two messages are.
     tools: HashMap<String, ToolSlot>,
@@ -235,6 +239,10 @@ impl Transcript {
             // card text of its own.
             message.content = text;
         }
+        let failure_text = (fields.status == Some(ToolCallStatus::Failed))
+            .then(|| fields.content.as_deref().map(summary))
+            .flatten();
+        let exit_code = exit_code.or_else(|| failure_text.as_deref().and_then(text_exit_code));
         let record = message.tool_result.get_or_insert_with(Default::default);
         if let Some(command) = fields.raw_input.as_ref().and_then(|input| {
             crate::command_guard::requested_command(input)
@@ -251,6 +259,20 @@ impl Transcript {
         }
         if let Some(code) = exit_code {
             record.exit_code = Some(code as i32);
+        }
+        match fields.status {
+            Some(ToolCallStatus::Failed) => {
+                record.error_kind = Some(failure_kind(
+                    meta,
+                    record.exit_code,
+                    failure_text.as_deref(),
+                ));
+            }
+            Some(ToolCallStatus::Completed) => record.error_kind = None,
+            _ => {}
+        }
+        if let Some(name) = meta.and_then(native_tool_name) {
+            self.tool_names.insert(slot.result, name);
         }
         if let Some(locations) = &fields.locations {
             record.changed_paths = locations
@@ -283,6 +305,7 @@ impl Transcript {
     pub(crate) fn push_user(&mut self, text: &str) {
         if !self.live {
             self.tool_metrics.clear();
+            self.tool_names.clear();
         }
         self.end_reply();
         self.plan = None;
@@ -365,6 +388,87 @@ fn terminal_exit(meta: &Meta) -> Option<i64> {
     meta.get("terminal_exit")?
         .get("exit_code")
         .and_then(Value::as_i64)
+}
+
+/// The harness's own name for a tool call, from its `_meta`: Claude Code's
+/// `claudeCode.toolName`, the ACP adapter's `jetbrains.air.mcp` server and
+/// tool, or `rustcode.toolName` that the Codex bridge sets.
+pub(crate) fn native_tool_name(meta: &Meta) -> Option<String> {
+    let named = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+    };
+    if let Some(name) = named(
+        meta.get("claudeCode")
+            .and_then(|claude| claude.get("toolName")),
+    ) {
+        return Some(name);
+    }
+    if let Some(name) = named(
+        meta.get("rustcode")
+            .and_then(|rustcode| rustcode.get("toolName")),
+    ) {
+        return Some(name);
+    }
+    let mcp = meta.get("jetbrains")?.get("air")?.get("mcp")?;
+    let server = named(mcp.get("server"))?;
+    let tool = named(mcp.get("tool"))?;
+    Some(format!("mcp__{server}__{tool}"))
+}
+
+/// Why a tool call failed, as a short kind for the data store; never the
+/// message itself.
+///
+/// - `permission_denied`: the harness or its permission check refused it
+///   (Claude Code's `toolResponse.decisionReasonType`, a "Permission denied" or
+///   "user rejected" result).
+/// - `guard_refused`: RustCode's command guard refused it.
+/// - `exit_status`: a command that ran and exited non-zero.
+/// - `timeout`: the harness reports it timed out.
+/// - `failed`: anything else.
+fn failure_kind(meta: Option<&Meta>, exit_code: Option<i32>, text: Option<&str>) -> String {
+    let decided = meta
+        .and_then(|meta| meta.get("claudeCode"))
+        .and_then(|claude| claude.get("toolResponse"))
+        .and_then(|response| response.get("decisionReasonType"))
+        .is_some();
+    let text = text.unwrap_or_default();
+    let head: String = text
+        .chars()
+        .take(400)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let kind = if head.contains("command guard") {
+        "guard_refused"
+    } else if decided
+        || head.contains("permission denied")
+        || head.contains("user rejected")
+        || head.contains("user denied")
+        || head.contains("doesn't want to proceed")
+    {
+        "permission_denied"
+    } else if exit_code.is_some_and(|code| code != 0) {
+        "exit_status"
+    } else if head.contains("timed out") || head.contains("timeout") {
+        "timeout"
+    } else {
+        "failed"
+    };
+    kind.to_owned()
+}
+
+/// The exit code Claude Code writes at the head of a failed Bash result
+/// (`Exit code 1`).
+fn text_exit_code(text: &str) -> Option<i64> {
+    let text = text.trim_start().trim_start_matches("```").trim_start();
+    text.strip_prefix("Exit code ")?
+        .split(|ch: char| !ch.is_ascii_digit() && ch != '-')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// The exit code a structured `rawOutput` carries (`exitCode` or
@@ -479,6 +583,9 @@ fn finalize_tool_message(message: &mut ChatMessage) {
     {
         record.pending = false;
         record.success = false;
+        record
+            .error_kind
+            .get_or_insert_with(|| "interrupted".to_owned());
     }
     if message.content.is_empty() {
         return;
@@ -626,6 +733,110 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::ToolCallUpdate;
+
+    #[test]
+    fn a_failed_claude_bash_call_keeps_its_name_exit_code_and_kind() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        let mut meta = Meta::new();
+        meta.insert(
+            "claudeCode".to_owned(),
+            serde_json::json!({"toolName": "Bash"}),
+        );
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t", "cargo check")
+                .kind(ToolKind::Execute)
+                .raw_input(serde_json::json!({"command": "cd repo && cargo check"}))
+                .status(ToolCallStatus::InProgress)
+                .meta(meta),
+        ));
+        transcript.observe(&SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t",
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Failed)
+                .content(vec![ToolCallContent::from(ContentBlock::Text(
+                    TextContent::new("```\nExit code 101\nerror[E0425]\n```"),
+                ))]),
+        )));
+        let index = transcript.history.len() - 1;
+        let record = transcript.history[index].tool_result.as_ref().unwrap();
+        assert_eq!(record.tool_name, "execute");
+        assert_eq!(record.exit_code, Some(101));
+        assert_eq!(record.error_kind.as_deref(), Some("exit_status"));
+        assert_eq!(
+            transcript.tool_names.get(&index).map(String::as_str),
+            Some("Bash")
+        );
+    }
+
+    #[test]
+    fn mcp_names_and_failure_kinds_come_from_meta_and_text() {
+        let mut meta = Meta::new();
+        meta.insert(
+            "jetbrains".to_owned(),
+            serde_json::json!({"air": {"mcp": {"server": "rustcode", "tool": "wait_session"}}}),
+        );
+        assert_eq!(
+            native_tool_name(&meta).as_deref(),
+            Some("mcp__rustcode__wait_session")
+        );
+        let mut codex = Meta::new();
+        codex.insert(
+            "rustcode".to_owned(),
+            serde_json::json!({"toolName": "commandExecution"}),
+        );
+        assert_eq!(
+            native_tool_name(&codex).as_deref(),
+            Some("commandExecution")
+        );
+        assert_eq!(native_tool_name(&Meta::new()), None);
+
+        let mut denied = Meta::new();
+        denied.insert(
+            "claudeCode".to_owned(),
+            serde_json::json!({"toolResponse": {"decisionReasonType": "classifier"}}),
+        );
+        assert_eq!(
+            failure_kind(Some(&denied), None, Some("no verdict")),
+            "permission_denied"
+        );
+        assert_eq!(
+            failure_kind(
+                None,
+                None,
+                Some("Command guard: rule `no-git-stash` refused")
+            ),
+            "guard_refused"
+        );
+        assert_eq!(
+            failure_kind(None, Some(2), Some("Exit code 2")),
+            "exit_status"
+        );
+        assert_eq!(failure_kind(None, None, Some("something broke")), "failed");
+        assert_eq!(text_exit_code("Exit code 1\nboom"), Some(1));
+        assert_eq!(text_exit_code("no code here"), None);
+    }
+
+    #[test]
+    fn a_call_cut_off_by_the_turn_end_is_interrupted() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t", "sleep 60")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress),
+        ));
+        transcript.end_reply();
+        let record = transcript
+            .history
+            .last()
+            .unwrap()
+            .tool_result
+            .as_ref()
+            .unwrap();
+        assert!(!record.success);
+        assert_eq!(record.error_kind.as_deref(), Some("interrupted"));
+    }
 
     #[test]
     fn live_tool_metrics_keep_first_terminal_and_command() {
