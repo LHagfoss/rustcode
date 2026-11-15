@@ -262,9 +262,9 @@ export function Row({
   /** A live value shown under the description (a path, why a control is off). */
   status?: ReactNode;
   /**
-   * A row's short state at its top right (a `Chip`): the same place on every
-   * row, whether or not the row has controls under its text. A row with
-   * controls keeps them in their own row below.
+   * A row's short state (a `Chip`), just before its controls on the same line, so a
+   * state and the action that changes it read together. A stacked row keeps it at its
+   * top right, level with the title, and its controls in their own line below.
    */
   badge?: ReactNode;
   children?: ReactNode;
@@ -288,7 +288,7 @@ export function Row({
       className={cx("@container group/row relative", className)}
       data-setting={typeof title === "string" ? title : undefined}
     >
-      {badge && <div className="absolute end-4 top-3 flex items-center gap-2">{badge}</div>}
+      {badge && stacked && <div className="absolute end-4 top-3 flex items-center gap-2">{badge}</div>}
       <div
         className={cx(
           "flex min-h-12 flex-col gap-3",
@@ -299,7 +299,7 @@ export function Row({
         <div
           className={cx(
             "min-w-0 flex-1",
-            badge ? "pr-24" : undefined,
+            badge && stacked ? "pr-24" : undefined,
             reset && (stacked ? "pr-7" : "@max-[34rem]:pr-7"),
           )}
         >
@@ -314,8 +314,9 @@ export function Row({
           )}
           {status && <div className="pt-0.5 text-caption text-fg-muted">{status}</div>}
         </div>
-        {(children || reset) && (
-          <div className="flex shrink-0 items-center gap-2">
+        {(children || reset || (badge && !stacked)) && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {badge && !stacked && <div className="flex items-center gap-2">{badge}</div>}
             {/* Stacked, the reset leaves the flow for the row's top right: the control then
                 starts at the same left edge as every other stacked control. */}
             {reset && (

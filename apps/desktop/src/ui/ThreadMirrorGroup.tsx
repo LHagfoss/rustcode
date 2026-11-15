@@ -53,12 +53,12 @@ export function ThreadMirrorGroup() {
   return (
     <Group
       title="Thread copies"
-      footer="The environment that runs a thread stays its owner. A copy is read-only and never deleted when the original is."
+      hint="The environment that runs a thread stays its owner. A copy is read-only and never deleted when the original is."
     >
       <Row
         title="Keep a copy of other environments' threads"
-        subtitle="Their threads stay readable here when they are offline, wiped or removed."
-        status={loaded ? mirrorLine(status) : "Reading…"}
+        subtitle={loaded ? mirrorLine(status) : "Reading…"}
+        hint="Their threads stay readable here when they are offline, wiped or removed."
       >
         <Switch
           label="Keep a copy of other environments' threads"
@@ -66,26 +66,28 @@ export function ThreadMirrorGroup() {
           onChange={(enabled) => apply({ enabled })}
         />
       </Row>
-      <Row
-        title="Projects left out"
-        subtitle="One folder per line. Threads in these folders, or inside them, are not copied."
-        stacked
-      >
-        <textarea
-          aria-label="Projects left out of the copy"
-          className={`${fieldClass} h-20 w-full resize-y py-2 font-mono`}
-          placeholder="/Users/me/code/private"
-          value={projects}
-          disabled={!loaded || !status}
-          onChange={(event) => setProjects(event.target.value)}
-          onBlur={() => {
-            const next = parseProjects(projects);
-            if (JSON.stringify(next) !== JSON.stringify(status?.excludedProjects ?? [])) {
-              apply({ excludedProjects: next });
-            }
-          }}
-        />
-      </Row>
+      {status?.enabled !== false && (
+        <Row
+          title="Projects left out"
+          subtitle="One folder per line; threads in or under these are not copied."
+          stacked
+        >
+          <textarea
+            aria-label="Projects left out of the copy"
+            className={`${fieldClass} h-16 w-full resize-y py-2 font-mono`}
+            placeholder="/Users/me/code/private"
+            value={projects}
+            disabled={!loaded || !status}
+            onChange={(event) => setProjects(event.target.value)}
+            onBlur={() => {
+              const next = parseProjects(projects);
+              if (JSON.stringify(next) !== JSON.stringify(status?.excludedProjects ?? [])) {
+                apply({ excludedProjects: next });
+              }
+            }}
+          />
+        </Row>
+      )}
     </Group>
   );
 }

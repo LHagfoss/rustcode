@@ -91,7 +91,7 @@ export function ShortcutsPage() {
           />
         ))}
       </Group>
-      <Group title="While typing" footer="The message box and approvals keep these; they cannot be changed.">
+      <Group title="While typing" hint="The message box and approvals keep these; they cannot be changed.">
         {APP_COMMANDS.filter((command) => !command.remappable).map((command) => (
           <Row key={command.id} title={command.label}>
             <Kbd>{commandHint(command.binding, command)}</Kbd>

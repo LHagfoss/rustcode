@@ -331,18 +331,18 @@ function GeneralPage() {
           status={defaultCwd || "None chosen"}
         >
           <Action onClick={() => void pickFolder(defaultCwd).then((p) => p && setDefaultCwd(p))}>
-            Choose…
+            {defaultCwd ? "Change folder" : "Choose folder"}
           </Action>
         </Row>
         <Row title="Harness, model and effort" subtitle="Which harness runs a new thread by default.">
-          <Action onClick={() => openSettings("agents")}>Harnesses…</Action>
+          <Action onClick={() => openSettings("agents")}>Open Harnesses</Action>
         </Row>
         <Row
           title="Access"
           subtitle="What threads may do without asking, by default and per project."
           status={permissionLabel(defaultAccess.value ?? SETTINGS_DEFAULTS.defaultPermissionMode)}
         >
-          <Action onClick={() => openSettings("permissions")}>Permissions…</Action>
+          <Action onClick={() => openSettings("permissions")}>Open Permissions</Action>
         </Row>
       </Group>
       <Group title="Threads">
@@ -679,7 +679,7 @@ function AgentsPage() {
               </Chip>
             ) : undefined
           }
-          footer="A thread can still switch harness and model from the composer."
+          hint="A thread can still switch harness and model from the composer."
         >
           {scoped.project && (
             <div className="px-4 pb-2">
@@ -1351,7 +1351,7 @@ function AppearancePage() {
               </Action>
             )}
             <Action quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
-              <Plus size={12} /> New theme…
+              <Plus size={12} /> New theme
             </Action>
           </div>
         }
@@ -1559,7 +1559,7 @@ function RecordRequestBodiesGroup() {
   return (
     <Group
       title="Record request bodies"
-      footer="Redacted, clipped and dropped after 7 days. Off, only timing and status are kept."
+      hint="Redacted, clipped and dropped after 7 days. Off, only timing and status are kept."
     >
       <Row
         title="Provider requests (built-in harness)"
@@ -1608,17 +1608,9 @@ function AdvancedPage() {
   return (
     <>
       <RecordRequestBodiesGroup />
-      <Group title="Server status and logs" footer="The server's process, log and a debug report.">
-        <Row title="Diagnostics" subtitle="Moved to its own page.">
-          <Action onClick={() => openSettings("diagnostics")}>Open Diagnostics</Action>
-        </Row>
-      </Group>
       <Group title="Setup">
-        <Row
-          title="Set up your agents again"
-          subtitle="Find each harness, sign it in and check that it runs."
-        >
-          <Action onClick={() => setOnboarding(true)}>Run setup again</Action>
+        <Row title="Agent setup" subtitle="Find each harness, sign it in and check that it runs.">
+          <Action onClick={() => setOnboarding(true)}>Run setup</Action>
         </Row>
       </Group>
     </>
@@ -1628,7 +1620,7 @@ function AdvancedPage() {
 function AboutPage() {
   return (
     <>
-      <Group title="Version" footer="RustCode is open source; its licences ship in each release.">
+      <Group title="Version" hint="RustCode is open source; its licences ship in each release.">
         <AppVersion />
         <UpdateChannelRow />
         <AutoInstallRow />
@@ -1668,9 +1660,8 @@ function SystemSetupGroup() {
   return (
     <Group
       title="System setup"
-      footer={
-        error ?? "Runs after an install or an update. RustCode never asks for an administrator silently."
-      }
+      hint="Runs after an install or an update. RustCode never asks for an administrator silently."
+      footer={error ?? undefined}
       action={
         <Action disabled={running !== null} onClick={() => void run()}>
           {running === "all" ? <Spinner size={12} /> : null}
@@ -1688,8 +1679,8 @@ function SystemSetupGroup() {
             <Row
               key={step.id}
               title={step.title}
-              subtitle={step.about}
-              status={step.message}
+              subtitle={step.message}
+              hint={step.about}
               badge={<Chip tone={chip.tone}>{chip.label}</Chip>}
             >
               {command && (
@@ -1701,10 +1692,13 @@ function SystemSetupGroup() {
                   Copy command
                 </Action>
               )}
-              <Action disabled={running !== null} onClick={() => void run(step.id)}>
-                {running === step.id ? <Spinner size={12} /> : null}
-                {step.auto ? "Run again" : step.status === "done" ? "Check again" : "Set up"}
-              </Action>
+              {/* A step that stands needs no button of its own: the section's Run again checks it. */}
+              {(step.status === "pending" || step.status === "failed" || running === step.id) && (
+                <Action disabled={running !== null} onClick={() => void run(step.id)}>
+                  {running === step.id ? <Spinner size={12} /> : null}
+                  {step.status === "failed" ? "Try again" : "Set up"}
+                </Action>
+              )}
             </Row>
           );
         })

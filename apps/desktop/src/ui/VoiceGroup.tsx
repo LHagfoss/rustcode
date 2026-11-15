@@ -64,7 +64,7 @@ export function VoiceGroup() {
           title={generators === null ? "Looking for a transcription provider…" : "No transcription provider"}
           subtitle="Add an OpenAI or custom OpenAI-compatible generator under Text generation first."
         >
-          <Action onClick={() => openSettings("agents")}>Text generation…</Action>
+          <Action onClick={() => openSettings("agents")}>Open Harnesses</Action>
         </Row>
       ) : (
         <>

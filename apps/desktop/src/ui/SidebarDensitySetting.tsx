@@ -10,7 +10,8 @@ export function SidebarDensitySetting() {
     <Row
       title="Sidebar rows"
       reset={density !== "detailed" ? () => setDensity("detailed") : undefined}
-      subtitle="Compact puts each thread on one line; hover a row for its project, branch and model."
+      subtitle="Compact shows one line per thread."
+      hint="Hover a compact row for its project, branch and model."
     >
       <Choice
         label="Sidebar rows"

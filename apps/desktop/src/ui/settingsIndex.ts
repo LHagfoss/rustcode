@@ -457,13 +457,8 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "advanced",
-    title: "Set up your agents again",
-    keywords: "setup onboarding install sign in harness start over",
-  },
-  {
-    section: "advanced",
-    title: "Server status and logs",
-    keywords: "engine server diagnostics debug",
+    title: "Agent setup",
+    keywords: "setup onboarding install sign in harness start over run again",
   },
 
   // ------------------------------------------------------------ Diagnostics
