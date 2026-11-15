@@ -24,11 +24,38 @@ export type MergeControl =
   | { kind: "merge_when_green"; pending: number }
   | { kind: "blocked"; failed: number };
 
-export function mergeControl(pull: Pick<PullRequest, "state" | "draft" | "checks">): MergeControl {
+export function mergeControl(
+  pull: Pick<PullRequest, "state" | "draft" | "checks">,
+  runs?: readonly CheckRun[],
+): MergeControl {
   if (pull.state !== "open" || pull.draft) return { kind: "none" };
-  if (pull.checks.failed > 0) return { kind: "blocked", failed: pull.checks.failed };
-  if (pull.checks.pending > 0) return { kind: "merge_when_green", pending: pull.checks.pending };
+  // The detail's runs name each check, so the advisory ones the merge ignores
+  // can be left out; the list's counts cannot, and stand in until it is read.
+  const { failed, pending } = runs ? blockingCounts(runs) : pull.checks;
+  if (failed > 0) return { kind: "blocked", failed };
+  if (pending > 0) return { kind: "merge_when_green", pending };
   return { kind: "merge" };
+}
+
+/**
+ * The checks a merge never waits for, as the engine's `ADVISORY_CHECKS`
+ * (rustcode/engine/src/pull_requests.rs) and scripts/pr-merge.sh name them.
+ */
+export const ADVISORY_CHECKS = ["portability coverage"] as const;
+
+export function advisoryCheck(name: string): boolean {
+  const lower = name.toLowerCase();
+  return ADVISORY_CHECKS.some((advisory) => lower.includes(advisory));
+}
+
+const settled = (status: string) => status === "passed" || status === "skipped";
+
+/** Failing and running checks that hold a merge: every one but the advisory jobs. */
+export function blockingCounts(runs: readonly CheckRun[]): { failed: number; pending: number } {
+  const blocking = runs.filter((c) => !advisoryCheck(c.name));
+  const failed = blocking.filter((c) => c.status === "failed").length;
+  const pending = blocking.filter((c) => c.status !== "failed" && !settled(c.status)).length;
+  return { failed, pending };
 }
 
 /**
@@ -49,10 +76,8 @@ type CheckRun = { name: string; status: string };
 
 /** The checks' headline: what needs the user first, then that everything passed. */
 export function checksHeadline(runs: readonly CheckRun[]): string {
-  const failed = runs.filter((c) => c.status === "failed").length;
-  const pending = runs.filter(
-    (c) => c.status !== "failed" && c.status !== "passed" && c.status !== "skipped",
-  ).length;
+  // Advisory jobs never hold a merge, so they never lead the headline either.
+  const { failed, pending } = blockingCounts(runs);
   if (failed) return `${failed} ${failed === 1 ? "check failed" : "checks failed"}`;
   if (pending) return `${pending} ${pending === 1 ? "check running" : "checks running"}`;
   return runs.length ? "Checks passed" : "No checks";
@@ -74,7 +99,11 @@ const subscribe = (listener: () => void) => {
 
 /** Whether a merge of this pull is waiting or running. */
 export function useMerging(cwd: string, number: number): boolean {
-  useSyncExternalStore(subscribe, () => version);
+  useSyncExternalStore(
+    subscribe,
+    () => version,
+    () => version,
+  );
   return running.has(keyOf(cwd, number));
 }
 

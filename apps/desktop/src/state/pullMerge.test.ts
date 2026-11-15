@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkName, checksHeadline, mergeControl } from "./pullMerge";
+import { advisoryCheck, checkName, checksHeadline, mergeControl } from "./pullMerge";
 
 const checks = (passed = 0, failed = 0, pending = 0) => ({ passed, failed, pending, skipped: 0 });
 
@@ -40,5 +40,36 @@ describe("check names", () => {
     expect(checksHeadline([run("passed"), run("pending"), run("pending")])).toBe("2 checks running");
     expect(checksHeadline([run("passed"), run("skipped")])).toBe("Checks passed");
     expect(checksHeadline([])).toBe("No checks");
+    expect(checksHeadline([run("passed"), { name: "portability coverage", status: "failed" }])).toBe(
+      "Checks passed",
+    );
+  });
+});
+
+describe("advisory checks", () => {
+  const run = (name: string, status: string) => ({ name, status });
+  const open = { state: "open" as const, draft: false, checks: checks(1, 1) };
+
+  test("are named as the engine names them", () => {
+    expect(advisoryCheck("Windows and macOS portability coverage")).toBe(true);
+    expect(advisoryCheck("portability coverage (windows)")).toBe(true);
+    expect(advisoryCheck("cargo test --workspace")).toBe(false);
+  });
+
+  test("never hold a merge, failing or running", () => {
+    expect(mergeControl(open, [run("lint", "passed"), run("portability coverage", "failed")])).toEqual({
+      kind: "merge",
+    });
+    expect(mergeControl(open, [run("lint", "passed"), run("portability coverage", "pending")])).toEqual({
+      kind: "merge",
+    });
+    expect(mergeControl(open, [run("lint", "failed"), run("portability coverage", "failed")])).toEqual({
+      kind: "blocked",
+      failed: 1,
+    });
+  });
+
+  test("the list's counts stand in until the runs are read", () => {
+    expect(mergeControl(open)).toEqual({ kind: "blocked", failed: 1 });
   });
 });
