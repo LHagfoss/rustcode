@@ -594,6 +594,8 @@ export type SessionUpdate =
       kind: "toolCallUpdate";
       id: string;
       title?: string;
+      /** The call's input when it arrives after the call (Claude Code sends a Bash command so). */
+      input?: Json;
       status?: ToolStatus;
       output?: string;
       outputDelta?: string;
@@ -752,6 +754,9 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         kind: "toolCallUpdate",
         id: str(update.toolCallId) ?? "",
         title: str(update.title),
+        ...(update.rawInput !== undefined && update.rawInput !== null
+          ? { input: update.rawInput as Json }
+          : {}),
         status: parseToolStatus(update.status),
         output: toolOutput(update),
         outputDelta: str(meta?.outputDelta),

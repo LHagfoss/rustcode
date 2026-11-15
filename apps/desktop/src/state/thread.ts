@@ -728,6 +728,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         parent: item.parent ?? update.parent,
         endedAt: item.endedAt ?? (ended ? now : undefined),
         title: update.title ?? item.title,
+        input: update.input ?? item.input,
         status: background
           ? "in_progress"
           : (update.status ?? (item.status === "pending" ? "in_progress" : item.status)),
