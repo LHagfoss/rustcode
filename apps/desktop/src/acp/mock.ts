@@ -2337,6 +2337,84 @@ function configOptions(thread: MockThread, harnesses: HarnessSnapshot): Json[] {
   return options;
 }
 
+/** The pull requests the mock project has; `/view` opens one of these by number. */
+const MOCK_PULLS = [
+  {
+    number: 2788,
+    title: "feat(desktop): Tauri desktop app on every harness",
+    author: "LHagfoss",
+    state: "open",
+    draft: true,
+    review: "review_required",
+    checks: { passed: 5, failed: 0, pending: 1, skipped: 0 },
+    headRef: "feat/desktop-tauri-harnesses",
+    baseRef: "main",
+    headSha: "58961fc5aa",
+    updatedAt: new Date(minutes(20)).toISOString(),
+    url: "https://github.com/LHagfoss/rustcode/pull/2788",
+    additions: 9120,
+    deletions: 12,
+    changedFiles: 64,
+  },
+  {
+    number: 2781,
+    title: "fix(engine): keep the steer queue across a restart",
+    author: "LHagfoss",
+    state: "open",
+    draft: false,
+    review: "approved",
+    checks: { passed: 6, failed: 1, pending: 0, skipped: 0 },
+    headRef: "fix/engine-steer-restart",
+    baseRef: "main",
+    headSha: "a1b2c3d4",
+    updatedAt: new Date(minutes(300)).toISOString(),
+    url: "https://github.com/LHagfoss/rustcode/pull/2781",
+    additions: 40,
+    deletions: 9,
+    changedFiles: 3,
+  },
+  {
+    number: 2795,
+    title: "feat(desktop): add the login form",
+    author: "LHagfoss",
+    state: "open",
+    draft: false,
+    review: "changes_requested",
+    checks: { passed: 4, failed: 1, pending: 0, skipped: 0 },
+    headRef: "feat/login-form",
+    baseRef: "main",
+    headSha: "58961fc5aa",
+    updatedAt: new Date(minutes(30)).toISOString(),
+    url: "https://github.com/LHagfoss/rustcode/pull/2795",
+    additions: 210,
+    deletions: 4,
+    changedFiles: 5,
+  },
+];
+
+/**
+ * Each pull's check runs, matching its row's counts: #2781's one failure is an
+ * advisory job (Merge stays open), #2795's is a real one (Merge is blocked).
+ */
+const MOCK_CHECK_RUNS: Record<number, { name: string; status: string }[]> = {
+  2781: [
+    { name: "desktop / check", status: "passed" },
+    { name: "lint", status: "passed" },
+    { name: "label", status: "passed" },
+    { name: "Desktop UI", status: "passed" },
+    { name: "rust / test", status: "passed" },
+    { name: "clippy", status: "passed" },
+    { name: "Windows and macOS portability coverage", status: "failed" },
+  ],
+  2795: [
+    { name: "desktop / check", status: "passed" },
+    { name: "lint", status: "passed" },
+    { name: "label", status: "passed" },
+    { name: "rust / test", status: "passed" },
+    { name: "Desktop UI", status: "failed" },
+  ],
+};
+
 export class MockEngine {
   /** What this computer knows of the others (`fleet.json`), by host id. */
   private textGenerators: JsonObject = { generators: [], selected: null };
@@ -3647,65 +3725,7 @@ export class MockEngine {
       case "_rustcode/environment/sync":
         return this.environmentSync(obj(params) ?? {});
       case "_rustcode/pulls":
-        return {
-          list: {
-            provider: "github",
-            hasMore: false,
-            pulls: [
-              {
-                number: 2788,
-                title: "feat(desktop): Tauri desktop app on every harness",
-                author: "LHagfoss",
-                state: "open",
-                draft: true,
-                review: "review_required",
-                checks: { passed: 5, failed: 0, pending: 1, skipped: 0 },
-                headRef: "feat/desktop-tauri-harnesses",
-                baseRef: "main",
-                headSha: "58961fc5aa",
-                updatedAt: new Date(minutes(20)).toISOString(),
-                url: "https://github.com/LHagfoss/rustcode/pull/2788",
-                additions: 9120,
-                deletions: 12,
-                changedFiles: 64,
-              },
-              {
-                number: 2781,
-                title: "fix(engine): keep the steer queue across a restart",
-                author: "LHagfoss",
-                state: "open",
-                draft: false,
-                review: "approved",
-                checks: { passed: 6, failed: 1, pending: 0, skipped: 0 },
-                headRef: "fix/engine-steer-restart",
-                baseRef: "main",
-                headSha: "a1b2c3d4",
-                updatedAt: new Date(minutes(300)).toISOString(),
-                url: "https://github.com/LHagfoss/rustcode/pull/2781",
-                additions: 40,
-                deletions: 9,
-                changedFiles: 3,
-              },
-              {
-                number: 2795,
-                title: "feat(desktop): add the login form",
-                author: "LHagfoss",
-                state: "open",
-                draft: false,
-                review: "changes_requested",
-                checks: { passed: 4, failed: 1, pending: 0, skipped: 0 },
-                headRef: "feat/login-form",
-                baseRef: "main",
-                headSha: "58961fc5aa",
-                updatedAt: new Date(minutes(30)).toISOString(),
-                url: "https://github.com/LHagfoss/rustcode/pull/2795",
-                additions: 210,
-                deletions: 4,
-                changedFiles: 5,
-              },
-            ],
-          },
-        };
+        return { list: { provider: "github", hasMore: false, pulls: MOCK_PULLS } };
       case "_rustcode/project/read": {
         // The engine's `_rustcode/project/read`: a folder's git facts.
         const path = str(obj(params)?.path) || "/Users/me/code/rustcode";
@@ -3986,30 +4006,33 @@ export class MockEngine {
           checkout_branch: "main",
         } as unknown as Json;
       }
-      case "_rustcode/pulls/view":
+      case "_rustcode/pulls/view": {
+        // The row the list shows, so the detail agrees with it; a number the list
+        // does not have opens as an open pull with its checks still running.
+        const row = MOCK_PULLS.find((pull) => pull.number === params.number);
         return {
           pull: {
-            number: params.number as number,
             title: "feat(desktop): Tauri desktop app on every harness",
             author: "LHagfoss",
             state: "open",
-            // #2788 is the draft the list shows; any other opens ready to merge.
-            draft: params.number === 2788,
+            draft: false,
             checks: { passed: 5, failed: 0, pending: 1, skipped: 0 },
             headRef: "feat/desktop-tauri-harnesses",
             baseRef: "main",
             headSha: "58961fc5aa",
-            url: `https://github.com/LHagfoss/rustcode/pull/${params.number}`,
             additions: 9120,
             deletions: 12,
             changedFiles: 64,
+            ...row,
+            number: params.number as number,
+            url: `https://github.com/LHagfoss/rustcode/pull/${params.number}`,
             body: "Adds `apps/desktop`: a Tauri shell around `rustcode --acp`.\n\n- Composer, approvals, harness pickers\n- Link chips and Smart UI",
-            checkRuns: [
+            checkRuns: MOCK_CHECK_RUNS[params.number as number] ?? [
               { name: "desktop / check", status: "passed" },
               { name: "lint", status: "passed" },
               { name: "label", status: "passed" },
               { name: "Desktop UI", status: "passed" },
-              { name: "rust / test", status: "pending" },
+              { name: "rust / test", status: "passed" },
               // A matrix job GitHub skipped before it expanded: the template stays in its name.
               { name: ["Desktop shell (", "$", "{{ matrix.name }})"].join(""), status: "pending" },
             ],
@@ -4145,6 +4168,7 @@ export class MockEngine {
             ],
           },
         };
+      }
       case "_rustcode/pulls/diff":
         return {
           diff: [

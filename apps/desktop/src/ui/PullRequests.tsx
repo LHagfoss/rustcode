@@ -1,12 +1,13 @@
 // Pull requests, after PullRequestsView.swift: the project's pull requests
 // (`_rustcode/pulls`), one in full (`/view`), and a review the user writes
-// and submits (`/review`). Read-only otherwise: nothing here checks out,
-// merges or comments on its own. Picked review feedback goes into the
+// and submits (`/review`), and a merge the user confirms (state/pullMerge.ts).
+// Nothing here checks out, merges or comments on its own. Picked review feedback goes into the
 // thread's composer as a draft; it is never sent from here.
 
 import {
   ArrowLeft,
   Bot,
+  ChevronDown,
   ChevronRight,
   CircleCheck,
   CircleDashed,
@@ -15,7 +16,6 @@ import {
   ExternalLink,
   GitBranchPlus,
   GitMerge,
-  GitPullRequest,
   MessageSquare,
   MoreHorizontal,
   RefreshCw,
@@ -37,6 +37,7 @@ import { openExternal } from "../lib/native";
 import { count } from "../lib/plural";
 import { type FeedbackItem, feedbackItems, feedbackLocation, keepSelected } from "../lib/reviewFeedback";
 import {
+  advisoryCheck,
   cancelMerge,
   checkName,
   checksHeadline,
@@ -337,12 +338,20 @@ const CONFIRM_MS = 4000;
  * finished pull. The first press arms it ("Confirm merge?"), the second merges;
  * a waiting merge shows here, with a way to stop it, until it ends.
  */
-function MergeButton({ cwd, pull }: { cwd: string; pull: PullRequest }) {
+export function MergeButton({
+  cwd,
+  pull,
+  runs,
+}: {
+  cwd: string;
+  pull: PullRequest;
+  runs?: PullDetail["checkRuns"];
+}) {
   const merging = useMerging(cwd, pull.number);
   const [armed, setArmed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
-  const control = mergeControl(pull);
+  const control = mergeControl(pull, runs);
   if (merging)
     return (
       <span className="inline-flex items-center rounded-full bg-fill">
@@ -356,17 +365,20 @@ function MergeButton({ cwd, pull }: { cwd: string; pull: PullRequest }) {
       </span>
     );
   if (control.kind === "none") return null;
+  // The failing count is the Checks headline's to say; the button only says it cannot merge.
   if (control.kind === "blocked")
     return (
       <Tooltip label="A failing check stops the merge. Fix it, or merge on GitHub.">
         <span className="inline-flex">
           <Pill prominent disabled>
-            <GitMerge size={12} /> {count(control.failed, "check")} failed
+            <GitMerge size={12} /> Merge
           </Pill>
         </span>
       </Tooltip>
     );
   const label = control.kind === "merge" ? "Merge" : "Merge when checks pass";
+  // Armed, the button changes colour and keeps saying what the second press does.
+  const confirm = control.kind === "merge" ? "Press again to merge" : "Press again to merge when green";
   const press = () => {
     clearTimeout(timer.current);
     if (!armed) {
@@ -383,8 +395,8 @@ function MergeButton({ cwd, pull }: { cwd: string; pull: PullRequest }) {
         control.kind === "merge_when_green" ? " once every check passes" : ""
       }`}
     >
-      <Pill prominent onClick={press} onBlur={() => setArmed(false)}>
-        <GitMerge size={12} /> {armed ? "Confirm merge?" : label}
+      <Pill prominent={!armed} danger={armed} onClick={press} onBlur={() => setArmed(false)}>
+        <GitMerge size={12} /> {armed ? confirm : label}
       </Pill>
     </Tooltip>
   );
@@ -434,29 +446,25 @@ function ChecksSection({ runs }: { runs: PullDetail["checkRuns"] }) {
           ) : (
             <span className="truncate">{checkName(c.name)}</span>
           )}
+          {advisoryCheck(c.name) && (
+            <Tooltip label="Advisory: a merge does not wait for this check">
+              <span className="shrink-0 text-caption text-fg-faint">advisory</span>
+            </Tooltip>
+          )}
         </div>
       ))}
     </section>
   );
 }
 
-function PullView({
-  cwd,
-  host,
-  number,
-  onBack,
-}: {
-  cwd: string;
-  host: string;
-  number: number;
-  onBack: () => void;
-}) {
+function PullView({ cwd, host, number }: { cwd: string; host: string; number: number }) {
   // The row the list already read draws the header at once; the body, the
   // files and the activity come from the detail read behind it.
   const { detail, summary, error, live } = usePullDetail(cwd, number);
   const [reviewing, setReviewing] = useState(false);
   const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState<"overview" | "diff">("overview");
+  const [tab, setTab] = useState<"details" | "diff">("details");
+  const merges = !!summary && !host && mergeControl(summary, detail?.checkRuns).kind !== "none";
   const askAgent = (pull: PullRequest) => {
     startNewThread(cwd, host || undefined);
     setDraft(
@@ -467,13 +475,6 @@ function PullView({
   };
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
-      <button
-        type="button"
-        onClick={onBack}
-        className="mb-2 flex items-center gap-1 text-callout text-fg-muted hover:text-fg"
-      >
-        <ArrowLeft size={12} /> All pull requests
-      </button>
       {summary ? (
         <>
           <h2 className="selectable font-semibold text-title3">
@@ -481,7 +482,6 @@ function PullView({
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption">
             <span className={STATE_TONE[pullState(summary)]}>{STATE_LABEL[pullState(summary)]}</span>
-            <ChecksMark pull={summary} />
             <Tooltip label={`${summary.author} wants to merge ${summary.headRef} into ${summary.baseRef}`}>
               <span className="text-fg-muted">
                 {count(summary.changedFiles, "file")}{" "}
@@ -491,12 +491,20 @@ function PullView({
             </Tooltip>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <MergeButton cwd={cwd} pull={summary} />
+            {/* A thread on another machine names a path this engine does not have: it merges there. */}
+            {!host && <MergeButton cwd={cwd} pull={summary} runs={detail?.checkRuns} />}
             <DropdownMenu.Root modal={false}>
               <DropdownMenu.Trigger asChild>
-                <Pill aria-label="More pull request actions" className="px-2">
-                  <MoreHorizontal size={13} />
-                </Pill>
+                {merges ? (
+                  <Pill aria-label="More pull request actions" className="px-2">
+                    <MoreHorizontal size={13} />
+                  </Pill>
+                ) : (
+                  // With no merge beside it, a bare "···" reads as nothing: it says what it holds.
+                  <Pill>
+                    Actions <ChevronDown size={12} />
+                  </Pill>
+                )}
               </DropdownMenu.Trigger>
               <MenuContent align="start" className="min-w-[200px]">
                 {summary.url && (
@@ -542,7 +550,7 @@ function PullView({
             value={tab}
             onChange={setTab}
             options={[
-              { value: "overview", label: "Overview" },
+              { value: "details", label: "Details" },
               { value: "diff", label: `Diff · ${summary.changedFiles}` },
             ]}
           />
@@ -553,7 +561,7 @@ function PullView({
           <PullDiff cwd={cwd} pull={summary} detail={detail} />
         </div>
       )}
-      {tab === "overview" && detail && (
+      {tab === "details" && detail && (
         <>
           {detail.body && (
             <div className="mt-3 rounded-lg bg-fill-subtle p-3">
@@ -561,20 +569,6 @@ function PullView({
             </div>
           )}
           {detail.checkRuns.length > 0 && <ChecksSection runs={detail.checkRuns} />}
-          {detail.files.length > 0 && (
-            <section className="mt-3">
-              <h3 className="mb-1 font-semibold text-caption text-fg-muted">Files</h3>
-              {detail.files.map((f) => (
-                <div key={f.path} className="flex h-[20px] items-center gap-2 text-caption">
-                  <span className="min-w-0 flex-1 truncate text-left font-mono" dir="rtl">
-                    <bdi>{f.path}</bdi>
-                  </span>
-                  <span className="text-success tabular">+{f.additions}</span>
-                  <span className="text-danger tabular">−{f.deletions}</span>
-                </div>
-              ))}
-            </section>
-          )}
           <FeedbackSection detail={detail} pull={summary ?? detail} />
         </>
       )}
@@ -708,7 +702,12 @@ export function PullsPanel() {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
   const host = selectedId ? splitThreadKey(selectedId).host : "";
   const [state, setState] = useState<PullListState>("open");
-  const [viewing, setViewing] = useState<number | null>(null);
+  // An open pull belongs to the project (and machine) it was opened in: another
+  // project's #N is a different pull request, so a switch goes back to the list.
+  const scope = `${host}\u0000${cwd ?? ""}`;
+  const [opened, setOpened] = useState<{ scope: string; number: number } | null>(null);
+  const viewing = opened?.scope === scope ? opened.number : null;
+  const setViewing = (number: number | null) => setOpened(number === null ? null : { scope, number });
   // The panel paints the last answer for this state at once and refreshes
   // behind it; the skeleton is only for a first read with nothing saved.
   const { data: pulls, error } = usePullList(cwd, state, { limit: PULL_LIMIT });
@@ -724,10 +723,31 @@ export function PullsPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 px-3">
-        <span className="flex items-center gap-1.5 font-semibold text-body">
-          <GitPullRequest size={14} /> Pull requests
-        </span>
+      {/* The panel's tab already says "Pull requests": the bar holds the state filter or the way back. */}
+      <div className="flex h-9 shrink-0 items-center gap-2 px-3 pt-2">
+        {viewing !== null && cwd ? (
+          <button
+            type="button"
+            onClick={() => setViewing(null)}
+            className="flex items-center gap-1 text-callout text-fg-muted hover:text-fg"
+          >
+            <ArrowLeft size={12} /> All pull requests
+          </button>
+        ) : (
+          <Segments
+            label="State"
+            value={state}
+            onChange={setState}
+            // A rest on a state reads it: choosing it then draws rows at once.
+            onIntent={(next) => cwd && void readPullList(cwd, next, { limit: PULL_LIMIT })}
+            options={[
+              { value: "open", label: "Open" },
+              { value: "merged", label: "Merged" },
+              { value: "closed", label: "Closed" },
+              { value: "all", label: "All" },
+            ]}
+          />
+        )}
         <span className="flex-1" />
         <Cluster>
           <ClusterButton label="Reload" onClick={reload}>
@@ -736,69 +756,52 @@ export function PullsPanel() {
         </Cluster>
       </div>
       {viewing !== null && cwd ? (
-        <PullView cwd={cwd} host={host} number={viewing} onBack={() => setViewing(null)} />
+        <PullView key={`${scope}#${viewing}`} cwd={cwd} host={host} number={viewing} />
       ) : (
-        <>
-          <div className="px-3 pt-2">
-            <Segments
-              label="State"
-              value={state}
-              onChange={setState}
-              // A rest on a state reads it: choosing it then draws rows at once.
-              onIntent={(next) => cwd && void readPullList(cwd, next, { limit: PULL_LIMIT })}
-              options={[
-                { value: "open", label: "Open" },
-                { value: "merged", label: "Merged" },
-                { value: "closed", label: "Closed" },
-                { value: "all", label: "All" },
-              ]}
-            />
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {error && <ErrorView error={error} />}
-            {!error && pulls?.length === 0 && (
-              <p className="px-2 py-2 text-callout text-fg-muted">No pull requests.</p>
-            )}
-            {!pulls && !error && <PullListSkeleton />}
-            {pulls?.map((pull) => (
-              <button
-                key={pull.number}
-                type="button"
-                onClick={() => setViewing(pull.number)}
-                onPointerEnter={() => intent.start(pull.number)}
-                onPointerLeave={intent.cancel}
-                onFocus={() => intent.start(pull.number)}
-                onBlur={intent.cancel}
-                className="flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-subtle"
-              >
-                <span className="flex w-full items-baseline gap-1.5">
-                  <span
-                    className={cx(
-                      "min-w-0 flex-1 truncate font-medium text-body",
-                      pull.draft && "text-fg-muted",
-                    )}
-                  >
-                    {pull.title}
-                  </span>
-                  <span className="shrink-0 text-caption text-fg-faint tabular">#{pull.number}</span>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {error && <ErrorView error={error} />}
+          {!error && pulls?.length === 0 && (
+            <p className="px-2 py-2 text-callout text-fg-muted">No pull requests.</p>
+          )}
+          {!pulls && !error && <PullListSkeleton />}
+          {pulls?.map((pull) => (
+            <button
+              key={pull.number}
+              type="button"
+              onClick={() => setViewing(pull.number)}
+              onPointerEnter={() => intent.start(pull.number)}
+              onPointerLeave={intent.cancel}
+              onFocus={() => intent.start(pull.number)}
+              onBlur={intent.cancel}
+              className="flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-subtle"
+            >
+              <span className="flex w-full items-baseline gap-1.5">
+                <span
+                  className={cx(
+                    "min-w-0 flex-1 truncate font-medium text-body",
+                    pull.draft && "text-fg-muted",
+                  )}
+                >
+                  {pull.title}
                 </span>
-                <span className="flex items-center gap-2 text-caption text-fg-muted">
-                  <span className="truncate">
-                    {[
-                      pull.author,
-                      pull.draft ? "Draft" : undefined,
-                      pull.review ? REVIEW_LABEL[pull.review] : undefined,
-                      relativeAge(pull.updatedAt),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                  <ChecksMark pull={pull} />
+                <span className="shrink-0 text-caption text-fg-faint tabular">#{pull.number}</span>
+              </span>
+              <span className="flex items-center gap-2 text-caption text-fg-muted">
+                <span className="truncate">
+                  {[
+                    pull.author,
+                    pull.draft ? "Draft" : undefined,
+                    pull.review ? REVIEW_LABEL[pull.review] : undefined,
+                    relativeAge(pull.updatedAt),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </span>
-              </button>
-            ))}
-          </div>
-        </>
+                <ChecksMark pull={pull} />
+              </span>
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
