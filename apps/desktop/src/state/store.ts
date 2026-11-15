@@ -182,6 +182,7 @@ import {
   reconcileLinks,
   releaseLimitWaitsFrom,
   requeueUnreadSteers,
+  resetLinkBook,
   resetWaits,
   restoreQueuedThreads,
   stateOf,
@@ -8515,6 +8516,7 @@ export function resetForTests() {
   clearPageCache();
   stopPlanPolling();
   resetWaits();
+  resetLinkBook();
   keptUnlistedThreads.clear();
   deletedThreads.clear();
   deferredAnnouncements.length = 0;
