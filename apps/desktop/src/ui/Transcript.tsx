@@ -1406,7 +1406,7 @@ export function Transcript({
                     ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
                       <div className="flex items-center gap-2 text-caption text-fg-faint">
                         <span className="h-px flex-1 bg-border" />
-                        <RotateCw size={11} />
+                        <RotateCw size={12} />
                         Continued after a restart
                         {(row.repeats ?? 1) > 1 && <span className="tabular">×{row.repeats}</span>}
                         <span className="h-px flex-1 bg-border" />
@@ -1415,7 +1415,8 @@ export function Transcript({
                       <SelectableMessage threadId={thread.id}>
                         <UserRow
                           item={item}
-                          threadId={thread.running || peek ? undefined : thread.id}
+                          threadId={peek ? undefined : thread.id}
+                          busy={thread.running}
                           rewind={rewind}
                           // Consecutive messages from the same side soften the corners they share.
                           after={rows[v.index - 1]?.item?.kind === "user"}

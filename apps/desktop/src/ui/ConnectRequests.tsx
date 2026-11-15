@@ -19,7 +19,8 @@ import {
   promptedRequests,
   settleCode,
 } from "../state/connectRequests";
-import { answerConnectRequest, closeConnectCode, refreshRemote, toast, useApp } from "../state/store";
+import { answerConnectRequest, closeConnectCode, refreshRemote } from "../state/remoteAccess";
+import { toast, useApp } from "../state/store";
 import { copyText, Pill, Spinner } from "./primitives";
 
 /** At most this many requests are asked about at once; the gateway holds four. */
@@ -136,7 +137,7 @@ function RequestCard({
             {request.remoteAddr ? ` at ${request.remoteAddr}` : ""}
           </div>
           <p className="m-0 pt-2 text-caption text-fg-faint leading-normal">
-            {request.deviceKind === "desktop" && <>Can see and run all threads on this machine. </>}
+            {request.deviceKind === "desktop" && <>Can see and run all threads on this computer. </>}
             Accept only a device you have with you. This computer then shows a code to enter on it.
           </p>
         </div>

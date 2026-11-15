@@ -1227,10 +1227,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         >
           <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />
           <span className="min-w-0 shrink truncate">{label}</span>
-          {fast?.currentBool && <Zap size={11} className="shrink-0" fill="currentColor" />}
+          {fast?.currentBool && <Zap size={12} className="shrink-0" fill="currentColor" />}
           {traits && <span className="min-w-0 shrink-[2] truncate text-fg-muted">{traits}</span>}
           <ChevronUp
-            size={11}
+            size={12}
             strokeWidth={2.5}
             className={cx("shrink-0 transition-transform duration-200 ease-snappy", open && "rotate-180")}
           />

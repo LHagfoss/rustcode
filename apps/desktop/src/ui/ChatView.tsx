@@ -47,6 +47,7 @@ import {
   refreshSessions,
   repairThread,
   retryPendingSetup,
+  seeFailure,
   setAutoCompactForThread,
   setPanel,
   setTerminalOpen,
@@ -171,7 +172,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
         >
           {wt && (
             <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">
-              <GitBranch size={11} className="shrink-0" />
+              <GitBranch size={12} className="shrink-0" />
               <span className="truncate">{wt.branch}</span>
             </span>
           )}
@@ -672,7 +673,7 @@ function SettledBar({ threadId }: { threadId: string }) {
       <CircleCheck size={12} className="shrink-0 text-success" />
       <span className="min-w-0 flex-1 truncate font-medium text-fg-muted">Settled</span>
       <Pill size="sm" quiet onClick={() => void setThreadStatus(threadId, "idle")}>
-        <CircleDashed size={11} /> Unsettle
+        <CircleDashed size={12} /> Unsettle
       </Pill>
     </div>
   );
@@ -1008,6 +1009,8 @@ export function ChatView() {
                     }
                     onDismiss={() => {
                       setDismissed(error);
+                      // Dismissed here is seen: its "Needs you" row goes with it.
+                      if (thread) seeFailure(thread.id);
                       void refreshSessions();
                     }}
                   />

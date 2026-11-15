@@ -529,7 +529,7 @@ export function SmartUIView({
       ) : halt ? (
         <div className="flex min-h-[44px] items-center gap-2 text-callout">
           <Pill disabled={!threadId} onClick={pressRun}>
-            <Play size={11} fill="currentColor" /> Run interactive view
+            <Play size={12} fill="currentColor" /> Run interactive view
           </Pill>
           <span className="truncate text-fg-muted">{title}</span>
         </div>
@@ -562,7 +562,7 @@ export function SmartUIView({
           </IconButton>
         ) : (
           <IconButton label="Run" onClick={pressRun}>
-            <Play size={11} />
+            <Play size={12} />
           </IconButton>
         )}
       </div>

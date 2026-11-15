@@ -220,12 +220,12 @@ export const QueuedMessageRow = memo(function QueuedMessageRow({
           edit. */}
       <div className="mt-1 flex h-[22px] items-center gap-1.5 text-caption text-fg-muted">
         <span className={cx("flex items-center gap-1", !held && !editing && "rc-meta-reveal")}>
-          <Clock size={11} className="text-fg-faint" />
+          <Clock size={12} className="text-fg-faint" />
           {state}
         </span>
         {editing ? (
           <span className="flex items-center gap-1 text-accent">
-            <Pencil size={11} />
+            <Pencil size={12} />
             Editing in the composer
             <button
               type="button"

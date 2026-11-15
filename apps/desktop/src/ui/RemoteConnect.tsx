@@ -5,7 +5,8 @@
 import { useState } from "react";
 import type { RemoteDevice } from "../acp/remote";
 import { deviceLabel, promptedRequests } from "../state/connectRequests";
-import { answerConnectRequest, askConfirm, revokeRemoteDevice, useApp } from "../state/store";
+import { answerConnectRequest, revokeRemoteDevice } from "../state/remoteAccess";
+import { askConfirm, useApp } from "../state/store";
 import { Spinner } from "./primitives";
 import { Action, Group, Row } from "./settingsKit";
 
@@ -29,7 +30,7 @@ export function ConnectRequestsGroup() {
         <Row
           key={request.id}
           title={request.deviceName}
-          subtitle={`${request.deviceKind === "desktop" ? "Can see and run all threads on this machine. " : ""}${deviceLabel(request.deviceKind, request.platform)}${request.remoteAddr ? ` at ${request.remoteAddr}` : ""}`}
+          subtitle={`${request.deviceKind === "desktop" ? "Can see and run all threads on this computer. " : ""}${deviceLabel(request.deviceKind, request.platform)}${request.remoteAddr ? ` at ${request.remoteAddr}` : ""}`}
         >
           <Action disabled={answering === request.id} onClick={() => void answer(request.id, false)}>
             Deny

@@ -184,7 +184,7 @@ export function WhileAwayCard({ className }: { className?: string }) {
               <ProjectMark name={projectName(item.project)} size={14} />
               <span className="min-w-0 flex-1 truncate text-callout font-medium text-fg">{item.title}</span>
               <Pill size="sm" onClick={() => selectThread(item.threadId)}>
-                Open <ArrowUpRight size={11} />
+                Open <ArrowUpRight size={12} />
               </Pill>
             </div>
           ))}

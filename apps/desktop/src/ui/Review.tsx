@@ -145,7 +145,7 @@ function Gutter({ line, side, onComment, commented }: Omit<LineProps, "html">) {
       <span className="group-hover/g:invisible">{n ?? ""}</span>
       {n !== undefined && (
         <MessageSquarePlus
-          size={11}
+          size={12}
           className="invisible absolute top-[3px] right-1.5 group-hover/g:visible"
         />
       )}
@@ -566,7 +566,7 @@ export function Review({ threadId }: { threadId: string }) {
             <div key={group.dir} className="mb-1">
               {group.dir && (
                 <div className="flex items-center gap-1.5 px-2 pt-2 pb-0.5 text-caption text-fg-faint">
-                  <Folder size={11} className="shrink-0" />
+                  <Folder size={12} className="shrink-0" />
                   <span className="truncate font-mono">{group.dir}/</span>
                 </div>
               )}
@@ -693,7 +693,7 @@ export function Review({ threadId }: { threadId: string }) {
                       ]}
                     />
                     <Pill disabled={posting} onClick={() => void postReview()}>
-                      {posting ? <Spinner size={11} /> : null} Post to #{source.pull.number}
+                      {posting ? <Spinner size={12} /> : null} Post to #{source.pull.number}
                     </Pill>
                   </>
                 )}

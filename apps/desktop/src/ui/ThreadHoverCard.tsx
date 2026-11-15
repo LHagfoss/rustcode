@@ -95,7 +95,7 @@ export function ThreadHoverCard({
             </Line>
             {machine && (
               <Line>
-                <Laptop size={11} className="shrink-0" />
+                <Laptop size={12} className="shrink-0" />
                 <span className="min-w-0 truncate">Runs on {machine}</span>
               </Line>
             )}
@@ -108,18 +108,18 @@ export function ThreadHoverCard({
             </Line>
             {branch && (
               <Line>
-                <GitBranch size={11} className="shrink-0" />
+                <GitBranch size={12} className="shrink-0" />
                 <span className="min-w-0 truncate font-mono text-[10px]">{branch}</span>
               </Line>
             )}
             <Line>
-              <Folder size={11} className="shrink-0" />
+              <Folder size={12} className="shrink-0" />
               <span className="min-w-0 truncate font-mono text-[10px]">{displayPath(session.cwd)}</span>
             </Line>
           </span>
           {words && (
             <span className="flex min-w-0 items-start gap-1.5 border-border border-t pt-2 text-fg-muted text-sub">
-              <MessageSquare size={11} className="mt-[3px] shrink-0" />
+              <MessageSquare size={12} className="mt-[3px] shrink-0" />
               <span className="line-clamp-3 min-w-0">{words}</span>
             </span>
           )}

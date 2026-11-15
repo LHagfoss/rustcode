@@ -5,6 +5,7 @@
 
 import {
   Archive,
+  ArrowDownUp,
   BarChart3,
   Clock,
   Filter,
@@ -18,6 +19,7 @@ import {
   PinOff,
   Play,
   Rows3,
+  Search,
 } from "lucide-react";
 import type { PullRequest } from "../acp/rustcode";
 import { projectName, type SessionSummary } from "../acp/types";
@@ -25,7 +27,17 @@ import { pickFolder } from "../lib/native";
 import { projectActions, projectKey } from "../state/projectActions";
 import { registerProject } from "../state/projectBook";
 import { cachedPulls, pullForBranch } from "../state/pulls";
-import { PREF, readPref, sidebarDensity, writePref } from "../state/sidebarPrefs";
+import {
+  PREF,
+  readPref,
+  SETTLE_AFTER_DEFAULT_DAYS,
+  SIDEBAR_SORTS,
+  settleAfterDays,
+  settleAfterMs,
+  sidebarDensity,
+  sidebarSort,
+  writePref,
+} from "../state/sidebarPrefs";
 import { shelfKey } from "../state/sidebarRows";
 import { snoozePresets } from "../state/snooze";
 import {
@@ -120,9 +132,10 @@ export function threadHaystack(s: SessionSummary, pull = pullOfThread(s)): strin
 
 /** Whether any thread is settled: marked so, or untouched long enough to count as settled. */
 function hasSettled(s: ReturnType<typeof useApp.getState>, now: number): boolean {
+  const settleMs = settleAfterMs(settleAfterDays(readPref(PREF.settleAfterDays, SETTLE_AFTER_DEFAULT_DAYS)));
   return s.sessions.some((x) => {
     const status = statusOf(s, x.id);
-    return status === "done" || (status !== "review" && idleSettled(x.updatedAt, now));
+    return status === "done" || (status !== "review" && idleSettled(x.updatedAt, now, settleMs));
   });
 }
 
@@ -133,6 +146,8 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
   const working = readPref(PREF.workingSection, true);
   const only = readPref(PREF.onlyProject, false);
   const compact = sidebarDensity(readPref(PREF.density, "detailed")) === "compact";
+  const toolbar = readPref(PREF.toolbar, true);
+  const sort = sidebarSort(readPref(PREF.sort, "activity"));
   const open = s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) : undefined;
   const pinned = open ? s.pinned.includes(open.id) : false;
   const asleep = open ? s.snoozed[open.id] : undefined;
@@ -203,6 +218,24 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
       disabled: s.projectCwd ? undefined : "No project open",
       run: () => writePref(PREF.onlyProject, !only),
     },
+    {
+      id: "sidebar-toolbar",
+      label: "Sidebar: Toolbar",
+      detail: state(toolbar),
+      icon: Search,
+      words: "view search filter sort new thread buttons header",
+      run: () => writePref(PREF.toolbar, !toolbar),
+    },
+    ...SIDEBAR_SORTS.map(
+      (option): PaletteAction => ({
+        id: `sidebar-sort-${option.id}`,
+        label: `Sidebar: Sort by ${option.label.toLowerCase()}`,
+        detail: sort === option.id ? "On" : undefined,
+        icon: ArrowDownUp,
+        words: "view order sort list threads",
+        run: () => writePref(PREF.sort, option.id),
+      }),
+    ),
     {
       id: "sidebar-density",
       label: "Sidebar: Compact rows",

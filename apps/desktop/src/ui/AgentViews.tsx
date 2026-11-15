@@ -122,13 +122,13 @@ export function AgentAvatar({
           className="-right-1 -bottom-1 absolute flex size-3 items-center justify-center rounded-full bg-bg ring-2 ring-bg"
         >
           {state === "working" ? (
-            <Spinner size={8} className="text-accent" />
+            <Spinner size={10} className="text-accent" />
           ) : state === "failed" ? (
-            <X size={9} strokeWidth={3} className="text-danger" />
+            <X size={10} strokeWidth={3} className="text-danger" />
           ) : state === "stopped" ? (
-            <Minus size={9} strokeWidth={3} className="text-fg-faint" />
+            <Minus size={10} strokeWidth={3} className="text-fg-faint" />
           ) : (
-            <Check size={9} strokeWidth={3} className="text-success rc-dot-in" />
+            <Check size={10} strokeWidth={3} className="text-success rc-dot-in" />
           )}
         </span>
       )}

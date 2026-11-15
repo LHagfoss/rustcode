@@ -1,3 +1,13 @@
+## [v1.37.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.37.0) - 2026-11-15
+
+### Features
+- The sidebar has a toolbar again: search threads, sort and filter the list, and start a new thread. Idle threads can settle after a chosen number of days, or never. (#3806)
+- Opening a failed thread or dismissing its error now takes it out of Needs you. (#3803)
+- A sent message keeps its Edit and Retry buttons while a turn runs, dimmed until it ends. (#3804)
+- The thread menu leads with Pin, Rename, Mark Unread and Snooze; occasional tools moved under More. (#3807)
+- Settings groups its pages under Agents, Devices & access, Activity and System. (#3808)
+- Icons share one size scale across the app, and settings say "this computer" and "environments" consistently. (#3809)
+- Use smaller Linux desktop downloads when system WebKitGTK is installed and share the app engine with the CLI. (#3802)
 ## [v1.36.3](https://github.com/LHagfoss/rustcode/releases/tag/v1.36.3) - 2026-11-15
 
 ### Features

@@ -1,12 +1,12 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
-import { copyThreadLink } from "../state/deepLinks";
-// The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
-// the app's brand under it (its mark, name and version), then one list: pinned
-// threads first, then one Threads list (by project when asked) that leads with
-// the threads running now, then the Snoozed and Settled shelves at the foot, each
-// folding on its own header. Threads are searched from ⌘K, which also holds the
-// buttons that used to sit here (new thread, add project, settings, pull
-// requests, usage). A section header never folds.
+import { copyThreadId, copyThreadLink } from "../state/deepLinks";
+// The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
+// Settings), the Needs you row, the toolbar (search, the sort and filter menu and
+// New thread; ui/SidebarToolbar.tsx, optional), then one list: pinned threads
+// first, then one Threads list (by project when asked) in the chosen sort, then
+// the Snoozed and Settled shelves at the foot, each folding on its own header.
+// ⌘K searches threads too, and holds the actions (add project, pull requests,
+// usage). A section header never folds.
 // Every thread row is one fixed grid of 3 lines, each a left and a right part, so
 // each row is the same height and each thing has one place (`ROW_GRID`). The left
 // parts hold the title, then the project and computer, then the branch or what the
@@ -23,6 +23,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDashed,
+  CircleDot,
   Clock,
   CloudUpload,
   Copy,
@@ -103,7 +104,15 @@ import {
 import { type PendingSetup, pendingSummary } from "../state/setup";
 import { type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
-import { PREF, usePref, useSidebarDensity } from "../state/sidebarPrefs";
+import {
+  PREF,
+  SETTLE_AFTER_DEFAULT_DAYS,
+  settleAfterDays,
+  settleAfterMs,
+  usePref,
+  useSidebarDensity,
+  useSidebarSort,
+} from "../state/sidebarPrefs";
 import {
   type CompactMark,
   cleanFolds,
@@ -136,6 +145,7 @@ import {
   shelfOpen,
   sortSection,
   threadDiff,
+  threadMatches,
   visibleRows,
 } from "../state/sidebarRows";
 import { snoozePresets, wakeLabel } from "../state/snooze";
@@ -201,6 +211,7 @@ import {
   Tooltip,
 } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
+import { SidebarToolbar } from "./SidebarToolbar";
 import { useThreadDrag } from "./sidebarDrag";
 import { ThreadHoverCard } from "./ThreadHoverCard";
 import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
@@ -303,35 +314,27 @@ function ThreadMenuItems({
             onClear?.();
           }}
         >
-          <CircleCheck size={13} /> Mark {n} Unread
+          <CircleDot size={13} /> Mark {n} Unread
         </Item>
       </>
     );
   }
+  // Most used first (pin, rename, unread, snooze), then the thread's state and what it changed,
+  // then the worktree's own actions; the occasional tools sit under More, and Trash last.
   return (
     <>
-      {status !== "review" && (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "review")}>
-          <Eye size={13} /> Mark for Review
+      <Item className={menuItem} onSelect={() => togglePin(session.id)}>
+        {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+        {pinned ? "Unpin" : "Pin"}
+      </Item>
+      {!remote && (
+        <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
+          <Pencil size={13} /> Rename…
         </Item>
       )}
-      {status === "done" ? (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
-          <CircleDashed size={13} /> Unsettle
-        </Item>
-      ) : (
-        <Item className={menuItem} onSelect={() => settleThread(session.id)}>
-          <CircleCheck size={13} /> Settle
-        </Item>
-      )}
-      {status === "review" && (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
-          <CircleDashed size={13} /> Clear Status
-        </Item>
-      )}
-      {statusMissing && (
-        <div className="px-2 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
-      )}
+      <Item className={menuItem} onSelect={() => markUnread(session.id)}>
+        <CircleDot size={13} /> Mark Unread
+      </Item>
       {snoozed ? (
         <Item className={menuItem} onSelect={() => snoozeThread(session.id, null)}>
           <Clock size={13} /> Unsnooze
@@ -340,7 +343,7 @@ function ThreadMenuItems({
         <Menu.Sub>
           <Menu.SubTrigger className={menuItem}>
             <Clock size={13} /> Snooze
-            <ChevronRight size={11} strokeWidth={2.5} className="ml-auto text-fg-faint" />
+            <ChevronRight size={12} strokeWidth={2.5} className="ml-auto text-fg-faint" />
           </Menu.SubTrigger>
           <Menu.Portal>
             <Menu.SubContent
@@ -365,54 +368,42 @@ function ThreadMenuItems({
           </Menu.Portal>
         </Menu.Sub>
       )}
+      <Separator className={menuSeparator} />
+      {status === "done" ? (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
+          <CircleDashed size={13} /> Unsettle
+        </Item>
+      ) : (
+        <Item className={menuItem} onSelect={() => settleThread(session.id)}>
+          <CircleCheck size={13} /> Settle
+        </Item>
+      )}
+      {status !== "review" && (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "review")}>
+          <Eye size={13} /> Mark for Review
+        </Item>
+      )}
+      {status === "review" && (
+        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
+          <CircleDashed size={13} /> Clear Status
+        </Item>
+      )}
+      {statusMissing && (
+        <div className="px-2 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
+      )}
       {!remote && (
         <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
           <FileDiff size={13} /> Review Changes
         </Item>
       )}
-      <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
-        <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
-      </Item>
-      <Item className={menuItem} onSelect={() => markUnread(session.id)}>
-        <CircleCheck size={13} /> Mark Unread
-      </Item>
-      <Separator className={menuSeparator} />
-      <Item className={menuItem} onSelect={() => togglePin(session.id)}>
-        {pinned ? <PinOff size={13} /> : <Pin size={13} />}
-        {pinned ? "Unpin" : "Pin"}
-      </Item>
-      {!remote && (
-        <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
-          <Pencil size={13} /> Rename…
-        </Item>
-      )}
-      <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
-        <Wrench size={13} /> Repair Thread
-      </Item>
       <Item className={menuItem} onSelect={() => copyThreadLink(session.id)}>
-        <Copy size={13} /> Copy link
+        <Copy size={13} /> Copy Link
       </Item>
-      <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
-        <Copy size={13} /> Copy Thread ID
-      </Item>
-      {!remote && (
-        <Item
-          className={menuItem}
-          disabled={!canFiles}
-          onSelect={() =>
-            void openThreadLog(session.id).catch((e) =>
-              toast(`Could not open the thread log: ${errorText(e)}`, "error"),
-            )
-          }
-        >
-          <FileText size={13} /> Open Thread Log
-        </Item>
-      )}
       {worktree && (
         <>
           <Separator className={menuSeparator} />
           <div className="flex items-center gap-1.5 px-2 pt-0.5 pb-1 text-caption text-fg-muted">
-            <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
+            <GitBranch size={12} /> <span className="truncate font-mono">{worktree.branch}</span>
           </div>
           {!remote && (
             <>
@@ -433,6 +424,46 @@ function ThreadMenuItems({
           )}
         </>
       )}
+      <Separator className={menuSeparator} />
+      {/* What a thread needs now and then, not every day: kept one level down so the menu leads
+          with what is used. */}
+      <Menu.Sub>
+        <Menu.SubTrigger className={menuItem}>
+          <Ellipsis size={13} /> More
+          <ChevronRight size={12} strokeWidth={2.5} className="ml-auto text-fg-faint" />
+        </Menu.SubTrigger>
+        <Menu.Portal>
+          <Menu.SubContent
+            sideOffset={4}
+            alignOffset={-5}
+            collisionPadding={surfaceCollisionPadding}
+            className={menuSurface}
+          >
+            <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
+              <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
+            </Item>
+            <Item className={menuItem} onSelect={() => copyThreadId(session.id)}>
+              <Copy size={13} /> Copy Thread ID
+            </Item>
+            {!remote && (
+              <Item
+                className={menuItem}
+                disabled={!canFiles}
+                onSelect={() =>
+                  void openThreadLog(session.id).catch((e) =>
+                    toast(`Could not open the thread log: ${errorText(e)}`, "error"),
+                  )
+                }
+              >
+                <FileText size={13} /> Open Thread Log
+              </Item>
+            )}
+            <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
+              <Wrench size={13} /> Repair Thread
+            </Item>
+          </Menu.SubContent>
+        </Menu.Portal>
+      </Menu.Sub>
       {!remote && (
         <>
           <Separator className={menuSeparator} />
@@ -459,13 +490,6 @@ function ThreadMenuItems({
         </div>
       )}
     </>
-  );
-}
-
-function copyText(text: string, done: string) {
-  void navigator.clipboard.writeText(text).then(
-    () => toast(done, "info"),
-    () => toast("Could not copy", "error"),
   );
 }
 
@@ -971,10 +995,10 @@ const ThreadRow = memo(function ThreadRow({
                     className={cx("relative shrink-0", markTint)}
                   />
                   <span className={ROW_LEFT}>
-                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                    {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-faint" />}
                     {branch && (
                       <span className="shrink-0 text-fg-faint">
-                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                        {branch === "fork" ? <GitFork size={12} /> : <MessageSquareQuote size={12} />}
                       </span>
                     )}
                     <LinkBadge threadId={session.id} />
@@ -988,7 +1012,7 @@ const ThreadRow = memo(function ThreadRow({
                   >
                     {delegates && (
                       <span className="flex shrink-0 items-center gap-0.5 tabular">
-                        <Bot size={11} aria-hidden />
+                        <Bot size={12} aria-hidden />
                         <span className="sr-only">{delegates.title}</span>
                         <span aria-hidden>{delegates.count}</span>
                       </span>
@@ -1001,13 +1025,13 @@ const ThreadRow = memo(function ThreadRow({
                   {/* Line 1: the title, and what the thread is doing (the hover actions take its place). */}
                   <span className={ROW_LINE}>
                     <span className={ROW_LEFT}>
-                      {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                      {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-faint" />}
                       {branch && (
                         <span
                           title={branch === "fork" ? "A fork" : "A side chat"}
                           className="shrink-0 text-fg-faint"
                         >
-                          {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                          {branch === "fork" ? <GitFork size={12} /> : <MessageSquareQuote size={12} />}
                         </span>
                       )}
                       <LinkBadge threadId={session.id} />
@@ -1050,10 +1074,10 @@ const ThreadRow = memo(function ThreadRow({
                           }
                         >
                           <span aria-hidden>·</span>
-                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={11} />
+                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
                           <span className="min-w-0 truncate">{place.name}</span>
                           {unsynced && (
-                            <CloudUpload size={11} className="shrink-0" aria-label="Waiting to sync" />
+                            <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />
                           )}
                         </span>
                       )}
@@ -1066,7 +1090,7 @@ const ThreadRow = memo(function ThreadRow({
                             aria-label={delegates.title}
                             className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
                           >
-                            <Bot size={11} />
+                            <Bot size={12} />
                             {delegates.count}
                           </span>
                         </Tooltip>
@@ -1090,7 +1114,7 @@ const ThreadRow = memo(function ThreadRow({
                         </span>
                       ) : gitBranch ? (
                         <>
-                          <GitBranch size={11} className="shrink-0" />
+                          <GitBranch size={12} className="shrink-0" />
                           <span className="min-w-0 truncate" title={gitBranch}>
                             {rowBranch(gitBranch)}
                           </span>
@@ -1099,7 +1123,7 @@ const ThreadRow = memo(function ThreadRow({
                         // A folder outside git has no branch: the line names the folder instead.
                         folder && (
                           <>
-                            <Folder size={11} className="shrink-0" />
+                            <Folder size={12} className="shrink-0" />
                             <span className="min-w-0 truncate" title={folder}>
                               {folder}
                             </span>
@@ -1164,7 +1188,7 @@ const ThreadRow = memo(function ThreadRow({
                   title={`Actions · ${formatBinding("shift+f10")}`}
                   className="flex size-6 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
                 >
-                  <Ellipsis size={15} />
+                  <Ellipsis size={14} />
                 </button>
               </DropdownMenu.Trigger>
               <MenuContent align="start" sideOffset={4}>
@@ -1238,12 +1262,12 @@ const PendingRow = memo(function PendingRow({
           <span className={cx(ROW_RIGHT, "text-sub text-fg-muted", failure && "pr-6")}>
             {failure ? (
               <>
-                <CircleAlert size={11} className="text-danger" />
+                <CircleAlert size={12} className="text-danger" />
                 <span className="font-medium text-danger">Failed</span>
               </>
             ) : (
               <>
-                <Spinner size={9} />
+                <Spinner size={10} />
                 <Elapsed since={pending.startedAt} />
               </>
             )}
@@ -1266,7 +1290,7 @@ const PendingRow = memo(function PendingRow({
                 <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
                 {branch && (
                   <>
-                    <GitBranch size={11} className="ml-1 shrink-0" />
+                    <GitBranch size={12} className="ml-1 shrink-0" />
                     <span className="min-w-0 truncate">{branch}</span>
                   </>
                 )}
@@ -1563,6 +1587,8 @@ const NO_PICKS: ReadonlySet<string> = new Set();
 const NO_AGENTS: SubagentInfo[] = [];
 
 export function Sidebar() {
+  const mac = appPlatform() === "mac";
+  const TitlebarControls = mac ? Cluster : "div";
   const sessions = useApp((s) => s.sessions);
   // Paired computers' threads are rows of the one list, each tagged with where it runs.
   const machines = useMachines((s) => s.machines);
@@ -1634,6 +1660,17 @@ export function Sidebar() {
     return () => clearInterval(t);
   }, []);
   const [onlyProject] = usePref(PREF.onlyProject, false);
+  // The toolbar over the list (ui/SidebarToolbar.tsx), the order it chose, and when an idle
+  // thread settles on its own (Settings › Appearance).
+  const [toolbarOn] = usePref(PREF.toolbar, true);
+  const [sort] = useSidebarSort();
+  const [settleDays] = usePref<number>(PREF.settleAfterDays, SETTLE_AFTER_DEFAULT_DAYS);
+  const settleMs = settleAfterMs(settleAfterDays(settleDays));
+  // The search narrows the list as it is typed; it is this window's, not a stored preference, and
+  // goes when the toolbar is hidden.
+  const [rawQuery, setQuery] = useState("");
+  const query = toolbarOn ? rawQuery.trim() : "";
+  const searching = query !== "";
   // The projects folded under "group by project" (`project:<path>`); the shelves keep their own.
   const [folded, setFolded] = usePref<string[]>(PREF.folded, NO_FOLDS);
   // A section header never folds, so a `working` or `threads` entry an older release stored would
@@ -1699,9 +1736,11 @@ export function Sidebar() {
   const filtered = useMemo(
     () =>
       sessions.filter(
-        (s) => !onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd,
+        (s) =>
+          (!onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd) &&
+          threadMatches(s, query),
       ),
-    [sessions, onlyProject, projectCwd],
+    [sessions, onlyProject, projectCwd, query],
   );
   // The threads waiting on work they handed out, though no turn of theirs runs: the Threads list
   // holds them beside the ones running (state/waiting.ts).
@@ -1821,13 +1860,15 @@ export function Sidebar() {
     // row will be, so it keeps its place when it becomes one.
     const pendingRow =
       pending &&
+      !searching &&
       (!onlyProject || !projectCwd || pending.cwd === projectCwd || pending.worktree?.repo === projectCwd)
         ? pendingSummary(pending)
         : null;
     for (const s of filtered) {
       // A delegated thread has no row of its own, unless the filter left the open one with no row
       // to hang under (`orphanOpen`).
-      if (parentOf.has(s.id) && s.id !== orphanOpen) continue;
+      // A search shows a delegate that matches as a row of its own, saying which thread it is under.
+      if (parentOf.has(s.id) && s.id !== orphanOpen && !searching) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
       // Settled: threads settled (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
@@ -1836,7 +1877,7 @@ export function Sidebar() {
         placeThread({
           pinned: pinned.includes(s.id),
           settled: status === "done",
-          aged: status !== "review" && idleSettled(s.updatedAt, now),
+          aged: status !== "review" && idleSettled(s.updatedAt, now, settleMs),
           snoozed: !!snoozed[s.id],
           needs: flagged.has(`${s.id}:n`),
           working: flagged.has(`${s.id}:w`),
@@ -1860,12 +1901,13 @@ export function Sidebar() {
       wakeAt: snoozed[s.id],
       running: works(s.id),
       needs: flagged.has(`${s.id}:n`),
+      title: s.title || "New thread",
     });
     // The order the user arranged comes over the section's own (state/sidebarOrder.ts): a row that
     // was dragged or ⌥↑/↓'d is drawn where it was put, and the rows nobody arranged keep the order
     // their section gives them (state/sidebarRows.ts `sortSection`).
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
-      applyOrder(sortSection(id, items, keyOf), layout[sectionOrderKey(id, project)]);
+      applyOrder(sortSection(id, items, keyOf, sort), layout[sectionOrderKey(id, project)]);
     // The threads by project, when the pref is on and there is more than one project.
     const grouped = sidebarProjects(active);
     let projects: ProjectGroup[] | undefined;
@@ -1916,6 +1958,9 @@ export function Sidebar() {
     projectCwd,
     orphanOpen,
     layout,
+    sort,
+    settleMs,
+    searching,
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
@@ -1944,6 +1989,8 @@ export function Sidebar() {
   // whatever `folded` holds, so an id an older release stored can never shut a list with no control
   // to open it.
   const isOpen = (id: string) => {
+    // A search shows every match, in a shut shelf or folder too.
+    if (searching) return true;
     if (isShelf(id, layoutMode)) return shelfIsOpen[id];
     if (id.startsWith("project:")) return !folded.includes(id);
     return true;
@@ -1954,7 +2001,7 @@ export function Sidebar() {
     else if (id === "settled") setSettledStored(!isOpen(id));
     else setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
   };
-  const settledLimit = Math.max(settledShown, settledAt + 1);
+  const settledLimit = searching ? Number.POSITIVE_INFINITY : Math.max(settledShown, settledAt + 1);
 
   // Which list each drawn row arranges, and the rows drawn in it: a drag and ⌥↑/↓ both move a row
   // inside the one list it was drawn in — a section, or one project's run of rows under its heading
@@ -2412,13 +2459,13 @@ export function Sidebar() {
             aria-live="polite"
             className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-lg bg-accent/10 px-4 text-center text-callout text-fg outline-2 outline-accent outline-dashed"
           >
-            <FolderPlus size={20} className="text-accent" />
+            <FolderPlus size={18} className="text-accent" />
             Drop folders to add them as projects
           </div>
         )}
-        {/* Keep the toggle and Settings at the right edge, clear of the window controls. */}
+        {/* macOS groups the controls after its lights; other platforms leave a drag gap. */}
         <TitlebarRow className="pr-3">
-          <Cluster className="ml-auto shrink-0">
+          <TitlebarControls className={mac ? "ml-auto shrink-0" : "contents"}>
             <ClusterButton
               label="Hide sidebar"
               tooltip={`Hide sidebar (${toggleKey})`}
@@ -2426,10 +2473,21 @@ export function Sidebar() {
             >
               <PanelLeft size={14} />
             </ClusterButton>
+            {!mac && <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />}
             <SettingsButton />
-          </Cluster>
+          </TitlebarControls>
         </TitlebarRow>
         <NeedsYouRow />
+        {toolbarOn && (
+          <SidebarToolbar
+            query={rawQuery}
+            onQuery={setQuery}
+            onOpenFirst={() => {
+              const first = orderIds[0];
+              if (first) selectThread(rowIdOf(first));
+            }}
+          />
+        )}
         <nav
           ref={list}
           data-focus-default
@@ -2447,7 +2505,11 @@ export function Sidebar() {
           {!sessionsLoaded && <ThreadRowsSkeleton />}
           {sessionsLoaded && !filtered.length && (
             <div className="px-2 py-3 text-callout text-fg-muted">
-              {onlyProject ? "No threads in this project yet." : "No threads yet."}
+              {searching
+                ? `No threads match “${query}”.`
+                : onlyProject
+                  ? "No threads in this project yet."
+                  : "No threads yet."}
             </div>
           )}
           <div className="flex min-h-full flex-col">

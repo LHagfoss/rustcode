@@ -48,3 +48,10 @@ export function threadLink(id: string): string {
 export function promptLink(prompt: string): string {
   return `rustcode://new?${new URLSearchParams({ prompt: prompt.slice(0, PROMPT_LIMIT) })}`;
 }
+
+/** Clipboard references use bare local ids or stable machine-id/session-id remote keys. */
+export function threadReference(raw: string): string {
+  const value = raw.trim();
+  const link = parseDeepLink(value);
+  return link?.kind === "thread" ? link.id : value;
+}

@@ -154,7 +154,7 @@ import { ShortcutsPage } from "./ShortcutSettings";
 
 const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
 
-import { SidebarDensitySetting } from "./SidebarDensitySetting";
+import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
@@ -190,26 +190,33 @@ const NAV: { heading?: string; pages: Page[] }[] = [
       { id: "general", label: "General", icon: Gear },
       { id: "chat", label: "Chat", icon: MessageSquare },
       { id: "permissions", label: "Permissions", icon: ShieldCheck },
+      { id: "appearance", label: "Appearance", icon: Palette },
+      { id: "keyboard", label: "Keyboard", icon: Keyboard },
     ],
   },
   {
-    heading: "Setup",
+    // What runs a thread and what it can reach.
+    heading: "Agents",
     pages: [
       { id: "agents", label: "Harnesses", icon: Layers },
       { id: "orchestration", label: "Orchestration", icon: Network },
-      { id: "voice", label: "Voice & computer use", icon: Mic },
-      { id: "connections", label: "Connections", icon: KeyRound },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
-      { id: "remote", label: "Remote access", icon: Smartphone },
-      { id: "outside", label: "Outside agents", icon: Plug },
-      { id: "machines", label: "Environments", icon: Laptop },
+      { id: "connections", label: "Connections", icon: KeyRound },
+      { id: "voice", label: "Voice & computer use", icon: Mic },
     ],
   },
   {
-    heading: "App",
+    // Other computers, phones and agents that work with this app.
+    heading: "Devices & access",
     pages: [
-      { id: "appearance", label: "Appearance", icon: Palette },
-      { id: "keyboard", label: "Keyboard", icon: Keyboard },
+      { id: "machines", label: "Environments", icon: Laptop },
+      { id: "remote", label: "Remote access", icon: Smartphone },
+      { id: "outside", label: "Outside agents", icon: Plug },
+    ],
+  },
+  {
+    heading: "Activity",
+    pages: [
       { id: "usage", label: "Usage", icon: Gauge },
       { id: "statistics", label: "Statistics", icon: ChartColumn },
     ],
@@ -672,7 +679,7 @@ function AgentsPage() {
           action={
             saved ? (
               <Chip tone="ok">
-                <Check size={11} /> Saved
+                <Check size={12} /> Saved
               </Chip>
             ) : undefined
           }
@@ -699,13 +706,13 @@ function AgentsPage() {
           thisMachine ? (
             <div className="flex items-center gap-1">
               <Action quiet size="sm" onClick={() => void runAllHarnessChecks()} disabled={checking}>
-                {checking && <Spinner size={11} />}
+                {checking && <Spinner size={12} />}
                 {checkingAll
                   ? `Checking ${Math.min(checkingAll.done + 1, checkingAll.total)} of ${checkingAll.total}…`
                   : "Check all"}
               </Action>
               <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
-                <Plus size={11} />
+                <Plus size={12} />
                 Add harness
               </Action>
             </div>
@@ -1337,6 +1344,8 @@ function AppearancePage() {
           <Switch label="Reduce transparency" checked={reduceTransparency} onChange={setReduceTransparency} />
         </Row>
         <SidebarDensitySetting />
+        <SidebarToolbarSetting />
+        <SettleAfterSetting />
       </Group>
       <Group
         title="Theme"

@@ -404,7 +404,7 @@ export function DictationButton({ dictation }: { dictation: Dictation }) {
             onPointerUp={hold ? dictation.release : undefined}
             className="flex size-7 items-center justify-center rounded-full bg-danger text-accent-fg hover:bg-danger/85"
           >
-            <Square size={9} fill="currentColor" strokeWidth={0} />
+            <Square size={10} fill="currentColor" strokeWidth={0} />
           </button>
         </Tooltip>
       </div>

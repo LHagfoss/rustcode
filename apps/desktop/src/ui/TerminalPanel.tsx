@@ -238,7 +238,7 @@ function TerminalView({ tab, visible }: { tab: TerminalTab; visible: boolean }) 
             onClick={() => setGeneration((g) => g + 1)}
             className="flex items-center gap-1 text-accent hover:underline"
           >
-            <RotateCcw size={11} /> Restart
+            <RotateCcw size={12} /> Restart
           </button>
         </div>
       )}
@@ -325,7 +325,7 @@ export function TerminalPanel() {
                 onClick={() => closeTerminalTab(tab.id)}
                 className="shrink-0 text-fg-faint opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:text-fg focus-visible:opacity-100"
               >
-                <X size={11} />
+                <X size={12} />
               </button>
             </div>
           ))}

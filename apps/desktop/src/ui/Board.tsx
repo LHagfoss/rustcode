@@ -113,7 +113,7 @@ function Card({
         <span className="mt-1.5 flex flex-wrap items-center gap-1 text-caption text-fg-muted">
           {wt ? (
             <span className="flex max-w-full items-center gap-0.5 rounded-sm bg-fill-subtle px-1 font-mono text-[10px]">
-              <GitBranch size={9} className="shrink-0" />
+              <GitBranch size={10} className="shrink-0" />
               <span className="truncate">{wt.branch}</span>
             </span>
           ) : (
@@ -129,7 +129,7 @@ function Card({
           {status === "review" ? (
             <Tooltip label="Settle">
               <Pill size="sm" aria-label="Settle" onClick={() => settleThread(session.id)}>
-                <CircleCheck size={11} /> Settle
+                <CircleCheck size={12} /> Settle
               </Pill>
             </Tooltip>
           ) : (
@@ -139,7 +139,7 @@ function Card({
                 aria-label="Back to review"
                 onClick={() => void setThreadStatus(session.id, "review")}
               >
-                <Eye size={11} /> Review
+                <Eye size={12} /> Review
               </Pill>
             </Tooltip>
           )}
@@ -150,7 +150,7 @@ function Card({
               onClick={() => void setThreadStatus(session.id, "idle")}
               className="flex size-6 items-center justify-center rounded-full bg-fill hover:bg-fill-strong"
             >
-              <Undo2 size={11} />
+              <Undo2 size={12} />
             </button>
           </Tooltip>
         </div>

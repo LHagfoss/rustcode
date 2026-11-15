@@ -339,6 +339,17 @@ export const SETTINGS_INDEX: SettingEntry[] = [
 
   // ------------------------------------------------------------ Appearance
   { section: "appearance", title: "Light or dark", keywords: "mode theme system" },
+  { section: "appearance", title: "Sidebar rows", keywords: "sidebar density compact detailed one line" },
+  {
+    section: "appearance",
+    title: "Sidebar toolbar",
+    keywords: "sidebar search filter sort new thread button header",
+  },
+  {
+    section: "appearance",
+    title: "Settle idle threads",
+    keywords: "sidebar settled shelf auto archive idle days never",
+  },
   {
     section: "appearance",
     title: "Rounded font",

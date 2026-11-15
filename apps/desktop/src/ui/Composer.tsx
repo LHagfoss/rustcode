@@ -1497,7 +1497,7 @@ export const Composer = memo(function Composer({
             // A queued message is edited here, not in an input of its own: its text, command, links
             // and attachments are the composer's while it is open, and ⏎ saves them where it waits.
             <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-accent">
-              <Pencil size={11} />
+              <Pencil size={12} />
               <b>Editing a queued message</b>
               <span className="text-fg-muted">· ⏎ saves it in the queue, esc leaves it</span>
               <Pill quiet size="sm" className="ml-auto" onClick={() => cancelQueuedEdit()}>
@@ -1507,7 +1507,7 @@ export const Composer = memo(function Composer({
           )}
           {editing && (
             <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-accent">
-              <Pencil size={11} />
+              <Pencil size={12} />
               <b>Editing a sent message</b>
               <span className="text-fg-muted">· sending takes the thread back to it</span>
               <Pill
@@ -1850,7 +1850,7 @@ function LimitWaitRow({ threadId }: { threadId: string }) {
         : "";
   return (
     <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-fg-muted">
-      {offline ? <WifiOff size={11} className="shrink-0" /> : <Clock size={11} className="shrink-0" />}
+      {offline ? <WifiOff size={12} className="shrink-0" /> : <Clock size={12} className="shrink-0" />}
       <span className="min-w-0 truncate">{text}</span>
       <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => resumeWaitNow(threadId)}>
         Send now

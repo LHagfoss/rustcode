@@ -26,7 +26,7 @@ export function OriginChip({ threadId }: { threadId: string }) {
       onClick={() => open && selectThread(open)}
       className="flex min-w-0 max-w-[260px] shrink items-center gap-1 rounded-sm px-1 text-caption text-fg-muted enabled:hover:bg-fill-subtle enabled:hover:text-fg disabled:cursor-default"
     >
-      <Glyph kind={origin.kind} size={11} />
+      <Glyph kind={origin.kind} size={12} />
       <span className="shrink-0">{line.label}</span>
       <span className="min-w-0 truncate font-medium">{line.title}</span>
       {open && <CornerUpLeft size={10} className="shrink-0 text-fg-faint" />}
@@ -46,7 +46,7 @@ export function BranchRow({ branch }: { branch: Branch }) {
   const line = branchLine(branch);
   return (
     <div className="flex h-6 items-center justify-center gap-1.5 text-caption text-fg-faint">
-      <Glyph kind={branch.kind} size={11} />
+      <Glyph kind={branch.kind} size={12} />
       <span>{line.label}</span>
       <Tooltip label={branch.kind === "fork" ? "Open the fork" : "Open the side chat beside this thread"}>
         <button

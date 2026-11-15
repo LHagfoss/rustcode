@@ -45,7 +45,7 @@ export function TextGeneration() {
     <section className="flex flex-col gap-3" aria-label="Text generation">
       <h3 className="font-semibold">Text generation</h3>
       <p className="text-callout text-fg-muted">
-        Use a separate model for titles and git drafts. Keys stay on this machine.
+        Use a separate model for titles and git drafts. Keys stay on this computer.
       </p>
       <Select
         label="Selected text generator"

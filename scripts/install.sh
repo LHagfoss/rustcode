@@ -4,8 +4,8 @@
 #        curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash -s -- --no-app
 #
 # Installs the `rustcode` CLI and the RustCode desktop app (macOS:
-# /Applications/RustCode.app; Linux: an AppImage with a menu entry, or the
-# .deb with --deb). Every download is checked against the release SHA256SUMS.
+# /Applications/RustCode.app; Linux: a system-WebKitGTK app when available,
+# otherwise AppImage, or .deb with --deb). Downloads are checksum-verified.
 # Run with --help for the options; docs/install.md has the details.
 
 set -euo pipefail
@@ -15,6 +15,8 @@ APP_BUNDLE_ID="com.lhagfoss.rustcode.desktop"
 INSTALL_CLI=1
 INSTALL_APP=1
 USE_DEB=0
+LINUX_APP_FORMAT=auto
+CLI_SHARED=0
 BIN_DIR=""
 # A release to install instead of the latest one ("1.31.4" or "v1.31.4").
 VERSION="${RUSTCODE_VERSION:-}"
@@ -26,12 +28,16 @@ usage() {
     cat <<'USAGE'
 Install the RustCode CLI and desktop app from the latest GitHub release, or
 from the release --version names.
+Linux uses the smaller system-WebKitGTK app when WebKitGTK 4.1 is available,
+otherwise AppImage. The system app and CLI share one engine.
 
 Options:
   --no-app        Install only the CLI.
   --no-cli        Install only the desktop app.
   --deb           Linux: install the desktop app's .deb with dpkg (asks for
                   sudo) instead of the AppImage.
+  --system-webkit Linux: require the smaller app using system WebKitGTK 4.1.
+  --appimage      Linux: bundle the web view instead of using system libraries.
   --bin-dir DIR   Install the CLI to DIR (default /usr/local/bin when
                   writable, else ~/.local/bin).
   --version X.Y.Z Install that release instead of the latest one.
@@ -49,6 +55,8 @@ while [ $# -gt 0 ]; do
         --no-app) INSTALL_APP=0 ;;
         --no-cli) INSTALL_CLI=0 ;;
         --deb) USE_DEB=1 ;;
+        --system-webkit) LINUX_APP_FORMAT=system ;;
+        --appimage) LINUX_APP_FORMAT=appimage ;;
         --bin-dir)
             [ $# -ge 2 ] || { echo "--bin-dir needs a directory" >&2; exit 2; }
             BIN_DIR="$2"
@@ -66,6 +74,10 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+if [ "$USE_DEB" = 1 ] && [ "$LINUX_APP_FORMAT" != auto ]; then
+    echo "--deb cannot be combined with --system-webkit or --appimage." >&2
+    exit 2
+fi
 if [ "$INSTALL_CLI" = 0 ] && [ "$INSTALL_APP" = 0 ]; then
     echo "Nothing to install: --no-app and --no-cli together." >&2
     exit 2
@@ -363,6 +375,19 @@ manifest_asset() {
     printf '%s\n' "$found"
 }
 
+select_cli_directory() {
+    if [ -n "$BIN_DIR" ]; then
+        INSTALL_DIR="$BIN_DIR"
+    elif [ -w /usr/local/bin ]; then
+        INSTALL_DIR=/usr/local/bin
+    else
+        INSTALL_DIR="${HOME}/.local/bin"
+    fi
+    mkdir -p "$INSTALL_DIR"
+    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
+    TARGET_EXE="${INSTALL_DIR}/rustcode"
+}
+
 install_cli() {
     local archive extracted
     if ! fetch_verified "$ASSET_NAME"; then
@@ -385,17 +410,7 @@ install_cli() {
 
     chmod +x "$extracted"
 
-    # Target installation directory
-    if [ -n "$BIN_DIR" ]; then
-        INSTALL_DIR="$BIN_DIR"
-    elif [ -w "/usr/local/bin" ]; then
-        INSTALL_DIR="/usr/local/bin"
-    else
-        INSTALL_DIR="${HOME}/.local/bin"
-    fi
-
-    mkdir -p "$INSTALL_DIR"
-    TARGET_EXE="${INSTALL_DIR}/rustcode"
+    select_cli_directory
 
     if ! run_with_spinner "Installing to ${TARGET_EXE}..." cp "$extracted" "$TARGET_EXE"; then
         error "Could not install RustCode to ${TARGET_EXE}."
@@ -555,6 +570,73 @@ install_app_macos() {
     success "RustCode.app installed to ${dest}. Open it from Launchpad, Spotlight or: open -a RustCode"
 }
 
+system_webkit_available() {
+    command -v ldconfig >/dev/null 2>&1 || return 1
+    # Read the whole stream: grep -q can SIGPIPE ldconfig under pipefail.
+    ldconfig -p 2>/dev/null | grep 'libwebkit2gtk-4.1.so.0 ' >/dev/null
+}
+
+install_app_linux_system() {
+    local name="$1" stage target data missing icon pending link_stage
+    fetch_verified "$name" || error "Could not download ${name}."
+    stage="${TMP_DIR}/system-app"
+    mkdir -p "$stage"
+    tar -xzf "$VERIFIED_PATH" -C "$stage" || error "Could not extract ${name}."
+    [ -x "$stage/usr/bin/rustcode" ] && [ -x "$stage/usr/bin/rustcode-desktop" ] || error "${name} is missing the app or engine."
+    # Check the actual release's dependencies, not just the WebKit SONAME.
+    missing="$(ldd "$stage/usr/bin/rustcode-desktop" 2>&1)" || error "Could not inspect app dependencies: ${missing}"
+    if printf '%s\n' "$missing" | grep 'not found' >/dev/null; then
+        error "System libraries are missing: ${missing}. On Arch: sudo pacman -S webkit2gtk-4.1. Or use --appimage."
+    fi
+    data="${XDG_DATA_HOME:-${HOME}/.local/share}"
+    mkdir -p "$data"
+    data="$(cd "$data" && pwd)"
+    target="${data}/rustcode/desktop"
+    mkdir -p "$target/usr/bin" "$data/applications" "$data/icons/hicolor/128x128/apps"
+    pending="$(mktemp -d "$target/.install.XXXXXX")"
+    # Rename each executable rather than overwriting a running file or following
+    # an old symlink. The updater recognises this usr/bin layout.
+    for name in rustcode rustcode-desktop; do
+        install -m 755 "$stage/usr/bin/$name" "$pending/$name"
+    done
+    for name in rustcode rustcode-desktop; do
+        mv -fT "$pending/$name" "$target/usr/bin/$name"
+    done
+    rmdir "$pending"
+    icon="$(find "$stage/usr/share/icons" -path '*128x128/apps/*.png' 2>/dev/null | head -n 1 || true)"
+    [ -z "$icon" ] || cp "$icon" "$data/icons/hicolor/128x128/apps/rustcode.png"
+    cat > "$data/applications/rustcode.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=RustCode
+Comment=The local coding agent
+Exec="${target}/usr/bin/rustcode-desktop" %U
+Icon=rustcode
+Terminal=false
+Categories=Development;
+MimeType=x-scheme-handler/rustcode;
+DESKTOP
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$data/applications" >/dev/null 2>&1 || true
+    if [ "$INSTALL_CLI" = 1 ]; then
+        select_cli_directory
+        link_stage="$(mktemp -d "$INSTALL_DIR/.rustcode-link.XXXXXX")"
+        ln -s "$target/usr/bin/rustcode" "$link_stage/rustcode"
+        mv -fT "$link_stage/rustcode" "$TARGET_EXE"
+        rmdir "$link_stage"
+        CLI_SHARED=1
+        success "CLI linked to the app's engine at ${TARGET_EXE}; no separate CLI download needed."
+        case ":$PATH:" in
+            *":${INSTALL_DIR}:"*) ;;
+            *) warn "Add ${INSTALL_DIR} to your PATH to run rustcode from the terminal." ;;
+        esac
+    fi
+    success "RustCode installed to ${target}, using system WebKitGTK and a menu entry."
+    if [ -f "$HOME/Applications/RustCode.AppImage" ]; then
+        warn "The old AppImage is still at ~/Applications/RustCode.AppImage. Close it and launch RustCode from the menu to use this installation; remove the old AppImage after verifying it works."
+        warn "If you installed a background server from the AppImage, reinstall that server from the new app before removing its old engine copy."
+    fi
+}
+
 install_app_linux() {
     local machine name file
     machine="$TARGET_ARCH"
@@ -576,6 +658,20 @@ install_app_linux() {
         fi
         success "RustCode installed from ${name}. Start it from your applications menu or with: rustcode-desktop"
         return 0
+    fi
+
+    if [ "$LINUX_APP_FORMAT" != appimage ]; then
+        if system_webkit_available; then
+            if name="$(manifest_asset "^RustCode-[0-9][^ ]*-linux-${machine}\\.tar\\.gz\$")"; then
+                install_app_linux_system "$name"
+                return 0
+            elif [ "$LINUX_APP_FORMAT" = system ]; then
+                error "Release ${LATEST_TAG} has no system-WebKitGTK app for Linux ${machine}."
+            fi
+        elif [ "$LINUX_APP_FORMAT" = system ]; then
+            error "WebKitGTK 4.1 is required. On Arch: sudo pacman -S webkit2gtk-4.1. Then rerun this installer, or use --appimage."
+        fi
+        info "Using AppImage; install system WebKitGTK 4.1 and rerun with --system-webkit for smaller downloads."
     fi
 
     if ! name="$(manifest_asset "^RustCode-[0-9][^ ]*-linux-${machine}\\.AppImage\$")"; then
@@ -621,15 +717,18 @@ DESKTOP
     fi
 }
 
-if [ "$INSTALL_CLI" = 1 ]; then
+# Linux's system-WebKitGTK app provides the CLI too. Install it first so we
+# avoid downloading another engine. macOS retains its existing install order.
+if [ "$INSTALL_APP" = 1 ] && [ "$TARGET_OS" = linux ]; then
+    install_app_linux
+fi
+if [ "$INSTALL_CLI" = 1 ] && [ "$CLI_SHARED" = 0 ]; then
     install_cli
 fi
 
 if [ "$INSTALL_APP" = 1 ]; then
     if [ "$TARGET_OS" = "macos" ]; then
         install_app_macos
-    else
-        install_app_linux
     fi
 fi
 

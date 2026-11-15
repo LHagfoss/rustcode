@@ -101,7 +101,7 @@ export function MachineIdentityEditor({
                     onName(null);
                   }}
                 >
-                  <RotateCcw size={11} />
+                  <RotateCcw size={12} />
                   Reset
                 </button>
               )}
@@ -126,7 +126,7 @@ export function MachineIdentityEditor({
                         : "flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill"
                     }
                   >
-                    <DeviceGlyphIcon glyph={icon} tint={chosen ? identity.tint : null} size={15} />
+                    <DeviceGlyphIcon glyph={icon} tint={chosen ? identity.tint : null} size={16} />
                   </button>
                 );
               })}

@@ -11,7 +11,56 @@ export const PREF = {
   onlyProject: "rustcode.sidebar.onlyProject",
   folded: "rustcode.sidebar.folded",
   density: "rustcode.sidebar.density",
+  toolbar: "rustcode.sidebar.toolbar",
+  sort: "rustcode.sidebar.sort",
+  settleAfterDays: "rustcode.sidebar.settleAfterDays",
 } as const;
+
+/**
+ * How the Threads list orders the rows nobody arranged: `activity` puts what runs, then what asks
+ * you, then what came back unseen first (rows move as turns start and end); `recent` is by when
+ * each thread last changed; `title` is A–Z and never moves on its own.
+ */
+export type SidebarSort = "activity" | "recent" | "title";
+
+export const SIDEBAR_SORTS: readonly { id: SidebarSort; label: string }[] = [
+  { id: "activity", label: "Activity" },
+  { id: "recent", label: "Last updated" },
+  { id: "title", label: "Title" },
+];
+
+/** A stored sort, read leniently: anything unknown is the default, `activity`. */
+export function sidebarSort(raw: unknown): SidebarSort {
+  return raw === "recent" || raw === "title" ? raw : "activity";
+}
+
+/** The sidebar's sort and its setter, shared by the toolbar's menu and ⌘K. */
+export function useSidebarSort() {
+  const [raw, set] = usePref<string>(PREF.sort, "activity");
+  return [sidebarSort(raw), set as (next: SidebarSort) => void] as const;
+}
+
+/** How many idle days settle a thread on its own; 0 never does. */
+export const SETTLE_AFTER_CHOICES: readonly { days: number; label: string }[] = [
+  { days: 0, label: "Never" },
+  { days: 1, label: "1 day" },
+  { days: 3, label: "3 days" },
+  { days: 7, label: "7 days" },
+  { days: 14, label: "14 days" },
+];
+
+/** The default: three idle days, what the sidebar always did. */
+export const SETTLE_AFTER_DEFAULT_DAYS = 3;
+
+/** A stored day count, read leniently: anything but one of the choices is the default. */
+export function settleAfterDays(raw: unknown): number {
+  return SETTLE_AFTER_CHOICES.some((c) => c.days === raw) ? (raw as number) : SETTLE_AFTER_DEFAULT_DAYS;
+}
+
+/** The idle time that settles a thread, in ms; 0 never settles one. */
+export function settleAfterMs(days: number): number {
+  return days * 86_400_000;
+}
 
 /**
  * How much a thread row says: `detailed` is the three-line row (title, where it runs, the branch),
