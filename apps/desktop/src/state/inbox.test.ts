@@ -117,6 +117,20 @@ describe("the needs-you inbox", () => {
     ]);
   });
 
+  test("the thread on screen has no row for its replayed failure", () => {
+    const items = deriveInbox(
+      {
+        sessions,
+        threads: { two: { permissions: [], items: [{ kind: "turnEnd", outcome: "failed", at: NOW - 500 }] } },
+        failed: {},
+        links: [],
+        viewing: "two",
+      },
+      NOW,
+    );
+    expect(items.filter((item) => item.kind === "failed")).toEqual([]);
+  });
+
   test("a settled thread's failed turn is no row, from either source", () => {
     const settled = sessions.map((s) => (s.id === "one" ? { ...s, status: "done" as const } : s));
     const items = deriveInbox(

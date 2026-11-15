@@ -4038,6 +4038,41 @@ describe("finished threads", () => {
     markUnread("t1");
     expect(Object.keys(useApp.getState().finished)).toEqual(["t1"]);
   });
+
+  test("opening a thread whose replayed last turn failed takes it out of Needs you, until it fails again", async () => {
+    const { clearFinished, seeFailure } = await import("./store");
+    const { deriveInbox } = await import("./inbox");
+    const failedAt = Date.now() - 5_000;
+    const thread = (at: number) =>
+      ({ permissions: [], queue: [], items: [{ kind: "turnEnd", id: "e", outcome: "failed", at }] }) as never;
+    useApp.setState({
+      selectedId: "other",
+      sessions: [{ id: "t1", title: "T1", cwd: "/tmp" }] as never,
+      threads: { t1: thread(failedAt) },
+      failed: {},
+      inboxDismissed: {},
+    });
+    const rows = () => {
+      const s = useApp.getState();
+      return deriveInbox({
+        sessions: s.sessions,
+        threads: s.threads,
+        failed: s.failed,
+        links: [],
+        dismissed: s.inboxDismissed,
+      }).filter((row) => row.threadId === "t1");
+    };
+    expect(rows()).toHaveLength(1);
+    clearFinished("t1");
+    expect(rows()).toHaveLength(0);
+    // Seeing it again records nothing new.
+    const before = useApp.getState().inboxDismissed;
+    seeFailure("t1");
+    expect(useApp.getState().inboxDismissed).toBe(before);
+    // The next failure arrives later, and is a row again.
+    useApp.setState({ threads: { t1: thread(Date.now() + 60_000) } });
+    expect(rows()).toHaveLength(1);
+  });
 });
 
 test("a mode chosen in one thread leaves the default and the other threads alone", async () => {

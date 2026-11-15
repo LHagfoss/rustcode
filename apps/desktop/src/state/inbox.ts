@@ -65,6 +65,12 @@ export interface InboxRead {
   snoozed?: Readonly<Record<string, number>>;
   /** Rows put away by hand, which stay away until their thread asks again. */
   dismissed?: InboxDismissals;
+  /**
+   * The thread on screen. Its replayed failure is no row: the user is looking at it, and its
+   * banner already says it (a failure that lands while the window is elsewhere still comes in
+   * through `failed`).
+   */
+  viewing?: string | null;
 }
 
 /** The title a thread is known by, when the app has one. */
@@ -160,7 +166,7 @@ export function deriveInbox(read: InboxRead, now = Date.now()): InboxItem[] {
   // A replayed thread whose last turn failed is a failure too, even when this app
   // sent no prompt: the mock seeds one, and a thread opened after a restart has one.
   for (const [threadId, thread] of Object.entries(read.threads)) {
-    if (failedThreads.has(threadId)) continue;
+    if (failedThreads.has(threadId) || threadId === read.viewing) continue;
     const tail = thread.items?.[thread.items.length - 1];
     if (tail?.kind !== "turnEnd" || tail.outcome !== "failed") continue;
     items.push({
