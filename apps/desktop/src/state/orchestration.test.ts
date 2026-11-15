@@ -2469,3 +2469,13 @@ test("cleanup retains merged and closed PRs on links across retirement and reloa
     expect(mergeBooks(restored, saved).links[0]?.cleanup?.branch).toBe("fix/x");
   }
 });
+
+test("thread tools accept the single deep link copied by the app", () => {
+  for (const target of ["abc-123", "machine-id/abc-123"]) {
+    for (const tool of ["read_session", "message_session"]) {
+      expect(
+        parseCall({ tool, args: { session_id: `rustcode://thread/${target}`, message: "hello" } }),
+      ).toMatchObject({ tool, target });
+    }
+  }
+});

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseDeepLink, promptLink, threadLink } from "./deepLinks";
+import { parseDeepLink, promptLink, threadLink, threadReference } from "./deepLinks";
 
 test("round-trip text and qualified thread keys", () => {
   const prompt = "<script> & + % 日本語\nhello";
@@ -40,4 +40,12 @@ test("malformed input is inert", () => {
     "rustcode://unknown?prompt=x",
   ])
     expect(parseDeepLink(raw)).toBeNull();
+});
+
+test("clipboard references retain exactly one local or remote thread address", () => {
+  for (const id of ["abc-123", "machine-id/abc-123"]) {
+    expect(threadReference(id)).toBe(id);
+    expect(threadReference(threadLink(id))).toBe(id);
+    expect(threadReference(`  ${id}\n`)).toBe(id);
+  }
 });

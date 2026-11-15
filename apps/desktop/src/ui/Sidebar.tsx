@@ -1,4 +1,5 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
+import { copyThreadId } from "../state/deepLinks";
 // The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
 // Settings), the Needs you row, the toolbar (search, the sort and filter menu and
 // New thread; ui/SidebarToolbar.tsx, optional), then one list: pinned threads
@@ -433,7 +434,7 @@ function ThreadMenuItems({
             <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
               <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
             </Item>
-            <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
+            <Item className={menuItem} onSelect={() => copyThreadId(session.id)}>
               <Copy size={13} /> Copy Thread ID
             </Item>
             {!remote && (
@@ -481,13 +482,6 @@ function ThreadMenuItems({
         </div>
       )}
     </>
-  );
-}
-
-function copyText(text: string, done: string) {
-  void navigator.clipboard.writeText(text).then(
-    () => toast(done, "info"),
-    () => toast("Could not copy", "error"),
   );
 }
 
@@ -1585,6 +1579,8 @@ const NO_PICKS: ReadonlySet<string> = new Set();
 const NO_AGENTS: SubagentInfo[] = [];
 
 export function Sidebar() {
+  const mac = appPlatform() === "mac";
+  const TitlebarControls = mac ? Cluster : "div";
   const sessions = useApp((s) => s.sessions);
   // Paired computers' threads are rows of the one list, each tagged with where it runs.
   const machines = useMachines((s) => s.machines);
@@ -2459,9 +2455,9 @@ export function Sidebar() {
             Drop folders to add them as projects
           </div>
         )}
-        {/* Keep the toggle and Settings at the right edge, clear of the window controls. */}
+        {/* macOS groups the controls after its lights; other platforms leave a drag gap. */}
         <TitlebarRow className="pr-3">
-          <Cluster className="ml-auto shrink-0">
+          <TitlebarControls className={mac ? "ml-auto shrink-0" : "contents"}>
             <ClusterButton
               label="Hide sidebar"
               tooltip={`Hide sidebar (${toggleKey})`}
@@ -2469,8 +2465,9 @@ export function Sidebar() {
             >
               <PanelLeft size={14} />
             </ClusterButton>
+            {!mac && <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />}
             <SettingsButton />
-          </Cluster>
+          </TitlebarControls>
         </TitlebarRow>
         <NeedsYouRow />
         {toolbarOn && (
