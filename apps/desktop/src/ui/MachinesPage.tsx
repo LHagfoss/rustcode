@@ -57,7 +57,8 @@ import {
   useMachines,
   versionSkew,
 } from "../state/machines";
-import { openMachineSettings, refreshRemote, useApp } from "../state/store";
+import { refreshRemote } from "../state/remoteAccess";
+import { openMachineSettings, useApp } from "../state/store";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
 import {

@@ -3,8 +3,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseRemoteStatus } from "../acp/remote";
 import { PairingCard } from "../ui/RemoteAccessPage";
+import { applyRemoteStatus } from "./remoteAccess";
 import { remainingPairingSeconds } from "./remotePairing";
-import { applyRemoteStatus, resetForTests, useApp } from "./store";
+import { resetForTests, useApp } from "./store";
 
 const offer = parseRemoteStatus({
   offer: { qrPayload: "qr", code: "12345678", address: "host", expiresInSecs: 120, challenge: 7 },

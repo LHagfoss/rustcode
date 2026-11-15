@@ -5,7 +5,8 @@
 import { useState } from "react";
 import type { RemoteDevice } from "../acp/remote";
 import { deviceLabel, promptedRequests } from "../state/connectRequests";
-import { answerConnectRequest, askConfirm, revokeRemoteDevice, useApp } from "../state/store";
+import { answerConnectRequest, revokeRemoteDevice } from "../state/remoteAccess";
+import { askConfirm, useApp } from "../state/store";
 import { Spinner } from "./primitives";
 import { Action, Group, Row } from "./settingsKit";
 

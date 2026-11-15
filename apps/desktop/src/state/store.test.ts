@@ -32,12 +32,12 @@ import {
 import { pendingRequestsOn } from "./pending";
 import { projectEntry, updateProjectEntry } from "./projectBook";
 import { QUEUE_REASON } from "./queue";
+import { answerConnectRequest, pairRemoteDevice, refreshRemote } from "./remoteAccess";
 import {
   type AppState,
   addHarnessAccount,
   advertisedCommands,
   agentHistory,
-  answerConnectRequest,
   answerPermission,
   answerQuestionOptions,
   backgroundPlansAsk,
@@ -78,7 +78,6 @@ import {
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
   PLAN_STALE_MARGIN_MS,
-  pairRemoteDevice,
   parsePanels,
   peekThread,
   permissionModeOf,
@@ -99,7 +98,6 @@ import {
   refreshAgents,
   refreshHarnesses,
   refreshReadPlanLogins,
-  refreshRemote,
   refreshSessions,
   refreshSessionsOnFocus,
   removeQueued,

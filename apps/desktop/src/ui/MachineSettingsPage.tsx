@@ -34,6 +34,7 @@ import {
   setMachinePaused,
   useMachines,
 } from "../state/machines";
+import { revokeRemoteDevice } from "../state/remoteAccess";
 import { SERVER_SETTINGS } from "../state/settingsRegistry";
 import {
   checkMachineHarnesses,
@@ -44,7 +45,7 @@ import {
   useServerValues,
   useSettingsScope,
 } from "../state/settingsScope";
-import { openSettings, revokeRemoteDevice, useApp } from "../state/store";
+import { openSettings, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
