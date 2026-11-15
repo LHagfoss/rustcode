@@ -114,7 +114,7 @@ export function ProjectGenerators({ project }: { project: { name: string; path: 
   return (
     <Group
       title={`Text generation and voice in ${project.name}`}
-      footer="Fields left on the machine's value follow Text generation and Voice above."
+      footer="Fields left on the machine's value follow this machine's Text generation and Voice."
     >
       <Row title="Text generator" subtitle="Writes titles, git drafts and dictation cleanup in this project.">
         <ScopedValue mixed={false} breakdown={[]} project={rowState("text-generator", "id")}>

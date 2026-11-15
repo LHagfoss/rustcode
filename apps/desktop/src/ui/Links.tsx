@@ -208,7 +208,7 @@ export function GrantDialog() {
             className="text-left text-callout text-accent"
             onClick={() => {
               resolveGrant("deny");
-              openSettings("agents");
+              openSettings("orchestration");
             }}
           >
             Named account approval settings…

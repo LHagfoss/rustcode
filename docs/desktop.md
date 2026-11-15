@@ -1444,7 +1444,7 @@ composer's keys stay outside the table.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
-  On by default (Settings › Harnesses turns it off). The app answers `_rustcode/orchestration`
+  On by default (Settings › Orchestration turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
   `start_session` and `fan_out`. Same project only — the repository, so a main
@@ -2122,10 +2122,14 @@ discard. In **Hold to talk** mode, recording lasts while the button or the
 shortcut is held. The audio is transcribed and the text is put at the caret
 (replacing a selection) in the draft. It never sends on its own.
 
-Nothing is recorded or sent until Settings › Agents › Voice › **Transcribe
-with** names a provider; while it is Off, the button opens that page. The
-providers are the OpenAI and custom OpenAI-compatible entries from Text
-generation, with their keys (any endpoint that serves `/audio/transcriptions`).
+Nothing is recorded or sent until the switch in the title of Settings › Voice &
+computer use › **Voice** turns dictation on (off by default). Off, the group is
+that one row, and the composer has no microphone button and the shortcut does
+nothing; turning it on picks the first usable provider and the button appears
+at once. With no usable provider yet, the group says to add one under Text
+generation first. **Transcribe with** then picks among the providers, which
+are the OpenAI and custom OpenAI-compatible entries from Text generation, with
+their keys (any endpoint that serves `/audio/transcriptions`).
 Anthropic and OpenRouter entries are not listed: neither offers a
 speech-to-text endpoint. The model defaults to `gpt-4o-mini-transcribe`, and an
 optional language code (`en`, `nb`) skips detection. A recording stops at five

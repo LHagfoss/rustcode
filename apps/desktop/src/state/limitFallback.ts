@@ -1,7 +1,7 @@
 // Switching a delegate at a limit (issue 3392): with the setting on, a delegate
 // that stops on a Claude or Codex usage limit goes on at once on the other
 // provider's model of the same tier, instead of waiting for the reset. The
-// tiers are a table the user keeps (`limit-fallback-map`, Settings › Harnesses);
+// tiers are a table the user keeps (`limit-fallback-map`, Settings › Orchestration);
 // this module only reads, checks and edits that table and picks a row. The move
 // itself is `switchOnLimit` in state/store.ts, which uses the same
 // `_rustcode/session/harness` request as `transfer_session`.

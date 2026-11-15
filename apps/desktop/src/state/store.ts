@@ -360,6 +360,8 @@ export type SettingsSection =
   | "chat"
   | "permissions"
   | "agents"
+  | "orchestration"
+  | "voice"
   | "connections"
   | "capabilities"
   | "remote"
@@ -379,6 +381,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "chat",
   "permissions",
   "agents",
+  "orchestration",
+  "voice",
   "connections",
   "capabilities",
   "remote",
@@ -575,15 +579,15 @@ export interface AppState {
     /** A second, less prominent action (e.g. "Files and conversation"). */
     alt?: { action: string; run: () => void };
   } | null;
-  /** Threads can start and message other threads (Settings › Harnesses); the engine learns it at initialize. */
+  /** Threads can start and message other threads (Settings › Orchestration); the engine learns it at initialize. */
   orchestration: boolean;
-  /** How many delegates one thread may run at once (Settings › Harnesses). */
+  /** How many delegates one thread may run at once (Settings › Orchestration). */
   threadLimit: number;
-  /** How many delegates may run at once across this app (Settings › Harnesses). */
+  /** How many delegates may run at once across this app (Settings › Orchestration). */
   totalLimit: number;
   /** Trust this computer's named logins for delegation (default off). */
   trustDelegateAccounts: boolean;
-  /** Agents may read threads of every project, not only the calling thread's (Settings › Harnesses). */
+  /** Agents may read threads of every project, not only the calling thread's (Settings › Orchestration). */
   readAcrossProjects: boolean;
   /**
    * A delegate that stops on a usage limit goes on at once on the table's model of the other

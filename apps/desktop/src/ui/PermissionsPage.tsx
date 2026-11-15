@@ -228,9 +228,9 @@ function RememberedGroup() {
           <button
             type="button"
             className="text-accent hover:underline"
-            onClick={() => openSettings("agents")}
+            onClick={() => openSettings("orchestration")}
           >
-            “Let delegates use my named accounts without asking” in Harnesses › Orchestration…
+            “Let delegates use my named accounts without asking” in Orchestration…
           </button>
         </>
       }

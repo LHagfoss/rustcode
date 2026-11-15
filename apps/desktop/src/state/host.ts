@@ -422,7 +422,7 @@ export function forgetThreadGrant(caller: string, key: string) {
   setBook((b) => revokeThreadGrant(b, caller, key));
 }
 
-/** The two delegate limits (Settings › Harnesses): one thread's own, and the machine's total. */
+/** The two delegate limits (Settings › Orchestration): one thread's own, and the machine's total. */
 const delegateLimits = (): DelegateLimits => ({
   perThread: useApp.getState().threadLimit,
   total: useApp.getState().totalLimit,
@@ -1806,7 +1806,7 @@ function reachRefused(): JsonObject {
   return failureJson(
     failure(
       "not_allowed",
-      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Harnesses",
+      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Orchestration",
     ),
   );
 }
@@ -2440,7 +2440,7 @@ function projectRefusal(caller: RuleThread, path: string): Failure | null {
   if (useApp.getState().readAcrossProjects) return null;
   return failure(
     "not_allowed",
-    "that project is outside this thread's; turn on “Let agents read threads in other projects” in Settings › Harnesses",
+    "that project is outside this thread's; turn on “Let agents read threads in other projects” in Settings › Orchestration",
   );
 }
 

@@ -1,4 +1,4 @@
-// Settings › Harnesses › Switch a delegate at a limit (issue 3392): with the
+// Settings › Orchestration › Switch a delegate at a limit (issue 3392): with the
 // switch on, a delegate that stops on a usage limit goes on at once on the other
 // provider's model of the same tier, from a table kept here, instead of waiting
 // for the reset. Both are server settings (`limit-fallback`,
@@ -49,13 +49,13 @@ export function LimitFallbackGroup() {
           </Action>
         ) : undefined
       }
-      footer="Only a delegate that stops on a Claude or Codex usage limit moves, and only to a harness in the table; switching between your own accounts of one harness stays manual. The thread says which model it moved to, and the move is in its activity."
+      hint="Only a delegate that stops on a Claude or Codex usage limit moves, and only to a harness in the table; switching between your own accounts of one harness stays manual. The thread says which model it moved to, and the move is in its activity."
     >
       <Row
         title="Continue a limited delegate on another provider"
         reset={enabled.mixed || on ? () => void enabled.set(false) : undefined}
-        subtitle="Instead of waiting for the reset, if the table below has a model for it."
-        hint="A delegate carries on within a minute. Off, it waits for the reset as it does today."
+        subtitle="Instead of waiting for the reset."
+        hint="Only when the table below has a model for it. A delegate carries on within a minute. Off, it waits for the reset as it does today."
       >
         <ScopedValue mixed={enabled.mixed} breakdown={enabled.breakdown} project={enabled.project}>
           <Switch

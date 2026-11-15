@@ -28,6 +28,8 @@ import {
   Laptop,
   Layers,
   MessageSquare,
+  Mic,
+  Network,
   Palette,
   Plug,
   Plus,
@@ -210,6 +212,8 @@ const NAV: { heading?: string; pages: Page[] }[] = [
     heading: "Setup",
     pages: [
       { id: "agents", label: "Harnesses", icon: Layers },
+      { id: "orchestration", label: "Orchestration", icon: Network },
+      { id: "voice", label: "Voice & computer use", icon: Mic },
       { id: "connections", label: "Connections", icon: KeyRound },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
       { id: "remote", label: "Remote access", icon: Smartphone },
@@ -740,13 +744,48 @@ function AgentsPage() {
         )}
       </Group>
       {thisMachine && <TextGeneration />}
-      {thisMachine && <VoiceGroup />}
       {thisMachine && chosenProject && <ProjectGenerators project={chosenProject} />}
-      {thisMachine && <ComputerUseGroup />}
+    </>
+  );
+}
+
+/** Threads that start and message other threads, and what their delegates and workflows may use. */
+function OrchestrationPage() {
+  useLoadScopeSettings();
+  return (
+    <>
+      <SettingsScopeBar />
       <OrchestrationGroup />
       <WorkflowsGroup />
       <DelegatePresetsGroup />
       <LimitFallbackGroup />
+    </>
+  );
+}
+
+/** Dictation in the composer and the browser tools: both kept by this machine, each behind a switch. */
+function VoicePage() {
+  const { scope, machines } = useScope();
+  const remote =
+    scope.mode === "machine"
+      ? machines.find((machine) => machine.host === scope.host && !machine.local)
+      : undefined;
+  return (
+    <>
+      <SettingsScopeBar machineOnly />
+      {remote ? (
+        <Group title="Voice and computer use">
+          <Row
+            title={`Set these on ${remote.name} itself`}
+            subtitle="Dictation and browser tools are kept by each machine."
+          />
+        </Group>
+      ) : (
+        <>
+          <VoiceGroup />
+          <ComputerUseGroup />
+        </>
+      )}
     </>
   );
 }
@@ -761,7 +800,7 @@ function WorkflowLimitRow({
 }: {
   setting: keyof typeof WORKFLOW_LIMITS;
   title: string;
-  subtitle: string;
+  subtitle?: string;
   hint: string;
   unit: string;
 }) {
@@ -799,21 +838,19 @@ function WorkflowsGroup() {
       <WorkflowLimitRow
         setting="workflow-concurrency"
         title="Workflow workers at once"
-        subtitle="How many worker threads one run may have working together."
         hint="Workers are delegates of the thread that started the run, so the delegate limits above apply too. A run can ask for fewer, never more."
         unit="workers"
       />
       <WorkflowLimitRow
         setting="workflow-call-budget"
         title="Workflow agent calls per run"
-        subtitle="How many worker threads one run may start in all."
+        subtitle="Worker threads one run may start in all."
         hint="A call a restarted run replays from disk is not counted again. The call that goes over fails inside the script."
         unit="calls"
       />
       <WorkflowLimitRow
         setting="workflow-timeout-minutes"
         title="Workflow run time limit"
-        subtitle="How long a run may take before it stops."
         hint="Counted from each start. When it passes, the run ends as timed out and its running workers are stopped."
         unit="minutes"
       />
@@ -851,7 +888,8 @@ function OrchestrationGroup() {
       <Group title="Orchestration">
         <Row
           title="Let delegates use my named accounts without asking"
-          subtitle="Trust named logins on this computer. Accounts on other computers still need approval."
+          subtitle="Named logins on this computer."
+          hint="Accounts on other computers still need approval."
         >
           <ScopedValue
             mixed={trustAccounts.mixed}
@@ -872,7 +910,7 @@ function OrchestrationGroup() {
               ? () => void orchestration.set(SETTINGS_DEFAULTS.orchestration)
               : undefined
           }
-          subtitle="An agent can read, message and start threads, and compare a task across harnesses."
+          subtitle="Read, message and start threads, and compare a task across harnesses."
           hint="Full access does this without asking; Auto-edit may list, read and wait; otherwise you approve each. A thread it starts gets the lower of this thread's access and Default access."
         >
           <ScopedValue
@@ -894,8 +932,7 @@ function OrchestrationGroup() {
               ? () => void readAcrossProjects.set(SETTINGS_DEFAULTS.readAcrossProjects)
               : undefined
           }
-          subtitle="An agent can list, search and read any thread, in any project."
-          hint="Reading still follows the approval rules above. Messaging and starting threads stay in the project."
+          hint="An agent can list, search and read any thread, in any project. Reading still follows the approval rules above. Messaging and starting threads stay in the project."
         >
           <ScopedValue
             mixed={readAcrossProjects.mixed}
@@ -933,7 +970,7 @@ function OrchestrationGroup() {
               ? () => void totalLimitSetting.set(SETTINGS_DEFAULTS.totalLimit)
               : undefined
           }
-          subtitle="How many delegates may run at once, whichever thread started them."
+          subtitle="Running at once, whichever thread started them."
           status={
             running === 0
               ? "No delegates running now"
@@ -964,7 +1001,6 @@ function OrchestrationGroup() {
               ? () => void threadLimitSetting.set(SETTINGS_DEFAULTS.threadLimit)
               : undefined
           }
-          subtitle="How many delegates one thread may have working at once."
           hint="The total above can make this lower."
           status={
             threadLimit > totalLimit
@@ -996,7 +1032,7 @@ function OrchestrationGroup() {
               ? () => void wakeBatchSetting.set(WAKE_BATCH_DEFAULT_S)
               : undefined
           }
-          subtitle="Delegates that finish or stall inside this window reach the thread in one turn."
+          subtitle="Delegates that finish or stall in this window wake the thread once."
           hint="Each wake is a model turn that resends the thread's whole context. A question for you is never held back. Off sends each as it comes."
         >
           <ScopedValue
@@ -2112,6 +2148,8 @@ export function Settings() {
                     {section === "chat" && <ChatPage />}
                     {section === "permissions" && <PermissionsPage />}
                     {section === "agents" && <AgentsPage />}
+                    {section === "orchestration" && <OrchestrationPage />}
+                    {section === "voice" && <VoicePage />}
                     {section === "connections" && <ConnectionsPage />}
                     {section === "capabilities" && <CapabilitiesPage />}
                     {section === "remote" && <RemoteAccessPage />}
