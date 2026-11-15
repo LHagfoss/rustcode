@@ -443,7 +443,7 @@ export function Select({
           <RadixSelect.Value />
         </span>
         <RadixSelect.Icon className="shrink-0 text-fg-faint">
-          <ChevronDown size={11} strokeWidth={2.5} />
+          <ChevronDown size={12} strokeWidth={2.5} />
         </RadixSelect.Icon>
       </RadixSelect.Trigger>
       <RadixSelect.Portal>

@@ -313,7 +313,7 @@ function TreeItem({ node, depth }: { node: TreeNode; depth: number }) {
         className="flex items-center gap-1 rounded-xs px-1 text-left text-callout enabled:hover:bg-fill-subtle"
       >
         <ChevronRight
-          size={11}
+          size={12}
           className={cx(
             "text-fg-faint transition-transform",
             open && "rotate-90",

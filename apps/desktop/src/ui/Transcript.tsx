@@ -1405,7 +1405,7 @@ export function Transcript({
                     ) : item?.kind === "user" && item.text === RESUME_TEXT ? (
                       <div className="flex items-center gap-2 text-caption text-fg-faint">
                         <span className="h-px flex-1 bg-border" />
-                        <RotateCw size={11} />
+                        <RotateCw size={12} />
                         Continued after a restart
                         {(row.repeats ?? 1) > 1 && <span className="tabular">×{row.repeats}</span>}
                         <span className="h-px flex-1 bg-border" />

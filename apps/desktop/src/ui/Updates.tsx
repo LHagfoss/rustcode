@@ -70,7 +70,7 @@ export function UpdateRow() {
         }
         className="flex w-full items-center gap-2 rounded-md bg-accent/12 px-2 py-2 text-left text-callout hover:bg-accent/18 disabled:opacity-70"
       >
-        {installing ? <Spinner size={13} /> : <ArrowUpCircle size={15} className="shrink-0 text-accent" />}
+        {installing ? <Spinner size={13} /> : <ArrowUpCircle size={16} className="shrink-0 text-accent" />}
         <span className="min-w-0 flex-1">
           <span className="block font-medium">
             {installing
@@ -143,7 +143,7 @@ export function WhatsNewDialog() {
         <Dialog.Content className="elevated rc-whatsnew fixed top-1/2 left-1/2 z-50 flex max-h-[min(640px,calc(100vh-80px))] w-[min(560px,calc(100vw-56px))] -translate-x-1/2 -translate-y-1/2 flex-col">
           <div className="flex items-center gap-3 px-5 pt-5 pb-3">
             <span className="flex size-9 items-center justify-center rounded-lg bg-accent/15 text-accent">
-              <Sparkles size={17} />
+              <Sparkles size={16} />
             </span>
             <div className="min-w-0 flex-1">
               <Dialog.Title className="font-semibold text-title3">What's new in {shown.version}</Dialog.Title>
@@ -213,7 +213,7 @@ function Notes({ whatsNew, page }: { whatsNew: WhatsNew; page: string }) {
           onClick={() => openExternal(notes.compare?.url ?? page)}
           className="inline-flex w-fit cursor-pointer items-center gap-1 text-caption text-fg-faint hover:text-fg-muted"
         >
-          <GitCompareArrows size={11} aria-hidden />
+          <GitCompareArrows size={12} aria-hidden />
           {notes.compare.label}
         </button>
       )}
@@ -246,7 +246,7 @@ function CategoryHeading({ name }: { name: string }) {
         tone,
       )}
     >
-      <Icon size={11} aria-hidden />
+      <Icon size={12} aria-hidden />
       {name}
     </h3>
   );

@@ -48,7 +48,7 @@ export function TurnChanges({
           type="button"
           className="flex h-[20px] items-center gap-1 rounded-full bg-fill-subtle px-2 font-medium text-caption text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong"
         >
-          <FileDiff size={11} />
+          <FileDiff size={12} />
           Changes
           <DiffCount added={checkpoint.insertions} removed={checkpoint.deletions} />
         </button>

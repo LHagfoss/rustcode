@@ -77,7 +77,7 @@ function CompareCard({ link, fanOut, kept }: { link: Link; fanOut: string; kept?
       </header>
       {wt && (
         <span className="flex items-center gap-1 truncate font-mono text-caption text-fg-muted">
-          <GitBranch size={11} className="shrink-0" />
+          <GitBranch size={12} className="shrink-0" />
           {wt.branch}
         </span>
       )}

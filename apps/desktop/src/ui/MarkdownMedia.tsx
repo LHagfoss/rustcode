@@ -239,7 +239,7 @@ export function MermaidBlock({ code, fallback }: { code: string; fallback: React
         {fallback}
         {error && (
           <span className="flex items-center gap-1.5 px-1 text-caption text-fg-faint">
-            <CircleAlert size={11} className="shrink-0" />
+            <CircleAlert size={12} className="shrink-0" />
             {tooBig ? error : `Mermaid: ${error}`}
           </span>
         )}

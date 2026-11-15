@@ -316,7 +316,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
           onClick={() => setAdding(true)}
           className="flex items-center gap-1 self-start text-caption text-accent hover:underline"
         >
-          <Plus size={11} />
+          <Plus size={12} />
           Add account
         </button>
       )}
@@ -478,7 +478,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
     <div className="flex flex-col gap-2 px-4 py-3">
       <div className="flex items-center gap-3">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-fill">
-          <HarnessIcon id={harness.id} name={harness.name} size={17} />
+          <HarnessIcon id={harness.id} name={harness.name} size={16} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -555,7 +555,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           aria-expanded={open}
           className="flex items-center gap-1 text-caption text-fg-muted hover:text-fg"
         >
-          <ChevronRight size={11} className={cx("transition-transform", open && "rotate-90")} />
+          <ChevronRight size={12} className={cx("transition-transform", open && "rotate-90")} />
           Details
         </button>
         {open && (
@@ -586,9 +586,9 @@ export function HarnessCard({ harness }: { harness: Harness }) {
                   className={cx("flex items-start gap-1.5 text-caption", !row.available && "text-fg-faint")}
                 >
                   {row.available ? (
-                    <Check size={11} className="mt-px text-success" />
+                    <Check size={12} className="mt-px text-success" />
                   ) : (
-                    <Minus size={11} className="mt-px" />
+                    <Minus size={12} className="mt-px" />
                   )}
                   <span>
                     {row.label}

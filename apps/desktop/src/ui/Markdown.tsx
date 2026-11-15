@@ -233,7 +233,7 @@ function ThreadChip({ id, label }: { id: string; label?: string }) {
         "-mx-[0.5em] inline-flex max-w-full cursor-pointer items-center gap-1 bg-fill-strong align-baseline text-fg hover:bg-accent/12",
       )}
     >
-      <MessagesSquare size={11} className="shrink-0 text-fg-muted" />
+      <MessagesSquare size={12} className="shrink-0 text-fg-muted" />
       <span className="truncate">{title}</span>
     </button>
   );

@@ -153,7 +153,7 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
       )}
       <div className="flex items-center gap-2">
         <Action type="submit" prominent disabled={!!busy}>
-          {busy && <Spinner size={11} />}
+          {busy && <Spinner size={12} />}
           {busy === "adding" ? "Adding…" : busy === "verifying" ? "Verifying…" : "Add and verify"}
         </Action>
         <Action quiet disabled={!!busy} onClick={onClose}>
@@ -216,7 +216,7 @@ export function HarnessCommandFields({
             onClick={() => patch({ args: [...form.args, ""] })}
             className="flex items-center gap-1 self-start text-caption text-accent hover:underline"
           >
-            <Plus size={11} />
+            <Plus size={12} />
             Add argument
           </button>
         </div>
@@ -263,7 +263,7 @@ export function HarnessCommandFields({
             onClick={() => patch({ env: [...form.env, { name: "", value: "" }] })}
             className="flex items-center gap-1 self-start text-caption text-accent hover:underline"
           >
-            <Plus size={11} />
+            <Plus size={12} />
             Add variable
           </button>
         </div>

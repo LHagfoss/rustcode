@@ -557,9 +557,11 @@ the default arrow on static text; the text cursor only in fields and
 
 ## Icons
 
-Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). Sizes: 12 inside chips,
+Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). Sizes, and no others
+(`design.test.ts` checks every `size={n}` in `ui/`): 10 for a glyph inside a
+status dot and a spinner in a caption line, 12 inside chips and caption rows,
 13 in menus, 14 in toolbar and composer buttons, 16 in page headers and tool
-rows, 18 in empty states. Icon colour follows text (`text-fg-muted` idle,
+rows, 18 in empty states, 24 for a page's own mark. Icon colour follows text (`text-fg-muted` idle,
 `text-fg` on hover).
 
 ## Scrollbars

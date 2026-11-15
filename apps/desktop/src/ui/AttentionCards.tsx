@@ -175,7 +175,7 @@ function ApprovalActions({
         <DropdownMenu.Root modal={false}>
           <DropdownMenu.Trigger asChild>
             <Pill size="sm" quiet aria-label={plan ? "More ways to build" : "Allow for longer"}>
-              {grants.length > 0 ? "Grant" : "More"} <ChevronDown size={11} />
+              {grants.length > 0 ? "Grant" : "More"} <ChevronDown size={12} />
             </Pill>
           </DropdownMenu.Trigger>
           <MenuContent side="top" align="end" className="max-w-[360px] min-w-[220px]">
@@ -676,7 +676,7 @@ export function QuestionCard({
       }}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <MessageCircleQuestion size={15} className="shrink-0 text-accent" aria-hidden />
+        <MessageCircleQuestion size={16} className="shrink-0 text-accent" aria-hidden />
         <h2 id={headId} className="m-0 min-w-0 flex-1 truncate font-semibold text-accent text-body">
           {from ? `From ${from}: ` : ""}
           {q.header || "RustCode has a question"}
@@ -928,7 +928,7 @@ export function ChildRequestCard({
           From <span className="font-medium text-fg">{from}</span>
         </span>
         <ArrowUpRight
-          size={11}
+          size={12}
           className="shrink-0 text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
         />
       </button>

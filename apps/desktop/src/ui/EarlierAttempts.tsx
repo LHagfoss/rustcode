@@ -85,7 +85,7 @@ function EarlierAttempt({
     <section aria-label="Earlier attempt" className="flex flex-col gap-3">
       <div className="flex items-center gap-2 text-caption text-fg-faint">
         <span className="h-px flex-1 bg-border" />
-        <History size={11} />
+        <History size={12} />
         <span className="font-medium">Earlier attempt</span>
         <span className="tabular">
           {turns} turn{turns === 1 ? "" : "s"}
@@ -114,7 +114,7 @@ function AttemptAction({ threadId, attempt }: { threadId: string; attempt: Attem
   if (attempt.head === undefined)
     return (
       <span className="flex items-center gap-1">
-        <TriangleAlert size={11} />
+        <TriangleAlert size={12} />
         The state it left was not kept
       </span>
     );

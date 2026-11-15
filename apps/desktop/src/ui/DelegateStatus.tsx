@@ -200,7 +200,7 @@ export function DelegateStatusPanel({ threadId }: { threadId: string }) {
             >
               {panelLabel(rows)}
             </span>
-            {rows.some((row) => row.state === "working") && <Spinner size={9} className="text-accent" />}
+            {rows.some((row) => row.state === "working") && <Spinner size={10} className="text-accent" />}
           </button>
           {!folded && (
             <div id={rowsId} className="flex max-h-[min(240px,35vh)] flex-col gap-0.5 overflow-y-auto">
@@ -230,7 +230,7 @@ export function StatusReplyRow({ rows }: { rows: readonly DelegateStatusRow[] })
   return (
     <div className="flex flex-col gap-1 rounded-xl border border-border bg-fill-subtle px-1 py-1.5">
       <div className="flex items-center gap-1.5 px-2 text-caption text-fg-muted">
-        <Layers size={11} aria-hidden className="shrink-0 text-fg-faint" />
+        <Layers size={12} aria-hidden className="shrink-0 text-fg-faint" />
         <span className="font-medium text-fg">Status</span>
         <span className="min-w-0 truncate">· {statusSummary(rows)}</span>
         <span className="ml-auto shrink-0 text-fg-faint">Local reply · no model turn</span>
