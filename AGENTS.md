@@ -264,8 +264,23 @@ and remote protocol, "session" in ACP and internal identifiers. See
 
 ## Delegating to other threads
 
+Do not delegate unless the user asks for it. Do the work in this thread: no
+delegate threads (`start_session`, `fan_out`, `run_workflow`) and no
+harness subagents. Every delegate spends usage of its own, and every one that
+finishes wakes the orchestrator, which resends its whole context.
+
+When the user does ask for delegates:
+
+- Unless the user names another model, run them on Opus 5.5 or Sol 6.1 at
+  medium effort.
+- Keep each delegate's task small and self-contained, so it finishes in a
+  short turn instead of exploring.
+- Start fewer, larger waves rather than many small ones: put everything
+  that is ready into one `fan_out`, and wait on it once. Each wave and each
+  separate finish is another orchestrator wake.
+
 When an orchestrator thread hands work to other threads (`start_session`,
-`message_session`), and especially to Pi on DeepSeek Flash:
+`message_session`):
 
 - Give each thread its own worktree and disjoint files, with file:line
   pointers, concrete target values and the acceptance criteria. Repeat the
