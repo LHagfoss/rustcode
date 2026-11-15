@@ -1,3 +1,14 @@
+## [v1.36.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.36.2) - 2026-11-15
+
+### Features
+- Check the desktop shell on Linux and Windows before merge to catch platform compilation failures before release. (#3782)
+- Settings: Voice and Computer use turn on with a switch in their title and stay one line while off, the composer microphone appears only when dictation is on, and the Harnesses page is split into Harnesses, Orchestration and Voice & computer use. (#3785)
+- Add favourites and recent models to the composer model picker. (#3786)
+- Sidebar: a Compact density puts each thread on one line (Settings › Appearance › Sidebar rows, or ⌘K "Sidebar: Compact rows"). (#3784)
+- Smart UI views space blocks evenly inside tabs, sections, columns and cards, and bar charts are taller. (#3783)
+- Settings › Appearance › Chat background: show your picture behind the chat as ASCII, dither, halftone, scanlines or haze, on new threads or all threads with an adjustable visibility. (#3787)
+- Perch is detected as a harness, and a custom harness command that fails to start now shows its own error output. (#3788)
+- Settings show less text: buttons say what they do, status chips sit beside their actions, long explanations move behind the info mark, and environment errors take one line. (#3789)
 ## [v1.36.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.36.1) - 2026-11-15
 
 ### Fixes
