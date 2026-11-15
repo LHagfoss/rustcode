@@ -9,6 +9,7 @@ import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { DelegatePull } from "../acp/rustcode";
 import { plainPath } from "../acp/types";
 import type { ThreadStatus, Worktree } from "../acp/v2";
+import { threadReference } from "../lib/deepLinks";
 import { answerPreview } from "./answerPreview";
 import { MAX_ATTACHMENT_FILES } from "./attachments";
 import type { PermissionMode } from "./permissions";
@@ -752,6 +753,11 @@ function pathsOf(value: Json | undefined, max = MAX_ATTACHMENT_FILES): string[] 
   return paths.length === value.length ? paths : null;
 }
 
+/** Accept the same reference from Copy Thread ID and Copy Link. */
+function sessionReference(value: unknown): string | undefined {
+  return typeof value === "string" ? threadReference(value) : undefined;
+}
+
 /** The call in a request's params, or the failure to answer with. */
 export function parseCall(params: JsonObject): Call | Failure {
   const raw = params.args;
@@ -778,7 +784,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "list_worktrees":
       return { tool: "list_worktrees", allProjects: allProjects(args), ...machineField(args) };
     case "worktree_status": {
-      const target = s(args.session_id)?.trim() || undefined;
+      const target = sessionReference(args.session_id)?.trim() || undefined;
       return {
         tool: "worktree_status",
         ...(target ? { target } : {}),
@@ -787,7 +793,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       };
     }
     case "handoff_worktree": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
       // The direction an orchestrator means when it says "the user takes over"
       // is the checkout, so it is the default.
@@ -814,12 +820,12 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "search_sessions", query, allProjects: allProjects(args), ...machineField(args) };
     }
     case "interrupt_session": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
       return { tool: "interrupt_session", target, ...machineField(args) };
     }
     case "transfer_session": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       const harness = s(args.harness) ?? "";
       if (!target || !harness) return failure("invalid", "session_id and harness are required");
       return { tool: "transfer_session", target, harness };
@@ -827,7 +833,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "list_pending_requests":
       return { tool: "list_pending_requests", ...machineField(args) };
     case "answer_request": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       // The list prints `request_id` as a string, and the engine refuses anything else
       // (`orchestration.rs`: a name is a non-empty string), so a number is refused here too.
       const requestId = (s(args.request_id) ?? "").trim();
@@ -901,11 +907,11 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "query_data", sql, limit: Math.min(Math.max(asked, 1), MAX_DATA_ROWS) };
     }
     case "thread_status": {
-      const target = s(args.session_id)?.trim() || undefined;
+      const target = sessionReference(args.session_id)?.trim() || undefined;
       return { tool: "thread_status", target, ...machineField(args) };
     }
     case "merge_when_green": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       const number =
         typeof args.number === "number" && Number.isSafeInteger(args.number) && args.number > 0
           ? args.number
@@ -922,7 +928,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       };
     }
     case "cleanup_worktree": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
       // Settling after cleanup is the default; a caller can keep the thread as it is.
       return {
@@ -932,7 +938,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       };
     }
     case "read_activity": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
       const after = s(args.after)?.trim() || undefined;
       if (args.order != null && args.order !== "oldest" && args.order !== "newest") {
@@ -950,7 +956,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       };
     }
     case "manage_queue": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
       const action = s(args.action) ?? "";
       if (!QUEUE_ACTIONS.includes(action)) {
@@ -979,7 +985,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "configure_session":
       return {
         tool: "configure_session",
-        target: s(args.session_id),
+        target: sessionReference(args.session_id),
         model: s(args.model),
         effort: s(args.effort),
         ...machineField(args),
@@ -1007,7 +1013,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       }
       return {
         tool: "update_session",
-        target: s(args.session_id),
+        target: sessionReference(args.session_id),
         title,
         pinned,
         unread,
@@ -1017,7 +1023,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       };
     }
     case "read_session": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
       const n = typeof args.last_turns === "number" ? Math.floor(args.last_turns) : 3;
       if (n < 1 || n > MAX_LAST_TURNS) return failure("invalid", `last_turns must be 1 to ${MAX_LAST_TURNS}`);
@@ -1028,7 +1034,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "read_session", target, lastTurns: n, offset, ...machineField(args) };
     }
     case "message_session": {
-      const target = s(args.session_id) ?? "";
+      const target = sessionReference(args.session_id) ?? "";
       const text = s(args.message) ?? "";
       if (!target || !text.trim()) return failure("invalid", "session_id and message are required");
       if (bytes(text) > MAX_MESSAGE_BYTES) return failure("invalid", "the message is over 32 KiB");

@@ -2220,3 +2220,13 @@ then Save or Decline. Values stay out of drafts and transcript items. A remote
 thread warns that its machine receives the value; the reply uses that thread's
 connection. Other threads can list the pending request but cannot answer it.
 In mock transport, send `secret card` to stage this request without an engine.
+
+### Copying a thread reference
+
+The thread menu's **Copy Thread ID** copies one reference: the session ID for
+this computer, or `machine-id/session-id` for another environment. The prefix
+is the stable machine ID, not its editable display name; keep it when passing
+a remote reference to MCP tools such as `read_session` so the app routes the
+request to the right computer. **Copy Link** (also in the command palette)
+copies one `rustcode://thread/<reference>` deep link. Opening that link selects
+the thread; thread tools also accept the link as `session_id`.
