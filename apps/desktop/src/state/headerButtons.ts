@@ -22,13 +22,22 @@ export const HEADER_BUTTON_IDS = [
 export type HeaderButtonId = (typeof HEADER_BUTTON_IDS)[number];
 
 /**
- * What a fresh install and a reset start from: every button in registry order but Pull requests,
- * which ⌘K holds ("Open Git"; still one click away in Settings › Chat › Thread
- * header buttons). A layout the user saved is never touched by this: `sanitizeHeaderButtons` keeps
- * what was stored, so a user who shows the button keeps it.
+ * What a fresh install and a reset start from: status, plan, terminal and the
+ * panel. The buttons for driving git by hand stay one click away in Settings ›
+ * Chat › Thread header buttons: Git (commit, push, open a pull request: agents
+ * do that), Project actions, Changes (the panel's Changes tab holds them) and
+ * Pull requests (⌘K "Open Git", and the panel's tab). A layout the user saved
+ * is never touched by this: `sanitizeHeaderButtons` keeps what was stored.
  */
+export const HIDDEN_BY_DEFAULT: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>([
+  "git",
+  "actions",
+  "pulls",
+  "changes",
+]);
+
 export const DEFAULT_HEADER_BUTTONS: readonly HeaderButtonId[] = HEADER_BUTTON_IDS.filter(
-  (id) => id !== "pulls",
+  (id) => !HIDDEN_BY_DEFAULT.has(id),
 );
 
 /** What `rustcode.headerButtons` holds. */

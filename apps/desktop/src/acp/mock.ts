@@ -3817,6 +3817,8 @@ export class MockEngine {
       case "_rustcode/pulls/merge/cancel":
         return { cancelled: false };
       case "_rustcode/pulls/merge":
+        // Long enough for the panel's "Waiting for checks" to show.
+        if (obj(params)?.mergeId) await new Promise((r) => setTimeout(r, 2500));
         return {
           merge: {
             number: num(obj(params)?.number) ?? 2790,
@@ -3991,7 +3993,8 @@ export class MockEngine {
             title: "feat(desktop): Tauri desktop app on every harness",
             author: "LHagfoss",
             state: "open",
-            draft: true,
+            // #2788 is the draft the list shows; any other opens ready to merge.
+            draft: params.number === 2788,
             checks: { passed: 5, failed: 0, pending: 1, skipped: 0 },
             headRef: "feat/desktop-tauri-harnesses",
             baseRef: "main",
@@ -4003,7 +4006,12 @@ export class MockEngine {
             body: "Adds `apps/desktop`: a Tauri shell around `rustcode --acp`.\n\n- Composer, approvals, harness pickers\n- Link chips and Smart UI",
             checkRuns: [
               { name: "desktop / check", status: "passed" },
+              { name: "lint", status: "passed" },
+              { name: "label", status: "passed" },
+              { name: "Desktop UI", status: "passed" },
               { name: "rust / test", status: "pending" },
+              // A matrix job GitHub skipped before it expanded: the template stays in its name.
+              { name: ["Desktop shell (", "$", "{{ matrix.name }})"].join(""), status: "pending" },
             ],
             files: [
               { path: "apps/desktop/src/ui/Composer.tsx", additions: 4, deletions: 2 },

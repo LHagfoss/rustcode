@@ -1,5 +1,5 @@
 // The overview's Execution log: what the thread spent and how long it worked,
-// a bar for each turn, then the last few turns themselves — and, behind the
+// a bar for each turn once there are a few to compare, then the last few turns themselves — and, behind the
 // header's expand, the whole log with each turn's own waterfall (ui/TurnTrace.tsx)
 // where the app watched one. The turns come from the transcript the thread
 // already holds, so the panel reads no transcript again (ui/overview.ts).
@@ -12,13 +12,15 @@ import { formatDuration, formatTokens, type TranscriptItem } from "../state/thre
 import { HarnessIcon } from "./HarnessIcon";
 import { OverviewSection, SectionButton } from "./OverviewSection";
 import { logTotals, type TurnEntry, turnEntries, turnHasTrace } from "./overview";
-import { cx, Tooltip } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 import { TurnTrace } from "./TurnTrace";
 
 /** How many turns the section lists before the header's expand shows them all. */
 export const LOG_ROWS = 3;
 /** How many bars the strip draws: a thread with a hundred turns keeps its shape, not every bar. */
 export const LOG_BARS = 24;
+/** Fewer turns than this draw no bars: one or two bars compare nothing. */
+export const MIN_BARS = 4;
 /** The turns' rows, before the full log is opened and needs them. */
 const NO_TURNS: Record<string, TranscriptItem[]> = {};
 
@@ -167,14 +169,13 @@ export function ExecutionLogSection({
       {turns.length > 0 ? (
         <>
           <div className="grid grid-cols-3 gap-2 px-2 pb-1">
-            <Stat
-              label="Spent"
-              value={totals.spent === undefined ? "—" : `${totals.spent.toFixed(2)} ${totals.currency}`}
-            />
-            <Stat label="Tokens" value={totals.tokens === undefined ? "—" : formatTokens(totals.tokens)} />
-            <Stat label="Agent time" value={totals.agentMs > 0 ? formatDuration(totals.agentMs) : "—"} />
+            {totals.spent !== undefined && (
+              <Stat label="Spent" value={`${totals.spent.toFixed(2)} ${totals.currency}`} />
+            )}
+            {totals.tokens !== undefined && <Stat label="Tokens" value={formatTokens(totals.tokens)} />}
+            {totals.agentMs > 0 && <Stat label="Agent time" value={formatDuration(totals.agentMs)} />}
           </div>
-          <TurnBars turns={turns} />
+          {turns.length >= MIN_BARS && <TurnBars turns={turns} />}
           <div className="pt-1">
             {shown.map((turn) => {
               const end = ends.get(turn.id);
@@ -193,9 +194,9 @@ export function ExecutionLogSection({
             })}
           </div>
           {!all && more && (
-            <p className="px-2 pt-0.5 text-caption text-fg-faint">
-              {turns.length - shown.length} more behind the expand.
-            </p>
+            <Pill quiet size="sm" className="mt-1 ml-2" onClick={() => setAll(true)}>
+              Show all {turns.length} turns
+            </Pill>
           )}
         </>
       ) : (
