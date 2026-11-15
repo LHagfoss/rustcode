@@ -408,7 +408,9 @@
   }
 
   ::selection {
-    background: var(--rc-selection);
+    background: var(--rc-knob);
+    color: var(--rc-knob-fg);
+    text-shadow: none;
   }
 }
 

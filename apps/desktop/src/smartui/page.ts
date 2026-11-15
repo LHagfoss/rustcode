@@ -47,6 +47,8 @@ export function pageTheme(
 ): PageTheme {
   const vars: Record<string, string> = {
     "--rc-text": token("--rc-text"),
+    "--rc-knob": token("--rc-knob") || "#ffffff",
+    "--rc-knob-fg": token("--rc-knob-fg") || "#171717",
     "--rc-bg": token("--rc-bg"),
     "--rc-muted": token("--rc-text-muted"),
     "--rc-faint": token("--rc-text-faint"),
@@ -102,6 +104,7 @@ html, body { margin: 0; background: transparent; }
 body { position: relative; color: var(--rc-text); font: var(--rc-text-size)/1.5 var(--rc-font);
   padding: 1px 0 2px; overflow-wrap: anywhere; -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
+::selection { background: var(--rc-knob); color: var(--rc-knob-fg); text-shadow: none; }
 :focus { outline: none; }
 :root[data-keyboard-nav] :focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
 /* One vertical rhythm for whatever the view writes, kit block or bare tag: the gaps
