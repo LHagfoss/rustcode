@@ -3,9 +3,10 @@
 // the parent's transcript. Both are read from the sessions' recorded parents (state/branches.ts),
 // so they are there after a reload and cost the parent's history nothing.
 
-import { CornerUpLeft, GitFork, MessageSquareQuote } from "lucide-react";
+import { Bot, CornerUpLeft, GitFork, MessageSquareQuote } from "lucide-react";
 import { useMemo } from "react";
 import { type Branch, type BranchKind, branchLine, originLine, originOf } from "../state/branches";
+import { delegateOriginOf } from "../state/delegateOrigin";
 import { peekThread, selectThread, useApp } from "../state/store";
 import { Tooltip } from "./primitives";
 
@@ -16,7 +17,7 @@ const Glyph = ({ kind, size }: { kind: BranchKind; size: number }) =>
 export function OriginChip({ threadId }: { threadId: string }) {
   const sessions = useApp((s) => s.sessions);
   const origin = useMemo(() => originOf(sessions, threadId), [sessions, threadId]);
-  if (!origin) return null;
+  if (!origin) return <DelegateOriginChip threadId={threadId} />;
   const line = originLine(origin);
   const open = origin.listed && origin.id ? origin.id : undefined;
   const chip = (
@@ -37,6 +38,40 @@ export function OriginChip({ threadId }: { threadId: string }) {
   return (
     <Tooltip label={`${origin.title} is no longer in the list`}>
       <span className="flex min-w-0 max-w-[260px] shrink">{chip}</span>
+    </Tooltip>
+  );
+}
+
+/**
+ * The header's link from a delegate back to the thread that started it, naming that thread's
+ * project when it is another one: a delegate in `~/code/rustcode` started from a thread in
+ * `~/code` says so, rather than reading as a thread nobody started (state/delegateOrigin.ts).
+ */
+function DelegateOriginChip({ threadId }: { threadId: string }) {
+  const sessions = useApp((s) => s.sessions);
+  const links = useApp((s) => s.links.links);
+  const origin = useMemo(() => delegateOriginOf(sessions, threadId, links), [sessions, threadId, links]);
+  if (!origin) return null;
+  const open = origin.listed && origin.id ? origin.id : undefined;
+  const chip = (
+    <button
+      type="button"
+      disabled={!open}
+      onClick={() => open && selectThread(open)}
+      className="flex min-w-0 max-w-[320px] shrink items-center gap-1 rounded-sm px-1 text-caption text-fg-muted enabled:hover:bg-fill-subtle enabled:hover:text-fg disabled:cursor-default"
+    >
+      <Bot size={12} className="shrink-0" />
+      <span className="shrink-0">From</span>
+      <span className="min-w-0 truncate font-medium">{origin.title}</span>
+      {origin.project && <span className="shrink-0 text-fg-faint">· {origin.project}</span>}
+      {open && <CornerUpLeft size={10} className="shrink-0 text-fg-faint" />}
+    </button>
+  );
+  const where = origin.project ? ` in ${origin.project}` : "";
+  if (open) return <Tooltip label={`Started by ${origin.title}${where}. Open it`}>{chip}</Tooltip>;
+  return (
+    <Tooltip label={`Started by ${origin.title}, which is no longer in the list`}>
+      <span className="flex min-w-0 max-w-[320px] shrink">{chip}</span>
     </Tooltip>
   );
 }

@@ -480,7 +480,7 @@ function Header({
               </span>
             </Tooltip>
           )}
-          {/* A fork or a side chat links back to the thread it came from. */}
+          {/* A fork, a side chat or a delegate links back to the thread it came from. */}
           {thread && <OriginChip threadId={thread.id} />}
           {/* A paired device is attached, or the thread is shared with them (RemoteAccessPage.tsx). */}
           <RemoteThreadIndicator sessionId={thread?.id} />
