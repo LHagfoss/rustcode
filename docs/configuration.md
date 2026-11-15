@@ -619,7 +619,7 @@ so the server stays the only writer of the file; without one it reads and
 writes the file itself.
 
 An agent uses the `manage_settings` tool (`rustcode/engine/src/manage.rs`) of
-the `rustcode` MCP server and the built-in harness: `{ "action": "list" |
+the `rustcode` MCP server, which external harnesses and outside agents get: `{ "action": "list" |
 "get" | "set" | "reset", "key"?, "value"?, "project"? }`. Reads answer at once.
 `set` and `reset` show the thread's approval card, titled with the value
 before and after (`Change setting auto-compact-threshold: 150000 → 200000`),

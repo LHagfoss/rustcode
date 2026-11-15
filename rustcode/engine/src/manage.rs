@@ -2,8 +2,8 @@
 //! settings in `settings.json` first. One set of operations serves both
 //! surfaces, so they cannot drift apart:
 //!
-//! - `manage_settings`, a tool of the `rustcode` MCP server and of the
-//!   built-in harness. Reads answer at once; a write asks the user through the
+//! - `manage_settings`, a tool of the `rustcode` MCP server that external
+//!   harnesses (Claude Code, Codex and the rest) and outside agents call. Reads answer at once; a write asks the user through the
 //!   thread's own approval card, which names the value before and after.
 //! - `rustcode settings list|get|set|reset`, which sends the same
 //!   `_rustcode/settings/*` request to the running server, or reads and writes
@@ -302,31 +302,6 @@ async fn approved(
         Some(RequestPermissionOutcome::Selected(selected))
             if selected.option_id.0.as_ref() == "manage_allow"
     )
-}
-
-/// The built-in harness's call: the thread's own client asks.
-pub(crate) async fn execute(
-    state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
-    cancel: &tokio_util::sync::CancellationToken,
-    tool: &str,
-    args: &Value,
-) -> crate::tools::ToolExecutionOutput {
-    let approval = {
-        let state = state.lock().await;
-        match state.secret_asker.clone() {
-            Some(asker) => Approval::Ask {
-                asker,
-                session_id: state.active_session_id.clone(),
-            },
-            None => Approval::Unavailable("this terminal session has no approval card for it"),
-        }
-    };
-    let answer = answer(tool, args, approval, cancel).await;
-    if answer.success {
-        crate::tools::ToolExecutionOutput::success(answer.content)
-    } else {
-        crate::tools::ToolExecutionOutput::failure(answer.content)
-    }
 }
 
 // ---------------------------------------------------- the operations
