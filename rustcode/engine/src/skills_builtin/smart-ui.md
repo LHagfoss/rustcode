@@ -86,6 +86,8 @@ so leave out margins (16 px; 28 px inside `.rc-dash`). A `.rc-card` is already a
   `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`.
 - Tabs: `.rc-tabs` > `[role=tablist]` > `button[role=tab][data-rc-tab=a]` and `section[data-rc-panel=a]`.
 - Layout: `.rc-row .rc-col .rc-grid .rc-gap-1` … `.rc-gap-4 .rc-card .rc-scroll`.
+  Blocks are spaced for you, in panels and sections too: add no margins. A subheading
+  between blocks is an `h3`; `.rc-num` keeps a short column on one line.
 
 ## Charts (Chart.js, bundled)
 
