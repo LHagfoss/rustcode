@@ -264,6 +264,10 @@ jobs:
               if: needs.changes.outputs.scripts == 'true'
               run: bash -n scripts/install.sh
 
+            - name: Check Linux installer with isolated release assets
+              if: needs.changes.outputs.scripts == 'true'
+              run: python3 scripts/test-install-linux.py
+
             - name: Check CI change matcher
               if: needs.changes.outputs.scripts == 'true'
               run: bash scripts/test-ci-relevant-changes.sh

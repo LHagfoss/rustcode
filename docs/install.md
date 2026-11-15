@@ -48,7 +48,8 @@ against the release's `SHA256SUMS`:
 | --- | --- | --- |
 | macOS (Apple Silicon) | `RustCode-<ver>-macos-aarch64.app.zip` | `/Applications/RustCode.app` (`~/Applications` when `/Applications` is not writable) |
 | Windows x64 | `RustCode-<ver>-windows-x64-setup.exe` | per-user install in `%LOCALAPPDATA%\RustCode`, Start menu entry |
-| Linux x86_64 | `RustCode-<ver>-linux-x86_64.AppImage` | `~/Applications/RustCode.AppImage`, menu entry and icon in `~/.local/share` |
+| Linux x86_64 (system WebKitGTK 4.1 available) | `RustCode-<ver>-linux-x86_64.tar.gz` | `~/.local/share/rustcode/desktop`, menu entry and shared CLI engine |
+| Linux x86_64 (`--appimage`, or no system WebKitGTK) | `RustCode-<ver>-linux-x86_64.AppImage` | `~/Applications/RustCode.AppImage`, menu entry and icon in `~/.local/share` |
 | Linux x86_64 (`--deb`) | `RustCode-<ver>-linux-x86_64.deb` | system package via `apt-get`/`dpkg` (asks for sudo) |
 
 The app carries its own engine (`rustcode --acp`) inside the bundle, so it
@@ -69,6 +70,8 @@ Options (`curl … | bash -s -- <options>` on macOS and Linux):
 | `--no-app` | `-NoApp` or `$env:RUSTCODE_NO_APP = "1"` | CLI only, as before |
 | `--no-cli` | `-NoCli` or `$env:RUSTCODE_NO_CLI = "1"` | app only |
 | `--deb` | | Linux: the `.deb` instead of the AppImage |
+| `--system-webkit` | | Linux: require system WebKitGTK 4.1 and install the smaller archive |
+| `--appimage` | | Linux: use the portable AppImage even with system WebKitGTK installed |
 | `--bin-dir DIR` | | CLI to `DIR` instead of `/usr/local/bin` or `~/.local/bin` |
 | `--version 1.31.4` or `$RUSTCODE_VERSION` | `-Version 1.31.4` or `$env:RUSTCODE_VERSION` | that release instead of the latest (`v` optional, a beta like `1.32.0-beta.2` too); a release that does not exist stops with its URL. `rustcode machines add-ssh` uses it to put the other computer on this one's version |
 
@@ -112,10 +115,13 @@ RUSTCODE_INSTALL_ARTIFACTS=/tmp/rc/art bash ../../scripts/install.sh --bin-dir /
   it with `pkexec apt-get install -y` (or `pkexec dpkg -i`), which asks for
   your password through polkit, then reopens. Without `pkexec` or a polkit
   agent, install the new `.deb` yourself (`sudo apt install ./RustCode-<ver>-linux-x86_64.deb`).
+- Linux system-WebKitGTK archive: **Update to X** verifies the archive,
+  replaces both binaries and reopens. The CLI symlink follows the updated
+  engine. No root access is needed.
 - Windows: **Update to X** downloads the setup, checks it, runs it silently
   (`/S /UPDATE /R`) and quits; the installer replaces the app in place and
   reopens it. No administrator prompt.
-- Other installs (a tarball, Flatpak, a folder RustCode cannot write, arm
+- Other installs (an unrecognised folder layout, Flatpak, a folder RustCode cannot write, arm
   Linux or Windows): the button links to the release;
   run the installer again to update.
 
@@ -132,6 +138,9 @@ RUSTCODE_INSTALL_ARTIFACTS=/tmp/rc/art bash ../../scripts/install.sh --bin-dir /
   `~/.local/share/applications/rustcode.desktop` and
   `~/.local/share/icons/hicolor/128x128/apps/rustcode.png`.
 - Linux `.deb`: `sudo apt remove rustcode` (the package name `dpkg -l | grep -i rustcode` shows).
+- Linux system-WebKitGTK: remove `~/.local/share/rustcode/desktop`, its
+  `rustcode` CLI symlink, and the menu entry and icon listed for AppImage above.
+  A custom `XDG_DATA_HOME` replaces `~/.local/share`.
 
 ### Taking over from the SwiftUI app
 
@@ -204,8 +213,34 @@ continue to use `brew upgrade rustcode`.
 
 ### Arch Linux: system WebKitGTK
 
-For smaller downloads (under 50 MB), install the system web view with
-`sudo pacman -S webkit2gtk-4.1`. Download
+For smaller downloads (under 50 MB), install the system web view, then run
+the installer:
+
+```sh
+sudo pacman -S webkit2gtk-4.1
+curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash -s -- --system-webkit
+```
+
+The installer checks the release checksum and the app's shared-library
+dependencies before installing. By default it selects this archive when
+WebKitGTK 4.1 is available; `--system-webkit` requires it and fails with
+installation guidance when it is missing. `--appimage` explicitly keeps the
+portable bundle. No system packages are installed automatically.
+
+The app lives in `${XDG_DATA_HOME:-~/.local/share}/rustcode/desktop` with a
+menu entry. When the CLI is requested, the installer links it to the app's
+engine instead of downloading another copy. A background server installed
+from this app also uses that stable engine without copying it.
+
+To migrate an AppImage installation, run the command above, close the old app
+and open RustCode from the applications menu. Reinstall an existing background
+server from the new app so it uses the new engine path. After checking that
+the app, CLI and server work, remove `~/Applications/RustCode.AppImage` and
+the old service engine at `~/.local/share/rustcode/bin/rustcode`. The installer
+leaves these files intact because an existing process or service may use them.
+`--no-cli` preserves the existing terminal command.
+
+For a manual installation, download
 `RustCode-<ver>-linux-x86_64.tar.gz` and `SHA256SUMS` from the same release,
 then verify the archive with `sha256sum --ignore-missing -c SHA256SUMS`.
 Unpack it into a folder you own:
