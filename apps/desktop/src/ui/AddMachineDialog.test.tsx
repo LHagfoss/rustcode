@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AccessChoice, CodeInput, ProgressSteps } from "./AddEnvironmentDialog";
-import type { ProgressStep } from "./environments";
+import { AccessChoice, CodeInput, ProgressSteps } from "./AddMachineDialog";
+import type { ProgressStep } from "./machineLabels";
 
-describe("the add environment steps", () => {
+describe("the add machine steps", () => {
   const steps: ProgressStep[] = [
     { key: "a", label: "Sign in over SSH", state: "done" },
     { key: "b", label: "Install RustCode", state: "running", detail: "Downloading 1.32.0" },

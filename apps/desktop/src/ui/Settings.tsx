@@ -209,7 +209,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
     // Other computers, phones and agents that work with this app.
     heading: "Devices & access",
     pages: [
-      { id: "machines", label: "Environments", icon: Laptop },
+      { id: "machines", label: "Machines", icon: Laptop },
       { id: "remote", label: "Remote access", icon: Smartphone },
       { id: "outside", label: "Outside agents", icon: Plug },
     ],
@@ -1777,7 +1777,7 @@ export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
   const machine = useApp((s) => s.settingsMachine);
   const current = PAGES.find((s) => s.id === section) ?? PAGES[0]!;
-  const label = section === "machines" && machine ? "Environment settings" : current.label;
+  const label = section === "machines" && machine ? "Machine settings" : current.label;
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const field = useRef<HTMLInputElement>(null);

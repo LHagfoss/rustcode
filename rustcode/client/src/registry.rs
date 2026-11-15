@@ -358,8 +358,8 @@ pub struct Machine {
     pub name: String,
     /// The name this app shows, in place of the reported one. A rename is
     /// shared across the fleet: it is stamped with [`Self::name_updated_at`]
-    /// and spread to the machine and to the others by the environment sync
-    /// (`docs/remote.md` › Environment names and the fleet), where the newest
+    /// and spread to the machine and to the others by the machine sync
+    /// (`docs/remote.md` › Machine names and the fleet), where the newest
     /// rename wins. A name without a stamp was set before names were shared
     /// and stays on this computer until it is renamed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -751,7 +751,7 @@ impl MachineRegistry {
     }
 
     /// Rename a machine, now. A blank name clears it, so the reported name is
-    /// shown again. The rename is stamped, so the environment sync carries it
+    /// shown again. The rename is stamped, so the machine sync carries it
     /// to the machine and the rest of the fleet; pairing again keeps it.
     pub fn set_display_name(&mut self, host_id: &str, display_name: Option<&str>) -> Result<()> {
         self.set_display_name_at(host_id, display_name, Utc::now())

@@ -616,12 +616,27 @@ export function sentAttachments(extras: ComposeExtras): SentAttachment[] {
   });
 }
 
-const IMAGE_MARKER = /!\[image\]\(file:\/\/[^)\s]+\)\n?/g;
+const IMAGE_MARKER = /!\[image\]\(file:\/\/([^)\s]+)\)\n?/g;
+/** The line an external harness's thread recorded for an image before its file was kept. */
+const LOST_IMAGE = /^\[image\][ \t]*$\n?/gm;
 
-/** A replayed user message: its text without the engine's `![image](file://…)` markers, and how many there were. */
-export function splitImageMarkers(text: string): { text: string; images: number } {
-  const images = text.match(IMAGE_MARKER)?.length ?? 0;
-  return { text: images ? text.replace(IMAGE_MARKER, "").trim() : text, images };
+/**
+ * A replayed user message: its text without the engine's `![image](file://…)` markers, the files
+ * they name (`paths`, read back from the thread's computer: state/attachmentImages.ts), how many
+ * images a message recorded only as `[image]` because their file was never kept (`lost`), and
+ * how many there were in all (`images`).
+ */
+export function splitImageMarkers(text: string): {
+  text: string;
+  images: number;
+  paths: string[];
+  lost: number;
+} {
+  const paths = Array.from(text.matchAll(IMAGE_MARKER), (m) => m[1]!);
+  const lost = text.match(LOST_IMAGE)?.length ?? 0;
+  if (!paths.length && !lost) return { text, images: 0, paths, lost };
+  const stripped = text.replace(IMAGE_MARKER, "").replace(LOST_IMAGE, "").trim();
+  return { text: stripped, images: paths.length + lost, paths, lost };
 }
 
 const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]}]/gi;

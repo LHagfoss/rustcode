@@ -9,14 +9,14 @@ const status = (enabled: boolean, hosts: MirrorStatus["hosts"]): MirrorStatus =>
 });
 
 describe("what the thread copy says it holds", () => {
-  test("counts threads and environments", () => {
+  test("counts threads and machines", () => {
     const hosts = {
       a: { threads: 3, transcripts: 1, bytes: 1 },
       b: { threads: 1, transcripts: 0, bytes: 0 },
     };
-    expect(mirrorLine(status(true, hosts))).toBe("Holding 4 threads from 2 environments.");
+    expect(mirrorLine(status(true, hosts))).toBe("Holding 4 threads from 2 machines.");
     expect(mirrorLine(status(true, { a: { threads: 1, transcripts: 0, bytes: 0 } }))).toBe(
-      "Holding 1 thread from 1 environment.",
+      "Holding 1 thread from 1 machine.",
     );
   });
 
@@ -24,7 +24,7 @@ describe("what the thread copy says it holds", () => {
     expect(mirrorLine(status(true, {}))).toBe("Nothing copied yet.");
     expect(mirrorLine(status(false, {}))).toBe("Off. Nothing is copied.");
     expect(mirrorLine(status(false, { a: { threads: 2, transcripts: 0, bytes: 0 } }))).toBe(
-      "Off. Still holding 2 threads from 1 environment; they stay readable.",
+      "Off. Still holding 2 threads from 1 machine; they stay readable.",
     );
   });
 

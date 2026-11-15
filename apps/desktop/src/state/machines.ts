@@ -293,7 +293,7 @@ interface MachinesStore {
   serverLinking: boolean;
   /** A route test is running now. */
   probing: boolean;
-  /** The Add environment dialog is open (Settings › Environments, or the new-thread selector asked). */
+  /** The Add machine dialog is open (Settings › Machines, or the new-thread selector asked). */
   incomingConnectCode?: string;
   addOpen: boolean;
 }
@@ -381,7 +381,7 @@ export interface MachineIdentity {
   icon: MachineIcon | null;
   tint: MachineTint | null;
   /**
-   * When `displayName` was chosen, here or on another computer, as an ISO time. The environment
+   * When `displayName` was chosen, here or on another computer, as an ISO time. The machine
    * sync (`state/fleet.ts`) keeps the newest rename: a name without a time stays on this computer.
    */
   nameUpdatedAt?: string | null;
@@ -461,7 +461,7 @@ export function useLocalIdentity(): MachineIdentity {
 }
 
 /**
- * Rename this computer, or give it a glyph. A rename is stamped, so the environment sync
+ * Rename this computer, or give it a glyph. A rename is stamped, so the machine sync
  * (`state/fleet.ts`) tells every paired computer and the newest rename wins; a name another
  * computer chose arrives with its own `nameUpdatedAt` and is not stamped again.
  */
@@ -1991,8 +1991,8 @@ export async function setMachinePaused(machine: Pick<Machine, "id">, paused: boo
   }
 }
 
-/** Open or close the Add environment dialog, which lives on Settings › Environments. */
-export function setAddEnvironmentOpen(open: boolean): void {
+/** Open or close the Add machine dialog, which lives on Settings › Machines. */
+export function setAddMachineOpen(open: boolean): void {
   useMachines.setState({ addOpen: open });
 }
 

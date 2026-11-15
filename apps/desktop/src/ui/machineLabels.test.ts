@@ -4,18 +4,18 @@ import {
   addFailure,
   addressSteps,
   codeSteps,
-  environmentAddress,
-  environmentChoices,
-  environmentIds,
-  environmentOutdated,
-  environmentRecovery,
-  environmentRoute,
-  environmentStatus,
-  knownEnvironment,
-  newEnvironment,
+  knownMachine,
+  machineAddress,
+  machineChoices,
+  machineIds,
+  machineOutdated,
+  machineRecovery,
+  machineRoute,
+  machineStatus,
+  newMachine,
   recoveryLabel,
   sshProgress,
-} from "./environments";
+} from "./machineLabels";
 
 const LAN = { kind: "lan", address: "192.168.1.31:17879", encrypted: false };
 const TAILNET = { kind: "tailscale", address: "100.64.0.7:17879", encrypted: true };
@@ -38,20 +38,20 @@ function machine(patch: Partial<Machine> = {}): Machine {
   };
 }
 
-describe("environment status", () => {
+describe("machine status", () => {
   test("names the four states people tell apart", () => {
-    expect(environmentStatus(machine())).toEqual({ kind: "online", label: "Online", tone: "ok" });
-    expect(environmentStatus(machine({ state: "connecting" })).kind).toBe("connecting");
-    expect(environmentStatus(machine({ state: "offline" }))).toEqual({
+    expect(machineStatus(machine())).toEqual({ kind: "online", label: "Online", tone: "ok" });
+    expect(machineStatus(machine({ state: "connecting" })).kind).toBe("connecting");
+    expect(machineStatus(machine({ state: "offline" }))).toEqual({
       kind: "offline",
       label: "Offline",
       tone: "warn",
     });
-    expect(environmentStatus(machine({ state: "needsPairing" })).kind).toBe("attention");
+    expect(machineStatus(machine({ state: "needsPairing" })).kind).toBe("attention");
   });
 
   test("an offline one on its retry clock is connecting, not failed", () => {
-    expect(environmentStatus(machine({ state: "offline", retryInSecs: 8 }))).toEqual({
+    expect(machineStatus(machine({ state: "offline", retryInSecs: 8 }))).toEqual({
       kind: "connecting",
       label: "Reconnecting",
       tone: "idle",
@@ -59,35 +59,35 @@ describe("environment status", () => {
   });
 
   test("one that refused says why", () => {
-    const status = environmentStatus(machine({ state: "unavailable", reason: "version_mismatch" }));
+    const status = machineStatus(machine({ state: "unavailable", reason: "version_mismatch" }));
     expect(status.kind).toBe("attention");
     expect(status.label).toBe("Version mismatch");
   });
 });
 
-describe("environment route", () => {
+describe("machine route", () => {
   test("the address leads, then the network and whether it is encrypted", () => {
-    expect(environmentRoute(machine())).toBe("192.168.1.31:17879 · LAN · Unencrypted");
-    expect(environmentRoute(machine({ route: TAILNET, routes: [TAILNET] }))).toBe(
+    expect(machineRoute(machine())).toBe("192.168.1.31:17879 · LAN · Unencrypted");
+    expect(machineRoute(machine({ route: TAILNET, routes: [TAILNET] }))).toBe(
       "100.64.0.7:17879 · Tailscale · Encrypted",
     );
   });
 
   test("falls back to the first saved route, and says when there is none", () => {
-    expect(environmentAddress(machine({ route: null }))).toBe("192.168.1.31:17879");
-    expect(environmentRoute(machine({ route: null, routes: [] }))).toBe("No route saved");
-    expect(environmentAddress(machine({ route: null, routes: [] }))).toBeNull();
+    expect(machineAddress(machine({ route: null }))).toBe("192.168.1.31:17879");
+    expect(machineRoute(machine({ route: null, routes: [] }))).toBe("No route saved");
+    expect(machineAddress(machine({ route: null, routes: [] }))).toBeNull();
   });
 });
 
 describe("recovery", () => {
   test("each state offers the one action that brings it back", () => {
-    expect(environmentRecovery(machine())).toBeNull();
-    expect(environmentRecovery(machine({ state: "connecting" }))).toBeNull();
-    expect(environmentRecovery(machine({ state: "stopped" }))).toBe("connect");
-    expect(environmentRecovery(machine({ state: "offline" }))).toBe("reconnect");
-    expect(environmentRecovery(machine({ state: "unavailable" }))).toBe("reconnect");
-    expect(environmentRecovery(machine({ state: "needsPairing" }))).toBe("pair");
+    expect(machineRecovery(machine())).toBeNull();
+    expect(machineRecovery(machine({ state: "connecting" }))).toBeNull();
+    expect(machineRecovery(machine({ state: "stopped" }))).toBe("connect");
+    expect(machineRecovery(machine({ state: "offline" }))).toBe("reconnect");
+    expect(machineRecovery(machine({ state: "unavailable" }))).toBe("reconnect");
+    expect(machineRecovery(machine({ state: "needsPairing" }))).toBe("pair");
     expect(recoveryLabel("pair")).toBe("Pair again");
     expect(recoveryLabel("reconnect")).toBe("Reconnect");
     expect(recoveryLabel("connect")).toBe("Connect");
@@ -97,8 +97,8 @@ describe("recovery", () => {
 describe("the new-thread selector's choices", () => {
   const nameOf = (entry: Machine) => entry.displayName ?? entry.name;
 
-  test("this computer first, then each environment", () => {
-    const choices = environmentChoices(
+  test("this computer first, then each machine", () => {
+    const choices = machineChoices(
       [machine(), machine({ id: "gw-2", name: "Box" })],
       { name: "My Mac" },
       nameOf,
@@ -110,7 +110,7 @@ describe("the new-thread selector's choices", () => {
   });
 
   test("one that is away is listed with why, and cannot be chosen", () => {
-    const [, away, paused] = environmentChoices(
+    const [, away, paused] = machineChoices(
       [machine({ state: "offline" }), machine({ id: "gw-2", paused: true })],
       { name: "My Mac" },
       nameOf,
@@ -120,16 +120,12 @@ describe("the new-thread selector's choices", () => {
   });
 
   test("uses the name the user gave it", () => {
-    const [, named] = environmentChoices(
-      [machine({ displayName: "Office Mac" })],
-      { name: "My Mac" },
-      nameOf,
-    );
+    const [, named] = machineChoices([machine({ displayName: "Office Mac" })], { name: "My Mac" }, nameOf);
     expect(named?.name).toBe("Office Mac");
   });
 });
 
-describe("add environment progress", () => {
+describe("add machine progress", () => {
   test("a connect code runs, then fails on its first step", () => {
     expect(codeSteps(true, false)[0]?.state).toBe("running");
     expect(codeSteps(false, true)[0]?.state).toBe("failed");
@@ -189,36 +185,36 @@ describe("failures", () => {
   });
 });
 
-describe("a new environment", () => {
+describe("a new machine", () => {
   test("is the one that was not there when the dialog opened", () => {
-    const before = environmentIds([machine()]);
-    expect(newEnvironment([machine()], before)).toBeNull();
+    const before = machineIds([machine()]);
+    expect(newMachine([machine()], before)).toBeNull();
     const fresh = machine({ id: "gw-2", name: "Box" });
-    expect(newEnvironment([machine(), fresh], before)?.id).toBe("gw-2");
+    expect(newMachine([machine(), fresh], before)?.id).toBe("gw-2");
   });
 
   test("is none when several appeared at once", () => {
-    const before = environmentIds([]);
-    expect(newEnvironment([machine(), machine({ id: "gw-2" })], before)).toBeNull();
+    const before = machineIds([]);
+    expect(newMachine([machine(), machine({ id: "gw-2" })], before)).toBeNull();
   });
 });
 
-describe("an outdated environment", () => {
+describe("an outdated machine", () => {
   test("is older than this app; a newer, equal, unknown or development version is not", () => {
-    expect(environmentOutdated("1.32.0", "1.33.0")).toBe(true);
-    expect(environmentOutdated("1.33.0", "1.33.0")).toBe(false);
-    expect(environmentOutdated("1.34.0", "1.33.0")).toBe(false);
-    expect(environmentOutdated(null, "1.33.0")).toBe(false);
-    expect(environmentOutdated("1.32.0", null)).toBe(false);
-    // A `tauri dev` build reports 0.1.0, which would make every environment look old.
-    expect(environmentOutdated("1.32.0", "0.1.0")).toBe(false);
+    expect(machineOutdated("1.32.0", "1.33.0")).toBe(true);
+    expect(machineOutdated("1.33.0", "1.33.0")).toBe(false);
+    expect(machineOutdated("1.34.0", "1.33.0")).toBe(false);
+    expect(machineOutdated(null, "1.33.0")).toBe(false);
+    expect(machineOutdated("1.32.0", null)).toBe(false);
+    // A `tauri dev` build reports 0.1.0, which would make every machine look old.
+    expect(machineOutdated("1.32.0", "0.1.0")).toBe(false);
   });
 });
 
-describe("an environment known through another", () => {
+describe("a machine known through another", () => {
   test("shows what is known of it and who told us, and is outdated by the same rule", () => {
     const now = Date.parse("2026-11-13T13:00:00Z");
-    const row = knownEnvironment(
+    const row = knownMachine(
       {
         hostId: "gw-pi",
         name: "Raspberry Pi",
@@ -239,7 +235,7 @@ describe("an environment known through another", () => {
   });
 
   test("says nothing it does not know", () => {
-    const row = knownEnvironment(
+    const row = knownMachine(
       {
         hostId: "gw-x",
         name: "Box",

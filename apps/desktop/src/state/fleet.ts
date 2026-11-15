@@ -1,8 +1,8 @@
-// The environment fleet: every computer running RustCode that this one's pairings reach, and
-// what each is called (docs/remote.md › Environment names and the fleet).
+// The machine fleet: every computer running RustCode that this one's pairings reach, and
+// what each is called (docs/remote.md › Machine names and the fleet).
 //
 // Pairing is trust between two computers; this adds none. The app asks its own engine and every
-// connected environment for `_rustcode/environment/sync`, which carries only names, platforms,
+// connected machine for `_rustcode/environment/sync`, which carries only names, platforms,
 // versions and when a computer was last seen, and merges what comes back (the engine does the
 // merge, `rustcode/engine/src/fleet.rs`): the newest rename of a computer wins, so a name chosen on
 // one computer shows on all of them, and one that was offline picks it up the next time it syncs.
@@ -27,6 +27,10 @@ import {
 import { connectionFor } from "./store";
 import { LOCAL_HOST } from "./threadKeys";
 
+/**
+ * The wire name of the machine sync. It keeps the word "environment" on purpose: older paired
+ * computers only know this name (docs/terminology.md › Machine).
+ */
 export const FLEET_SYNC_METHOD = "_rustcode/environment/sync";
 
 /** One computer, as a sync reports it. Times are ISO strings. */
@@ -101,7 +105,7 @@ export function wireEntry(entry: FleetEntry): JsonObject {
 
 // ---------------------------------------------------------------- what a sync decides
 
-/** The environments this computer is not paired with, known through another: read-only rows. */
+/** The machines this computer is not paired with, known through another: read-only rows. */
 export function knownOnly(
   entries: readonly FleetEntry[],
   machines: readonly Pick<Machine, "id">[],
@@ -200,9 +204,9 @@ let running = false;
 let again = false;
 
 /**
- * Exchange names with this computer's engine and every connected environment, then apply what the
+ * Exchange names with this computer's engine and every connected machine, then apply what the
  * fleet agreed on: the saved names of paired machines and this computer's own. Away or older
- * environments are skipped; the next sync (a reconnect, a rename, a minute later) reaches them.
+ * machines are skipped; the next sync (a reconnect, a rename, a minute later) reaches them.
  */
 export async function syncFleet(): Promise<void> {
   if (running) {

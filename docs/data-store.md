@@ -226,8 +226,8 @@ answers `unknown method`, and the app keeps its local copy as before.
 ## Thread mirror
 
 Beside the store, not in it: `~/.config/rustcode/mirror/` is this computer's
-own copy of the threads it reads from other environments (paired machines;
-`docs/terminology.md` › Environment = machine). The app already keeps a small
+own copy of the threads it reads from other machines (paired machines;
+`docs/terminology.md` › Machine). The app already keeps a small
 copy in its web view's storage so an offline machine still draws
 (`docs/desktop.md` › Several machines); that copy is capped (200 threads per
 machine, transcripts of threads opened in the last 30 days, 2 MB in all) and a
@@ -242,7 +242,7 @@ mirror/<machine id>/threads/<id>.json   the transcript last read from it
 - **The origin owns the thread.** The mirror is written only from what the
   machine reported to this computer, never edited here, never sent back, and
   read-only in the app (a mirrored thread opens like one on an offline machine:
-  *Runs on ‹environment›*, composer disabled). It never moves, changes or deletes
+  *Runs on ‹machine›*, composer disabled). It never moves, changes or deletes
   the original, and it never deletes a mirrored thread either: a thread the
   machine stops listing (deleted there, or the machine wiped) stays.
 - **Conflict-free.** A machine is the only writer of its own folder, and writes
@@ -265,11 +265,11 @@ mirror/<machine id>/threads/<id>.json   the transcript last read from it
   (messages, tool calls with their output), without attachment bytes. It is not
   the machine's `history.json` byte for byte; it is what a client can read over
   the connection today (see "Not yet" below).
-- **Settings › Environments › Thread copies** holds the switch (on by default)
+- **Settings › Machines › Thread copies** holds the switch (on by default)
   and **Projects left out**, one folder per line. A thread whose folder is
   one of those, or inside one, is not copied (matched by path components,
   case-insensitively). Turning the switch off stops new copies; what was
-  already copied stays and stays readable. Removing an environment forgets its
+  already copied stays and stays readable. Removing a machine forgets its
   pairing and keeps its mirror (delete `mirror/<machine id>` to drop it).
 - **Metadata only is not promised here.** Unlike `data.sqlite`, the mirror holds
   message text, because a copy of a conversation is the point. Treat the folder
@@ -290,7 +290,7 @@ what `session/load` replays); mirroring from a computer that has no app or
 terminal client paired with the others (every computer mirrors the machines it
 is paired with, so a fleet where each pair is paired both ways holds every copy
 on every computer); a "Continue here as a fork" action on a mirrored thread;
-and a sidebar filter by environment.
+and a sidebar filter by machine.
 
 ## Command receipts
 

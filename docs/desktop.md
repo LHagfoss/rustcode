@@ -51,7 +51,7 @@ Next, in rough order:
    sidebar listed from the index, lazy transcript import.
 5. The rest of [Not yet ported](#not-yet-ported).
 
-Several machines (#3202): Settings › **Environments** (called Machines before; the app says *environment* for a computer it can run threads on, after T3 Code) pairs the app with another
+Several machines (#3202): Settings › **Machines** (a machine is a computer the app can run threads on; called Environments for a while) pairs the app with another
 computer's RustCode server and keeps the connection, so one app reaches its
 own threads here and other machines' threads there. The sidebar is one flat
 list: every machine's threads sit in the same sections, in the order this
@@ -64,10 +64,10 @@ stays under its parent whichever machine it runs on. A machine that is away
 lists the copy this computer last read from it, read-only, and its chat says
 “‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
 updates when the machine is back.”; the Settings gear shows an amber dot while any paired
-machine is not connected. New thread and ⌘N still start here; the draft's Run on selector picks another environment (each with its status and address, and *Add environment…* at the end), and Settings › Environments keeps the
+machine is not connected. New thread and ⌘N still start here; the draft's Run on selector picks another machine (each with its status and address, and *Add machine…* at the end), and Settings › Machines keeps the
 pairing, Reconnect and each machine's own page. A machine that is away while
 the app retries it on its own reads **Reconnecting…** rather than Offline (in
-Settings › Environments and in the notice of its open thread), because it is coming
+Settings › Machines and in the notice of its open thread), because it is coming
 back without anyone pressing anything. Every client that lists threads
 hears of one another makes there (`_rustcode/threads/created`), a just-made
 thread stays listed until that machine's own list names it, and one trashed in
@@ -93,7 +93,7 @@ from each, without the web view's caps, so a wiped web view, a reinstall or a
 machine that is wiped or removed does not take its threads with it. A machine that is away
 draws the mirrored threads its 200 cached rows lack, and a thread whose transcript
 the web view no longer holds opens from the mirror. It is read-only, never deleted
-and never sent back; Settings › Environments › **Thread copies** switches it off
+and never sent back; Settings › Machines › **Thread copies** switches it off
 and lists projects to leave out. The chat says
 "‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
 updates when the machine is back.", the composer is disabled, and the
@@ -120,10 +120,10 @@ threads, and an offline Linux box, so the sidebar shows three headings, the
 Linux box folded to a muted row.
 
 A machine's name is shared across the fleet and its glyph is this app's own:
-Settings › Environments (and the same row for this computer) gives each one a
+Settings › Machines (and the same row for this computer) gives each one a
 **Rename** popover (name and icon). A rename is stamped with the time and spread
 to the machine itself and to every other paired computer (`state/fleet.ts`,
-[Environment names and the fleet](remote.md#environment-names-and-the-fleet)),
+[Machine names and the fleet](remote.md#machine-names-and-the-fleet)),
 where the newest rename wins; a computer that was offline shows it after its next
 sync. The name is stored as `display_name` with `name_updated_at` in
 `machines.json`; **Reset** (or a blank field) goes back to the name the machine
@@ -280,7 +280,7 @@ A machine on an older RustCode that does not answer `_rustcode/harnesses` is
 shown as the builtin harness, as this computer's engine is, so a thread can
 still start there. A harness whose models that machine has not learned yet
 keeps no model from here: the machine's own default decides. Removing a
-machine in Settings › Environments sends Run on back to this computer and drops
+machine in Settings › Machines sends Run on back to this computer and drops
 the harness list kept for it. Reopening a thread uses its own machine's
 connection (`openThread`), including a thread listed before its machine went
 away.
@@ -2194,12 +2194,12 @@ that are not an app bundle are not checked.
 - `rustcode://new?prompt=Fix%20the%20build` opens a new-thread draft. The prompt
   is plain text, capped at 8,000 characters. Read it and press Send yourself.
   Optional `repo=owner/name` selects a matching git remote among projects on the
-  draft's environment; `harness` and `model` select installed, enabled harnesses
+  draft's machine; `harness` and `model` select installed, enabled harnesses
   and known model ids. Unknown options are ignored. A link cannot change
   permission mode, branch or worktree settings, or send a message.
 - `rustcode://thread/<id>` opens a known thread; remote threads use
   `rustcode://thread/<machine-id>/<id>`. An unknown thread shows a toast.
-- `rustcode://connect/<code>` opens **Settings → Environments → Add environment**
+- `rustcode://connect/<code>` opens **Settings → Machines → Add machine**
   with the link filled in. Press Connect to pair; opening the link never pairs.
 
 In the command palette, **Copy prompt link** copies the current composer text,
@@ -2224,7 +2224,7 @@ In mock transport, send `secret card` to stage this request without an engine.
 ### Copying a thread reference
 
 The thread menu's **Copy Thread ID** copies one reference: the session ID for
-this computer, or `machine-id/session-id` for another environment. The prefix
+this computer, or `machine-id/session-id` for another machine. The prefix
 is the stable machine ID, not its editable display name; keep it when passing
 a remote reference to MCP tools such as `read_session` so the app routes the
 request to the right computer. **Copy Link** (also in the command palette)

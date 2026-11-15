@@ -1,16 +1,18 @@
-//! The environment fleet: which computers run RustCode, what each is called,
+//! The machine fleet: which computers run RustCode, what each is called,
 //! and what version and platform it reports, as every computer in a pairing
-//! chain sees them (`docs/remote.md` › Environment names and the fleet).
+//! chain sees them (`docs/remote.md` › Machine names and the fleet).
 //!
 //! Pairing is one trust relationship between two computers. This module adds
 //! no trust: it carries *metadata* about computers, over the ACP connection a
 //! pairing already opened, so a rename made on one computer reaches the rest.
 //!
-//! - Each computer keeps its own name in `environment.json`, with the time it
-//!   was set. Without that file the name is the operating system's.
+//! - Each computer keeps its own name in `machine.json`, with the time it
+//!   was set. Without that file the name is the operating system's. Older
+//!   versions wrote `environment.json`; it is still read while `machine.json`
+//!   is missing, and the next rename writes `machine.json`.
 //! - Each computer keeps what it learned about the others in `fleet.json`.
 //! - Two computers exchange everything they know with `_rustcode/environment/sync`
-//!   (`acp/environment.rs`); each side merges the other's entries.
+//!   (`acp/machine_sync.rs`); each side merges the other's entries.
 //!
 //! The merge is last-writer-wins on the name, per computer: the entry with the
 //! newer `name_updated_at` wins, and on a tie the greater name does, so every
@@ -35,7 +37,9 @@ const MAX_FILE_BYTES: u64 = 512 * 1024;
 /// A computer nobody has seen for this long is forgotten.
 const FORGET_AFTER_DAYS: i64 = 90;
 
-const OWN_NAME_FILE: &str = "environment.json";
+const OWN_NAME_FILE: &str = "machine.json";
+/// Where versions before the rename to "machine" kept this computer's name.
+const LEGACY_OWN_NAME_FILE: &str = "environment.json";
 const FLEET_FILE: &str = "fleet.json";
 
 /// One computer, as a report about it says. Sent and stored as camelCase JSON.
@@ -213,7 +217,7 @@ impl Fleet {
 
 // ----------------------------------------------------------------- own name
 
-/// This computer's chosen name and when it was chosen: `environment.json`.
+/// This computer's chosen name and when it was chosen: `machine.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OwnName {
@@ -222,9 +226,15 @@ pub(crate) struct OwnName {
 }
 
 pub(crate) fn own_name(dir: &Path) -> Option<OwnName> {
-    read_private_json::<OwnName>(&dir.join(OWN_NAME_FILE), 4 * 1024)
-        .ok()
-        .filter(|own| !own.name.is_empty())
+    let read = |file: &str| {
+        read_private_json::<OwnName>(&dir.join(file), 4 * 1024)
+            .ok()
+            .filter(|own| !own.name.is_empty())
+    };
+    if dir.join(OWN_NAME_FILE).exists() {
+        return read(OWN_NAME_FILE);
+    }
+    read(LEGACY_OWN_NAME_FILE)
 }
 
 /// The name this computer was given, for the gateway to announce, or `None`
@@ -561,6 +571,22 @@ mod tests {
             !apply_own_name(dir.path(), "   ", at(99)).unwrap(),
             "blank is no name"
         );
+    }
+
+    #[test]
+    fn own_name_reads_the_file_older_versions_wrote_until_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = OwnName {
+            name: "Desk".into(),
+            updated_at: at(5),
+        };
+        publish_private_json(&dir.path().join(LEGACY_OWN_NAME_FILE), &legacy).unwrap();
+        assert_eq!(own_name(dir.path()), Some(legacy));
+        // An older rename loses to the one kept in the old file.
+        assert!(!apply_own_name(dir.path(), "Old", at(1)).unwrap());
+        assert!(apply_own_name(dir.path(), "Mac Studio", at(6)).unwrap());
+        assert!(dir.path().join(OWN_NAME_FILE).exists());
+        assert_eq!(own_name(dir.path()).unwrap().name, "Mac Studio");
     }
 
     fn write_identity(dir: &Path, id: &str) {

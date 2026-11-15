@@ -211,7 +211,7 @@ export function ScopedValue({
 
 /** Where a page's rows are shown, for a title ("Lars's MacBook Pro"). */
 export function scopeName(value: string | undefined, machines: { host: string; name: string }[]): string {
-  return machines.find((machine) => machine.host === value)?.name ?? "this environment";
+  return machines.find((machine) => machine.host === value)?.name ?? "this machine";
 }
 
 export { scopeLabel };

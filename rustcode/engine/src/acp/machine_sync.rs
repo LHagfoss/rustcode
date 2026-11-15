@@ -1,5 +1,8 @@
-//! `_rustcode/environment/sync`: the environment fleet's metadata exchange
-//! (`crate::fleet`, `docs/remote.md` › Environment names and the fleet).
+//! `_rustcode/environment/sync`: the machine fleet's metadata exchange
+//! (`crate::fleet`, `docs/remote.md` › Machine names and the fleet).
+//!
+//! The wire name keeps the word "environment" on purpose: older paired
+//! computers send and allow only this name.
 //!
 //! One request does both halves of a sync. The caller says who it is and what
 //! it knows; this computer folds that in (a newer name for itself is adopted,
@@ -23,7 +26,7 @@ use chrono::Utc;
 )]
 #[request(method = "_rustcode/environment/sync", response = serde_json::Value)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct EnvironmentSyncRequest {
+pub(crate) struct MachineSyncRequest {
     #[serde(default)]
     pub from: Option<FleetEntry>,
     #[serde(default)]
@@ -31,7 +34,7 @@ pub(crate) struct EnvironmentSyncRequest {
 }
 
 /// Merge the caller's report and answer with this computer's own.
-pub(crate) fn sync(request: EnvironmentSyncRequest) -> Result<serde_json::Value, String> {
+pub(crate) fn sync(request: MachineSyncRequest) -> Result<serde_json::Value, String> {
     let dir = crate::fleet::config_dir().ok_or("there is no configuration directory")?;
     let from_id = request
         .from
@@ -51,14 +54,14 @@ mod tests {
 
     #[test]
     fn the_request_reads_what_the_app_sends() {
-        let request: EnvironmentSyncRequest = serde_json::from_str(
+        let request: MachineSyncRequest = serde_json::from_str(
             r#"{"from":{"hostId":"a","name":"Laptop","platform":"macos"},"entries":[{"hostId":"c","name":"mini","nameUpdatedAt":"2026-11-13T10:00:00Z"}]}"#,
         )
         .unwrap();
         assert_eq!(request.from.unwrap().host_id, "a");
         assert_eq!(request.entries[0].platform, "unknown");
         // Nothing at all is a plain read.
-        let empty: EnvironmentSyncRequest = serde_json::from_str("{}").unwrap();
+        let empty: MachineSyncRequest = serde_json::from_str("{}").unwrap();
         assert!(empty.from.is_none() && empty.entries.is_empty());
     }
 }

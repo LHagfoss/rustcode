@@ -2421,7 +2421,7 @@ export class MockEngine {
   /** Review conversations resolved or unresolved through `_rustcode/pulls/thread`. */
   private pullResolved = new Map<string, boolean>();
   private fleet = new Map<string, JsonObject>();
-  /** This computer's own chosen name and when it was chosen (`environment.json`). */
+  /** This computer's own chosen name and when it was chosen (`machine.json`). */
   private ownName: { name: string; at: string } | null = null;
   private threads: MockThread[];
   private harnesses: HarnessSnapshot;
@@ -2649,7 +2649,7 @@ export class MockEngine {
   }
 
   /** `_rustcode/environment/sync` (`rustcode/engine/src/fleet.rs`): merge a report, answer with ours. */
-  private environmentSync(ask: JsonObject): JsonObject {
+  private machineSync(ask: JsonObject): JsonObject {
     const from = obj(ask.from);
     const fromId = str(from?.hostId) ?? "";
     for (const raw of [...arr(ask.entries), ...(from ? [from as Json] : [])]) {
@@ -3382,6 +3382,15 @@ export class MockEngine {
       }
       case "session/close":
         return {};
+      case "_rustcode/attachments/read": {
+        // A kept image reads back as a picture; any other path is gone, as on an engine whose
+        // attachment was cleaned away.
+        const path = str(params.path) ?? "";
+        if (!path.includes("/attachments/")) throw new Error("that image is not kept on this computer");
+        const svg =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320"><rect width="480" height="320" fill="#5b8def"/><circle cx="360" cy="90" r="40" fill="#ffd166"/><path d="M0 320 L160 150 L300 320 Z" fill="#2a4d8f"/></svg>';
+        return { mimeType: "image/svg+xml", size: svg.length, offset: 0, data: btoa(svg), done: true };
+      }
       case "_rustcode/session/move": {
         const thread = this.thread(params.sessionId);
         const cwd = str(params.cwd);
@@ -3723,7 +3732,7 @@ export class MockEngine {
       case "_rustcode/workflows/wake":
         return { claimed: false };
       case "_rustcode/environment/sync":
-        return this.environmentSync(obj(params) ?? {});
+        return this.machineSync(obj(params) ?? {});
       case "_rustcode/pulls":
         return { list: { provider: "github", hasMore: false, pulls: MOCK_PULLS } };
       case "_rustcode/project/read": {
