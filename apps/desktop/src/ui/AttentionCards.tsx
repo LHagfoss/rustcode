@@ -517,7 +517,7 @@ function focusComposerField() {
  * draft, so the thread's context and the user's own words are where they were (issue 3696). It
  * says which of a set it is, the question (scrolling past `QUESTION_TEXT_MAX`), its answers with
  * their descriptions, and a field for the user's own answer. ↑/↓ move between answers, 1–9 pick
- * one, esc dismisses when no field has focus.
+ * one, esc declines when no field has focus.
  *
  * A question that takes the user's own answer also takes files (issue 3756): Attach files, or a
  * paste or drop on the form, under the composer's own limits (`ui/Attachments.tsx`). A file goes
@@ -825,7 +825,7 @@ export function QuestionCard({
               Send
             </Pill>
             {reject && (
-              <Tooltip label={keys ? "Dismiss the question (esc)" : "Dismiss the question"}>
+              <Tooltip label={keys ? "Decline the question (esc)" : "Decline the question"}>
                 <Pill onClick={() => answerPermission(request, reject)}>{reject.name}</Pill>
               </Tooltip>
             )}

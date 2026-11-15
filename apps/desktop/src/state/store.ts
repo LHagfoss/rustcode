@@ -2856,8 +2856,30 @@ function without(map: Record<string, number>, id: string): Record<string, number
 
 /** You saw it: opening the thread (or coming back to the window on it) settles the flag. */
 export function clearFinished(id: string | null) {
-  if (!id || !(id in get().finished || id in get().failed)) return;
+  if (!id) return;
+  seeFailure(id);
+  if (!(id in get().finished || id in get().failed)) return;
   set((s) => ({ finished: without(s.finished, id), failed: without(s.failed, id) }));
+}
+
+/**
+ * The thread's failure was seen: opened, or its banner dismissed. Its "Needs you" row is put away
+ * quietly, from both of its sources — the store's `failed` map and a replayed transcript that ends
+ * in a failed turn — and a later failure, which arrives after this moment, is a row again
+ * (state/inboxDismissed.ts `isDismissed`). A thread with no failure records nothing.
+ */
+export function seeFailure(id: string): void {
+  const s = get();
+  const items = s.threads[id]?.items;
+  const tail = items?.[items.length - 1];
+  const failedTail = tail?.kind === "turnEnd" && tail.outcome === "failed";
+  if (!(id in s.failed) && !failedTail) return;
+  const key = `${id}:failed`;
+  const at = Math.max(s.failed[id] ?? 0, failedTail ? (tail.at ?? 0) : 0);
+  if ((s.inboxDismissed[key] ?? -1) >= at) return;
+  const next = dismissRows(s.inboxDismissed, [{ key, kind: "failed", at }]);
+  set({ inboxDismissed: next });
+  store(STORAGE.inboxDismissed, JSON.stringify(next));
 }
 
 /** The shortest gap between two window-focus list refreshes, see below. */

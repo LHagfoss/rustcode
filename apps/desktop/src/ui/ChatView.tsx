@@ -47,6 +47,7 @@ import {
   refreshSessions,
   repairThread,
   retryPendingSetup,
+  seeFailure,
   setAutoCompactForThread,
   setPanel,
   setTerminalOpen,
@@ -1008,6 +1009,8 @@ export function ChatView() {
                     }
                     onDismiss={() => {
                       setDismissed(error);
+                      // Dismissed here is seen: its "Needs you" row goes with it.
+                      if (thread) seeFailure(thread.id);
                       void refreshSessions();
                     }}
                   />
