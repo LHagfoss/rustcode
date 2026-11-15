@@ -364,6 +364,8 @@ export function renderEffect(
 
 /** Lightest ink first. */
 export const RAMP = " .:-=+*#%@";
+/** Ink at or below this is paper: a blank cell. */
+const BLANK_INK = 0.02;
 /** Width over height the band is cropped to at least. */
 export const MIN_ASPECT = 3;
 /** A monospaced cell is about twice as tall as wide. */
@@ -445,7 +447,12 @@ export function renderAscii(
       const bb = a > 0 ? b / a : 0;
       const luminance = (0.2126 * rr + 0.7152 * gg + 0.0722 * bb) * coverage;
       const ink = inverted ? (1 - luminance) * coverage : luminance;
-      const step = Math.min(RAMP.length - 1, Math.floor(ink * RAMP.length));
+      // Lifted (square root) so mid-tones and shadows still draw a glyph: only paper itself, pure
+      // black on dark or pure white on light, is a blank cell.
+      const step =
+        ink <= BLANK_INK
+          ? 0
+          : Math.max(1, Math.min(RAMP.length - 1, Math.floor(Math.sqrt(ink) * RAMP.length)));
       cells.push({ ch: RAMP[step] ?? " ", r: rr, g: gg, b: bb });
     }
     rows.push(cells);
@@ -453,18 +460,59 @@ export function renderAscii(
   return rows;
 }
 
-/** The text's size: small enough that a band reads as a picture. */
-export const FONT_SIZE = 7;
-export const LINE_HEIGHT = 9;
-const FONT = `${FONT_SIZE}px "SF Mono", ui-monospace, Menlo, monospace`;
+/**
+ * The text's size: about 150 columns across a chat pane, small enough that the picture reads and
+ * large enough that each cell is a glyph rather than a dash in a run.
+ */
+export const FONT_SIZE = 12;
+export const LINE_HEIGHT = 14;
+const FONT = `600 ${FONT_SIZE}px "SF Mono", ui-monospace, Menlo, monospace`;
+
+/**
+ * A cell's colour as ink on the theme's paper, channels 0 to 1: the source's hue and saturation,
+ * its lightness lifted to a floor on dark paper (pressed below a ceiling on light), so a dark sky
+ * or a shadow still reads as its colour instead of vanishing into the background.
+ */
+export function inkColor(r: number, g: number, b: number, dark: boolean): [number, number, number] {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  let h = 0;
+  let sat = 0;
+  if (d > 0) {
+    sat = d / (1 - Math.abs(2 * l - 1));
+    if (max === r) h = ((g - b) / d + 6) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+  }
+  sat = Math.min(1, sat * 1.15);
+  const lift = dark ? 0.42 + 0.53 * l : 0.08 + 0.42 * l;
+  const c = (1 - Math.abs(2 * lift - 1)) * sat;
+  const x = c * (1 - Math.abs((h % 2) - 1));
+  const m = lift - c / 2;
+  const [r1, g1, b1] =
+    h < 1
+      ? [c, x, 0]
+      : h < 2
+        ? [x, c, 0]
+        : h < 3
+          ? [0, c, x]
+          : h < 4
+            ? [0, x, c]
+            : h < 5
+              ? [x, 0, c]
+              : [c, 0, x];
+  return [r1 + m, g1 + m, b1 + m];
+}
 
 let charWidthCache = 0;
 export function charWidth(): number {
   if (charWidthCache) return charWidthCache;
   const ctx = document.createElement("canvas").getContext("2d");
-  if (!ctx) return 4.2;
+  if (!ctx) return 7.2;
   ctx.font = FONT;
-  charWidthCache = ctx.measureText("M").width || 4.2;
+  charWidthCache = ctx.measureText("M").width || 7.2;
   return charWidthCache;
 }
 
@@ -535,7 +583,8 @@ export function asciiDrawing(
       start = end;
     };
     row.forEach((cell, x) => {
-      const color = `rgb(${Math.round(cell.r * 15) * 17} ${Math.round(cell.g * 15) * 17} ${Math.round(cell.b * 15) * 17})`;
+      const [ir, ig, ib] = inkColor(cell.r, cell.g, cell.b, dark);
+      const color = `rgb(${Math.round(ir * 15) * 17} ${Math.round(ig * 15) * 17} ${Math.round(ib * 15) * 17})`;
       if (cell.ch !== " " && color !== runColor) {
         flush(x);
         runColor = color;
