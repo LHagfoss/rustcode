@@ -1,3 +1,13 @@
+## [v1.38.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.38.0) - 2026-11-15
+
+### Features
+- Accept copied thread links in thread tools and balance the Linux/Windows sidebar titlebar controls. (#3812)
+- Add square quick-action rows to thread, project-folder, composer and pull-request menus, with keyboard navigation and accessible labels. (#3813)
+- Images now show in old threads and in threads on other computers, pasting an image into a remote thread works, and changing a remote thread's model or harness no longer fails. (#3814)
+- Settings and menus now call other computers you run threads on "machines" instead of "environments" (Settings › Machines, Add machine). (#3815)
+- The sidebar and the thread header now say which thread a delegate came from, and in which project, when the two are in different projects. (#3816)
+- Agents work in their own thread and only delegate when asked. (#3817)
+- Switching a thread to another account or harness no longer replays the model's reasoning, which made Claude refuse every turn after the switch. (#3819)
 ## [v1.37.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.37.0) - 2026-11-15
 
 ### Features
