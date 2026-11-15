@@ -5,16 +5,21 @@ import {
   BANNER_DARKEN_DEFAULT,
   BANNER_DARKEN_MAX,
   BANNER_IN_THREADS_DEFAULT,
+  BANNER_STYLE_DEFAULT,
+  BANNER_VISIBILITY_DEFAULT,
+  BANNER_VISIBILITY_MAX,
   bannerSetting,
   blurScale,
   boundedNumber,
   crop,
   darkenOverlay,
+  parseBannerStyle,
   RAMP,
   renderAscii,
   setBannerBlur,
   setBannerDarken,
   setBannerInThreads,
+  setBannerVisibility,
 } from "./banner";
 
 function solid(width: number, height: number, rgb: [number, number, number], alpha = 255) {
@@ -125,4 +130,28 @@ test("a blurred picture grows past the pane so its soft edge is out of sight", (
   expect(blurScale(10, 0, 600)).toBe(1);
   expect(blurScale(15, 1200, 600)).toBeCloseTo(1.1);
   expect(blurScale(40, 1200, 600)).toBeGreaterThan(blurScale(10, 1200, 600));
+});
+
+test("a stored style is one the app draws, anything else the default", () => {
+  expect(parseBannerStyle("dither")).toBe("dither");
+  expect(parseBannerStyle("haze")).toBe("haze");
+  expect(parseBannerStyle("picture")).toBe("picture");
+  expect(parseBannerStyle("")).toBe(BANNER_STYLE_DEFAULT);
+  expect(parseBannerStyle("sepia")).toBe(BANNER_STYLE_DEFAULT);
+});
+
+test("visibility in threads is held to its range, the default stored as nothing", () => {
+  const storage = testStorage({ "rustcode.newThreadBannerStyle": "halftone" });
+  try {
+    setBannerVisibility(BANNER_VISIBILITY_DEFAULT);
+    expect(bannerSetting()).toMatchObject({ style: "halftone", visibility: BANNER_VISIBILITY_DEFAULT });
+    setBannerVisibility(200);
+    expect(bannerSetting().visibility).toBe(BANNER_VISIBILITY_MAX);
+    setBannerVisibility(-5);
+    expect(storage.data.get("rustcode.newThreadBannerVisibility")).toBe("0");
+    setBannerVisibility(BANNER_VISIBILITY_DEFAULT);
+    expect(storage.data.has("rustcode.newThreadBannerVisibility")).toBe(false);
+  } finally {
+    storage.done();
+  }
 });

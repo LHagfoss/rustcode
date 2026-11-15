@@ -366,8 +366,13 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "appearance",
-    title: "New thread banner",
-    keywords: "banner picture image header new thread background wallpaper",
+    title: "Chat background",
+    keywords: "banner picture image photo wallpaper background new thread choose remove",
+  },
+  {
+    section: "appearance",
+    title: "Effect",
+    keywords: "background banner picture ascii text dither halftone scanlines haze retro print style",
   },
   {
     section: "appearance",
@@ -381,8 +386,13 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "appearance",
-    title: "Show in threads",
-    keywords: "banner background picture image open threads chat behind transcript",
+    title: "Show on",
+    keywords: "banner background picture image all threads open chat behind transcript",
+  },
+  {
+    section: "appearance",
+    title: "Visibility",
+    keywords: "banner background picture image opacity strength fade threads transcript",
   },
 
   // ------------------------------------------------------------ Keyboard

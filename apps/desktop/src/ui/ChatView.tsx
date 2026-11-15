@@ -883,34 +883,35 @@ export function ChatView() {
     >
       {/* The chosen picture covers the whole pane, the header included: the header floats over the
           column, so the column's `height` is the pane's, and the screen is the picture all the way
-          down without running past the window's bottom edge. */}
-      {showsBanner && (
-        <NewThreadBanner
-          key={banner.style}
-          name={banner.name}
-          style={banner.style}
-          height={Math.round(height)}
-          blur={banner.blur}
-          className="!absolute top-0 left-0 rc-fade-in"
-        />
-      )}
-      {/* The Darken setting: black over the picture, under the pane's wash. */}
-      {veil && (
-        <div aria-hidden className="pointer-events-none absolute inset-0" style={{ background: veil }} />
-      )}
-      {/* One light scrim over it, so the field and the cards stay the readable thing: dark text on
-          a light theme's pane wash, light text on the dark one's. A new thread shows the picture
-          alone, so its wash is light; an open thread is read line by line over whatever picture was
-          chosen, so its wash has to carry the text on its own. The white photo and the dark theme
-          are the worst case (the black photo and the light theme are the mirror): at 60% the body
-          text read at 4.4:1 and its muted lines at 2.0:1, where 80% keeps 9.4:1 and 4.3:1. A
-          picture that should show more than that is a darker one, or the Darken slider. */}
+          down without running past the window's bottom edge. An open thread shows it at the
+          Visibility setting, which is the wash of the pane colour over it put the other way round. */}
       {showsBanner && (
         <div
           aria-hidden
-          className={cx("pointer-events-none absolute inset-0", isNew ? "bg-bg/35" : "bg-bg/80")}
-        />
+          className="pointer-events-none absolute inset-0"
+          style={isNew ? undefined : { opacity: banner.visibility / 100 }}
+        >
+          <NewThreadBanner
+            key={banner.style}
+            name={banner.name}
+            style={banner.style}
+            height={Math.round(height)}
+            blur={banner.blur}
+            className="!absolute top-0 left-0 rc-fade-in"
+          />
+          {/* The Darken setting: black over the picture, under the pane's wash. */}
+          {veil && <div className="absolute inset-0" style={{ background: veil }} />}
+        </div>
       )}
+      {/* One light scrim over a new thread's picture, so the field and the cards stay the readable
+          thing: dark text on a light theme's pane wash, light text on the dark one's. An open thread
+          is read line by line over whatever picture was chosen, so there the picture itself is
+          faded instead (Visibility, 20% by default): the white photo and the dark theme are the
+          worst case (the black photo and the light theme are the mirror), and a 20% picture, the
+          80% wash first measured, keeps body text at 9.4:1 and muted lines at 4.3:1 where 40%
+          left 4.4:1 and 2.0:1. A picture that should show more than that is a darker one, or the
+          Darken slider. */}
+      {showsBanner && isNew && <div aria-hidden className="pointer-events-none absolute inset-0 bg-bg/35" />}
       <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />
       {/*
         The chat column and the right panel share one row, so the panel is docked beside
