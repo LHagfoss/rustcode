@@ -820,7 +820,7 @@ fn thousands(number: i64) -> String {
 }
 
 /// Left-aligned columns, two spaces apart.
-fn print_rows(headers: &[&str], rows: &[Vec<String>]) {
+pub(crate) fn print_rows(headers: &[&str], rows: &[Vec<String>]) {
     let mut widths: Vec<usize> = headers.iter().map(|header| header.len()).collect();
     for row in rows {
         for (index, cell) in row.iter().enumerate() {
@@ -921,6 +921,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(crate::cli::Commands::Data { command }) = cli_args.command.as_ref() {
         if let Err(error) = run_data_command(command) {
             eprintln!("rustcode data: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if let Some(crate::cli::Commands::Settings { command }) = cli_args.command.as_ref() {
+        if let Err(error) = crate::manage_command::settings(command).await {
+            eprintln!("rustcode settings: {error}");
             std::process::exit(1);
         }
         return Ok(());

@@ -1005,6 +1005,9 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || tool.name == crate::orchestration::ask_user::TOOL_NAME
         // Workflow runs are started through the `rustcode` MCP server too (#3394).
         || crate::workflow::is_tool(tool.name)
+        // Managing RustCode's settings (#3821) is a tool of the `rustcode`
+        // MCP server too: the built-in schema has no room under its budget.
+        || crate::manage::is_tool(tool.name)
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
         || (crate::orchestration::is_v2_tool(tool.name) && !policy.include_orchestration_v2_tools)
         || (crate::orchestration::is_v3_tool(tool.name) && !policy.include_orchestration_v3_tools)

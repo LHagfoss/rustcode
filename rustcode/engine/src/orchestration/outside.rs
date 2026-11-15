@@ -70,6 +70,8 @@ pub enum Scope {
     ReadOnly,
     Delegate,
     Manage,
+    /// Manage, and changing RustCode's own settings (#3821).
+    Admin,
 }
 
 impl Scope {
@@ -78,6 +80,7 @@ impl Scope {
             Self::ReadOnly => "read_only",
             Self::Delegate => "delegate",
             Self::Manage => "manage",
+            Self::Admin => "admin",
         }
     }
 
@@ -86,6 +89,7 @@ impl Scope {
             Self::ReadOnly => "Read-only",
             Self::Delegate => "Delegate",
             Self::Manage => "Manage",
+            Self::Admin => "Admin",
         }
     }
 
@@ -94,6 +98,7 @@ impl Scope {
             "read_only" | "readonly" | "read" => Some(Self::ReadOnly),
             "delegate" => Some(Self::Delegate),
             "manage" => Some(Self::Manage),
+            "admin" => Some(Self::Admin),
             _ => None,
         }
     }
@@ -107,8 +112,9 @@ impl Scope {
                 "read, and also start, fan out, message and interrupt threads (the work you start runs at Auto-edit)"
             }
             Self::Manage => {
-                "delegate, and also the management tools (merge, clean up, settings) as RustCode offers them to outside agents"
+                "delegate, and also the management tools (merge, clean up, projects, scheduled work) as RustCode offers them to outside agents"
             }
+            Self::Admin => "manage, and also change RustCode's own settings with `manage_settings`",
         }
     }
 }
@@ -135,7 +141,8 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
         | READ_PROJECT
         | LIST_SCHEDULED_TASKS
         | WAIT_SESSION
-        | WORKTREE_STATUS => Scope::ReadOnly,
+        | WORKTREE_STATUS
+        | crate::manage::MANAGE_SETTINGS => Scope::ReadOnly,
         START_SESSION | MESSAGE_SESSION | FAN_OUT | INTERRUPT_SESSION | MANAGE_QUEUE => {
             Scope::Delegate
         }
@@ -156,6 +163,15 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
         | RUN_SCHEDULED_TASK_NOW => Scope::Manage,
         _ => return None,
     })
+}
+
+/// The scope one call needs: a manage tool's reads need Read-only, and its
+/// writes Admin. Every other tool needs what [`required_scope`] says.
+pub fn required_scope_for(tool: &str, args: &Value) -> Option<Scope> {
+    if crate::manage::is_write(tool, args) {
+        return Some(Scope::Admin);
+    }
+    required_scope(tool)
 }
 
 /// Whether the engine can run `tool` for an outside agent without a thread
@@ -185,13 +201,14 @@ pub fn implemented(tool: &str) -> bool {
             | CONFIGURE_SESSION
             | MERGE_WHEN_GREEN
             | CLEANUP_WORKTREE
+            | crate::manage::MANAGE_SETTINGS
     )
 }
 
 /// Whether a call changes something, so a grant that asks must be answered
 /// by the user first.
-pub fn changes_things(tool: &str) -> bool {
-    required_scope(tool).is_some_and(|scope| scope > Scope::ReadOnly)
+pub fn changes_things(tool: &str, args: &Value) -> bool {
+    required_scope_for(tool, args).is_some_and(|scope| scope > Scope::ReadOnly)
 }
 
 // ------------------------------------------------------------------ grants
@@ -667,6 +684,17 @@ impl Runner for EngineRunner {
                 super::START_SESSION | super::FAN_OUT => args["standalone"] = json!(true),
                 _ => {}
             }
+            if crate::manage::is_tool(tool) {
+                // The gate has checked the scope and asked when the grant
+                // asks; a grant that does not ask was set so by the user.
+                let answer =
+                    crate::manage::answer(tool, &args, crate::manage::Approval::Granted, cancel)
+                        .await;
+                return CallAnswer {
+                    success: answer.success,
+                    content: answer.content,
+                };
+            }
             let output = match tool {
                 super::THREAD_USAGE | super::QUERY_DATA | super::READ_ACTIVITY => {
                     data_tool(tool, &args)
@@ -888,7 +916,7 @@ pub(super) async fn answer_transport_with(
     }
     // The scope is checked before anything else about the call, so a call the
     // grant may not make never reaches validation, the app, or a thread.
-    let Some(needed) = required_scope(tool) else {
+    let Some(needed) = required_scope_for(tool, &request.args) else {
         record(
             settings,
             &grant,
@@ -932,12 +960,17 @@ pub(super) async fn answer_transport_with(
             content: content.to_string(),
         };
     }
-    if let Err(reason) = super::validate(tool, &request.args) {
+    let checked = if crate::manage::is_tool(tool) {
+        crate::manage::validate(tool, &request.args)
+    } else {
+        super::validate(tool, &request.args)
+    };
+    if let Err(reason) = checked {
         return refusal(format!(
             "error: invalid {tool} call: {reason}. Nothing was sent."
         ));
     }
-    if grant.ask && changes_things(tool) {
+    if grant.ask && changes_things(tool, &request.args) {
         match ask_user(settings, &grant, tool, &request.args, cancel).await {
             Approval::Allowed => {}
             Approval::Declined => {
@@ -1050,7 +1083,7 @@ pub fn instructions(grant: &Grant) -> String {
         ""
     };
     format!(
-        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_session` sends an existing thread a message, `interrupt_session` stops a running turn, and `wait_session` returns an answer. With Manage access `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` act on a thread you name with `session_id`. Work you start runs at Auto-edit: it can edit files but a command that needs approval is declined. Tools outside your access are not listed.",
+        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_session` sends an existing thread a message, `interrupt_session` stops a running turn, and `wait_session` returns an answer. With Manage access `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` act on a thread you name with `session_id`. `manage_settings` lists and reads RustCode's settings; with Admin access it also sets and resets them. Work you start runs at Auto-edit: it can edit files but a command that needs approval is declined. Tools outside your access are not listed.",
         grant.name,
         grant.scope.label(),
         grant.scope.meaning(),
@@ -1085,6 +1118,16 @@ pub fn tools_for(scope: Scope) -> Vec<Value> {
                     ""
                 }
             );
+            if let Some(description) = entry.get("description").and_then(Value::as_str) {
+                entry["description"] = json!(format!("{description}{note}"));
+            }
+        }
+        if crate::manage::is_tool(&name) {
+            let note = if scope >= Scope::Admin {
+                "\n\n[Outside agent: set and reset need Admin access, which this connection has; the user may be asked to approve them in RustCode.]"
+            } else {
+                "\n\n[Outside agent: list and get only; set and reset need Admin access, which this connection does not have.]"
+            };
             if let Some(description) = entry.get("description").and_then(Value::as_str) {
                 entry["description"] = json!(format!("{description}{note}"));
             }
@@ -1259,7 +1302,7 @@ mod tests {
         for name in [super::super::SEARCH_SESSIONS, super::super::LIST_PROJECTS] {
             assert_eq!(required_scope(name), Some(Scope::ReadOnly), "{name}");
             assert!(implemented(name), "{name}");
-            assert!(!changes_things(name), "{name}");
+            assert!(!changes_things(name, &json!({})), "{name}");
             let listed = tools_for(Scope::ReadOnly);
             assert!(
                 listed.iter().any(|tool| tool["name"] == json!(name)),
@@ -1419,6 +1462,73 @@ mod tests {
         let audit = fixture.audit();
         assert_eq!(audit.len(), 10);
         assert!(audit.iter().all(|row| row["outcome"] == "denied"));
+    }
+
+    #[test]
+    fn admin_is_above_manage_and_settings_writes_need_it() {
+        assert!(Scope::Manage < Scope::Admin);
+        assert_eq!(Scope::parse("Admin"), Some(Scope::Admin));
+        assert_eq!(Scope::Admin.as_str(), "admin");
+        let tool = crate::manage::MANAGE_SETTINGS;
+        assert_eq!(required_scope(tool), Some(Scope::ReadOnly));
+        assert_eq!(
+            required_scope_for(tool, &json!({"action": "get", "key": "orchestration"})),
+            Some(Scope::ReadOnly)
+        );
+        for action in ["set", "reset"] {
+            assert_eq!(
+                required_scope_for(tool, &json!({"action": action})),
+                Some(Scope::Admin),
+                "{action}"
+            );
+            assert!(changes_things(tool, &json!({"action": action})));
+        }
+        assert!(!changes_things(tool, &json!({"action": "list"})));
+        let listed = |scope| {
+            tools_for(scope)
+                .into_iter()
+                .find(|entry| entry["name"] == json!(tool))
+                .and_then(|entry| entry["description"].as_str().map(str::to_owned))
+                .unwrap_or_default()
+        };
+        assert!(listed(Scope::ReadOnly).contains("list and get only"));
+        assert!(listed(Scope::Admin).contains("which this connection has"));
+    }
+
+    #[tokio::test]
+    async fn a_settings_write_below_admin_is_refused_with_the_level_it_needs() {
+        let fixture = Fixture::new();
+        let (_, manage) = fixture.grant(Scope::Manage, false);
+        let (_, admin) = fixture.grant(Scope::Admin, false);
+        let tool = crate::manage::MANAGE_SETTINGS;
+        let write = json!({"action": "set", "key": "orchestration", "value": false});
+        let refused = fixture.call(&manage, tool, write.clone()).await;
+        assert!(!refused.success);
+        assert!(
+            refused.content.contains("needs Admin access"),
+            "{}",
+            refused.content
+        );
+        assert_eq!(fixture.ran(), 0, "nothing reached the engine");
+        let read = fixture
+            .call(
+                &manage,
+                tool,
+                json!({"action": "get", "key": "orchestration"}),
+            )
+            .await;
+        assert!(read.success, "{}", read.content);
+        let allowed = fixture.call(&admin, tool, write).await;
+        assert!(allowed.success, "{}", allowed.content);
+        assert_eq!(fixture.ran(), 2);
+        let invalid = fixture
+            .call(
+                &admin,
+                tool,
+                json!({"action": "set", "key": "theme", "value": 1}),
+            )
+            .await;
+        assert!(!invalid.success && invalid.content.contains("unknown setting"));
     }
 
     #[tokio::test]

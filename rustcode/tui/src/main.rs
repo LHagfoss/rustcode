@@ -5,6 +5,7 @@
 mod cli;
 mod inline_terminal;
 mod machines;
+mod manage_command;
 mod run;
 mod runtime;
 mod server_command;

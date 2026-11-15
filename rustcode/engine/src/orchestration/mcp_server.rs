@@ -89,6 +89,9 @@ pub fn tools_with(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
         // orchestration version gates it (#3369).
         std::iter::once(crate::pull_watch::LINK_TOOL_NAME)
             .chain(std::iter::once(super::secret::TOOL_NAME))
+            // Managing RustCode itself (#3821): answered by the engine, which
+            // asks the user before a write through the thread's own card.
+            .chain(crate::manage::TOOL_NAMES)
             // Workflow runs start threads, so they need the tools that do
             // (version 2); the engine's hub answers them (#3394).
             .chain(
@@ -430,6 +433,27 @@ async fn call(
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
     if identity.outside {
         return call_outside(forward, identity, tool, params).await;
+    }
+    if crate::manage::is_tool(tool) {
+        let args = params
+            .get("arguments")
+            .cloned()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        if let Err(reason) = crate::manage::validate(tool, &args) {
+            return CallAnswer::failure(format!(
+                "error: invalid {tool} call: {reason}. Nothing was changed."
+            ));
+        }
+        return forward
+            .call(CallRequest {
+                session_id: identity.session_id.clone(),
+                token: identity.token.clone(),
+                tool: tool.to_owned(),
+                args,
+                outside: false,
+            })
+            .await;
     }
     if tool == super::secret::TOOL_NAME {
         return forward
@@ -1248,6 +1272,7 @@ mod tests {
         // for every client and answered by this server (#3369).
         expected.push(crate::pull_watch::LINK_TOOL_NAME.to_owned());
         expected.push(super::super::secret::TOOL_NAME.to_owned());
+        expected.extend(crate::manage::TOOL_NAMES.map(str::to_owned));
         // The workflow tools follow it for a client that can start threads.
         expected.extend(crate::workflow::TOOL_NAMES.map(str::to_owned));
         assert_eq!(listed, expected);

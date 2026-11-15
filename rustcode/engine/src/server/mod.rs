@@ -326,6 +326,66 @@ pub(crate) async fn connect_running() -> io::Result<listen::ClientStream> {
     listen::connect(&info.endpoint).await
 }
 
+/// What one request to the running server found.
+#[derive(Debug)]
+pub enum Asked {
+    /// The server's answer.
+    Answer(serde_json::Value),
+    /// The server refused the request, in its words.
+    Refused(String),
+    /// No server answers, or this process may not reach it.
+    NoServer(io::Error),
+}
+
+/// Send one ACP request to the running server and wait for its answer, as a
+/// client that reads it once: `rustcode settings` writes through the server
+/// so its clients hear of the change. Nothing is started.
+pub async fn ask_running(method: &str, params: serde_json::Value) -> Asked {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let stream = match connect_running().await {
+        Ok(stream) => stream,
+        Err(error) => return Asked::NoServer(error),
+    };
+    let exchange = async {
+        let (read, mut write) = tokio::io::split(stream);
+        let request = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": method, "params": params
+        });
+        write.write_all(format!("{request}\n").as_bytes()).await?;
+        write.flush().await?;
+        let mut lines = tokio::io::BufReader::new(read).lines();
+        while let Some(line) = lines.next_line().await? {
+            let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if message.get("id") != Some(&serde_json::json!(1)) || message.get("method").is_some() {
+                continue;
+            }
+            if let Some(error) = message.get("error") {
+                let text = error
+                    .get("data")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| error.get("message").and_then(serde_json::Value::as_str))
+                    .unwrap_or("the server refused the request")
+                    .to_owned();
+                return Ok(Asked::Refused(text));
+            }
+            return Ok(Asked::Answer(
+                message.get("result").cloned().unwrap_or_default(),
+            ));
+        }
+        Err(io::Error::from(io::ErrorKind::UnexpectedEof))
+    };
+    match tokio::time::timeout(Duration::from_secs(15), exchange).await {
+        Ok(Ok(asked)) => asked,
+        Ok(Err(error)) => Asked::NoServer(error),
+        Err(_) => Asked::NoServer(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "the RustCode server did not answer within 15s",
+        )),
+    }
+}
+
 async fn wait_for_server() -> anyhow::Result<listen::ClientStream> {
     let deadline = tokio::time::Instant::now() + START_TIMEOUT;
     loop {

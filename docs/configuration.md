@@ -590,6 +590,44 @@ turns dictation off there),
 `auto-compact-mode` and `auto-compact-threshold` may be overridden; any other
 key is refused. A file written before projects existed reads unchanged.
 
+The engine watches the file and sends `_rustcode/settings/changed` (the same
+answer as `get` with no keys) to every client that read or wrote settings when
+it changes, whoever changed it, so the app follows a value set elsewhere
+without a restart.
+
+### From a terminal or an agent
+
+`rustcode settings` reads and changes the same values:
+
+```sh
+rustcode settings list [--project <folder>] [--json]
+rustcode settings get auto-compact-threshold [--json]
+rustcode settings set continue-after-limit false
+rustcode settings set default-permission-mode edits --project ~/code/app
+rustcode settings reset auto-compact-threshold
+```
+
+`list` and `get` show each key's value, where it comes from (`default`,
+`machine` or `project`), its type, its default and, for a text key, the values
+it accepts (`default-permission-mode` is `ask`, `edits` or `full`;
+`auto-compact-mode` is `off`, `size` or `cache`). `set` reads the value in the
+key's type (`true`/`false`, a number, a choice, or JSON for a list), refuses a
+wrong one with what the key accepts, and prints `before → after`. `reset`
+removes the machine's value, or with `--project` the project's override. The
+command goes through the running server when there is one (`rustcode server`),
+so the server stays the only writer of the file; without one it reads and
+writes the file itself.
+
+An agent uses the `manage_settings` tool (`rustcode/engine/src/manage.rs`) of
+the `rustcode` MCP server, which external harnesses and outside agents get: `{ "action": "list" |
+"get" | "set" | "reset", "key"?, "value"?, "project"? }`. Reads answer at once.
+`set` and `reset` show the thread's approval card, titled with the value
+before and after (`Change setting auto-compact-threshold: 150000 → 200000`),
+and change nothing unless the user allows it; with no window to show the card
+in, the call is refused and names the `rustcode settings` command to run
+instead. An outside agent needs Admin access to write
+([mcp-outside-agents.md](mcp-outside-agents.md)).
+
 `settings.json` is deliberately not part of `rustcode sync`: it is one
 machine's behaviour, not a shared configuration.
 

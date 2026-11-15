@@ -13,9 +13,9 @@
 //! so they are not duplicated here.
 //!
 //! Offline machines keep their file; a client writes to a machine only while
-//! its connection is open. `_rustcode/settings/changed` is not sent: a client
-//! is the only writer of a value while it is connected, and the next read is
-//! cheap.
+//! its connection is open. `_rustcode/settings/changed` is sent when the file
+//! changes, whoever wrote it: the app, `rustcode settings set`, an agent's
+//! `manage_settings` or an edit by hand ([`start_watching`]).
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -255,8 +255,9 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
         Some(keys) => {
             for key in keys {
                 if registry_entry(key).is_none() {
-                    return Err(agent_client_protocol::Error::invalid_params()
-                        .data(format!("unknown setting '{key}'")));
+                    return Err(
+                        agent_client_protocol::Error::invalid_params().data(unknown_key(key))
+                    );
                 }
             }
             keys.iter().map(String::as_str).collect()
@@ -345,6 +346,11 @@ pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_p
                 return Err(agent_client_protocol::Error::invalid_params()
                     .data(format!("setting '{known}' has the wrong type")));
             }
+            if is_key(known) {
+                check_value(known, value).map_err(|message| {
+                    agent_client_protocol::Error::invalid_params().data(message)
+                })?;
+            }
             overrides.insert(known.to_owned(), value.clone());
         }
         for key in &request.clear {
@@ -373,6 +379,8 @@ pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_p
             return Err(agent_client_protocol::Error::invalid_params()
                 .data(format!("setting '{known}' has the wrong type")));
         }
+        check_value(known, value)
+            .map_err(|message| agent_client_protocol::Error::invalid_params().data(message))?;
         if known == "computer-use" {
             crate::computer_use::save_settings(value)
                 .map_err(|e| agent_client_protocol::Error::invalid_params().data(e))?;
@@ -383,6 +391,193 @@ pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_p
     write_file(&path, &file)
         .map_err(|error| agent_client_protocol::Error::internal_error().data(error))?;
     read(GetSettingsRequest::default())
+}
+
+/// What a person or an agent reads about a key before changing it: a short
+/// label (the Settings row's) and, for a text key, the values it accepts.
+fn about(key: &str) -> (&'static str, Option<&'static [&'static str]>) {
+    match key {
+        "computer-use" => ("Computer use (browser and desktop control)", None),
+        "default-permission-mode" => ("Default access", Some(&["ask", "edits", "full"])),
+        "resume-after-restart" => ("Continue threads after a restart", None),
+        "continue-after-limit" => ("Continue threads on their own after a usage limit", None),
+        "auto-compact-mode" => ("Auto-compact", Some(&["off", "size", "cache"])),
+        "auto-compact-threshold" => ("Auto-compact threshold, in tokens", None),
+        "orchestration" => ("Threads can start and message other threads", None),
+        "delegates-total" => ("Delegates across all threads", None),
+        "delegates-per-thread" => ("Delegates one thread can run at once", None),
+        "trust-delegate-accounts" => ("Let delegates use named accounts without asking", None),
+        "read-across-projects" => ("Let agents read threads in other projects", None),
+        "delegate-presets" => ("Delegate presets", None),
+        "limit-fallback" => ("Switch a delegate to another model at a limit", None),
+        "limit-fallback-map" => ("Limit fallback models", None),
+        "wake-batch-seconds" => ("Merge delegate wakes within, in seconds", None),
+        "workflow-concurrency" => ("Workflow workers at once", None),
+        "workflow-call-budget" => ("Workflow agent calls per run", None),
+        "workflow-timeout-minutes" => ("Workflow run time limit, in minutes", None),
+        _ => ("", None),
+    }
+}
+
+fn type_name(kind: SettingType) -> &'static str {
+    match kind {
+        SettingType::Object => "object",
+        SettingType::Boolean => "boolean",
+        SettingType::Number => "number",
+        SettingType::Text => "text",
+        SettingType::List => "list",
+    }
+}
+
+/// Every key with its type, default, label, accepted values and whether a
+/// project may override it: what `rustcode settings list` and
+/// `manage_settings` show beside the values.
+pub(crate) fn describe() -> Vec<Value> {
+    registry()
+        .iter()
+        .map(|(key, kind, default)| {
+            let (label, choices) = about(key);
+            let mut entry = json!({
+                "key": key,
+                "type": type_name(*kind),
+                "default": default,
+                "label": label,
+                "project": PROJECT_KEYS.contains(key),
+            });
+            if let Some(choices) = choices {
+                entry["choices"] = json!(choices);
+            }
+            entry
+        })
+        .collect()
+}
+
+/// Whether `key` is a machine setting this registry knows.
+pub(crate) fn is_key(key: &str) -> bool {
+    registry_entry(key).is_some()
+}
+
+/// The keys, for a refusal that names what exists.
+pub(crate) fn keys() -> Vec<&'static str> {
+    registry().iter().map(|(key, ..)| *key).collect()
+}
+
+/// A value typed on a command line, as the JSON `key` stores: `true`/`false`
+/// (also `on`/`off`, `yes`/`no`), a number, the text itself, or JSON for an
+/// object or a list. A wrong value is refused with what the key accepts.
+pub(crate) fn parse_text(key: &str, text: &str) -> Result<Value, String> {
+    let Some((known, kind, _)) = registry_entry(key) else {
+        return Err(unknown_key(key));
+    };
+    let trimmed = text.trim();
+    let value = match kind {
+        SettingType::Boolean => match trimmed.to_ascii_lowercase().as_str() {
+            "true" | "on" | "yes" | "1" => json!(true),
+            "false" | "off" | "no" | "0" => json!(false),
+            _ => return Err(format!("{known} is true or false, not '{trimmed}'")),
+        },
+        SettingType::Number => {
+            if let Ok(whole) = trimmed.replace('_', "").parse::<i64>() {
+                json!(whole)
+            } else {
+                match trimmed.parse::<f64>() {
+                    Ok(number) if number.is_finite() => json!(number),
+                    _ => return Err(format!("{known} is a number, not '{trimmed}'")),
+                }
+            }
+        }
+        SettingType::Text => json!(trimmed),
+        SettingType::Object | SettingType::List => {
+            serde_json::from_str(trimmed).map_err(|error| format!("{known} takes JSON: {error}"))?
+        }
+    };
+    check_value(known, &value)?;
+    Ok(value)
+}
+
+/// Refuse a value of the wrong type, or a text value outside the key's choices.
+pub(crate) fn check(key: &str, value: &Value) -> Result<(), String> {
+    check_value(key, value)
+}
+
+fn check_value(key: &str, value: &Value) -> Result<(), String> {
+    let Some((known, kind, _)) = registry_entry(key) else {
+        return Err(unknown_key(key));
+    };
+    if !value_matches(kind, value) {
+        return Err(format!(
+            "setting '{known}' has the wrong type: it takes a {}",
+            type_name(kind)
+        ));
+    }
+    if let (Some(choices), Some(text)) = (about(known).1, value.as_str())
+        && !choices.contains(&text)
+    {
+        return Err(format!(
+            "{known} is one of {}, not '{text}'",
+            choices.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+fn unknown_key(key: &str) -> String {
+    format!(
+        "unknown setting '{key}'; the settings are {}",
+        keys().join(", ")
+    )
+}
+
+/// What the file looks like now, for the watcher: modification time and size.
+fn file_signature() -> Option<(Option<std::time::SystemTime>, u64)> {
+    let meta = std::fs::metadata(settings_path().ok()?).ok()?;
+    Some((meta.modified().ok(), meta.len()))
+}
+
+/// `_rustcode/settings/changed`: the machine's values, as `get` with no keys
+/// answers them, after `settings.json` changed (the app, the CLI, an agent's
+/// `manage_settings`, or an edit by hand).
+#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcNotification)]
+#[notification(method = "_rustcode/settings/changed")]
+pub(crate) struct SettingsChangedNotification {
+    #[serde(flatten)]
+    pub answer: Value,
+}
+
+/// Watch `settings.json`, once per engine, and tell every client that read
+/// settings when it changes, so a value set outside the app shows there at
+/// once instead of at its next start.
+pub(crate) fn start_watching(clients: &super::clients::Clients) {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let notify = clients.clone();
+    tokio::spawn(async move {
+        use crate::themes::watch::{DEBOUNCE, Debouncer, POLL};
+        let mut debouncer = Debouncer::new(
+            tokio::task::spawn_blocking(file_signature)
+                .await
+                .unwrap_or_default(),
+            DEBOUNCE,
+        );
+        loop {
+            tokio::time::sleep(POLL).await;
+            let current = tokio::task::spawn_blocking(file_signature)
+                .await
+                .unwrap_or_default();
+            if debouncer.observe(current, std::time::Instant::now()) {
+                let answer =
+                    tokio::task::spawn_blocking(|| read(GetSettingsRequest::default())).await;
+                if let Ok(Ok(answer)) = answer {
+                    notify.publish(
+                        super::clients::Topic::Settings,
+                        SettingsChangedNotification { answer },
+                    );
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]

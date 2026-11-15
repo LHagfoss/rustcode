@@ -1996,6 +1996,9 @@ function onChildActivity(params: unknown) {
   );
 }
 
+/** `_rustcode/settings/changed`: the engine saw `settings.json` change. */
+const SETTINGS_CHANGED = "_rustcode/settings/changed";
+
 async function handleInbound(message: Inbound, conn: AcpConnection | null = connection, host = LOCAL_HOST) {
   switch (message.type) {
     case "closed":
@@ -2026,6 +2029,11 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
         void deliverPullWatch(conn, message.params, host).catch(() => {});
       else if (message.method === WorkflowMethod.changed) onWorkflowChanged(message.params, host);
       else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
+      // A setting changed outside this window: the CLI, an agent's `manage_settings`, another app.
+      else if (message.method === SETTINGS_CHANGED) {
+        const params = message.params;
+        void import("./settingsScope").then((scope) => scope.onServerSettingsChanged(host, params));
+      }
       return;
     case "request":
       if (message.method === Method.requestPermission) {

@@ -1523,6 +1523,7 @@ pub const TOOLS: &[Tool] = &[
     misc::SMART_UI_CHECK,
     misc::ASK_USER_QUESTION,
     misc::REQUEST_SECRET,
+    misc::MANAGE_SETTINGS,
     misc::RUN_WORKFLOW,
     misc::WORKFLOW_STATUS,
     misc::STOP_WORKFLOW,

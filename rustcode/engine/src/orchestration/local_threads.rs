@@ -586,10 +586,10 @@ async fn start_one(
 
     // The work an outside agent starts runs at most at the ceiling its grant
     // sets: Auto-edit for a delegate grant, so a command that needs approval is
-    // declined and nobody is asked, Full only for a manage grant.
+    // declined and nobody is asked, Full only for a manage or admin grant.
     let thread_access = if outside {
         match super::outside::scope_of_caller(caller) {
-            Some(super::outside::Scope::Manage) => Access::Full,
+            Some(super::outside::Scope::Manage | super::outside::Scope::Admin) => Access::Full,
             _ => Access::Edits,
         }
     } else {

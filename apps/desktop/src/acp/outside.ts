@@ -13,16 +13,17 @@ export const OutsideMethod = {
   answer: "_rustcode/outside/answer",
 } as const;
 
-export type OutsideScope = "read_only" | "delegate" | "manage";
+export type OutsideScope = "read_only" | "delegate" | "manage" | "admin";
 export type OutsidePlatform = "claude-desktop" | "cursor" | "codex" | "other";
 
-export const OUTSIDE_SCOPES: readonly OutsideScope[] = ["read_only", "delegate", "manage"];
+export const OUTSIDE_SCOPES: readonly OutsideScope[] = ["read_only", "delegate", "manage", "admin"];
 export const OUTSIDE_PLATFORMS: readonly OutsidePlatform[] = ["claude-desktop", "cursor", "codex", "other"];
 
 export const SCOPE_LABEL: Record<OutsideScope, string> = {
   read_only: "Read-only",
   delegate: "Delegate",
   manage: "Manage",
+  admin: "Admin",
 };
 
 export const SCOPE_HELP: Record<OutsideScope, string> = {
@@ -30,7 +31,8 @@ export const SCOPE_HELP: Record<OutsideScope, string> = {
   delegate:
     "Read, and start or message threads. Threads it starts run at Auto-edit: files can change, a command that needs approval is declined.",
   manage:
-    "Delegate, and the management tools (merge, clean up, settings) as RustCode makes them available to outside agents. Started threads may run at Full access.",
+    "Delegate, and the management tools (merge, clean up, projects, scheduled work) as RustCode makes them available to outside agents. Started threads may run at Full access.",
+  admin: "Manage, and change RustCode's own settings. Started threads may run at Full access.",
 };
 
 export const PLATFORM_LABEL: Record<OutsidePlatform, string> = {
