@@ -103,9 +103,11 @@ import {
 import { type PendingSetup, pendingSummary } from "../state/setup";
 import { type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
-import { PREF, usePref } from "../state/sidebarPrefs";
+import { PREF, usePref, useSidebarDensity } from "../state/sidebarPrefs";
 import {
+  type CompactMark,
   cleanFolds,
+  compactMark,
   contextRow,
   type HiddenKind,
   hiddenKind,
@@ -602,6 +604,30 @@ const ROW_LEFT = "relative flex min-w-0 flex-1 items-center gap-1.5 overflow-hid
 const ROW_RIGHT =
   "relative flex flex-none items-center justify-end gap-1 overflow-hidden whitespace-nowrap tabular";
 
+/**
+ * The compact row: one line at 28px, so about two and a half rows sit where one detailed row
+ * did. It keeps the leading status dot, the harness's mark, the title and the trailing state;
+ * the project, computer, branch and model move to the hover card.
+ */
+const COMPACT_ROW = "flex h-[28px] items-center gap-1.5 rounded-lg px-3";
+
+/** The compact row's leading dot, in the tone the detailed row's chip takes for the same state. */
+const COMPACT_DOT: Record<CompactMark, string> = {
+  needs: "bg-warning motion-safe:animate-pulse",
+  working: "bg-accent",
+  failed: "bg-danger",
+  unread: "bg-success",
+};
+
+/** The dot's slot is always kept, so the titles of a compact list line up whatever they flag. */
+function CompactDot({ mark }: { mark?: CompactMark }) {
+  return (
+    <span aria-hidden className="relative flex w-1.5 shrink-0 justify-center">
+      {mark && <span className={cx("size-1.5 rounded-full", COMPACT_DOT[mark])} />}
+    </span>
+  );
+}
+
 /** What a thread's calls changed, small enough for the row's second line or its trailing slot. */
 function DiffStat({ diff }: { diff: { added: number; removed: number } }) {
   return (
@@ -690,6 +716,7 @@ const ThreadRow = memo(function ThreadRow({
   pinKey,
   settleKey,
   onClearSelection,
+  compact,
 }: {
   session: SessionSummary;
   selected: boolean;
@@ -716,6 +743,8 @@ const ThreadRow = memo(function ThreadRow({
   pinKey?: string;
   settleKey?: string;
   onClearSelection?: () => void;
+  /** The sidebar's compact density: one line, the rest on the hover card. */
+  compact?: boolean;
 }) {
   // The computer a thread runs on, when that is not this one: its row carries the glyph and name,
   // and the hover card says so. A thread from this computer carries nothing.
@@ -801,7 +830,7 @@ const ThreadRow = memo(function ThreadRow({
   // Renaming edits the title in place, over the row's first line: the row keeps its height and
   // its other lines, so the list does not jump while you type.
   const renameBox = renaming && (
-    <div className="absolute inset-x-1 top-[5px] z-10">
+    <div className={cx("absolute inset-x-1 z-10", compact ? "top-[2px]" : "top-[5px]")}>
       <input
         autoFocus
         value={title}
@@ -890,6 +919,7 @@ const ThreadRow = memo(function ThreadRow({
             machine={machine}
             harness={harnessName}
             model={model}
+            branch={gitBranch}
             status={chip?.label ?? (done ? "Settled" : "Idle")}
             now={now}
             items={items}
@@ -924,130 +954,174 @@ const ThreadRow = memo(function ThreadRow({
               }}
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
-              className={cx(ROW_GRID, "relative w-full text-left")}
+              className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
             >
-              <RowFill selected={lit} picked={picked} radius="rounded-xl" />
-              {/* Line 1: the title, and what the thread is doing (the hover actions take its place). */}
-              <span className={ROW_LINE}>
-                <span className={ROW_LEFT}>
-                  {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-                  {branch && (
-                    <span
-                      title={branch === "fork" ? "A fork" : "A side chat"}
-                      className="shrink-0 text-fg-faint"
-                    >
-                      {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+              <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
+              {compact ? (
+                <>
+                  <CompactDot mark={compactMark(chip)} />
+                  <HarnessIcon
+                    id={session.harness || "rustcode"}
+                    name={harness?.name}
+                    size={12}
+                    className={cx("relative shrink-0", markTint)}
+                  />
+                  <span className={cx(ROW_LEFT, "flex-1")}>
+                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                    {branch && (
+                      <span className="shrink-0 text-fg-faint">
+                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                      </span>
+                    )}
+                    <LinkBadge threadId={session.id} />
+                    <span className={cx(titleTint, renaming && "invisible")}>
+                      {session.title || "New thread"}
                     </span>
-                  )}
-                  <LinkBadge threadId={session.id} />
-                  <span className={cx(titleTint, renaming && "invisible")}>
-                    {session.title || "New thread"}
                   </span>
-                </span>
-                <span
-                  title={chip?.title}
-                  className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
-                >
-                  <span className="flex min-w-0 items-center justify-end">{state}</span>
-                </span>
-              </span>
-              {/* Line 2: where it runs — the project (under its heading, the harness) and the computer. */}
-              <span className={ROW_LINE}>
-                <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-                  {grouped ? (
-                    external && (
-                      <HarnessIcon
-                        id={session.harness!}
-                        name={harness?.name}
-                        size={12}
-                        className="shrink-0"
-                      />
-                    )
-                  ) : (
-                    <ProjectMark name={project} size={14} className={markTint} />
-                  )}
-                  <span className="min-w-0 max-w-[60%] shrink-0 truncate">
-                    {grouped ? (harnessName ?? "") : project}
+                  <span
+                    title={chip?.title}
+                    className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
+                  >
+                    {delegates && (
+                      <span className="flex shrink-0 items-center gap-0.5 tabular">
+                        <Bot size={11} aria-hidden />
+                        <span className="sr-only">{delegates.title}</span>
+                        <span aria-hidden>{delegates.count}</span>
+                      </span>
+                    )}
+                    <span className="flex min-w-0 items-center justify-end">{state}</span>
                   </span>
-                  {place && (
+                </>
+              ) : (
+                <>
+                  {/* Line 1: the title, and what the thread is doing (the hover actions take its place). */}
+                  <span className={ROW_LINE}>
+                    <span className={ROW_LEFT}>
+                      {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                      {branch && (
+                        <span
+                          title={branch === "fork" ? "A fork" : "A side chat"}
+                          className="shrink-0 text-fg-faint"
+                        >
+                          {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                        </span>
+                      )}
+                      <LinkBadge threadId={session.id} />
+                      <span className={cx(titleTint, renaming && "invisible")}>
+                        {session.title || "New thread"}
+                      </span>
+                    </span>
                     <span
-                      className="flex min-w-0 shrink items-center gap-1 text-fg-faint"
-                      title={
-                        unsynced
-                          ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
-                          : `Runs on ${place.name}`
-                      }
+                      title={chip?.title}
+                      className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
                     >
-                      <span aria-hidden>·</span>
-                      <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={11} />
-                      <span className="min-w-0 truncate">{place.name}</span>
-                      {unsynced && (
-                        <CloudUpload size={11} className="shrink-0" aria-label="Waiting to sync" />
+                      <span className="flex min-w-0 items-center justify-end">{state}</span>
+                    </span>
+                  </span>
+                  {/* Line 2: where it runs — the project (under its heading, the harness) and the computer. */}
+                  <span className={ROW_LINE}>
+                    <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+                      {grouped ? (
+                        external && (
+                          <HarnessIcon
+                            id={session.harness!}
+                            name={harness?.name}
+                            size={12}
+                            className="shrink-0"
+                          />
+                        )
+                      ) : (
+                        <ProjectMark name={project} size={14} className={markTint} />
+                      )}
+                      <span className="min-w-0 max-w-[60%] shrink-0 truncate">
+                        {grouped ? (harnessName ?? "") : project}
+                      </span>
+                      {place && (
+                        <span
+                          className="flex min-w-0 shrink items-center gap-1 text-fg-faint"
+                          title={
+                            unsynced
+                              ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
+                              : `Runs on ${place.name}`
+                          }
+                        >
+                          <span aria-hidden>·</span>
+                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={11} />
+                          <span className="min-w-0 truncate">{place.name}</span>
+                          {unsynced && (
+                            <CloudUpload size={11} className="shrink-0" aria-label="Waiting to sync" />
+                          )}
+                        </span>
                       )}
                     </span>
-                  )}
-                </span>
-                <span className={cx(ROW_RIGHT, "gap-1.5")}>
-                  {delegates && (
-                    <Tooltip label={delegates.title}>
-                      <span
-                        role="img"
-                        aria-label={delegates.title}
-                        className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
-                      >
-                        <Bot size={11} />
-                        {delegates.count}
-                      </span>
-                    </Tooltip>
-                  )}
-                  {diff && <DiffStat diff={diff} />}
-                  {pull && <PullMark pull={pull} />}
-                </span>
-              </span>
-              {/* Line 3: the branch, or what the thread asks for in its place. */}
-              <span className={ROW_LINE}>
-                <span
-                  className={cx(
-                    ROW_LEFT,
-                    "gap-1 text-sub",
-                    ask ? (request ? "text-warning" : "text-fg-muted") : "text-fg-muted",
-                  )}
-                >
-                  {ask ? (
-                    <span className="min-w-0 truncate" title={ask}>
-                      {ask}
+                    <span className={cx(ROW_RIGHT, "gap-1.5")}>
+                      {delegates && (
+                        <Tooltip label={delegates.title}>
+                          <span
+                            role="img"
+                            aria-label={delegates.title}
+                            className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
+                          >
+                            <Bot size={11} />
+                            {delegates.count}
+                          </span>
+                        </Tooltip>
+                      )}
+                      {diff && <DiffStat diff={diff} />}
+                      {pull && <PullMark pull={pull} />}
                     </span>
-                  ) : gitBranch ? (
-                    <>
-                      <GitBranch size={11} className="shrink-0" />
-                      <span className="min-w-0 truncate" title={gitBranch}>
-                        {rowBranch(gitBranch)}
-                      </span>
-                    </>
-                  ) : (
-                    // A folder outside git has no branch: the line names the folder instead.
-                    folder && (
-                      <>
-                        <Folder size={11} className="shrink-0" />
-                        <span className="min-w-0 truncate" title={folder}>
-                          {folder}
+                  </span>
+                  {/* Line 3: the branch, or what the thread asks for in its place. */}
+                  <span className={ROW_LINE}>
+                    <span
+                      className={cx(
+                        ROW_LEFT,
+                        "gap-1 text-sub",
+                        ask ? (request ? "text-warning" : "text-fg-muted") : "text-fg-muted",
+                      )}
+                    >
+                      {ask ? (
+                        <span className="min-w-0 truncate" title={ask}>
+                          {ask}
                         </span>
-                      </>
-                    )
-                  )}
-                </span>
-                {/* The harness's icon unless the section heading names it, then the model it runs. */}
-                <span className={cx(ROW_RIGHT, "text-sub text-fg-faint")}>
-                  {!grouped && external && (
-                    <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
-                  )}
-                  {model && (
-                    <span className="min-w-0 max-w-[96px] truncate" title={model}>
-                      {model}
+                      ) : gitBranch ? (
+                        <>
+                          <GitBranch size={11} className="shrink-0" />
+                          <span className="min-w-0 truncate" title={gitBranch}>
+                            {rowBranch(gitBranch)}
+                          </span>
+                        </>
+                      ) : (
+                        // A folder outside git has no branch: the line names the folder instead.
+                        folder && (
+                          <>
+                            <Folder size={11} className="shrink-0" />
+                            <span className="min-w-0 truncate" title={folder}>
+                              {folder}
+                            </span>
+                          </>
+                        )
+                      )}
                     </span>
-                  )}
-                </span>
-              </span>
+                    {/* The harness's icon unless the section heading names it, then the model it runs. */}
+                    <span className={cx(ROW_RIGHT, "text-sub text-fg-faint")}>
+                      {!grouped && external && (
+                        <HarnessIcon
+                          id={session.harness!}
+                          name={harness?.name}
+                          size={12}
+                          className="shrink-0"
+                        />
+                      )}
+                      {model && (
+                        <span className="min-w-0 max-w-[96px] truncate" title={model}>
+                          {model}
+                        </span>
+                      )}
+                    </span>
+                  </span>
+                </>
+              )}
             </button>
           </ThreadHoverCard>
           {renameBox}
@@ -1056,7 +1130,7 @@ const ThreadRow = memo(function ThreadRow({
             // Hidden while the row is dragged: the actions sit beside the row, not on it.
             className={cx(
               "invisible absolute right-2 flex items-center opacity-0 transition-[opacity,visibility] duration-150 ease-snappy",
-              "top-1.5",
+              compact ? "top-[2px]" : "top-1.5",
               !dragging &&
                 !renaming &&
                 "group-hover:visible group-hover:opacity-100 group-has-[:focus-visible]:visible group-has-[:focus-visible]:opacity-100 group-has-[[data-state=open]]:visible group-has-[[data-state=open]]:opacity-100",
@@ -1128,10 +1202,13 @@ const PendingRow = memo(function PendingRow({
   pending,
   selected,
   navActive,
+  compact,
 }: {
   pending: PendingSetup;
   selected: boolean;
   navActive?: boolean;
+  /** The sidebar's compact density: the first line alone. */
+  compact?: boolean;
 }) {
   const project = projectName(pending.worktree?.repo || pending.cwd);
   const branch = pending.worktree?.branch;
@@ -1145,11 +1222,11 @@ const PendingRow = memo(function PendingRow({
         onClick={() => selectThread(pending.id)}
         aria-current={selected ? "page" : undefined}
         title={failure ? `${pending.title} · ${failure.text}` : pending.title}
-        className={cx(ROW_GRID, "relative w-full text-left")}
+        className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
       >
-        <RowFill selected={selected} radius="rounded-xl" />
+        <RowFill selected={selected} radius={compact ? "rounded-lg" : "rounded-xl"} />
         {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
-        <span className={ROW_LINE}>
+        <span className={cx(ROW_LINE, compact && "flex-1")}>
           <span className={ROW_LEFT}>
             <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
           </span>
@@ -1168,29 +1245,33 @@ const PendingRow = memo(function PendingRow({
             )}
           </span>
         </span>
-        <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-          <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
-          <span className="min-w-0 truncate">{project}</span>
-        </span>
-        <span className={cx(ROW_LEFT, "gap-1 text-sub text-fg-muted")}>
-          {failure ? (
-            <span className="min-w-0 truncate text-danger" title={failure.text}>
-              {failure.text}
-            </span>
-          ) : (
-            <>
-              <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
-              {branch && (
-                <>
-                  <GitBranch size={11} className="ml-1 shrink-0" />
-                  <span className="min-w-0 truncate">{branch}</span>
-                </>
-              )}
-            </>
-          )}
-        </span>
+        {!compact && (
+          <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+            <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
+            <span className="min-w-0 truncate">{project}</span>
+          </span>
+        )}
+        {!compact && (
+          <span className={cx(ROW_LEFT, "gap-1 text-sub text-fg-muted")}>
+            {failure ? (
+              <span className="min-w-0 truncate text-danger" title={failure.text}>
+                {failure.text}
+              </span>
+            ) : (
+              <>
+                <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
+                {branch && (
+                  <>
+                    <GitBranch size={11} className="ml-1 shrink-0" />
+                    <span className="min-w-0 truncate">{branch}</span>
+                  </>
+                )}
+              </>
+            )}
+          </span>
+        )}
       </button>
-      <div className="absolute top-1.5 right-2 flex items-center">
+      <div className={cx("absolute right-2 flex items-center", compact ? "top-[2px]" : "top-1.5")}>
         {failure && (
           <RowAction label="Dismiss" onClick={dismissPendingSetup}>
             <X size={12} />
@@ -1539,6 +1620,8 @@ export function Sidebar() {
   // off: the layout the sidebar had before it put running work first (state/sidebarRows.ts
   // `SidebarLayout`).
   const [showWorking] = usePref(PREF.workingSection, true);
+  // One line per thread, or the three-line row (Settings › Appearance, ⌘K).
+  const compact = useSidebarDensity()[0] === "compact";
   const layoutMode: SidebarLayout = showWorking ? "top" : "shelf";
   const snoozed = useApp((s) => s.snoozed);
   useEffect(() => {
@@ -2258,6 +2341,7 @@ export function Sidebar() {
       pinKey={pinKey}
       settleKey={settleKey}
       onClearSelection={clearSelection}
+      compact={compact}
     />
   );
   // The open delegate and its descendants, each an indented row under the one above it. The last
@@ -2276,11 +2360,16 @@ export function Sidebar() {
     );
   };
   const rows = (items: SessionSummary[], grouped: boolean) => (
-    <div className="flex flex-col gap-0.5">
+    <div className={cx("flex flex-col", !compact && "gap-0.5")}>
       {items.map((s) => (
         <Fragment key={s.id}>
           {pending && s.id === pending.id ? (
-            <PendingRow pending={pending} selected={!selectedId} navActive={s.id === currentId} />
+            <PendingRow
+              pending={pending}
+              selected={!selectedId}
+              navActive={s.id === currentId}
+              compact={compact}
+            />
           ) : (
             rowFor(s, grouped)
           )}

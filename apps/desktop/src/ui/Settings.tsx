@@ -169,6 +169,7 @@ import { ShortcutsPage } from "./ShortcutSettings";
 
 const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
 
+import { SidebarDensitySetting } from "./SidebarDensitySetting";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
@@ -1319,6 +1320,7 @@ function AppearancePage() {
         >
           <Switch label="Reduce transparency" checked={reduceTransparency} onChange={setReduceTransparency} />
         </Row>
+        <SidebarDensitySetting />
       </Group>
       <Group
         title="Theme"

@@ -17,6 +17,7 @@ import {
   Pin,
   PinOff,
   Play,
+  Rows3,
 } from "lucide-react";
 import type { PullRequest } from "../acp/rustcode";
 import { projectName, type SessionSummary } from "../acp/types";
@@ -24,7 +25,7 @@ import { pickFolder } from "../lib/native";
 import { projectActions, projectKey } from "../state/projectActions";
 import { registerProject } from "../state/projectBook";
 import { cachedPulls, pullForBranch } from "../state/pulls";
-import { PREF, readPref, writePref } from "../state/sidebarPrefs";
+import { PREF, readPref, sidebarDensity, writePref } from "../state/sidebarPrefs";
 import { shelfKey } from "../state/sidebarRows";
 import { snoozePresets } from "../state/snooze";
 import {
@@ -131,6 +132,7 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
   const grouped = readPref(PREF.groupByProject, false);
   const working = readPref(PREF.workingSection, true);
   const only = readPref(PREF.onlyProject, false);
+  const compact = sidebarDensity(readPref(PREF.density, "detailed")) === "compact";
   const open = s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) : undefined;
   const pinned = open ? s.pinned.includes(open.id) : false;
   const asleep = open ? s.snoozed[open.id] : undefined;
@@ -200,6 +202,14 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
       words: "view filter one project",
       disabled: s.projectCwd ? undefined : "No project open",
       run: () => writePref(PREF.onlyProject, !only),
+    },
+    {
+      id: "sidebar-density",
+      label: "Sidebar: Compact rows",
+      detail: state(compact),
+      icon: Rows3,
+      words: "view density dense detailed one line thread rows list",
+      run: () => writePref(PREF.density, compact ? "detailed" : "compact"),
     },
     {
       id: "settled-open",

@@ -1492,6 +1492,176 @@ function seedThreads(): MockThread[] {
         }),
       ],
     },
+    // Quiet older threads, so the list runs past one screen and the compact density shows its
+    // difference (Settings › Appearance › Sidebar rows).
+    {
+      id: "mock-quiet-1",
+      cwd: "/Users/you/code/rustcode",
+      title: "Bump the bun lockfile",
+      updatedAt: minutes(1800),
+      harness: "codex",
+      model: "gpt-6-luna",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-quiet-1", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Bump the bun lockfile"),
+        }),
+        update("mock-quiet-1", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Done."),
+          ...turn(9000),
+        }),
+      ],
+    },
+    {
+      id: "mock-quiet-2",
+      cwd: "/Users/you/code/website",
+      title: "Fix the footer links on mobile",
+      updatedAt: minutes(2040),
+      harness: "claude-code",
+      model: "sonnet",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-quiet-2", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Fix the footer links on mobile"),
+        }),
+        update("mock-quiet-2", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Done."),
+          ...turn(9000),
+        }),
+      ],
+    },
+    {
+      id: "mock-quiet-3",
+      cwd: "/Users/you/code/rustcode",
+      title: "Explain the command guard rules",
+      updatedAt: minutes(2400),
+      harness: "rustcode",
+      model: "chatgpt/gpt-6-luna",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-quiet-3", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Explain the command guard rules"),
+        }),
+        update("mock-quiet-3", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Done."),
+          ...turn(9000),
+        }),
+      ],
+    },
+    {
+      id: "mock-quiet-4",
+      cwd: "/Users/you/code/website",
+      title: "Compress the hero images",
+      updatedAt: minutes(2880),
+      harness: "codex",
+      model: "gpt-6-luna",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-quiet-4", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Compress the hero images"),
+        }),
+        update("mock-quiet-4", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Done."),
+          ...turn(9000),
+        }),
+      ],
+    },
+    {
+      id: "mock-quiet-5",
+      cwd: "/Users/you/code/rustcode",
+      title: "Trace the slow thread list load on a cold start",
+      updatedAt: minutes(3120),
+      harness: "claude-code",
+      model: "opus",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-quiet-5", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Trace the slow thread list load on a cold start"),
+        }),
+        update("mock-quiet-5", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Done."),
+          ...turn(9000),
+        }),
+      ],
+    },
+    {
+      id: "mock-quiet-6",
+      cwd: "/Users/you/code/rustcode",
+      title: "Draft the release notes",
+      updatedAt: minutes(4200),
+      harness: "rustcode",
+      model: "chatgpt/gpt-6-luna",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-quiet-6", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Draft the release notes"),
+        }),
+        update("mock-quiet-6", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Done."),
+          ...turn(9000),
+        }),
+      ],
+    },
+    {
+      id: "mock-quiet-7",
+      cwd: "/Users/you/code/website",
+      title: "Add a changelog page",
+      updatedAt: minutes(5760),
+      harness: "claude-code",
+      model: "sonnet",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-quiet-7", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Add a changelog page"),
+        }),
+        update("mock-quiet-7", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Done."),
+          ...turn(9000),
+        }),
+      ],
+    },
+    {
+      id: "mock-quiet-8",
+      cwd: "/Users/you/code/rustcode",
+      title: "Rename the worktree helper",
+      updatedAt: minutes(7200),
+      harness: "codex",
+      model: "gpt-6-luna",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-quiet-8", {
+          sessionUpdate: "user_message_chunk",
+          content: text("Rename the worktree helper"),
+        }),
+        update("mock-quiet-8", {
+          sessionUpdate: "agent_message_chunk",
+          content: text("Done."),
+          ...turn(9000),
+        }),
+      ],
+    },
   ];
 }
 

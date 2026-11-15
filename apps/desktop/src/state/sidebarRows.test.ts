@@ -3,6 +3,7 @@ import type { FileDiff } from "../acp/types";
 import { moveBy } from "./sidebarOrder";
 import {
   cleanFolds,
+  compactMark,
   contextRow,
   hiddenKind,
   isNestedKey,
@@ -647,5 +648,22 @@ describe("the order a section keeps", () => {
     const sorted = sortSection("threads", list, (r) => r.at);
     expect(sorted).toEqual([list[0]!, list[1]!]);
     expect(sorted).not.toBe(list);
+  });
+});
+
+describe("the compact row's leading mark", () => {
+  test("flags what asks for you, works, failed or finished unseen, from the detailed row's chip", () => {
+    const request = { title: "Run tests" };
+    expect(compactMark(rowStatus({ request, running: true }))).toBe("needs");
+    expect(compactMark(rowStatus({ running: true, failed: true }))).toBe("working");
+    expect(compactMark(rowStatus({ running: false, failed: true, fresh: true }))).toBe("failed");
+    expect(compactMark(rowStatus({ running: false, fresh: true }))).toBe("unread");
+  });
+
+  test("leaves waiting, review and quiet rows without a dot", () => {
+    const waiting = { label: "1 delegate", title: "" };
+    expect(compactMark(rowStatus({ running: false, waiting }))).toBeUndefined();
+    expect(compactMark(rowStatus({ running: false, review: true }))).toBeUndefined();
+    expect(compactMark(rowStatus({ running: false }))).toBeUndefined();
   });
 });

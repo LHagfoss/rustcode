@@ -30,6 +30,7 @@ export function ThreadHoverCard({
   machine,
   harness,
   model,
+  branch: rowBranch,
   status,
   now,
   items,
@@ -44,6 +45,8 @@ export function ThreadHoverCard({
   /** The harness's own name, when it is not RustCode's built-in one. */
   harness?: string;
   model?: string;
+  /** The branch the row read (a worktree's, else the checkout's), over the worktree's own. */
+  branch?: string;
   /** What the row's own chip says (`Working`, `Needs you`…), or that it is idle. */
   status: string;
   /** The list's clock, so the card's age matches the rows'. */
@@ -63,7 +66,7 @@ export function ThreadHoverCard({
   }, [disabled, dismiss]);
   // The words are only worth reading out while the card is on screen.
   const words = useMemo(() => (open ? lastWords(items) : undefined), [open, items]);
-  const branch = session.worktree?.branch;
+  const branch = rowBranch || session.worktree?.branch;
   const said = [harness, model].filter(Boolean).join(" · ");
   return (
     <HoverCard.Root open={open}>
