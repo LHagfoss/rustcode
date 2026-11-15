@@ -1,3 +1,13 @@
+## [v1.36.3](https://github.com/LHagfoss/rustcode/releases/tag/v1.36.3) - 2026-11-15
+
+### Features
+- Keep failed tool calls’ exit status on one line beside long commands. (#3791)
+- Merge a pull request from the thread panel (it waits for checks), with a tidier panel and a header that hides the hand-driven git buttons by default. (#3792)
+- Show automatic pull request merge results as system notices instead of user messages. (#3794)
+- The merge button no longer acts on another project's pull request after a thread switch, ignores advisory checks the way the merge does, and asks for confirmation more clearly. (#3795)
+- The new thread tip is readable over the background, and General settings no longer has a row that only links to Harnesses. (#3797)
+- A Claude Code thread that opens a pull request is woken again when its checks fail or it merges. (#3800)
+- Usage data now records Claude Code compactions (recovering past ones), each tool's real name, and why a tool call or turn failed. (#3799)
 ## [v1.36.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.36.2) - 2026-11-15
 
 ### Features
