@@ -7,11 +7,8 @@ import { onThemesChanged, refreshThemes } from "./themeActions";
 export { createTheme, setActiveTheme } from "./themeActions";
 
 import { refreshAgents, startAgentPolling } from "./agentActions";
-import { permissionModeOf, type ResolvedApproval, refreshGrants, setPermissionMode } from "./approvals";
+import { permissionModeOf, type ResolvedApproval, refreshGrants } from "./approvals";
 import {
-  appChoices,
-  effortMemory,
-  ensureHarnessModels,
   forgetAskedModels,
   lastAccountFor,
   noteChoice,
@@ -26,7 +23,7 @@ import { refreshCheckpoints } from "./checkpointActions";
 
 export { refreshCheckpoints, returnToAttempt, rewindCheckpoint, turnDiff } from "./checkpointActions";
 
-import { askConfirm, pruneSidebarOrder, renameThread, threadDeleted } from "./threadActions";
+import { askConfirm, pruneSidebarOrder, threadDeleted } from "./threadActions";
 
 export {
   askConfirm,
@@ -102,8 +99,6 @@ export {
 } from "./threadStatus";
 
 import {
-  CLAUDE_CODE,
-  markClaudePlansStarted,
   prunePlans,
   refreshPlanCache,
   refreshPlanUsage,
@@ -173,7 +168,6 @@ import {
   type AgentInfo,
   byActivity,
   displayPath,
-  fallbackHarnessSnapshot,
   type Harness,
   type HarnessSnapshot,
   initializeParams,
@@ -181,21 +175,16 @@ import {
   Method,
   parseAgentInfo,
   parseConfigOptions,
-  parseHarnessSnapshot,
   parsePermissionRequest,
-  parseSessionHarness,
   parseSessionList,
   parseSessionUpdate,
   permissionCancelled,
   permissionSelected,
-  projectName,
   type SessionSummary,
   type SlashCommand,
-  type ThreadRelationship,
 } from "../acp/types";
 import {
   type Checkpoint,
-  parseWorktree,
   parseWorktreeList,
   removeRefusal,
   STATUS_LABEL,
@@ -269,13 +258,7 @@ import type { ConnectCode } from "./connectRequests";
 import { contextPercent } from "./details";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import type { TimedGrant } from "./grants";
-import {
-  normalizeDefault,
-  preferredDefault,
-  restoreChoice,
-  selectOption,
-  unavailableReason,
-} from "./harness";
+import { selectOption, unavailableReason } from "./harness";
 import {
   DEFAULT_HEADER_BUTTONS,
   HEADER_BUTTON_IDS,
@@ -288,7 +271,6 @@ import {
   linkFinished,
   linkStarted,
   linksFinished,
-  linksOf,
   linksReopened,
   linksResumed,
   linkWaitEnded,
@@ -300,17 +282,14 @@ import {
   resetLinkBook,
   resetWaits,
   restoreQueuedThreads,
-  stateOf,
   stopLinksFrom,
-  subtreeQuiet,
-  subtreeQuietBelow,
   syncLinkBook,
   takeSteeredLinks,
   threadTurnEnded,
   wakeDelivered,
   wakeTick,
 } from "./host";
-import { dismissRows, type InboxDismissals } from "./inboxDismissed";
+import type { InboxDismissals } from "./inboxDismissed";
 import {
   INTERNET_POLL_MS,
   INTERNET_RESUME_TEXT,
@@ -334,8 +313,8 @@ import {
 } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins } from "./logins";
 import { lostTurn, lostTurnStatus, reloadThread, resetLostTurns, resumeLostTurns } from "./lostTurns";
-import { loadTranscript, saveTranscript, threadFromTranscript } from "./machineCache";
-import { loadMirroredTranscript, mirrorTranscript, setMirrorRequest } from "./machineMirror";
+import { saveTranscript } from "./machineCache";
+import { mirrorTranscript, setMirrorRequest } from "./machineMirror";
 import {
   changesFor,
   type OutboxChange,
@@ -344,14 +323,7 @@ import {
   resolveChange,
   useOutbox,
 } from "./machineOutbox";
-import {
-  finishIsNews,
-  type NotifyEvent,
-  notifyThread,
-  startNotifications,
-  wakeEvent,
-  warmingUp,
-} from "./notify";
+import { notifyThread, startNotifications, warmingUp } from "./notify";
 import {
   CAPABILITY_VERSION,
   DEFAULT_DELEGATES_PER_THREAD,
@@ -371,9 +343,7 @@ import {
 } from "./orchestration";
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
-import { projectKey as actionsProjectKey, projectActions, worktreeHooks } from "./projectActions";
-import { projectChoice, projectKey } from "./projectBook";
-import { matchProject, projectAt, projectsOn } from "./projects";
+import { projectKey } from "./projectBook";
 import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
 import { nextQueued } from "./queue";
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
@@ -387,20 +357,18 @@ import {
   type ResumeBook,
   resumeVerdict,
 } from "./restartResume";
-import { type DriftReads, engineBusy, FORCE_STOP_MS, noDrift, pollDelay, reconcileRuns } from "./runState";
+import { engineBusy, FORCE_STOP_MS } from "./runState";
+import { forgetRunDrift, reconcileRunState, resetRunStatePoll, startRunStatePoll } from "./runStatePoll";
 import { parseScheduleBook, SCHEDULED_KEY, type ScheduleBook } from "./schedule";
 import { resetScheduledSends, restoreScheduled } from "./scheduledSends";
 import { acceptsImages, removeQueued, threadHarness } from "./sendActions";
-import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
+import type { PendingSetup } from "./setup";
 import type { SidebarOrder } from "./sidebarOrder";
-import { dueSnoozes } from "./snooze";
 import {
   appendNotice,
   applyUpdate,
   beginQuietTurn,
   beginTurn,
-  emptyThread,
-  finishLoad,
   finishTurn,
   foldingBatch,
   localId,
@@ -415,6 +383,25 @@ import {
 } from "./thread";
 import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 import {
+  announceFinished,
+  applySnooze,
+  finishToast,
+  isDelegated,
+  markFinished,
+  markMessaged,
+  notifyTitle,
+  threadName,
+  wakeOnWrite,
+} from "./threadNotices";
+import {
+  autoRepaired,
+  closeThread,
+  loadMachineHarnesses,
+  openThread,
+  resetFocusList,
+  selectThread,
+} from "./threadOpen";
+import {
   clear as clearQueue,
   dismiss as dismissInQueue,
   due as dueInQueue,
@@ -428,11 +415,9 @@ import {
 } from "./toasts";
 import { noticeOnlyHistory, userTypedPrompt } from "./topLevel";
 import { readableTurnError } from "./turnError";
-import { waitingOn as backgroundWork } from "./waiting";
 import { onWorkflowChanged, subscribeWorkflows } from "./workflows";
 
 export { lostTurn, setLostMachineMsForTests } from "./lostTurns";
-
 export {
   continueDueScheduled,
   removeScheduled,
@@ -465,6 +450,44 @@ export {
   turnState,
   updateQueued,
 } from "./sendActions";
+export {
+  announceFinished,
+  applySnooze,
+  askCustomSnooze,
+  clearFinished,
+  finishToast,
+  markFinished,
+  markUnread,
+  seeFailure,
+  setSnoozed,
+  snoozeThread,
+  snoozeWakeEvent,
+  wakeOnWrite,
+  wakeSnoozed,
+  without,
+} from "./threadNotices";
+export {
+  closeThread,
+  createSession,
+  createThread,
+  dismissPendingSetup,
+  HOME_FOLDER,
+  isRepairableOpenError,
+  lacksModels,
+  loadMachineHarnesses,
+  moveThread,
+  newThreadChoice,
+  openThread,
+  projectThreadChoice,
+  refreshSessionsOnFocus,
+  repairThread,
+  retryPendingSetup,
+  selectThread,
+  setDefaultCwd,
+  setNewThreadHost,
+  setProjectCwd,
+  startNewThread,
+} from "./threadOpen";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -1284,7 +1307,7 @@ function rpcReason(data: Json | undefined): string | null {
 
 // ---------------------------------------------------------------- connection
 
-let connection: AcpConnection | null = null;
+export let connection: AcpConnection | null = null;
 let transport: Transport | null = null;
 
 // ---------------------------------------------------------------- machines
@@ -1630,6 +1653,16 @@ export function isTombstoned(key: string): boolean {
  * (a thread another client made meanwhile) are applied once no creation is out.
  */
 let creatingSessions = 0;
+
+/** A session creation started (`createSession`): announcements wait until it answers. */
+export function beginCreatingSession(): void {
+  creatingSessions++;
+}
+
+/** A session creation answered or failed. */
+export function endCreatingSession(): void {
+  creatingSessions--;
+}
 const deferredAnnouncements: { key: string; apply: () => void }[] = [];
 
 /**
@@ -1643,7 +1676,7 @@ export function deferAnnouncement(key: string, apply: () => void): boolean {
 }
 
 /** A creation ended: drop the announcements of its own thread, apply the rest when none is out. */
-function releaseAnnouncements(own: string | undefined): void {
+export function releaseAnnouncements(own: string | undefined): void {
   if (own) {
     for (let i = deferredAnnouncements.length - 1; i >= 0; i--) {
       if (deferredAnnouncements[i]?.key === own) deferredAnnouncements.splice(i, 1);
@@ -1839,9 +1872,9 @@ function restoreRow(change: OutboxChange, row: SessionSummary | undefined): void
 }
 
 /** Sessions whose `session/load` replay is arriving. */
-const loading = new Set<string>();
+export const loading = new Set<string>();
 /** The shared `session/load` for each thread; callers must not prompt before its replay finishes. */
-const opening = new Map<string, Promise<string | null>>();
+export const opening = new Map<string, Promise<string | null>>();
 
 /**
  * Threads whose messages contain `query`, from the engine's SQLite index
@@ -2022,7 +2055,7 @@ async function handshake(): Promise<void> {
       orchestrationPending: false,
     });
     // Threads that were open lost their engine-side state with the old process.
-    driftReads = noDrift;
+    forgetRunDrift();
     set((s) => ({
       engineRunning: {},
       threads: Object.fromEntries(
@@ -2586,1193 +2619,6 @@ export async function refreshSessions(options: { quiet?: boolean } = {}): Promis
     if (!options.quiet) toast(`Could not list threads: ${errorText(error)}`, "error");
   }
 }
-
-// ---------------------------------------------------------------- run state
-
-/** What the last list reads said about threads that disagree with this window, by thread. */
-let driftReads: DriftReads = noDrift;
-
-/**
- * Compares one read of this computer's thread list with the window's own `running` flags
- * (state/runState.ts). A turn the window still shows running after the engine called its thread
- * idle on two reads has ended unseen (a sleep, a dropped connection): it is closed here and read
- * again from the engine, so the row and the composer stop saying Working. A thread the engine runs
- * and the window does not know of reads as running (`engineRunning`) until the engine says it stopped.
- */
-function reconcileRunState(listed: readonly SessionSummary[]): void {
-  const state = get();
-  const local = Object.values(state.threads)
-    .filter((t) => !isRemoteThread(t.id))
-    .map((t) => ({ id: t.id, running: t.running, startedAt: t.turnStartedAt }));
-  const result = reconcileRuns(
-    local,
-    listed.filter((x) => !x.host).map((x) => ({ id: x.id, status: x.status })),
-    driftReads,
-    Date.now(),
-  );
-  driftReads = result.reads;
-  const adopted = new Set(result.adopt);
-  const before = Object.keys(state.engineRunning);
-  if (before.length !== adopted.size || before.some((id) => !adopted.has(id))) {
-    set({ engineRunning: Object.fromEntries(result.adopt.map((id) => [id, true as const])) });
-  }
-  for (const id of result.settle) {
-    updateThread(id, (t) => (t.running ? finishTurn(t, "completed", Date.now()) : t));
-    // What the turn left is the engine's to say: read the thread again.
-    if (get().threads[id]?.loaded) void reloadThread(id);
-  }
-}
-
-/** Whether something runs, or is in doubt, so the list is worth reading often. */
-function runStateActive(): boolean {
-  const s = get();
-  if (Object.keys(s.engineRunning).length) return true;
-  if (Object.keys(driftReads.stale).length || Object.keys(driftReads.missed).length) return true;
-  if (Object.values(s.threads).some((t) => t.running)) return true;
-  return s.sessions.some((x) => !x.host && engineBusy(x.status));
-}
-
-let runPollTimer: ReturnType<typeof setTimeout> | undefined;
-let runPollReading = false;
-
-/**
- * Reads the engine's thread list on a timer while the window is visible, so the sidebar follows
- * the engine within a few seconds without a focus or a turn to prompt it: every 5 s while anything
- * runs, every 30 s otherwise (a thread another client starts). Started once; each handshake (a
- * restart or a reconnect) also reads the list itself.
- */
-export function startRunStatePoll(): void {
-  if (runPollTimer !== undefined) return;
-  const tick = async () => {
-    if (
-      !runPollReading &&
-      connection &&
-      get().status === "ready" &&
-      (typeof document === "undefined" || !document.hidden)
-    ) {
-      runPollReading = true;
-      try {
-        await refreshSessions({ quiet: true });
-      } finally {
-        runPollReading = false;
-      }
-    }
-    runPollTimer = setTimeout(() => void tick(), pollDelay(runStateActive()));
-  };
-  runPollTimer = setTimeout(() => void tick(), pollDelay(false));
-}
-
-/**
- * A turn ended: flag the thread unless you are looking at it. The row says Done (or Failed) until you open the thread.
- *
- * A thread that sleeps after a snooze is marked all the same — the row reads Done or Failed when its
- * snooze ends — but nothing is said about it now: the notification gate keeps quiet for a sleeping
- * thread, and `wakeSnoozed` says its one thing then.
- */
-export function markFinished(id: string, now = Date.now(), failed = false) {
-  const looking = get().selectedId === id && typeof document !== "undefined" && document.hasFocus();
-  if (looking) return;
-  set((s) =>
-    failed
-      ? { failed: { ...s.failed, [id]: now } }
-      : { finished: { ...s.finished, [id]: now }, failed: without(s.failed, id) },
-  );
-  // A limit or a lost network already said what stopped it, in the composer's own row.
-  if (!failed || (!get().limitWaits[id] && !get().internetWaits[id])) {
-    // A failure always is. A finish is only when the thread is done for good (`endedForGood`): not
-    // a delegate (the wake message reaches its parent and the strip above that parent's composer
-    // already says it), not a turn that left background work or a queued message to go on.
-    if (failed || endedForGood(id)) {
-      notifyThread(
-        { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: notifyTitle(id) },
-        get(),
-      );
-    }
-  }
-}
-
-/** A thread another one runs, where the user has not written themselves. */
-function isDelegated(id: string): boolean {
-  return linksOf(get().links, id).drivenBy !== undefined && get().messaged[id] === undefined;
-}
-
-/**
- * Whether a thread still waits on something it started: commands its last turn parked on, or
- * delegates it handed work to (state/waiting.ts `waitingOn`). It picks up by itself, so its turn
- * ending is not its end.
- */
-function stillWaiting(id: string): boolean {
-  const s = get();
-  const thread = s.threads[id];
-  return !!backgroundWork({
-    id,
-    running: thread?.running ?? false,
-    commands: thread?.waiting,
-    links: s.links.links,
-    state: (link) => stateOf(s, link),
-    quiet: subtreeQuiet,
-    quietBelow: subtreeQuietBelow,
-  });
-}
-
-/** Whether a turn that just ended leaves the thread truly finished: the only finish worth announcing. */
-function endedForGood(id: string): boolean {
-  const thread = get().threads[id];
-  return finishIsNews({
-    waiting: stillWaiting(id),
-    delegated: isDelegated(id),
-    queued: !!thread && !!nextQueued(thread.queue, thread),
-  });
-}
-
-/**
- * The in-app toast for a thread whose turn ended off screen. A failure, or a wait that stopped it,
- * is always news; a finish only when the thread is done for good (`endedForGood`), and never for a
- * thread that answers a link (`link`). A thread the user snoozed says nothing: its finish waits for
- * the snooze to end, which then says it once (`wakeSnoozed`).
- */
-export function finishToast(
-  id: string,
-  outcome: "completed" | "failed",
-  stop: { waiting?: { reason?: string; until: number } | null; offline?: unknown; link?: unknown } = {},
-): void {
-  if (id === get().selectedId || id in get().snoozed) return;
-  const { waiting, offline, link } = stop;
-  const stopped = !!waiting || !!offline;
-  if (!stopped && outcome === "completed" && (link !== undefined || !endedForGood(id))) return;
-  const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
-  toast(
-    waiting
-      ? waiting.reason === "overload"
-        ? `“${name}” was overloaded and tries again at ${limitTime(waiting.until)}`
-        : `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
-      : offline
-        ? `“${name}” is waiting for the internet`
-        : outcome === "failed"
-          ? `“${name}” failed`
-          : `“${name}” finished`,
-    stopped ? "info" : outcome === "failed" ? "error" : "success",
-    { action: { label: "Open", run: () => selectThread(id) } },
-  );
-}
-
-/** A turn the thread woke itself for ended: the toast and the notification, once, when it is done for good. */
-export function announceFinished(id: string): void {
-  if (!endedForGood(id)) return;
-  finishToast(id, "completed");
-  notifyThread({ threadId: id, kind: "finished", key: String(Date.now()), title: notifyTitle(id) }, get());
-}
-
-/** A thread's title, for what the system shows of it. */
-function threadName(id: string): string {
-  const s = get();
-  return sessionById(s, id)?.title || s.threads[id]?.title || "A thread";
-}
-
-/**
- * A notification's title: the thread's, and the computer it runs on when that
- * is not this one, so two machines' "Run the tests" are told apart.
- */
-function notifyTitle(id: string): string {
-  const machine = machineOfThread(id);
-  return machine ? `${threadName(id)} · ${machine}` : threadName(id);
-}
-
-/**
- * The user sent `id` a message themselves: a delegated thread is their own now
- * and keeps its place in the sidebar (state/topLevel.ts). Recorded once, and
- * only for a prompt an agent did not ask for (`runPrompt`).
- */
-export function markMessaged(id: string) {
-  if (get().messaged[id] !== undefined) return;
-  const messaged = { ...get().messaged, [id]: Date.now() };
-  set({ messaged });
-  store(STORAGE.messaged, JSON.stringify(messaged));
-}
-
-/** Take a thread out of the list until `at`, or bring it back now with `null`: the write alone. */
-export async function setSnoozed(id: string, at: number | null): Promise<boolean> {
-  if (!threadIsRemote(id)) applySnooze(id, at);
-  const conn = connectionForThread(id);
-  if (conn || threadIsRemote(id)) {
-    try {
-      if (!conn) throw new Error("That computer is not connected.");
-      await conn.request(
-        "_rustcode/session/snooze",
-        { session_id: splitThreadKey(id).id, until: at },
-        10_000,
-      );
-    } catch (error) {
-      if (threadIsRemote(id) || !(error instanceof RpcError && error.isMethodNotFound)) {
-        toast(`Could not snooze the thread: ${errorText(error)}`, "error");
-        return false;
-      }
-    }
-  }
-  applySnooze(id, at);
-  return true;
-}
-
-export function applySnooze(id: string, at: number | null) {
-  const { [id]: _, ...rest } = get().snoozed;
-  const snoozed = at === null ? rest : { ...rest, [id]: at };
-  set({ snoozed });
-  store(STORAGE.snoozed, JSON.stringify(snoozed));
-}
-
-/**
- * The user wrote in this thread, so a snoozed one comes back now (`submit`, `steerOrSubmit`):
- * writing in a thread is what asks for it, whichever way the message goes out — its own turn, the
- * queue behind a running one, or a steer into it. A message the app sends instead is not a write
- * and leaves the snooze alone (`runPrompt`).
- */
-export function wakeOnWrite(id: string) {
-  if (id in get().snoozed) setSnoozed(id, null);
-}
-
-/**
- * Snoozes a thread because the user asked — the sidebar's menu, the command
- * palette, the custom dialog — or wakes one with `null`.
- *
- * Snoozing the thread on screen in the chat leaves it, with the panel, for the
- * new-thread screen in the same folder, the way settling or archiving it does;
- * the board, review and compare have no new-thread screen, so snoozing there
- * stays on that view. Snoozing another thread changes nothing on screen, and
- * waking a thread never navigates. A caller that is not the user — an agent's
- * `update_session`, a wake whose time has come — calls `setSnoozed` instead,
- * which never moves the screen.
- */
-export async function snoozeThread(id: string, at: number | null) {
-  if (!(await setSnoozed(id, at))) return;
-  const s = get();
-  if (at !== null && s.view.kind === "chat" && s.selectedId === id) startNewThread();
-}
-
-export function askCustomSnooze(id: string | null) {
-  set({ snoozeAsk: id });
-}
-
-/**
- * What a thread that slept has to say now its snooze is over: one thing at most, when it waits on
- * the user (an approval or a question) or its last turn ended unseen. Null for a thread with
- * nothing new, which simply takes its place in the list again.
- */
-export function snoozeWakeEvent(id: string): NotifyEvent | null {
-  const s = get();
-  return wakeEvent({
-    threadId: id,
-    title: threadName(id),
-    request: s.threads[id]?.permissions[0],
-    finishedAt: s.finished[id],
-    failedAt: s.failed[id],
-    // The same read `markFinished` makes: a delegate's own ending is its parent's news, not a
-    // notification of its own with a row the user cannot find.
-    delegated: linksOf(s.links, id).drivenBy !== undefined && s.messaged[id] === undefined,
-  });
-}
-
-/**
- * Brings back the threads whose time has come, quietly. Nothing a sleeping thread did reached the
- * list, the badge, the inbox or a notification (state/notify.ts, state/inbox.ts, state/sidebarRows.ts),
- * so this is where it is heard once: a request that waits or a turn that ended unseen says itself, at
- * most one thing, and a thread with nothing to say just returns with the state it reached.
- */
-export function wakeSnoozed(now = Date.now()) {
-  for (const id of dueSnoozes(get().snoozed, now)) {
-    applySnooze(id, null);
-    const event = snoozeWakeEvent(id);
-    if (event) notifyThread(event, get());
-  }
-}
-
-export function markUnread(id: string) {
-  set((s) => ({ finished: { ...s.finished, [id]: Date.now() } }));
-}
-
-export function without(map: Record<string, number>, id: string): Record<string, number> {
-  if (!(id in map)) return map;
-  const { [id]: _, ...rest } = map;
-  return rest;
-}
-
-/** You saw it: opening the thread (or coming back to the window on it) settles the flag. */
-export function clearFinished(id: string | null) {
-  if (!id) return;
-  seeFailure(id);
-  if (!(id in get().finished || id in get().failed)) return;
-  set((s) => ({ finished: without(s.finished, id), failed: without(s.failed, id) }));
-}
-
-/**
- * The thread's failure was seen: opened, or its banner dismissed. Its "Needs you" row is put away
- * quietly, from both of its sources — the store's `failed` map and a replayed transcript that ends
- * in a failed turn — and a later failure, which arrives after this moment, is a row again
- * (state/inboxDismissed.ts `isDismissed`). A thread with no failure records nothing.
- */
-export function seeFailure(id: string): void {
-  const s = get();
-  const items = s.threads[id]?.items;
-  const tail = items?.[items.length - 1];
-  const failedTail = tail?.kind === "turnEnd" && tail.outcome === "failed";
-  if (!(id in s.failed) && !failedTail) return;
-  const key = `${id}:failed`;
-  const at = Math.max(s.failed[id] ?? 0, failedTail ? (tail.at ?? 0) : 0);
-  if ((s.inboxDismissed[key] ?? -1) >= at) return;
-  const next = dismissRows(s.inboxDismissed, [{ key, kind: "failed", at }]);
-  set({ inboxDismissed: next });
-  store(STORAGE.inboxDismissed, JSON.stringify(next));
-}
-
-/** The shortest gap between two window-focus list refreshes, see below. */
-const FOCUS_LIST_GAP_MS = 5_000;
-let lastFocusListAt = 0;
-
-/**
- * A window focus re-lists the threads, at most once per 5 s: a change made outside this window
- * (`rustcode threads settle` in a terminal, another app) reaches the list with no turn to carry it,
- * and flapping between windows should not read 500 threads each time. Off until connected, and
- * `now` is a parameter so it can be felt with a clock in tests.
- */
-export async function refreshSessionsOnFocus(now = Date.now()): Promise<void> {
-  if (!connection || get().status !== "ready") return;
-  if (now - lastFocusListAt < FOCUS_LIST_GAP_MS) return;
-  lastFocusListAt = now;
-  await refreshSessions();
-}
-
-if (typeof window !== "undefined") {
-  window.addEventListener("focus", () => {
-    clearFinished(get().selectedId);
-    void refreshSessionsOnFocus();
-  });
-}
-
-export function selectThread(id: string | null) {
-  // The pending row is not a session: opening it shows the new thread it will become, and sends
-  // nothing to the engine with its client id.
-  if (id && id === get().pendingSetup?.id) id = null;
-  clearFinished(id);
-  dismissOverlays();
-  set((s) => ({
-    ...viewingThread(s, id),
-    switcherOpen: false,
-    settings: null,
-    view: { kind: "chat" },
-  }));
-  if (id && harnessOf(get(), id) === CLAUDE_CODE) markClaudePlansStarted();
-  // The account this thread runs on may never have been read: its meter has no
-  // numbers until it is, and it appears without a visit to Settings › Usage.
-  // The list's summary names the account before the thread itself is opened.
-  void refreshPlanCache();
-  if (id) void openThread(id);
-}
-
-/**
- * The folder a new thread starts in when none was chosen: the home folder of the machine it runs
- * on. `session/new` is sent no folder for it, which every engine resolves to its own home
- * (`session_new_cwd`), so it works on a machine whose home this app cannot know.
- */
-export const HOME_FOLDER = "~";
-
-export function startNewThread(cwd?: string, host?: string) {
-  const s = get();
-  // An explicit machine wins, and a folder picked on this disk still starts here.
-  // A new thread started from a machine's group in the sidebar names it (docs/desktop.md › Several
-  // machines).
-  const target = host ?? LOCAL_HOST;
-  // Where it starts: a folder picked for this one wins, then the default folder (Settings › General,
-  // ⌘⇧O), so the sidebar's button, ⌘N and the command palette land where the reader said even while
-  // another thread is open; then the folder of the thread they were in, then the last one used.
-  // Picking a folder here does not change the default. A thread on a machine starts in that
-  // machine's folders: the same project there when it has one (state/projects.ts), else its most
-  // recent project. A folder of this computer is not a folder there.
-  const selected = s.selectedId ? s.threads[s.selectedId] : undefined;
-  const selectedCwd = selected && splitThreadKey(selected.id).host === target ? selected.cwd : undefined;
-  const mine = projectsOn(s.sessions, target);
-  const wasOn = projectAt(s.sessions, s.projectCwd, s.newThreadHost);
-  const preferred =
-    target === LOCAL_HOST
-      ? s.defaultCwd || selectedCwd || matchProject(wasOn, mine)?.path
-      : mine.find((project) => project.path === selectedCwd)?.path || mine[0]?.path;
-  // The last screen's folder is kept only by that same screen: host and folder are written
-  // together, and a worktree is under no project path (`hostOfProject`), so the host is the
-  // only trustworthy half. Without it, a machine's worktree folder starts a thread here.
-  const remembered =
-    s.newThreadHost === target && hostOfProject(s, s.projectCwd) === target ? s.projectCwd : "";
-  // Nothing chosen and nothing to go on: the machine's home folder, so a new thread can always start.
-  const projectCwd = cwd ?? (preferred || remembered || HOME_FOLDER);
-  dismissOverlays();
-  set({
-    selectedId: null,
-    projectCwd,
-    newThreadHost: target,
-    // The panel belongs to a thread: the new-thread screen has none, and a
-    // thread picked next restores the panel it had.
-    panel: null,
-    // The Thread tab shows a thread beside this one; a new thread has none.
-    peekId: null,
-    settings: null,
-    switcherOpen: false,
-    // The picker's choice is the session's draft: leaving the new-thread screen and coming back
-    // shows what was picked, not the default again. `newThread` is only empty on a fresh start,
-    // where the remembered (or default) choice takes over.
-    newThreadPermissionMode: null,
-    view: { kind: "chat" },
-    newWorktree: { on: s.newWorktree.on, branch: "", edited: false },
-  });
-  // A machine's harnesses are its own, read before the composer's picker can draw them.
-  if (target) void loadMachineHarnesses(target);
-}
-
-/** The folder of the new thread being written (⌘O there, the composer footer's folder menu). */
-export function setProjectCwd(cwd: string) {
-  set({ projectCwd: cwd });
-}
-
-/**
- * The computer a folder belongs to: this one when it has a project there, else a paired machine
- * with it, else this one (a folder this app has not seen). A folder inside a project counts as
- * that project (a worktree, a subfolder a thread ran in).
- */
-function hostOfProject(s: Pick<AppState, "sessions" | "machineNames">, path: string): string {
-  if (!path) return LOCAL_HOST;
-  for (const host of [LOCAL_HOST, ...Object.keys(s.machineNames)]) {
-    const found = projectsOn(s.sessions, host).some(
-      (project) => project.path === path || path.startsWith(`${project.path}/`),
-    );
-    if (found) return host;
-  }
-  return LOCAL_HOST;
-}
-
-/** Whether a machine's **Run on** is being changed, so a slow answer for an earlier one is dropped. */
-let runOnSeeks = 0;
-
-/**
- * **Run on**: the computer the next new thread runs on. The folder follows: the same project
- * here, found again on that machine by path, then by git remote, then by folder name
- * (state/projects.ts), else that machine's most recent project. Its harnesses, models and
- * logins are read over its own connection, as the local picker reads this computer's.
- */
-export async function setNewThreadHost(host: string): Promise<void> {
-  const seek = ++runOnSeeks;
-  const s = get();
-  if (host === s.newThreadHost) return;
-  const previous = s.newThreadHost;
-  const wasOn = projectAt(s.sessions, s.projectCwd, previous);
-  const projects = projectsOn(s.sessions, host);
-  const match = matchProject(wasOn, projects);
-  set({ newThreadHost: host, projectCwd: match?.path ?? projects[0]?.path ?? "" });
-  if (!host) return;
-  // A fresh read: a harness or login added on the machine while Run on was elsewhere shows.
-  const snapshot = await loadMachineHarnesses(host, { report: false, refresh: true });
-  if (seek !== runOnSeeks || get().newThreadHost !== host) return;
-  if (!snapshot) {
-    // The machine went away before it answered: the choice goes back, so the composer keeps a
-    // thread it can start rather than a machine that cannot answer.
-    // Never the folder the failed move just chose: it belongs to the machine that went away.
-    set({ newThreadHost: previous, projectCwd: wasOn?.path ?? "" });
-    toast(`${getName(host)} is not connected. The thread will run on this computer.`, "error");
-    return;
-  }
-  // A machine that listed nothing when the picker moved may have answered by now.
-  const listed = projectsOn(get().sessions, host);
-  if (!get().projectCwd && listed.length) set({ projectCwd: listed[0]!.path });
-}
-
-/**
- * Read one machine's harnesses, models, accounts and defaults over its own connection, the call
- * the local picker gets from `_rustcode/harnesses`. Kept per machine; `refresh` reads it again
- * (a machine's default harness may have changed on it).
- */
-export async function loadMachineHarnesses(
-  host: string,
-  options: { report?: boolean; refresh?: boolean } = {},
-): Promise<HarnessSnapshot | null> {
-  if (!host) return get().harnesses;
-  const cached = get().remoteHarnesses[host];
-  if (cached && !options.refresh) return cached;
-  const conn = connectionFor(host);
-  if (!conn) {
-    if (options.report) toast(`${getName(host)} is not connected.`, "error");
-    return cached ?? null;
-  }
-  try {
-    const snapshot = parseHarnessSnapshot(await conn.request(Method.harnesses, {}, 15_000));
-    // It dropped while the answer was coming: a list from a gone machine is not shown.
-    if (connectionFor(host) !== conn) return cached ?? null;
-    set((st) => ({ remoteHarnesses: { ...st.remoteHarnesses, [host]: snapshot } }));
-    return snapshot;
-  } catch (error) {
-    // A machine on an older RustCode has no `_rustcode/harnesses`: it runs the builtin harness,
-    // as this computer's own client says of an engine before harnesses (`fallbackHarnessSnapshot`).
-    if (error instanceof RpcError && error.isMethodNotFound) {
-      const fallback = fallbackHarnessSnapshot();
-      set((st) => ({ remoteHarnesses: { ...st.remoteHarnesses, [host]: fallback } }));
-      return fallback;
-    }
-    if (options.report && !cached) {
-      toast(`Could not read ${getName(host)}'s agents: ${errorText(error)}`, "error");
-    }
-    return cached ?? null;
-  }
-}
-
-/** A paired machine's name, as the composer and its toasts say it. */
-function getName(host: string): string {
-  return get().machineNames[host] ?? "That computer";
-}
-
-/** Where new threads start by default (⌘⇧O, Settings › General); a new thread being written follows. */
-export function setDefaultCwd(cwd: string) {
-  // The default folder is this computer's, so a new thread being written goes back to it.
-  set((s) => ({
-    defaultCwd: cwd,
-    projectCwd: s.selectedId ? s.projectCwd : cwd,
-    ...(s.selectedId ? {} : { newThreadHost: LOCAL_HOST }),
-  }));
-  store(STORAGE.project, cwd);
-}
-
-/**
- * ⌘O on an open thread: it works in another folder from now on. The engine
- * moves only a closed session, so the thread is closed, moved and loaded
- * again; a running turn has to stop first.
- */
-export async function moveThread(id: string, cwd: string): Promise<boolean> {
-  const thread = get().threads[id];
-  if (thread?.running) {
-    toast("Stop the running turn before moving this thread to another folder.");
-    return false;
-  }
-  if (!get().agent?.sessionMove || !connection) {
-    toast("This server cannot move a thread to another folder. Update RustCode.", "error");
-    return false;
-  }
-  if (thread && get().agent?.closeSession) await closeThread(id);
-  try {
-    await connectionForThread(id)?.request(
-      Method.sessionMove,
-      { sessionId: splitThreadKey(id).id, cwd },
-      10_000,
-    );
-  } catch (error) {
-    toast(`Could not move the thread: ${errorText(error)}`, "error");
-    if (thread) void openThread(id);
-    return false;
-  }
-  set((s) => {
-    const { [id]: _old, ...threads } = s.threads;
-    return {
-      threads,
-      sessions: s.sessions.map((x) => (x.id === id ? { ...x, cwd, worktree: undefined } : x)),
-    };
-  });
-  await openThread(id);
-  toast(`Moved to ${projectName(cwd)}`, "success");
-  return true;
-}
-
-/**
- * Loads a thread's history (the replay) if it is not loaded yet. Answers the
- * open error when it could not be opened, so a caller can say why instead of
- * reporting an empty thread.
- */
-export function openThread(id: string): Promise<string | null> {
-  const inFlight = opening.get(id);
-  if (inFlight) return inFlight;
-  // Another computer's thread loads over that machine's connection (`state/threadKeys.ts`); an
-  // offline one is not opened at all, and the chat says so instead of a conversation.
-  const conn = connectionForThread(id);
-  const { id: sessionId } = splitThreadKey(id);
-  const existing = get().threads[id];
-  // A thread on a machine that is away is still a thread: its row stays and it opens read-only,
-  // with the chat and the composer saying so (docs/desktop.md › Several machines). Without this it
-  // would draw as a new thread, with this computer's folder and controls.
-  if (!conn && threadIsRemote(id)) {
-    if (!existing || (!existing.loaded && !existing.items.length)) {
-      const summary = get().sessions.find((x) => x.id === id);
-      // The last copy this computer read from the machine, if it kept one; it is replaced by the
-      // machine's own replay when the machine is back (`watchMachineConnection`).
-      const cached = loadTranscript(id);
-      const base = cached
-        ? threadFromTranscript(cached)
-        : { ...emptyThread(id, summary?.cwd ?? "", summary?.title), loaded: false };
-      set((s) => ({
-        threads: {
-          ...s.threads,
-          [id]: { ...base, cwd: summary?.cwd || base.cwd, title: summary?.title ?? base.title },
-        },
-      }));
-      // Past what the web view's storage keeps (a transcript older than 30 days, a wiped web
-      // view), this computer's disk still has the last read (`state/machineMirror.ts`).
-      if (!cached) {
-        void loadMirroredTranscript(id).then((mirrored) => {
-          if (!mirrored || connectionForThread(id)) return;
-          const now = get().threads[id];
-          if (!now || now.loaded || now.items.length) return;
-          const copy = threadFromTranscript(mirrored);
-          set((s) => ({
-            threads: {
-              ...s.threads,
-              [id]: { ...copy, cwd: summary?.cwd || copy.cwd, title: summary?.title ?? copy.title },
-            },
-          }));
-        });
-      }
-    }
-    return Promise.resolve(null);
-  }
-  // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
-  // be opened once (the engine was restarting, its harness was down) is not refused for good.
-  if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
-    return Promise.resolve(null);
-  const summary = get().sessions.find((x) => x.id === id);
-  const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
-  let pending: Promise<string | null>;
-  pending = Promise.resolve().then(async () => {
-    try {
-      let result: Json;
-      try {
-        result = await conn.request(Method.sessionLoad, { sessionId, cwd, mcpServers: [] }, 60_000);
-      } catch (first) {
-        // A record naming another folder is put right once, quietly; only a repair that finds
-        // problems, or a second failure, reaches the banner.
-        const fixedCwd = await repairBeforeRetry(id, conn, first);
-        if (fixedCwd === null) throw first;
-        result = await conn.request(Method.sessionLoad, { sessionId, cwd: fixedCwd, mcpServers: [] }, 60_000);
-      }
-      updateThread(id, (t) => ({
-        ...finishLoad(t),
-        configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
-        harness: parseSessionHarness(result) ?? t.harness,
-      }));
-      const opened = get().threads[id];
-      if (id === get().selectedId && opened?.harness?.id === CLAUDE_CODE) {
-        markClaudePlansStarted();
-        void refreshPlanCache();
-      }
-      if (opened && lacksModels(opened))
-        void ensureHarnessModels(opened.harness!.id, splitThreadKey(id).host);
-      void refreshPlanUsage(id);
-      void refreshCheckpoints(id);
-      // A thread opened after it went idle can still be before its cache deadline.
-      scheduleAutoCompact(id);
-      return null;
-    } catch (error) {
-      const message = `Could not open this thread: ${errorText(error)}`;
-      updateThread(id, (t) => ({ ...finishLoad(t), error: message, openFailed: true }));
-      return message;
-    } finally {
-      loading.delete(id);
-      if (opening.get(id) === pending) opening.delete(id);
-    }
-  });
-  opening.set(id, pending);
-  loading.add(id);
-  set((s) => ({
-    threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
-  }));
-  return pending;
-}
-
-/** Threads whose open was repaired automatically in this app session: once each, never a loop. */
-const autoRepaired = new Set<string>();
-
-/** An open the engine refuses because the thread's record names another folder (Repair Thread fixes it). */
-export function isRepairableOpenError(error: unknown): boolean {
-  return /session\/load cwd does not match the recorded workspace/i.test(errorText(error));
-}
-
-/**
- * A failed open that Repair Thread can fix is repaired here, once per thread: answers the folder to
- * open again in, or null when it is not repairable, was tried already, or the repair found problems.
- */
-async function repairBeforeRetry(id: string, conn: AcpConnection, error: unknown): Promise<string | null> {
-  if (!isRepairableOpenError(error) || autoRepaired.has(id) || !get().agent?.sessionRepair) return null;
-  autoRepaired.add(id);
-  try {
-    const answer = ((await conn.request(
-      Method.sessionRepair,
-      { sessionId: splitThreadKey(id).id },
-      10_000,
-    )) ?? {}) as JsonObject;
-    const problems = Array.isArray(answer.problems) ? answer.problems : [];
-    const cwd = typeof answer.cwd === "string" ? answer.cwd : null;
-    if (problems.length || !cwd) return null;
-    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, cwd } : x)) }));
-    return cwd;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Repair Thread: the engine checks a closed thread the way opening it does and
- * puts right what it safely can (a harness record pointing at another folder).
- * The thread is then opened again; what is left (a folder that is gone) is said.
- */
-export async function repairThread(id: string): Promise<void> {
-  const conn = connectionForThread(id);
-  if (!conn || !get().agent?.sessionRepair) {
-    toast("This server cannot repair threads. Update RustCode.", "error");
-    return;
-  }
-  if (get().threads[id]?.running) {
-    toast("Stop the running turn before repairing this thread.");
-    return;
-  }
-  await closeThread(id);
-  let answer: JsonObject;
-  try {
-    answer = ((await conn.request(Method.sessionRepair, { sessionId: splitThreadKey(id).id }, 10_000)) ??
-      {}) as JsonObject;
-  } catch (error) {
-    toast(`Could not repair the thread: ${errorText(error)}`, "error");
-    return;
-  }
-  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-  const fixed = list(answer.fixed);
-  const problems = list(answer.problems);
-  const cwd = typeof answer.cwd === "string" ? answer.cwd : undefined;
-  set((s) => {
-    const { [id]: _old, ...threads } = s.threads;
-    return {
-      threads,
-      sessions: cwd ? s.sessions.map((x) => (x.id === id ? { ...x, cwd } : x)) : s.sessions,
-    };
-  });
-  if (problems.length) {
-    toast(problems.join(" "), "error", {
-      action: { label: "Move…", run: () => void import("./folders").then((f) => f.chooseFolder(false)) },
-    });
-  } else {
-    toast(
-      fixed.length ? `Repaired: ${fixed.join(" ")}` : "Nothing needed repair: the thread checks out.",
-      "success",
-    );
-  }
-  await openThread(id);
-}
-
-export async function closeThread(id: string) {
-  try {
-    await connectionForThread(id)?.request(Method.sessionClose, { sessionId: splitThreadKey(id).id }, 10_000);
-  } catch {
-    // Closing is best effort.
-  }
-}
-
-export interface NewSession {
-  cwd: string;
-  harness?: string;
-  /** The harness account to run on; omitted is its default login. */
-  account?: string | null;
-  model?: string | null;
-  effort?: string | null;
-  /** Create a worktree first and run the thread in it (docs/orchestrator.md). */
-  worktree?: { repo: string; branch?: string; title?: string };
-  /** The thread an agent starts this one from (`state/host.ts` `newThread`), or the user opens it beside. */
-  parent?: string;
-  /** Why it has that parent; a delegate when omitted, which is what an agent's thread is. */
-  relationship?: ThreadRelationship;
-  title?: string;
-  select?: boolean;
-  /** The setup this session finishes (state/setup.ts): it is listed and the setup cleared together. */
-  pendingId?: string;
-  /**
-   * The computer it runs on (`state/machines.ts`): its own connection is asked for
-   * `session/new`, and the thread is keyed with its host (`state/threadKeys.ts`).
-   * Omitted is this computer.
-   */
-  host?: string;
-}
-
-/** `session/new` with the harness, model, effort and worktree in `_meta.rustcode`; the thread is added to the list. */
-export async function createSession(options: NewSession): Promise<string> {
-  // The engine announces the thread to this very client before it answers: those announcements
-  // wait until the answer says which thread is this one's (`deferAnnouncement`).
-  creatingSessions++;
-  let own: string | undefined;
-  try {
-    return await makeSession(options, (id) => {
-      own = id;
-    });
-  } finally {
-    creatingSessions--;
-    releaseAnnouncements(own);
-  }
-}
-
-async function makeSession(options: NewSession, made: (id: string) => void): Promise<string> {
-  const host = options.host ?? LOCAL_HOST;
-  // A thread on another computer is made there, over that computer's own connection: its
-  // folder, its harness and its worktree are on that machine, never here.
-  const conn = host ? connectionFor(host) : engine();
-  if (!conn) throw new Error(host ? "That computer is not connected." : "The server is not connected.");
-  const s = get();
-  const params: JsonObject = { cwd: options.cwd, mcpServers: [] };
-  const meta: JsonObject = {};
-  if (options.harness && !harnessesOn(s, host)?.unsupported) {
-    meta.harness = options.harness;
-    if (options.account) meta.account = options.account;
-    if (options.model) meta.model = options.model;
-    if (options.effort) meta.effort = options.effort;
-  }
-  if (options.worktree) {
-    const w: JsonObject = { repo: options.worktree.repo };
-    if (options.worktree.branch) w.branch = options.worktree.branch;
-    if (options.worktree.title) w.title = options.worktree.title;
-    // The project's setup and settle actions (state/projectActions.ts); the engine runs them in the
-    // worktree, the repository's own `.rustcode/actions.json` winning a slot both fill.
-    const hooks = worktreeHooks(projectActions(actionsProjectKey(options.worktree.repo)));
-    if (hooks) w.hooks = hooks as unknown as JsonObject;
-    meta.worktree = w;
-  }
-  // The engine keeps this in the thread's own metadata, so pruning the link
-  // book does not make the child a top-level thread (`state/topLevel.ts`).
-  if (options.parent) {
-    // The machine's own session id, not a key that names it here (`state/threadKeys.ts`).
-    meta.parent = splitThreadKey(options.parent).id;
-    if (options.relationship && options.relationship !== "delegate") meta.relationship = options.relationship;
-  }
-  // The title this thread is made with, so a thread on another machine is named
-  // there too: `thread_rename` is this computer's shell, and it never reaches a
-  // machine's own history (issue 3524).
-  if (options.title) meta.title = options.title;
-  if (Object.keys(meta).length) params._meta = { rustcode: meta };
-  const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
-  const raw = str(result.sessionId);
-  if (!raw) throw new Error("The server did not return a thread id.");
-  const id = threadKey(host, raw);
-  made(id);
-  const worktree: Worktree | undefined = parseWorktree(
-    ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
-  );
-  const repo = str(((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.repo);
-  const cwd = worktree?.path ?? options.cwd;
-  const thread: ThreadState = {
-    ...emptyThread(id, cwd, options.title),
-    loaded: true,
-    configOptions: parseConfigOptions(result.configOptions),
-    harness: parseSessionHarness(result),
-    worktree,
-  };
-  const summary: SessionSummary = {
-    id,
-    // The sidebar groups it under the machine it runs on (`ui/Sidebar.tsx`); this computer's
-    // threads carry no host, as they always did.
-    host: host || undefined,
-    cwd,
-    updatedAt: Date.now(),
-    harness: thread.harness?.id ?? options.harness,
-    account: thread.harness?.account ?? options.account ?? undefined,
-    model: selectOption(thread.configOptions, "model")?.current ?? options.model ?? undefined,
-    worktree,
-    repo,
-    title: options.title,
-    // A thread an agent started is nested from its first frame: without the parent here the
-    // sidebar draws it as a row of its own until the engine lists it with the same record, then
-    // moves it under its parent (`state/topLevel.ts`).
-    parent: options.parent
-      ? {
-          id: options.parent,
-          title: sessionById(s, options.parent)?.title,
-          relationship: options.relationship ?? "delegate",
-        }
-      : undefined,
-  };
-  // A pending setup keeps its row and its message until the thread is listed below, so nothing it
-  // shows goes away and comes back between the session and its model. Any other session is listed
-  // at once.
-  const pending = !!options.pendingId && get().pendingSetup?.id === options.pendingId;
-  // No list has this thread yet: it is kept here, so a snapshot from before it cannot take it
-  // away mid-turn (`mergeMachineLists`, `refreshSessions`, issue 3523).
-  keepUnlisted(summary);
-  set((st) => ({
-    threads: { ...st.threads, [id]: thread },
-    ...(pending
-      ? {}
-      : {
-          // Selecting the new thread keeps the picker's choice as the session's draft, so the
-          // new-thread screen comes back on it (state/store.ts `startNewThread`).
-          ...(options.select ? viewingThread(st, id) : {}),
-          // The engine announces the thread to every client (`threads/created`) while this
-          // request is still out: the row it added is replaced by this one, never doubled.
-          sessions: [summary, ...st.sessions.filter((x) => x.id !== id)],
-          pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
-        }),
-  }));
-  // Saved, not only shown: otherwise the thread's first message replaces it at the next list.
-  // A pending setup lets its rename run beside it: the message starts the moment the thread is listed.
-  // A thread on another computer is titled by the `session/new` it was made with: only this
-  // computer's folder is renamed from here (`thread_rename` is this computer's shell).
-  if (options.title && !host) {
-    const saved = renameThread(id, options.title);
-    if (!pending) await saved;
-  }
-  // A model or effort picked before the thread existed applies now, when the thread did not take it
-  // from `session/new` (an older engine, or a harness that ignores it there).
-  const current = (configId: string) => thread.configOptions.find((o) => o.id === configId)?.current;
-  const has = (configId: string) => thread.configOptions.some((o) => o.id === configId);
-  try {
-    if (options.model && current("model") !== options.model && has("model")) {
-      await setConfigOption(id, "model", options.model, { remember: false });
-    }
-    if (options.effort && current("effort") !== options.effort && has("effort")) {
-      await setConfigOption(id, "effort", options.effort, { remember: false });
-    }
-  } catch (error) {
-    // The creation failed: the row it kept and listed must not linger for the keep's five minutes.
-    keptUnlistedThreads.delete(id);
-    set((st) => {
-      const { [id]: _gone, ...threads } = st.threads;
-      return { threads, sessions: st.sessions.filter((x) => x.id !== id) };
-    });
-    throw error;
-  }
-  if (pending) {
-    // Listed now, with the setup gone in the same update: the row the message was sent to becomes
-    // the thread, in place, and the chat goes on from the message it already shows.
-    set((st) => ({
-      sessions: [
-        {
-          ...summary,
-          model: selectOption(st.threads[id]?.configOptions ?? [], "model")?.current ?? summary.model,
-        },
-        ...st.sessions.filter((x) => x.id !== id),
-      ],
-      ...(options.select && !st.selectedId ? viewingThread(st, id) : {}),
-      pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
-    }));
-  }
-  return id;
-}
-
-/**
- * A restored external thread whose harness has not started again offers only its own model (and
- * maybe no effort) until the harness lists its models: ask for them.
- */
-export function lacksModels(thread: ThreadState): boolean {
-  const id = thread.harness?.id;
-  if (!id || id === "rustcode") return false;
-  const model = thread.configOptions.find((o) => o.id === "model" && o.type === "select");
-  const effort = thread.configOptions.some((o) => o.id === "effort");
-  return (model?.choices.length ?? 0) <= 1 || (!effort && !!thread.harness?.capabilities.effort);
-}
-
-/** The new-thread choice: the picked one, else the default harness with its remembered model and effort. */
-export function newThreadChoice(
-  s: { newThread: NewThreadChoice | null; harnesses: HarnessSnapshot | null } & {
-    newThreadHost?: string;
-    remoteHarnesses?: Record<string, HarnessSnapshot>;
-    /** The folder a new thread would start in: its project default comes first. */
-    projectCwd?: string;
-  },
-): NewThreadChoice | null {
-  // The computer the thread will run on chooses the harnesses: a machine's default harness,
-  // models and logins are its own (`state/machines.ts`).
-  const snapshot = harnessesOn(s, s.newThreadHost);
-  if (!snapshot) return null;
-  if (!s.newThread) {
-    // A folder whose project names a harness and model starts on them, so the picker shows
-    // exactly what ⏎ starts (`startSetup` reads the same two functions).
-    return (
-      projectDefaultChoice(s, s.projectCwd) ??
-      restoreChoice(snapshot, snapshot.default.harness, appChoices(snapshot), effortMemory())
-    );
-  }
-  // A kept draft can name a harness that is gone, or one that cannot run now (turned off, signed
-  // out in Settings): then the screen falls back to the harness a new thread would start on, never
-  // to this draft. One that can run is normalized as the picker normalizes it.
-  const harness = snapshot.harnesses.find((h) => h.id === s.newThread?.harness);
-  if (!harness || unavailableReason(harness)) return preferredDefault(snapshot);
-  const choice = normalizeDefault(snapshot, s.newThread);
-  // A machine's `_rustcode/harnesses` lists only the models a harness has already learned there,
-  // and `_rustcode/harnesses/models` is not on its gateway: with none listed, keep no model, so
-  // the machine's own harness default applies rather than a model picked on this computer.
-  if (s.newThreadHost && !harness.models.length) return { ...choice, model: null, effort: null };
-  return choice;
-}
-
-/**
- * The new-thread choice a project set for `cwd`: a harness that can run now,
- * on the project's model when that harness offers it. A folder with no
- * project default, or one whose harness is turned off or signed out, starts a
- * thread the way every other folder does; a harness the user picked wins.
- */
-export function projectThreadChoice(
-  s: Pick<AppState, "newThread" | "harnesses">,
-  cwd: string,
-): NewThreadChoice | null {
-  if (s.newThread) return null;
-  return projectDefaultChoice(s, cwd);
-}
-
-/**
- * The project's own default, when it can run here: this computer's folders
- * only, since a machine's folders and harnesses are its own. The project book
- * holds one harness/model pair per folder (`state/projectBook.ts`).
- */
-function projectDefaultChoice(
-  s: { harnesses: HarnessSnapshot | null; newThreadHost?: string },
-  cwd: string | null | undefined,
-): NewThreadChoice | null {
-  if (s.newThreadHost || !s.harnesses || !cwd) return null;
-  const { harness, model } = projectChoice(cwd);
-  if (!harness) return null;
-  const found = s.harnesses.harnesses.find((h) => h.id === harness);
-  if (!found || unavailableReason(found)) return null;
-  const restored = restoreChoice(s.harnesses, harness);
-  const offered = !!model && (!found.models.length || found.models.some((m) => m.id === model));
-  return { ...restored, model: offered ? model : restored.model, effort: restored.effort };
-}
-
-/**
- * Creates a thread with the new-thread choice (or the default harness) and worktree toggle, and
- * selects it. `session/new` starts a harness there (and a worktree, when the toggle is on), which
- * takes a moment: the setup, with the message and its attachments, is shown before it is asked for,
- * so ⏎ on the new-thread screen is answered at once. A second send while it runs starts nothing; a
- * setup that failed is sent again with `retryPendingSetup`.
- */
-export async function createThread(
-  firstMessage = "",
-  extras: ComposeExtras = emptyExtras,
-): Promise<string | null> {
-  const s = get();
-  if (!s.projectCwd) throw new Error("Choose a project folder for this thread first.");
-  const setup = beginSetup(get().pendingSetup, {
-    id: localId("setup"),
-    text: firstMessage,
-    extras: carriesExtras(extras) ? extras : undefined,
-    title: titleFrom(firstMessage, 80) || (hasExtras(extras) ? "Image" : "New thread"),
-    cwd: s.projectCwd,
-    // The computer it belongs to: its group in the sidebar, its harnesses, its `session/new`.
-    host: s.newThreadHost,
-    worktree: newWorktreeFor(s, s.projectCwd, firstMessage),
-  });
-  if (!setup) {
-    const failed = get().pendingSetup?.failure;
-    if (failed) toast(failed.text, "error");
-    else toast("Starting the thread: it appears here when it is ready.");
-    return null;
-  }
-  // One update switches the screen and shows the message: nothing waits for the engine.
-  set({ pendingSetup: setup });
-  // That update gets its own painted frame before `session/new` is asked for. An in-process harness
-  // answers in a microtask, so both updates would otherwise land in one task and one frame: the
-  // pending screen's message would be drawn for the first time by the thread's own transcript, and
-  // its entry (`rc-send-in`) would never get a frame to play in.
-  await afterPaint();
-  return await startSetup(setup);
-}
-
-/** The worktree the new-thread composer asked for, or none. */
-function newWorktreeFor(
-  s: Pick<AppState, "newWorktree" | "features" | "newThreadHost">,
-  cwd: string,
-  firstMessage: string,
-): PendingSetup["worktree"] {
-  const wt = s.newWorktree;
-  // A worktree is cut on the machine the thread runs on, by that machine's own `session/new`; the
-  // toggle is this computer's, so it is only offered for threads that start here.
-  if (s.newThreadHost || !wt.on || !s.features.worktrees || cwd === HOME_FOLDER) return undefined;
-  return { repo: cwd, branch: wt.branch.trim() || undefined, title: titleFrom(firstMessage, 80) };
-}
-
-/**
- * `session/new` for a setup, with the choices the new-thread screen holds. Its title is the one the
- * row already shows, so nothing blinks back to "New thread" when the row becomes real. On failure
- * the setup keeps the message, its attachments and the reason, for a retry.
- */
-async function startSetup(setup: PendingSetup): Promise<string | null> {
-  const s = get();
-  const host = setup.host ?? LOCAL_HOST;
-  // The harness choice belongs to the machine the setup runs on, which may not be the one the
-  // composer shows now (the user moved **Run on** after sending). A project's own default harness
-  // and model are this machine's folders, so they only shape a local setup.
-  const choice =
-    (host === LOCAL_HOST ? projectThreadChoice(s, setup.cwd) : null) ??
-    newThreadChoice({
-      newThread: s.newThread,
-      harnesses: s.harnesses,
-      remoteHarnesses: s.remoteHarnesses,
-      newThreadHost: host,
-      projectCwd: setup.cwd,
-    });
-  // The login follows the choice `session/new` is given, not a draft it fell back from.
-  const harness = harnessesOn(s, host)?.harnesses.find((h) => h.id === choice?.harness);
-  let id: string;
-  try {
-    id = await createSession({
-      cwd: setup.cwd === HOME_FOLDER ? "" : setup.cwd,
-      host,
-      harness: choice?.harness,
-      // The account shown for the new thread: with named accounts, always one of them.
-      account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
-      model: choice?.model,
-      effort: choice?.effort,
-      worktree: setup.worktree,
-      select: true,
-      pendingId: setup.id,
-      title: setup.title,
-    });
-  } catch (error) {
-    const text = errorText(error);
-    set((st) =>
-      st.pendingSetup?.id === setup.id ? { pendingSetup: setupFailed(st.pendingSetup, text) } : {},
-    );
-    return null;
-  }
-  // The access level chosen on the new-thread composer belongs to the thread it started.
-  const pendingMode = get().newThreadPermissionMode;
-  if (pendingMode) {
-    setPermissionMode(id, pendingMode);
-    set({ newThreadPermissionMode: null });
-  }
-  set({ newWorktree: { on: get().newWorktree.on, branch: "", edited: false } });
-  return id;
-}
-
-/**
- * Retry: a failed setup sends its message again, with the attachments and the place it held, and the
- * prompt goes out the moment the session exists. Its own row stays where it is while it runs.
- */
-export async function retryPendingSetup(): Promise<boolean> {
-  const failed = get().pendingSetup;
-  if (!failed?.failure) return false;
-  const setup = beginSetup(failed, {
-    id: localId("setup"),
-    text: failed.text,
-    extras: failed.extras,
-    title: failed.title,
-    cwd: failed.cwd,
-    host: failed.host,
-    worktree: failed.worktree,
-  });
-  if (!setup) return false;
-  set({ pendingSetup: setup });
-  const id = await startSetup(setup);
-  if (!id) return false;
-  // Its bubble is already on screen, from the setup it keeps through the retry: it does not fly in.
-  void runPrompt(id, setup.text, setup.extras ?? emptyExtras, { alreadyShown: true });
-  return true;
-}
-
-/**
- * Gives up a failed setup: its row and its error leave, and its message goes back to the field it
- * was typed in, with the pictures and files that went with it, so nothing that was written is lost.
- */
-export function dismissPendingSetup() {
-  const pending = get().pendingSetup;
-  set({ pendingSetup: dismissSetup() });
-  if (!pending?.failure) return;
-  if (pending.text.trim()) setDraft("new", pending.text);
-  const extras = pending.extras;
-  if (extras) setExtras("new", () => ({ ...extras, attachments: [...extras.attachments] }));
-}
-
-// ---------------------------------------------------------------- thread actions
 
 // ---------------------------------------------------------------- turns
 
@@ -4717,7 +3563,10 @@ function keptPanels(id: string | null, panel: AppState["panel"]): Record<string,
  * The state a thread opens with: selected, on the panel that thread was last
  * showing (none for one never seen, or one whose panel was closed by hand).
  */
-function viewingThread(s: AppState, id: string | null): Pick<AppState, "selectedId" | "panel" | "peekId"> {
+export function viewingThread(
+  s: AppState,
+  id: string | null,
+): Pick<AppState, "selectedId" | "panel" | "peekId"> {
   // The Thread tab shows another thread beside this one: opening the thread it
   // shows ends the peek, so the panel goes back to this thread's own view.
   const shown = id && s.peekId === id ? { ...s, peekId: null } : s;
@@ -4911,7 +3760,7 @@ export function resetForTests() {
   // A machine's channel and its threads are process-global too: one test file's MockMachine must
   // not answer the next one's `openThread` (machinesThreads.test.ts › findings 1).
   resetMachinesForTests();
-  lastFocusListAt = 0;
+  resetFocusList();
   resetRemoteStatusReads();
   clearTimeout(slowTimer);
   if (waitTimer) clearInterval(waitTimer);
@@ -4932,10 +3781,7 @@ export function resetForTests() {
   forgetAutoCompact();
   // A lost turn's timers outlive a test file, and its links belong to that file's book.
   resetLostTurns();
-  driftReads = noDrift;
-  clearTimeout(runPollTimer);
-  runPollTimer = undefined;
-  runPollReading = false;
+  resetRunStatePoll();
   forcingStops.clear();
   engineWatch?.();
   engineWatch = undefined;

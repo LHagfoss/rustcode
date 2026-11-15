@@ -1056,5 +1056,3 @@ export async function manageQueue(caller: RuleThread, call: ManageQueueCall): Pr
 
 export type StartCall = Extract<ReturnType<typeof parseCall>, { tool: "start_session" }>;
 export type FanOutCall = Extract<ReturnType<typeof parseCall>, { tool: "fan_out" }>;
-
-// ---------------------------------------------------------------- SPLIT-START
