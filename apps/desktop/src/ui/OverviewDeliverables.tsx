@@ -125,6 +125,9 @@ export function DeliverablesSection({
     writeDeliverableMode(next);
   };
 
+  // Nothing delivered yet: the section waits until there is something to show.
+  if (total === 0) return null;
+
   return (
     <OverviewSection
       id="deliverables"
@@ -179,11 +182,6 @@ export function DeliverablesSection({
         <Pill quiet size="sm" className="mt-1.5 ml-2" onClick={() => setAll(true)}>
           Show {hidden} more
         </Pill>
-      )}
-      {total === 0 && (
-        <p className="px-2 py-1 text-callout text-fg-muted">
-          Nothing yet: the pictures its replies show and the files it writes land here.
-        </p>
       )}
     </OverviewSection>
   );

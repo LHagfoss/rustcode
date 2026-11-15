@@ -11,13 +11,10 @@ import {
 const ids = (...list: string[]) => list as HeaderButtonId[];
 
 describe("header buttons sanitising", () => {
-  test("pull requests are hidden by default: ⌘K holds that action", () => {
-    expect(DEFAULT_HEADER_BUTTONS).not.toContain("pulls");
-    expect(DEFAULT_HEADER_BUTTONS).toEqual(
-      ids("status", "plan", "git", "actions", "terminal", "details", "changes"),
-    );
-    // Still a button the setting lists, so it can be shown.
-    expect(HEADER_BUTTON_IDS).toContain("pulls");
+  test("the hand-driven git buttons are hidden by default", () => {
+    expect(DEFAULT_HEADER_BUTTONS).toEqual(ids("status", "plan", "terminal", "details"));
+    // Still buttons the setting lists, so each can be shown.
+    for (const id of ids("git", "actions", "pulls", "changes")) expect(HEADER_BUTTON_IDS).toContain(id);
   });
 
   test("a layout saved with Pull requests shown keeps it", () => {

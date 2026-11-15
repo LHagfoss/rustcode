@@ -6,17 +6,22 @@
 
 import {
   ArrowLeft,
+  Bot,
+  ChevronRight,
   CircleCheck,
   CircleDashed,
   CirclePlus,
   CircleX,
   ExternalLink,
   GitBranchPlus,
+  GitMerge,
   GitPullRequest,
+  MessageSquare,
+  MoreHorizontal,
   RefreshCw,
 } from "lucide-react";
-import { Dialog } from "radix-ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Dialog, DropdownMenu } from "radix-ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JsonObject } from "../acp/jsonrpc";
 import {
   type PullDetail,
@@ -31,6 +36,14 @@ import { useIntentRest } from "../lib/intent";
 import { openExternal } from "../lib/native";
 import { count } from "../lib/plural";
 import { type FeedbackItem, feedbackItems, feedbackLocation, keepSelected } from "../lib/reviewFeedback";
+import {
+  cancelMerge,
+  checkName,
+  checksHeadline,
+  mergeControl,
+  mergePull,
+  useMerging,
+} from "../state/pullMerge";
 import {
   PULL_LIMIT,
   type PullListState,
@@ -67,11 +80,14 @@ import {
   Cluster,
   ClusterButton,
   cx,
+  MenuContent,
+  menuItem,
   noTextHelpers,
   Pill,
   Segments,
   Skeleton,
   Spinner,
+  Tooltip,
 } from "./primitives";
 
 /**
@@ -312,6 +328,118 @@ function FeedbackSection({ detail, pull }: { detail: PullDetail; pull: PullReque
   );
 }
 
+/** How long a pressed merge waits for the second press that confirms it. */
+const CONFIRM_MS = 4000;
+
+/**
+ * The view's one prominent control (state/pullMerge.ts): Merge once the checks
+ * passed, Merge when checks pass while they run, nothing for a draft or a
+ * finished pull. The first press arms it ("Confirm merge?"), the second merges;
+ * a waiting merge shows here, with a way to stop it, until it ends.
+ */
+function MergeButton({ cwd, pull }: { cwd: string; pull: PullRequest }) {
+  const merging = useMerging(cwd, pull.number);
+  const [armed, setArmed] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const control = mergeControl(pull);
+  if (merging)
+    return (
+      <span className="inline-flex items-center rounded-full bg-fill">
+        <span className="flex h-[26px] items-center gap-1.5 pl-3 pr-2 font-medium text-callout">
+          <Spinner size={12} />
+          {control.kind === "merge_when_green" ? "Waiting for checks" : "Merging"}
+        </span>
+        <Pill quiet className="rounded-l-none" onClick={() => cancelMerge(cwd, pull.number)}>
+          Cancel
+        </Pill>
+      </span>
+    );
+  if (control.kind === "none") return null;
+  if (control.kind === "blocked")
+    return (
+      <Tooltip label="A failing check stops the merge. Fix it, or merge on GitHub.">
+        <span className="inline-flex">
+          <Pill prominent disabled>
+            <GitMerge size={12} /> {count(control.failed, "check")} failed
+          </Pill>
+        </span>
+      </Tooltip>
+    );
+  const label = control.kind === "merge" ? "Merge" : "Merge when checks pass";
+  const press = () => {
+    clearTimeout(timer.current);
+    if (!armed) {
+      setArmed(true);
+      timer.current = setTimeout(() => setArmed(false), CONFIRM_MS);
+      return;
+    }
+    setArmed(false);
+    void mergePull(cwd, pull);
+  };
+  return (
+    <Tooltip
+      label={`Squash-merges into ${pull.baseRef} and deletes ${pull.headRef}${
+        control.kind === "merge_when_green" ? " once every check passes" : ""
+      }`}
+    >
+      <Pill prominent onClick={press} onBlur={() => setArmed(false)}>
+        <GitMerge size={12} /> {armed ? "Confirm merge?" : label}
+      </Pill>
+    </Tooltip>
+  );
+}
+
+/**
+ * The pull's checks under one headline. While something failed or runs, those
+ * rows show and the passed ones fold behind a line; when all passed, the list
+ * folds whole behind the headline.
+ */
+function ChecksSection({ runs }: { runs: PullDetail["checkRuns"] }) {
+  const [open, setOpen] = useState(false);
+  const attention = runs.filter((c) => c.status !== "passed" && c.status !== "skipped");
+  const rest = runs.filter((c) => c.status === "passed" || c.status === "skipped");
+  const shown = open ? [...attention, ...rest] : attention;
+  return (
+    <section className="mt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="mb-1 flex items-center gap-1 font-semibold text-caption text-fg-muted hover:text-fg"
+      >
+        <ChevronRight size={11} className={cx("transition-transform", open && "rotate-90")} />
+        {checksHeadline(runs)}
+        {!open && rest.length > 0 && attention.length > 0 && (
+          <span className="font-normal text-fg-faint">· {rest.length} passed</span>
+        )}
+      </button>
+      {shown.map((c, i) => (
+        <div key={i} className="flex h-[22px] items-center gap-2 text-callout">
+          {c.status === "passed" ? (
+            <CircleCheck size={12} className="shrink-0 text-success" />
+          ) : c.status === "failed" ? (
+            <CircleX size={12} className="shrink-0 text-danger" />
+          ) : (
+            <CircleDashed size={12} className="shrink-0 text-fg-faint" />
+          )}
+          {c.url ? (
+            <button
+              type="button"
+              className="truncate text-left hover:underline"
+              onClick={() => openExternal(c.url!)}
+            >
+              {checkName(c.name)}
+            </button>
+          ) : (
+            <span className="truncate">{checkName(c.name)}</span>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function PullView({
   cwd,
   host,
@@ -351,39 +479,50 @@ function PullView({
           <h2 className="selectable font-semibold text-title3">
             {summary.title} <span className="font-normal text-fg-muted">#{summary.number}</span>
           </h2>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-caption">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption">
             <span className={STATE_TONE[pullState(summary)]}>{STATE_LABEL[pullState(summary)]}</span>
             <ChecksMark pull={summary} />
+            <Tooltip label={`${summary.author} wants to merge ${summary.headRef} into ${summary.baseRef}`}>
+              <span className="text-fg-muted">
+                {count(summary.changedFiles, "file")}{" "}
+                <span className="text-success">+{summary.additions}</span>{" "}
+                <span className="text-danger">−{summary.deletions}</span>
+              </span>
+            </Tooltip>
           </div>
-          <p className="mt-1 text-caption text-fg-muted">
-            {summary.author} wants to merge <span className="font-mono">{summary.headRef}</span> into{" "}
-            <span className="font-mono">{summary.baseRef}</span> · {summary.changedFiles} files{" "}
-            <span className="text-success">+{summary.additions}</span>{" "}
-            <span className="text-danger">−{summary.deletions}</span>
-          </p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {summary.url && (
-              <Pill onClick={() => openExternal(summary.url!)}>
-                <ExternalLink size={11} /> GitHub
-              </Pill>
-            )}
-            <Pill onClick={() => askAgent(summary)}>Ask the agent to review</Pill>
-            {!host && summary.state === "open" && (
-              <Pill onClick={() => setWorking(true)}>
-                <GitBranchPlus size={11} /> Work on this in a thread
-              </Pill>
-            )}
-            {!reviewing && (
-              <Pill
-                prominent
-                onClick={() => setReviewing(true)}
-                // A review names the head commit: it waits for a read this session,
-                // not for a row or a saved copy that may be behind the branch.
-                disabled={!live || !repositoryOf(summary.url) || pullState(summary) !== "open"}
-              >
-                Review…
-              </Pill>
-            )}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <MergeButton cwd={cwd} pull={summary} />
+            <DropdownMenu.Root modal={false}>
+              <DropdownMenu.Trigger asChild>
+                <Pill aria-label="More pull request actions" className="px-2">
+                  <MoreHorizontal size={13} />
+                </Pill>
+              </DropdownMenu.Trigger>
+              <MenuContent align="start" className="min-w-[200px]">
+                {summary.url && (
+                  <DropdownMenu.Item className={menuItem} onSelect={() => openExternal(summary.url!)}>
+                    <ExternalLink size={13} className="text-fg-muted" /> Open on GitHub
+                  </DropdownMenu.Item>
+                )}
+                <DropdownMenu.Item className={menuItem} onSelect={() => askAgent(summary)}>
+                  <Bot size={13} className="text-fg-muted" /> Ask an agent to review
+                </DropdownMenu.Item>
+                {!host && summary.state === "open" && (
+                  <DropdownMenu.Item className={menuItem} onSelect={() => setWorking(true)}>
+                    <GitBranchPlus size={13} className="text-fg-muted" /> Work on this in a thread
+                  </DropdownMenu.Item>
+                )}
+                <DropdownMenu.Item
+                  className={menuItem}
+                  // A review names the head commit: it waits for a read this session,
+                  // not for a row or a saved copy that may be behind the branch.
+                  disabled={reviewing || !live || !repositoryOf(summary.url) || pullState(summary) !== "open"}
+                  onSelect={() => setReviewing(true)}
+                >
+                  <MessageSquare size={13} className="text-fg-muted" /> Write a review
+                </DropdownMenu.Item>
+              </MenuContent>
+            </DropdownMenu.Root>
           </div>
           {reviewing && <ReviewForm cwd={cwd} pull={summary} onDone={() => setReviewing(false)} />}
           {working && (
@@ -421,23 +560,7 @@ function PullView({
               <Markdown text={detail.body} className="text-callout" />
             </div>
           )}
-          {detail.checkRuns.length > 0 && (
-            <section className="mt-3">
-              <h3 className="mb-1 font-semibold text-caption text-fg-muted">Checks</h3>
-              {detail.checkRuns.map((c, i) => (
-                <div key={i} className="flex h-[22px] items-center gap-2 text-callout">
-                  {c.status === "passed" ? (
-                    <CircleCheck size={12} className="text-success" />
-                  ) : c.status === "failed" ? (
-                    <CircleX size={12} className="text-danger" />
-                  ) : (
-                    <CircleDashed size={12} className="text-fg-faint" />
-                  )}
-                  <span className="truncate">{c.name}</span>
-                </div>
-              ))}
-            </section>
-          )}
+          {detail.checkRuns.length > 0 && <ChecksSection runs={detail.checkRuns} />}
           {detail.files.length > 0 && (
             <section className="mt-3">
               <h3 className="mb-1 font-semibold text-caption text-fg-muted">Files</h3>

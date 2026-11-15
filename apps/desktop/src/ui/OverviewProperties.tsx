@@ -1,7 +1,8 @@
 // The overview's first section: what this thread is and where it works
 // (ui/ThreadDetails.tsx draws every section). A label/value list with a mark
 // for each fact — the status it is in, the agent and model it runs on, the
-// project and branch it works in, the effort and access it was given — and the
+// project and branch it works in, the effort and access it was given when it
+// chose them rather than a default — and the
 // rows that do something are the ones with an act behind them: the project
 // opens the file manager, the branch copies itself.
 
@@ -129,28 +130,31 @@ export function PropertiesSection({
 
   return (
     <OverviewSection id="properties" title="Properties" folded={folded} onToggle={onToggle}>
-      <Property
-        icon={<StatusIcon status={status} size={14} />}
-        label="Status"
-        title={
-          waiting
-            ? waitingTitle(waiting)
-              ? `${waitingLabel(waiting)}: ${waitingTitle(waiting)}`
-              : waitingLabel(waiting)
-            : undefined
-        }
-        value={
-          status !== "idle" ? (
-            <span className="inline-flex items-center">
-              <StatusChip status={status} />
-            </span>
-          ) : waiting ? (
-            <span className="text-fg-muted">Waiting</span>
-          ) : (
-            <span className="text-fg-faint">Idle</span>
-          )
-        }
-      />
+      {/* An idle thread says nothing here: the header's status already does. */}
+      {(status !== "idle" || waiting) && (
+        <Property
+          icon={<StatusIcon status={status} size={14} />}
+          label="Status"
+          title={
+            waiting
+              ? waitingTitle(waiting)
+                ? `${waitingLabel(waiting)}: ${waitingTitle(waiting)}`
+                : waitingLabel(waiting)
+              : undefined
+          }
+          value={
+            status !== "idle" ? (
+              <span className="inline-flex items-center">
+                <StatusChip status={status} />
+              </span>
+            ) : waiting ? (
+              <span className="text-fg-muted">Waiting</span>
+            ) : (
+              <span className="text-fg-faint">Idle</span>
+            )
+          }
+        />
+      )}
       {thread.harness && (
         <Property
           icon={<HarnessIcon id={thread.harness.id} name={harnessName} size={14} />}
@@ -184,25 +188,17 @@ export function PropertiesSection({
         />
       )}
       {base && <SubFact label="Based on" value={base} title={thread.worktree?.baseRef ?? base} />}
-      <Property
-        icon={<Gauge size={14} />}
-        label="Effort"
-        // A thread that sets none runs on the harness's own default, which reads quieter.
-        muted={!effort}
-        value={effort ?? "Default"}
-        title={effort ? undefined : "This thread sets no effort: its harness chooses."}
-      />
-      <Property
-        icon={<ShieldCheck size={14} />}
-        label="Access"
-        title={
-          inheritedAccess
-            ? "This thread keeps the default access from Settings › General."
-            : "Chosen for this thread, under its composer."
-        }
-        muted={inheritedAccess}
-        value={inheritedAccess ? `${modeLabel(mode)} (default)` : modeLabel(mode)}
-      />
+      {/* A thread that sets no effort runs on its harness's default: nothing to say. */}
+      {effort && <Property icon={<Gauge size={14} />} label="Effort" value={effort} />}
+      {/* Access shows when the thread chose its own; the default from Settings › General goes unsaid. */}
+      {!inheritedAccess && (
+        <Property
+          icon={<ShieldCheck size={14} />}
+          label="Access"
+          title="Chosen for this thread, under its composer."
+          value={modeLabel(mode)}
+        />
+      )}
     </OverviewSection>
   );
 }

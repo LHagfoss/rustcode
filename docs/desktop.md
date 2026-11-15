@@ -707,8 +707,18 @@ composer's keys stay outside the table.
   and each comment's side. *Add to chat* on a conversation, or *Add all
   unresolved*, puts the comments with their file, lines and author into the
   composer draft; nothing is sent. Replying and resolving from the app
-  (#3768) and `#`/`@` completion (#3769) are not there yet. "Ask the agent to review" starts a
-  thread draft naming the commit. *Work on this in a thread* (an open pull
+  (#3768) and `#`/`@` completion (#3769) are not there yet. The header's one
+  button merges (`state/pullMerge.ts`): *Merge* once every check passed,
+  *Merge when checks pass* while they run (the first press arms it, "Confirm
+  merge?", the second merges), a disabled "N checks failed" when one failed.
+  It calls `_rustcode/pulls/merge`, the path `merge_when_green` uses (waits up
+  to 25 minutes, squash-merges, deletes the branch, advisory jobs ignored);
+  the wait shows as *Waiting for checks · Cancel* and survives closing the
+  panel. Checks fold under a headline ("2 checks running · 4 passed"), with
+  only what needs attention listed, and a skipped matrix job's
+  `${{ matrix.name }}` is dropped from its name. The rest sits behind `…`:
+  Open on GitHub, *Ask an agent to review* (a thread draft naming the
+  commit), Work on this in a thread, Write a review. *Work on this in a thread* (an open pull
   request on this computer) opens a sheet: tick the description, the review
   comments still on the diff and the failing checks, edit the instruction
   ("Address the review comments and fix failing checks."), and *Start*. The
@@ -1238,9 +1248,10 @@ composer's keys stay outside the table.
   panel toggles (details, changes) always draw after the rest, in their kept
   order, so the panel's control is the header's last, rightmost one. The order
   is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
-  in a later release shows by default. Pull requests is hidden on a fresh
-  install and after Reset (Open Git in ⌘K holds it); a saved layout
-  that shows it keeps it.
+  in a later release shows by default. A fresh install and Reset show status,
+  plan, terminal and details: Git, Project actions, Pull requests and Changes
+  (driving git by hand; agents commit and open pull requests, and the panel's
+  tabs hold the rest) are hidden. A saved layout keeps what it shows.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the
   thread comes back exactly where it was (scroll, drafts, open rows). A
