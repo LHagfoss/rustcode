@@ -621,6 +621,35 @@ holds until encrypted transport (#2651) lands.
   would send them to a network they are not on. Those routes are still kept
   and dialled, but only after every route that can answer.
 
+### Images in remote threads
+
+A thread's pictures are kept as files on the computer that runs it: an image
+attached to a message is saved under `attachments/` in the configuration
+directory, on every harness, and the message records a
+`![image](file://…)` marker naming it. Threads on an external harness from
+before this recorded only `[image]`; the app shows those as **Image
+unavailable**, as it does a marker whose file is gone.
+
+A paired computer's connection takes frames of at most 1 MiB, so an image
+never travels whole over it:
+
+- **Showing:** the app reads each marker's file back from the thread's own
+  computer with `_rustcode/attachments/read` (`path`, `offset`), about
+  512 KiB per answer, and draws the thumbnail. Only image files under
+  `attachments/` or a thread's `remote-images/` are served.
+- **Sending:** for a thread on another computer the app first uploads each
+  image with `_rustcode/attachments/upload` (`uploadId`, `mimeType`, `offset`,
+  `data`, `done`) and the prompt then carries an `image` block with empty
+  `data` and the kept file's `uri`. The engine reads the bytes back for the
+  harness (`controller::materialize_images`). A computer on an older RustCode
+  takes the image inline only when the prompt fits a frame.
+- **Switching harness or account** on a remote thread (a model of another
+  harness in the picker) is `_rustcode/session/harness`, relayed like the
+  thread's other operations.
+
+All three methods are on the gateway's desktop relay allowlist
+(`engine/src/remote_gateway/acp_relay.rs`).
+
 ### Machine names and the fleet
 
 Pairing is trust between two computers. On top of it, paired computers share

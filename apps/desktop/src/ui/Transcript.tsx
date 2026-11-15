@@ -21,7 +21,7 @@ import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
 import { hasTimeline } from "../lib/trace";
 import { checkpointsByMessage } from "../state/attempts";
 import { type Branch, branchesOf } from "../state/branches";
-import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
+import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses, splitImageMarkers } from "../state/compose";
 import { statusReply } from "../state/delegateStatus";
 import {
   collapseNotices,
@@ -299,7 +299,8 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (item.kind === "user") {
     const body = lines(item.text, 60) * BODY_LINE;
     const text = messageCollapses(body) ? COLLAPSED_MESSAGE_HEIGHT + SHOW_FULL_PILL : body;
-    return (item.attachments?.length ? ATTACHMENT_CHIPS : 0) + BUBBLE_PADDING * 2 + text + META_LINE;
+    const pictures = item.attachments?.length || splitImageMarkers(item.text).images;
+    return (pictures ? ATTACHMENT_CHIPS : 0) + BUBBLE_PADDING * 2 + text + META_LINE;
   }
   return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
 }

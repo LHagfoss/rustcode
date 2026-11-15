@@ -1,4 +1,5 @@
 mod agents;
+mod attachments;
 mod capabilities;
 pub(crate) mod clients;
 mod commands;
@@ -2311,10 +2312,13 @@ fn echo_prompt(
     prompt: &[ContentBlock],
     origin: Option<serde_json::Value>,
 ) {
+    // An image goes as its marker: the other clients read the stored file back
+    // (`_rustcode/attachments/read`) instead of taking its bytes in the update.
     let text = prompt
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
+            ContentBlock::Text(text) => Some(text.text.clone()),
+            ContentBlock::Image(image) => crate::controller::stored_image_marker(image),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -2810,6 +2814,40 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: attachments::AttachmentReadRequest, responder, connection| {
+                connection.spawn(async move {
+                    match tokio::task::spawn_blocking(move || attachments::read(request)).await {
+                        Ok(Ok(answer)) => responder.respond(answer),
+                        Ok(Err(error)) => responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params().data(error),
+                        ),
+                        Err(error) => responder.respond_with_error(
+                            agent_client_protocol::Error::internal_error().data(error.to_string()),
+                        ),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: attachments::AttachmentUploadRequest, responder, connection| {
+                connection.spawn(async move {
+                    match tokio::task::spawn_blocking(move || attachments::upload(request)).await {
+                        Ok(Ok(answer)) => responder.respond(answer),
+                        Ok(Err(error)) => responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params().data(error),
+                        ),
+                        Err(error) => responder.respond_with_error(
+                            agent_client_protocol::Error::internal_error().data(error.to_string()),
+                        ),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: machine_sync::MachineSyncRequest, responder, connection| {
                 connection.spawn(async move {
                     match machine_sync::sync(request) {
@@ -2981,13 +3019,19 @@ async fn serve_connection(
                     {
                         let remote = server.remote.clone();
                         return connection.spawn(async move {
-                            let blocks = request.prompt.clone().unwrap_or_else(|| {
+                            let mut blocks = request.prompt.clone().unwrap_or_else(|| {
                                 vec![agent_client_protocol::schema::v1::ContentBlock::Text(
                                     agent_client_protocol::schema::v1::TextContent::new(
                                         request.text.clone(),
                                     ),
                                 )]
                             });
+                            if let Err(error) = crate::controller::materialize_images(&mut blocks) {
+                                responder.respond_with_error(
+                                    agent_client_protocol::Error::invalid_params().data(error),
+                                )?;
+                                return Ok(());
+                            }
                             let accepted = external.steer(&blocks).await;
                             if accepted {
                                 remote.note_prompt(&request.session_id, &request.text, request.meta.as_ref().and_then(|v| v.get("rustcode")).and_then(|v| v.get("origin")).cloned().filter(|v| crate::message_origin::from_meta(v).is_some()));
@@ -4218,8 +4262,16 @@ async fn serve_connection(
         .on_receive_request(
             {
                 let server = server.clone();
-                async move |request: PromptRequest, responder, connection| {
+                async move |mut request: PromptRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
+                    // Every image is a stored one from here on: one sent by reference gets
+                    // its bytes back, one sent inline is kept, so the thread shows it again
+                    // later, here or on a paired computer.
+                    if let Err(error) = crate::controller::materialize_images(&mut request.prompt) {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params().data(error),
+                        );
+                    }
                     let origin = request.meta.as_ref().and_then(|meta| meta.get("rustcode")).and_then(|v| v.get("origin")).cloned().filter(|v| crate::message_origin::from_meta(v).is_some());
                     // A wake turn (the app telling an orchestrator what its delegates did) is
                     // recorded with how many delegates it carried; its tokens and cost are on
