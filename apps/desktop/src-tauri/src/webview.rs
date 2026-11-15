@@ -150,9 +150,8 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
     Ok(window)
 }
 
-/// Shows the main window again (the Dock icon was clicked). Closing only hides it on macOS, so it
-/// always still exists.
-#[cfg(target_os = "macos")]
+/// Shows the main window again and focuses it: the Dock icon was clicked, a second launch or a
+/// `rustcode://` link arrived. Closing only hides it on macOS, so there it always still exists.
 pub fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
