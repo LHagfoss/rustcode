@@ -489,3 +489,59 @@ export function costLabel(usd: number | undefined, estimated = false): string {
   if (usd === undefined) return "—";
   return `${estimated ? "≈" : ""}${formatCost(usd)}`;
 }
+
+/** One delegate as a card in the lanes view: where it ran, in what order, and how it stands. */
+export interface LaneCard {
+  id: string;
+  /** Its place in the order the work was handed out, from 1. */
+  n: number;
+  title: string;
+  state: LinkState;
+  /** How long it worked, or has worked so far (ms); undefined before it starts. */
+  ms?: number;
+  /** The column it sits in: one per card, in the order handed out. */
+  column: number;
+}
+
+/** One agent and model, with the delegates that ran on it. */
+export interface Lane {
+  key: string;
+  /** `Claude Code · Opus 5.5`, or the harness alone when the model is not known. */
+  label: string;
+  harness: string;
+  model?: string;
+  cards: LaneCard[];
+}
+
+/**
+ * A branch of delegates as lanes, one per harness and model, with a card per delegate in the order
+ * it was handed out, at any depth. Read across, it is what ran on which agent and when; read down,
+ * which agents worked side by side. Lanes keep the order their first card came in.
+ */
+export function delegateLanes(nodes: readonly DelegateNode[], now: number): Lane[] {
+  const flat: DelegateNode[] = [];
+  const walk = (list: readonly DelegateNode[]) => {
+    for (const node of list) {
+      flat.push(node);
+      walk(node.children);
+    }
+  };
+  walk(nodes);
+  flat.sort((a, b) => a.link.createdAt - b.link.createdAt);
+  const lanes = new Map<string, Lane>();
+  flat.forEach((node, i) => {
+    const link = node.link;
+    const harness = link.harnessName ?? link.harness ?? "RustCode";
+    const key = `${harness}\u0000${link.model ?? ""}`;
+    const label = link.model ? `${harness} · ${link.model}` : harness;
+    const lane = lanes.get(key) ?? { key, label, harness, model: link.model, cards: [] };
+    lanes.set(key, lane);
+    const ms =
+      link.workedMs ??
+      (link.startedAt !== undefined
+        ? (link.settledAt ?? now) - link.startedAt - (link.waitedMs ?? 0)
+        : undefined);
+    lane.cards.push({ id: node.id, n: i + 1, title: link.targetTitle, state: link.state, ms, column: i });
+  });
+  return [...lanes.values()];
+}

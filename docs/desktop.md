@@ -1527,6 +1527,13 @@ composer's keys stay outside the table.
   Marks go to `_rustcode/session/status`; on an engine without it the app
   keeps them itself. `_meta.rustcode.status` from the engine (a merged
   branch's auto-done) updates the chip.
+- **Delegate lanes.** The overview's Delegates section switches between Tree
+  and Lanes (kept in `rustcode.delegatesView`). Lanes draws one row per
+  harness and model and a card per delegate, at any depth, in the order the
+  work was handed out: its number, how long it worked, its title and state,
+  the live ones ringed in the accent; a card opens its thread
+  (`delegateLanes` in `state/delegates.ts`, `ui/DelegateLanes.tsx`). It reads
+  an implement-review-fix loop or a fan-out as what ran where, side by side.
 - **Fan-out compare.** A `fan_out` adds *Compare* to the chips: one card per
   harness with its status, branch, files changed and diff stat of the
   branch, its answer, Open and Review. *Keep this* marks the others done

@@ -10,6 +10,7 @@ import {
   costLabel,
   type DelegateRead,
   delegateCount,
+  delegateLanes,
   delegateTree,
   delegateViews,
   elapsedOf,
@@ -434,5 +435,50 @@ describe("RustCode's own subagents", () => {
     expect(runningSubagents([spawn])).toEqual([]);
     const rows = runningAgents([agent("running", 1), agent("completed", 2)]);
     expect(rows.map((a) => a.name)).toEqual(["Explore"]);
+  });
+});
+
+describe("delegate lanes", () => {
+  test("a lane per agent and model, a card per delegate in the order handed out, at any depth", () => {
+    const links = [
+      link("root", "impl", {
+        harnessName: "Claude Code",
+        model: "Opus 5.5",
+        createdAt: 1,
+        startedAt: 1,
+        workedMs: 21 * MINUTE,
+        state: "done",
+      }),
+      link("root", "review", {
+        harnessName: "Codex",
+        model: "sol",
+        createdAt: 2,
+        startedAt: 2,
+        settledAt: 2 + 3 * MINUTE,
+        state: "done",
+      }),
+      link("impl", "fix", {
+        harnessName: "Claude Code",
+        model: "Opus 5.5",
+        createdAt: 3,
+        startedAt: 10,
+        state: "working",
+      }),
+    ];
+    const lanes = delegateLanes(delegateTree("root", links), 10 + MINUTE);
+    expect(lanes.map((l) => l.label)).toEqual(["Claude Code · Opus 5.5", "Codex · sol"]);
+    expect(lanes[0]!.cards.map((c) => [c.n, c.id, c.column, c.ms])).toEqual([
+      [1, "impl", 0, 21 * MINUTE],
+      [3, "fix", 2, MINUTE],
+    ]);
+    expect(lanes[1]!.cards).toEqual([
+      { id: "review", n: 2, title: "review", state: "done", ms: 3 * MINUTE, column: 1 },
+    ]);
+  });
+
+  test("names the harness alone when the model is not known", () => {
+    expect(delegateLanes(delegateTree("root", [link("root", "a", { harness: "pi" })]), 0)[0]!.label).toBe(
+      "pi",
+    );
   });
 });
