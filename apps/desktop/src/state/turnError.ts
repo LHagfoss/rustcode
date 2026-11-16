@@ -203,3 +203,67 @@ export function readableTurnError(raw: string, contextPercent?: number): string 
     : `${subject} ${verb}${code ? ` (${code})` : ""}: ${shortMessage!.replace(/[.\s]+$/, "")}.`;
   return clipped(full && clientSide ? `${sentence} ${hint}` : sentence, MAX_DISPLAY_ERROR_CHARS);
 }
+
+/** What can fix a failed turn, in the order the error card offers it. */
+export type TurnErrorFix = "sign_in" | "compact" | "retry";
+
+/** What a failed turn needs from the user: whether it was a sign-in, and the fixes worth offering. */
+export interface TurnErrorAdvice {
+  /** The harness refused because its login is gone or expired. */
+  signedOut: boolean;
+  /** Sign in, compact, try again: only those that can work for this failure. */
+  fixes: TurnErrorFix[];
+}
+
+// The wording a harness or provider uses when the login is gone, expired or refused.
+const SAYS_SIGNED_OUT = [
+  /\bnot (?:logged|signed) in\b/i,
+  /\b(?:log|sign) ?in again\b/i,
+  /\bplease (?:run )?`?\/?login\b/i,
+  /\bauthentication (?:failed|required|error)\b/i,
+  /\binvalid (?:api[ _-]?key|x-api-key|bearer token|access token|token|credentials)\b/i,
+  /\b(?:oauth |access |refresh )?token (?:has )?(?:expired|been revoked|is invalid|was revoked)\b/i,
+  /\btoken request failed\b/i,
+  /\bunauthori[sz]ed\b/i,
+];
+
+/**
+ * The fixes a failed turn offers, from what the harness sent (`raw`, the error's detail when it
+ * has one). A sign-in comes first when the login was refused (HTTP 401, or the words for it); a
+ * compaction when a client-side refusal met a conversation at {@link FULL_CONTEXT_PERCENT} or more;
+ * and Try again wherever sending again can work: after either fix, with no network, on a server
+ * error, a timeout, a conflict or a rate limit, and on a failure that names no status. A refusal
+ * of the request itself (a 400 with room left) gets no Try again: the same request fails the same
+ * way.
+ */
+export function turnErrorAdvice(raw: string | undefined, contextPercent?: number): TurnErrorAdvice {
+  const text = raw?.trim() ?? "";
+  if (!text) return { signedOut: false, fixes: [] };
+  const status = failureStatus(text);
+  const signedOut =
+    status === 401 || ((status === undefined || status < 500) && SAYS_SIGNED_OUT.some((p) => p.test(text)));
+  const full =
+    contextPercent !== undefined &&
+    contextPercent >= FULL_CONTEXT_PERCENT &&
+    (status === undefined || status < 500) &&
+    !signedOut;
+  const retries =
+    signedOut ||
+    full ||
+    networkFailure(text) ||
+    status === undefined ||
+    status >= 500 ||
+    status === 408 ||
+    status === 409 ||
+    status === 429;
+  const fixes: TurnErrorFix[] = [];
+  if (signedOut) fixes.push("sign_in");
+  if (full) fixes.push("compact");
+  if (retries) fixes.push("retry");
+  return { signedOut, fixes };
+}
+
+/** `Claude Code: …` → `Claude Code`: the harness a failure names first, when it names one. */
+export function failureHarness(raw: string | undefined): string | undefined {
+  return /^([A-Z][\w .-]{0,30}?):\s+\S/.exec(raw?.trim() ?? "")?.[1];
+}

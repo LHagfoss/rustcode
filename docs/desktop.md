@@ -1081,6 +1081,15 @@ composer's keys stay outside the table.
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
   long scrollers.
+- **A failed turn** is one card over the composer, its text read out of what
+  the provider sent (`state/turnError.ts`), the raw text under *Details*. It
+  offers what fixes it, and only that (`turnErrorAdvice`): a refused login
+  reads `‹Harness› is signed out.` with **Sign in** (Settings › Agents);
+  a refusal with the conversation 90 % full or more offers **Compact**; and
+  **Try again** sends the failed message again wherever that can work (after
+  those fixes, with no network, on a server error, a timeout, a conflict or a
+  rate limit). A bad request with room left offers neither, since it fails
+  the same way again.
 - **Approvals** are one card over the composer: what the agent wants, its
   risk (*Read-only*, *Risky*, *Changes files* or *Destructive*, from the tool
   and its input; anything unknown is risky), then *Decline* and *Approve*
