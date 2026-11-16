@@ -100,15 +100,16 @@ import {
   setAnimateStreaming,
   setChatWidth,
   setDefaultCwd,
+  setFont,
   setNotificationsBackgroundOnly,
   setOnboarding,
   setRecapHours,
   setRecapWhileAway,
   setReduceTransparency,
-  setRoundedFont,
   setShowToolCalls,
   setSmartUi,
   setSystemNotifications,
+  setTextSize,
   setTheme,
   toast,
   useApp,
@@ -1286,7 +1287,8 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
 
 function AppearancePage() {
   const mode = useApp((s) => s.theme);
-  const roundedFont = useApp((s) => s.roundedFont);
+  const font = useApp((s) => s.font);
+  const textSize = useApp((s) => s.textSize);
   const animateStreaming = useApp((s) => s.animateStreaming);
   const reduceTransparency = useApp((s) => s.reduceTransparency);
   const active = useApp((s) => s.themeActive);
@@ -1320,11 +1322,40 @@ function AppearancePage() {
           />
         </Row>
         <Row
-          title="Rounded font"
-          reset={roundedFont ? () => setRoundedFont(SETTINGS_DEFAULTS.roundedFont) : undefined}
-          subtitle="SF Pro Rounded for the interface and chat. Code stays monospaced."
+          title="Font"
+          reset={font !== SETTINGS_DEFAULTS.font ? () => setFont(SETTINGS_DEFAULTS.font) : undefined}
+          subtitle="For the interface and chat. Code stays monospaced."
         >
-          <Switch label="Rounded font" checked={roundedFont} onChange={setRoundedFont} />
+          <Choice
+            label="Font"
+            value={font}
+            onChange={setFont}
+            options={[
+              { value: "inter", label: "Inter" },
+              { value: "system", label: "System" },
+              { value: "rounded", label: "Rounded" },
+            ]}
+          />
+        </Row>
+        <Row
+          title="Text size"
+          reset={
+            textSize !== SETTINGS_DEFAULTS.textSize
+              ? () => setTextSize(SETTINGS_DEFAULTS.textSize)
+              : undefined
+          }
+          subtitle="Small is the denser size RustCode used before."
+        >
+          <Choice
+            label="Text size"
+            value={textSize}
+            onChange={setTextSize}
+            options={[
+              { value: "small", label: "Small" },
+              { value: "medium", label: "Medium" },
+              { value: "large", label: "Large" },
+            ]}
+          />
         </Row>
         <Row
           title="Animate streaming text"

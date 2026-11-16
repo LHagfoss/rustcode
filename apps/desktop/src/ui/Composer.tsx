@@ -12,27 +12,7 @@ import { primaryModifier } from "../lib/platform";
 // closes suggestions, then leaves a queued edit, then clears the draft, then
 // stops the turn.
 
-import {
-  ArrowUp,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Clock,
-  Command,
-  FileText,
-  Folder,
-  GitBranch,
-  ListEnd,
-  Paperclip,
-  Pencil,
-  Shield,
-  ShieldCheck,
-  ShieldOff,
-  Square,
-  SquarePen,
-  WifiOff,
-  X,
-} from "lucide-react";
+import { Square } from "lucide-react";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { harnessPlanKey } from "../acp/rustcode";
@@ -148,6 +128,26 @@ import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
 import { DRAWER_NAME, Marked } from "./drawerMarks";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Command,
+  FileText,
+  Folder,
+  GitBranch,
+  ListEnd,
+  Paperclip,
+  Pencil,
+  Shield,
+  ShieldCheck,
+  ShieldOff,
+  SquarePen,
+  WifiOff,
+  X,
+} from "./icons";
 import { LinkChip } from "./LinkChip";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineSelector } from "./MachineSelector";

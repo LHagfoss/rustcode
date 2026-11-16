@@ -6,7 +6,6 @@
 // A filter that hides threads always says so: "Only <project>" shows as a chip under the field,
 // with its own clear button, so a short list is never a mystery.
 
-import { Check, ListFilter, SquarePen, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import type { KeyboardEvent, Ref } from "react";
 import { projectName } from "../acp/types";
@@ -19,6 +18,7 @@ import {
   useSidebarSort,
 } from "../state/sidebarPrefs";
 import { startNewThread, toast, useApp, useShortcutHint } from "../state/store";
+import { Check, ListFilter, SquarePen, X } from "./icons";
 import { cx, MenuContent, MenuSearchField, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
 
 const TOOL_BUTTON =

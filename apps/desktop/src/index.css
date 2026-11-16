@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Inter, bundled so it is the same face on every OS (Settings › Appearance › Font). */
+@import "@fontsource-variable/inter";
 
 /*
  * The design system's tokens (docs/design.md). Every colour the app draws
@@ -17,6 +19,7 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
   --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, "Cascadia Mono", monospace;
   --font-rounded: ui-rounded, "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+  --font-inter: "Inter Variable", Inter, -apple-system, system-ui, sans-serif;
 
   /* macOS text styles, one point up (= CSS px): the app reads at a laptop's distance. */
   --text-caption: 11px;
@@ -307,8 +310,8 @@
     background: var(--rc-bg);
     color: var(--rc-text);
     font-family: var(--font-sans);
-    font-size: 14px;
-    line-height: 19px;
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -317,7 +320,7 @@
     -webkit-user-select: none;
     cursor: default;
   }
-  /* SF Pro by default; Settings › Appearance turns on SF Pro Rounded. */
+  /* Settings › Appearance › Font: Inter by default (end of file), the system face, or SF Pro Rounded. */
   :root[data-font="rounded"] body {
     font-family: var(--font-rounded);
   }
@@ -1616,4 +1619,50 @@
   .title-first-badges {
     display: none;
   }
+}
+
+/*
+ * Settings › Appearance › Font: Inter (the default) replaces the sans face on every OS; System
+ * keeps the platform's own face above; Rounded is the body rule in the base layer. After the
+ * platform blocks, so it wins over them.
+ */
+:root[data-font="inter"] {
+  --font-sans: var(--font-inter);
+}
+
+/*
+ * Settings › Appearance › Text size. Small is the scale in @theme (macOS text styles one point
+ * up); Medium, the default, is one more point for the reading sizes, and Large one more again.
+ * Captions grow only at Large, so dense metadata rows keep their height. The utilities read these
+ * variables, so every `text-*` class follows.
+ */
+:root[data-text-size="medium"] {
+  --text-sub: 13px;
+  --text-sub--line-height: 16px;
+  --text-callout: 14px;
+  --text-callout--line-height: 18px;
+  --text-body: 15px;
+  --text-body--line-height: 20px;
+  --text-title3: 17px;
+  --text-title3--line-height: 22px;
+  --text-title2: 19px;
+  --text-title2--line-height: 24px;
+  --text-title: 24px;
+  --text-title--line-height: 30px;
+}
+:root[data-text-size="large"] {
+  --text-caption: 12px;
+  --text-caption--line-height: 15px;
+  --text-sub: 14px;
+  --text-sub--line-height: 17px;
+  --text-callout: 15px;
+  --text-callout--line-height: 19px;
+  --text-body: 16px;
+  --text-body--line-height: 21px;
+  --text-title3: 18px;
+  --text-title3--line-height: 23px;
+  --text-title2: 20px;
+  --text-title2--line-height: 25px;
+  --text-title: 25px;
+  --text-title--line-height: 31px;
 }

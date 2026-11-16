@@ -340,22 +340,27 @@ its lane and re-centres in the room that is left (Right panel below).
 
 ## Type
 
-macOS text styles one point up (read at a laptop's distance), SF Pro
-(Settings › Appearance › Rounded font switches to SF Pro Rounded) / SF Mono.
-Replies read at 14px on a 1.625 line height (22.75px, `leading-relaxed`,
-set on the reply's own scope so the app's rows keep 19px), in `fg` at 90%,
-with headings at 26/21/18/16 (`h1`–`h4`) in semibold, a step bigger than the 14px body so a
-long reply scans by its headings:
+Inter (bundled, `@fontsource-variable/inter`, the same face on every OS) /
+SF Mono. Settings › Appearance › Font picks Inter, System (the platform's own
+face, below) or Rounded (SF Pro Rounded). Settings › Appearance › Text size
+picks Small (macOS text styles one point up, the scale in `@theme`), Medium
+(the default: one more point for the reading sizes, captions unchanged) or
+Large (one more again, captions too); `:root[data-text-size]` swaps the
+`--text-*` variables, so every `text-*` class follows. Sizes below are Small /
+Medium / Large. Replies read at `text-body` on a 1.625 line height
+(`leading-relaxed`, set on the reply's own scope so the app's rows keep
+theirs), in `fg` at 90%, with headings at 26/21/18/16 (`h1`–`h4`) in
+semibold, a step bigger than the body so a long reply scans by its headings:
 
-| Class | Size / line | Use |
+| Class | Size / line (Small · Medium · Large) | Use |
 |---|---|---|
-| `text-caption` | 11/14 | Metadata, badges |
-| `text-sub` | 12/15 | Sidebar secondary lines, section headers |
-| `text-callout` | 13/17 | Controls, chips, secondary copy |
-| `text-body` | 14/19 | Body, rows, tool rows |
-| `text-title3` | 16/21 | Card titles |
-| `text-title2` | 18/23 | Onboarding, a document's headings |
-| `text-title` | 23/29 | Empty-state heading |
+| `text-caption` | 11/14 · 11/14 · 12/15 | Metadata, badges |
+| `text-sub` | 12/15 · 13/16 · 14/17 | Sidebar secondary lines, section headers |
+| `text-callout` | 13/17 · 14/18 · 15/19 | Controls, chips, secondary copy |
+| `text-body` | 14/19 · 15/20 · 16/21 | Body, rows, tool rows |
+| `text-title3` | 16/21 · 17/22 · 18/23 | Card titles |
+| `text-title2` | 18/23 · 19/24 · 20/25 | Onboarding, a document's headings |
+| `text-title` | 23/29 · 24/30 · 25/31 | Empty-state heading |
 | `text-[26px]`, `text-[21px]` | 26/31, 21/26 | A reply's `h1`, `h2` (`Markdown.tsx`) |
 
 Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
@@ -486,7 +491,7 @@ painted there either: the effects worker bakes it into the picture once
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Sans (`--font-sans`, `--font-rounded`) | SF Pro / SF Pro Rounded | Segoe UI Variable Text, Segoe UI | Inter, Cantarell, Ubuntu, Noto Sans |
+| Sans (`--font-sans`, `--font-rounded`) | Inter by default; System: SF Pro / SF Pro Rounded | Inter by default; System: Segoe UI Variable Text, Segoe UI | Inter by default; System: Inter, Cantarell, Ubuntu, Noto Sans |
 | Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
 | Font smoothing | `antialiased` | system (ClearType) | system |
 | Glass | the recipe above | none: solid `surface-2` | none: solid `surface-2` |
@@ -561,7 +566,12 @@ the default arrow on static text; the text cursor only in fields and
 
 ## Icons
 
-Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). Sizes, and no others
+Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). The sidebar, its toolbar and
+the composer use the rounded set instead: Hugeicons' free stroke-rounded icons
+under the Lucide names in `ui/icons.tsx`, with the same props, stroke 1.75 and
+sizes. Move another surface over by changing only its import, a whole surface
+at a time so one screen never mixes the two; a glyph drawn filled (the
+composer's stop square) or with no rounded match (`CircleDot`) stays Lucide. Sizes, and no others
 (`design.test.ts` checks every `size={n}` in `ui/`): 10 for a glyph inside a
 status dot and a spinner in a caption line, 12 inside chips and caption rows,
 13 in menus, 14 in toolbar and composer buttons, 16 in page headers and tool

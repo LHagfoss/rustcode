@@ -15,47 +15,7 @@ import { copyThreadId } from "../state/deepLinks";
 // state/sidebarRows.ts `rowStatus`), then the diff and pull request, then the
 // model and harness mark (a count of running delegates sits beside the diff). Hovering swaps the state for the row's actions.
 
-import {
-  Bot,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CircleAlert,
-  CircleCheck,
-  CircleDashed,
-  CircleDot,
-  Clock,
-  CloudUpload,
-  Copy,
-  CornerUpLeft,
-  Ellipsis,
-  Eye,
-  FileDiff,
-  FileText,
-  Folder,
-  FolderOpen,
-  FolderPlus,
-  FolderX,
-  GitBranch,
-  GitFork,
-  GitMerge,
-  GitPullRequestArrow,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
-  MessageCircleQuestion,
-  MessageSquareQuote,
-  PanelLeft,
-  Pencil,
-  Pin,
-  PinOff,
-  ShieldQuestion,
-  Sparkles,
-  SquarePen,
-  SquareTerminal,
-  Trash2,
-  Wrench,
-  X,
-} from "lucide-react";
+import { CircleDot } from "lucide-react";
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import {
   Fragment,
@@ -203,6 +163,46 @@ import { CustomSnooze } from "./CustomSnooze";
 import { FOLDER_DROP_ATTR, overFolderDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
+import {
+  Bot,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  Clock,
+  CloudUpload,
+  Copy,
+  CornerUpLeft,
+  Ellipsis,
+  Eye,
+  FileDiff,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  FolderX,
+  GitBranch,
+  GitFork,
+  GitMerge,
+  GitPullRequestArrow,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  MessageCircleQuestion,
+  MessageSquareQuote,
+  PanelLeft,
+  Pencil,
+  Pin,
+  PinOff,
+  ShieldQuestion,
+  Sparkles,
+  SquarePen,
+  SquareTerminal,
+  Trash2,
+  Wrench,
+  X,
+} from "./icons";
 import { LinkBadge } from "./Links";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { SettingsButton } from "./MainHeader";
@@ -752,17 +752,23 @@ function PullMark({ pull }: { pull: PullRequest }) {
 function MiddlePath({ path }: { path: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [chars, setChars] = useState(32);
+  const font = useApp((s) => s.font);
+  const textSize = useApp((s) => s.textSize);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new font or text size changes the em, not the box, so measure again
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
+    // An average character is just under 0.6em in the app's faces (7px at Small's 12px); reading the
+    // size keeps the estimate right at every Text size and font.
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) setChars(Math.max(5, Math.floor(entry.contentRect.width / 7)));
+      const em = Number.parseFloat(getComputedStyle(node).fontSize) || 12;
+      if (entry) setChars(Math.max(5, Math.floor(entry.contentRect.width / (em * 0.58))));
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [font, textSize]);
   return (
-    <span ref={ref} className="block overflow-hidden whitespace-nowrap">
+    <span ref={ref} className="block overflow-hidden text-ellipsis whitespace-nowrap">
       {middleEllipsis(path, chars)}
     </span>
   );
@@ -1223,8 +1229,9 @@ const ThreadRow = memo(function ThreadRow({
                           className="shrink-0"
                         />
                       )}
+                      {/* Normal figures: a tabular face (Inter) gives a model name's hyphens a digit's width. */}
                       {model && (
-                        <span className="min-w-0 max-w-[96px] truncate" title={model}>
+                        <span className="min-w-0 max-w-[96px] truncate normal-nums" title={model}>
                           {model}
                         </span>
                       )}

@@ -352,8 +352,13 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "appearance",
-    title: "Rounded font",
-    keywords: "font rounded typography text size",
+    title: "Font",
+    keywords: "font inter system rounded sf pro typeface typography",
+  },
+  {
+    section: "appearance",
+    title: "Text size",
+    keywords: "text size bigger larger smaller zoom readability",
   },
   {
     section: "appearance",
