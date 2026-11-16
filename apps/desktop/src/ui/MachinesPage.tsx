@@ -19,7 +19,7 @@
 // with it. A row of another machine says which RustCode version it runs, so an old one is a
 // sentence with a command, not a silent connection failure.
 
-import { Plus, RefreshCw, Server, SquareTerminal } from "lucide-react";
+import { Plus, RefreshCw, Server } from "lucide-react";
 import { useEffect, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
@@ -30,7 +30,6 @@ import {
   defaultSelfName,
   gatewayLine,
   lastSeen,
-  linkCliToApp,
   localAppVersion,
   type Machine,
   machineGlyph,
@@ -72,6 +71,7 @@ import {
   recoveryLabel,
 } from "./machineLabels";
 import { Spinner } from "./primitives";
+import { ServerProblems } from "./ServerProblems";
 import { Action, Chip, Group, Row } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
 
@@ -175,7 +175,6 @@ function ThisComputer() {
   const open = useApp((s) => Object.values(s.threads).filter((thread) => thread.loaded).length);
   const server = useMachines((s) => s.server);
   const installing = useMachines((s) => s.serverInstalling);
-  const linking = useMachines((s) => s.serverLinking);
   const local = useLocalIdentity();
   const platform = currentPlatform();
   const reported = platform === "mac" ? "macos" : platform;
@@ -212,11 +211,7 @@ function ThisComputer() {
           ) : server?.gateway.remoteEnabled ? (
             <span> · Gateway not running</span>
           ) : null}
-          {server?.problems.map((problem) => (
-            <span key={problem.code} className="block pt-0.5 text-warning">
-              {problem.message}
-            </span>
-          ))}
+          <ServerProblems problems={server?.problems} />
         </>
       }
       badge={
@@ -244,14 +239,6 @@ function ThisComputer() {
           </Action>
         }
       />
-      {/* One action for a terminal's older `rustcode`: the install script's copy
-          or any other that Homebrew does not own (issue 3411). */}
-      {server?.problems.some((problem) => problem.code === "path-version-mismatch") && (
-        <Action disabled={linking} onClick={() => void linkCliToApp()}>
-          {linking ? <Spinner /> : <SquareTerminal size={13} />}
-          Use this app's version in a terminal
-        </Action>
-      )}
     </Row>
   );
 }

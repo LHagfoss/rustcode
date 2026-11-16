@@ -154,6 +154,8 @@ import { ShortcutsPage } from "./ShortcutSettings";
 
 const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
 
+import { refreshServerService, useMachines } from "../state/machines";
+import { useSettingsAttention } from "../state/settingsAttention";
 import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
@@ -1794,6 +1796,12 @@ export function Settings() {
   }, [active, query, virtualResults]);
   // The row to land on, set when a result is picked and cleared once it is lit.
   const [landing, setLanding] = useState<{ section: SettingsSection; title: string } | null>(null);
+  // A dot on each page that needs attention: the gear's dot says something does, the nav says
+  // where. The server's warnings are read once when Settings opens, if no page has read them.
+  const attention = useSettingsAttention();
+  useEffect(() => {
+    if (useMachines.getState().server === null) void refreshServerService();
+  }, []);
   // The panel takes focus when it opens: keys then land inside it, never on the
   // shell it covers. Not its first control, so no stray ring in the search field.
   const panel = useRef<HTMLDivElement>(null);
@@ -1985,6 +1993,7 @@ export function Settings() {
                           key={s.id}
                           type="button"
                           aria-current={s.id === section ? "page" : undefined}
+                          aria-description={attention[s.id]}
                           onClick={() => openSettings(s.id)}
                           className={cx(
                             "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
@@ -1994,7 +2003,14 @@ export function Settings() {
                           )}
                         >
                           <s.icon size={16} className="shrink-0" />
-                          {s.label}
+                          <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                          {attention[s.id] && (
+                            <span
+                              data-testid={`settings-attention-${s.id}`}
+                              title={attention[s.id]}
+                              className="size-1.5 shrink-0 rounded-full bg-warning"
+                            />
+                          )}
                         </button>
                       ))}
                     </div>
