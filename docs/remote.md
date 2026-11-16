@@ -1356,13 +1356,17 @@ Client requests and notifications are restricted to these exact methods:
 - `_rustcode/threads/search`, `_rustcode/data/activity`, `_rustcode/project/read`,
   `_rustcode/project/clone` and `_rustcode/worktrees/state`: what an agent on the
   paired computer reads and does here (`docs/orchestrator.md` › Machines)
+- `_rustcode/project/browse` and `_rustcode/project/create`: the folders in one
+  folder, and a new project folder with `git init`, for the picker's Browse
+  Folders… on a machine with no project yet (`docs/desktop.md`). Neither
+  reaches past what `session/new` in any folder already can.
 
 The only allowed prefixes are `session/`, `_rustcode/pulls` and
 `_rustcode/capabilities` (which includes adding an MCP server, that is, running
 a command on this machine: consistent with "can see and run all threads").
 Everything else is denied, including provider credentials and login, pairing
-and remote management, `_rustcode/server/*`, data-store SQL and usage, project
-creation and worktree handoff. Denied requests receive a JSON-RPC
+and remote management, `_rustcode/server/*`, data-store SQL and usage,
+and worktree handoff. Denied requests receive a JSON-RPC
 error with the same `id`, numeric code `-32601` and
 `data: {"code":"unauthorized_access"}`. Denied notifications are dropped.
 JSON-RPC responses pass through only for an outstanding server request ID,
