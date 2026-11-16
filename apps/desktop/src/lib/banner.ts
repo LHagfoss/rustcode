@@ -7,7 +7,14 @@
 
 import { useSyncExternalStore } from "react";
 import { isTauri } from "../acp/transport";
-import { EffectCache, effectKey, fitWithin, isPixelEffect, type PixelEffect } from "./bannerEffects";
+import {
+  EffectCache,
+  effectKey,
+  fitWithin,
+  isPixelEffect,
+  type PixelEffect,
+  processPixels,
+} from "./bannerEffects";
 import type { EffectRequest, EffectResponse } from "./bannerEffects.worker";
 import { shellCall } from "./shell";
 import { readStorage, writeStorage } from "./storage";
@@ -282,22 +289,23 @@ export function loadBanner(name: string): Promise<HTMLImageElement | null> {
 
 let worker: Worker | null | undefined;
 let nextId = 0;
-const waiting = new Map<number, (png: Blob | null) => void>();
+const waiting = new Map<number, (pixels: ArrayBuffer | null) => void>();
 
-/** The effects worker; null where there is none (then the picture shows as is). */
+/** The effects worker; null where there is none (then the page does the work itself). */
 function effectsWorker(): Worker | null {
   if (worker !== undefined) return worker;
-  if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined") {
+  if (typeof Worker === "undefined") {
     worker = null;
     return worker;
   }
   try {
     worker = new Worker(new URL("./bannerEffects.worker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (event: MessageEvent<EffectResponse>) => {
-      waiting.get(event.data.id)?.(event.data.png);
+      waiting.get(event.data.id)?.(event.data.pixels);
       waiting.delete(event.data.id);
     };
     worker.onerror = () => {
+      // A worker that cannot load (a web view without module workers): the page takes over.
       worker?.terminate();
       worker = null;
       for (const done of waiting.values()) done(null);
@@ -307,6 +315,29 @@ function effectsWorker(): Worker | null {
     worker = null;
   }
   return worker;
+}
+
+/** The pixels processed in the worker, or here where there is none or it failed. */
+async function process(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  effect: PixelEffect | null,
+  dark: boolean,
+  blur: number,
+): Promise<Uint8ClampedArray> {
+  const w = effectsWorker();
+  if (w) {
+    // The worker gets its own copy, so the page can still fall back to the original.
+    const copy = pixels.slice().buffer as ArrayBuffer;
+    const id = ++nextId;
+    const out = await new Promise<ArrayBuffer | null>((resolve) => {
+      waiting.set(id, resolve);
+      w.postMessage({ id, pixels: copy, width, height, effect, dark, blur } satisfies EffectRequest, [copy]);
+    });
+    if (out) return new Uint8ClampedArray(out);
+  }
+  return processPixels(pixels, width, height, effect, dark, blur);
 }
 
 /** Rendered effects as blob URLs, by picture, effect and theme (lib/bannerEffects.ts). */
@@ -331,8 +362,8 @@ export function renderSize(source: HTMLImageElement | HTMLCanvasElement): { widt
 /**
  * The picture (or a text drawing) re-printed with `look` when that is a print effect, and blurred
  * by `blur` px of the drawn copy (Windows and Linux, which paint no live blur), as a blob URL:
- * rendered once in the worker, from a copy at most 2048px on its long edge, then kept. Null when
- * it cannot be rendered here.
+ * rendered once in the worker (or here, where there is none), from a copy at most 2048px on its
+ * long edge, then kept. Null when it cannot be rendered.
  */
 export function renderEffect(
   name: string,
@@ -346,22 +377,23 @@ export function renderEffect(
   if (ready) return Promise.resolve(ready);
   const running = rendering.get(key);
   if (running) return running;
-  const w = effectsWorker();
-  if (!w || typeof createImageBitmap !== "function") return Promise.resolve(null);
   const effect = isPixelEffect(look) ? look : null;
   const job = (async () => {
-    const size = renderSize(source);
-    if (!size.width) return null;
-    const bitmap = await createImageBitmap(source, {
-      resizeWidth: size.width,
-      resizeHeight: size.height,
-      resizeQuality: "high",
-    });
-    const id = ++nextId;
-    const png = await new Promise<Blob | null>((resolve) => {
-      waiting.set(id, resolve);
-      w.postMessage({ id, bitmap, effect, dark, blur } satisfies EffectRequest, [bitmap]);
-    });
+    const { width, height } = renderSize(source);
+    if (!width) return null;
+    // Scaled in a plain canvas: no OffscreenCanvas or createImageBitmap options, which some web
+    // views lack.
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(source, 0, 0, width, height);
+    const image = ctx.getImageData(0, 0, width, height);
+    image.data.set(await process(image.data, width, height, effect, dark, blur));
+    ctx.putImageData(image, 0, 0);
+    const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     // The picture changed while this ran: its render is not kept.
     if (!png || snapshot.name !== name) return null;
     const url = URL.createObjectURL(png);

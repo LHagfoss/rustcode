@@ -9,6 +9,7 @@ import {
   HALFTONE_CELL,
   halftone,
   isPixelEffect,
+  processPixels,
   scanlines,
 } from "./bannerEffects";
 
@@ -174,5 +175,20 @@ describe("boxBlur", () => {
   test("keys a baked blur apart from none", () => {
     expect(effectKey("a", "picture", true, 3)).not.toBe(effectKey("a", "picture", true));
     expect(effectKey("a", "dither", true, 0)).toBe(effectKey("a", "dither", true));
+  });
+});
+
+describe("processPixels", () => {
+  test("applies the effect, then the blur, and keeps the source", () => {
+    const src = new Uint8ClampedArray(8 * 8 * 4);
+    for (let i = 0; i < src.length; i += 4) src.set([i % 64 < 32 ? 30 : 220, 120, 90, 255], i);
+    const before = Array.from(src);
+    const dithered = applyEffect("dither", src, 8, 8, true);
+    expect(Array.from(processPixels(src, 8, 8, "dither", true, 0))).toEqual(Array.from(dithered));
+    expect(Array.from(processPixels(src, 8, 8, "dither", true, 2))).toEqual(
+      Array.from(boxBlur(dithered, 8, 8, 2)),
+    );
+    expect(Array.from(processPixels(src, 8, 8, null, true, 0))).toEqual(before);
+    expect(Array.from(src)).toEqual(before);
   });
 });

@@ -957,12 +957,14 @@ composer's keys stay outside the table.
   on a light background, drawn once per size on an offscreen canvas so a
   resize scales the last drawing), as is (None), blurred and faded (Haze), or re-printed as a 4×4 Bayer Dither, a Halftone of dots on a 4px grid
   or Scanlines. Those three run once per picture, effect and theme in a Web
-  Worker on an OffscreenCanvas (`lib/bannerEffects.worker.ts`, pure pixel
+  Worker on plain pixel buffers (`lib/bannerEffects.worker.ts`, pure pixel
   functions in `lib/bannerEffects.ts`), from a copy at most 2048px on its long
   edge, and are kept as PNG blob URLs (six at most; a new picture drops the
   old one's; the CSP's `img-src` allows `blob:` for them): a resize never
   renders again, and with no picture nothing runs.
-  Where there is no worker or OffscreenCanvas the picture shows as is. It fades
+  The page scales the picture in a canvas and encodes the PNG, so the worker
+  needs no OffscreenCanvas or ImageBitmap (WebKitGTK); where no worker runs,
+  the page processes the pixels itself. It fades
   in, and does not move under Reduce motion. *Darken* (0–80%, black over it)
   and *Blur* (0–40px) apply everywhere: macOS blurs live in CSS, and Windows
   and Linux, which paint no live blur, have the same worker bake it (and
