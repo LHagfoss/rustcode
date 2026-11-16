@@ -354,6 +354,8 @@ import {
   beginTurn,
   finishTurn,
   foldingBatch,
+  isContinueMessage,
+  isWakeMessage,
   localId,
   requeueSteers,
   settleEveryWait,
@@ -2411,6 +2413,18 @@ export async function runPrompt(
     alreadyShown?: boolean;
   } = {},
 ): Promise<TurnOutcome> {
+  // Check again when a queued notice starts: settling may have happened after delivery.
+  if (
+    (options.automatic ||
+      options.autoCompact ||
+      options.autoResume ||
+      options.continued ||
+      options.wake ||
+      isContinueMessage(text) ||
+      isWakeMessage(text)) &&
+    (get().statusMarks[id] ?? sessionById(get(), id)?.status) === "done"
+  )
+    return "skipped";
   // The turn runs on the thread's own computer, which may have gone away since it was opened.
   const conn = connectionForThread(id);
   if (!conn) {

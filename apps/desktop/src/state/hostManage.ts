@@ -89,8 +89,16 @@ import {
   updateThread,
   useApp,
 } from "./store";
-import { localId, type QueuedPrompt, type TranscriptItem, turnCompletion } from "./thread";
+import {
+  isContinueMessage,
+  isWakeMessage,
+  localId,
+  type QueuedPrompt,
+  type TranscriptItem,
+  turnCompletion,
+} from "./thread";
 import { isRemoteThread, splitThreadKey } from "./threadKeys";
+import { sessionById } from "./threadStatus";
 
 type UpdateCall = Extract<ReturnType<typeof parseCall>, { tool: "update_session" }>;
 type ConfigureCall = Extract<ReturnType<typeof parseCall>, { tool: "configure_session" }>;
@@ -932,6 +940,12 @@ export function deliver(
   from: string,
   extras?: ComposeExtras,
 ) {
+  const state = useApp.getState();
+  if (
+    (isContinueMessage(text) || isWakeMessage(text)) &&
+    (state.statusMarks[target] ?? sessionById(state, target)?.status) === "done"
+  )
+    return;
   const thread = useApp.getState().threads[target];
   if (thread?.running) {
     // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
