@@ -821,6 +821,12 @@ fn load_oauth_token(server: &str) -> Option<OAuthToken> {
     serde_json::from_str(&contents).ok()
 }
 
+/// Whether RustCode holds a sign-in for `server` (`rustcode mcp login`), read from disk without
+/// refreshing it, so a harness thread can tell cheaply that a sign-in arrived or went.
+pub(crate) fn has_saved_login(server: &str) -> bool {
+    load_oauth_token(server).is_some()
+}
+
 fn save_oauth_token(server: &str, token: &OAuthToken) -> Result<(), String> {
     let path = oauth_token_path(server)
         .ok_or_else(|| "no config directory is available for OAuth token storage".to_string())?;
