@@ -113,6 +113,27 @@ pub enum Commands {
         command: HarnessCommands,
     },
 
+    /// List, check, add and remove the named accounts of a harness (sign-ins
+    /// are never printed)
+    #[command(alias = "accounts")]
+    Account {
+        #[command(subcommand)]
+        command: AccountCommands,
+    },
+
+    /// List the GitHub and model sign-ins, or sign one out
+    #[command(alias = "connection")]
+    Connections {
+        #[command(subcommand)]
+        command: ConnectionCommands,
+    },
+
+    /// Connect, change and revoke outside agents (Claude Desktop, Cursor, …)
+    Outside {
+        #[command(subcommand)]
+        command: OutsideCommands,
+    },
+
     /// List RustCode's worktrees of a repository, read one, remove one, or
     /// prune the records of worktrees whose folders are gone
     #[command(alias = "worktrees")]
@@ -283,7 +304,7 @@ pub enum Commands {
         command: CronCommands,
     },
 
-    /// Add, list, or remove MCP servers in the user config
+    /// Add, list, remove, turn on or off, and restart MCP servers
     Mcp {
         #[command(subcommand)]
         command: McpCommands,
@@ -923,6 +944,105 @@ pub enum HarnessCommands {
         /// The reasoning effort they start with
         #[arg(long)]
         effort: Option<String>,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum AccountCommands {
+    /// Every named account: its harness, folder and sign-in state
+    #[command(alias = "ls")]
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Look every account's sign-in up again; nothing is started
+    Check {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Register a named login of a harness, kept in its own config folder
+    Add {
+        /// claude-code or codex
+        harness: String,
+        /// A short id, e.g. work
+        id: String,
+        /// The name the app shows
+        #[arg(long)]
+        name: Option<String>,
+        /// The config folder (default: the harness's, with the id appended)
+        #[arg(long)]
+        config_dir: Option<String>,
+    },
+    /// Forget an account; its folder and the login in it stay
+    #[command(alias = "rm")]
+    Remove {
+        harness: String,
+        id: String,
+        /// Confirm without asking
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ConnectionCommands {
+    /// The GitHub CLI's accounts and the saved model sign-ins
+    #[command(alias = "ls")]
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sign one out: `github <login>` or `<provider> <account>`
+    Logout {
+        /// `github`, or a model provider such as openai
+        provider: String,
+        /// The GitHub login, or the provider's account name
+        account: String,
+        /// The GitHub host
+        #[arg(long, default_value = "github.com")]
+        host: String,
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum OutsideCommands {
+    /// The connected apps, their access and when each last called
+    #[command(alias = "ls")]
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Connect an app; prints its token and config snippet once
+    Create {
+        /// The name RustCode shows for it
+        name: String,
+        /// claude-desktop, cursor, codex or other
+        #[arg(long, default_value = "other")]
+        platform: String,
+        /// read_only (default), delegate, manage or admin
+        #[arg(long)]
+        access: Option<String>,
+        /// Ask in the app before each change (default: on above read_only)
+        #[arg(long)]
+        ask: Option<bool>,
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Change an app's access, or whether it asks first
+    Update {
+        id: String,
+        #[arg(long)]
+        access: Option<String>,
+        #[arg(long)]
+        ask: Option<bool>,
+    },
+    /// Revoke an app's token; it stops working at once
+    Revoke {
+        id: String,
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -2106,6 +2226,34 @@ mod tests {
     }
 
     #[test]
+    fn parses_account_connection_and_outside_commands() {
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "account", "add", "claude-code", "work", "--name", "Work"])
+                .unwrap()
+                .command,
+            Some(Commands::Account {
+                command: AccountCommands::Add { harness, id, name: Some(_), config_dir: None }
+            }) if harness == "claude-code" && id == "work"
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "connections", "logout", "github", "me", "-y"])
+                .unwrap()
+                .command,
+            Some(Commands::Connections {
+                command: ConnectionCommands::Logout { yes: true, .. }
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "outside", "create", "Cursor", "--access", "admin"])
+                .unwrap()
+                .command,
+            Some(Commands::Outside {
+                command: OutsideCommands::Create { access: Some(access), .. }
+            }) if access == "admin"
+        ));
+    }
+
+    #[test]
     fn parses_thread_and_worktree_commands() {
         assert!(matches!(
             Cli::try_parse_from([
@@ -2133,6 +2281,19 @@ mod tests {
                 }
             })
         ));
+    }
+
+    #[test]
+    fn cli_doc_lists_every_command() {
+        use clap::CommandFactory;
+        let doc = include_str!("../../../docs/cli.md");
+        for command in Cli::command().get_subcommands() {
+            let name = command.get_name();
+            assert!(
+                doc.contains(&format!("`rustcode {name}")),
+                "docs/cli.md has no row for `rustcode {name}`"
+            );
+        }
     }
 
     #[test]

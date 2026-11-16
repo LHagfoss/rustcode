@@ -4,8 +4,8 @@
 //! too; this parses, prints and exits.
 
 use crate::cli::{
-    Commands, HarnessCommands, McpCommands, SessionCommands, SettingsCommands, ToggleCommands,
-    WorktreeCommands,
+    AccountCommands, Commands, ConnectionCommands, HarnessCommands, McpCommands, OutsideCommands,
+    SessionCommands, SettingsCommands, ToggleCommands, WorktreeCommands,
 };
 use rustcode::manage::capabilities::Op;
 use serde_json::Value;
@@ -416,4 +416,186 @@ fn confirm(question: &str) -> bool {
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer).is_ok()
         && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+/// `rustcode account|connections|outside …`, or `None` for another command.
+pub async fn credentials(command: &Commands) -> Option<Result<(), String>> {
+    use rustcode::manage::accounts;
+    Some(match command {
+        Commands::Account { command } => match command {
+            AccountCommands::List { json } => accounts::list_accounts()
+                .await
+                .and_then(|answer| print_accounts(&answer, *json)),
+            AccountCommands::Check { json } => accounts::check_accounts()
+                .await
+                .and_then(|answer| print_accounts(&answer, *json)),
+            AccountCommands::Add {
+                harness,
+                id,
+                name,
+                config_dir,
+            } => accounts::add_account(
+                harness,
+                id,
+                name.as_deref().unwrap_or(id),
+                config_dir.as_deref(),
+            )
+            .await
+            .map(|_| println!("Added {harness} account {id}. Sign in to it from the app or the harness's own login.")),
+            AccountCommands::Remove { harness, id, yes } => {
+                if !*yes && !confirm(&format!("Forget the {harness} account {id}? Its folder and login stay. [y/N] ")) {
+                    Err("not removed; pass --yes to confirm".to_owned())
+                } else {
+                    accounts::remove_account(harness, id)
+                        .await
+                        .map(|_| println!("Removed {harness} account {id}; its folder was kept."))
+                }
+            }
+        },
+        Commands::Connections { command } => match command {
+            ConnectionCommands::List { json } => {
+                accounts::list_connections().await.and_then(|answer| {
+                    if *json {
+                        return print_json(&answer);
+                    }
+                    let mut rows: Vec<Vec<String>> = Vec::new();
+                    for account in answer["github"].as_array().into_iter().flatten() {
+                        rows.push(vec![
+                            "github".to_owned(),
+                            shown(&account["login"]),
+                            shown(&account["host"]),
+                            if account["valid"].as_bool() == Some(false) {
+                                "needs sign-in".to_owned()
+                            } else {
+                                "signed in".to_owned()
+                            },
+                        ]);
+                    }
+                    for account in answer["models"].as_array().into_iter().flatten() {
+                        rows.push(vec![
+                            shown(&account["provider"]),
+                            shown(&account["account"]),
+                            shown(&account["method"]),
+                            if account["needs_sign_in"].as_bool() == Some(true) {
+                                "needs sign-in".to_owned()
+                            } else {
+                                "signed in".to_owned()
+                            },
+                        ]);
+                    }
+                    crate::run::print_rows(&["PROVIDER", "ACCOUNT", "HOW", "STATE"], &rows);
+                    Ok(())
+                })
+            }
+            ConnectionCommands::Logout {
+                provider,
+                account,
+                host,
+                yes,
+            } => {
+                if !*yes && !confirm(&format!("Sign {account} out of {provider}? [y/N] ")) {
+                    Err("not signed out; pass --yes to confirm".to_owned())
+                } else if provider == "github" {
+                    accounts::logout_github(host, account)
+                        .await
+                        .map(|_| println!("Signed {account} out of GitHub on {host}."))
+                } else {
+                    accounts::logout_model(provider, account)
+                        .await
+                        .map(|_| println!("Signed {account} out of {provider}."))
+                }
+            }
+        },
+        Commands::Outside { command } => match command {
+            OutsideCommands::List { json } => accounts::list_outside().await.and_then(|answer| {
+                if *json {
+                    return print_json(&answer);
+                }
+                let rows: Vec<Vec<String>> = answer["grants"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|grant| {
+                        vec![
+                            shown(&grant["id"]),
+                            shown(&grant["name"]),
+                            shown(&grant["scope"]),
+                            if grant["ask"].as_bool() == Some(true) { "asks" } else { "-" }.to_owned(),
+                            shown(&grant["lastTool"]),
+                        ]
+                    })
+                    .collect();
+                crate::run::print_rows(&["ID", "NAME", "ACCESS", "ASK", "LAST CALL"], &rows);
+                Ok(())
+            }),
+            OutsideCommands::Create {
+                name,
+                platform,
+                access,
+                ask,
+                yes,
+            } => {
+                let level = access.as_deref().unwrap_or("read_only");
+                if level != "read_only"
+                    && !*yes
+                    && !confirm(&format!("Give “{name}” {level} access to RustCode? [y/N] "))
+                {
+                    Err("not connected; pass --yes to confirm".to_owned())
+                } else {
+                    accounts::create_outside(name, platform, access.as_deref(), *ask)
+                        .await
+                        .map(|answer| {
+                            println!("Connected “{name}” with {level} access.");
+                            println!("Its token is shown this once; put it in the app's config:\n");
+                            println!("{}", shown(&answer["snippet"]));
+                        })
+                }
+            }
+            OutsideCommands::Update { id, access, ask } => {
+                if access.is_none() && ask.is_none() {
+                    Err("give --access, --ask, or both".to_owned())
+                } else {
+                    accounts::update_outside(id, access.as_deref(), *ask)
+                        .await
+                        .map(|_| println!("Updated {id}."))
+                }
+            }
+            OutsideCommands::Revoke { id, yes } => {
+                if !*yes && !confirm(&format!("Revoke {id}? Its token stops working at once. [y/N] ")) {
+                    Err("not revoked; pass --yes to confirm".to_owned())
+                } else {
+                    accounts::revoke_outside(id)
+                        .await
+                        .map(|_| println!("Revoked {id}."))
+                }
+            }
+        },
+        _ => return None,
+    })
+}
+
+fn print_accounts(answer: &Value, json: bool) -> Result<(), String> {
+    if json {
+        return print_json(answer);
+    }
+    let rows: Vec<Vec<String>> = answer["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|account| {
+            vec![
+                shown(&account["harness"]),
+                shown(&account["id"]),
+                shown(&account["name"]),
+                shown(&account["auth"]),
+                shown(&account["config_dir"]),
+            ]
+        })
+        .collect();
+    if rows.is_empty() {
+        println!("No named accounts. Add one with `rustcode account add <harness> <id>`.");
+    } else {
+        crate::run::print_rows(&["HARNESS", "ID", "NAME", "SIGN-IN", "FOLDER"], &rows);
+    }
+    Ok(())
 }

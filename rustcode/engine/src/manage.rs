@@ -21,6 +21,7 @@ use agent_client_protocol::schema::v1::{
 };
 use serde_json::{Map, Value, json};
 
+pub mod accounts;
 pub mod capabilities;
 pub mod threads;
 
