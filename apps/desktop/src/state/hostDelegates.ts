@@ -251,6 +251,8 @@ async function mergeTracked(
           ...(state.branch ? { branch: state.branch } : {}),
           timeoutMs: call.timeoutMs,
           ...(mergeId ? { mergeId } : {}),
+          // The engine claims the caller's link news for this merge, so it hears once.
+          sessionId: caller.id,
         },
         call.timeoutMs + 120_000,
       );
@@ -278,10 +280,14 @@ async function mergeTracked(
       ...(outcome.failing.length ? { failing: outcome.failing } : {}),
       waited_secs: outcome.waitedSecs,
       detail: outcome.message,
+      ...(outcome.announced ? { announced: true } : {}),
     };
   };
   if (call.number) {
-    void finishMerge().then((result) => deliver(caller.id, mergeResultNotice(pull.number, result), "", ""));
+    void finishMerge().then((result) => {
+      // The link already woke the thread with "Merged"; a second notice is the same news (issue 3851).
+      if (result.announced !== true) deliver(caller.id, mergeResultNotice(pull.number, result), "", "");
+    });
     return {
       number: pull.number,
       state: "watching",

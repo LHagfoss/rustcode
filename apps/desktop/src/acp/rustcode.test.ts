@@ -4,6 +4,7 @@ import {
   nextPlanRefresh,
   PLAN_REFRESH_MS,
   parseAgentList,
+  parseMergeOutcome,
   parsePayloadCapture,
   parsePlanUsage,
   parsePullList,
@@ -116,4 +117,11 @@ describe("rustcode extensions", () => {
     });
     expect(parseUsage({ used: 1, size: 2 })?.context).toBeUndefined();
   });
+});
+
+test("a merge result says when the thread's link announced the merge first", () => {
+  const merge = { number: 7, state: "merged", merged: true, failing: [], waitedSecs: 3, message: "Merged" };
+  expect(parseMergeOutcome({ merge, announced: true })?.announced).toBe(true);
+  // An engine from before the claim answers without it: the result is still delivered.
+  expect(parseMergeOutcome({ merge })?.announced).toBe(false);
 });
