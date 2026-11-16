@@ -1,6 +1,6 @@
 //! `manage_capabilities` and `rustcode skill|mcp|harness …` (#3821): what a
 //! thread can use. Skills and MCP servers are turned on and off (and an MCP
-//! server restarted), the default harness for new threads is chosen, and the
+//! server restarted), a skill is created, the default harness for new threads is chosen, and the
 //! theme is switched. The engine's own methods do the work
 //! (`_rustcode/capabilities*`, `_rustcode/harnesses/default`,
 //! `_rustcode/themes/set`), so the app's Settings and these surfaces change
@@ -16,7 +16,7 @@ pub const KINDS: [&str; 4] = ["skill", "mcp", "harness", "theme"];
 
 fn actions(kind: &str) -> &'static [&'static str] {
     match kind {
-        "skill" => &["list", "enable", "disable"],
+        "skill" => &["list", "enable", "disable", "create"],
         "mcp" => &["list", "enable", "disable", "restart"],
         "harness" => &["list", "default"],
         "theme" => &["list", "set"],
@@ -31,10 +31,11 @@ pub fn schema() -> Value {
             "kind": {"type": "string", "enum": KINDS, "description": "skill, mcp (an MCP server), harness, or theme"},
             "action": {
                 "type": "string",
-                "enum": ["list", "enable", "disable", "restart", "default", "set"],
-                "description": "list (any kind); enable or disable a skill or MCP server; restart an MCP server; default: the harness new threads start on; set: the theme. Everything but list asks the user first"
+                "enum": ["list", "enable", "disable", "restart", "default", "set", "create"],
+                "description": "list (any kind); enable or disable a skill or MCP server; restart an MCP server; default: the harness new threads start on; set: the theme; create: a new user skill from content. Everything but list asks the user first"
             },
-            "name": {"type": "string", "description": "The skill, MCP server, harness id or theme, as list names it"},
+            "name": {"type": "string", "description": "The skill, MCP server, harness id or theme, as list names it. create: the new skill's name (lowercase letters, digits, dashes)"},
+            "content": {"type": "string", "description": "create: the whole SKILL.md, starting with front matter (name, description saying what it does and when to use it, optional triggers and keywords), then the instructions"},
             "model": {"type": "string", "description": "default: the model new threads on that harness start with"},
             "effort": {"type": "string", "description": "default: the reasoning effort they start with"}
         },
@@ -66,6 +67,11 @@ pub enum Op {
         effort: Option<String>,
     },
     Theme(String),
+    /// A new skill in the user's RustCode skills folder.
+    CreateSkill {
+        name: String,
+        content: String,
+    },
 }
 
 impl Op {
@@ -94,6 +100,19 @@ impl Op {
                 enabled: action == "enable",
             },
             "restart" => Self::Restart(name),
+            "create" => {
+                let Some(content) = args
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .filter(|content| !content.trim().is_empty())
+                else {
+                    return Err("create needs content, the whole SKILL.md".to_owned());
+                };
+                Self::CreateSkill {
+                    name,
+                    content: content.to_owned(),
+                }
+            }
             "default" => Self::Default {
                 harness: name,
                 model: text(args, "model").map(str::to_owned),
@@ -121,6 +140,7 @@ impl Op {
                 if kind == "mcp" { "MCP server" } else { "skill" }
             ),
             Self::Restart(name) => format!("Restart MCP server {name}"),
+            Self::CreateSkill { name, .. } => format!("Create skill {name}"),
             Self::Default {
                 harness,
                 model,
@@ -156,6 +176,9 @@ impl Op {
                 if *enabled { "enable" } else { "disable" }
             ),
             Self::Restart(name) => format!("rustcode mcp restart {name}"),
+            Self::CreateSkill { name, .. } => {
+                format!("write ~/.config/rustcode/skills/{name}/SKILL.md")
+            }
             Self::Default { harness, .. } => format!("rustcode harness default {harness}"),
             Self::Theme(name) => format!("rustcode theme set {name}"),
         }
@@ -180,6 +203,10 @@ impl Op {
             Self::Restart(name) => (
                 "_rustcode/capabilities/mcp/restart",
                 json!({ "name": name }),
+            ),
+            Self::CreateSkill { name, content } => (
+                "_rustcode/skills/add",
+                json!({ "name": name, "content": content }),
             ),
             Self::Default {
                 harness,
@@ -237,6 +264,13 @@ async fn run_here(op: &Op, place: Place) -> Result<Value, String> {
             crate::capabilities::restart_mcp_server(name).await?;
             serde_json::to_value(crate::capabilities::snapshot()).map_err(|error| error.to_string())
         }
+        Op::CreateSkill { name, content } => {
+            let path = crate::capabilities::add_skill(name, content)?;
+            let mut snapshot = serde_json::to_value(crate::capabilities::snapshot())
+                .map_err(|error| error.to_string())?;
+            snapshot["created"] = json!(path);
+            Ok(snapshot)
+        }
         Op::Default {
             harness,
             model,
@@ -255,10 +289,16 @@ fn shaped(op: &Op, raw: &Value) -> Value {
         Op::List(kind) => kind.as_str(),
         Op::Toggle { kind, .. } => kind.as_str(),
         Op::Restart(_) => "mcp",
+        Op::CreateSkill { .. } => "skill",
         Op::Default { .. } => "harness",
         Op::Theme(_) => "theme",
     };
     let rows = |key: &str| raw[key].as_array().cloned().unwrap_or_default();
+    if let Op::CreateSkill { name, .. } = op {
+        // The path the engine wrote, or the one `_rustcode/skills/add` answers.
+        let path = raw["created"].as_str().or_else(|| raw["path"].as_str());
+        return json!({ "created": name, "path": path });
+    }
     match kind {
         "skill" => json!({ "skills": rows("skills").iter().map(|skill| json!({
             "name": skill["name"],
@@ -402,6 +442,24 @@ mod tests {
                 .contains("list, enable, disable")
         );
         assert!(Op::parse(&json!({"kind": "theme", "action": "set"})).is_err());
+        assert_eq!(
+            Op::parse(
+                &json!({"kind": "skill", "action": "create", "name": "notes", "content": "---\nname: notes\n---\n"})
+            ),
+            Ok(Op::CreateSkill {
+                name: "notes".into(),
+                content: "---\nname: notes\n---\n".into()
+            })
+        );
+        assert!(
+            Op::parse(&json!({"kind": "skill", "action": "create", "name": "notes"}))
+                .unwrap_err()
+                .contains("content")
+        );
+        assert!(
+            Op::parse(&json!({"kind": "mcp", "action": "create", "name": "x", "content": "y"}))
+                .is_err()
+        );
         assert!(Op::parse(&json!({"kind": "account", "action": "list"})).is_err());
         assert!(!Op::List("mcp".into()).is_write());
         assert!(Op::Restart("files".into()).is_write());
@@ -426,6 +484,16 @@ mod tests {
         };
         assert_eq!(off.title(&Value::Null), "Turn off skill review");
         assert_eq!(off.hint(), "rustcode skill disable review");
+        let create = Op::CreateSkill {
+            name: "notes".into(),
+            content: "x".into(),
+        };
+        assert!(create.is_write());
+        assert_eq!(create.title(&Value::Null), "Create skill notes");
+        assert_eq!(
+            shaped(&create, &json!({"path": "/u/skills/notes/SKILL.md"})),
+            json!({"created": "notes", "path": "/u/skills/notes/SKILL.md"})
+        );
     }
 
     #[test]

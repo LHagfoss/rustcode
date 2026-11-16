@@ -191,6 +191,10 @@ pub async fn capability(op: Op, json: bool) -> Result<(), String> {
             println!("{what} {name} is {}.", if *enabled { "on" } else { "off" });
         }
         Op::Restart(name) => println!("Restarted MCP server {name}."),
+        Op::CreateSkill { name, .. } => println!(
+            "Created skill {name} at {}.",
+            answer["path"].as_str().unwrap_or("the user skills folder")
+        ),
         Op::Default { .. } => {
             let default = &answer["default"];
             println!(
