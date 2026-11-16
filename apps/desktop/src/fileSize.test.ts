@@ -24,7 +24,7 @@ const OVERSIZED: Record<string, number> = {
   "ui/Settings.tsx": 2200,
   "state/machines.ts": 2100,
   "state/thread.ts": 1800,
-  "ui/Transcript.tsx": 1600,
+  "ui/Transcript.tsx": 1500,
 };
 
 function sources(dir: string): string[] {
