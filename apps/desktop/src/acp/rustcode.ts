@@ -266,6 +266,8 @@ export interface MergeOutcome {
   url?: string;
   waitedSecs: number;
   message: string;
+  /** The thread's link to this pull request told it about the merge first. */
+  announced: boolean;
 }
 
 export function parseMergeOutcome(result: Json | undefined): MergeOutcome | null {
@@ -288,6 +290,7 @@ export function parseMergeOutcome(result: Json | undefined): MergeOutcome | null
     url: str(m.url),
     waitedSecs: num(m.waitedSecs) ?? 0,
     message: str(m.message) ?? "",
+    announced: bool(obj(result)?.announced) ?? false,
   };
 }
 
