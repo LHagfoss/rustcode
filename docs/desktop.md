@@ -1198,11 +1198,16 @@ composer's keys stay outside the table.
   unread, counts in *Needs you*, badges the Dock or notifies the system. It
   comes back when its snooze ends, or when you write in it, with the state it
   reached then and one notification at most (`snoozed` in the store;
-  `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`). Every
+  `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`).
+  Needs you counts distinct threads in the active filter; its inbox opens all
+  projects. Approval and question rows keep their sort position with an amber
+  `warning` left edge. Remote rows always keep their machine tag; local rows
+  show it only when the filtered list spans several machines. Every
   thread row is the same 68px grid of three lines, each a left and a right part
   (`docs/design.md` › Sidebar rows): the title and its state or age, then the
-  project and the computer it runs on with the diff and pull request, then the
-  branch (or what the thread asks of you) with the model and harness mark or
+  working folder (home as `~`, worktrees use their own folder, middle-truncated
+  with the full path on hover) and the computer it runs on with the diff and pull request, then the
+  branch (or what the thread asks of you; no repeated path for non-git folders) with the model and always its harness mark or
   the stack of delegates. *Sidebar rows: Compact* (Settings › Appearance, or
   ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`) draws each thread on
   one 28px line instead: a status dot (needs you, working, failed, finished

@@ -695,7 +695,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   mount; a project's folder (`project:<path>`) is kept. Threads from every paired
   machine share the one list; a thread from another machine carries its glyph
   and name in muted text on its meta line, and a thread from this computer
-  carries none (docs/desktop.md › Several machines). Under the Needs you row
+  names this computer only when the filtered rows span several machines
+  (docs/desktop.md › Several machines). The Needs you badge counts distinct
+  threads in the active filter; opening it still opens the full inbox. Under the Needs you row
   sits the sidebar's toolbar (`ui/SidebarToolbar.tsx`), on by default and
   turned off in Settings › Appearance or ⌘K: a search field that narrows the
   list as it is typed (title, project folder, branch; it opens shut shelves and
@@ -738,12 +740,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `Failed` in `danger`, `Done` in `success` until the thread is opened,
   `Review` in `accent`), else the hour a snoozed thread wakes, else its age
   (`5m`, `3h`, with a check before it when settled).
-  Line 2 (`text-sub`, `fg-muted`): the project's 14px mark and name (under a
-  project heading, the harness instead) and the computer it runs on — another
-  computer always, this one too once a machine is paired; at the right, the
+  Line 2 (`text-sub`, `fg-muted`): the project's 14px mark and the working
+  folder (home as `~`, a worktree's own folder), truncated in the middle with
+  the full path on hover, including under project headings. The computer tag
+  appears for another computer always, for this one only when filtered rows
+  span several machines; at the right, the
   diff (`+N −N` in `success`/`danger`) and the pull request's mark, led by the
   count of running delegates and subagents (a 11px bot and the number, muted,
   with the list in its tooltip; `delegateCount` in `state/agentStack.ts`).
+  Approval and question rows keep their sort position and carry a `warning`
+  left edge. Non-git folders do not repeat their path on line 3.
   Line 3: the branch, or what the thread asks of you in
   `warning` in its place (`in <parent title>` for a delegated row drawn on its
   own); at the right, always the harness mark and the model;
