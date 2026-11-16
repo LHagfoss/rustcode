@@ -3,7 +3,7 @@
 // signs in for a harness: "Sign in" shows the harness's own login command.
 
 import { Popover } from "radix-ui";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { effortLabel, type Harness, type HarnessAccount, type HarnessSnapshot } from "../acp/types";
 import { canOpenTerminal, openInTerminal } from "../lib/native";
 import {
@@ -220,8 +220,8 @@ export function AccountsList({ harness }: { harness: Harness }) {
     });
   };
   return (
-    <div className="ml-11 flex flex-col gap-2 rounded-lg bg-surface-2 px-3 py-2">
-      <span className="text-caption text-fg-muted">Accounts</span>
+    <section className="flex flex-col gap-2">
+      <SectionLabel>Accounts</SectionLabel>
       {/* A named Codex login is its own CODEX_HOME, so it starts without the
           Mac's own ~/.codex config.toml, AGENTS.md or MCP servers. */}
       {harness.id === "codex" && (
@@ -321,8 +321,8 @@ export function AccountsList({ harness }: { harness: Harness }) {
         </button>
       )}
       {discovered.length > 0 && (
-        <div className="flex flex-col gap-1.5 border-border/70 border-t pt-2">
-          <span className="text-caption text-fg-muted">Found on this computer</span>
+        <div className="flex flex-col gap-1.5 pt-1">
+          <span className="text-caption text-fg-faint">Found on this computer</span>
           {discovered.map((found) => (
             <div key={found.config_dir} className="flex items-center gap-2">
               <PathText path={found.config_dir} className="flex-1 text-caption text-fg-muted" />
@@ -339,7 +339,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -398,8 +398,10 @@ function HarnessAdvanced({ harness }: { harness: Harness }) {
     }
   };
   return (
-    <details className="ml-11 text-callout">
-      <summary className="cursor-pointer text-fg-muted">Advanced</summary>
+    <details className="text-callout">
+      <summary className="cursor-pointer font-medium text-caption text-fg-muted hover:text-fg">
+        Command and environment
+      </summary>
       <form
         className="mt-3 flex flex-col gap-3"
         onSubmit={(e) => {
@@ -451,7 +453,6 @@ export function HarnessCard({ harness }: { harness: Harness }) {
   const checking = !!entry && "running" in entry;
   const result = currentResult(harness, entry);
   const check = () => void runHarnessCheck(harness.id);
-  const [open, setOpen] = useState(false);
   // After a Check the status line says where it ended; before one, what the engine detected.
   const status =
     entry && "running" in entry
@@ -474,31 +475,50 @@ export function HarnessCard({ harness }: { harness: Harness }) {
     harness.auth !== "ok" &&
     result?.state !== "ready" &&
     !harness.accounts?.length;
+  const accounts = harness.accounts ?? [];
+  const hasAccounts = !!accountSignIn(harness) || accounts.length > 0;
+  // An account waiting for its sign-in opens the card: that is the next thing to do on it.
+  const [open, setOpen] = useState(() => accounts.some((a) => a.auth === "needs_login"));
+  const statusLine = [
+    status.label,
+    accounts.length ? `${accounts.length} account${accounts.length === 1 ? "" : "s"}` : null,
+    local ? "for the TUI, testing and local models" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <div className="flex flex-col gap-2 px-4 py-3">
+    <div className="flex flex-col gap-3 px-4 py-3">
       <div className="flex items-center gap-3">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-fill">
-          <HarnessIcon id={harness.id} name={harness.name} size={16} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-body">{harness.name}</span>
-            {local && (
-              <span className="rounded-full bg-fill px-1.5 text-caption text-fg-muted leading-[16px]">
-                Local
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 text-caption text-fg-muted">
-            <StatusDot tone={status.tone} />
-            <span className="truncate">
-              {local ? `${status.label} · for the TUI, testing and local models` : status.label}
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          aria-label={`${open ? "Hide" : "Show"} ${harness.name} settings`}
+          className="group -my-1 -ml-1 flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1 pl-1 text-left"
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-fill">
+            <HarnessIcon id={harness.id} name={harness.name} size={16} />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold text-body">{harness.name}</span>
+              <ChevronRight
+                size={13}
+                className={cx(
+                  "text-fg-faint transition-transform group-hover:text-fg-muted",
+                  open && "rotate-90",
+                )}
+              />
             </span>
-          </div>
-        </div>
+            <span className="flex items-center gap-1.5 text-caption text-fg-muted">
+              <StatusDot tone={status.tone} />
+              <span className="truncate">{statusLine}</span>
+            </span>
+          </span>
+        </button>
         {signIn && <SignIn harness={harness} />}
         {!local && (
-          <Action onClick={check} disabled={checking}>
+          <Action quiet size="sm" onClick={check} disabled={checking}>
             {checking && <Spinner size={10} />}
             {entry && "running" in entry ? CHECK_STEP_LABEL[entry.running] : "Check"}
           </Action>
@@ -512,7 +532,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
                 : undefined
           }
         >
-          <span>
+          <span className="flex">
             <Switch
               label={`Use ${harness.name}`}
               checked={harness.enabled}
@@ -536,10 +556,6 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           <CopyButton text={harness.install_hint} />
         </div>
       )}
-      {(accountSignIn(harness) || (harness.accounts?.length ?? 0) > 0) && <AccountsList harness={harness} />}
-      {!harness.builtin && (
-        <HarnessAdvanced key={JSON.stringify([harness.command, harness.env_names])} harness={harness} />
-      )}
       {/* A failure's own words; every other end is already the status line. */}
       {(result ? result.state === "error" : harness.error) && !checking && (
         <ErrorDetails
@@ -548,21 +564,14 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           detail={result ? result.text : harness.error}
         />
       )}
-      <div className="ml-11">
-        <button
-          type="button"
-          onClick={() => setOpen(!open)}
-          aria-expanded={open}
-          className="flex items-center gap-1 text-caption text-fg-muted hover:text-fg"
-        >
-          <ChevronRight size={12} className={cx("transition-transform", open && "rotate-90")} />
-          Details
-        </button>
-        {open && (
-          <div className="mt-2 flex flex-col gap-2">
+      {open && (
+        <div className="ml-11 flex flex-col gap-4 pb-1">
+          {hasAccounts && <AccountsList harness={harness} />}
+          <section className="flex flex-col gap-2">
+            <SectionLabel>Details</SectionLabel>
             {!local && harness.command.length > 0 && (
               <div className="flex items-center gap-2 text-caption">
-                <span className="text-fg-muted">Runs</span>
+                <span className="w-20 shrink-0 text-fg-faint">Runs</span>
                 <code
                   className="selectable truncate font-mono text-fg-muted"
                   title={commandLine(harness.command)}
@@ -573,7 +582,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
             )}
             {!local && !!harness.env_names?.length && (
               <div className="flex items-center gap-2 text-caption">
-                <span className="text-fg-muted">Environment</span>
+                <span className="w-20 shrink-0 text-fg-faint">Environment</span>
                 <span className="selectable truncate text-fg-muted" title={harness.env_names.join(", ")}>
                   {harness.env_names.join(", ")}
                 </span>
@@ -596,26 +605,33 @@ export function HarnessCard({ harness }: { harness: Harness }) {
                   </span>
                 </li>
               ))}
-              {!local && (
-                <li className="col-span-2 text-caption text-fg-faint">
-                  Runs with its own tools and permission rules; RustCode's sandbox does not apply.
-                </li>
-              )}
             </ul>
-            {custom && (
-              <button
-                type="button"
-                onClick={() => void removeHarness(harness.id)}
-                className="self-start text-caption text-danger hover:underline"
-              >
-                Remove
-              </button>
+            {!local && (
+              <p className="text-caption text-fg-faint">
+                Runs with its own tools and permission rules; RustCode's sandbox does not apply.
+              </p>
             )}
-          </div>
-        )}
-      </div>
+          </section>
+          {!harness.builtin && (
+            <HarnessAdvanced key={JSON.stringify([harness.command, harness.env_names])} harness={harness} />
+          )}
+          {custom && (
+            <button
+              type="button"
+              onClick={() => void removeHarness(harness.id)}
+              className="self-start text-caption text-danger hover:underline"
+            >
+              Remove harness
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return <span className="font-medium text-caption text-fg-muted">{children}</span>;
 }
 
 /** Where the cards will be: each one's icon, name and status line, and its switch. */

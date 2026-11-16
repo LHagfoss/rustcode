@@ -608,7 +608,7 @@ export function Switch({
     >
       <span
         className={cx(
-          "absolute inset-y-0 left-0 w-7 rounded-full bg-knob shadow-knob transition-transform duration-200 ease-snappy",
+          "absolute top-0.5 left-0.5 h-4 w-6 rounded-full bg-knob shadow-knob transition-transform duration-200 ease-snappy",
           checked ? "translate-x-4" : "translate-x-0",
         )}
       />

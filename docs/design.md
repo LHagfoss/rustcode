@@ -165,8 +165,8 @@ own fill marks the range or the state the control is off in (`bg-fill`, or
 this: pressed icon buttons (`bg-fill-strong`), primary actions (`bg-fg
 text-bg`) and native checkboxes, whose check is the mark rather than a knob.
 
-Every knob is 24 px, except a switch's: a 28×20 px pill on a 44×20 px track,
-exactly as tall as the track (no overhang), travelling 0 → 16 px, and both the
+Every knob is 24 px, except a switch's: a 24×16 px pill inset 2 px inside a
+44×20 px track (the track shows around it), travelling 0 → 16 px, and both the
 knob and the track's fill answer a toggle over 200 ms. The button's own box is
 the track's 20 px, so a switch in a Settings row does not make the row taller
 than its neighbours.
