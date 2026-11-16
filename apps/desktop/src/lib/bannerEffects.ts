@@ -157,6 +157,22 @@ export function applyEffect(
   }
 }
 
+/**
+ * A print effect (or none), then a baked blur (or none): what the worker, or the page where there
+ * is no worker, does to a picture's pixels. A new array; the source untouched.
+ */
+export function processPixels(
+  src: Uint8ClampedArray,
+  width: number,
+  height: number,
+  effect: PixelEffect | null,
+  dark: boolean,
+  blur: number,
+): Uint8ClampedArray {
+  const printed = effect ? applyEffect(effect, src, width, height, dark) : new Uint8ClampedArray(src);
+  return blur > 0 ? boxBlur(printed, width, height, blur) : printed;
+}
+
 // ---------------------------------------------------------------- blur
 
 /**
