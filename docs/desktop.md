@@ -1549,6 +1549,14 @@ composer's keys stay outside the table.
   Marks go to `_rustcode/session/status`; on an engine without it the app
   keeps them itself. `_meta.rustcode.status` from the engine (a merged
   branch's auto-done) updates the chip.
+- **Starting a delegate** asks with a plan, not a paragraph (`StartPlan` in
+  `ui/Links.tsx`): a row per agent it starts (`Claude Code · Opus 5.5 ·
+  medium`), with `usually 8m` beside it when at least three delegates have
+  finished on that harness and model (the median time worked,
+  `typicalRun` in `state/delegates.ts`); where it works (its own worktree
+  or this checkout); its access; and what happens when it is done (reports
+  back, or a thread of yours). Don't Start, Start, and Start, and Allow for
+  This Thread answer it. Nothing starts on a timer: a start is an approval.
 - **Delegate lanes.** The overview's Delegates section switches between Tree
   and Lanes (kept in `rustcode.delegatesView`). Lanes draws one row per
   harness and model and a card per delegate, at any depth, in the order the

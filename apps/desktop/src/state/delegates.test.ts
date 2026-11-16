@@ -19,6 +19,7 @@ import {
   runningAgents,
   runningSubagents,
   timeLabel,
+  typicalRun,
 } from "./delegates";
 import { type Link, liveState } from "./orchestration";
 import type { TranscriptItem } from "./thread";
@@ -435,6 +436,38 @@ describe("RustCode's own subagents", () => {
     expect(runningSubagents([spawn])).toEqual([]);
     const rows = runningAgents([agent("running", 1), agent("completed", 2)]);
     expect(rows.map((a) => a.name)).toEqual(["Explore"]);
+  });
+});
+
+describe("a delegate's typical run", () => {
+  const done = (target: string, workedMs: number, extra: Partial<Link> = {}) =>
+    link("root", target, {
+      state: "done",
+      harnessName: "Claude Code",
+      model: "Opus 5.5",
+      workedMs,
+      ...extra,
+    });
+
+  test("the median of the finished runs on that harness and model", () => {
+    const links = [
+      done("a", 4 * MINUTE),
+      done("b", 10 * MINUTE),
+      done("c", 6 * MINUTE),
+      done("d", 8 * MINUTE),
+    ];
+    expect(typicalRun("Claude Code · work · Opus 5.5 · medium", links)).toEqual({ ms: 7 * MINUTE, runs: 4 });
+  });
+
+  test("leaves out other harnesses, other models, and runs that did not finish", () => {
+    const links = [
+      done("a", MINUTE),
+      done("b", MINUTE),
+      done("c", MINUTE, { model: "Sonnet 5.5" }),
+      done("d", MINUTE, { harnessName: "Codex" }),
+      done("e", MINUTE, { state: "failed" }),
+    ];
+    expect(typicalRun("Claude Code · Opus 5.5", links)).toBeUndefined();
   });
 });
 

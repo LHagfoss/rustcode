@@ -490,6 +490,44 @@ export function costLabel(usd: number | undefined, estimated = false): string {
   return `${estimated ? "≈" : ""}${formatCost(usd)}`;
 }
 
+/** How long a delegate on one agent usually works, from the ones that finished before. */
+export interface TypicalRun {
+  /** The median time worked (ms). */
+  ms: number;
+  /** How many finished delegates it is read from. */
+  runs: number;
+}
+
+/** Fewer finished runs than this say nothing worth showing as "usually". */
+export const TYPICAL_MIN_RUNS = 3;
+
+/**
+ * How long a new delegate on `label` (`Claude Code · work · Opus 5.5 · medium`, as the approval
+ * names it) usually works: the median of the delegates that finished on that harness and model,
+ * from the link book. Undefined below {@link TYPICAL_MIN_RUNS}, so a guess from one run is never
+ * shown as a habit.
+ */
+export function typicalRun(label: string, links: readonly Link[]): TypicalRun | undefined {
+  const parts = label.split(" · ");
+  const harness = parts[0];
+  const times = links
+    .filter(
+      (link) =>
+        link.started &&
+        link.state === "done" &&
+        link.workedMs !== undefined &&
+        link.workedMs > 0 &&
+        (link.harnessName ?? link.harness) === harness &&
+        (!link.model || parts.includes(link.model)),
+    )
+    .map((link) => link.workedMs!)
+    .sort((a, b) => a - b);
+  if (times.length < TYPICAL_MIN_RUNS) return undefined;
+  const mid = Math.floor(times.length / 2);
+  const ms = times.length % 2 ? times[mid]! : (times[mid - 1]! + times[mid]!) / 2;
+  return { ms, runs: times.length };
+}
+
 /** One delegate as a card in the lanes view: where it ran, in what order, and how it stands. */
 export interface LaneCard {
   id: string;

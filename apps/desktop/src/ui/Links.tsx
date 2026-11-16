@@ -18,11 +18,12 @@ import {
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
-import { runningAgents, runningSubagents } from "../state/delegates";
+import { runningAgents, runningSubagents, typicalRun } from "../state/delegates";
 import { linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
-import { type Link, type LinkState, linkStatusText } from "../state/orchestration";
+import { type GrantAsk, type Link, type LinkState, linkStatusText } from "../state/orchestration";
 import { modeLabel } from "../state/permissions";
 import { openSettings, selectThread, setView, useApp } from "../state/store";
+import { formatDuration } from "../state/thread";
 import { AgentRow, SubagentRow, useNow } from "./AgentViews";
 import { GrantWhy } from "./GrantWhy";
 import { cx, Pill, Tooltip } from "./primitives";
@@ -150,6 +151,57 @@ function WorkingFor({ link }: { link: Link }) {
   );
 }
 
+/**
+ * What a start will do, as a plan rather than a paragraph: one row per agent it starts (with how
+ * long a delegate there usually works, read from the ones that finished), where it works, at what
+ * access, and what happens when it is done. Nothing starts until the user says so: a start is an
+ * approval, so the card never counts down to one on its own.
+ */
+function StartPlan({ grant }: { grant: GrantAsk }) {
+  const links = useApp((s) => s.links.links);
+  const agents = grant.harnesses?.length ? grant.harnesses : ["The default agent"];
+  const typical = useMemo(() => agents.map((label) => typicalRun(label, links)), [agents, links]);
+  const row = "flex items-baseline justify-between gap-3 py-1.5";
+  return (
+    <div className="flex flex-col divide-y divide-border/60 text-callout">
+      {agents.map((label, i) => (
+        <div key={label} className={row}>
+          <span className="shrink-0 text-fg-muted">{i === 0 ? "Runs on" : ""}</span>
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="min-w-0 truncate font-medium text-fg">{label}</span>
+            {typical[i] && (
+              <Tooltip label={`The median of ${typical[i]!.runs} delegates that finished there`}>
+                <span className="shrink-0 text-caption text-fg-faint tabular">
+                  usually {formatDuration(typical[i]!.ms)}
+                </span>
+              </Tooltip>
+            )}
+          </span>
+        </div>
+      ))}
+      <div className={row}>
+        <span className="shrink-0 text-fg-muted">Works in</span>
+        <span className="min-w-0 truncate text-fg">
+          {grant.worktree ? (agents.length > 1 ? "A worktree each" : "Its own worktree") : "This checkout"}
+        </span>
+      </div>
+      <div className={row}>
+        <span className="shrink-0 text-fg-muted">Access</span>
+        <span className="min-w-0 truncate text-fg">
+          {modeLabel(grant.access ?? "ask")}
+          {grant.standalone ? "" : ", never more than this thread"}
+        </span>
+      </div>
+      <div className={row}>
+        <span className="shrink-0 text-fg-muted">When done</span>
+        <span className="min-w-0 truncate text-fg">
+          {grant.standalone ? "A thread of yours; nothing comes back here" : "Reports back to this thread"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /** A thread asking whether it may reach another one: Allow for This Thread, Allow Once, Don't Allow. */
 export function GrantDialog() {
   const grant = useApp((s) => s.grant);
@@ -176,19 +228,7 @@ export function GrantDialog() {
           </Dialog.Title>
           <GrantWhy grant={grant} />
           <div className="flex flex-col gap-1.5 text-callout text-fg-muted">
-            {starts && (
-              <span>
-                {/* The card says which of the two a thread will be: the agent's
-                    sub-task, or a thread of the user's own at the top level. */}
-                <span className="font-medium text-fg">{grant.standalone ? "New thread" : "Delegate"}</span>
-                {grant.standalone ? ", yours to follow up: " : ": "}a new thread
-                {grant.harnesses?.length ? ` on ${grant.harnesses.join(", ")}` : ""}
-                {grant.worktree ? ", each in its own worktree," : ""} gets this as its first message.{" "}
-                {grant.standalone
-                  ? `It runs at ${modeLabel(grant.access ?? "ask")}, with its own approvals and sandbox, and nothing comes back to this thread.`
-                  : `It runs at ${modeLabel(grant.access ?? "ask")}, never more than this thread, with its own approvals and sandbox.`}
-              </span>
-            )}
+            {starts && <StartPlan grant={grant} />}
             {grant.kind === "message" && (
               <span>The message arrives in that thread as yours would, headed with where it is from.</span>
             )}
@@ -217,10 +257,10 @@ export function GrantDialog() {
             {grant.detail}
           </pre>
           <div className="flex flex-wrap justify-end gap-2">
-            <Pill onClick={() => resolveGrant("deny")}>Don’t Allow</Pill>
-            <Pill onClick={() => resolveGrant("once")}>Allow Once</Pill>
+            <Pill onClick={() => resolveGrant("deny")}>{starts ? "Don’t Start" : "Don’t Allow"}</Pill>
+            <Pill onClick={() => resolveGrant("once")}>{starts ? "Start" : "Allow Once"}</Pill>
             <Pill prominent autoFocus onClick={() => resolveGrant("always")}>
-              Allow for This Thread
+              {starts ? "Start, and Allow for This Thread" : "Allow for This Thread"}
             </Pill>
           </div>
         </Dialog.Content>
