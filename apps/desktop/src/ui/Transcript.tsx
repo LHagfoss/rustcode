@@ -299,10 +299,19 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (item.kind === "user") {
     const body = lines(item.text, 60) * BODY_LINE;
     const text = messageCollapses(body) ? COLLAPSED_MESSAGE_HEIGHT + SHOW_FULL_PILL : body;
-    const pictures = item.attachments?.length || splitImageMarkers(item.text).images;
-    return (pictures ? ATTACHMENT_CHIPS : 0) + BUBBLE_PADDING * 2 + text + META_LINE;
+    const sent = item.attachments ?? [];
+    const pictures = sent.some((a) => a.kind === "image") || splitImageMarkers(item.text).paths.length > 0;
+    const above = pictures
+      ? THUMBNAIL_ROW
+      : sent.length || splitImageMarkers(item.text).lost
+        ? ATTACHMENT_CHIPS
+        : 0;
+    return above + BUBBLE_PADDING * 2 + text + META_LINE;
   }
-  return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
+  const text = "text" in item ? item.text : "";
+  // A reply's pictures take their placeholder's height each (ui/MarkdownMedia.tsx), not a line.
+  const pictures = text.includes("![") ? (text.match(MARKDOWN_PICTURE)?.length ?? 0) : 0;
+  return Math.min(600, 40 + text.length / 4) + pictures * PICTURE_PLACEHOLDER;
 }
 
 /** The lines a string wraps to in the lane, near enough for an estimate. */
@@ -398,6 +407,11 @@ const BUBBLE_PADDING = 12;
 const BODY_LINE = 23;
 const META_LINE = 24;
 const ATTACHMENT_CHIPS = 32;
+/** A row of picture thumbnails (ui/Rows.tsx `THUMBNAIL`, 120px) and the 6px under it. */
+const THUMBNAIL_ROW = 126;
+/** A reply's picture while it loads (ui/MarkdownMedia.tsx, 240px) and the paragraph gap after it. */
+const PICTURE_PLACEHOLDER = 256;
+const MARKDOWN_PICTURE = /!\[[^\]\n]*\]\([^)\n]+\)/g;
 const THOUGHT_TAIL_LINES = 5;
 /** The "Show full message" pill a folded bubble ends with, and its air above it. */
 const SHOW_FULL_PILL = 30;

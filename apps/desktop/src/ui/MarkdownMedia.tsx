@@ -20,8 +20,13 @@ import { cx, Pill } from "./primitives";
 
 // ---------------------------------------------------------------- pictures
 
+/** A picture read and decoded, with its own size, so it is laid out at that size from its first frame. */
+type Picture = { url: string; width: number; height: number };
+
 /** Read pictures by their path and folders, kept while the app runs (at most 64). */
-const pictures = new Map<string, Promise<string>>();
+const pictures = new Map<string, Promise<Picture>>();
+/** The ones already decoded: a row that mounts again (a thread opened again, a scroll back) draws them at once. */
+const decoded = new Map<string, Picture>();
 
 /** The open thread's folders: its own folder, then its worktree's. */
 function threadRoots(): string[] {
@@ -32,15 +37,36 @@ function threadRoots(): string[] {
   );
 }
 
-function loadPicture(path: string, roots: string[]): Promise<string> {
-  const key = `${roots.join("\0")}\0${path}`;
+function pictureKey(path: string, roots: string[]): string {
+  return `${roots.join("\0")}\0${path}`;
+}
+
+async function decode(url: string): Promise<Picture> {
+  const img = new Image();
+  img.src = url;
+  // A picture the web view cannot decode still shows its own error below, from the <img>.
+  await img.decode().catch(() => undefined);
+  return { url, width: img.naturalWidth, height: img.naturalHeight };
+}
+
+function loadPicture(path: string, roots: string[]): Promise<Picture> {
+  const key = pictureKey(path, roots);
   let hit = pictures.get(key);
   if (!hit) {
-    hit = threadImage(path, roots).then((f) => `data:${f.mimeType};base64,${f.data}`);
+    hit = threadImage(path, roots)
+      .then((f) => decode(`data:${f.mimeType};base64,${f.data}`))
+      .then((picture) => {
+        decoded.set(key, picture);
+        return picture;
+      });
     // A failure is not kept: the file may appear later.
     hit.catch(() => pictures.delete(key));
     pictures.set(key, hit);
-    if (pictures.size > 64) pictures.delete(pictures.keys().next().value as string);
+    if (pictures.size > 64) {
+      const oldest = pictures.keys().next().value as string;
+      pictures.delete(oldest);
+      decoded.delete(oldest);
+    }
   }
   return hit;
 }
@@ -92,35 +118,55 @@ export function BlockedImage({ path, reason }: { path: string; reason: string })
 export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const path = src ? picturePath(src) : null;
   const direct = src && !path && /^(https?:|data:image\/)/i.test(src) ? src : null;
-  const [state, setState] = useState<{ url?: string; error?: string }>({});
+  const [state, setState] = useState<{ picture?: Picture; error?: string }>(() => ({
+    picture: path ? decoded.get(pictureKey(path, threadRoots())) : undefined,
+  }));
   useEffect(() => {
     if (!path) return;
     if (!hasShell()) {
       setState({ error: "Pictures from files show in the desktop app." });
       return;
     }
+    const roots = threadRoots();
+    const ready = decoded.get(pictureKey(path, roots));
+    if (ready) {
+      setState({ picture: ready });
+      return;
+    }
     setState({});
     let live = true;
-    loadPicture(path, threadRoots()).then(
-      (url) => live && setState({ url }),
+    loadPicture(path, roots).then(
+      (picture) => live && setState({ picture }),
       (e) => live && setState({ error: e instanceof Error ? e.message : String(e) }),
     );
     return () => {
       live = false;
     };
   }, [path]);
-  const url = direct ?? state.url;
+  const picture = state.picture;
+  const url = direct ?? picture?.url;
   if (state.error && path) {
     const actionPath = isAbsolute(path) || path.startsWith("~/") ? path : join(threadRoots()[0] ?? "", path);
     return <BlockedImage path={actionPath} reason={state.error} />;
   }
   if (!url) {
     if (!state.error && !src) return null;
+    if (state.error) {
+      return (
+        <span className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-fill-subtle px-2 py-1 align-middle text-callout text-fg-muted">
+          <ImageOff size={12} className="shrink-0" />
+          <span className="truncate">{`${alt || path}: ${state.error}`}</span>
+        </span>
+      );
+    }
+    // Still reading: a picture-sized box, not a one-line label, so the reply does not jump by a
+    // picture's height when it arrives (`PICTURE_PLACEHOLDER` in ui/Transcript.tsx's estimate).
     return (
-      <span className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-fill-subtle px-2 py-1 align-middle text-callout text-fg-muted">
-        {state.error ? <ImageOff size={12} className="shrink-0" /> : null}
-        <span className="truncate">{state.error ? `${alt || path}: ${state.error}` : alt || "Picture"}</span>
-      </span>
+      <span
+        role="img"
+        aria-label={alt ? `Loading picture: ${alt}` : "Loading picture"}
+        className="block h-[240px] w-full max-w-[420px] rounded-lg bg-fill-subtle"
+      />
     );
   }
   return (
@@ -133,10 +179,12 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
       <img
         src={url}
         alt={alt ?? ""}
+        // Its own size, read when it was decoded: the box is right before the pixels are.
+        width={picture?.width || undefined}
+        height={picture?.height || undefined}
         onError={() => setState({ error: "Could not display this picture." })}
-        loading="lazy"
         draggable={false}
-        className="max-h-[360px] max-w-full rounded-lg object-contain"
+        className="h-auto max-h-[360px] max-w-full rounded-lg object-contain"
       />
     </button>
   );
