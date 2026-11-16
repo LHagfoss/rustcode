@@ -2,8 +2,9 @@
 //! asked by the app, which is a web view with no filesystem of its own.
 //!
 //! `read` answers a folder's git facts (remote, branch, default branch),
-//! `create` makes an empty folder a repository, and `clone` runs `git clone`
-//! with a bounded wait. The app keeps the project list itself; nothing here
+//! `browse` lists the folders in one (a paired machine's disk is not this
+//! app's to open in a file dialog), `create` makes an empty folder a
+//! repository, and `clone` runs `git clone` with a bounded wait. The app keeps the project list itself; nothing here
 //! writes to it, and nothing here deletes a folder.
 
 use std::path::{Path, PathBuf};
@@ -27,6 +28,25 @@ pub(crate) const MAX_NAME_CHARS: usize = 120;
 pub(crate) struct ProjectReadRequest {
     pub path: String,
 }
+
+/// `_rustcode/project/browse`: the folders directly in `path`, the home
+/// folder when it is omitted.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/project/browse", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProjectBrowseRequest {
+    #[serde(default)]
+    pub path: Option<String>,
+    /// List folders whose name starts with a dot; false by default.
+    #[serde(default)]
+    pub hidden: Option<bool>,
+}
+
+/// The most folders one browse answers: a folder of thousands (a cache, a
+/// mail spool) is cut rather than sent whole.
+pub(crate) const MAX_BROWSE_FOLDERS: usize = 500;
 
 /// `_rustcode/project/create`: make `path` a folder, and a repository when it
 /// is not one already.
@@ -144,6 +164,61 @@ pub(crate) fn read(request: ProjectReadRequest) -> Result<Value, String> {
     Ok(facts(&folder(&request.path)?))
 }
 
+pub(crate) fn browse(request: ProjectBrowseRequest) -> Result<Value, String> {
+    let home = crate::service::home_dir().ok();
+    let asked = match request
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        Some("~") | None => home
+            .clone()
+            .ok_or("this computer has no home folder; pass path")?,
+        Some(path) => match (path.strip_prefix("~/"), &home) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => PathBuf::from(path),
+        },
+    };
+    let path = folder(&asked.to_string_lossy())?;
+    let hidden = request.hidden.unwrap_or(false);
+    let entries = std::fs::read_dir(&path)
+        .map_err(|error| format!("{} could not be read: {error}", path.display()))?;
+    let mut folders: Vec<(String, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            // A link to a folder is followed, as a file dialog does.
+            std::fs::metadata(entry.path()).is_ok_and(|meta| meta.is_dir())
+        })
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            (hidden || !name.starts_with('.')).then(|| (name, entry.path()))
+        })
+        .collect();
+    folders.sort_by_key(|(name, _)| name.to_lowercase());
+    let truncated = folders.len() > MAX_BROWSE_FOLDERS;
+    folders.truncate(MAX_BROWSE_FOLDERS);
+    let listed: Vec<Value> = folders
+        .into_iter()
+        .map(|(name, entry)| {
+            json!({
+                "name": name,
+                "path": entry,
+                // A repository's own `.git`: no git run per row.
+                "is_git": entry.join(".git").exists(),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "path": path,
+        "parent": path.parent(),
+        "home": home,
+        "is_git": crate::worktrees::main_checkout(&path).is_some(),
+        "folders": listed,
+        "truncated": truncated,
+    }))
+}
+
 pub(crate) fn create(request: ProjectCreateRequest) -> Result<Value, String> {
     let path = new_folder(&request.path)?;
     let created = !path.exists();
@@ -238,6 +313,56 @@ mod tests {
             ],
         ] {
             crate::worktrees::git(dir, &args).unwrap();
+        }
+    }
+
+    #[test]
+    fn browse_lists_the_folders_in_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("beta")).unwrap();
+        std::fs::create_dir(dir.path().join("Alpha")).unwrap();
+        std::fs::create_dir(dir.path().join(".cache")).unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
+        repo(&dir.path().join("beta"));
+        let answer = browse(ProjectBrowseRequest {
+            path: Some(dir.path().to_string_lossy().into_owned()),
+            hidden: None,
+        })
+        .unwrap();
+        let names: Vec<&str> = answer["folders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|folder| folder["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Alpha", "beta"]);
+        assert_eq!(answer["folders"][1]["is_git"], true);
+        assert_eq!(answer["folders"][0]["is_git"], false);
+        assert_eq!(answer["truncated"], false);
+        assert!(answer["parent"].is_string());
+
+        let all = browse(ProjectBrowseRequest {
+            path: Some(dir.path().to_string_lossy().into_owned()),
+            hidden: Some(true),
+        })
+        .unwrap();
+        assert_eq!(all["folders"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn browse_refuses_what_is_not_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        std::fs::write(&file, "x").unwrap();
+        for path in [file.to_string_lossy().into_owned(), "relative/path".to_owned()] {
+            assert!(
+                browse(ProjectBrowseRequest {
+                    path: Some(path.clone()),
+                    hidden: None,
+                })
+                .is_err(),
+                "{path}"
+            );
         }
     }
 
