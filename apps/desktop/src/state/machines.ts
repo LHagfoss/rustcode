@@ -970,13 +970,13 @@ export async function startMachines(): Promise<void> {
  * instead of a spinner. A machine that is away must never hold the page: the
  * shell reads and writes its own files, so a few seconds is generous.
  */
-const SHELL_READ_MS = 10_000;
+export const SHELL_READ_MS = 10_000;
 /** Bonjour browses for a few seconds; the rest is the overlay rows. */
 const DISCOVER_MS = 20_000;
 /** `rustcode server status --json` starts a process. */
 const SERVER_STATUS_MS = 15_000;
 /** One task per machine runs in parallel, each with its own connect timeout. */
-const PROBE_MS = 45_000;
+export const PROBE_MS = 45_000;
 
 /** Read the machines and their live state from the shell. */
 export async function refreshMachines(): Promise<void> {
@@ -1999,76 +1999,6 @@ export async function probeMachineRoutes(machine?: Pick<Machine, "id">): Promise
 
 /** How a machine paired over SSH is reached: its network address with SSH as the fallback, or SSH only. */
 export type SshVia = "auto" | "ssh";
-
-/** What Add route sends: an SSH host, or a network address. */
-export type NewRoute =
-  | { kind: "ssh"; destination: string; gatewayPort?: number | null }
-  | { kind: "address"; address: string };
-
-/**
- * Add a route to a saved machine and test it. Answers the error to show beside the form, or null
- * when it was added.
- */
-export async function addMachineRoute(machine: Pick<Machine, "id">, route: NewRoute): Promise<string | null> {
-  try {
-    const machines = await shellCallWithin<Machine[]>(
-      PROBE_MS,
-      "machines_route_add",
-      route.kind === "ssh"
-        ? {
-            id: machine.id,
-            ssh: route.destination.trim(),
-            sshPort: null,
-            identity: null,
-            gatewayPort: route.gatewayPort ?? null,
-            address: null,
-          }
-        : {
-            id: machine.id,
-            ssh: null,
-            sshPort: null,
-            identity: null,
-            gatewayPort: null,
-            address: route.address.trim(),
-          },
-    );
-    useMachines.setState({ machines });
-    return null;
-  } catch (error) {
-    return errorText(error);
-  }
-}
-
-/** Remove one route of a machine. */
-export async function removeMachineRoute(machine: Pick<Machine, "id">, address: string): Promise<void> {
-  try {
-    const machines = await shellCallWithin<Machine[]>(SHELL_READ_MS, "machines_route_remove", {
-      id: machine.id,
-      address,
-    });
-    useMachines.setState({ machines });
-  } catch (error) {
-    toast(errorText(error), "error");
-  }
-}
-
-/** Turn one route of a machine on or off; at least one stays on. */
-export async function setMachineRouteOff(
-  machine: Pick<Machine, "id">,
-  address: string,
-  off: boolean,
-): Promise<void> {
-  try {
-    const machines = await shellCallWithin<Machine[]>(SHELL_READ_MS, "machines_route_set_off", {
-      id: machine.id,
-      address,
-      off,
-    });
-    useMachines.setState({ machines });
-  } catch (error) {
-    toast(errorText(error), "error");
-  }
-}
 
 /** Pause new threads on a machine, or let them start there again. */
 export async function setMachinePaused(machine: Pick<Machine, "id">, paused: boolean): Promise<void> {

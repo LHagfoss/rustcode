@@ -14,8 +14,8 @@ import { useEffect, useState } from "react";
 import type { Harness } from "../acp/types";
 import { devicePlatform, deviceRoute, deviceStatus, machineAccess, versionLine } from "../state/deviceRows";
 import { accountState } from "../state/harness";
+import { addMachineRoute, removeMachineRoute, setMachineRouteOff } from "../state/machineRoutes";
 import {
-  addMachineRoute,
   disconnectMachine,
   lastSeen,
   localAppVersion,
@@ -28,13 +28,11 @@ import {
   probeTone,
   reconnectMachine,
   removeMachine,
-  removeMachineRoute,
   routeLabel,
   selfName,
   setMachineDisplayName,
   setMachineIcon,
   setMachinePaused,
-  setMachineRouteOff,
   useMachines,
 } from "../state/machines";
 import { revokeRemoteDevice } from "../state/remoteAccess";
@@ -52,7 +50,7 @@ import { openSettings, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
-import { cx, noTextHelpers, Segments, Spinner, Switch } from "./primitives";
+import { cx, noTextHelpers, Segments, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, Chip, ErrorDetails, fieldClass, Group, Row, SectionTitle } from "./settingsKit";
 import { SYNC_COLUMNS, syncRows } from "./syncRows";
 
@@ -261,20 +259,23 @@ function Routes({ machine }: { machine: Machine }) {
             disabled={!route.off && on <= 1}
             onChange={(next) => void setMachineRouteOff(machine, route.address, !next)}
           />
-          <Action
-            quiet
-            size="sm"
-            aria-label={`Remove ${route.address}`}
-            title={
+          <Tooltip
+            label={
               route.manual
                 ? "Remove this route"
                 : "Remove this route. The machine reports it again on its next connection; turn it off to keep it unused."
             }
-            disabled={!route.off && on <= 1}
-            onClick={() => void removeMachineRoute(machine, route.address)}
           >
-            <Trash2 size={12} />
-          </Action>
+            <Action
+              quiet
+              size="sm"
+              aria-label={`Remove ${route.address}`}
+              disabled={!route.off && on <= 1}
+              onClick={() => void removeMachineRoute(machine, route.address)}
+            >
+              <Trash2 size={12} />
+            </Action>
+          </Tooltip>
         </Row>
       ))}
       {adding && <AddRoute machine={machine} onDone={() => setAdding(false)} />}
@@ -311,7 +312,7 @@ function AddRoute({ machine, onDone }: { machine: Machine; onDone: () => void })
     else onDone();
   };
   return (
-    <div className="flex flex-col gap-2 px-3 py-2.5">
+    <div className="flex flex-col gap-2 px-3 py-3">
       <div className="flex items-center gap-2">
         <Segments
           value={method}
@@ -351,7 +352,6 @@ function AddRoute({ machine, onDone }: { machine: Machine; onDone: () => void })
             onChange={(event) => setPort(event.target.value.replace(/\D/g, "").slice(0, 5))}
             placeholder="17879"
             aria-label="RustCode's port there"
-            title="RustCode's port on that machine (remote.port there)"
             disabled={busy}
             inputMode="numeric"
             {...noTextHelpers}
