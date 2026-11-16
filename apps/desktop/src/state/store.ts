@@ -47,6 +47,7 @@ export {
 } from "./threadActions";
 
 import {
+  clearSettledNotifications,
   clearStatusMark,
   reconcileStatusMarks,
   sessionById,
@@ -2154,6 +2155,7 @@ function onSessionUpdate(params: JsonObject) {
   }
   const status = statusInUpdate(params);
   if (status) {
+    if (status === "done") clearSettledNotifications([sessionId]);
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, status } : x)) }));
     clearStatusMark(sessionId);
     // A lost turn on this thread is settled now if the machine says it stopped running there.

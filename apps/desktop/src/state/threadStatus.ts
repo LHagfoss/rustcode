@@ -24,6 +24,7 @@ import {
   useApp,
   without,
 } from "./store";
+import { isContinueMessage, isWakeMessage } from "./thread";
 import { splitThreadKey } from "./threadKeys";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
@@ -96,6 +97,27 @@ export function clearStatusMark(id: string) {
   if (_gone) saveMarks(rest);
 }
 
+/** Settled threads keep user messages, but no longer wait for automatic notices. */
+export function clearSettledNotifications(ids: string[]): void {
+  clearWaitingLinks(ids.filter((id) => !threadIsRemote(id)));
+  const wanted = new Set(ids);
+  set((s) => ({
+    threads: Object.fromEntries(
+      Object.entries(s.threads).map(([id, thread]) => [
+        id,
+        wanted.has(id)
+          ? {
+              ...thread,
+              queue: thread.queue.filter((row) => !isContinueMessage(row.text) && !isWakeMessage(row.text)),
+            }
+          : thread,
+      ]),
+    ),
+    finished: Object.fromEntries(Object.entries(s.finished).filter(([id]) => !wanted.has(id))),
+    failed: Object.fromEntries(Object.entries(s.failed).filter(([id]) => !wanted.has(id))),
+  }));
+}
+
 /** Mark a thread for review, done, or back to idle; stored by the engine when it can, else by the app. */
 export function setThreadStatus(id: string, status: "review" | "done" | "idle"): Promise<number> {
   return setThreadsStatus([id], status);
@@ -106,7 +128,7 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  * Whatever fails is reported in one toast for the selection, not one per thread.
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
-  if (status === "done") clearWaitingLinks(ids.filter((id) => !threadIsRemote(id)));
+  if (status === "done") clearSettledNotifications(ids);
   const remote = ids.filter(threadIsRemote);
   const remoteRequests = remote.map(async (id) => {
     const conn = connectionForThread(id);
