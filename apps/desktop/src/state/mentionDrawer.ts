@@ -1,4 +1,4 @@
-// The `@` drawer's shape: the agents under their own harness, the threads and the
+// The `@` drawer's shape: the agents under their own harness, the machines, the threads and the
 // project's files under their own headings, a few of each up front and the rest
 // behind a `Show all` row. What is typed searches every item, never only the few
 // that are on screen, and the rows still say which section and harness they are in.
@@ -6,16 +6,46 @@
 import { fuzzyScore } from "../lib/modelSearch";
 import type { AgentChoice, ThreadChoice } from "./compose";
 import type { MentionScope } from "./fileRefs";
+import type { MachineIcon } from "./machines";
+
+/** A computer the `@` drawer offers: this one first, then each paired machine. */
+export interface MachineMentionChoice {
+  /** What `list_machines` calls it: `local` for this computer, else the paired machine's id. */
+  id: string;
+  name: string;
+  /** Its address or why it cannot run anything now: `This computer`, `Offline`. */
+  detail: string;
+  /** Whether a thread can start there now. One that is away is still listed, dimmed. */
+  available: boolean;
+  glyph: MachineIcon;
+  tint?: string | null;
+}
+
+/** The machines that answer what is typed, best first; this computer leads while nothing is typed. */
+export function rankMachines(
+  machines: readonly MachineMentionChoice[],
+  query: string,
+): MachineMentionChoice[] {
+  const scored = machines.flatMap((machine, at) => {
+    const score = fuzzyScore(query, machine.name);
+    return score === null ? [] : [{ machine, at, score }];
+  });
+  scored.sort(
+    (a, b) => b.score - a.score || Number(b.machine.available) - Number(a.machine.available) || a.at - b.at,
+  );
+  return scored.map((hit) => hit.machine);
+}
 
 /** A row of the drawer that points at something. */
 export type MentionEntry =
   | { kind: "keyword"; scope: MentionScope }
   | { kind: "agent"; agent: AgentChoice }
+  | { kind: "machine"; machine: MachineMentionChoice }
   | { kind: "thread"; thread: ThreadChoice }
   | { kind: "file"; path: string };
 
 /** A group of the drawer that keeps something back behind its `Show all` row. */
-export type MentionSection = "agents" | "threads" | "files";
+export type MentionSection = "agents" | "machines" | "threads" | "files";
 
 /** How the drawer draws a section: its name, a harness's name, a row, or its rest and its end. */
 export type MentionNode =
@@ -40,6 +70,7 @@ export const QUERY_ROWS = 8;
 /** The section each heading names, in the order the drawer lists them. */
 const LABEL: Record<MentionSection, string> = {
   agents: "Agents",
+  machines: "Machines",
   threads: "Threads",
   files: "Files",
 };
@@ -49,10 +80,12 @@ export interface MentionInput {
   query: string;
   /** The group a keyword narrowed the drawer to (`@agents pi`), else every group. */
   scope?: MentionScope | null;
-  /** The `@agents`, `@threads` and `@files` rows, already narrowed to what is typed. */
+  /** The `@agents`, `@machines`, `@threads` and `@files` rows, already narrowed to what is typed. */
   keywords?: readonly MentionScope[];
   /** The agents of every harness that can run, ranked; the harness's own last model first. */
   agents: readonly AgentChoice[];
+  /** The computers the work can run on, ranked; empty while no other computer is paired. */
+  machines?: readonly MachineMentionChoice[];
   /** The threads this one started and still runs, on the harnesses they run on, ranked. */
   delegates: readonly ThreadChoice[];
   /** The threads the message can point at, ranked. */
@@ -92,9 +125,11 @@ function sectionScore(query: string, nodes: readonly MentionNode[]): number {
         ? entry.agent.name
         : entry.kind === "thread"
           ? entry.thread.title
-          : entry.kind === "file"
-            ? entry.path.slice(entry.path.lastIndexOf("/") + 1)
-            : "";
+          : entry.kind === "machine"
+            ? entry.machine.name
+            : entry.kind === "file"
+              ? entry.path.slice(entry.path.lastIndexOf("/") + 1)
+              : "";
     const score = label ? fuzzyScore(query, label) : null;
     if (score !== null && score > best) best = score;
   }
@@ -181,6 +216,18 @@ export function mentionNodes(input: MentionInput): MentionNode[] {
       if (hidden > 0) nodes.push({ kind: "more", section: "agents", hidden });
       else if (expanded?.has("agents")) nodes.push({ kind: "less", section: "agents" });
       groups.push({ section: "agents", nodes });
+    }
+  }
+
+  if (!scope || scope === "machines") {
+    const entries = (input.machines ?? []).map((machine): MentionEntry => ({ kind: "machine", machine }));
+    const shown = entries.slice(0, cap("machines"));
+    if (shown.length) {
+      const nodes: MentionNode[] = shown.map((entry) => ({ kind: "entry", entry }));
+      const hidden = entries.length - shown.length;
+      if (hidden > 0) nodes.push({ kind: "more", section: "machines", hidden });
+      else if (expanded?.has("machines")) nodes.push({ kind: "less", section: "machines" });
+      groups.push({ section: "machines", nodes });
     }
   }
 

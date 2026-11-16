@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentChoice, ThreadChoice } from "./compose";
-import { type MentionNode, mentionNodes, QUERY_ROWS, SHORT_ROWS } from "./mentionDrawer";
+import { type MentionNode, mentionNodes, QUERY_ROWS, rankMachines, SHORT_ROWS } from "./mentionDrawer";
 
 const agent = (harness: string, name: string, harnessName = harness): AgentChoice => ({
   harness,
@@ -35,7 +35,9 @@ function shape(nodes: MentionNode[]): string[] {
             ? `t:${node.entry.thread.id}`
             : node.entry.kind === "file"
               ? `f:${node.entry.path}`
-              : `k:${node.entry.scope}`;
+              : node.entry.kind === "machine"
+                ? `m:${node.entry.machine.id}`
+                : `k:${node.entry.scope}`;
       default:
         return "?";
     }
@@ -355,5 +357,46 @@ describe("typing across the sections", () => {
       files: [],
     });
     expect(shape(nodes)).toEqual(["t:t0", "k:threads"]);
+  });
+});
+
+describe("machines", () => {
+  const machine = (id: string, name: string, available = true) => ({
+    id,
+    name,
+    detail: available ? "192.168.1.2:17879 · LAN" : "Offline",
+    available,
+    glyph: "laptop" as const,
+  });
+  const fleet = [machine("local", "MacBook"), machine("m1", "Studio"), machine("m2", "Server", false)];
+
+  test("an empty drawer lists them in their own section", () => {
+    const nodes = mentionNodes({
+      query: "",
+      machines: fleet,
+      agents: [],
+      delegates: [],
+      threads: [thread("t0", "pi")],
+      files: [],
+    });
+    expect(shape(nodes)).toEqual(["# Machines", "m:local", "m:m1", "m:m2", "# Threads", "t:t0"]);
+  });
+
+  test("@machines narrows the drawer to them", () => {
+    const nodes = mentionNodes({
+      query: "",
+      scope: "machines",
+      machines: fleet,
+      agents: [],
+      delegates: [],
+      threads: [thread("t0", "pi")],
+      files: ["a.ts"],
+    });
+    expect(shape(nodes)).toEqual(["m:local", "m:m1", "m:m2"]);
+  });
+
+  test("what is typed finds a machine by name", () => {
+    expect(rankMachines(fleet, "stu").map((entry) => entry.id)).toEqual(["m1"]);
+    expect(rankMachines(fleet, "").map((entry) => entry.id)).toEqual(["local", "m1", "m2"]);
   });
 });
