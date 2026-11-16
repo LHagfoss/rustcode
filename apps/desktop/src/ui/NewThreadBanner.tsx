@@ -15,6 +15,7 @@ import {
   LINE_HEIGHT,
   loadBanner,
   renderEffect,
+  renderSize,
 } from "../lib/banner";
 import { isPixelEffect } from "../lib/bannerEffects";
 import { paintsBlur } from "../lib/platform";
@@ -56,8 +57,8 @@ export function NewThreadBanner({
   name: string;
   style: BannerStyle;
   height: number;
-  /** Blur radius in px (macOS only: Windows and Linux paint none); the picture grows a little so
-   * the soft edge falls outside the pane. */
+  /** Blur radius in px: live on macOS, where the picture grows a little so the soft edge falls
+   * outside the pane; baked into the picture once on Windows and Linux. */
   blur?: number;
   className?: string;
 }) {
@@ -108,32 +109,67 @@ export function NewThreadBanner({
     return () => clearTimeout(t);
   }, [image, columns, rows, dark, style, name]);
 
+  // macOS blurs live; Windows and Linux paint no blur (docs/design.md › Platforms), so there the
+  // blur is baked into the picture once by the worker instead, and nothing blurs on screen.
+  const blurred = paintsBlur();
+  const haze = style === "haze";
+  // Haze is the picture blurred well past the slider and faded into the pane.
+  const wanted = haze ? Math.max(blur, HAZE_BLUR) : blur;
+  const painted = blurred ? wanted : 0;
+  const baked = blurred ? 0 : wanted;
+  const scale = art ? Math.max(width / art.width, height / art.height) : 1;
+
+  // What the worker draws from, and what it is called in its cache.
+  const source = style === "ascii" ? (art?.canvas ?? null) : image;
+  const look =
+    style === "ascii" ? (art ? `ascii ${art.canvas.width}x${art.canvas.height}` : "") : (effect ?? "picture");
+  const needsWorker = !!effect || baked > 0;
+  // The blur in the drawn copy's pixels: the CSS radius over how much that copy is scaled on screen.
+  let radius = 0;
+  if (baked > 0 && source && width) {
+    const size = renderSize(source);
+    const shown =
+      style === "ascii" && art
+        ? art.width * scale
+        : size.width * Math.max(width / size.width, height / size.height);
+    radius = shown > 0 ? Math.max(1, Math.round((baked * size.width) / shown)) : 0;
+  }
+  const printedShows = useRef(false);
+  printedShows.current = !!printed;
+
   useEffect(() => {
-    if (!image || !effect) return;
+    if (!needsWorker) {
+      setPrinted(null);
+      return;
+    }
+    if (!source || (baked > 0 && !radius)) return;
     let live = true;
-    setPrinted(cachedEffect(name, effect, dark) ?? null);
-    void renderEffect(name, image, effect, dark).then((url) => live && setPrinted(url ?? ""));
+    const cached = cachedEffect(name, look, dark, radius);
+    if (cached) {
+      setPrinted(cached);
+      return;
+    }
+    const run = () =>
+      void renderEffect(name, source, look, dark, radius).then((url) => live && setPrinted(url ?? ""));
+    // A resize or a slider drag settles first while the last render shows.
+    const t = printedShows.current ? setTimeout(run, 150) : undefined;
+    if (!t) run();
     return () => {
       live = false;
+      clearTimeout(t);
     };
-  }, [image, effect, dark, name]);
+  }, [source, look, needsWorker, baked, radius, dark, name]);
 
-  // Drawn as an image: as is, hazed, or printed.
-  const photo =
-    style === "ascii"
-      ? null
-      : effect
-        ? printed === ""
-          ? (image?.src ?? null)
-          : printed
-        : (image?.src ?? null);
-  const haze = style === "haze";
-  const ready = style === "ascii" ? !!art : !!photo;
-  const scale = art ? Math.max(width / art.width, height / art.height) : 1;
-  // Windows and Linux paint no blur, the glow included (docs/design.md › Platforms).
-  const blurred = paintsBlur();
-  // Haze is the picture blurred well past the slider and faded into the pane.
-  const painted = blurred ? (haze ? Math.max(blur, HAZE_BLUR) : blur) : 0;
+  // Still rendering: nothing shows yet, and it fades in. "" is a render that cannot be made here,
+  // and then the picture or the text shows as is.
+  const pending = needsWorker && printed === null;
+  const rendered = needsWorker && printed ? printed : null;
+  // Drawn as an image: as is, hazed, printed or blurred.
+  const photo = style === "ascii" || pending ? null : (rendered ?? image?.src ?? null);
+  // The text drawing, blurred by the worker, in its place.
+  const artPhoto = style === "ascii" ? rendered : null;
+  const showsArt = style === "ascii" && !!art && !pending;
+  const ready = style === "ascii" ? showsArt : !!photo;
 
   const layer = (glow: boolean) =>
     photo ? (
@@ -144,7 +180,21 @@ export function NewThreadBanner({
         className={cx("absolute inset-0 size-full object-cover", glow && "blur-[14px]")}
         style={glow ? { opacity: dark ? 0.5 : 0.3 } : undefined}
       />
-    ) : art ? (
+    ) : showsArt && art && artPhoto ? (
+      <img
+        src={artPhoto}
+        alt=""
+        draggable={false}
+        className={cx("absolute top-0 left-1/2 max-w-none", glow && "blur-[14px]")}
+        style={{
+          width: art.width,
+          height: art.height,
+          transform: `translateX(-50%) scale(${scale})`,
+          transformOrigin: "top center",
+          opacity: glow ? (dark ? 0.5 : 0.3) : 1,
+        }}
+      />
+    ) : showsArt && art ? (
       <ArtCanvas
         art={art}
         className={cx("absolute top-0 left-1/2", glow && "blur-[14px]")}

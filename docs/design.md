@@ -478,7 +478,9 @@ which reads that attribute. To look at Windows in the mock, open it at
 first render is already that platform.
 
 Blur is macOS's alone. Windows and Linux paint no blur at all, in the page or
-behind the window, decorative ones included.
+behind the window, decorative ones included. The chat background's Blur setting is not
+painted there either: the effects worker bakes it into the picture once
+(`boxBlur` in `lib/bannerEffects.ts`).
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
