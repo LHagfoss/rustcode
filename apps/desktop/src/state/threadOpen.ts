@@ -753,8 +753,8 @@ export function newThreadChoice(
   const harness = snapshot.harnesses.find((h) => h.id === s.newThread?.harness);
   if (!harness || unavailableReason(harness)) return preferredDefault(snapshot);
   const choice = normalizeDefault(snapshot, s.newThread);
-  // A machine's `_rustcode/harnesses` lists only the models a harness has already learned there,
-  // and `_rustcode/harnesses/models` is not on its gateway: with none listed, keep no model, so
+  // A machine's `_rustcode/harnesses` lists only the models a harness has already learned there
+  // (the picker asks for the rest, `ensureHarnessModels`): with none listed yet, keep no model, so
   // the machine's own harness default applies rather than a model picked on this computer.
   if (s.newThreadHost && !harness.models.length) return { ...choice, model: null, effort: null };
   return choice;
