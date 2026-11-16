@@ -549,7 +549,7 @@ Every key above except the composer's is a command in one table
 (`src/lib/keys.ts`) with an id, a label and a default binding, and Settings ›
 Keyboard rebinds it: click the key, press the new combination, Esc cancels;
 a row whose binding differs from its default offers a reset. A binding needs
-⌘ (or ⌥) unless it is a function key; ⌘Q, ⌘W, ⌘H, ⌘M and ⌘Tab are refused
+⌘ (or ⌥) unless it is a function key; ⌘Q, ⌘H, ⌘M and ⌘Tab are refused
 because macOS keeps them, and so are the editing keys (⌘C, ⌘V, ⌘X, ⌘A, ⌘Z,
 ⌘⇧Z) that the window's menu answers before the page sees the keydown. A key
 another command already answers is refused with its name, so two commands
@@ -557,9 +557,10 @@ never share one. Only the overrides are kept, as `rustcode.shortcuts`
 (`{ "command-id": "mod+alt+s" }`) in localStorage: an unknown id, a corrupt
 value or a binding equal to the default is dropped, and the rest of the table
 stays the default it ships with. `state/shortcuts.ts` runs a matched command;
-the transcript matches "find in thread" against the same table. The app sets
-no menu of its own (`src-tauri/src/lib.rs`), so a remap has no native
-accelerator to fight; ⌘R (reload the view, `ui/Recover.tsx`) and the
+the transcript matches "find in thread" against the same table. ⌘W (Ctrl+W elsewhere) settles the current thread with Undo and keeps the window
+open, including from the terminal; with no selected thread it does nothing.
+The native menu (`src-tauri/src/lib.rs`) keeps the default editing and app
+items but removes Close so its accelerator cannot hide the window; ⌘R (reload the view, `ui/Recover.tsx`) and the
 composer's keys stay outside the table.
 
 ## Features

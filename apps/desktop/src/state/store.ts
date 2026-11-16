@@ -47,6 +47,7 @@ export {
 } from "./threadActions";
 
 import {
+  clearSettledNotifications,
   clearStatusMark,
   reconcileStatusMarks,
   sessionById,
@@ -353,6 +354,8 @@ import {
   beginTurn,
   finishTurn,
   foldingBatch,
+  isContinueMessage,
+  isWakeMessage,
   localId,
   requeueSteers,
   settleEveryWait,
@@ -2160,6 +2163,7 @@ function onSessionUpdate(params: JsonObject) {
   }
   const status = statusInUpdate(params);
   if (status) {
+    if (status === "done") clearSettledNotifications([sessionId]);
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, status } : x)) }));
     clearStatusMark(sessionId);
     // A lost turn on this thread is settled now if the machine says it stopped running there.
@@ -2415,6 +2419,18 @@ export async function runPrompt(
     alreadyShown?: boolean;
   } = {},
 ): Promise<TurnOutcome> {
+  // Check again when a queued notice starts: settling may have happened after delivery.
+  if (
+    (options.automatic ||
+      options.autoCompact ||
+      options.autoResume ||
+      options.continued ||
+      options.wake ||
+      isContinueMessage(text) ||
+      isWakeMessage(text)) &&
+    (get().statusMarks[id] ?? sessionById(get(), id)?.status) === "done"
+  )
+    return "skipped";
   // The turn runs on the thread's own computer, which may have gone away since it was opened.
   const conn = connectionForThread(id);
   if (!conn) {

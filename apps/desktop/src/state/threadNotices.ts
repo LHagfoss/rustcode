@@ -39,6 +39,7 @@ const set = (patch: Partial<AppState> | ((s: AppState) => Partial<AppState>)) =>
  * thread, and `wakeSnoozed` says its one thing then.
  */
 export function markFinished(id: string, now = Date.now(), failed = false) {
+  if ((get().statusMarks[id] ?? sessionById(get(), id)?.status) === "done") return;
   const looking = get().selectedId === id && typeof document !== "undefined" && document.hasFocus();
   if (looking) return;
   set((s) =>

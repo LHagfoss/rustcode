@@ -553,6 +553,19 @@ impl WatchStore {
         Ok(out)
     }
 
+    /// Settling ends automatic PR delivery, including news waiting to be claimed.
+    /// Keeping stopped records also prevents an in-flight check from restoring them.
+    pub fn settle(&self, session_id: &str) -> std::io::Result<()> {
+        self.update(|watches| {
+            for watch in watches.iter_mut().filter(|w| w.session_id == session_id) {
+                if watch.is_watching() {
+                    watch.stop("thread settled");
+                }
+                watch.deliver();
+            }
+        })
+    }
+
     /// Start watching, or start again with fresh state: the first check is
     /// the baseline, so nothing that already happened is reported.
     pub fn start(
@@ -1378,6 +1391,26 @@ mod tests {
         assert!(again.due(now).is_empty());
         assert!(store.stop("s1", 7, true).unwrap().is_some());
         assert!(store.list(None).is_empty());
+    }
+
+    #[test]
+    fn settling_stops_watches_consumes_events_and_rejects_inflight_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let now = chrono::Utc::now().timestamp();
+        let mut pending = linked(&store, "s1", "/repo", now);
+        pending.events.push(WatchEvent {
+            kind: "checks_failed".into(),
+            message: "CI failed".into(),
+            at: "now".into(),
+        });
+        assert!(store.put(&pending).unwrap());
+        linked(&store, "s2", "/repo", now);
+        store.settle("s1").unwrap();
+        assert!(store.take("s1", 7).unwrap().unwrap().1.is_empty());
+        assert!(!store.put(&pending).unwrap());
+        assert!(store.list(Some("s1")).iter().all(|w| !w.is_watching()));
+        assert!(store.list(Some("s2")).iter().any(Watch::is_watching));
     }
 
     #[test]
