@@ -112,7 +112,7 @@ import {
   subscribePulls,
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
-import { type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
+import { byProjectName, type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import {
   PREF,
@@ -2020,6 +2020,7 @@ export function Sidebar() {
         if (project.project) project.label = projectLabel(project.project);
         project.items = arranged("threads", project.items, project.key);
       }
+      byProjectName(projects);
     }
     // The sections this layout draws, in its order: Pinned and the one Threads list, and the
     // shelves close it (state/sidebarRows.ts `sectionsOf`).

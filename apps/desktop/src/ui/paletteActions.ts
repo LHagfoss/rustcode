@@ -28,6 +28,7 @@ import { projectActions, projectKey } from "../state/projectActions";
 import { registerProject } from "../state/projectBook";
 import { cachedPulls, pullForBranch } from "../state/pulls";
 import {
+  DEFAULT_SIDEBAR_SORT,
   PREF,
   readPref,
   SETTLE_AFTER_DEFAULT_DAYS,
@@ -147,7 +148,7 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
   const only = readPref(PREF.onlyProject, false);
   const compact = sidebarDensity(readPref(PREF.density, "detailed")) === "compact";
   const toolbar = readPref(PREF.toolbar, true);
-  const sort = sidebarSort(readPref(PREF.sort, "activity"));
+  const sort = sidebarSort(readPref(PREF.sort, DEFAULT_SIDEBAR_SORT));
   const open = s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) : undefined;
   const pinned = open ? s.pinned.includes(open.id) : false;
   const asleep = open ? s.snoozed[open.id] : undefined;
