@@ -63,6 +63,17 @@ pub(crate) struct RestartMcpServerRequest {
     pub name: String,
 }
 
+/// Sign out of a remote MCP server: forget its saved OAuth token and disconnect
+/// it; answers with the fresh snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[request(
+    method = "_rustcode/capabilities/mcp/logout",
+    response = serde_json::Value
+)]
+pub(crate) struct LogoutMcpServerRequest {
+    pub name: String,
+}
+
 /// Copy one skill's `SKILL.md` to this machine's user skills directory
 /// (`_rustcode/skills/add`). Settings uses it for "Copy to ‹machine›".
 #[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
@@ -143,6 +154,15 @@ pub(crate) async fn restart_mcp_server(
     snapshot_value()
 }
 
+pub(crate) async fn logout_mcp_server(
+    request: LogoutMcpServerRequest,
+) -> Result<serde_json::Value, agent_client_protocol::Error> {
+    crate::capabilities::logout_mcp_server(&request.name)
+        .await
+        .map_err(|message| agent_client_protocol::Error::invalid_params().data(message))?;
+    snapshot_value()
+}
+
 pub(crate) fn snapshot_value() -> Result<serde_json::Value, agent_client_protocol::Error> {
     serde_json::to_value(crate::capabilities::snapshot())
         .map_err(|error| agent_client_protocol::Error::internal_error().data(error.to_string()))
@@ -194,6 +214,9 @@ mod tests {
         ));
         assert!(RestartMcpServerRequest::matches_method(
             "_rustcode/capabilities/mcp/restart"
+        ));
+        assert!(LogoutMcpServerRequest::matches_method(
+            "_rustcode/capabilities/mcp/logout"
         ));
         assert!(AddSkillRequest::matches_method("_rustcode/skills/add"));
         assert!(GetSkillRequest::matches_method("_rustcode/skills/get"));

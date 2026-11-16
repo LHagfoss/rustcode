@@ -1251,7 +1251,7 @@ impl ExternalSession {
         }
         let record = self.record();
         let mut options = self.resume_options(&record)?;
-        // Signed in to in RustCode (Settings › MCP, `rustcode mcp login`): the harness gets the token.
+        // Signed in to in RustCode (Settings › MCP): the harness gets the token.
         options.mcp = crate::mcp::with_saved_logins(mcp).await;
         let adapter = Adapter::start(&self.harness, &self.cwd, options, self.out.clone()).await?;
         let native = adapter.native_session_id();

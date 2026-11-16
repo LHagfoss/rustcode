@@ -103,6 +103,10 @@ pub struct McpEntry {
     pub env_keys: Vec<String>,
     /// The names of its HTTP headers, never their values.
     pub header_keys: Vec<String>,
+    /// For a remote server that signs in with OAuth: `signed_in` when RustCode holds its token,
+    /// `signed_out` when it does not. `None` for a stdio server and for one that sends its own
+    /// `Authorization` header, which has no sign-in to show.
+    pub auth: Option<&'static str>,
 }
 
 impl McpEntry {
@@ -239,9 +243,26 @@ pub(crate) fn mcp_entries_from(
                 header_keys: config
                     .map(|server| sorted_keys(&server.headers))
                     .unwrap_or_default(),
+                auth: config.and_then(oauth_state),
             }
         })
         .collect()
+}
+
+/// Whether RustCode holds an OAuth sign-in for `server` (`McpEntry::auth`).
+fn oauth_state(server: &crate::config::McpServerConfig) -> Option<&'static str> {
+    let own_header = server
+        .headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("authorization"));
+    if !server.is_remote() || own_header {
+        return None;
+    }
+    Some(if crate::mcp::has_saved_login(&server.name) {
+        "signed_in"
+    } else {
+        "signed_out"
+    })
 }
 
 fn sorted_keys(map: &HashMap<String, String>) -> Vec<String> {
@@ -434,6 +455,23 @@ pub async fn restart_mcp_server(name: &str) -> Result<(), String> {
     if let Err(error) = crate::mcp::start_server_by_name_in_workspace(name, &workspace).await {
         crate::mcp::record_mcp_startup_failure(name, &error);
     }
+    Ok(())
+}
+
+/// Sign out of a remote server: forget RustCode's saved token and disconnect it, so neither the
+/// built-in harness nor a harness thread (which gets the token at its next message) uses it.
+/// Signing in again is a reconnect, which runs the browser login.
+pub async fn logout_mcp_server(name: &str) -> Result<(), String> {
+    let workspace = mcp_workspace();
+    let servers = crate::config::workspace_mcp_servers_in(&user_config_dir()?, &workspace);
+    let Some(server) = servers.iter().find(|server| server.name == name) else {
+        return Err(format!("MCP server '{name}' is no longer configured"));
+    };
+    if !server.is_remote() {
+        return Err(format!("MCP server '{name}' is local and has no sign-in"));
+    }
+    crate::mcp::forget_saved_login(name)?;
+    crate::mcp::shutdown_server(name).await;
     Ok(())
 }
 
@@ -832,9 +870,35 @@ mod tests {
                 "mcpServers": [{"name": "idle", "transport": "stdio", "target": "npx",
                                 "copyTarget": ["npx"], "enabled": true, "scope": "user",
                                 "connection": "not_connected", "tools": [], "error": null,
-                                "envKeys": ["API_KEY"], "headerKeys": []}],
+                                "envKeys": ["API_KEY"], "headerKeys": [], "auth": null}],
                 "configPath": "/c/config.toml",
             })
+        );
+    }
+
+    #[test]
+    fn only_a_remote_server_without_its_own_header_has_a_sign_in() {
+        let server = |value: serde_json::Value| -> crate::config::McpServerConfig {
+            serde_json::from_value(value).expect("a server")
+        };
+        assert_eq!(
+            oauth_state(&server(
+                serde_json::json!({"name": "files", "command": "npx"})
+            )),
+            None
+        );
+        assert_eq!(
+            oauth_state(&server(serde_json::json!({
+                "name": "keyed", "url": "https://mcp.example.com",
+                "headers": {"authorization": "Bearer static"},
+            }))),
+            None
+        );
+        assert_eq!(
+            oauth_state(&server(serde_json::json!({
+                "name": "never-signed-in-7f3a9c", "url": "https://mcp.example.com",
+            }))),
+            Some("signed_out")
         );
     }
 

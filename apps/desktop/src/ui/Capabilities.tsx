@@ -60,7 +60,12 @@ interface McpServer {
   envKeys: string[];
   headerKeys: string[];
   copyTarget: string[] | null;
+  /** A remote server that signs in with OAuth: whether RustCode holds its token. */
+  auth?: "signed_in" | "signed_out";
 }
+
+/** A browser sign-in waits up to five minutes for the user (the engine's loopback limit). */
+const SIGN_IN_TIMEOUT = 310_000;
 
 interface Capabilities {
   skills: Skill[];
@@ -106,6 +111,7 @@ const parseCapabilities = (v: Json): Capabilities => {
         copyTarget: Array.isArray(o.copyTarget)
           ? arr(o.copyTarget).flatMap((part) => (typeof part === "string" ? [part] : []))
           : null,
+        auth: o.auth === "signed_in" || o.auth === "signed_out" ? o.auth : undefined,
       };
     }),
   };
@@ -504,6 +510,7 @@ function McpRow({
   // unconfigured server has nothing to reconnect to.
   const canRetry = s.enabled && s.scope !== "session";
   const [retrying, setRetrying] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const [copying, setCopying] = useState(false);
   const retry = async () => {
     setRetrying(true);
@@ -513,6 +520,26 @@ function McpRow({
       setRetrying(false);
     }
   };
+  // Reconnecting a server with no token runs the engine's browser login.
+  const needsSignIn = s.auth === "signed_out" && s.enabled && s.connection !== "connected";
+  const signIn = async () => {
+    setSigningIn(true);
+    toast(`Finish signing in to ${s.name} in your browser.`, "info");
+    try {
+      await run(Method.mcpRestart, { name: s.name }, SIGN_IN_TIMEOUT);
+    } finally {
+      setSigningIn(false);
+    }
+  };
+  const signOut = () =>
+    askConfirm({
+      title: `Sign out of ${s.name}?`,
+      message:
+        "RustCode forgets its sign-in and disconnects it. Threads lose its tools at their next message.",
+      action: "Sign out",
+      destructive: true,
+      run: () => void run(Method.mcpLogout, { name: s.name }, 15_000),
+    });
   const copyTo = async (target: string) => {
     const copy = mcpCopy({
       name: s.name,
@@ -572,18 +599,33 @@ function McpRow({
           <span className="min-w-0 flex-1">
             <span className="block truncate font-medium text-body">{s.name}</span>
             <span className={cx("block truncate text-caption", s.error ? "text-danger" : "text-fg-muted")}>
-              {retrying
-                ? "Reconnecting…"
-                : (s.error ??
-                  `${CONNECTION[s.connection] ?? s.connection} · ${s.transport}${
-                    s.connection === "connected"
-                      ? ` · ${s.toolCount} tool${s.toolCount === 1 ? "" : "s"}`
-                      : ""
-                  }`)}
+              {signingIn
+                ? "Waiting for the browser sign-in…"
+                : retrying
+                  ? "Reconnecting…"
+                  : needsSignIn
+                    ? `Sign in required · ${s.transport}`
+                    : (s.error ??
+                      `${CONNECTION[s.connection] ?? s.connection} · ${s.transport}${
+                        s.connection === "connected"
+                          ? ` · ${s.toolCount} tool${s.toolCount === 1 ? "" : "s"}`
+                          : ""
+                      }${s.auth === "signed_in" ? " · Signed in" : ""}`)}
             </span>
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-1.5">
+          {needsSignIn && (
+            <Action
+              size="sm"
+              prominent
+              disabled={signingIn}
+              aria-busy={signingIn}
+              onClick={() => void signIn()}
+            >
+              {signingIn ? <Spinner size={12} /> : null} Sign in
+            </Action>
+          )}
           <Tooltip
             label={
               !s.enabled
@@ -635,6 +677,19 @@ function McpRow({
             </dd>
             <dt className="text-fg-faint">Scope</dt>
             <dd className="m-0 text-fg-muted">{s.scope}</dd>
+            {s.auth && (
+              <>
+                <dt className="text-fg-faint">Sign-in</dt>
+                <dd className="m-0 flex items-center gap-2 text-fg-muted">
+                  {s.auth === "signed_in" ? "Signed in with OAuth" : "Not signed in"}
+                  {s.auth === "signed_in" && s.scope !== "session" && (
+                    <Action size="sm" quiet onClick={signOut}>
+                      Sign out
+                    </Action>
+                  )}
+                </dd>
+              </>
+            )}
             {(s.envKeys.length > 0 || s.headerKeys.length > 0) && (
               <>
                 <dt className="text-fg-faint">Set here</dt>
