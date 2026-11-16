@@ -11,7 +11,9 @@
 //!    computers end on the same release.
 //! 4. **Start**: `rustcode up --yes --json` there: the server as a service,
 //!    remote access on, and a connect code in the JSON it prints.
-//! 5. **Pair**: redeem that code here over the routes it lists.
+//! 5. **Pair**: redeem that code here over the routes it lists, or through
+//!    SSH itself (`crate::tunnel`) when none answers, when the server there
+//!    listens on its own loopback only, or when the user chose SSH.
 //! 6. **Pair back** (only when asked for mutual access): the other computer
 //!    redeems a connect code created here, so each computer can reach the
 //!    other and each side holds its own, separately revocable pairing.
@@ -27,7 +29,7 @@
 
 use crate::connect_code::ConnectCode;
 use crate::machine::{Connector, Paired, Unreachable};
-use crate::registry::Route;
+use crate::registry::{Route, SshRoute};
 use anyhow::{Result, bail, ensure};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -483,9 +485,34 @@ impl UpReport {
 /// caller as any other, and what `rustcode up` said there.
 pub struct Connected {
     pub paired: Paired,
+    /// The route the pairing used, saved first.
     pub route: Route,
+    /// Saved beside it: the SSH route as a fallback when the network one
+    /// paired, so the machine stays reachable when that network is not.
+    pub extra: Vec<Route>,
+    /// The user chose SSH only: the network routes the machine reports are
+    /// saved turned off.
+    pub ssh_only: bool,
     pub report: UpReport,
     pub probe: Probe,
+}
+
+impl Connected {
+    /// The machine to save: the route that paired first, the SSH fallback
+    /// beside it, and every network route turned off when SSH was chosen.
+    pub fn machine(&self, name: Option<String>) -> crate::registry::Machine {
+        let welcome = self.paired.session.welcome();
+        let mut machine = crate::machine::machine_from_pairing(welcome, self.route.clone(), name);
+        for route in &self.extra {
+            machine.learn_route(route.clone());
+        }
+        if self.ssh_only {
+            for route in &mut machine.routes {
+                route.off = route.kind != crate::registry::RouteKind::Ssh;
+            }
+        }
+        machine
+    }
 }
 
 /// The output of one SSH command.
@@ -644,8 +671,22 @@ async fn ssh_step(
     Ok(output)
 }
 
+/// How the paired machine is reached afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Via {
+    /// Its network address (LAN, NetBird, Tailscale) when one answers, with
+    /// SSH saved as the fallback, else SSH.
+    #[default]
+    Auto,
+    /// Through SSH only.
+    Ssh,
+}
+
 /// Everything a connection over SSH takes besides the target.
 pub struct Options<'a> {
+    /// How the machine is reached once paired.
+    pub via: Via,
     /// Asked once RustCode is found missing or older: answer whether to
     /// install this release there.
     pub approve_install: &'a mut (dyn FnMut(&Probe) -> bool + Send),
@@ -662,6 +703,7 @@ pub async fn connect(
     options: Options<'_>,
 ) -> Result<Connected> {
     let Options {
+        via,
         approve_install,
         progress,
     } = options;
@@ -743,11 +785,13 @@ pub async fn connect(
         );
 
         report(Step::Pair, StepState::Running, None);
-        let (paired, route) = pair(connector, target, probe.os, &program, &up).await?;
+        let (paired, route, extra) = pair(connector, target, probe.os, &program, &up, via).await?;
         report(Step::Pair, StepState::Done, Some(route.address.clone()));
         Ok(Connected {
             paired,
             route,
+            extra,
+            ssh_only: via == Via::Ssh,
             report: up,
             probe,
         })
@@ -914,27 +958,23 @@ async fn start(target: &SshTarget, os: RemoteOs, program: &str) -> Result<UpRepo
             format!("RustCode on {host} started, but {error:#}."),
         )
     })?;
-    if report.connect_code.loopback_only {
-        return Err(failure(
-            Step::Start,
-            FailureKind::NoRoute,
-            format!(
-                "Remote access on {host} listens on that computer only (`remote.bind`). Set it to `auto` there and try again."
-            ),
-        ));
-    }
+    // A server that listens on its own loopback only is reached through SSH
+    // (`pair`).
     Ok(report)
 }
 
-/// Step 5: redeem the code here. When no route answers, the code is
-/// withdrawn there so it does not stay open.
+/// Step 5: redeem the code here, over the routes it lists or through SSH
+/// (`via`, and the fallback when none answers). When nothing works, the code
+/// is withdrawn there so it does not stay open. Answers the pairing, the
+/// route it used and the SSH fallback to save beside a network route.
 async fn pair(
     connector: &Connector,
     target: &SshTarget,
     os: RemoteOs,
     program: &str,
     up: &UpReport,
-) -> Result<(Paired, Route)> {
+    via: Via,
+) -> Result<(Paired, Route, Vec<Route>)> {
     let host = target.host();
     let code: ConnectCode = crate::connect_code::parse(&up.connect_code.link).map_err(|error| {
         failure(
@@ -943,39 +983,76 @@ async fn pair(
             format!("{host} printed a connect code this computer cannot read ({error:#})."),
         )
     })?;
-    match connector.pair_with_code(&code, None).await {
-        Ok(paired) => Ok(paired),
-        Err(error) => {
-            let (remote, input) = remote_rustcode(os, program, "machines code --cancel");
-            let _ = run_ssh(target, &remote, input.as_deref(), SIGN_IN_TIMEOUT).await;
-            if let Some(unreachable) = error.downcast_ref::<Unreachable>() {
-                let addresses = code
-                    .routes()
-                    .iter()
-                    .map(|route| route.address.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ");
+    let tunnel = SshRoute {
+        destination: target.destination.clone(),
+        port: target.port,
+        identity: target.identity.clone(),
+        gateway_port: code
+            .routes()
+            .first()
+            .map_or(crate::transport::DEFAULT_PORT, |route| {
+                crate::transport::port_or_default(&route.address)
+            }),
+    };
+    // The network first, unless SSH was chosen or the server listens on its
+    // own loopback only (its routes would name this computer's loopback).
+    let mut direct_error = None;
+    if via == Via::Auto && !up.connect_code.loopback_only {
+        match connector.pair_with_code(&code, None).await {
+            Ok((paired, route)) => return Ok((paired, route, vec![Route::ssh(tunnel)])),
+            // Unreachable: the code was not spent, so SSH may redeem it.
+            Err(error) if error.downcast_ref::<Unreachable>().is_some() => {
+                direct_error = Some(error);
+            }
+            Err(error) => {
+                withdraw(target, os, program).await;
                 return Err(failure(
                     Step::Pair,
-                    FailureKind::NoRoute,
-                    format!(
-                        "{host} is reachable over SSH, but not on RustCode's port ({}): {}. Put both computers on the same network or a VPN such as NetBird or Tailscale, then try again. A host reachable over SSH alone needs the SSH route, which is not in RustCode yet.",
-                        if addresses.is_empty() {
-                            "it reported no address".to_owned()
-                        } else {
-                            addresses
-                        },
-                        unreachable.attempts.join("; ")
-                    ),
+                    FailureKind::Other,
+                    format!("Pairing with {host} failed: {error:#}"),
                 ));
             }
+        }
+    }
+    let through_ssh = async {
+        let bridge = crate::tunnel::Bridge::open(&tunnel).await?;
+        match connector
+            .pair_with_code(&code, Some(bridge.address()))
+            .await
+        {
+            Ok((paired, _)) => anyhow::Ok(paired),
+            Err(error) => Err(anyhow::anyhow!(bridge.explain(format!("{error:#}")).await)),
+        }
+    };
+    match through_ssh.await {
+        Ok(paired) => Ok((paired, Route::ssh(tunnel), Vec::new())),
+        Err(error) => {
+            withdraw(target, os, program).await;
+            let network = direct_error
+                .as_ref()
+                .and_then(|error| error.downcast_ref::<Unreachable>())
+                .map(|unreachable| {
+                    format!(
+                        " Its network address did not answer either: {}.",
+                        unreachable.attempts.join("; ")
+                    )
+                })
+                .unwrap_or_default();
             Err(failure(
                 Step::Pair,
-                FailureKind::Other,
-                format!("Pairing with {host} failed: {error:#}"),
+                FailureKind::NoRoute,
+                format!(
+                    "{host} is reachable over SSH, but pairing through it failed: {error:#}.{network}"
+                ),
             ))
         }
     }
+}
+
+/// Withdraw the connect code there, so a pairing that failed leaves none open.
+async fn withdraw(target: &SshTarget, os: RemoteOs, program: &str) {
+    let (remote, input) = remote_rustcode(os, program, "machines code --cancel");
+    let _ = run_ssh(target, &remote, input.as_deref(), SIGN_IN_TIMEOUT).await;
 }
 
 /// The last step of mutual access: have `target` redeem `link`, a connect

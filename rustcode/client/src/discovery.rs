@@ -84,6 +84,8 @@ fn route_rank(kind: RouteKind) -> u8 {
         RouteKind::Tailscale => 1,
         RouteKind::Vpn => 2,
         RouteKind::Public => 3,
+        // Never discovered: an SSH route is one the user adds.
+        RouteKind::Ssh => 4,
     }
 }
 

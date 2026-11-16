@@ -66,6 +66,8 @@ pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(150);
 
 /// How long one route may take to authenticate before the next is tried.
 pub const ROUTE_TIMEOUT: Duration = Duration::from_secs(5);
+/// An SSH route's: the sign-in comes before the socket.
+pub const SSH_ROUTE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What kind of client this is. A label for the owner, and what the machine
 /// grants: ACP access follows an accepted request from a [`ClientKind::Desktop`],
@@ -704,10 +706,15 @@ impl Connector {
         let routes: Vec<Route> = machine
             .routes
             .iter()
-            .filter(|route| may_send_secrets(&route.address))
+            .filter(|route| route.is_dialable())
             .cloned()
             .collect();
         if routes.is_empty() {
+            ensure!(
+                machine.routes.iter().any(|route| !route.off),
+                "every route to {} is turned off; turn one on in its settings",
+                machine.display()
+            );
             return Err(plain_ws_refusal(&machine.routes[0].address));
         }
         // A route on an overlay this computer is not on can never answer, so it
@@ -718,40 +725,66 @@ impl Connector {
             crate::routes::ordered_for_this_computer(&routes, &crate::routes::local_addresses());
         let settings = RaceSettings::default();
         let outcome = race(&routes, &settings, |route| async move {
+            // An SSH route is dialled through a bridge on this computer's
+            // loopback (`crate::tunnel`); it lives until this attempt ends,
+            // and the connection it carried keeps its own `ssh`.
+            let bridge = match &route.ssh {
+                Some(ssh) => Some(
+                    crate::tunnel::Bridge::open(ssh)
+                        .await
+                        .map_err(|error| DialFailure::unreachable(format!("{error:#}")))?,
+                ),
+                None => None,
+            };
+            let address = bridge.as_ref().map_or_else(
+                || route.address.clone(),
+                |bridge| bridge.address().to_owned(),
+            );
+            let address = address.as_str();
+            // SSH signs in before the socket opens: it gets longer.
+            let route_timeout = if bridge.is_some() {
+                self.route_timeout.max(SSH_ROUTE_TIMEOUT)
+            } else {
+                self.route_timeout
+            };
             // Dial and ask who answers before taking the credential lock: a
             // LAN route that hangs must not keep the overlay route from
             // opening its socket, and a stranger on a stale address is
             // dropped here, its token unsent and its refusal never heard.
-            let opened = match tokio::time::timeout(
-                self.route_timeout,
-                self.open_proven(&route.address, machine, None),
-            )
-            .await
-            {
-                Ok(Ok(opened)) => opened,
-                Ok(Err(error)) => return Err(DialFailure::unreachable(format!("{error:#}"))),
-                Err(_) => {
-                    return Err(DialFailure::unreachable(format!(
-                        "the address did not say who it is in {:.1}s",
-                        self.route_timeout.as_secs_f64()
-                    )));
-                }
-            };
+            let opened =
+                match tokio::time::timeout(route_timeout, self.open_proven(address, machine, None))
+                    .await
+                {
+                    Ok(Ok(opened)) => opened,
+                    Ok(Err(error)) => {
+                        let reason = match &bridge {
+                            Some(bridge) => bridge.explain(format!("{error:#}")).await,
+                            None => format!("{error:#}"),
+                        };
+                        return Err(DialFailure::unreachable(reason));
+                    }
+                    Err(_) => {
+                        return Err(DialFailure::unreachable(format!(
+                            "the address did not say who it is in {:.1}s",
+                            route_timeout.as_secs_f64()
+                        )));
+                    }
+                };
             let _serialized = self.credentials.lock().await;
             // Bound the locked section: a route that completes the WebSocket
             // upgrade and then never answers holds this lock through the
             // per-frame timeout, and every other route behind it. Ending it
             // at the route timeout keeps the race's own deadline in charge.
             let resolved = match tokio::time::timeout(
-                self.route_timeout,
-                self.authenticate_with(Some(opened), &route.address, machine, tokens),
+                route_timeout,
+                self.authenticate_with(Some(opened), address, machine, tokens),
             )
             .await
             {
                 Ok(result) => result.and_then(|session| session.check(machine).map(|()| session)),
                 Err(_) => Err(anyhow::anyhow!(
                     "the credential handshake did not finish in {:.1}s",
-                    self.route_timeout.as_secs_f64()
+                    route_timeout.as_secs_f64()
                 )),
             };
             match resolved {
@@ -980,6 +1013,9 @@ impl Connector {
             detail: None,
             at,
         };
+        if let Some(ssh) = &route.ssh {
+            return self.probe_ssh_route(probe, ssh).await;
+        }
         let Ok(target) = crate::transport::dial_target(&route.address) else {
             probe.detail = Some("not an address this client can dial".to_owned());
             return probe;
@@ -1007,13 +1043,45 @@ impl Connector {
         probe
     }
 
+    /// An SSH route's test: open the WebSocket through the bridge, which
+    /// proves the sign-in, the forward and the gateway at once. No handshake
+    /// frame and no token is sent.
+    async fn probe_ssh_route(
+        &self,
+        mut probe: RouteProbe,
+        ssh: &crate::registry::SshRoute,
+    ) -> RouteProbe {
+        let bridge = match crate::tunnel::Bridge::open(ssh).await {
+            Ok(bridge) => bridge,
+            Err(error) => {
+                probe.detail = Some(format!("{error:#}"));
+                return probe;
+            }
+        };
+        let started = std::time::Instant::now();
+        // SSH signs in first, so it gets the longer of the two timeouts.
+        let wait = self.route_timeout.max(Duration::from_secs(15));
+        match tokio::time::timeout(wait, Connection::open_with_timeout(bridge.address(), wait))
+            .await
+        {
+            Ok(Ok(_)) => {
+                probe.outcome = ProbeOutcome::Reachable;
+                probe.latency_ms =
+                    Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+            }
+            Ok(Err(error)) => probe.detail = Some(bridge.explain(format!("{error:#}")).await),
+            Err(_) => probe.outcome = ProbeOutcome::Timeout,
+        }
+        probe
+    }
+
     /// Probe every route the machine has, at once, in the order they are saved.
     /// A public route is left out: this client never dials one (#2651).
     pub async fn probe_routes(&self, machine: &Machine) -> Vec<RouteProbe> {
         let attempts = machine
             .routes
             .iter()
-            .filter(|route| may_send_secrets(&route.address))
+            .filter(|route| route.may_send_secrets())
             .map(|route| self.probe_route(route));
         futures_util::future::join_all(attempts).await
     }
@@ -1034,7 +1102,7 @@ impl Connector {
         let probes = machine.routes.iter().filter(|route| {
             matches!(route.kind, RouteKind::Vpn | RouteKind::Tailscale)
                 && route.address != in_use.address
-                && may_send_secrets(&route.address)
+                && route.is_dialable()
                 && crate::routes::on_local_overlay(route, &local)
         });
         let attempts = probes.map(|route| async move {
