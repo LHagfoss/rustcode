@@ -256,8 +256,10 @@ rather than a `hover:bg-…` utility a class rule would beat.
 The composer floats over the transcript as one card: the field, and under it one control row with
 every control the send needs. Its `/` and `@` menus are a solid drawer attached to the box's top
 edge, each opened by the token at the caret, at the start of the message or after whitespace
-anywhere in it: `/` lists commands, and `@` lists agents, threads and the project's files under
-those quiet headings, in that order. `@` shows a few rows of each section to begin with — what the
+anywhere in it: `/` lists commands, and `@` lists agents, machines, threads and the project's
+files under those quiet headings, in that order. Machines are listed once another computer is
+paired: this one first, then each paired one, dimmed while it is away; picking one writes `@Name`
+and the message says `@Name (machine: <id>)`, the id the thread tools take in `machine`. `@` shows a few rows of each section to begin with — what the
 folder's picks pointed at last, the threads used last, and each harness's own models under a
 sub-heading carrying that harness's mark (left out when a harness has one row that is simply the
 harness by name) — and the rest of a section waits behind its `Show N more` row, which draws it in
@@ -265,7 +267,7 @@ place, with `Show fewer` under it to put the short list back. What is typed sear
 not only the rows on screen.
 `#` opens the same drawer straight on the threads. A keyword
 is the drawer's first row while what is typed is empty or still a prefix of it — `@agents`,
-`@threads`, `@files` — and completing one keeps the drawer open on that group, so `@agents pi`
+`@machines`, `@threads`, `@files` — and completing one keeps the drawer open on that group, so `@agents pi`
 looks inside the agents for `pi`. The arrow keys walk the rows across the groups and never onto a
 heading or a harness's name; ⏎ on `Show N more` opens that section and ⏎ on `Show fewer` closes it,
 and Esc closes the drawer. Everything in the card starts on one left edge: the field, the chips,

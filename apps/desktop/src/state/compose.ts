@@ -124,7 +124,8 @@ export type Attachment =
 
 /**
  * Something a message points at besides its words: another thread (`#Title`), or the harness, model
- * and effort an agent should delegate to (`@pi/deepseek/deepseek-flash`). The draft keeps the
+ * and effort an agent should delegate to (`@pi/deepseek/deepseek-flash`), or the machine to run the
+ * work on (`@Studio`). The draft keeps the
  * short form the reader picks, and the message spells it out (`composedText`), so the agent can act
  * on it: a thread id for `read_session`, or what `start_session` takes. The id is what makes it
  * unambiguous: two threads may share a title, and the list of mentions carries which one was picked.
@@ -141,11 +142,17 @@ export type Mention =
       effort?: string;
       /** What the draft says after the `@`: `pi/deepseek/deepseek-flash`. */
       token: string;
-    };
+    }
+  /**
+   * A computer the work should run on: its id as `list_machines` reports it (`local` for this
+   * computer), and the name the draft shows after the `@`.
+   */
+  | { kind: "machine"; id: string; name: string };
 
 /** What a mention reads as in the draft, and what the mirror draws on its pill: `#Title`, `@codex`. */
 export function mentionToken(mention: Mention): string {
-  return mention.kind === "thread" ? `#${mention.title}` : `@${mention.token}`;
+  if (mention.kind === "thread") return `#${mention.title}`;
+  return mention.kind === "machine" ? `@${mention.name}` : `@${mention.token}`;
 }
 
 /** A link's label cannot hold an unescaped bracket: `#[a]b](…)` would end at the first `]`. */
@@ -158,6 +165,8 @@ const escapeLabel = (title: string) => title.replace(/[\\[\]]/g, (c) => `\\${c}`
  */
 export function mentionText(mention: Mention): string {
   if (mention.kind === "thread") return `#[${escapeLabel(mention.title)}](rustcode://thread/${mention.id})`;
+  // The id is what the thread tools take in `machine`; the name alone could be ambiguous or renamed.
+  if (mention.kind === "machine") return `@${mention.name} (machine: ${mention.id})`;
   const delegation = [
     `harness=${mention.harness}`,
     ...(mention.model ? [`model=${mention.model}`] : []),
@@ -664,7 +673,8 @@ export interface DraftToken {
 function mentionTokens(text: string, mentions: readonly Mention[]): DraftToken[] {
   return mentionRuns(text, mentions).flatMap((run): DraftToken[] => {
     if (typeof run === "string") return refRuns(run);
-    return run.mention.kind === "thread" ? [{ mention: run.raw }] : [{ ref: run.raw.slice(1) }];
+    // A machine's name may hold spaces, as a thread's title does: both are drawn whole on a pill.
+    return run.mention.kind === "agent" ? [{ ref: run.raw.slice(1) }] : [{ mention: run.raw }];
   });
 }
 
