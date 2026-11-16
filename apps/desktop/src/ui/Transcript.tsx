@@ -95,9 +95,9 @@ import {
 } from "./Rows";
 import { turnFooterHidden } from "./replyActions";
 import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
-import { estimatedRowHeight } from "./transcriptHeight";
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
+import { estimatedRowHeight } from "./transcriptHeight";
 
 export { estimatedRowHeight } from "./transcriptHeight";
 

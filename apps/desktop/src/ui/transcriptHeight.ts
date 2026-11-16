@@ -70,4 +70,3 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
 function lines(text: string, perLine: number): number {
   return Math.max(1, Math.ceil(text.length / perLine));
 }
-
