@@ -173,7 +173,11 @@ it reads that machine's `_rustcode/harnesses` — its harnesses, models, logins
 and default — over the machine's own connection and keeps the answer per
 machine (`remoteHarnesses` in `src/state/store.ts`), so the model picker, the
 `@` agents and the harness defaults are the machine's; this computer's list is
-untouched. The composer's Run on pill starts a thread there
+untouched. That snapshot carries only the models a harness has learned there,
+so a machine set up fresh lists none: the picker (and an agent's
+`list_harnesses` or `start_session` on it) asks the machine's own
+`_rustcode/harnesses/models`, which starts the harness briefly, and reads the
+snapshot again. The composer's Run on pill starts a thread there
 (`startNewThread(folder, host)`), and any other new thread starts here. A folder picked on this disk — "Choose Folder…", "New
 Thread in Folder…", the palette's Add project folder — always starts here: a
 path alone never names a machine, so two Macs that share a checkout path cannot

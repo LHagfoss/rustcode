@@ -1,5 +1,5 @@
 import { formatBinding } from "../lib/keys";
-import { primaryModifier } from "../lib/platform";
+import { appPlatform, primaryModifier } from "../lib/platform";
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
 // in front of it; pasted links stay inline as text) and its foot: + on the left,
@@ -90,12 +90,23 @@ import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles, SCOPES
 import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason } from "../state/harness";
 import { usageOf } from "../state/harnessUsage";
 import { childAccountOn, type SignedOutLogins } from "../state/logins";
-import { useMachineReconnecting, useMachines } from "../state/machines";
 import {
+  machineGlyph,
+  machineName,
+  machineTint,
+  platformIcon,
+  selfName,
+  useLocalIdentity,
+  useMachineReconnecting,
+  useMachines,
+} from "../state/machines";
+import {
+  type MachineMentionChoice,
   type MentionEntry,
   type MentionNode,
   type MentionSection,
   mentionNodes,
+  rankMachines,
 } from "../state/mentionDrawer";
 import { modeLabel, PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import { noteRecentFile, recentFiles, recentFirst } from "../state/recentFiles";
@@ -151,6 +162,7 @@ import { LinkChip } from "./LinkChip";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineSelector } from "./MachineSelector";
 import { ModelPicker } from "./ModelPicker";
+import { machineChoices } from "./machineLabels";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import { cx, MenuQuickActions, noTextHelpers, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
@@ -301,9 +313,11 @@ function agentChoices(
 }
 
 /** The group keywords the drawer offers first, while what is typed is empty or still a prefix. */
-function keywordEntries(query: string): MentionScope[] {
+function keywordEntries(query: string, machines: boolean): MentionScope[] {
   const asked = query.trim().toLowerCase();
-  return SCOPES.filter((scope) => scope.word.startsWith(asked)).map((scope) => scope.scope);
+  return SCOPES.filter((scope) => scope.word.startsWith(asked))
+    .map((scope) => scope.scope)
+    .filter((scope) => machines || scope !== "machines");
 }
 
 /** The folder a thread is grouped by: a worktree's repo, else the thread's own folder. */
@@ -536,6 +550,34 @@ export const Composer = memo(function Composer({
     [harnesses, plans, signedOut, parent],
   );
   const mentioning = !!hash || !!at;
+  // `@`'s machines: where the agent should run the work, so it need not look for one. Listed once
+  // another computer is paired, as the Run on selector is. Each says what the thread's own engine
+  // calls it: `local` is the computer the thread runs on, which is this one only for a local thread.
+  const pairedMachines = useMachines((s) => s.machines);
+  const localIdentity = useLocalIdentity();
+  const machineMentions = useMemo((): MachineMentionChoice[] => {
+    if (!pairedMachines.length) return [];
+    const platform = appPlatform();
+    const here = localIdentity.icon ?? platformIcon(platform === "mac" ? "macos" : platform);
+    const choices = machineChoices(
+      pairedMachines,
+      { name: localIdentity.displayName ?? selfName() },
+      machineName,
+    );
+    return choices.map((choice) => {
+      const machine = pairedMachines.find((entry) => entry.id === choice.id);
+      // A remote thread's engine has its own list of machines: the name is what it can resolve.
+      const id = choice.id === host ? "local" : host ? choice.name : choice.id;
+      return {
+        id,
+        name: choice.name,
+        detail: choice.detail,
+        available: choice.available,
+        glyph: machine ? machineGlyph(machine) : here,
+        tint: machine ? machineTint(machine) : localIdentity.tint,
+      };
+    });
+  }, [pairedMachines, localIdentity, host]);
   // The sections the reader opened whole with a `Show all` row: a few rows of each is what the
   // drawer offers first, and this is the rest of the ones they asked for.
   const [expanded, setExpanded] = useState<ReadonlySet<MentionSection>>(NOT_EXPANDED);
@@ -555,9 +597,10 @@ export const Composer = memo(function Composer({
     return mentionNodes({
       query: mentionQuery,
       scope,
-      keywords: scope ? [] : keywordEntries(mentionQuery),
+      keywords: scope ? [] : keywordEntries(mentionQuery, machineMentions.length > 0),
       // Ranked over everything, so a match past the few rows on screen still answers what is typed.
       agents: rankAgents(mentionQuery, agents, ALL_MATCHES),
+      machines: rankMachines(machineMentions, mentionQuery),
       delegates: rankThreads(delegates, mentionQuery, ALL_MATCHES),
       threads: rankThreads(threadChoices, mentionQuery, ALL_MATCHES),
       files: mentionQuery.trim() ? ranked : recentFirst(ranked, recentFiles(cwdForFiles)),
@@ -569,6 +612,7 @@ export const Composer = memo(function Composer({
     mentionQuery,
     scope,
     agents,
+    machineMentions,
     delegates,
     threadChoices,
     files,
@@ -1001,6 +1045,9 @@ export const Composer = memo(function Composer({
           token: entry.agent.token,
         });
         return;
+      case "machine":
+        addMention({ kind: "machine", id: entry.machine.id, name: entry.machine.name });
+        return;
       case "thread":
         addMention({ kind: "thread", id: entry.thread.id, title: entry.thread.title });
         return;
@@ -1362,6 +1409,23 @@ export const Composer = memo(function Composer({
             )}
           </button>
         );
+      case "machine": {
+        const machine = entry.machine;
+        return (
+          <button
+            key={`mc:${machine.id}`}
+            {...row}
+            onClick={() => accept(entry, false)}
+            className={cx(row.className, !machine.available && "opacity-60")}
+          >
+            <DeviceGlyphIcon glyph={machine.glyph} tint={machine.tint} size={16} />
+            <span className={DRAWER_NAME}>
+              <Marked text={machine.name} query={drawerQuery} />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{machine.detail}</span>
+          </button>
+        );
+      }
       case "thread": {
         const thread = entry.thread;
         return (
