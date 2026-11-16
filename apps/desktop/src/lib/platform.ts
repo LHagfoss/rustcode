@@ -49,7 +49,7 @@ export function applyPlatform(): Platform {
 }
 
 /** Whether the platform paints blur at all: Windows and Linux are solid, decorative blur included. */
-export function paintsBlur(platform: Platform = currentPlatform()): boolean {
+export function paintsBlur(platform: Platform = appPlatform()): boolean {
   return platform === "mac";
 }
 

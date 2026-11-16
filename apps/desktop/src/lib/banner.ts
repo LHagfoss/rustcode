@@ -7,7 +7,7 @@
 
 import { useSyncExternalStore } from "react";
 import { isTauri } from "../acp/transport";
-import { EffectCache, effectKey, fitWithin, type PixelEffect } from "./bannerEffects";
+import { EffectCache, effectKey, fitWithin, isPixelEffect, type PixelEffect } from "./bannerEffects";
 import type { EffectRequest, EffectResponse } from "./bannerEffects.worker";
 import { shellCall } from "./shell";
 import { readStorage, writeStorage } from "./storage";
@@ -313,32 +313,46 @@ function effectsWorker(): Worker | null {
 const effects = new EffectCache((url) => URL.revokeObjectURL(url));
 const rendering = new Map<string, Promise<string | null>>();
 
-/** The rendered effect's URL if it is ready, so a picture seen before shows at once. */
-export function cachedEffect(name: string, effect: PixelEffect, dark: boolean): string | undefined {
-  return effects.get(effectKey(name, effect, dark));
+/** What the worker draws: a print effect, or a look ("picture", or a text drawing's size) only blurred. */
+export type RenderLook = PixelEffect | string;
+
+/** The rendered picture's URL if it is ready, so a picture seen before shows at once. */
+export function cachedEffect(name: string, look: RenderLook, dark: boolean, blur = 0): string | undefined {
+  return effects.get(effectKey(name, look, dark, blur));
+}
+
+/** The size the worker draws a source at: at most 2048px on its long edge. */
+export function renderSize(source: HTMLImageElement | HTMLCanvasElement): { width: number; height: number } {
+  return source instanceof HTMLImageElement
+    ? fitWithin(source.naturalWidth, source.naturalHeight)
+    : fitWithin(source.width, source.height);
 }
 
 /**
- * The picture re-printed with `effect`, as a blob URL: rendered once in the worker, from a copy
- * at most 2048px on its long edge, then kept. Null when it cannot be rendered here.
+ * The picture (or a text drawing) re-printed with `look` when that is a print effect, and blurred
+ * by `blur` px of the drawn copy (Windows and Linux, which paint no live blur), as a blob URL:
+ * rendered once in the worker, from a copy at most 2048px on its long edge, then kept. Null when
+ * it cannot be rendered here.
  */
 export function renderEffect(
   name: string,
-  img: HTMLImageElement,
-  effect: PixelEffect,
+  source: HTMLImageElement | HTMLCanvasElement,
+  look: RenderLook,
   dark: boolean,
+  blur = 0,
 ): Promise<string | null> {
-  const key = effectKey(name, effect, dark);
+  const key = effectKey(name, look, dark, blur);
   const ready = effects.get(key);
   if (ready) return Promise.resolve(ready);
   const running = rendering.get(key);
   if (running) return running;
   const w = effectsWorker();
   if (!w || typeof createImageBitmap !== "function") return Promise.resolve(null);
+  const effect = isPixelEffect(look) ? look : null;
   const job = (async () => {
-    const size = fitWithin(img.naturalWidth, img.naturalHeight);
+    const size = renderSize(source);
     if (!size.width) return null;
-    const bitmap = await createImageBitmap(img, {
+    const bitmap = await createImageBitmap(source, {
       resizeWidth: size.width,
       resizeHeight: size.height,
       resizeQuality: "high",
@@ -346,7 +360,7 @@ export function renderEffect(
     const id = ++nextId;
     const png = await new Promise<Blob | null>((resolve) => {
       waiting.set(id, resolve);
-      w.postMessage({ id, bitmap, effect, dark } satisfies EffectRequest, [bitmap]);
+      w.postMessage({ id, bitmap, effect, dark, blur } satisfies EffectRequest, [bitmap]);
     });
     // The picture changed while this ran: its render is not kept.
     if (!png || snapshot.name !== name) return null;

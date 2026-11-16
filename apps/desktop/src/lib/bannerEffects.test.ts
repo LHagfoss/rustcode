@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyEffect,
+  boxBlur,
   dither,
   EffectCache,
   effectKey,
@@ -140,5 +141,38 @@ describe("EffectCache", () => {
     expect(released.sort()).toEqual(["blob:1", "blob:2"]);
     expect(cache.size).toBe(1);
     expect(cache.get(effectKey("new", "dither", true))).toBe("blob:3");
+  });
+});
+
+describe("boxBlur", () => {
+  const stripe = () => {
+    // 5×1: one white pixel between black ones.
+    const px = new Uint8ClampedArray(5 * 4);
+    for (let i = 0; i < 5; i++) px.set(i === 2 ? [255, 255, 255, 255] : [0, 0, 0, 255], i * 4);
+    return px;
+  };
+
+  test("leaves the pixels alone at radius 0", () => {
+    const src = stripe();
+    expect(Array.from(boxBlur(src, 5, 1, 0))).toEqual(Array.from(src));
+  });
+
+  test("spreads a bright pixel to its neighbours and keeps the source", () => {
+    const src = stripe();
+    const out = boxBlur(src, 5, 1, 1);
+    expect(out[2 * 4]).toBeLessThan(255);
+    expect(out[1 * 4]).toBeGreaterThan(0);
+    expect(out[3]).toBe(255);
+    expect(src[2 * 4]).toBe(255);
+  });
+
+  test("keeps a flat colour flat, edges included", () => {
+    const src = new Uint8ClampedArray(4 * 3 * 4).fill(120);
+    expect(Array.from(boxBlur(src, 4, 3, 2)).every((v) => v === 120)).toBe(true);
+  });
+
+  test("keys a baked blur apart from none", () => {
+    expect(effectKey("a", "picture", true, 3)).not.toBe(effectKey("a", "picture", true));
+    expect(effectKey("a", "dither", true, 0)).toBe(effectKey("a", "dither", true));
   });
 });

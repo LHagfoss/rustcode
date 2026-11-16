@@ -955,16 +955,19 @@ composer's keys stay outside the table.
   the app's data folder (`src-tauri/src/banner.rs`; the setting keeps the copy's
   name) and decoded once. *Effect* draws it in coloured text (ASCII, inverted
   on a light background, drawn once per size on an offscreen canvas so a
-  resize scales the last drawing), as is (None), blurred and faded (Haze, CSS
-  only), or re-printed as a 4×4 Bayer Dither, a Halftone of dots on a 4px grid
+  resize scales the last drawing), as is (None), blurred and faded (Haze), or re-printed as a 4×4 Bayer Dither, a Halftone of dots on a 4px grid
   or Scanlines. Those three run once per picture, effect and theme in a Web
   Worker on an OffscreenCanvas (`lib/bannerEffects.worker.ts`, pure pixel
   functions in `lib/bannerEffects.ts`), from a copy at most 2048px on its long
-  edge, and are kept as PNG blob URLs (four at most; a new picture drops the
-  old one's): a resize never renders again, and with no picture nothing runs.
+  edge, and are kept as PNG blob URLs (six at most; a new picture drops the
+  old one's; the CSP's `img-src` allows `blob:` for them): a resize never
+  renders again, and with no picture nothing runs.
   Where there is no worker or OffscreenCanvas the picture shows as is. It fades
   in, and does not move under Reduce motion. *Darken* (0–80%, black over it)
-  and *Blur* (0–40px) apply everywhere; *Show on* is New threads (default) or
+  and *Blur* (0–40px) apply everywhere: macOS blurs live in CSS, and Windows
+  and Linux, which paint no live blur, have the same worker bake it (and
+  Haze's) into the picture or the text drawing once, with a three-pass box
+  blur (`boxBlur`), re-rendered only after a resize or a drag settles; *Show on* is New threads (default) or
   All threads, and *Visibility* (0–60%, 20% by default) is how strongly an open
   thread shows it, behind the transcript. 20% is the 80% wash of the pane
   colour first measured: a white photo in the dark theme left the body text at
