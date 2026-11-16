@@ -28,8 +28,9 @@ describe("the sidebar's sort", () => {
 
   test("a stored sort is read leniently", () => {
     expect(sidebarSort("title")).toBe("title");
-    expect(sidebarSort("nonsense")).toBe("activity");
-    expect(sidebarSort(undefined)).toBe("activity");
+    expect(sidebarSort("activity")).toBe("activity");
+    expect(sidebarSort("nonsense")).toBe("title");
+    expect(sidebarSort(undefined)).toBe("title");
   });
 });
 

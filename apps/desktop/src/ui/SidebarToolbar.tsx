@@ -10,7 +10,14 @@ import { Check, ListFilter, SquarePen, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import type { KeyboardEvent, Ref } from "react";
 import { projectName } from "../acp/types";
-import { PREF, SIDEBAR_SORTS, usePref, useSidebarDensity, useSidebarSort } from "../state/sidebarPrefs";
+import {
+  DEFAULT_SIDEBAR_SORT,
+  PREF,
+  SIDEBAR_SORTS,
+  usePref,
+  useSidebarDensity,
+  useSidebarSort,
+} from "../state/sidebarPrefs";
 import { startNewThread, toast, useApp, useShortcutHint } from "../state/store";
 import { cx, MenuContent, MenuSearchField, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
 
@@ -99,7 +106,7 @@ function ViewMenu({ filtering }: { filtering: boolean }) {
   const [working, setWorking] = usePref(PREF.workingSection, true);
   const [density, setDensity] = useSidebarDensity();
   const [, setToolbar] = usePref(PREF.toolbar, true);
-  const changed = filtering || sort !== "activity";
+  const changed = filtering || sort !== DEFAULT_SIDEBAR_SORT;
   const check = (on: boolean) => (on ? <Check size={14} className="ms-auto shrink-0 text-accent" /> : null);
   return (
     <DropdownMenu.Root>

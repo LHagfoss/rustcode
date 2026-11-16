@@ -40,3 +40,15 @@ export function sidebarProjects(items: readonly SessionSummary[]): ProjectGroup[
     items: rows,
   }));
 }
+
+/**
+ * The folders A–Z by name, whatever the rows' sort: a folder never jumps when one of its threads
+ * starts or finishes. Two same-named folders (two computers) keep a fixed order by key.
+ */
+export function byProjectName(groups: ProjectGroup[]): ProjectGroup[] {
+  return groups.sort(
+    (a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) ||
+      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+  );
+}

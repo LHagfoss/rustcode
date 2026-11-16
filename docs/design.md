@@ -696,12 +696,14 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   turned off in Settings › Appearance or ⌘K: a search field that narrows the
   list as it is typed (title, project folder, branch; it opens shut shelves and
   folders, ⏎ opens the first match, Esc clears), the **Sort and filter** menu
-  (sort by Activity, Last updated or Title; Only this project, Group by
+  (sort by Title, Activity or Last updated; Only this project, Group by
   project, Working at the top, Compact rows), and **New thread**. A filter that
   hides threads always shows: "Only <project>" is a chip under the field with
   its own clear button, and the menu button carries an accent dot while
-  anything differs from the default. Activity is the default sort and the only
-  one that moves rows as turns start and end. Threads settle after 3 idle days
+  anything differs from the default. Title is the default sort, so rows stay put
+  while threads work and finish; Activity is the only one that moves rows as
+  turns start and end. Project folders (Group by project) are always A–Z by
+  name, whatever the sort. Threads settle after 3 idle days
   unless Settings › Appearance › Settle idle threads says otherwise (Never, 1,
   3, 7 or 14 days). The foot carries no buttons: **Settings** lives in the
   title row. ⌘K finds threads too and holds every one of these options, plus

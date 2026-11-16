@@ -19,24 +19,27 @@ export const PREF = {
 /**
  * How the Threads list orders the rows nobody arranged: `activity` puts what runs, then what asks
  * you, then what came back unseen first (rows move as turns start and end); `recent` is by when
- * each thread last changed; `title` is A–Z and never moves on its own.
+ * each thread last changed; `title` is A–Z and never moves on its own, so it is the default.
  */
 export type SidebarSort = "activity" | "recent" | "title";
 
 export const SIDEBAR_SORTS: readonly { id: SidebarSort; label: string }[] = [
+  { id: "title", label: "Title" },
   { id: "activity", label: "Activity" },
   { id: "recent", label: "Last updated" },
-  { id: "title", label: "Title" },
 ];
 
-/** A stored sort, read leniently: anything unknown is the default, `activity`. */
+/** The sort a new sidebar starts with: rows stay where they are while threads work and finish. */
+export const DEFAULT_SIDEBAR_SORT: SidebarSort = "title";
+
+/** A stored sort, read leniently: anything unknown is the default. */
 export function sidebarSort(raw: unknown): SidebarSort {
-  return raw === "recent" || raw === "title" ? raw : "activity";
+  return raw === "activity" || raw === "recent" || raw === "title" ? raw : DEFAULT_SIDEBAR_SORT;
 }
 
 /** The sidebar's sort and its setter, shared by the toolbar's menu and ⌘K. */
 export function useSidebarSort() {
-  const [raw, set] = usePref<string>(PREF.sort, "activity");
+  const [raw, set] = usePref<string>(PREF.sort, DEFAULT_SIDEBAR_SORT);
   return [sidebarSort(raw), set as (next: SidebarSort) => void] as const;
 }
 

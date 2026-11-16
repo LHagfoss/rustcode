@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
-import { hostOf, sidebarProjects } from "./sidebarGroups";
+import { byProjectName, hostOf, sidebarProjects } from "./sidebarGroups";
 import { LOCAL_HOST } from "./threadKeys";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
@@ -40,4 +40,11 @@ test("only a folder on this computer can start a thread", () => {
   expect(groups[0]?.project).toBe(local.cwd);
   expect(groups[1]?.project).toBeUndefined();
   expect(sidebarProjects([])).toEqual([]);
+});
+
+test("folders are A to Z by name, not by which thread changed last", () => {
+  const site = thread("s", "/Users/you/code/Site");
+  const app = thread("a", "/Users/you/code/app");
+  const names = byProjectName(sidebarProjects([site, local, app])).map((g) => g.label);
+  expect(names).toEqual(["app", "notes", "Site"]);
 });
