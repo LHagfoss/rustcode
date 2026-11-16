@@ -1108,7 +1108,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   most 80% wide, `p-3`; consecutive messages soften the corners they share,
   `rounded-tr-md` / `rounded-br-md`; its time and actions on hover, 12px,
   clipped to the bubble, the actions before the time so a steer's kept badge and
-  time end flush with the bubble rather than before their empty room), the final answer (the replies after the last
+  time end flush with the bubble rather than before their empty room; the first message of a day
+  keeps its time in view, with the day, `yesterday at 12:33` or `today at 09:10`, so a thread that
+  ran over several days shows where each began; the row under a bubble takes the narrow gap, since
+  that time line is already its air), the final answer (the replies after the last
   step), warnings and errors, and the footer, which says only the time: no
   duration, so a folded turn never states it twice. A quiet notice the app
   appends for what it did on the thread's behalf (a call an access mode let

@@ -20,7 +20,8 @@ describe("the air above a transcript row", () => {
   test("a turn starts and ends on the wide gap, work inside it on the narrow one", () => {
     const rows = [user("m1"), tool("c1"), tool("c2"), user("m2")];
     expect(rowGap(rows, 0)).toBe(0);
-    expect(rowGap(rows, 1)).toBe(28);
+    // A sent bubble ends on its own 24px time line, so the turn under it takes the narrow gap.
+    expect(rowGap(rows, 1)).toBe(14);
     expect(rowGap(rows, 2)).toBe(14);
     // The message that starts the next turn takes the wide gap again.
     expect(rowGap(rows, 3)).toBe(28);
@@ -91,7 +92,7 @@ describe("the height a row is reserved at", () => {
     ];
     const reserved = rows.map((row, i) => rowGap(rows, i) + estimatedRowHeight(row));
     expect(reserved[1]).toBe(28 + 12 * 2 + 23 + 24);
-    expect(reserved[2]).toBe(28 + 35);
+    expect(reserved[2]).toBe(14 + 35);
     expect(reserved[3]).toBe(14 + 24);
   });
 

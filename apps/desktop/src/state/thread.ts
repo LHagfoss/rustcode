@@ -1337,6 +1337,29 @@ export function messageTime(at: number | undefined, now = Date.now()): string {
 }
 
 /**
+ * The messages that open a new day in a thread: the first one sent on a calendar day after a
+ * message from an earlier day, and the thread's first message when it was not sent today. Their
+ * time stays in view under the bubble (`yesterday at 12:33`, `today at 09:10`), so a reader
+ * scrolling a thread that ran over several days sees where each day starts without hovering.
+ */
+export function newDayMessages(items: readonly TranscriptItem[], now = Date.now()): Set<string> {
+  const out = new Set<string>();
+  const midnight = (at: number) => {
+    const d = new Date(at);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const today = midnight(now);
+  let last: number | undefined;
+  for (const item of items) {
+    if (item.kind !== "user" || !item.at || item.wake || item.continued) continue;
+    const day = midnight(item.at);
+    if (last === undefined ? day !== today : day !== last) out.add(item.id);
+    last = day;
+  }
+  return out;
+}
+
+/**
  * The last thing said in a thread, in one line: what a reader recognises it by in a
  * preview (ui/ThreadHoverCard.tsx). The newest message or answer, skipping the
  * steps between them and the pictures a message carries; null for a thread with
