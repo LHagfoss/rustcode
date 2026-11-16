@@ -11,8 +11,8 @@
 import { Settings as Gear, PanelLeft } from "lucide-react";
 import type { ReactNode } from "react";
 import { appPlatform } from "../lib/platform";
-import { useMachines } from "../state/machines";
-import { openSettings, toggleSidebar, useApp, useShortcutHint } from "../state/store";
+import { useSettingsAttention } from "../state/settingsAttention";
+import { openSettings, type SettingsSection, toggleSidebar, useApp, useShortcutHint } from "../state/store";
 import { Cluster, ClusterButton, cx } from "./primitives";
 import { TITLEBAR_HEIGHT, useLightsInset } from "./Titlebar";
 import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
@@ -21,23 +21,21 @@ import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
 export function SettingsButton() {
   const open = useApp((s) => s.settings !== null);
   const key = useShortcutHint("settings");
-  // A paired machine that is not connected has no row of its own in the list: the gear says so
-  // with a dot, and Settings › Machines says which.
-  const away = useMachines((s) => s.machines.filter((m) => m.state !== "connected").length);
+  // A paired machine that is not connected, or a warning from the RustCode server: the gear says
+  // so with a dot and opens the page that says which and offers the fix (state/settingsAttention.ts).
+  const attention = useSettingsAttention();
+  const first = Object.keys(attention)[0] as SettingsSection | undefined;
+  const reasons = Object.values(attention).join(" · ");
   return (
     <ClusterButton
       label="Settings"
-      tooltip={
-        open
-          ? "Close Settings (Esc)"
-          : `Settings (${key})${away ? ` · ${away === 1 ? "a machine is" : `${away} machines are`} not connected` : ""}`
-      }
+      tooltip={open ? "Close Settings (Esc)" : `Settings (${key})${reasons ? ` · ${reasons}` : ""}`}
       on={open}
-      onClick={() => openSettings(open ? null : "general")}
+      onClick={() => openSettings(open ? null : (first ?? "general"))}
     >
       <span className="relative flex">
         <Gear size={14} />
-        {away > 0 && (
+        {first && (
           <span
             aria-hidden
             data-testid="machines-away-dot"

@@ -44,6 +44,7 @@ import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { connectionDirection, peerOutbound } from "./connectionDirection";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
+import { ServerProblems } from "./ServerProblems";
 import { Action, Chip, Group, Row } from "./settingsKit";
 
 /** The page keeps itself current while it is open: pairing counts down in the engine. */
@@ -200,11 +201,7 @@ export function RemoteAccessPage() {
               {server?.gateway.remoteEnabled || server?.gateway.running ? (
                 <span className="block">Gateway: {gatewayLine(server.gateway, server.installed)}</span>
               ) : null}
-              {server?.problems.map((problem) => (
-                <span key={problem.code} className="block pt-0.5 text-warning">
-                  {problem.message}
-                </span>
-              ))}
+              <ServerProblems problems={server?.problems} />
             </>
           }
         >
