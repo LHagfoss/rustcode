@@ -56,6 +56,7 @@ import {
   useApp,
 } from "../state/store";
 import {
+  newDayMessages,
   noticeLine,
   type QueuedPrompt,
   splitSubagentSteps,
@@ -321,12 +322,11 @@ export function rowGap(rows: readonly Row[], index: number): number {
   if (index <= 0) return 0;
   const item = rows[index]?.item;
   const prev = rows[index - 1]?.item;
-  if (
-    (prev?.kind === "notice" && prev.tone === "info") ||
-    (prev?.kind === "user" && !!(prev.wake || prev.continued))
-  )
-    return ITEM_GAP;
-  return item?.kind === "user" || prev?.kind === "user" ? TURN_GAP : ITEM_GAP;
+  // A divider is the turn's own first line, and a sent bubble already ends on the 24px line its
+  // time and actions keep (`META_LINE`): the row under either takes the narrow gap, or the air
+  // between a message and its turn came to 52px where every other turn break is 28.
+  if ((prev?.kind === "notice" && prev.tone === "info") || prev?.kind === "user") return ITEM_GAP;
+  return item?.kind === "user" ? TURN_GAP : ITEM_GAP;
 }
 
 function searchable(item: TranscriptItem): string {
@@ -576,6 +576,8 @@ export function Transcript({
   // skips a streamed chunk (state/fold.ts keepUnchangedRows).
   const drawnRows = useRef<Row[]>([]);
   const showTools = useApp((s) => s.showToolCalls);
+  // The messages that open a day keep their time in view: where a long thread's days begin.
+  const newDays = useMemo(() => newDayMessages(visible), [visible]);
   const rows = useMemo<Row[]>(() => {
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each,
     // and the same quiet notice said back to back reads as one row with its count.
@@ -1421,6 +1423,7 @@ export function Transcript({
                           // Consecutive messages from the same side soften the corners they share.
                           after={rows[v.index - 1]?.item?.kind === "user"}
                           before={rows[v.index + 1]?.item?.kind === "user"}
+                          newDay={newDays.has(item.id)}
                         />
                       </SelectableMessage>
                     ) : item?.kind === "assistant" ? (

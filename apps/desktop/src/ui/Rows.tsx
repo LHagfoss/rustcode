@@ -182,6 +182,7 @@ export const UserRow = memo(function UserRow({
   rewind,
   before,
   after,
+  newDay,
 }: {
   item: Item<"user">;
   threadId?: string;
@@ -196,6 +197,8 @@ export const UserRow = memo(function UserRow({
   before?: boolean;
   /** The message before this one is the sender's too. */
   after?: boolean;
+  /** The first message of its day (`newDayMessages`): its time stays in view, with the day. */
+  newDay?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const { text, paths, lost } = useMemo(() => splitImageMarkers(stripMarks(item.text)), [item.text]);
@@ -378,7 +381,12 @@ export const UserRow = memo(function UserRow({
         {item.steered && <span className="rc-keep text-accent">Steered</span>}
         {item.fromView && <span className="rc-keep text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
-          <span className="truncate tabular">{messageTime(item.at)}</span>
+          <span className={cx("truncate tabular", newDay && "rc-keep")}>
+            {/* `messageTime` names the day from yesterday on; a day that starts today says so too. */}
+            {newDay && item.at && new Date(item.at).toDateString() === new Date().toDateString()
+              ? `today at ${messageTime(item.at)}`
+              : messageTime(item.at)}
+          </span>
         </Tooltip>
       </div>
     </div>
@@ -475,7 +483,7 @@ export const AssistantRow = memo(function AssistantRow({
   // turn, at the foot of its last reply (`TurnEndRow`), and nothing else has any.
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
-      <div className="selectable px-1">
+      <div className="selectable">
         <Markdown
           text={item.text}
           streaming={streaming}
@@ -490,7 +498,7 @@ export const AssistantRow = memo(function AssistantRow({
   // A view stands apart from the prose around it: 20px between segments, where 8px ran
   // the sentence after a view into its last row.
   return (
-    <div className="flex flex-col gap-5 selectable px-1">
+    <div className="flex flex-col gap-5 selectable">
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown
