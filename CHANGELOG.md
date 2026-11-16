@@ -1,3 +1,23 @@
+## [v1.39.3](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.3) - 2026-11-16
+
+### Features
+- Fix Settings › Appearance › Chat background: Dither, Halftone and Scanlines now show, and Blur and Haze work on Windows and Linux. (#3858)
+- Fix an empty model picker for Codex and Claude Code on a newly paired machine. (#3855)
+- Mention a machine with `@` in the composer to tell the agent where to run the work, with autocompletion. (#3859)
+- Chat background effects and blur now render on web views without OffscreenCanvas, such as WebKitGTK on Linux. (#3860)
+- Machines can be reached over SSH, and each machine's routes can be added, turned off and removed under Settings › Machines. (#3861)
+- Show working folders in sidebar thread rows, reduce repeated machine labels, and make threads needing attention easier to spot. (#3862)
+- Chat replies line up with the work above them, a sent message sits closer to its turn, and the first message of each day shows its date. (#3863)
+- Clarify the chat header's thread actions button and improve new-thread heading readability over background effects. (#3865)
+- Show usage left explicitly in the desktop composer, with the window and reset time on hover. (#3866)
+- Settings › Capabilities shows each skill on one line, and "Create with agent" starts a thread that writes a new skill with you; agents can now save skills through the RustCode MCP server. (#3864)
+- Selecting text in a message no longer shows an "Ask in a side chat" button. (#3867)
+- On a paired machine, the project picker's Browse Folders… lists that machine's folders and makes a new project there. (#3868)
+- Keep settled threads done by clearing pending notifications and stopping PR wakeups. (#3870)
+- Cmd/Ctrl+W now settles the current thread instead of closing the window. (#3874)
+- Keep self-settled threads settled when late pull request or CI notices arrive. (#3873)
+- The desktop app uses Inter and rounded icons throughout, keeps compact text by default with optional larger sizes in Appearance, clarifies project and delegate nesting with a full-width New thread button, removes sidebar attention bars, and reserves space for thread pictures while loading. (#3871)
+- Settings › Harnesses shows one row per harness, with its accounts and details behind a click, and switches have a smaller knob inset in the track. (#3857)
 ## [v1.39.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.2) - 2026-11-16
 
 ### Fixes
