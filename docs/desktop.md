@@ -1134,7 +1134,11 @@ composer's keys stay outside the table.
   (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits
   on the user: an approval, a question, a failed turn, or a delegate asking.
   A thread merely marked for review does not count, and the row's count is the
-  inbox's own list. With nothing waiting there is no row at all, so no empty
+  inbox's own list. A question answers in place: the selected question row
+  opens its whole card under it (every answer with what it means, a multiple
+  choice's ticks, the user's own words and files, the same draft as the
+  thread's card), and 1–7 pick the answers the card numbers, Open and Dismiss
+  after them. With nothing waiting there is no row at all, so no empty
   heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
   and the palette. One list, top to bottom: Pinned, then one **Threads** list,
   then Snoozed and Settled as shelves at the foot. **Threads** leads with the
