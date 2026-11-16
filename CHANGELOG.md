@@ -1,3 +1,12 @@
+## [v1.39.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.1) - 2026-11-16
+
+### Features
+- A failed turn now offers what fixes it: Sign in when the agent is signed out, Compact when the conversation is full, and Try again where that can work. (#3841)
+- The Needs you inbox answers a question in place: the selected question opens with every answer, what each means, and room for your own. (#3842)
+- Sidebar rows show how far a working thread is through its plan, and why a waiting thread waits (a limit reset time, no internet, or the thread it waits for). (#3844)
+- The Delegates section can show lanes: one row per agent and model, with each delegate as a card in the order the work was handed out. (#3845)
+- Starting a delegate now asks with a plan card: which agent and model, how long that usually takes, where it works, its access, and what happens when it is done. (#3846)
+- Reviews can show as a findings card: severity, file and line, who found it, and whether it was fixed or set aside, with Reopen. (#3843)
 ## [v1.39.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.0) - 2026-11-16
 
 ### Features
