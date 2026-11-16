@@ -122,12 +122,6 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/data/activity",
     "_rustcode/project/read",
     "_rustcode/project/clone",
-    // Browsing that machine's folders and making a project folder there: a
-    // fresh server has no project yet, and its disk is not the paired app's
-    // to open in a file dialog. Neither reaches past what `session/new`
-    // in any folder already can.
-    "_rustcode/project/browse",
-    "_rustcode/project/create",
     "_rustcode/worktrees/state",
     // The machine fleet's names, versions and last-seen times, exchanged
     // between paired computers (`crate::fleet`): metadata only.
@@ -379,8 +373,6 @@ mod tests {
                 "_rustcode/data/activity",
                 "_rustcode/project/read",
                 "_rustcode/project/clone",
-                "_rustcode/project/browse",
-                "_rustcode/project/create",
                 "_rustcode/worktrees/state",
                 "_rustcode/environment/sync",
                 "_rustcode/session/harness",
@@ -423,8 +415,6 @@ mod tests {
             "_rustcode/data/activity",
             "_rustcode/project/read",
             "_rustcode/project/clone",
-            "_rustcode/project/browse",
-            "_rustcode/project/create",
             "_rustcode/worktrees/state",
             "_rustcode/session/harness",
             "_rustcode/attachments/read",
@@ -462,6 +452,7 @@ mod tests {
             "_rustcode/mcp/set",
             "_rustcode/data/query",
             "_rustcode/data/usage",
+            "_rustcode/project/create",
             "_rustcode/worktrees/handoff",
             "_rustcode/unknown",
             "unknown",

@@ -2798,23 +2798,6 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: projects::ProjectBrowseRequest, responder, connection| {
-                connection.spawn(async move {
-                    match tokio::task::spawn_blocking(move || projects::browse(request)).await {
-                        Ok(Ok(answer)) => responder.respond(answer),
-                        Ok(Err(error)) => responder.respond_with_error(
-                            agent_client_protocol::Error::invalid_params().data(error),
-                        ),
-                        Err(error) => responder.respond_with_error(
-                            agent_client_protocol::Error::internal_error().data(error.to_string()),
-                        ),
-                    }?;
-                    Ok(())
-                })
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
             async move |request: projects::ProjectCreateRequest, responder, connection| {
                 connection.spawn(async move {
                     match projects::create(request) {
