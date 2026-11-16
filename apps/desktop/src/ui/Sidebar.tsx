@@ -71,6 +71,7 @@ import {
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
+import { middleEllipsis } from "../lib/folderList";
 import { rowBranch } from "../lib/gitRef";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { onFileDrop, openTerminalAt, openThreadLog, revealPath } from "../lib/native";
@@ -112,7 +113,13 @@ import {
   subscribePulls,
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
-import { byProjectName, type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
+import {
+  byProjectName,
+  type ProjectGroup,
+  sidebarProjects,
+  spansMachines,
+  threadFolder,
+} from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import {
   PREF,
@@ -741,6 +748,26 @@ function PullMark({ pull }: { pull: PullRequest }) {
   );
 }
 
+/** Fit both ends of a folder path to the space the row actually gives it. */
+function MiddlePath({ path }: { path: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [chars, setChars] = useState(32);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setChars(Math.max(5, Math.floor(entry.contentRect.width / 7)));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <span ref={ref} className="block overflow-hidden whitespace-nowrap">
+      {middleEllipsis(path, chars)}
+    </span>
+  );
+}
+
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
 // Compact: a title and state, then a quiet line for the branch and other details.
 // Comfortable: the title first, the project's mark and the branch under it. Hovering swaps the
@@ -749,7 +776,7 @@ const ThreadRow = memo(function ThreadRow({
   session,
   selected,
   context,
-  grouped,
+  mixedMachines,
   now,
   from,
   pull,
@@ -769,8 +796,8 @@ const ThreadRow = memo(function ThreadRow({
   context?: boolean;
   /** Being dragged to another place in its section: no hover card, and no pointer of its own. */
   dragging?: boolean;
-  /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
-  grouped: boolean;
+  /** The filtered rows span more than one computer. */
+  mixedMachines: boolean;
   now: number;
   /**
    * No parent row above it (a search result, or a parent in another project the filter left out):
@@ -798,8 +825,7 @@ const ThreadRow = memo(function ThreadRow({
   // and the hover card says so. A thread from this computer carries nothing.
   const host = useMachines((s) => s.machines.find((m) => m.id === session.host));
   const machine = host ? machineName(host) : undefined;
-  // With machines paired, this computer's own threads name it too.
-  const paired = useMachines((s) => s.machines.length > 0);
+
   const local = useLocalIdentity();
   const platform = appPlatform();
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
@@ -861,7 +887,8 @@ const ThreadRow = memo(function ThreadRow({
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
   const model = modelName(session.model);
   // The folder it runs in, as people read it (`~/code/app`, `C:\code\app`).
-  const folder = session.cwd ? displayPath(session.cwd) : undefined;
+  const folderPath = threadFolder({ ...session, worktree });
+  const folder = folderPath ? displayPath(folderPath) : "No folder";
   const startRename = () => {
     // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
     // says so instead of opening an editor whose save would only be refused (store.ts).
@@ -929,12 +956,11 @@ const ThreadRow = memo(function ThreadRow({
     e.stopPropagation();
     selectThread(from.id);
   };
-  // Where it runs: another computer always says so, and once machines are paired this one does too,
-  // so every row in a mixed list names its computer.
+  // Remote rows always name their computer; local rows do so only in a mixed list.
   const place =
     host && machine
       ? { glyph: machineGlyph(host), tint: machineTint(host), name: machine }
-      : paired
+      : mixedMachines
         ? {
             glyph: local.icon ?? platformIcon(platform === "mac" ? "macos" : platform),
             tint: local.tint,
@@ -1014,6 +1040,12 @@ const ThreadRow = memo(function ThreadRow({
               className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
             >
               <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
+              {request && (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-y-2 left-0 w-0.5 rounded-full bg-warning"
+                />
+              )}
               {compact ? (
                 <>
                   <CompactDot mark={compactMark(chip)} />
@@ -1084,23 +1116,12 @@ const ThreadRow = memo(function ThreadRow({
                       <span className="flex min-w-0 items-center justify-end">{state}</span>
                     </span>
                   </span>
-                  {/* Line 2: where it runs — the project (under its heading, the harness) and the computer. */}
+                  {/* Line 2: the working folder and, when needed, the computer. */}
                   <span className={ROW_LINE}>
                     <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-                      {grouped ? (
-                        external && (
-                          <HarnessIcon
-                            id={session.harness!}
-                            name={harness?.name}
-                            size={12}
-                            className="shrink-0"
-                          />
-                        )
-                      ) : (
-                        <ProjectMark name={project} size={14} className={markTint} />
-                      )}
-                      <span className="min-w-0 max-w-[60%] shrink-0 truncate">
-                        {grouped ? (harnessName ?? "") : project}
+                      <ProjectMark name={project} size={14} className={markTint} />
+                      <span className="min-w-0 flex-1" title={folderPath}>
+                        <MiddlePath path={folder} />
                       </span>
                       {place && (
                         <span
@@ -1190,23 +1211,13 @@ const ThreadRow = memo(function ThreadRow({
                             {rowBranch(gitBranch)}
                           </span>
                         </>
-                      ) : (
-                        // A folder outside git has no branch: the line names the folder instead.
-                        folder && (
-                          <>
-                            <Folder size={12} className="shrink-0" />
-                            <span className="min-w-0 truncate" title={folder}>
-                              {folder}
-                            </span>
-                          </>
-                        )
-                      )}
+                      ) : null}
                     </span>
-                    {/* The harness's icon unless the section heading names it, then the model it runs. */}
+                    {/* The harness mark always accompanies the model. */}
                     <span className={cx(ROW_RIGHT, "text-sub text-fg-faint")}>
-                      {!grouped && external && (
+                      {model && (
                         <HarnessIcon
-                          id={session.harness!}
+                          id={session.harness || "rustcode"}
                           name={harness?.name}
                           size={12}
                           className="shrink-0"
@@ -1813,6 +1824,7 @@ export function Sidebar() {
       ),
     [sessions, onlyProject, projectCwd, query],
   );
+  const mixedMachines = useMemo(() => spansMachines(filtered), [filtered]);
   // The threads waiting on work they handed out, though no turn of theirs runs: the Threads list
   // holds them beside the ones running (state/waiting.ts).
   const waiting = useWaitingIds(useMemo(() => filtered.map((s) => s.id), [filtered]));
@@ -2470,14 +2482,14 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  const rowFor = (s: SessionSummary, grouped: boolean, hint = true) => (
+  const rowFor = (s: SessionSummary, _grouped: boolean, hint = true) => (
     <ThreadRow
       session={s}
       selected={s.id === selectedId}
       context={s.id === contextSelected && s.id !== selectedId}
       // A row being dragged shows no hover card and takes no pointer.
       dragging={drag.draggedId === s.id}
-      grouped={grouped}
+      mixedMachines={mixedMachines}
       pull={pullOf(s)}
       now={now}
       from={hint ? origins.get(s.id) : undefined}
@@ -2576,7 +2588,7 @@ export function Sidebar() {
             <SettingsButton />
           </TitlebarControls>
         </TitlebarRow>
-        <NeedsYouRow />
+        <NeedsYouRow threadIds={new Set(filtered.map((s) => s.id))} />
         {toolbarOn && (
           <SidebarToolbar
             query={rawQuery}

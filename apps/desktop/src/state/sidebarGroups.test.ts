@@ -3,7 +3,14 @@
 
 import { expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
-import { byProjectName, hostOf, sidebarProjects } from "./sidebarGroups";
+import {
+  byProjectName,
+  filteredNeedsCount,
+  hostOf,
+  sidebarProjects,
+  spansMachines,
+  threadFolder,
+} from "./sidebarGroups";
 import { LOCAL_HOST } from "./threadKeys";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
@@ -47,4 +54,27 @@ test("folders are A to Z by name, not by which thread changed last", () => {
   const app = thread("a", "/Users/you/code/app");
   const names = byProjectName(sidebarProjects([site, local, app])).map((g) => g.label);
   expect(names).toEqual(["app", "notes", "Site"]);
+});
+
+test("machine tags follow the filtered rows, not the paired machine inventory", () => {
+  expect(spansMachines([])).toBe(false);
+  expect(spansMachines([local])).toBe(false);
+  expect(spansMachines([linux, linuxOther])).toBe(false);
+  expect(spansMachines([local, linux])).toBe(true);
+  expect(spansMachines([linux, studio])).toBe(true);
+});
+
+test("working folder uses the worktree, never its repository", () => {
+  expect(threadFolder(local)).toBe(local.cwd!);
+  expect(threadFolder({ ...local, worktree: { path: "/tmp/task", repo: local.cwd!, branch: "task" } })).toBe(
+    "/tmp/task",
+  );
+  expect(threadFolder({ cwd: "" })).toBe("");
+});
+
+test("needs-you count includes only filtered threads and counts each once", () => {
+  const items = [{ threadId: local.id }, { threadId: local.id }, { threadId: linux.id }];
+  expect(filteredNeedsCount(items, new Set([local.id]))).toBe(1);
+  expect(filteredNeedsCount(items, new Set([local.id, linux.id]))).toBe(2);
+  expect(filteredNeedsCount(items, new Set())).toBe(0);
 });
