@@ -293,6 +293,18 @@ async fn outside_http_interop() {
         tokio::task::yield_now().await;
     }
     drop(f);
+    // The full suite binds ports of its own: wait until the remembered one is free again, so the
+    // restart is not pushed to the next port by another test holding it for a moment.
+    let port: u16 = base.rsplit(':').next().unwrap().parse().unwrap();
+    for _ in 0..200 {
+        if TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let restarted = Fixture::start(dir.path()).await;
     assert_eq!(restarted.server.base, base);
     let token = restarted.token().await;

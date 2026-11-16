@@ -89,6 +89,7 @@ export {
 } from "./harnessActions";
 export {
   clearStatusMark,
+  leaveSettledThreads,
   sessionById,
   setThreadStatus,
   setThreadsStatus,
