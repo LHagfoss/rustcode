@@ -1128,14 +1128,19 @@
   @apply glass-filter;
 }
 
-/*
- * The new thread's heading and its tip (ui/ChatView.tsx): a pill behind either of them would cover
- * the picture the screen is about, so over a chosen picture the words carry a halo of the pane's
- * own colour instead — a crisp 1px stroke that holds each glyph's edge on any photo, plus the tight
- * and the wide lift around it. The colour is the theme's, so it is white under the light theme's
- * dark glyphs and near-black under the dark theme's light ones; over the pane itself none of it is
- * drawn.
- */
+/* A local wash protects the whole heading and tip even over a bright image. The feathered
+ * edge leaves the surrounding effect visible and follows light, dark and custom themes. */
+.rc-heading-over-image::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -8px;
+  border-radius: var(--rc-radius-xl);
+  background: color-mix(in srgb, var(--rc-bg) 94%, transparent);
+  box-shadow: 0 0 24px 16px color-mix(in srgb, var(--rc-bg) 94%, transparent);
+  pointer-events: none;
+}
+
 .rc-text-over-image {
   text-shadow:
     0 0 1px var(--rc-bg),
