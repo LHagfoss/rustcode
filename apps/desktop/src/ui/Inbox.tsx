@@ -40,7 +40,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
-import { orderedOptions } from "./AttentionCards";
+import { orderedOptions, QuestionCard } from "./AttentionCards";
 import { ViewHeader } from "./Board";
 import { ProjectMark } from "./ProjectMark";
 import { cx, Kbd, Pill } from "./primitives";
@@ -119,8 +119,10 @@ function rowAnswers(item: InboxItem): RowAction[] {
     // A multiple-choice question needs the thread's own form: one inline answer could
     // send half of it.
     if (request.question.multiple) return [];
+    // Every answer, in the order the question card numbers them, so a digit picks the same one
+    // in the row and in the card the selected row opens.
     const answers = request.options.filter((option) => isAllow(option.kind) || !option.kind);
-    return answers.slice(0, 3).map(
+    return answers.slice(0, 7).map(
       (option, i): RowAction => ({
         label: option.name,
         run: () => answerQuestionOptions(request, [option]),
@@ -169,21 +171,34 @@ function KindIcon({ kind }: { kind: InboxItem["kind"] }) {
 }
 
 /** The answers, with their digit hints: shown on the row the keyboard is on, or hovered. */
-function RowActions({ item, onRun }: { item: InboxItem; onRun: (action: RowAction) => void }) {
+function RowActions({
+  item,
+  onRun,
+  withoutAnswers,
+}: {
+  item: InboxItem;
+  onRun: (action: RowAction) => void;
+  /** The question's card is open under the row and holds its answers: only Open and Dismiss here. */
+  withoutAnswers?: boolean;
+}) {
+  const actions = inboxActions(item);
+  const answers = withoutAnswers ? rowAnswers(item).length : 0;
   return (
     <>
-      {inboxActions(item).map((action, i) => (
-        <Pill
-          key={`${action.label}-${i}`}
-          size="sm"
-          prominent={action.primary}
-          onClick={() => onRun(action)}
-          className="max-w-full overflow-hidden"
-        >
-          <span className="min-w-0 truncate">{action.label}</span>
-          {i < 9 && <Kbd>{i + 1}</Kbd>}
-        </Pill>
-      ))}
+      {actions.map((action, i) =>
+        i < answers ? null : (
+          <Pill
+            key={`${action.label}-${i}`}
+            size="sm"
+            prominent={action.primary}
+            onClick={() => onRun(action)}
+            className="max-w-full overflow-hidden"
+          >
+            <span className="min-w-0 truncate">{action.label}</span>
+            {i < 9 && <Kbd>{i + 1}</Kbd>}
+          </Pill>
+        ),
+      )}
     </>
   );
 }
@@ -223,6 +238,10 @@ function InboxRow({
 }) {
   const actions = inboxActions(item);
   const compact = actions.find((action) => action.primary) ?? actions[0];
+  // The selected question answers in place: its whole card (every answer with what it means, a
+  // multiple choice's ticks, the user's own words and files) opens under the row, the same draft
+  // as the thread's own card (state/questionDrafts.ts).
+  const opensCard = active && !!item.request?.question && !item.request.secret;
   return (
     <li
       data-inbox-key={item.key}
@@ -237,18 +256,25 @@ function InboxRow({
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <button
-            type="button"
-            onClick={onOpen}
-            title={item.detail}
-            className={cx(
-              "min-w-0 flex-1 text-left text-callout text-fg-muted hover:text-fg",
-              // The selected row reads its question whole: the answers drop to their own line.
-              active ? "break-words whitespace-normal" : "truncate",
-            )}
-          >
-            {item.detail}
-          </button>
+          {opensCard ? (
+            // The card under the row says the question whole; the row keeps its count and age.
+            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              <RowActions item={item} onRun={onRun} withoutAnswers />
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpen}
+              title={item.detail}
+              className={cx(
+                "min-w-0 flex-1 text-left text-callout text-fg-muted hover:text-fg",
+                // The selected row reads its question whole: the answers drop to their own line.
+                active ? "break-words whitespace-normal" : "truncate",
+              )}
+            >
+              {item.detail}
+            </button>
+          )}
           {item.pending > 1 && (
             <span className="shrink-0 text-caption text-fg-faint tabular">
               {item.number} of {item.pending}
@@ -268,11 +294,12 @@ function InboxRow({
         <span
           className={cx(
             "min-w-0 flex-wrap items-center gap-1.5",
-            active ? "flex" : "hidden group-hover:flex group-focus-within:flex",
+            opensCard ? "hidden" : active ? "flex" : "hidden group-hover:flex group-focus-within:flex",
           )}
         >
           <RowActions item={item} onRun={onRun} />
         </span>
+        {opensCard && item.request && <QuestionCard request={item.request} keys={false} />}
       </div>
       {/* The row's own x: the quick way out for a pointer, beside the answers the
           hovered line offers and the digit key that does the same. */}
