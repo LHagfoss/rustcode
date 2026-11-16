@@ -152,25 +152,28 @@ pub(crate) fn current(session_id: &str) -> Status {
         .get(session_id)
         .copied()
         .unwrap_or_default();
+    // Settling is an explicit decision even when the agent's final turn is still running.
+    // Keep execution liveness separate (`is_active`) so this does not cancel that turn.
+    let stored = stored(session_id);
+    if stored == Some(Status::Done) {
+        return Status::Done;
+    }
     if live.waits > 0 {
         Status::NeedsInput
     } else if live.turns > 0 {
         Status::Running
     } else {
-        stored(session_id).unwrap_or(Status::Idle)
+        stored.unwrap_or(Status::Idle)
     }
 }
 
 pub(crate) fn is_running(session_id: &str) -> bool {
-    matches!(current(session_id), Status::Running | Status::NeedsInput)
+    is_active(session_id)
 }
 
 /// Whether a turn runs or waits on the user right now, read from memory only.
 ///
-/// [`is_running`] falls back to the stored status, which is a file read; a
-/// caller that looks every 100 ms (a shared thread's loop) wants the live
-/// answer alone, which is the same one: a stored `done` or `review` is never
-/// `is_running`.
+/// This remains true when the running turn has already stored `done`.
 pub(crate) fn is_active(session_id: &str) -> bool {
     let live = live()
         .lock()
@@ -455,6 +458,34 @@ mod tests {
         set(&id, "done").unwrap();
         assert_eq!(current(&id), Status::Done);
         set(&id, "idle").unwrap();
+        assert_eq!(current(&id), Status::Idle);
+    }
+
+    #[test]
+    fn self_settle_survives_the_running_turn_and_pull_news() {
+        let id = crate::config::create_detached_session();
+        {
+            let _turn = turn(&id);
+            set(&id, "done").unwrap();
+            assert_eq!(current(&id), Status::Done);
+            assert!(is_running(&id), "settling does not stop the turn");
+            let _wait = waiting(&id);
+            assert_eq!(current(&id), Status::Done);
+            on_pull_events(
+                &id,
+                &[crate::pull_watch::WatchEvent {
+                    kind: "checks_failed".into(),
+                    message: "Checks failed".into(),
+                    at: String::new(),
+                }],
+            );
+        }
+        assert_eq!(current(&id), Status::Done);
+        assert!(!is_running(&id));
+        {
+            let _user_turn = turn(&id);
+            assert_eq!(current(&id), Status::Running);
+        }
         assert_eq!(current(&id), Status::Idle);
     }
 
