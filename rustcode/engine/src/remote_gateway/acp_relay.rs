@@ -105,6 +105,10 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/session/snooze",
     "_rustcode/session/repair",
     "_rustcode/harnesses",
+    // A harness's models, listed by starting it briefly when it never ran
+    // here: a freshly set up machine has learned none, and its model picker
+    // would stay empty until a thread ran on the harness's default.
+    "_rustcode/harnesses/models",
     "_rustcode/harnesses/default",
     "_rustcode/harnesses/set",
     "_rustcode/settings/get",
@@ -358,6 +362,7 @@ mod tests {
                 "_rustcode/session/snooze",
                 "_rustcode/session/repair",
                 "_rustcode/harnesses",
+                "_rustcode/harnesses/models",
                 "_rustcode/harnesses/default",
                 "_rustcode/harnesses/set",
                 "_rustcode/settings/get",
@@ -393,6 +398,7 @@ mod tests {
             "_rustcode/pulls/list",
             "_rustcode/pullsFuture",
             "_rustcode/harnesses",
+            "_rustcode/harnesses/models",
             "_rustcode/harnesses/default",
             "_rustcode/harnesses/set",
             "_rustcode/settings/get",
