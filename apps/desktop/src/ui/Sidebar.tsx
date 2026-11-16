@@ -175,6 +175,7 @@ import {
   Clock,
   CloudUpload,
   Copy,
+  CornerDownRight,
   CornerUpLeft,
   Ellipsis,
   Eye,
@@ -1477,8 +1478,13 @@ function OpenChild({ row, deeper }: { row: React.ReactNode | null; deeper: React
         // `rc-row-in` is the list's own arrival motion: the fold above it starts open, so the row
         // would otherwise appear in place when the thread is opened.
         <div className="rc-row-in relative pl-4">
-          {/* The subtle line saying this row belongs to the one above it. */}
-          <span aria-hidden className="pointer-events-none absolute inset-y-1 left-1.5 w-px bg-border" />
+          {/* A short, fine elbow points into the delegate instead of spanning its row. */}
+          <CornerDownRight
+            aria-hidden
+            size={12}
+            strokeWidth={0.75}
+            className="pointer-events-none absolute top-2 left-0.5 text-fg-faint"
+          />
           {held.current.row}
           {held.current.deeper}
         </div>
@@ -2484,7 +2490,7 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  const rowFor = (s: SessionSummary, _grouped: boolean, hint = true) => (
+  const rowFor = (s: SessionSummary, _grouped: boolean, hint = true, nested = false) => (
     <ThreadRow
       session={s}
       selected={s.id === selectedId}
@@ -2502,7 +2508,7 @@ export function Sidebar() {
       pinKey={pinKey}
       settleKey={settleKey}
       onClearSelection={clearSelection}
-      compact={compact}
+      compact={compact || nested}
     />
   );
   // The open delegate and its descendants, each an indented row under the one above it. The last
@@ -2518,7 +2524,7 @@ export function Sidebar() {
     const ownHeading = grouped && (!above || sameProject(child, above));
     return (
       <OpenChild
-        row={current ? rowFor(current, ownHeading, false) : null}
+        row={current ? rowFor(current, ownHeading, false, true) : null}
         deeper={openBelow(child.id, ownHeading, depth + 1)}
       />
     );
@@ -2670,10 +2676,9 @@ export function Sidebar() {
                                   onToggle={() => toggle(`project:${p.key}`)}
                                   onNew={onNew}
                                 />
-                                {/* Under its project's heading the row drops the mark: its title
-                                    then lines up under the folder's name. */}
+                                {/* Inset threads so the project's hierarchy reads before its delegates. */}
                                 <Fold open={projectOpen}>
-                                  <div className="pl-5">{rows(p.items, true)}</div>
+                                  <div className="pl-8">{rows(p.items, true)}</div>
                                 </Fold>
                               </div>
                             );

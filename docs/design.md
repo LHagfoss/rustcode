@@ -737,7 +737,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `fg-muted`, with 14px folder icons: the label,
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
-- **Sidebar rows:** every thread row is one fixed grid of three lines, 68px
+- **Sidebar rows:** project groups inset their threads by 32px. A full-width New thread
+  button sits above search. Every detailed thread row is one fixed grid of three lines, 68px
   tall whatever it holds, with `rounded-xl`, so a column of rows reads as a
   table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`). Each line
   is a left part that truncates and a right part against the row's edge that
@@ -797,7 +798,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   started are the marks, and one it messaged is what makes the chip say
   `Waiting`. Hovering lists
   the running threads and their state, and the row opens the parent. The open
-  delegate itself is drawn as an indented row, with a subtle tree line, directly
+  delegate itself is drawn as a compact one-line indented row, with a thin inward elbow, directly
   under its parent's row, unfolding in with the list's fold motion and folding
   away when the user opens another thread or goes back; the threads between it
   and its nearest row of its own come with it, and a parent in the Settled shelf
