@@ -1627,9 +1627,9 @@
 }
 
 /*
- * Settings › Appearance › Text size. Small is the scale in @theme (macOS text styles one point
- * up); Medium, the default, is one more point for the reading sizes, and Large one more again.
- * Captions grow only at Large, so dense metadata rows keep their height. The utilities read these
+ * Settings › Appearance › Text size. Default (small) is the compact scale in @theme;
+ * Large (medium) adds one point for reading sizes, and Larger (large) one more again.
+ * Captions grow only at Larger, so dense metadata rows keep their height. The utilities read these
  * variables, so every `text-*` class follows.
  */
 :root[data-text-size="medium"] {

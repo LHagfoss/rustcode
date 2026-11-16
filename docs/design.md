@@ -343,16 +343,16 @@ its lane and re-centres in the room that is left (Right panel below).
 Inter (bundled, `@fontsource-variable/inter`, the same face on every OS) /
 SF Mono. Settings › Appearance › Font picks Inter, System (the platform's own
 face, below) or Rounded (SF Pro Rounded). Settings › Appearance › Text size
-picks Small (macOS text styles one point up, the scale in `@theme`), Medium
-(the default: one more point for the reading sizes, captions unchanged) or
-Large (one more again, captions too); `:root[data-text-size]` swaps the
-`--text-*` variables, so every `text-*` class follows. Sizes below are Small /
-Medium / Large. Replies read at `text-body` on a 1.625 line height
+picks Default (the original compact scale in `@theme`), Large
+(one more point for the reading sizes, captions unchanged) or
+Larger (one more again, captions too); `:root[data-text-size]` swaps the
+`--text-*` variables, so every `text-*` class follows. Sizes below are Default /
+Large / Larger. Replies read at `text-body` on a 1.625 line height
 (`leading-relaxed`, set on the reply's own scope so the app's rows keep
 theirs), in `fg` at 90%, with headings at 26/21/18/16 (`h1`–`h4`) in
 semibold, a step bigger than the body so a long reply scans by its headings:
 
-| Class | Size / line (Small · Medium · Large) | Use |
+| Class | Size / line (Default · Large · Larger) | Use |
 |---|---|---|
 | `text-caption` | 11/14 · 11/14 · 12/15 | Metadata, badges |
 | `text-sub` | 12/15 · 13/16 · 14/17 | Sidebar secondary lines, section headers |

@@ -782,7 +782,7 @@ export interface AppState {
   internetWaits: Record<string, InternetWait>;
   /** The interface's typeface: Inter (the default), the system's own, or SF Pro Rounded. */
   font: AppFont;
-  /** How big the interface's text is; Medium is the default, Small the older, denser size. */
+  /** Text scale: small is Default in Appearance; medium and large are Large and Larger. */
   textSize: TextSize;
   /** A streaming reply's new words fade in as the model writes them. */
   animateStreaming: boolean;
