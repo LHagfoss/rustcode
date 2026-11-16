@@ -118,13 +118,18 @@ function TerminalView({ tab, visible }: { tab: TerminalTab; visible: boolean }) 
     term.onTitleChange((title) => titleTerminalTab(id, title));
     term.onSelectionChange(() => setSelected(term.hasSelection()));
     // The panel's own keys while a shell has focus: ⌘L sends the selection to the message,
-    // ⌘T opens a tab, ⌘W closes this one, ⌘⇧[ and ⌘⇧] move between tabs.
+    // ⌘T opens a tab, ⌘⇧[ and ⌘⇧] move between tabs.
     term.attachCustomKeyEventHandler((e) => {
       // App shortcuts reach the window from a focused shell too; F6 leaving the terminal must
       // not also send its escape sequence to the shell, so the terminal skips that key.
       if (e.type === "keydown") {
         const command = shortcutFor(e);
-        if (command === "focus-next-area" || command === "focus-previous-area") return false;
+        if (
+          command === "focus-next-area" ||
+          command === "focus-previous-area" ||
+          command === "settle-current-thread"
+        )
+          return false;
       }
       if (e.type !== "keydown" || !(e.metaKey || e.ctrlKey) || e.altKey) return true;
       const key = e.key.toLowerCase();
@@ -141,10 +146,6 @@ function TerminalView({ tab, visible }: { tab: TerminalTab; visible: boolean }) 
       if (!e.metaKey) return true;
       if (key === "t" && !e.shiftKey) {
         addTerminalTab(cwd);
-        return take();
-      }
-      if (key === "w" && !e.shiftKey) {
-        closeTerminalTab(id);
         return take();
       }
       if (e.shiftKey && (e.key === "[" || e.key === "{" || e.key === "]" || e.key === "}")) {

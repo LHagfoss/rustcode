@@ -14,6 +14,7 @@ import {
   openSettings,
   setSwitcher,
   setTerminalOpen,
+  settleThread,
   setView,
   startNewThread,
   toast,
@@ -30,6 +31,9 @@ function zoom(direction: 1 | -1 | 0) {
 export function runShortcut(command: string): boolean {
   const s = useApp.getState();
   switch (command) {
+    case "settle-current-thread":
+      if (s.selectedId) void settleThread(s.selectedId);
+      return true;
     case "new-thread":
       startNewThread();
       return true;
