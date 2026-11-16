@@ -64,6 +64,7 @@ import {
   hasOwnPermissionMode,
   inheritedModeOf,
   isRepairableOpenError,
+  leaveSettledThreads,
   loadTotalLimit,
   localChoices,
   MAX_PANELS,
@@ -3090,6 +3091,26 @@ describe("engine controller with the mock engine", () => {
     selectThread(a!.id);
     expect(useApp.getState().selectedId).toBe(a!.id);
     expect(useApp.getState().panel).toBe("changes");
+  });
+
+  test("an agent settling the thread on screen when asked leaves it for a new thread", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const [a, b] = useApp.getState().sessions;
+    selectThread(a!.id);
+    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+
+    // Another thread settled stays off screen: the one on screen is kept.
+    await setThreadStatus(b!.id, "done");
+    leaveSettledThreads([b!.id]);
+    expect(useApp.getState().selectedId).toBe(a!.id);
+
+    // `update_session` settling the thread on screen ("settle this") closes it.
+    await setThreadStatus(a!.id, "done");
+    leaveSettledThreads([a!.id]);
+    const s = useApp.getState();
+    expect(s.selectedId).toBeNull();
+    expect(s.projectCwd).toBe(a!.cwd);
   });
 
   test("settling on the board stays on the board, and its Undo restores every status", async () => {

@@ -226,14 +226,26 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
 }
 
 /**
+ * Leaves the thread on screen for the new-thread screen in the same folder when it is among `ids`,
+ * which were just settled. Only the chat moves: the board, review and compare have no new-thread
+ * screen, so a settle there stays on that view.
+ */
+export function leaveSettledThreads(ids: string[]): void {
+  const { view, selectedId } = get();
+  if (view.kind === "chat" && selectedId && ids.includes(selectedId)) startNewThread();
+}
+
+/**
  * Settles threads (marks them Done) because the user asked: one Undo toast puts
  * each back the way it was (review stays review, the rest go back to idle).
  *
  * Settling the thread on screen in the chat leaves it, with the panel, for the
  * new-thread screen in the same folder; the board, review and compare have no
- * new-thread screen, so settling there stays on that view. A caller that is
- * not the user — an agent's `organize`, a fan-out's cleanup, a thread merged on
- * the engine — calls `setThreadStatus` instead, which never moves the screen.
+ * new-thread screen, so settling there stays on that view. An agent's
+ * `update_session` settle is the user's own ask too ("settle this") and leaves
+ * the screen the same way (`leaveSettledThreads`). A caller that is not the
+ * user — an agent's `organize`, a fan-out's cleanup, a thread merged on the
+ * engine — calls `setThreadStatus` alone, which never moves the screen.
  */
 export async function settleThreads(ids: string[]): Promise<void> {
   const state = get();
@@ -248,14 +260,7 @@ export async function settleThreads(ids: string[]): Promise<void> {
     "done",
   );
   if (!optimistic && (await saving)) return;
-  if (
-    get().view.kind === "chat" &&
-    get().selectedId === state.selectedId &&
-    state.selectedId &&
-    before.some((x) => x.id === state.selectedId)
-  ) {
-    startNewThread();
-  }
+  if (get().selectedId === state.selectedId) leaveSettledThreads(before.map((x) => x.id));
   const title =
     before.length === 1
       ? sessionById(state, before[0]!.id)?.title || get().threads[before[0]!.id]?.title || "New thread"
