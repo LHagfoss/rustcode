@@ -2,7 +2,7 @@
 // the rules that move and pick them. Pure, so the sidebar and its tests share one answer
 // (ui/Sidebar.tsx).
 
-import type { SessionSummary } from "../acp/types";
+import type { PlanEntry, SessionSummary } from "../acp/types";
 import { diffCounts, type TranscriptItem } from "./thread";
 
 /** A row the list draws: a top-level thread, or the open delegate's indented row. */
@@ -559,3 +559,68 @@ function compare(section: SectionId, a: OrderKey, b: OrderKey): number {
 }
 
 /** What a row has besides its title, for {@link rowMeta}: the caller resolves each flag. */
+
+/** One step of a running plan, as a row's bar draws it. */
+export type StepMark = "done" | "active" | "todo";
+
+/** How far a working thread is through its plan: the bar's steps and what the line says. */
+export interface RowProgress {
+  /** One mark per step, or none past {@link MAX_STEP_MARKS} (the line still counts them). */
+  marks: StepMark[];
+  /** Where it is and the step it is on: `3/4 · Run the checks` (the count first, so it survives the cut). */
+  label: string;
+}
+
+/** Past this many steps the bar stops being readable at a row's width, and only the words stay. */
+export const MAX_STEP_MARKS = 8;
+
+/**
+ * Where a working thread is in its plan, for its row's third line, so it can be read without
+ * opening the thread. Nothing for a plan of fewer than two steps, or one with nothing left. The
+ * step it is on is the one in progress, else the first not done.
+ */
+export function rowProgress(plan: readonly PlanEntry[] | undefined): RowProgress | undefined {
+  if (!plan || plan.length < 2) return undefined;
+  let at = plan.findIndex((e) => e.status === "in_progress");
+  if (at < 0) at = plan.findIndex((e) => e.status !== "completed");
+  if (at < 0) return undefined;
+  const marks: StepMark[] =
+    plan.length > MAX_STEP_MARKS
+      ? []
+      : plan.map((e, i) => (e.status === "completed" ? "done" : i === at ? "active" : "todo"));
+  const step = plan[at]!.content.replace(/\s+/g, " ").trim();
+  return { marks, label: `${at + 1}/${plan.length} · ${step}` };
+}
+
+/** What {@link rowWaitReason} reads: the waits the app keeps for a thread that is not working. */
+export interface WaitReasonRead {
+  /** Stopped on its plan's limit or a full provider, until `until` (state/limitResume.ts). */
+  limit?: { until: number; reason?: "limit" | "overload" };
+  /** Stopped with no internet, to carry on once it is back (state/internetWait.ts). */
+  offline?: boolean;
+  /** The threads it handed work to and waits on, by title, and its background commands. */
+  threads?: readonly string[];
+  commands?: number;
+  /** The hour a wait ends, as the app says it (`14:00`). */
+  clock: (time: number) => string;
+}
+
+/**
+ * Why a thread that is not working has not finished, for its row's third line: a limit that resets
+ * at a set time, a provider that was full, no internet, or the work it handed out (named when it is
+ * one thread). Nothing when it waits on none of these.
+ */
+export function rowWaitReason(read: WaitReasonRead): string | undefined {
+  if (read.limit) {
+    const at = read.clock(read.limit.until);
+    return read.limit.reason === "overload" ? `Provider full, retries ${at}` : `Limit resets ${at}`;
+  }
+  if (read.offline) return "Waits for the internet";
+  const threads = read.threads ?? [];
+  const commands = read.commands ?? 0;
+  if (threads.length === 1 && !commands) return `Waits for ${threads[0]}`;
+  const parts: string[] = [];
+  if (threads.length) parts.push(threads.length === 1 ? `${threads[0]}` : `${threads.length} threads`);
+  if (commands) parts.push(commands === 1 ? "a background command" : `${commands} background commands`);
+  return parts.length ? `Waits for ${parts.join(" and ")}` : undefined;
+}

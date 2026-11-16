@@ -1130,6 +1130,15 @@ composer's keys stay outside the table.
   any harness, or in a worktree), board, review, mark for review, settle the
   open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
+- **Row progress and waits.** A detailed row's third line says, before the
+  branch, how far a working thread is through its plan: a short bar with a
+  segment per step (done, the one it is on in the accent, to do) and
+  `3/4 · Run the checks`, the count first so it survives the cut; past eight
+  steps only the words stay. A thread that is not working says why it has not
+  finished: `Limit resets 14:00`, `Provider full, retries 14:05`, `Waits for
+  the internet`, `Waits for ‹thread›`, or `Waits for 2 threads and a
+  background command` (`rowProgress`, `rowWaitReason` in
+  `state/sidebarRows.ts`). What it asks of you still comes first.
 - **Sidebar.** A *Needs you* row above the list opens the inbox
   (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits
   on the user: an approval, a question, a failed turn, or a delegate asking.
