@@ -1,3 +1,11 @@
+## [v1.39.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.2) - 2026-11-16
+
+### Fixes
+- MCP servers you add, toggle, or sign in to or out of reach open threads on their next message, without restarting the app. Settings shows each remote server's sign-in, with Sign in and Sign out buttons. (#3848)
+- Settings marks the page that needs attention, and server warnings are readable with a fix or Dismiss button. (#3849)
+- The sidebar now sorts by Title by default and keeps project folders A–Z, so nothing moves while threads work or finish. (#3850)
+- A merge started with `merge_when_green` now wakes the thread once, not twice. (#3852)
+- Saying "settle" to an agent now settles that thread (or the one you name) and takes you to a new thread. (#3853)
 ## [v1.39.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.1) - 2026-11-16
 
 ### Features
