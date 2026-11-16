@@ -83,6 +83,7 @@ export const Method = {
   mcpAdd: "_rustcode/capabilities/mcp/add",
   mcpRemove: "_rustcode/capabilities/mcp/remove",
   mcpRestart: "_rustcode/capabilities/mcp/restart",
+  mcpLogout: "_rustcode/capabilities/mcp/logout",
   connections: "_rustcode/connections",
   githubLogin: "_rustcode/connections/github/login",
   githubWait: "_rustcode/connections/github/wait",

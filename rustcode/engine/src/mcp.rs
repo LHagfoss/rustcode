@@ -821,6 +821,26 @@ fn load_oauth_token(server: &str) -> Option<OAuthToken> {
     serde_json::from_str(&contents).ok()
 }
 
+/// Whether RustCode holds a sign-in for `server` (`rustcode mcp login`), read from disk without
+/// refreshing it, so a harness thread can tell cheaply that a sign-in arrived or went.
+pub(crate) fn has_saved_login(server: &str) -> bool {
+    load_oauth_token(server).is_some()
+}
+
+/// Remove RustCode's saved sign-in for `server`. `Ok(false)` when there was none.
+pub(crate) fn forget_saved_login(server: &str) -> Result<bool, String> {
+    let Some(path) = oauth_token_path(server) else {
+        return Ok(false);
+    };
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "could not remove the sign-in for '{server}': {error}"
+        )),
+    }
+}
+
 fn save_oauth_token(server: &str, token: &OAuthToken) -> Result<(), String> {
     let path = oauth_token_path(server)
         .ok_or_else(|| "no config directory is available for OAuth token storage".to_string())?;

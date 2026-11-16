@@ -3427,6 +3427,18 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: capabilities::LogoutMcpServerRequest, responder, connection| {
+                connection.spawn(async move {
+                    match capabilities::logout_mcp_server(request).await {
+                        Ok(snapshot) => responder.respond(snapshot)?,
+                        Err(error) => responder.respond_with_error(error)?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: capabilities::AddSkillRequest, responder, _connection| {
                 responder.respond(capabilities::add_skill(request)?)
             },

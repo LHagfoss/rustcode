@@ -404,6 +404,7 @@ mod tests {
             "_rustcode/capabilities/mcp/add",
             "_rustcode/capabilities/mcp/remove",
             "_rustcode/capabilities/mcp/restart",
+            "_rustcode/capabilities/mcp/logout",
             "_rustcode/threads/search",
             "_rustcode/data/activity",
             "_rustcode/project/read",

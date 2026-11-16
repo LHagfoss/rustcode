@@ -880,12 +880,44 @@ fn guard_refusal(
     }))
 }
 
+/// What a harness's MCP servers were started from: the enabled servers as configured, and which
+/// of them RustCode holds a sign-in for. Read from disk only, never refreshing a token, so a turn
+/// compares it cheaply, and a token that merely rotated is the same sign-in and restarts nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct McpFingerprint(Vec<(crate::config::McpServerConfig, bool)>);
+
+impl McpFingerprint {
+    pub(crate) fn of(servers: &[crate::config::McpServerConfig]) -> Self {
+        Self(
+            servers
+                .iter()
+                .map(|server| {
+                    let signed_in =
+                        server.url.is_some() && crate::mcp::has_saved_login(&server.name);
+                    (server.clone(), signed_in)
+                })
+                .collect(),
+        )
+    }
+
+    fn names(&self) -> Vec<&str> {
+        self.0
+            .iter()
+            .map(|(server, _)| server.name.as_str())
+            .collect()
+    }
+}
+
 pub(crate) struct ExternalSession {
     pub id: String,
     pub harness: ResolvedHarness,
     pub cwd: PathBuf,
     out: OutputSender,
     adapter: Mutex<Option<Arc<Adapter>>>,
+    /// The MCP servers the running harness was started with (`McpFingerprint`), so a turn can
+    /// tell that Settings › MCP changed since and restart it on the new list. `None` until a
+    /// harness starts here (tests wire one in with `attach`).
+    started_mcp: StdMutex<Option<McpFingerprint>>,
     turn: Mutex<()>,
     cancel: StdMutex<Option<Arc<Notify>>>,
     record: StdMutex<HarnessRecord>,
@@ -996,6 +1028,7 @@ impl ExternalSession {
             harness,
             out,
             adapter: Mutex::new(None),
+            started_mcp: StdMutex::new(None),
             turn: Mutex::new(()),
             cancel: StdMutex::new(None),
             record: StdMutex::new(record),
@@ -1168,29 +1201,57 @@ impl ExternalSession {
     /// The running adapter, started (or restarted, resuming the harness's
     /// own session) when there is none.
     pub(crate) async fn ensure_started(&self) -> Result<Arc<Adapter>, String> {
+        self.start_adapter(false).await
+    }
+
+    /// The running adapter for a new turn: as `ensure_started`, but a harness started before
+    /// the MCP servers changed (one added, removed, turned on or off, or signed in to in
+    /// Settings › MCP) is restarted on the new list, resuming its own session, so the thread
+    /// gets the servers without restarting the app. Only at a turn's start, never mid-turn.
+    async fn ensure_started_for_turn(&self) -> Result<Arc<Adapter>, String> {
+        self.start_adapter(true).await
+    }
+
+    async fn start_adapter(&self, reload_mcp: bool) -> Result<Arc<Adapter>, String> {
         if self.closed.load(Ordering::Acquire) {
             return Err("the thread is closed".to_owned());
         }
-        let mut slot = self.adapter.lock().await;
-        if let Some(adapter) = slot.as_ref()
-            && adapter.is_alive()
-        {
-            return Ok(Arc::clone(adapter));
-        }
-        if let Some(dead) = slot.take() {
-            dead.kill();
-        }
-        let record = self.record();
-        let mut options = self.resume_options(&record)?;
         // The workspace's own servers, with the user config under them: the same list the built-in
         // harness runs, so Settings › MCP is one place for every harness.
-        let mcp = crate::config::get_config_dir()
+        let mcp: Vec<crate::config::McpServerConfig> = crate::config::get_config_dir()
             .map(|dir| crate::config::workspace_mcp_servers_in(&dir, &self.cwd))
             .unwrap_or_default()
             .into_iter()
             .filter(|server| server.enabled)
             .collect();
-        // Signed in to in RustCode (Settings › MCP, `rustcode mcp login`): the harness gets the token.
+        let fingerprint = McpFingerprint::of(&mcp);
+        let mut slot = self.adapter.lock().await;
+        if let Some(adapter) = slot.as_ref()
+            && adapter.is_alive()
+        {
+            if !reload_mcp || !self.mcp_changed(&fingerprint) {
+                return Ok(Arc::clone(adapter));
+            }
+            crate::dbg_log_for_session!(
+                self.id,
+                "harness {}: MCP servers changed since it started; restarting it on the new list",
+                self.harness.id
+            );
+            crate::logger::operational_event(
+                "harness.mcp_reloaded",
+                serde_json::json!({
+                    "session_id": self.id,
+                    "harness": self.harness.id,
+                    "servers": fingerprint.names(),
+                }),
+            );
+        }
+        if let Some(old) = slot.take() {
+            old.kill();
+        }
+        let record = self.record();
+        let mut options = self.resume_options(&record)?;
+        // Signed in to in RustCode (Settings › MCP): the harness gets the token.
         options.mcp = crate::mcp::with_saved_logins(mcp).await;
         let adapter = Adapter::start(&self.harness, &self.cwd, options, self.out.clone()).await?;
         let native = adapter.native_session_id();
@@ -1201,6 +1262,10 @@ impl ExternalSession {
             record.effort = effort.or(record.effort.take());
         });
         let adapter = Arc::new(adapter);
+        *self
+            .started_mcp
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(fingerprint);
         // A fresh process: nothing the old one left open still runs.
         self.progress.reset();
         self.idle.touch();
@@ -1852,7 +1917,7 @@ impl ExternalSession {
         recorded: &str,
         cancel: &Notify,
     ) -> Result<StopReason, String> {
-        let adapter = self.ensure_started().await?;
+        let adapter = self.ensure_started_for_turn().await?;
         // The first prompt after a switch carries the conversation so far.
         let handoff = self.record().handoff_from.and_then(|from| {
             let transcript = self
@@ -1976,6 +2041,24 @@ impl ExternalSession {
             .silence
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Some(timeout.unwrap_or(Duration::ZERO));
+    }
+
+    /// Whether the MCP servers differ from the ones the running harness started with. A harness
+    /// whose start was not recorded here, or a thread the next start could not resume (no
+    /// native session id yet), is left alone: restarting it would lose the conversation.
+    fn mcp_changed(&self, now: &McpFingerprint) -> bool {
+        let differs = self
+            .started_mcp
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|started| started != now);
+        differs
+            && self
+                .record()
+                .native_session_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
     }
 
     async fn forget_adapter(&self, adapter: &Arc<Adapter>) {
@@ -2578,6 +2661,32 @@ mod prepend_tests {
         let mut empty = Vec::new();
         prepend_text(&mut empty, "context".into());
         assert_eq!(texts(&empty), ["context"]);
+    }
+}
+
+#[cfg(test)]
+mod mcp_fingerprint_tests {
+    use super::*;
+
+    fn server(name: &str, command: &str) -> crate::config::McpServerConfig {
+        serde_json::from_value(serde_json::json!({"name": name, "command": command}))
+            .expect("a stdio server")
+    }
+
+    #[test]
+    fn the_same_servers_restart_nothing() {
+        let servers = [server("mail", "mail-mcp"), server("rcon", "rcon-mcp")];
+        assert_eq!(McpFingerprint::of(&servers), McpFingerprint::of(&servers));
+    }
+
+    #[test]
+    fn a_server_added_removed_or_changed_is_a_new_list() {
+        let before = McpFingerprint::of(&[server("mail", "mail-mcp")]);
+        let added = McpFingerprint::of(&[server("mail", "mail-mcp"), server("rcon", "rcon-mcp")]);
+        let changed = McpFingerprint::of(&[server("mail", "mail-mcp --verbose")]);
+        assert_ne!(before, added);
+        assert_ne!(before, changed);
+        assert_ne!(added, McpFingerprint::of(&[]));
     }
 }
 

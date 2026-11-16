@@ -2572,6 +2572,7 @@ export class MockEngine {
   private activeTheme = "rustcode";
   /** MCP servers the mock restarted through `_rustcode/capabilities/mcp/restart`. */
   private mcpRestarted = new Set<string>();
+  private sentrySignedIn = false; // the remote `sentry` row's `auth`
   /**
    * The timed approvals `_rustcode/permissions` lists: one seeded hour so the
    * details panel has "Allowed for 42m · Revoke" to show, and whatever the user
@@ -2645,6 +2646,17 @@ export class MockEngine {
             tools: 0,
             error: "MCP server 'fagbrev' failed to start: spawn npx ENOENT",
           },
+      {
+        name: "sentry",
+        transport: "http",
+        target: "https://mcp.sentry.dev/mcp",
+        enabled: true,
+        scope: "user",
+        connection: this.sentrySignedIn ? "connected" : "not_connected",
+        tools: this.sentrySignedIn ? 58 : 0,
+        error: null,
+        auth: this.sentrySignedIn ? "signed_in" : "signed_out",
+      },
     ];
   }
 
@@ -4886,9 +4898,14 @@ export class MockEngine {
       }
       case "_rustcode/capabilities/set":
         return this.handle("_rustcode/capabilities", {});
+      case "_rustcode/capabilities/mcp/logout": {
+        if (str(params.name) === "sentry") this.sentrySignedIn = false;
+        return this.handle("_rustcode/capabilities", {});
+      }
       case "_rustcode/capabilities/mcp/restart": {
         const name = str(params.name) ?? "";
-        if (name !== "github" && name !== "sqlite" && name !== "fagbrev")
+        if (name === "sentry") this.sentrySignedIn = true;
+        else if (name !== "github" && name !== "sqlite" && name !== "fagbrev")
           throw Object.assign(new Error(`MCP server '${name}' is no longer configured`), {
             code: -32602,
           });

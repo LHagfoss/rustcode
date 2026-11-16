@@ -465,6 +465,14 @@ at once, and each change shows the thread's approval card first, e.g.
 A list never carries a server's target, headers or environment, or an
 account's login. An outside agent needs Admin access to change anything.
 
+A thread on another harness (Claude Code, Codex, OpenCode) gets these servers
+when its harness process starts. When the list changes after that (a server
+added, removed, turned on or off, or signed in to or out of in Settings › MCP),
+the thread's next message restarts its harness on the new list and resumes
+its own session, so the new tools show up without restarting the app. A turn
+already running keeps the servers it started with, and a token that only
+refreshed restarts nothing.
+
 ## YOLO by default
 
 YOLO auto-approves tool calls that would otherwise ask for confirmation. It is
