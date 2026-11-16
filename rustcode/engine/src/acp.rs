@@ -2016,11 +2016,6 @@ pub(crate) struct PullMergeRequest {
     /// with the same id ends it before it merges.
     #[serde(default)]
     pub merge_id: Option<String>,
-    /// The thread the result is handed to. A merge claims its link's
-    /// "Merged" news, so the thread hears about it once; the answer's
-    /// `announced` says the link told it first.
-    #[serde(default)]
-    pub session_id: Option<String>,
 }
 
 /// Stop the merge started under `merge_id` (the call that asked for it was
@@ -3899,24 +3894,7 @@ async fn serve_connection(
                     )
                     .await
                     {
-                        Ok(outcome) => {
-                            let announced = match (outcome.merged, request.session_id) {
-                                (true, Some(session_id)) => {
-                                    let number = outcome.number;
-                                    tokio::task::spawn_blocking(move || {
-                                        crate::pull_watch::WatchStore::default_store()
-                                            .and_then(|store| {
-                                                store.claim_merge(&session_id, number).ok()
-                                            })
-                                            .unwrap_or(false)
-                                    })
-                                    .await
-                                    .unwrap_or(false)
-                                }
-                                _ => false,
-                            };
-                            serde_json::json!({ "merge": outcome, "announced": announced })
-                        }
+                        Ok(outcome) => serde_json::json!({ "merge": outcome }),
                         Err(error) => serde_json::json!({ "error": error }),
                     };
                     responder.respond(answer)?;

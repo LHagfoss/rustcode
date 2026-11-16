@@ -457,30 +457,6 @@ impl Watch {
     }
 }
 
-/// The receipt of one outcome handed to a thread: the same pull request,
-/// outcome and head are news once, whichever client or path told it.
-fn receipt_key(session_id: &str, watch: &Watch, event: &WatchEvent) -> std::io::Result<String> {
-    let snapshot = watch.snapshot.as_ref();
-    let outcome = if event.kind == "closed" {
-        snapshot.map(|s| s.state.as_str()).unwrap_or("closed")
-    } else {
-        event.kind.as_str()
-    };
-    let detail = if matches!(event.kind.as_str(), "activity" | "stopped") {
-        format!("{}:{}", event.at, event.message)
-    } else {
-        String::new()
-    };
-    serde_json::to_string(&(
-        session_id,
-        watch.key(),
-        outcome,
-        snapshot.map(|s| s.head.as_str()).unwrap_or_default(),
-        detail,
-    ))
-    .map_err(std::io::Error::other)
-}
-
 /// The watch list on disk.
 #[derive(Debug, Clone)]
 pub struct WatchStore {
@@ -713,69 +689,47 @@ impl WatchStore {
             // Receipts outlive watches (including unlinking and retention cleanup).
             // Write before handing news to the caller, so a restart or a stale
             // polling result cannot hand the same outcome to another client.
-            let mut receipts = self.receipts()?;
+            let path = self.dir.join("pull_deliveries.json");
+            let mut receipts: BTreeSet<String> = match std::fs::read(&path) {
+                Ok(bytes) => serde_json::from_slice(&bytes).map_err(std::io::Error::other)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
+                Err(error) => return Err(error),
+            };
             let mut events = Vec::new();
             for (index, event) in watch.events.iter().enumerate() {
-                let unseen = receipts.insert(receipt_key(session_id, watch, event)?);
+                let snapshot = watch.snapshot.as_ref();
+                let outcome = if event.kind == "closed" {
+                    snapshot.map(|s| s.state.as_str()).unwrap_or("closed")
+                } else {
+                    event.kind.as_str()
+                };
+                let detail = if matches!(event.kind.as_str(), "activity" | "stopped") {
+                    format!("{}:{}", event.at, event.message)
+                } else {
+                    String::new()
+                };
+                let key = serde_json::to_string(&(
+                    session_id,
+                    watch.key(),
+                    outcome,
+                    snapshot.map(|s| s.head.as_str()).unwrap_or_default(),
+                    detail,
+                ))
+                .map_err(std::io::Error::other)?;
+                let unseen = receipts.insert(key);
                 if unseen && index >= watch.delivered {
                     events.push(event.clone());
                 }
             }
-            self.save_receipts(&receipts)?;
+            let temporary = self.dir.join("pull_deliveries.tmp");
+            std::fs::write(
+                &temporary,
+                serde_json::to_vec(&receipts).map_err(std::io::Error::other)?,
+            )?;
+            crate::atomic_file::replace_file(&temporary, &path)?;
             watch.deliver();
             Ok(Some((watch.clone(), events)))
         })?
-    }
-
-    /// Claim the merge of `number` for the thread's link (#3850): a merge the
-    /// thread asked for answers it already, so the link's own "Merged" news
-    /// must not wake it a second time. Writes the receipt [`Self::take`] would
-    /// and stops the link, so a later check reports nothing new. Answers
-    /// whether the link had already told the thread, so the caller does not
-    /// tell it again; `false` when the thread has no link to `number`.
-    pub fn claim_merge(&self, session_id: &str, number: u64) -> std::io::Result<bool> {
-        self.update(|watches| {
-            let Some(watch) = watches.iter_mut().find(|watch| {
-                watch.session_id == session_id && watch.number == number && watch.link
-            }) else {
-                return Ok(false);
-            };
-            if let Some(snapshot) = watch.snapshot.as_mut() {
-                snapshot.state = "merged".to_owned();
-            }
-            if watch.is_watching() {
-                watch.stop("merged");
-            }
-            let merged = WatchEvent {
-                kind: "closed".to_owned(),
-                message: "Merged".to_owned(),
-                at: String::new(),
-            };
-            let mut receipts = self.receipts()?;
-            let announced = !receipts.insert(receipt_key(session_id, watch, &merged)?);
-            if !announced {
-                self.save_receipts(&receipts)?;
-            }
-            Ok(announced)
-        })?
-    }
-
-    /// The outcomes already handed to a thread, kept in `pull_deliveries.json`.
-    fn receipts(&self) -> std::io::Result<BTreeSet<String>> {
-        match std::fs::read(self.dir.join("pull_deliveries.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(std::io::Error::other),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
-            Err(error) => Err(error),
-        }
-    }
-
-    fn save_receipts(&self, receipts: &BTreeSet<String>) -> std::io::Result<()> {
-        let temporary = self.dir.join("pull_deliveries.tmp");
-        std::fs::write(
-            &temporary,
-            serde_json::to_vec(receipts).map_err(std::io::Error::other)?,
-        )?;
-        crate::atomic_file::replace_file(&temporary, &self.dir.join("pull_deliveries.json"))
     }
 
     /// The thread's links, one pull request each, newest first.
