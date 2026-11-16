@@ -6,7 +6,6 @@
 // A row whose connected machines disagree draws `MixedChip` instead of one
 // value, with each machine's value in its hover card.
 
-import { Layers } from "lucide-react";
 import type { ReactNode } from "react";
 import { type ScopeBreakdownEntry, SOURCE_LABEL } from "../state/settingsRegistry";
 import {
@@ -17,6 +16,7 @@ import {
   useScope,
   useScopeProjects,
 } from "../state/settingsScope";
+import { Layers } from "./icons";
 import { Tooltip } from "./primitives";
 import { Action, HintTip, Select } from "./settingsKit";
 

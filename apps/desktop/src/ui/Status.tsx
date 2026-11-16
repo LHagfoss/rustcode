@@ -1,9 +1,9 @@
 // A thread's status as a small chip: running, needs input, review, done
 // (docs/orchestrator.md, "Thread status"). Idle shows nothing.
 
-import { CircleCheck, Eye, Hand } from "lucide-react";
 import { STATUS_LABEL, type ThreadStatus } from "../acp/v2";
 import { statusOf, useApp } from "../state/store";
+import { CircleCheck, Eye, Hand } from "./icons";
 import { cx, Spinner } from "./primitives";
 
 const TONE: Record<ThreadStatus, string> = {

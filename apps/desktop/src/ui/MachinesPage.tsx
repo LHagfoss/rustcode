@@ -19,7 +19,6 @@
 // with it. A row of another machine says which RustCode version it runs, so an old one is a
 // sentence with a command, not a silent connection failure.
 
-import { Plus, RefreshCw, Server } from "lucide-react";
 import { useEffect, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
@@ -59,6 +58,7 @@ import { refreshRemote } from "../state/remoteAccess";
 import { openMachineSettings, useApp } from "../state/store";
 import { AddMachineDialog } from "./AddMachineDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
+import { Plus, RefreshCw, Server } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import {

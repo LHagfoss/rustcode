@@ -1,4 +1,5 @@
 import { zoomGestureModifier } from "../lib/platform";
+
 // A picture opened from the composer or the transcript: over a dimmed, blurred
 // backdrop, fit to the window. Esc or a click outside closes it, ←→ step through
 // the message's pictures. Pinch or primary-modifier scroll zooms at the pointer, a click on the
@@ -10,8 +11,8 @@ import { zoomGestureModifier } from "../lib/platform";
 // requestAnimationFrame. Only the toolbar's percentage, and the classes that
 // depend on zoom, go through state, throttled.
 
-import { ChevronLeft, ChevronRight, Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ChevronLeft, ChevronRight, Minus, Plus, X } from "./icons";
 import { cx, Pill } from "./primitives";
 
 export interface LightboxImage {

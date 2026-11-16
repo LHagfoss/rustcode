@@ -8,10 +8,10 @@
 // glide to their new place (transform only), and the global reduced-motion rule
 // collapses both.
 
-import { ArrowDown, ArrowUp } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { count } from "../lib/plural";
 import { type DayPoint, sparklinePath, sparklineSeries, type Trend } from "../state/period";
+import { ArrowDown, ArrowUp } from "./icons";
 import { cx } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
 import { Choice } from "./settingsKit";

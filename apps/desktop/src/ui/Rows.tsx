@@ -2,39 +2,6 @@
 // replies full width without a bubble, quiet thought disclosures, one-line
 // tool rows that open to their diff or output, and a turn footer.
 
-import {
-  ArrowRight,
-  Book,
-  Brain,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  CircleCheck,
-  CircleX,
-  CornerDownRight,
-  ExternalLink,
-  FileText,
-  GitFork,
-  Globe,
-  Hourglass,
-  Image as ImageIcon,
-  ImageOff,
-  Layers,
-  MessageCircleQuestion,
-  MessageSquareQuote,
-  MessagesSquare,
-  MoveRight,
-  Paperclip,
-  Pencil,
-  RotateCcw,
-  Search,
-  Shield,
-  SquareStop,
-  Terminal,
-  Trash2,
-  Users,
-  Wrench,
-} from "lucide-react";
 import { Fragment, memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { effortLabel, modelName } from "../acp/types";
@@ -83,6 +50,39 @@ import { type Waiting, waitingLabel, waitingNext, waitingTitle } from "../state/
 import { harnessId, wakeNotice } from "../state/wakeNotice";
 import { DiffView } from "./DiffView";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  ArrowRight,
+  Book,
+  Brain,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  CircleCheck,
+  CircleX,
+  CornerDownRight,
+  ExternalLink,
+  FileText,
+  GitFork,
+  Globe,
+  Hourglass,
+  Image as ImageIcon,
+  ImageOff,
+  Layers,
+  MessageCircleQuestion,
+  MessageSquareQuote,
+  MessagesSquare,
+  MoveRight,
+  Paperclip,
+  Pencil,
+  RotateCcw,
+  Search,
+  Shield,
+  SquareStop,
+  Terminal,
+  Trash2,
+  Users,
+  Wrench,
+} from "./icons";
 import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
 import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";
@@ -115,6 +115,14 @@ function ImageUnavailable() {
 }
 
 /**
+ * A sent picture's thumbnail. Its height is fixed, so the row is as tall while the picture loads
+ * (the placeholder below), once it has decoded, and in `estimatedRowHeight` (ui/Transcript.tsx
+ * `THUMBNAIL_ROW`): a picture that grew as it arrived pushed the end of a thread around as it
+ * opened. The width follows the picture's shape up to 240px, and a wider one is cropped.
+ */
+const THUMBNAIL = "h-[120px] w-auto max-w-[240px] cursor-zoom-in rounded-lg object-cover shadow-1";
+
+/**
  * A picture a replayed message names, read back from the computer the thread runs on. Clicking it
  * opens every picture of the message that has loaded.
  */
@@ -136,7 +144,7 @@ function StoredImage({ threadId, path, all }: { threadId: string; path: string; 
       <span
         role="img"
         aria-label={`Loading ${name}`}
-        className="flex h-[96px] w-[128px] items-center justify-center rounded-lg bg-fill-subtle text-fg-faint"
+        className="flex h-[120px] w-[160px] items-center justify-center rounded-lg bg-fill-subtle text-fg-faint"
       >
         <ImageIcon size={16} />
       </span>
@@ -158,12 +166,7 @@ function StoredImage({ threadId, path, all }: { threadId: string; path: string; 
         );
       }}
     >
-      <img
-        src={src}
-        alt={name}
-        title={name}
-        className="max-h-[160px] max-w-[240px] cursor-zoom-in rounded-lg object-cover shadow-1"
-      />
+      <img src={src} alt={name} title={name} className={THUMBNAIL} />
     </button>
   );
 }
@@ -256,12 +259,7 @@ export const UserRow = memo(function UserRow({
                   );
                 }}
               >
-                <img
-                  src={a.preview}
-                  alt={a.name}
-                  title={a.name}
-                  className="max-h-[160px] max-w-[240px] cursor-zoom-in rounded-lg object-cover shadow-1"
-                />
+                <img src={a.preview} alt={a.name} title={a.name} className={THUMBNAIL} />
               </button>
             ) : (
               <span

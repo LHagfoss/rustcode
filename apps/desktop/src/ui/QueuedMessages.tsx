@@ -5,7 +5,6 @@
 // Held at rest, with Resume under it. The composer edits a queued message in place (its pencil, or
 // ↑), so a row never opens a field of its own.
 
-import { ArrowUp, ChevronDown, ChevronUp, Clock, FileText, Pencil, RotateCw, X } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { type Attachment, splicePastes } from "../state/compose";
@@ -28,6 +27,7 @@ import {
   useApp,
 } from "../state/store";
 import { type QueuedPrompt, stripMarks, wakeLine } from "../state/thread";
+import { ArrowUp, ChevronDown, ChevronUp, Clock, FileText, Pencil, RotateCw, X } from "./icons";
 import { openLightbox } from "./Lightbox";
 import { Markdown } from "./Markdown";
 import { cx, Pill, Tooltip } from "./primitives";

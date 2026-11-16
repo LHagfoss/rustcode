@@ -3,7 +3,6 @@
 // Settled (or use its buttons) to mark it; the engine moves merged worktree
 // threads to Settled by itself. Idle threads stay in the list.
 
-import { CircleCheck, Eye, GitBranch, PanelLeft, SquarePen, Undo2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SessionSummary } from "../acp/types";
@@ -22,6 +21,7 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { DelegateTree, useDelegateCosts } from "./DelegateTree";
+import { CircleCheck, Eye, GitBranch, PanelLeft, SquarePen, Undo2 } from "./icons";
 import { HEADER_HEIGHT, SettingsButton } from "./MainHeader";
 import { Cluster, ClusterButton, cx, Pill, Tooltip } from "./primitives";
 import { StatusIcon } from "./Status";

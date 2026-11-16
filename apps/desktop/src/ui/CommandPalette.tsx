@@ -3,29 +3,6 @@
 // harness, panels, views, settings pages and the engine. ">" shows actions
 // only; ⇥ switches threads between all projects and this one.
 
-import {
-  CircleCheck,
-  CircleDashed,
-  Columns3,
-  CornerDownLeft,
-  Eye,
-  FileDiff,
-  Settings as Gear,
-  GitBranch,
-  Hand,
-  MessageSquare,
-  Moon,
-  PanelLeft,
-  PanelRight,
-  RefreshCw,
-  Search,
-  Sparkles,
-  SquarePen,
-  SquareTerminal,
-  Sun,
-  SunMoon,
-  Zap,
-} from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { modelName, projectName } from "../acp/types";
@@ -55,6 +32,29 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { createSkillWithAgent } from "../state/threadOpen";
+import {
+  CircleCheck,
+  CircleDashed,
+  Columns3,
+  CornerDownLeft,
+  Eye,
+  FileDiff,
+  Settings as Gear,
+  GitBranch,
+  Hand,
+  MessageSquare,
+  Moon,
+  PanelLeft,
+  PanelRight,
+  RefreshCw,
+  Search,
+  Sparkles,
+  SquarePen,
+  SquareTerminal,
+  Sun,
+  SunMoon,
+  Zap,
+} from "./icons";
 import {
   matches,
   type PaletteAction,

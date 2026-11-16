@@ -1,5 +1,6 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
 import { copyThreadId } from "../state/deepLinks";
+
 // The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
 // Settings), the Needs you row, the toolbar (search, the sort and filter menu and
 // New thread; ui/SidebarToolbar.tsx, optional), then one list: pinned threads
@@ -15,47 +16,6 @@ import { copyThreadId } from "../state/deepLinks";
 // state/sidebarRows.ts `rowStatus`), then the diff and pull request, then the
 // model and harness mark (a count of running delegates sits beside the diff). Hovering swaps the state for the row's actions.
 
-import {
-  Bot,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CircleAlert,
-  CircleCheck,
-  CircleDashed,
-  CircleDot,
-  Clock,
-  CloudUpload,
-  Copy,
-  CornerUpLeft,
-  Ellipsis,
-  Eye,
-  FileDiff,
-  FileText,
-  Folder,
-  FolderOpen,
-  FolderPlus,
-  FolderX,
-  GitBranch,
-  GitFork,
-  GitMerge,
-  GitPullRequestArrow,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
-  MessageCircleQuestion,
-  MessageSquareQuote,
-  PanelLeft,
-  Pencil,
-  Pin,
-  PinOff,
-  ShieldQuestion,
-  Sparkles,
-  SquarePen,
-  SquareTerminal,
-  Trash2,
-  Wrench,
-  X,
-} from "lucide-react";
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import {
   Fragment,
@@ -203,6 +163,48 @@ import { CustomSnooze } from "./CustomSnooze";
 import { FOLDER_DROP_ATTR, overFolderDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
+import {
+  Bot,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  CircleDot,
+  Clock,
+  CloudUpload,
+  Copy,
+  CornerDownRight,
+  CornerUpLeft,
+  Ellipsis,
+  Eye,
+  FileDiff,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  FolderX,
+  GitBranch,
+  GitFork,
+  GitMerge,
+  GitPullRequestArrow,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  MessageCircleQuestion,
+  MessageSquareQuote,
+  PanelLeft,
+  Pencil,
+  Pin,
+  PinOff,
+  ShieldQuestion,
+  Sparkles,
+  SquarePen,
+  SquareTerminal,
+  Trash2,
+  Wrench,
+  X,
+} from "./icons";
 import { LinkBadge } from "./Links";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { SettingsButton } from "./MainHeader";
@@ -752,17 +754,23 @@ function PullMark({ pull }: { pull: PullRequest }) {
 function MiddlePath({ path }: { path: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [chars, setChars] = useState(32);
+  const font = useApp((s) => s.font);
+  const textSize = useApp((s) => s.textSize);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new font or text size changes the em, not the box, so measure again
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
+    // An average character is just under 0.6em in the app's faces (7px at Small's 12px); reading the
+    // size keeps the estimate right at every Text size and font.
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) setChars(Math.max(5, Math.floor(entry.contentRect.width / 7)));
+      const em = Number.parseFloat(getComputedStyle(node).fontSize) || 12;
+      if (entry) setChars(Math.max(5, Math.floor(entry.contentRect.width / (em * 0.58))));
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [font, textSize]);
   return (
-    <span ref={ref} className="block overflow-hidden whitespace-nowrap">
+    <span ref={ref} className="block overflow-hidden text-ellipsis whitespace-nowrap">
       {middleEllipsis(path, chars)}
     </span>
   );
@@ -1040,12 +1048,6 @@ const ThreadRow = memo(function ThreadRow({
               className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
             >
               <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
-              {request && (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-y-2 left-0 w-0.5 rounded-full bg-warning"
-                />
-              )}
               {compact ? (
                 <>
                   <CompactDot mark={compactMark(chip)} />
@@ -1223,8 +1225,9 @@ const ThreadRow = memo(function ThreadRow({
                           className="shrink-0"
                         />
                       )}
+                      {/* Normal figures: a tabular face (Inter) gives a model name's hyphens a digit's width. */}
                       {model && (
-                        <span className="min-w-0 max-w-[96px] truncate" title={model}>
+                        <span className="min-w-0 max-w-[96px] truncate normal-nums" title={model}>
                           {model}
                         </span>
                       )}
@@ -1475,8 +1478,13 @@ function OpenChild({ row, deeper }: { row: React.ReactNode | null; deeper: React
         // `rc-row-in` is the list's own arrival motion: the fold above it starts open, so the row
         // would otherwise appear in place when the thread is opened.
         <div className="rc-row-in relative pl-4">
-          {/* The subtle line saying this row belongs to the one above it. */}
-          <span aria-hidden className="pointer-events-none absolute inset-y-1 left-1.5 w-px bg-border" />
+          {/* A short, fine elbow points into the delegate instead of spanning its row. */}
+          <CornerDownRight
+            aria-hidden
+            size={12}
+            strokeWidth={0.75}
+            className="pointer-events-none absolute top-2 left-0.5 text-fg-faint"
+          />
           {held.current.row}
           {held.current.deeper}
         </div>
@@ -2482,7 +2490,7 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  const rowFor = (s: SessionSummary, _grouped: boolean, hint = true) => (
+  const rowFor = (s: SessionSummary, _grouped: boolean, hint = true, nested = false) => (
     <ThreadRow
       session={s}
       selected={s.id === selectedId}
@@ -2500,7 +2508,7 @@ export function Sidebar() {
       pinKey={pinKey}
       settleKey={settleKey}
       onClearSelection={clearSelection}
-      compact={compact}
+      compact={compact || nested}
     />
   );
   // The open delegate and its descendants, each an indented row under the one above it. The last
@@ -2516,7 +2524,7 @@ export function Sidebar() {
     const ownHeading = grouped && (!above || sameProject(child, above));
     return (
       <OpenChild
-        row={current ? rowFor(current, ownHeading, false) : null}
+        row={current ? rowFor(current, ownHeading, false, true) : null}
         deeper={openBelow(child.id, ownHeading, depth + 1)}
       />
     );
@@ -2668,10 +2676,9 @@ export function Sidebar() {
                                   onToggle={() => toggle(`project:${p.key}`)}
                                   onNew={onNew}
                                 />
-                                {/* Under its project's heading the row drops the mark: its title
-                                    then lines up under the folder's name. */}
+                                {/* Inset threads so the project's hierarchy reads before its delegates. */}
                                 <Fold open={projectOpen}>
-                                  <div className="pl-5">{rows(p.items, true)}</div>
+                                  <div className="pl-8">{rows(p.items, true)}</div>
                                 </Fold>
                               </div>
                             );

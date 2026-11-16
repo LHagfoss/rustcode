@@ -6,7 +6,6 @@
 // the thread, the reply button shows its last answer in place, and a Board card
 // reads the same tree as one summary line (state/delegates.ts has the rules).
 
-import { ChevronRight, ListTree, MessageSquareText } from "lucide-react";
 import { useMemo, useState } from "react";
 import { parseUsageReport } from "../acp/rustcode";
 import { Method } from "../acp/types";
@@ -28,6 +27,7 @@ import { type CostTotals, costOf } from "../state/pricing";
 import { selectThread, useApp } from "../state/store";
 import { stripHarnessMarkup } from "../state/thread";
 import { AgentAvatar, AgentTip, useNow } from "./AgentViews";
+import { ChevronRight, ListTree, MessageSquareText } from "./icons";
 import { Markdown } from "./Markdown";
 import { cx, Tooltip } from "./primitives";
 import { useEngineData } from "./settingsKit";

@@ -3,10 +3,10 @@
 // question and not as the log that came with it. The message puts the paste back into its text where
 // it was pasted; only a message sent before that keeps a chip in the transcript.
 
-import { ClipboardPaste, SquareTerminal, X } from "lucide-react";
 import { pasteLabel } from "../lib/paste";
 import { terminalContextLabel } from "../state/terminalTabs";
 import { CardPopover } from "./cardPopover";
+import { ClipboardPaste, SquareTerminal, X } from "./icons";
 import { cx } from "./primitives";
 
 export function PasteChip({

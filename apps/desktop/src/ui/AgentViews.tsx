@@ -6,7 +6,6 @@
 // above the composer as the delegates (`ui/Links.tsx`), not in a surface of its
 // own.
 
-import { Bot, Check, ChevronDown, ChevronRight, CircleX, Minus, PanelRight, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import { modelName } from "../acp/types";
@@ -38,6 +37,7 @@ import {
 } from "../state/thread";
 import { AgentStack } from "./AgentStack";
 import { HarnessIcon } from "./HarnessIcon";
+import { Bot, Check, ChevronDown, ChevronRight, CircleX, Minus, PanelRight, X } from "./icons";
 import { Markdown } from "./Markdown";
 import { cx, Skeleton, Spinner, Tooltip } from "./primitives";
 

@@ -5,15 +5,6 @@
 // (ui/ThreadDetails.tsx draws the sections; the rows here are the old details
 // card's, in the order the overview puts them).
 
-import {
-  Clock,
-  CornerDownRight,
-  FileDiff,
-  GitFork,
-  ListChecks,
-  MessageSquareQuote,
-  SquareTerminal,
-} from "lucide-react";
 import { type ReactNode, useEffect, useMemo } from "react";
 import type { SubagentInfo } from "../acp/rustcode";
 import { delegateParent, displayPath, modelName } from "../acp/types";
@@ -36,6 +27,15 @@ import {
 } from "../state/store";
 import { formatDuration, formatTokens, shortAge, type ThreadState } from "../state/thread";
 import { AgentRow, AgentTip, LINK_AGENT_STATE, useNow } from "./AgentViews";
+import {
+  Clock,
+  CornerDownRight,
+  FileDiff,
+  GitFork,
+  ListChecks,
+  MessageSquareQuote,
+  SquareTerminal,
+} from "./icons";
 import { OverviewSection } from "./OverviewSection";
 import { cx, Pill } from "./primitives";
 import { DiffCount } from "./Rows";

@@ -3,11 +3,11 @@
 // the parent's transcript. Both are read from the sessions' recorded parents (state/branches.ts),
 // so they are there after a reload and cost the parent's history nothing.
 
-import { Bot, CornerUpLeft, GitFork, MessageSquareQuote } from "lucide-react";
 import { useMemo } from "react";
 import { type Branch, type BranchKind, branchLine, originLine, originOf } from "../state/branches";
 import { delegateOriginOf } from "../state/delegateOrigin";
 import { peekThread, selectThread, useApp } from "../state/store";
+import { Bot, CornerUpLeft, GitFork, MessageSquareQuote } from "./icons";
 import { Tooltip } from "./primitives";
 
 const Glyph = ({ kind, size }: { kind: BranchKind; size: number }) =>

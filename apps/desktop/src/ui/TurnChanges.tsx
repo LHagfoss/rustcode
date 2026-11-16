@@ -7,13 +7,13 @@
 // harness reported a completion for draws that card instead, so a turn never
 // shows its changes twice (state/fold.ts `turnChangeLine`).
 
-import { FileDiff, History } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useState } from "react";
 import type { Checkpoint, PatchFile } from "../acp/v2";
 import { parsePatch } from "../state/diff";
 import { canRewind, rewindCheckpoint, setView, turnDiff, useApp } from "../state/store";
 import { Patch } from "./DiffView";
+import { FileDiff, History } from "./icons";
 import { Pill, Skeleton, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 

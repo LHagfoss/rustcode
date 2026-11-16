@@ -7,16 +7,6 @@
 // The derivation is pure (state/inbox.ts); this file draws it and owns the keys:
 // ↑/↓ move the row, ⏎ opens its thread, 1–9 run its answers.
 
-import {
-  ArrowUpRight,
-  CircleAlert,
-  CircleCheck,
-  CornerDownRight,
-  Hand,
-  MessageCircleQuestion,
-  Sparkles,
-  X,
-} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
 import { assessApproval, grantAllowed, optionScope } from "../lib/approval";
@@ -36,6 +26,16 @@ import {
 import { relativeAge } from "../state/thread";
 import { orderedOptions, QuestionCard } from "./AttentionCards";
 import { ViewHeader } from "./Board";
+import {
+  ArrowUpRight,
+  CircleAlert,
+  CircleCheck,
+  CornerDownRight,
+  Hand,
+  MessageCircleQuestion,
+  Sparkles,
+  X,
+} from "./icons";
 import { ProjectMark } from "./ProjectMark";
 import { cx, Kbd, Pill } from "./primitives";
 import { WhileAwayCard } from "./WhileAway";

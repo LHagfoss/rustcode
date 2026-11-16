@@ -3,7 +3,6 @@
 // scrolled up, and a "Latest" button brings them back.
 
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
 import {
   memo,
   type ReactNode,
@@ -21,7 +20,6 @@ import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
 import { hasTimeline } from "../lib/trace";
 import { checkpointsByMessage } from "../state/attempts";
 import { type Branch, branchesOf } from "../state/branches";
-import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses, splitImageMarkers } from "../state/compose";
 import { statusReply } from "../state/delegateStatus";
 import {
   collapseNotices,
@@ -73,6 +71,7 @@ import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { BranchRow } from "./Branches";
 import { StatusReplyRow } from "./DelegateStatus";
 import { EarlierAttempts } from "./EarlierAttempts";
+import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "./icons";
 import { PlanCard } from "./PlanCard";
 import { cx, noTextHelpers } from "./primitives";
 import { LeavingQueuedRow, QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
@@ -98,6 +97,9 @@ import { turnFooterHidden } from "./replyActions";
 import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
+import { estimatedRowHeight } from "./transcriptHeight";
+
+export { estimatedRowHeight } from "./transcriptHeight";
 
 export type Row = {
   key: string;
@@ -268,48 +270,6 @@ function selecting(): boolean {
   return !!s && s.rangeCount > 0 && !s.isCollapsed;
 }
 
-export function estimatedRowHeight(row: Row | undefined, hidden = false): number {
-  if (hidden) return 0;
-  if (!row) return 24;
-  if (row.approval) return 96;
-  if (row.childRequest) return row.childRequest.request.question ? 240 : 52;
-  if (row.plan) return 260;
-  if (row.fold || row.group) return 26;
-  if (row.queued) return 96;
-  if (row.resume) return 30;
-  if (row.branch) return 24;
-  if (row.queueWake || row.queueNotice) return 26;
-  // The turn's own lines: `Working for 12s` is `h-[34px]` over its hairline, and the live activity
-  // is `min-h-6`. Left at a generic 24 they measured 39px taller a frame after mounting, and the
-  // pinned view took that back in one step — the message just sent jumped with it.
-  if (row.working) return 35;
-  if (row.activity) return 24;
-  const item = row.item;
-  if (!item) return 24;
-  if (item.kind === "tool" || item.kind === "turnEnd") return 26;
-  // The status card: a header line, then two lines a delegate.
-  if (item.kind === "status") return 34 + item.rows.length * 44;
-  // A live thought shows its last lines; a finished one is its one line.
-  if (item.kind === "thought")
-    return item.done ? 17 : 25 + Math.min(THOUGHT_TAIL_LINES, lines(item.text, 55)) * 17;
-  // A sent bubble: its pictures and files above it, 12px of padding each way, its text, and the
-  // 22px line under it that holds the time (shown on hover, laid out always). A long one folds at
-  // `COLLAPSED_MESSAGE_HEIGHT` and keeps its "Show full message" pill, so its estimate never
-  // reserves a screenful the row will not use.
-  if (item.kind === "user") {
-    const body = lines(item.text, 60) * BODY_LINE;
-    const text = messageCollapses(body) ? COLLAPSED_MESSAGE_HEIGHT + SHOW_FULL_PILL : body;
-    const pictures = item.attachments?.length || splitImageMarkers(item.text).images;
-    return (pictures ? ATTACHMENT_CHIPS : 0) + BUBBLE_PADDING * 2 + text + META_LINE;
-  }
-  return Math.min(600, 40 + ("text" in item ? item.text.length / 4 : 0));
-}
-
-/** The lines a string wraps to in the lane, near enough for an estimate. */
-function lines(text: string, perLine: number): number {
-  return Math.max(1, Math.ceil(text.length / perLine));
-}
-
 /**
  * The air above a row, from the transcript's own two values: a turn starts and a footer ends on the
  * wide one, everything inside a turn sits on the narrow one, and the first line under a divider
@@ -388,19 +348,6 @@ const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
  */
 const ITEM_GAP = 14;
 const TURN_GAP = 28;
-
-/**
- * The pieces an estimate is made of, in the sizes the rows are drawn at: a sent bubble's padding and
- * the line it sits on, the time line under it, the chips above it when it carries pictures or files,
- * and how much of a live thought's tail shows (`ThoughtRow`'s `line-clamp-5`).
- */
-const BUBBLE_PADDING = 12;
-const BODY_LINE = 23;
-const META_LINE = 24;
-const ATTACHMENT_CHIPS = 32;
-const THOUGHT_TAIL_LINES = 5;
-/** The "Show full message" pill a folded bubble ends with, and its air above it. */
-const SHOW_FULL_PILL = 30;
 
 /** The air above the transcript's first row, under the glass header. */
 export const FIRST_ROW_PAD = 20;

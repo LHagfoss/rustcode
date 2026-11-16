@@ -45,7 +45,8 @@ function useTheme() {
       const theme = resolveTheme(s.themes, s.themeActive, mode);
       applyTheme(theme);
       document.documentElement.dataset.theme = mode;
-      document.documentElement.dataset.font = s.roundedFont ? "rounded" : "standard";
+      document.documentElement.dataset.font = s.font;
+      document.documentElement.dataset.textSize = s.textSize;
       document.documentElement.dataset.chatWidth = s.chatWidth;
       setUserReduceTransparency(s.reduceTransparency);
     };
@@ -56,7 +57,8 @@ function useTheme() {
         s.theme !== prev.theme ||
         s.themeActive !== prev.themeActive ||
         s.themes !== prev.themes ||
-        s.roundedFont !== prev.roundedFont ||
+        s.font !== prev.font ||
+        s.textSize !== prev.textSize ||
         s.reduceTransparency !== prev.reduceTransparency ||
         s.chatWidth !== prev.chatWidth
       )

@@ -4,12 +4,12 @@
 // where the app watched one. The turns come from the transcript the thread
 // already holds, so the panel reads no transcript again (ui/overview.ts).
 
-import { CircleCheck, CircleSlash, CircleX, Maximize2, Minimize2 } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import type { SessionUsage } from "../acp/types";
 import { turnItemsByEnd } from "../state/fold";
 import { formatDuration, formatTokens, type TranscriptItem } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
+import { CircleCheck, CircleSlash, CircleX, Maximize2, Minimize2 } from "./icons";
 import { OverviewSection, SectionButton } from "./OverviewSection";
 import { logTotals, type TurnEntry, turnEntries, turnHasTrace } from "./overview";
 import { cx, Pill, Tooltip } from "./primitives";

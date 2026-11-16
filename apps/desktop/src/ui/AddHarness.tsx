@@ -3,7 +3,6 @@
 // kept off the pickers until that worked; a failure shows the error text and
 // leaves nothing behind. Rules live in state/harnessForm.ts.
 
-import { Plus, X } from "lucide-react";
 import { useState } from "react";
 import { forgetHarnessCheck, runHarnessCheck } from "../state/harnessChecks";
 import {
@@ -21,6 +20,7 @@ import {
   toast,
   useApp,
 } from "../state/store";
+import { Plus, X } from "./icons";
 import { cx, noTextHelpers, Spinner } from "./primitives";
 import { Action } from "./settingsKit";
 

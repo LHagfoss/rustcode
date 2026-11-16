@@ -8,7 +8,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { observeSize } from "../lib/resize";
 import "@xterm/xterm/css/xterm.css";
-import { MessageSquarePlus, Plus, RotateCcw, SquareTerminal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { projectName } from "../acp/types";
 import { canOpenPty, openPty, type PtyHandle } from "../lib/pty";
@@ -29,6 +28,7 @@ import {
   useTerminalTabs,
 } from "../state/terminalTabs";
 import { localId } from "../state/thread";
+import { MessageSquarePlus, Plus, RotateCcw, SquareTerminal, X } from "./icons";
 import { Cluster, ClusterButton, cx, Pill } from "./primitives";
 
 /** A solid colour for xterm from a token that may be translucent, over the panel's background. */

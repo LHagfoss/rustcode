@@ -5,7 +5,7 @@ import { SETTINGS_INDEX, SETTINGS_RESULTS, searchSettings } from "./settingsInde
 describe("settings search", () => {
   test("finds a row by its title, in any case", () => {
     expect(searchSettings("TRACKPAD").map((r) => r.title)).toContain("Trackpad haptics");
-    expect(searchSettings("rounded font")[0]?.title).toBe("Rounded font");
+    expect(searchSettings("TEXT SIZE").map((r) => r.title)).toContain("Text size");
   });
 
   test("finds a row by its keywords and its section", () => {

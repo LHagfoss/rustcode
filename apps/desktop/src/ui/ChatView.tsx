@@ -3,24 +3,6 @@
 // approval cards — and the right panel docked beside it (ui/RightPanel.tsx). A
 // new thread centres the composer and places its optional overview below it.
 
-import {
-  ChevronDown,
-  CircleCheck,
-  CircleDashed,
-  CircleDot,
-  Eye,
-  FileDiff,
-  GitBranch,
-  GitPullRequest,
-  Laptop,
-  ListChecks,
-  type LucideIcon,
-  PanelRight,
-  SlidersHorizontal,
-  Sparkles,
-  SquareTerminal,
-  Zap,
-} from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, modelName, projectName } from "../acp/types";
@@ -74,6 +56,24 @@ import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
 import { GitHeaderButton } from "./GitActions";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  ChevronDown,
+  CircleCheck,
+  CircleDashed,
+  CircleDot,
+  Eye,
+  FileDiff,
+  GitBranch,
+  GitPullRequest,
+  Laptop,
+  ListChecks,
+  type LucideIcon,
+  PanelRight,
+  SlidersHorizontal,
+  Sparkles,
+  SquareTerminal,
+  Zap,
+} from "./icons";
 import { LinkedThreads } from "./Links";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";

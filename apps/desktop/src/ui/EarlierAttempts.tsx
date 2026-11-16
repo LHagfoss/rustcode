@@ -8,12 +8,12 @@
 // Rendered as one block after the virtualized rows, so the attempt is never folded or measured as
 // part of the thread: it is a record, not the transcript.
 
-import { History, TriangleAlert } from "lucide-react";
 import { type Checkpoint, checkpointsByTurn } from "../acp/v2";
 import { type Attempt, attemptTurns, transcriptTurns } from "../state/attempts";
 import { returnToAttempt, useApp } from "../state/store";
 import type { TranscriptItem } from "../state/thread";
 import { StatusReplyRow } from "./DelegateStatus";
+import { History, TriangleAlert } from "./icons";
 import { Pill } from "./primitives";
 import {
   AssistantRow,

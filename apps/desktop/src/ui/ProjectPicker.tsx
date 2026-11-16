@@ -6,16 +6,6 @@
 // machine "Browse Folders…" walks that machine's folders and makes a new project there
 // (ui/MachineFolderBrowser.tsx), since its disk has no file dialog here.
 
-import {
-  Check,
-  Code,
-  Copy,
-  FolderOpen,
-  FolderPlus,
-  GitBranch,
-  SquarePen,
-  SquareTerminal,
-} from "lucide-react";
 import { type ReactElement, type ReactNode, useMemo, useState } from "react";
 import { projectName } from "../acp/types";
 import { folderRows, matchSpans, middleEllipsis } from "../lib/folderList";
@@ -28,6 +18,7 @@ import { isCurrentProject, moveBlockedReason } from "../state/projectPick";
 import { startNewThread, toast, useApp, useMachineOfThread } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { CardMenuItem, CardPopover, type CardTriggerProps, menuKeys } from "./cardPopover";
+import { Check, Code, Copy, FolderOpen, FolderPlus, GitBranch, SquarePen, SquareTerminal } from "./icons";
 import { MachineFolderBrowser } from "./MachineFolderBrowser";
 import { cx, type MenuQuickAction, MenuQuickActions, MenuSearchField, menuSeparator } from "./primitives";
 

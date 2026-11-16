@@ -340,22 +340,27 @@ its lane and re-centres in the room that is left (Right panel below).
 
 ## Type
 
-macOS text styles one point up (read at a laptop's distance), SF Pro
-(Settings › Appearance › Rounded font switches to SF Pro Rounded) / SF Mono.
-Replies read at 14px on a 1.625 line height (22.75px, `leading-relaxed`,
-set on the reply's own scope so the app's rows keep 19px), in `fg` at 90%,
-with headings at 26/21/18/16 (`h1`–`h4`) in semibold, a step bigger than the 14px body so a
-long reply scans by its headings:
+Inter (bundled, `@fontsource-variable/inter`, the same face on every OS) /
+SF Mono. Settings › Appearance › Font picks Inter, System (the platform's own
+face, below) or Rounded (SF Pro Rounded). Settings › Appearance › Text size
+picks Default (the original compact scale in `@theme`), Large
+(one more point for the reading sizes, captions unchanged) or
+Larger (one more again, captions too); `:root[data-text-size]` swaps the
+`--text-*` variables, so every `text-*` class follows. Sizes below are Default /
+Large / Larger. Replies read at `text-body` on a 1.625 line height
+(`leading-relaxed`, set on the reply's own scope so the app's rows keep
+theirs), in `fg` at 90%, with headings at 26/21/18/16 (`h1`–`h4`) in
+semibold, a step bigger than the body so a long reply scans by its headings:
 
-| Class | Size / line | Use |
+| Class | Size / line (Default · Large · Larger) | Use |
 |---|---|---|
-| `text-caption` | 11/14 | Metadata, badges |
-| `text-sub` | 12/15 | Sidebar secondary lines, section headers |
-| `text-callout` | 13/17 | Controls, chips, secondary copy |
-| `text-body` | 14/19 | Body, rows, tool rows |
-| `text-title3` | 16/21 | Card titles |
-| `text-title2` | 18/23 | Onboarding, a document's headings |
-| `text-title` | 23/29 | Empty-state heading |
+| `text-caption` | 11/14 · 11/14 · 12/15 | Metadata, badges |
+| `text-sub` | 12/15 · 13/16 · 14/17 | Sidebar secondary lines, section headers |
+| `text-callout` | 13/17 · 14/18 · 15/19 | Controls, chips, secondary copy |
+| `text-body` | 14/19 · 15/20 · 16/21 | Body, rows, tool rows |
+| `text-title3` | 16/21 · 17/22 · 18/23 | Card titles |
+| `text-title2` | 18/23 · 19/24 · 20/25 | Onboarding, a document's headings |
+| `text-title` | 23/29 · 24/30 · 25/31 | Empty-state heading |
 | `text-[26px]`, `text-[21px]` | 26/31, 21/26 | A reply's `h1`, `h2` (`Markdown.tsx`) |
 
 Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
@@ -486,7 +491,7 @@ painted there either: the effects worker bakes it into the picture once
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Sans (`--font-sans`, `--font-rounded`) | SF Pro / SF Pro Rounded | Segoe UI Variable Text, Segoe UI | Inter, Cantarell, Ubuntu, Noto Sans |
+| Sans (`--font-sans`, `--font-rounded`) | Inter by default; System: SF Pro / SF Pro Rounded | Inter by default; System: Segoe UI Variable Text, Segoe UI | Inter by default; System: Inter, Cantarell, Ubuntu, Noto Sans |
 | Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
 | Font smoothing | `antialiased` | system (ClearType) | system |
 | Glass | the recipe above | none: solid `surface-2` | none: solid `surface-2` |
@@ -561,7 +566,11 @@ the default arrow on static text; the text cursor only in fields and
 
 ## Icons
 
-Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). Sizes, and no others
+Hugeicons' free stroke-rounded set at stroke 1.5 (2.5 for chevrons at 10–12px),
+imported from `ui/icons.tsx` under the Lucide names, with Lucide's props; never
+import `lucide-react` directly. The four shapes the set has no match for (the
+raised hand, `CircleDot`, `SunMoon`, `GitBranchPlus`) are Lucide drawn at the
+same weight in that file. Sizes, and no others
 (`design.test.ts` checks every `size={n}` in `ui/`): 10 for a glyph inside a
 status dot and a spinner in a caption line, 12 inside chips and caption rows,
 13 in menus, 14 in toolbar and composer buttons, 16 in page headers and tool
@@ -728,7 +737,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `fg-muted`, with 14px folder icons: the label,
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
-- **Sidebar rows:** every thread row is one fixed grid of three lines, 68px
+- **Sidebar rows:** project groups inset their threads by 32px. A full-width New thread
+  button sits above search. Every detailed thread row is one fixed grid of three lines, 68px
   tall whatever it holds, with `rounded-xl`, so a column of rows reads as a
   table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`). Each line
   is a left part that truncates and a right part against the row's edge that
@@ -748,8 +758,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   diff (`+N −N` in `success`/`danger`) and the pull request's mark, led by the
   count of running delegates and subagents (a 11px bot and the number, muted,
   with the list in its tooltip; `delegateCount` in `state/agentStack.ts`).
-  Approval and question rows keep their sort position and carry a `warning`
-  left edge. Non-git folders do not repeat their path on line 3.
+  Approval and question rows keep their sort position; line 3 says what they
+  ask, in `warning`. Non-git folders do not repeat their path on line 3.
   Line 3: the branch, or what the thread asks of you in
   `warning` in its place (`in <parent title>` for a delegated row drawn on its
   own); at the right, always the harness mark and the model;
@@ -788,7 +798,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   started are the marks, and one it messaged is what makes the chip say
   `Waiting`. Hovering lists
   the running threads and their state, and the row opens the parent. The open
-  delegate itself is drawn as an indented row, with a subtle tree line, directly
+  delegate itself is drawn as a compact one-line indented row, with a thin inward elbow, directly
   under its parent's row, unfolding in with the list's fold motion and folding
   away when the user opens another thread or goes back; the threads between it
   and its nearest row of its own come with it, and a parent in the Settled shelf

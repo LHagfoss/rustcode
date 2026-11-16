@@ -1,10 +1,11 @@
 import { formatBinding } from "../lib/keys";
+
 // `?catalog` in a dev build: every shared control on one page, so a change to a recipe, or a
 // control that drifts from it, shows at a glance. Not part of the app (main.tsx).
 
-import { Copy, Plus, Settings, Trash2 } from "lucide-react";
 import { DropdownMenu, Tooltip as RadixTooltip } from "radix-ui";
 import { type ReactNode, useState } from "react";
+import { Copy, Plus, Settings, Trash2 } from "./icons";
 import {
   Callout,
   ChromeButton,

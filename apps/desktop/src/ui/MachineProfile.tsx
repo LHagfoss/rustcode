@@ -4,7 +4,6 @@
 // app's chart palette, so a list of machines reads at a glance and no value is
 // ever a colour literal.
 
-import { RotateCcw } from "lucide-react";
 import { Popover } from "radix-ui";
 import { type ReactElement, useState } from "react";
 import {
@@ -16,6 +15,7 @@ import {
   type MachineTint,
   platformIcon,
 } from "../state/machines";
+import { RotateCcw } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { noTextHelpers } from "./primitives";
 import { Action, fieldClass } from "./settingsKit";

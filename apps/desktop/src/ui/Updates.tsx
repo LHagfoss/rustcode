@@ -2,21 +2,6 @@
 // (state/updates.ts). The row shows only when a newer release is out; the
 // dialog once, after the app updated, with that release's notes.
 
-import {
-  ArrowUpCircle,
-  BookOpen,
-  Bug,
-  FlaskConical,
-  Gauge,
-  GitCompareArrows,
-  Hammer,
-  type LucideIcon,
-  Paintbrush,
-  Sparkles,
-  Tag,
-  TriangleAlert,
-  Wrench,
-} from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useMemo, useState } from "react";
 import { openExternal } from "../lib/native";
@@ -33,6 +18,21 @@ import {
   useUpdates,
   type WhatsNew,
 } from "../state/updates";
+import {
+  ArrowUpCircle,
+  BookOpen,
+  Bug,
+  FlaskConical,
+  Gauge,
+  GitCompareArrows,
+  Hammer,
+  type LucideIcon,
+  Paintbrush,
+  Sparkles,
+  Tag,
+  TriangleAlert,
+  Wrench,
+} from "./icons";
 import { Markdown } from "./Markdown";
 import { cx, Pill, Skeleton, Spinner } from "./primitives";
 
