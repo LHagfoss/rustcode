@@ -1,10 +1,21 @@
 import { basename, join } from "../lib/paths";
 import { appPlatform, fileManagerName } from "../lib/platform";
+
 // Settings › Capabilities: skills and MCP servers in one place, through the
 // engine process that runs them (`_rustcode/capabilities*`), so a status
 // is never a guess. Skills by where they come from, each with its file;
 // servers with their state, tools, errors and log lines.
 
+import { DropdownMenu } from "radix-ui";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
+import { Method } from "../acp/types";
+import { createSkill, openPath, revealPath } from "../lib/native";
+import { hasShell } from "../lib/shell";
+import { failureSummary, mcpCopy, runOnMachines, secretTargetReason } from "../state/settingsRegistry";
+import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
+import { askConfirm, errorText, toast, useApp } from "../state/store";
+import { createSkillWithAgent } from "../state/threadOpen";
 import {
   ChevronRight,
   Copy,
@@ -17,17 +28,7 @@ import {
   Sparkles,
   SquarePen,
   Trash2,
-} from "lucide-react";
-import { DropdownMenu } from "radix-ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
-import { Method } from "../acp/types";
-import { createSkill, openPath, revealPath } from "../lib/native";
-import { hasShell } from "../lib/shell";
-import { failureSummary, mcpCopy, runOnMachines, secretTargetReason } from "../state/settingsRegistry";
-import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
-import { askConfirm, errorText, toast, useApp } from "../state/store";
-import { createSkillWithAgent } from "../state/threadOpen";
+} from "./icons";
 import { cardInset, cx, MenuContent, menuItem, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
 import { SettingsScopeBar } from "./SettingsScope";
 import {

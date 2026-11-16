@@ -3,7 +3,6 @@
 // quiet sign that work is under way. The same stack in the sidebar's rows and in
 // the chat's group cards, at two sizes (state/agentStack.ts).
 
-import { Bot } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   type AgentStackView,
@@ -15,6 +14,7 @@ import {
 import { useApp } from "../state/store";
 import { formatDuration } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
+import { Bot } from "./icons";
 import { cx, Spinner, Tooltip } from "./primitives";
 
 /** The tip's clock: it runs only while the tip is open and something is working. */

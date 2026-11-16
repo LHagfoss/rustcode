@@ -2,7 +2,6 @@
 // QuestionCard): reading pasted, dropped and picked files into attachments under the composer's
 // limits (state/compose.ts), and the strip of thumbnails and chips that shows them with Remove.
 
-import { FileText, X } from "lucide-react";
 import { readImage } from "../lib/native";
 import { basename } from "../lib/paths";
 import {
@@ -14,6 +13,7 @@ import {
 } from "../state/compose";
 import { toast } from "../state/store";
 import { localId } from "../state/thread";
+import { FileText, X } from "./icons";
 import { openLightbox } from "./Lightbox";
 import { PasteChip } from "./PasteChip";
 import { cx, Tooltip } from "./primitives";

@@ -5,7 +5,6 @@
 // debug.log, and one redacted Markdown report for a GitHub issue
 // (lib/diagnostics.ts builds and redacts it).
 
-import { Copy, Download, FileText, FolderOpen, Pause, Play, RefreshCw } from "lucide-react";
 import {
   Fragment,
   type ReactNode,
@@ -48,6 +47,7 @@ import {
 } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { errorText, request, restartEngine, SERVER_LOG_LINES, toast, useApp } from "../state/store";
+import { Copy, Download, FileText, FolderOpen, Pause, Play, RefreshCw } from "./icons";
 import { cx, noTextHelpers, rowInset } from "./primitives";
 import { Action, ErrorDetails, fieldClass, Group, Literal, PathText, Row, Select } from "./settingsKit";
 

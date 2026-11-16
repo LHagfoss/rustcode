@@ -4,7 +4,6 @@
 // draws the diff unified, or side by side when the window is wide enough.
 // Reloads when a turn ends.
 
-import { ChevronRight, CircleCheck, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { latest } from "../lib/latest";
@@ -12,6 +11,7 @@ import { type GitChanges, gitChanges } from "../lib/native";
 import { parsePatch } from "../state/diff";
 import { useApp } from "../state/store";
 import { Patch } from "./DiffView";
+import { ChevronRight, CircleCheck, RefreshCw } from "./icons";
 import { Cluster, ClusterButton, cx, Segments, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 

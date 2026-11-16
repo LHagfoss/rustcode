@@ -4,7 +4,6 @@
 // this app, install the server from this app), else the command to run, and a
 // Dismiss that hides it until its words change (state/settingsAttention.ts).
 
-import { Copy, Server, SquareTerminal, TriangleAlert, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { installServer, linkCliToApp, useMachines } from "../state/machines";
 import {
@@ -14,6 +13,7 @@ import {
   useDismissedProblems,
   visibleProblems,
 } from "../state/settingsAttention";
+import { Copy, Server, SquareTerminal, TriangleAlert, X } from "./icons";
 import { copyText, Spinner } from "./primitives";
 import { Action } from "./settingsKit";
 

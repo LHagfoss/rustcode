@@ -3,7 +3,6 @@
 // scrolled up, and a "Latest" button brings them back.
 
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
 import {
   memo,
   type ReactNode,
@@ -73,6 +72,7 @@ import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { BranchRow } from "./Branches";
 import { StatusReplyRow } from "./DelegateStatus";
 import { EarlierAttempts } from "./EarlierAttempts";
+import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "./icons";
 import { PlanCard } from "./PlanCard";
 import { cx, noTextHelpers } from "./primitives";
 import { LeavingQueuedRow, QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";

@@ -1208,8 +1208,8 @@ composer's keys stay outside the table.
   reached then and one notification at most (`snoozed` in the store;
   `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`).
   Needs you counts distinct threads in the active filter; its inbox opens all
-  projects. Approval and question rows keep their sort position with an amber
-  `warning` left edge. Remote rows always keep their machine tag; local rows
+  projects. Approval and question rows keep their sort position and say what they
+  ask on line 3. Remote rows always keep their machine tag; local rows
   show it only when the filtered list spans several machines. Every
   thread row is the same 68px grid of three lines, each a left and a right part
   (`docs/design.md` › Sidebar rows): the title and its state or age, then the

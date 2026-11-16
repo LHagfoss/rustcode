@@ -9,7 +9,6 @@
 // goes through the same scope bar as every other server setting. A row set from
 // here waits for that machine's next launch, which the footer says.
 
-import { ArrowLeft, Plus, RefreshCw, Trash2, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Harness } from "../acp/types";
 import { devicePlatform, deviceRoute, deviceStatus, machineAccess, versionLine } from "../state/deviceRows";
@@ -48,6 +47,7 @@ import {
 } from "../state/settingsScope";
 import { openSettings, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
+import { ArrowLeft, Plus, RefreshCw, Trash2, Unplug } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import { cx, noTextHelpers, Segments, Spinner, Switch, Tooltip } from "./primitives";

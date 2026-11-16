@@ -2,39 +2,6 @@
 // replies full width without a bubble, quiet thought disclosures, one-line
 // tool rows that open to their diff or output, and a turn footer.
 
-import {
-  ArrowRight,
-  Book,
-  Brain,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  CircleCheck,
-  CircleX,
-  CornerDownRight,
-  ExternalLink,
-  FileText,
-  GitFork,
-  Globe,
-  Hourglass,
-  Image as ImageIcon,
-  ImageOff,
-  Layers,
-  MessageCircleQuestion,
-  MessageSquareQuote,
-  MessagesSquare,
-  MoveRight,
-  Paperclip,
-  Pencil,
-  RotateCcw,
-  Search,
-  Shield,
-  SquareStop,
-  Terminal,
-  Trash2,
-  Users,
-  Wrench,
-} from "lucide-react";
 import { Fragment, memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { effortLabel, modelName } from "../acp/types";
@@ -83,6 +50,39 @@ import { type Waiting, waitingLabel, waitingNext, waitingTitle } from "../state/
 import { harnessId, wakeNotice } from "../state/wakeNotice";
 import { DiffView } from "./DiffView";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  ArrowRight,
+  Book,
+  Brain,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  CircleCheck,
+  CircleX,
+  CornerDownRight,
+  ExternalLink,
+  FileText,
+  GitFork,
+  Globe,
+  Hourglass,
+  Image as ImageIcon,
+  ImageOff,
+  Layers,
+  MessageCircleQuestion,
+  MessageSquareQuote,
+  MessagesSquare,
+  MoveRight,
+  Paperclip,
+  Pencil,
+  RotateCcw,
+  Search,
+  Shield,
+  SquareStop,
+  Terminal,
+  Trash2,
+  Users,
+  Wrench,
+} from "./icons";
 import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
 import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";

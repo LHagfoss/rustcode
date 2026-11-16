@@ -3,7 +3,6 @@
 // and Stop/Run are small icons that appear on hover or focus. See
 // docs/smart-ui.md for the format, limits and security model.
 
-import { Check, Code, Copy, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
 import { KEYBOARD_NAV, TAB_FOCUS_EVENT, tabMovesFocus } from "../lib/focusModality";
@@ -37,6 +36,7 @@ import {
   viewMessage,
 } from "../smartui/parse";
 import { sendFromView, setSmartUi, toast, useApp } from "../state/store";
+import { Check, Code, Copy, Play, Square } from "./icons";
 import { CodeBlock } from "./Markdown";
 import { copyText, cx, Pill, Tooltip } from "./primitives";
 

@@ -18,7 +18,6 @@
 // header's toggle. The card is beside the composer rather than over it, so a
 // field being typed in always keeps the keyboard.
 
-import { X } from "lucide-react";
 import {
   type CSSProperties,
   lazy,
@@ -33,6 +32,7 @@ import { relationshipOf } from "../acp/types";
 import { observeSize } from "../lib/resize";
 import { readStorage, writeStorage } from "../lib/storage";
 import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
+import { X } from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
 import { cx, Segments, Tooltip } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";

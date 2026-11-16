@@ -4,10 +4,10 @@
 // webview); until it arrives, or without it, the chip shows the host on a
 // neutral fill.
 
-import { ArrowUpRight, Globe, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type LinkMeta, linkChipLabel, linkMetaCached, loadLinkMeta } from "../lib/links";
 import { openExternal } from "../lib/native";
+import { ArrowUpRight, Globe, X } from "./icons";
 import { cx, Tooltip } from "./primitives";
 
 export function useLinkMeta(url: string): LinkMeta | null {

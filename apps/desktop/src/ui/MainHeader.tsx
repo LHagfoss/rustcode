@@ -8,11 +8,11 @@
 // line, and on Windows it leaves the window's own controls their room at the
 // window's right edge (ui/WindowControls.tsx).
 
-import { Settings as Gear, PanelLeft } from "lucide-react";
 import type { ReactNode } from "react";
 import { appPlatform } from "../lib/platform";
 import { useSettingsAttention } from "../state/settingsAttention";
 import { openSettings, type SettingsSection, toggleSidebar, useApp, useShortcutHint } from "../state/store";
+import { Settings as Gear, PanelLeft } from "./icons";
 import { Cluster, ClusterButton, cx } from "./primitives";
 import { TITLEBAR_HEIGHT, useLightsInset } from "./Titlebar";
 import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";

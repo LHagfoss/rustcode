@@ -4,7 +4,6 @@
 // workers the same way: each is a delegate thread of the thread that started the run, so each row
 // opens it.
 
-import { ChevronDown, Workflow, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { WorkflowRun, WorkflowWorker } from "../acp/workflows";
 import { selectThread } from "../state/store";
@@ -24,6 +23,7 @@ import {
   useWorkflows,
   workerThread,
 } from "../state/workflows";
+import { ChevronDown, Workflow, X } from "./icons";
 import { cx, Spinner, Tooltip } from "./primitives";
 
 const WORKER_TINT: Record<WorkflowWorker["state"], string> = {

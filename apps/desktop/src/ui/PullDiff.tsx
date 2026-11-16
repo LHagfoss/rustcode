@@ -5,14 +5,6 @@
 // thread's composer as a draft. Reply, Resolve and the "+" on a diff line's
 // number write to GitHub through the engine (issue 3768); a failure keeps the text.
 
-import {
-  ChevronDown,
-  ChevronRight,
-  CircleCheck,
-  CirclePlus,
-  MessageSquare,
-  MessageSquarePlus,
-} from "lucide-react";
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { PullDetail, PullRequest } from "../acp/rustcode";
 import { pullErrorTitle } from "../acp/rustcode";
@@ -54,6 +46,14 @@ import { setDraft, toast, useApp } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { StatusMark } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  CirclePlus,
+  MessageSquare,
+  MessageSquarePlus,
+} from "./icons";
 import { Markdown } from "./Markdown";
 import { Callout, cx, noTextHelpers, Pill, Skeleton } from "./primitives";
 import { DiffCount } from "./Rows";

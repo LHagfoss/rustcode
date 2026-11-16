@@ -2,7 +2,6 @@
 // refreshed while it is open, and the row a bare "status" message gets as its local reply. Both draw
 // `DelegateStatusRow`s (state/delegateStatus.ts), so they say the same thing in the same words.
 
-import { ChevronDown, Layers, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   canStop,
@@ -23,6 +22,7 @@ import { delegateStatusInputs, readDelegatePull, stopDelegate } from "../state/h
 import { selectThread, useApp } from "../state/store";
 import { liveRuns, loadWorkflowRuns, useThreadRuns } from "../state/workflows";
 import { AgentMarks } from "./AgentStack";
+import { ChevronDown, Layers, X } from "./icons";
 import { cx, Spinner, Tooltip } from "./primitives";
 import { WorkflowStatusRow } from "./WorkflowRuns";
 

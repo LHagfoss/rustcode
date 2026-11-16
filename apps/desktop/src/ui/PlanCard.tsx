@@ -6,13 +6,13 @@
 // clock, and a steering note the turn read on that step is marked under it (`ui/SteerMark.tsx`), so
 // an instruction sent mid-turn says which step it changed. Each finished step keeps its own time.
 
-import { ChevronDown, ChevronUp, ListChecks } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PlanEntry } from "../acp/types";
 import { type PlanClocks, planClock, type SteerNote, steerMarks, stepElapsed } from "../state/steer";
 import { runPrompt } from "../state/store";
 import { formatDuration } from "../state/thread";
 import { useNow } from "./AgentViews";
+import { ChevronDown, ChevronUp, ListChecks } from "./icons";
 import { CopyButton } from "./Markdown";
 import { cx, Pill, Tooltip } from "./primitives";
 import { SteerMark } from "./SteerMark";

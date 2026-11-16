@@ -2,10 +2,10 @@
 // `rustcode://` links instead of this one (lib/nativeAccess.ts). It never blocks anything; the
 // fix makes this copy the handler where the system lets the app do that.
 
-import { TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { claimScheme, readSchemeStatus, type SchemeStatus, schemeWarning } from "../lib/nativeAccess";
 import { toast } from "../state/store";
+import { TriangleAlert } from "./icons";
 import { Action, Group, Row } from "./settingsKit";
 
 export function SchemeWarning() {

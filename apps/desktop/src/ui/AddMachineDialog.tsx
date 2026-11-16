@@ -8,7 +8,6 @@
 // The work is `state/machines.ts`'s (the shell holds every connection); this file only asks and
 // shows. `ui/machineLabels.ts` holds the words.
 
-import { Check, Copy, KeyRound, Minus, Search, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -39,6 +38,7 @@ import {
   versionSkew,
 } from "../state/machines";
 import { toast } from "../state/store";
+import { Check, Copy, KeyRound, Minus, Search, X } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import {
   ADD_METHODS,

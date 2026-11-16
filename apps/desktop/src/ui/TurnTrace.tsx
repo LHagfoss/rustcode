@@ -5,7 +5,6 @@
 // engine reported while the turn ran (state/thread.ts `TurnUsage`); a replayed
 // turn has no per-call timing, so it has no chip rather than invented bars.
 
-import { Activity, Brain, CircleX, Users, Wrench } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useMemo, useState } from "react";
 import {
@@ -29,6 +28,7 @@ import {
 } from "../lib/trace";
 import { formatDuration, formatTokens, subagentOf, type TranscriptItem } from "../state/thread";
 import { displayTool, orchestrationTool, usefulSummary } from "../state/toolNames";
+import { Activity, Brain, CircleX, Users, Wrench } from "./icons";
 import { CopyButton } from "./Markdown";
 import { cx, Segments, Tooltip } from "./primitives";
 import { ToolDetail } from "./Rows";

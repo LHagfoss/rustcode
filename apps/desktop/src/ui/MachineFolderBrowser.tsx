@@ -4,7 +4,6 @@
 // open a folder to go in, Up to go out, New Project to make a folder there with `git init`, and
 // Open to start the next thread in (or move the open one to) the folder shown.
 
-import { ArrowUp, Folder, FolderGit2, FolderPlus, House } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { projectName } from "../acp/types";
@@ -14,6 +13,7 @@ import {
   type FolderListing,
   folderNameProblem,
 } from "../state/machineFolders";
+import { ArrowUp, Folder, FolderGit2, FolderPlus, House } from "./icons";
 import { inputClass, noTextHelpers, Pill, Spinner, Tooltip } from "./primitives";
 
 export function MachineFolderBrowser({

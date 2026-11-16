@@ -5,7 +5,6 @@
 // `limit-fallback-map`). Rules live in state/limitFallback.ts; the move is
 // `switchOnLimit` in state/store.ts.
 
-import { Plus } from "lucide-react";
 import { useState } from "react";
 import {
   type FallbackRule,
@@ -18,6 +17,7 @@ import {
 } from "../state/limitFallback";
 import { useScopedSetting } from "../state/settingsScope";
 import { useApp } from "../state/store";
+import { Plus } from "./icons";
 import { cx, noTextHelpers, Switch } from "./primitives";
 import { ScopedValue } from "./SettingsScope";
 import { Action, fieldClass, Group, Row, Select } from "./settingsKit";

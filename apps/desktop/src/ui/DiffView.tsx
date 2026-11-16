@@ -3,13 +3,13 @@
 // syntax colours and carry word-level marks inside them (lib/wordDiff.ts),
 // so an edited line shows what changed in it and not only its tint.
 
-import { FilePlus, FileText } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { FileDiff } from "../acp/types";
 import { useHighlightedLines } from "../lib/useHighlightedLines";
 import { markedPieces, type Piece, runWordMarks, type WordRange } from "../lib/wordDiff";
 import { type PatchLine, splitRows } from "../state/diff";
 import { diffCounts, diffLines } from "../state/thread";
+import { FilePlus, FileText } from "./icons";
 import { cx } from "./primitives";
 import { DiffCount } from "./Rows";
 

@@ -1,5 +1,6 @@
 import { formatBinding } from "../lib/keys";
 import { primaryModifier } from "../lib/platform";
+
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
 // in front of it; pasted links stay inline as text) and its foot: + on the left,
@@ -12,7 +13,6 @@ import { primaryModifier } from "../lib/platform";
 // closes suggestions, then leaves a queued edit, then clears the draft, then
 // stops the turn.
 
-import { Square } from "lucide-react";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { harnessPlanKey } from "../acp/rustcode";
@@ -144,6 +144,7 @@ import {
   Shield,
   ShieldCheck,
   ShieldOff,
+  Square,
   SquarePen,
   WifiOff,
   X,

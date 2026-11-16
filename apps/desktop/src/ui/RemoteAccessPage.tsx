@@ -10,7 +10,6 @@
 // from the phone acts on the thread here. The host shares at most 32 at once,
 // most recently used first, and says why it holds the rest back.
 
-import { Copy, RefreshCw, Smartphone, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   connectionRouteLabel,
@@ -42,6 +41,7 @@ import {
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { connectionDirection, peerOutbound } from "./connectionDirection";
+import { Copy, RefreshCw, Smartphone, WifiOff } from "./icons";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
 import { ServerProblems } from "./ServerProblems";

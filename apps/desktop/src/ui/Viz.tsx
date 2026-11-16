@@ -3,9 +3,9 @@
 // checklist (level 2), with the documented limits. A payload that does not
 // fit the schema shows its source with the reason, as the TUI does.
 
-import { ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { clip } from "../lib/clip";
+import { ChevronRight } from "./icons";
 import { CodeBlock, CopyButton } from "./Markdown";
 import { cx } from "./primitives";
 

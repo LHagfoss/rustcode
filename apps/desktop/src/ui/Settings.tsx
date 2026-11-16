@@ -6,6 +6,7 @@ import { ComputerUseGroup } from "./ComputerUseGroup";
 import { ProjectGenerators } from "./ProjectGenerators";
 import { TextGeneration } from "./TextGeneration";
 import { VoiceGroup } from "./VoiceGroup";
+
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -15,32 +16,6 @@ import { VoiceGroup } from "./VoiceGroup";
 // themes, Usage, Statistics) read and write through `_rustcode/*` requests.
 // Diagnostics (DiagnosticsPage.tsx) asks the shell about the server itself.
 
-import {
-  Blocks,
-  ChartColumn,
-  Check,
-  FolderOpen,
-  Gauge,
-  Settings as Gear,
-  Info,
-  Keyboard,
-  KeyRound,
-  Laptop,
-  Layers,
-  MessageSquare,
-  Mic,
-  Network,
-  Palette,
-  Plug,
-  Plus,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-  Smartphone,
-  Stethoscope,
-  TerminalSquare,
-  X,
-} from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { type PayloadCapture, parsePayloadCapture } from "../acp/rustcode";
@@ -127,6 +102,32 @@ import {
   useUpdates,
 } from "../state/updates";
 import { AddHarnessForm } from "./AddHarness";
+import {
+  Blocks,
+  ChartColumn,
+  Check,
+  FolderOpen,
+  Gauge,
+  Settings as Gear,
+  Info,
+  Keyboard,
+  KeyRound,
+  Laptop,
+  Layers,
+  MessageSquare,
+  Mic,
+  Network,
+  Palette,
+  Plug,
+  Plus,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  Smartphone,
+  Stethoscope,
+  TerminalSquare,
+  X,
+} from "./icons";
 
 const CapabilitiesPage = lazy(() => import("./Capabilities").then((m) => ({ default: m.CapabilitiesPage })));
 
@@ -1344,16 +1345,16 @@ function AppearancePage() {
               ? () => setTextSize(SETTINGS_DEFAULTS.textSize)
               : undefined
           }
-          subtitle="Small is the denser size RustCode used before."
+          subtitle="Larger sizes scale the chat and sidebar text."
         >
           <Choice
             label="Text size"
             value={textSize}
             onChange={setTextSize}
             options={[
-              { value: "small", label: "Small" },
-              { value: "medium", label: "Medium" },
-              { value: "large", label: "Large" },
+              { value: "small", label: "Default" },
+              { value: "medium", label: "Large" },
+              { value: "large", label: "Larger" },
             ]}
           />
         </Row>

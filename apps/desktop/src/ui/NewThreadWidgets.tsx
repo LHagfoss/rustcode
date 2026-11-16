@@ -12,18 +12,6 @@
 // The optional overview sits outside the composer's centring stack. Cards keep
 // a consistent height while reads land; empty cards explain what is missing.
 
-import {
-  Activity,
-  CalendarDays,
-  Gauge,
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestArrow,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
-  History,
-  type LucideIcon,
-} from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { PullRequest, UsageRow } from "../acp/rustcode";
 import { parseUsageReport } from "../acp/rustcode";
@@ -43,6 +31,18 @@ import {
   projectThreads,
   turnsPerDay,
 } from "../state/widgets";
+import {
+  Activity,
+  CalendarDays,
+  Gauge,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestArrow,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  History,
+  type LucideIcon,
+} from "./icons";
 import { cx, Pill, Skeleton } from "./primitives";
 import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";

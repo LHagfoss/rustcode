@@ -8,13 +8,13 @@
 //   appears, themed from the tokens, rendered strictly (no scripts, no
 //   links out), capped in size, and shown as code when it does not parse.
 
-import { CircleAlert, ImageOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { openPath, revealPath, threadImage } from "../lib/native";
 import { isAbsolute, join } from "../lib/paths";
 import { appPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import { useApp } from "../state/store";
+import { CircleAlert, ImageOff } from "./icons";
 import { openLightbox } from "./Lightbox";
 import { cx, Pill } from "./primitives";
 

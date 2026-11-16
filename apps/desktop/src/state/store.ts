@@ -986,7 +986,7 @@ export const STORAGE = {
 export const SETTINGS_DEFAULTS = {
   theme: "system" as AppState["theme"],
   font: "inter" as AppFont,
-  textSize: "medium" as TextSize,
+  textSize: "small" as TextSize,
   animateStreaming: true,
   reduceTransparency: false,
   chatWidth: CHAT_WIDTH_DEFAULT,

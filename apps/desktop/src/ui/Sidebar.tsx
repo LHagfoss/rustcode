@@ -1,5 +1,6 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
 import { copyThreadId } from "../state/deepLinks";
+
 // The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
 // Settings), the Needs you row, the toolbar (search, the sort and filter menu and
 // New thread; ui/SidebarToolbar.tsx, optional), then one list: pinned threads
@@ -15,7 +16,6 @@ import { copyThreadId } from "../state/deepLinks";
 // state/sidebarRows.ts `rowStatus`), then the diff and pull request, then the
 // model and harness mark (a count of running delegates sits beside the diff). Hovering swaps the state for the row's actions.
 
-import { CircleDot } from "lucide-react";
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import {
   Fragment,
@@ -171,6 +171,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDashed,
+  CircleDot,
   Clock,
   CloudUpload,
   Copy,
@@ -1046,12 +1047,6 @@ const ThreadRow = memo(function ThreadRow({
               className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
             >
               <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
-              {request && (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-y-2 left-0 w-0.5 rounded-full bg-warning"
-                />
-              )}
               {compact ? (
                 <>
                   <CompactDot mark={compactMark(chip)} />

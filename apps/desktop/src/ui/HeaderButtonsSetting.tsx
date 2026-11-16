@@ -1,4 +1,5 @@
 import { formatBinding } from "../lib/keys";
+
 // Settings › Chat › Thread header buttons: which of the thread header's buttons
 // show, and in what order. Two lists — Shown and Hidden — and a row moves
 // between them by drag or by its own Show/Hide button, so it works without a
@@ -12,7 +13,6 @@ import { formatBinding } from "../lib/keys";
 // list keeps its order in the store, the Hidden one is the rest in registry
 // order, so dragging across is what matters there.
 
-import { Eye, EyeOff, GripVertical, type LucideIcon } from "lucide-react";
 import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -24,6 +24,7 @@ import {
 } from "../state/headerButtons";
 import { setHeaderButtons, useApp } from "../state/store";
 import { HEADER_BUTTONS } from "./ChatView";
+import { Eye, EyeOff, GripVertical, type LucideIcon } from "./icons";
 import { cx, Pill } from "./primitives";
 import { Row } from "./settingsKit";
 

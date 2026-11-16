@@ -4,7 +4,6 @@
 // sends: the transcript is draft text like any other. The pure rules (states,
 // insertion, request shape) are `lib/dictation.ts`.
 
-import { Loader2, Mic, MicOff, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   cleanupNote,
@@ -30,6 +29,7 @@ import {
 } from "../lib/dictation";
 import { checkMicrophone, micBlocked, micBlockedNotice, openMicrophoneSettings } from "../lib/nativeAccess";
 import { openSettings, request, shortcutHint, toast } from "../state/store";
+import { Loader2, Mic, MicOff, Square, X } from "./icons";
 import { cx, Pill, Tooltip } from "./primitives";
 
 function toBase64(blob: Blob): Promise<string> {

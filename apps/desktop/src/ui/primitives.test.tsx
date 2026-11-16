@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { Copy, Pin } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CardMenuItem } from "./cardPopover";
+import { Copy, Pin } from "./icons";
 import { MenuQuickActions } from "./primitives";
 
 function render(actions: ComponentProps<typeof MenuQuickActions>["actions"]) {

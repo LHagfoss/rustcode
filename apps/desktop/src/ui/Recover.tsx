@@ -1,13 +1,14 @@
 import { formatBinding } from "../lib/keys";
 import { primaryModifier } from "../lib/platform";
+
 // A soft reload: the interface mounts again from the store, the engine and
 // every running thread carry on. ⌘R does it, and a render error offers it
 // instead of a blank window. A webview reload would hand the page a fresh
 // engine (src-tauri/src/engine.rs), stopping what runs.
 
-import { RotateCw } from "lucide-react";
 import { Component, type ReactNode, useEffect, useState } from "react";
 import { refreshHarnesses } from "../state/store";
+import { RotateCw } from "./icons";
 import { Pill } from "./primitives";
 
 const listeners = new Set<() => void>();

@@ -566,12 +566,11 @@ the default arrow on static text; the text cursor only in fields and
 
 ## Icons
 
-Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). The sidebar, its toolbar and
-the composer use the rounded set instead: Hugeicons' free stroke-rounded icons
-under the Lucide names in `ui/icons.tsx`, with the same props, stroke 1.75 and
-sizes. Move another surface over by changing only its import, a whole surface
-at a time so one screen never mixes the two; a glyph drawn filled (the
-composer's stop square) or with no rounded match (`CircleDot`) stays Lucide. Sizes, and no others
+Hugeicons' free stroke-rounded set at stroke 1.5 (2.5 for chevrons at 10–12px),
+imported from `ui/icons.tsx` under the Lucide names, with Lucide's props; never
+import `lucide-react` directly. The four shapes the set has no match for (the
+raised hand, `CircleDot`, `SunMoon`, `GitBranchPlus`) are Lucide drawn at the
+same weight in that file. Sizes, and no others
 (`design.test.ts` checks every `size={n}` in `ui/`): 10 for a glyph inside a
 status dot and a spinner in a caption line, 12 inside chips and caption rows,
 13 in menus, 14 in toolbar and composer buttons, 16 in page headers and tool
@@ -758,8 +757,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   diff (`+N −N` in `success`/`danger`) and the pull request's mark, led by the
   count of running delegates and subagents (a 11px bot and the number, muted,
   with the list in its tooltip; `delegateCount` in `state/agentStack.ts`).
-  Approval and question rows keep their sort position and carry a `warning`
-  left edge. Non-git folders do not repeat their path on line 3.
+  Approval and question rows keep their sort position; line 3 says what they
+  ask, in `warning`. Non-git folders do not repeat their path on line 3.
   Line 3: the branch, or what the thread asks of you in
   `warning` in its place (`in <parent title>` for a delegated row drawn on its
   own); at the right, always the harness mark and the model;

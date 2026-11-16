@@ -8,7 +8,6 @@
 // access, then the config to paste, shown once), and shows the calls waiting
 // for an answer and the recent ones.
 
-import { Plug } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   lastUsedLabel,
@@ -33,6 +32,7 @@ import {
   useOutside,
 } from "../state/outside";
 import { askConfirm, useApp } from "../state/store";
+import { Plug } from "./icons";
 import { copyText, cx, Switch } from "./primitives";
 import { Action, Chip, fieldClass, Group, Loading, Row, Select } from "./settingsKit";
 

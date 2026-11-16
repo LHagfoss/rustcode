@@ -7,20 +7,6 @@
 // leaves a row in the transcript once it is answered (Rows.tsx QuestionRow). A request from a
 // thread below this one (ChildRequestCard) uses the same cards, under a header naming it.
 
-import {
-  ArrowUpRight,
-  CheckCheck,
-  ChevronDown,
-  CircleArrowUp,
-  CircleCheck,
-  Clock,
-  CornerDownRight,
-  Hand,
-  ListChecks,
-  MessageCircleQuestion,
-  Paperclip,
-  ShieldAlert,
-} from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
@@ -54,6 +40,20 @@ import {
 } from "../state/store";
 import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./Attachments";
 import { overQuestionDrop, QUESTION_DROP_ATTR } from "./folderDropTarget";
+import {
+  ArrowUpRight,
+  CheckCheck,
+  ChevronDown,
+  CircleArrowUp,
+  CircleCheck,
+  Clock,
+  CornerDownRight,
+  Hand,
+  ListChecks,
+  MessageCircleQuestion,
+  Paperclip,
+  ShieldAlert,
+} from "./icons";
 import { CopyButton, Markdown } from "./Markdown";
 import {
   cx,
