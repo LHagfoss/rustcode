@@ -1,3 +1,12 @@
+## [v1.39.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.0) - 2026-11-16
+
+### Features
+- Make selected text readable with matching white highlights and dark text in chat and Smart UI. (#3834)
+- Smart UI views space their sections, read list items written as sentences as one paragraph, and stand further from the text after them. (#3835)
+- Agents and `rustcode settings` can read and change RustCode's settings, with an approval that shows the value before and after. (#3836)
+- Agents and the CLI can turn skills and MCP servers on and off, restart an MCP server, and pick the default harness, after approval. (#3837)
+- Agents can move a thread from another project to a chosen harness, account and model; new `rustcode threads move|rename|pin` and `rustcode worktree` commands. (#3838)
+- New `rustcode account`, `rustcode connections` and `rustcode outside` commands, and a command reference in docs/cli.md. (#3839)
 ## [v1.38.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.38.0) - 2026-11-15
 
 ### Features
