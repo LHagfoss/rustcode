@@ -269,8 +269,15 @@ The project follows the machine: `src/state/projects.ts` finds the same project
 there by path, then by git remote (`_meta.rustcode.remote`, normalized so
 `git@…` and `https://…` compare equal), then by folder name, and otherwise the
 composer offers that machine's most recent project and its other folders from
-its thread list ("Choose Folder…" stays this computer's, since no code here can
-browse a machine's disk). The folder list shows each folder once, without
+its thread list. Its disk has no file dialog here, so the picker's last row is
+"Browse Folders…" instead of "Choose Folder…": a dialog
+(`src/ui/MachineFolderBrowser.tsx`) that lists that machine's folders one at a
+time through its engine (`_rustcode/project/browse`, from its home folder or the
+thread's), goes up and home, and with **New Project** makes a folder in the one
+shown and runs `git init` there (`_rustcode/project/create`). **Open** starts the
+next thread there (**Move Here** for an open thread). A fresh server with no
+threads gets the same row under "No projects on … yet", and a machine on an
+older RustCode answers that it needs an update. The folder list shows each folder once, without
 Windows' `\\?\` prefix, and never RustCode's own data or install folder. With
 no folder chosen and none to go on, a new thread starts in that machine's home
 folder (the composer shows *Home folder*; `session/new` is sent no folder,

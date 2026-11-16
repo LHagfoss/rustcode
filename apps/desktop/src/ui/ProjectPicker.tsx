@@ -2,7 +2,9 @@
 // project in the thread header (issue 3598). With no thread open it picks where the next one
 // starts; with one open it moves that thread to the project picked, and still offers what to do
 // with the thread's folder (Finder, Terminal, copy the path, another thread there). Both places
-// read the thread's own folder from the store, so a move from either shows in both.
+// read the thread's own folder from the store, so a move from either shows in both. On a paired
+// machine "Browse Folders…" walks that machine's folders and makes a new project there
+// (ui/MachineFolderBrowser.tsx), since its disk has no file dialog here.
 
 import {
   Check,
@@ -26,6 +28,7 @@ import { isCurrentProject, moveBlockedReason } from "../state/projectPick";
 import { startNewThread, toast, useApp, useMachineOfThread } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { CardMenuItem, CardPopover, type CardTriggerProps, menuKeys } from "./cardPopover";
+import { MachineFolderBrowser } from "./MachineFolderBrowser";
 import { cx, type MenuQuickAction, MenuQuickActions, MenuSearchField, menuSeparator } from "./primitives";
 
 /** How much of a path a row shows before it is cut in the middle. */
@@ -49,8 +52,8 @@ export function useMoveBlockedReason(thread?: ThreadState): string | undefined {
  * a worktree nests under the repo it was cut from (lib/folderList.ts). Projects are ranked by how
  * much they are used — how recently, and how many threads — so the ones worked in sit at the top.
  * One line per row — the name, then the end of its path, faded — so a deep checkout never turns the
- * list into a wall of wrapping text. "Choose Folder…" is the last project row, and the last thing
- * the arrow keys reach before the folder's own actions.
+ * list into a wall of wrapping text. "Choose Folder…" ("Browse Folders…" on a paired machine) is
+ * the last project row, and the last thing the arrow keys reach before the folder's own actions.
  */
 export function ProjectPicker({
   thread,
@@ -74,6 +77,7 @@ export function ProjectPicker({
   const threadMachine = useMachineOfThread(thread?.id);
   const blocked = useMoveBlockedReason(thread);
   const [filter, setFilter] = useState("");
+  const [browsing, setBrowsing] = useState(false);
   // A thread on another computer moves among that computer's folders: its threads' projects,
   // never this computer's paths, which are meaningless there.
   const sources = useMemo(
@@ -100,103 +104,114 @@ export function ProjectPicker({
       ? `Project folder: ${projectName(cwd)}`
       : "Choose a folder";
   return (
-    <CardPopover
-      label={label}
-      onKeyDown={menuKeys}
-      tooltip={tooltip ?? (cwd || "Choose a folder")}
-      side={side}
-      align={align}
-      className="flex w-[300px] flex-col gap-1"
-      onOpenChange={(open) => {
-        // A search is about the panel it was typed in, not a filter the next one inherits.
-        if (!open) setFilter("");
-      }}
-      trigger={trigger}
-    >
-      {thread && <FolderActions cwd={cwd} host={host} remote={!!threadMachine} />}
-      {thread && (
-        <div data-menu-static className="px-3 pt-1 pb-0.5">
-          <div className="truncate text-caption text-fg-muted">{middleEllipsis(cwd, PATH_CHARS + 10)}</div>
-          <div className="pt-1.5 text-caption text-fg-faint">Move this thread to</div>
-          {blocked && (
-            <p role="note" className="pt-1 text-caption text-fg-muted">
-              {blocked}
+    <>
+      <CardPopover
+        label={label}
+        onKeyDown={menuKeys}
+        tooltip={tooltip ?? (cwd || "Choose a folder")}
+        side={side}
+        align={align}
+        className="flex w-[300px] flex-col gap-1"
+        onOpenChange={(open) => {
+          // A search is about the panel it was typed in, not a filter the next one inherits.
+          if (!open) setFilter("");
+        }}
+        trigger={trigger}
+      >
+        {thread && <FolderActions cwd={cwd} host={host} remote={!!threadMachine} />}
+        {thread && (
+          <div data-menu-static className="px-3 pt-1 pb-0.5">
+            <div className="truncate text-caption text-fg-muted">{middleEllipsis(cwd, PATH_CHARS + 10)}</div>
+            <div className="pt-1.5 text-caption text-fg-faint">Move this thread to</div>
+            {blocked && (
+              <p role="note" className="pt-1 text-caption text-fg-muted">
+                {blocked}
+              </p>
+            )}
+          </div>
+        )}
+        {/* The folders scroll under a search that filters them; "Choose Folder…" stays pinned under
+          them, last in the list and last to the arrow keys. */}
+        {searchable && (
+          <div data-menu-static className="px-0.5 pb-0.5">
+            <MenuSearchField
+              value={filter}
+              onChange={setFilter}
+              placeholder={thread ? "Search projects" : "Search folders"}
+              label={thread ? "Search projects" : "Search folders"}
+            />
+          </div>
+        )}
+        <div className="scroll-stable min-h-0 flex-1">
+          {rows.map((row) => {
+            const current = isCurrentProject(picked, cwd, row.path);
+            // The thread's own project is no move; while a move is blocked no row is one either.
+            const disabled = !!thread && (!!blocked || current);
+            return (
+              <CardMenuItem
+                key={row.path}
+                onSelect={() => choose(row.path)}
+                disabled={disabled}
+                aria-current={current || undefined}
+                className={cx(
+                  "gap-2 disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent",
+                  current && "bg-fill",
+                  row.repo && "pl-6",
+                )}
+              >
+                {/* A worktree is the repo's, not a project of its own: indented under it, marked by
+                  the branch it is. */}
+                {row.repo && <GitBranch size={12} className="shrink-0 text-fg-faint" />}
+                <span className="min-w-[40%] flex-1 truncate text-body text-fg">
+                  {matchSpans(row.name, filter).map((span, i) =>
+                    span.hit ? (
+                      <mark key={i} className="rounded-xs bg-fill-strong text-fg">
+                        {span.text}
+                      </mark>
+                    ) : (
+                      span.text
+                    ),
+                  )}
+                </span>
+                <span className="min-w-0 shrink truncate text-caption text-fg-faint">
+                  {middleEllipsis(row.path, PATH_CHARS)}
+                </span>
+                {current && <Check size={13} className="shrink-0 text-fg-muted" />}
+              </CardMenuItem>
+            );
+          })}
+          {!rows.length && all.length > 0 && (
+            <p className="px-3 py-2 text-callout text-fg-muted">No folder matches</p>
+          )}
+          {!all.length && host && (
+            <p className="px-3 py-2 text-callout text-fg-muted">
+              No projects on {machineName ?? "that computer"} yet. Browse its folders, or make a new project
+              there.
             </p>
           )}
         </div>
-      )}
-      {/* The folders scroll under a search that filters them; "Choose Folder…" stays pinned under
-          them, last in the list and last to the arrow keys. */}
-      {searchable && (
-        <div data-menu-static className="px-0.5 pb-0.5">
-          <MenuSearchField
-            value={filter}
-            onChange={setFilter}
-            placeholder={thread ? "Search projects" : "Search folders"}
-            label={thread ? "Search projects" : "Search folders"}
-          />
-        </div>
-      )}
-      <div className="scroll-stable min-h-0 flex-1">
-        {rows.map((row) => {
-          const current = isCurrentProject(picked, cwd, row.path);
-          // The thread's own project is no move; while a move is blocked no row is one either.
-          const disabled = !!thread && (!!blocked || current);
-          return (
-            <CardMenuItem
-              key={row.path}
-              onSelect={() => choose(row.path)}
-              disabled={disabled}
-              aria-current={current || undefined}
-              className={cx(
-                "gap-2 disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent",
-                current && "bg-fill",
-                row.repo && "pl-6",
-              )}
-            >
-              {/* A worktree is the repo's, not a project of its own: indented under it, marked by
-                  the branch it is. */}
-              {row.repo && <GitBranch size={12} className="shrink-0 text-fg-faint" />}
-              <span className="min-w-[40%] flex-1 truncate text-body text-fg">
-                {matchSpans(row.name, filter).map((span, i) =>
-                  span.hit ? (
-                    <mark key={i} className="rounded-xs bg-fill-strong text-fg">
-                      {span.text}
-                    </mark>
-                  ) : (
-                    span.text
-                  ),
-                )}
-              </span>
-              <span className="min-w-0 shrink truncate text-caption text-fg-faint">
-                {middleEllipsis(row.path, PATH_CHARS)}
-              </span>
-              {current && <Check size={13} className="shrink-0 text-fg-muted" />}
-            </CardMenuItem>
-          );
-        })}
-        {!rows.length && all.length > 0 && (
-          <p className="px-3 py-2 text-callout text-fg-muted">No folder matches</p>
-        )}
-        {!all.length && host && (
-          <p className="px-3 py-2 text-callout text-fg-muted">
-            No folders on {machineName ?? "that computer"} yet
-          </p>
-        )}
-      </div>
-      {/* A folder of another computer is not this app's to browse: its projects are what its
-          threads name, and nothing here can read its disk. */}
-      {all.length > 0 && !host && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
-      {!host && (
+        {all.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
+        {/* Another computer's disk has no file dialog here: its engine lists the folders instead. */}
         <CardMenuItem
           disabled={!!thread && !!blocked}
           className="disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
-          onSelect={() => void pickFolder(cwd).then((p) => p && choose(p))}
+          onSelect={() => (host ? setBrowsing(true) : void pickFolder(cwd).then((p) => p && choose(p)))}
         >
-          <FolderPlus size={13} className="text-fg-muted" /> Choose Folder…
+          <FolderPlus size={13} className="text-fg-muted" /> {host ? "Browse Folders…" : "Choose Folder…"}
         </CardMenuItem>
+      </CardPopover>
+      {host && (
+        <MachineFolderBrowser
+          open={browsing}
+          onOpenChange={setBrowsing}
+          host={host}
+          machine={machineName ?? "that computer"}
+          start={cwd || undefined}
+          action={thread ? "Move Here" : "Open"}
+          onPick={choose}
+        />
       )}
-    </CardPopover>
+    </>
   );
 }
 

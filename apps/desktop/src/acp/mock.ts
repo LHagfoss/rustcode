@@ -6,6 +6,7 @@
 
 import { BUILTIN_THEMES } from "../lib/themes";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
+import { mockBrowse, mockCreate } from "./mockFolders";
 import { mockRouteCommand } from "./mockMachineRoutes";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
@@ -3760,20 +3761,10 @@ export class MockEngine {
           default_branch: "main",
         };
       }
-      case "_rustcode/project/create": {
-        const path = str(obj(params)?.path) || "/Users/me/code/new-project";
-        const init = obj(params)?.init !== false;
-        return {
-          path,
-          name: path.split("/").filter(Boolean).pop() ?? path,
-          is_git: init,
-          remote: null,
-          branch: init ? "main" : null,
-          default_branch: init ? "main" : null,
-          created: true,
-          initialized: init,
-        };
-      }
+      case "_rustcode/project/create":
+        return mockCreate(obj(params) ?? {});
+      case "_rustcode/project/browse":
+        return mockBrowse(obj(params) ?? {});
       case "_rustcode/project/clone": {
         const ask = obj(params) ?? {};
         const parent = str(ask.parent) || "/Users/me/code";

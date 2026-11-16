@@ -94,8 +94,12 @@ export const Method = {
   /** The timed approvals still in force ("Allow for 1 hour"), and revoking one. */
   permissions: "_rustcode/permissions",
   permissionsRevoke: "_rustcode/permissions/revoke",
-  /** A project folder's git facts, and a folder the project tools make or clone. */
+  /**
+   * A project folder's git facts, the folders in one (a paired machine's, which has no file dialog
+   * here), and a folder the project tools make or clone.
+   */
   projectRead: "_rustcode/project/read",
+  projectBrowse: "_rustcode/project/browse",
   projectCreate: "_rustcode/project/create",
   projectClone: "_rustcode/project/clone",
   /** The scheduler daemon's work, as `rustcode cron` asks it (`docs/daemon.md`). */
