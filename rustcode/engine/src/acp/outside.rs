@@ -35,7 +35,7 @@ pub(crate) struct OutsideCreateRequest {
     pub name: String,
     #[serde(default)]
     pub platform: String,
-    /// `read_only` (default), `delegate` or `manage`.
+    /// `read_only` (default), `delegate`, `manage` or `admin`.
     #[serde(default)]
     pub scope: Option<String>,
     /// Ask in the app before each change; on by default above read-only.
@@ -87,7 +87,7 @@ fn path() -> Result<std::path::PathBuf, String> {
 
 fn scope_of(text: &str) -> Result<outside::Scope, String> {
     outside::Scope::parse(text)
-        .ok_or_else(|| format!("access must be read_only, delegate or manage, not “{text}”"))
+        .ok_or_else(|| format!("access must be read_only, delegate, manage or admin, not “{text}”"))
 }
 
 /// The command another app runs: this program, by absolute path.

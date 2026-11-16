@@ -13,7 +13,7 @@ mod hosted;
 mod machine_sync;
 mod mcp_app;
 mod mirror;
-mod outside;
+pub(crate) mod outside;
 mod permissions;
 mod presence;
 mod preview;

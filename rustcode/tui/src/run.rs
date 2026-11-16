@@ -941,6 +941,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if let Some(command) = cli_args.command.as_ref()
+        && let Some(result) = crate::manage_command::credentials(command).await
+    {
+        if let Err(error) = result {
+            eprintln!("rustcode: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(crate::cli::Commands::Worktree { command }) = cli_args.command.as_ref() {
         if let Err(error) = crate::manage_command::worktree(command) {
             eprintln!("rustcode worktree: {error}");
