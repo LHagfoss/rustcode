@@ -73,4 +73,16 @@ describe("inbox answers", () => {
     expect(actions[0]?.primary).toBe(true);
     expect(actions[2]?.decided).toBe("Dismissed");
   });
+
+  test("a question lists every answer, numbered as its card numbers them", () => {
+    const item = approval("Which bucket?", { header: "Bucket", options: [] });
+    item.kind = "question";
+    item.request!.question = { header: "Bucket", text: "Which bucket?", descriptions: [], multiple: false };
+    item.request!.options = ["A", "B", "C", "D", "E"].map((name) => ({
+      id: name,
+      name,
+      kind: "allow_once" as const,
+    }));
+    expect(inboxActions(item).map((a) => a.label)).toEqual(["A", "B", "C", "D", "E", "Open", "Dismiss"]);
+  });
 });

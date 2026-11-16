@@ -29,6 +29,7 @@ import { observeSize } from "../lib/resize";
 import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
 import { autoCompactOffFor, setAutoCompactForThread } from "../state/autoCompactRun";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
+import { contextPercent } from "../state/details";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
 import { offlineNotice } from "../state/machineCache";
@@ -44,9 +45,11 @@ import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
   dismissPendingSetup,
   harnessesOn,
+  openSettings,
   refreshSessions,
   repairThread,
   retryPendingSetup,
+  runPrompt,
   seeFailure,
   setPanel,
   setTerminalOpen,
@@ -60,7 +63,9 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, type ThreadState } from "../state/thread";
+import { retryThread } from "../state/threadActions";
 import { splitThreadKey } from "../state/threadKeys";
+import { failureHarness, turnErrorAdvice } from "../state/turnError";
 import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
@@ -530,6 +535,58 @@ function ErrorBanner({
   );
 }
 
+/** The harness a thread runs on, by name: the one its failure names first, else its own. */
+function failedHarnessName(thread: ThreadState): string {
+  const named = failureHarness(thread.errorDetail ?? thread.error);
+  if (named) return named;
+  const id = thread.harness?.id;
+  const known = harnessesOn(useApp.getState(), splitThreadKey(thread.id).host)?.harnesses.find(
+    (h) => h.id === id,
+  );
+  return known?.name ?? "The agent";
+}
+
+/** A refused login said plainly (`Codex is signed out.`), the raw text kept under Details. */
+function signedOutText(thread: ThreadState): string | undefined {
+  const advice = turnErrorAdvice(thread.errorDetail ?? thread.error, contextPercent(thread.usage));
+  return advice.signedOut ? `${failedHarnessName(thread)} is signed out.` : undefined;
+}
+
+/**
+ * The fixes a failed turn offers beside Details (docs/design.md: an error offers the action that
+ * fixes it): Sign in opens Settings › Agents, where the harness signs in; Compact runs `/compact`;
+ * Try again sends the failed message again. Only those that can work for this failure, and none
+ * while a turn runs.
+ */
+function ErrorFixes({ thread }: { thread: ThreadState }) {
+  if (thread.running) return null;
+  const { fixes } = turnErrorAdvice(thread.errorDetail ?? thread.error, contextPercent(thread.usage));
+  if (!fixes.length) return null;
+  const first = fixes[0];
+  return (
+    <>
+      {fixes.includes("sign_in") && (
+        <Pill prominent={first === "sign_in"} onClick={() => openSettings("agents")}>
+          Sign in
+        </Pill>
+      )}
+      {fixes.includes("compact") && (
+        <Pill
+          prominent={first === "compact"}
+          onClick={() => void runPrompt(thread.id, "/compact", emptyExtras)}
+        >
+          Compact
+        </Pill>
+      )}
+      {fixes.includes("retry") && (
+        <Pill prominent={first === "retry"} onClick={() => void retryThread(thread.id)}>
+          Try again
+        </Pill>
+      )}
+    </>
+  );
+}
+
 /** Where an opening thread's transcript will be: a sent message, then reply lines, twice. */
 function TranscriptSkeleton() {
   const reply = [96, 88, 92, 54];
@@ -989,13 +1046,15 @@ export function ChatView() {
                 <LaneItem over>
                   <ErrorBanner
                     key={error}
-                    text={error}
+                    text={(thread && signedOutText(thread)) ?? error}
                     detail={thread?.errorDetail}
                     action={
                       thread && error.startsWith("Could not open this thread") ? (
                         <Pill prominent onClick={() => void repairThread(thread.id)}>
                           Repair Thread
                         </Pill>
+                      ) : thread ? (
+                        <ErrorFixes thread={thread} />
                       ) : undefined
                     }
                     onDismiss={() => {

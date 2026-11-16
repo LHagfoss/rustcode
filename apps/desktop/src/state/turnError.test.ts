@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { failureStatus, networkFailure, readableTurnError } from "./turnError";
+import {
+  failureHarness,
+  failureStatus,
+  networkFailure,
+  readableTurnError,
+  turnErrorAdvice,
+} from "./turnError";
 
 describe("a failed turn in words", () => {
   test("a JSON body is read for its message, with the harness and the HTTP status", () => {
@@ -114,5 +120,52 @@ describe("the HTTP status a failure names", () => {
     expect(failureStatus('Claude Code: API Error: 529 {"error":{"message":"Overloaded"}}')).toBe(529);
     expect(failureStatus("Codex: 503 Service Unavailable")).toBe(503);
     expect(failureStatus("Codex: the run finished")).toBeUndefined();
+  });
+});
+
+describe("turnErrorAdvice", () => {
+  test("a refused login offers Sign in, then Try again", () => {
+    expect(turnErrorAdvice("Codex: OpenAI token request failed (HTTP 400)")).toEqual({
+      signedOut: true,
+      fixes: ["sign_in", "retry"],
+    });
+    expect(
+      turnErrorAdvice('Claude Code: API Error: 401 {"error":{"message":"invalid x-api-key"}}').signedOut,
+    ).toBe(true);
+    expect(turnErrorAdvice("Gemini CLI: Please run /login to continue").fixes[0]).toBe("sign_in");
+  });
+
+  test("a full conversation refused offers Compact, then Try again", () => {
+    expect(turnErrorAdvice('Codex: {"detail":"Bad Request"}', 96)).toEqual({
+      signedOut: false,
+      fixes: ["compact", "retry"],
+    });
+  });
+
+  test("a bad request with room left offers nothing: the same request fails again", () => {
+    expect(turnErrorAdvice('Codex: {"detail":"Bad Request"}', 30).fixes).toEqual([]);
+  });
+
+  test("no network, a server error and a rate limit offer Try again alone", () => {
+    expect(turnErrorAdvice("Claude Code: Can't reach the API server").fixes).toEqual(["retry"]);
+    expect(turnErrorAdvice("API Error: 529 Overloaded").fixes).toEqual(["retry"]);
+    expect(turnErrorAdvice("HTTP 429 Too Many Requests").fixes).toEqual(["retry"]);
+  });
+
+  test("a server error that mentions a token is not a sign-in", () => {
+    expect(turnErrorAdvice("HTTP 503: token service unavailable, unauthorized upstream").signedOut).toBe(
+      false,
+    );
+  });
+
+  test("nothing to read offers nothing", () => {
+    expect(turnErrorAdvice(undefined)).toEqual({ signedOut: false, fixes: [] });
+  });
+});
+
+describe("failureHarness", () => {
+  test("reads the harness a failure names first", () => {
+    expect(failureHarness("Claude Code: API Error: 401")).toBe("Claude Code");
+    expect(failureHarness("fetch failed")).toBeUndefined();
   });
 });

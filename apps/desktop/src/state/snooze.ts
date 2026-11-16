@@ -13,7 +13,7 @@ const at = (base: Date, days: number, hour: number) => {
   return d.getTime();
 };
 
-const clock = (time: number) =>
+export const clockLabel = (time: number) =>
   new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
 /** The menu's choices: this evening only while it is still ahead, then the next two mornings to mention. */
@@ -51,10 +51,10 @@ export function snoozeAt(value: string, now: number): number {
 /** When a snoozed thread comes back, short: `18:00`, `Tomorrow 09:00`, `Mon 09:00`, `20 Nov`. */
 export function wakeLabel(time: number, now: number): string {
   const days = Math.round((at(new Date(time), 0, 0) - at(new Date(now), 0, 0)) / 86_400_000);
-  if (days <= 0) return clock(time);
-  if (days === 1) return `Tomorrow ${clock(time)}`;
+  if (days <= 0) return clockLabel(time);
+  if (days === 1) return `Tomorrow ${clockLabel(time)}`;
   const date = new Date(time);
-  if (days < 7) return `${date.toLocaleDateString([], { weekday: "short" })} ${clock(time)}`;
+  if (days < 7) return `${date.toLocaleDateString([], { weekday: "short" })} ${clockLabel(time)}`;
   return date.toLocaleDateString([], { day: "numeric", month: "short" });
 }
 

@@ -220,6 +220,7 @@ import {
   Tooltip,
 } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
+import { StepBar, useRowProgress } from "./RowProgress";
 import { SidebarToolbar } from "./SidebarToolbar";
 import { useThreadDrag } from "./sidebarDrag";
 import { ThreadHoverCard } from "./ThreadHoverCard";
@@ -831,6 +832,8 @@ const ThreadRow = memo(function ThreadRow({
     () => delegateCount(stack, (id) => harnesses?.harnesses.find((h) => h.id === id)?.name ?? id),
     [stack, harnesses],
   );
+  // Where a working thread is in its plan, or why one not working has not finished (ui/RowProgress.tsx).
+  const { progress, waitReason } = useRowProgress(session.id, running, !!request || status === "done", wait);
   // Done or Failed while you were elsewhere, until you open it.
   const fresh = !!finishedAt && !selected;
   const failed = !!failedAt && !selected;
@@ -1147,6 +1150,20 @@ const ThreadRow = memo(function ThreadRow({
                         <span className="min-w-0 truncate" title={ask}>
                           {ask}
                         </span>
+                      ) : progress ? (
+                        <>
+                          <StepBar marks={progress.marks} />
+                          <span className="min-w-0 truncate" title={progress.label}>
+                            {progress.label}
+                          </span>
+                        </>
+                      ) : waitReason ? (
+                        <>
+                          <Clock size={12} className="shrink-0" />
+                          <span className="min-w-0 truncate" title={waitReason}>
+                            {waitReason}
+                          </span>
+                        </>
                       ) : from && fromText ? (
                         <Tooltip
                           label={

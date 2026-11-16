@@ -1081,6 +1081,15 @@ composer's keys stay outside the table.
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
   long scrollers.
+- **A failed turn** is one card over the composer, its text read out of what
+  the provider sent (`state/turnError.ts`), the raw text under *Details*. It
+  offers what fixes it, and only that (`turnErrorAdvice`): a refused login
+  reads `‹Harness› is signed out.` with **Sign in** (Settings › Agents);
+  a refusal with the conversation 90 % full or more offers **Compact**; and
+  **Try again** sends the failed message again wherever that can work (after
+  those fixes, with no network, on a server error, a timeout, a conflict or a
+  rate limit). A bad request with room left offers neither, since it fails
+  the same way again.
 - **Approvals** are one card over the composer: what the agent wants, its
   risk (*Read-only*, *Risky*, *Changes files* or *Destructive*, from the tool
   and its input; anything unknown is risky), then *Decline* and *Approve*
@@ -1130,11 +1139,24 @@ composer's keys stay outside the table.
   any harness, or in a worktree), board, review, mark for review, settle the
   open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
+- **Row progress and waits.** A detailed row's third line says, before the
+  branch, how far a working thread is through its plan: a short bar with a
+  segment per step (done, the one it is on in the accent, to do) and
+  `3/4 · Run the checks`, the count first so it survives the cut; past eight
+  steps only the words stay. A thread that is not working says why it has not
+  finished: `Limit resets 14:00`, `Provider full, retries 14:05`, `Waits for
+  the internet`, `Waits for ‹thread›`, or `Waits for 2 threads and a
+  background command` (`rowProgress`, `rowWaitReason` in
+  `state/sidebarRows.ts`). What it asks of you still comes first.
 - **Sidebar.** A *Needs you* row above the list opens the inbox
   (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits
   on the user: an approval, a question, a failed turn, or a delegate asking.
   A thread merely marked for review does not count, and the row's count is the
-  inbox's own list. With nothing waiting there is no row at all, so no empty
+  inbox's own list. A question answers in place: the selected question row
+  opens its whole card under it (every answer with what it means, a multiple
+  choice's ticks, the user's own words and files, the same draft as the
+  thread's card), and 1–7 pick the answers the card numbers, Open and Dismiss
+  after them. With nothing waiting there is no row at all, so no empty
   heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
   and the palette. One list, top to bottom: Pinned, then one **Threads** list,
   then Snoozed and Settled as shelves at the foot. **Threads** leads with the
@@ -1535,6 +1557,13 @@ composer's keys stay outside the table.
   or this checkout); its access; and what happens when it is done (reports
   back, or a thread of yours). Don't Start, Start, and Start, and Allow for
   This Thread answer it. Nothing starts on a timer: a start is an approval.
+- **Delegate lanes.** The overview's Delegates section switches between Tree
+  and Lanes (kept in `rustcode.delegatesView`). Lanes draws one row per
+  harness and model and a card per delegate, at any depth, in the order the
+  work was handed out: its number, how long it worked, its title and state,
+  the live ones ringed in the accent; a card opens its thread
+  (`delegateLanes` in `state/delegates.ts`, `ui/DelegateLanes.tsx`). It reads
+  an implement-review-fix loop or a fan-out as what ran where, side by side.
 - **Fan-out compare.** A `fan_out` adds *Compare* to the chips: one card per
   harness with its status, branch, files changed and diff stat of the
   branch, its answer, Open and Review. *Keep this* marks the others done

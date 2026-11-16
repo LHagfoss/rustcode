@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { FileDiff } from "../acp/types";
+import type { FileDiff, PlanEntry } from "../acp/types";
 import { moveBy } from "./sidebarOrder";
 import {
   cleanFolds,
@@ -19,7 +19,9 @@ import {
   rangeRows,
   rowIdOf,
   rowKeyAction,
+  rowProgress,
   rowStatus,
+  rowWaitReason,
   SHELF_DEFAULT_OPEN,
   sectionLabelled,
   sectionsOf,
@@ -665,5 +667,59 @@ describe("the compact row's leading mark", () => {
     expect(compactMark(rowStatus({ running: false, waiting }))).toBeUndefined();
     expect(compactMark(rowStatus({ running: false, review: true }))).toBeUndefined();
     expect(compactMark(rowStatus({ running: false }))).toBeUndefined();
+  });
+});
+
+describe("a row's plan progress", () => {
+  const entry = (content: string, status: PlanEntry["status"]): PlanEntry => ({ content, status });
+
+  test("marks the step in progress and counts where it is", () => {
+    const plan = [
+      entry("Find", "completed"),
+      entry("Change", "completed"),
+      entry("Check", "in_progress"),
+      entry("Ship", "pending"),
+    ];
+    expect(rowProgress(plan)).toEqual({ marks: ["done", "done", "active", "todo"], label: "3/4 · Check" });
+  });
+
+  test("with nothing in progress, the first step not done is the one it is on", () => {
+    expect(rowProgress([entry("Find", "completed"), entry("Change", "pending")])?.label).toBe("2/2 · Change");
+  });
+
+  test("says nothing for one step, or a plan that is done", () => {
+    expect(rowProgress([entry("Only", "in_progress")])).toBeUndefined();
+    expect(rowProgress([entry("A", "completed"), entry("B", "completed")])).toBeUndefined();
+    expect(rowProgress(undefined)).toBeUndefined();
+  });
+
+  test("a long plan keeps the words and drops the bar", () => {
+    const plan = Array.from({ length: 12 }, (_, i) =>
+      entry(`Step ${i + 1}`, i < 4 ? "completed" : "pending"),
+    );
+    expect(rowProgress(plan)).toEqual({ marks: [], label: "5/12 · Step 5" });
+  });
+});
+
+describe("why a row waits", () => {
+  const clock = () => "14:00";
+
+  test("a limit says when it resets, a full provider when it tries again", () => {
+    expect(rowWaitReason({ limit: { until: 1 }, clock })).toBe("Limit resets 14:00");
+    expect(rowWaitReason({ limit: { until: 1, reason: "overload" }, clock })).toBe(
+      "Provider full, retries 14:00",
+    );
+  });
+
+  test("no internet, one thread by name, several by count", () => {
+    expect(rowWaitReason({ offline: true, clock })).toBe("Waits for the internet");
+    expect(rowWaitReason({ threads: ["Fix the VAT rate"], clock })).toBe("Waits for Fix the VAT rate");
+    expect(rowWaitReason({ threads: ["A", "B"], commands: 1, clock })).toBe(
+      "Waits for 2 threads and a background command",
+    );
+  });
+
+  test("nothing to wait on says nothing", () => {
+    expect(rowWaitReason({ threads: [], commands: 0, clock })).toBeUndefined();
   });
 });
