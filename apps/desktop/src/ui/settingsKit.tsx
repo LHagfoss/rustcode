@@ -22,7 +22,6 @@
 // defaults" for everything on the page that changed (it disappears again as
 // the rows go back to their defaults).
 
-import { Check, ChevronDown, Info, RotateCcw } from "lucide-react";
 import { Select as RadixSelect } from "radix-ui";
 import {
   type ButtonHTMLAttributes,
@@ -49,6 +48,7 @@ import {
   sameValue,
 } from "../state/pageCache";
 import { request, useApp } from "../state/store";
+import { Check, ChevronDown, Info, RotateCcw } from "./icons";
 import { cx, menuItem, rowInset, Skeleton, Switch, Tooltip } from "./primitives";
 
 /** A section's name, above its card: `text-base` in `fg`, at the card's own inset. */

@@ -4,22 +4,6 @@
 // Nothing here checks out, merges or comments on its own. Picked review feedback goes into the
 // thread's composer as a draft; it is never sent from here.
 
-import {
-  ArrowLeft,
-  Bot,
-  ChevronDown,
-  ChevronRight,
-  CircleCheck,
-  CircleDashed,
-  CirclePlus,
-  CircleX,
-  ExternalLink,
-  GitBranchPlus,
-  GitMerge,
-  MessageSquare,
-  MoreHorizontal,
-  RefreshCw,
-} from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JsonObject } from "../acp/jsonrpc";
@@ -74,6 +58,22 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { splitThreadKey, threadKey } from "../state/threadKeys";
+import {
+  ArrowLeft,
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  CircleDashed,
+  CirclePlus,
+  CircleX,
+  ExternalLink,
+  GitBranchPlus,
+  GitMerge,
+  MessageSquare,
+  MoreHorizontal,
+  RefreshCw,
+} from "./icons";
 import { Markdown } from "./Markdown";
 import { addFeedbackToThread, PullDiff } from "./PullDiff";
 import {

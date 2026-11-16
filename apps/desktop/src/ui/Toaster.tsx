@@ -6,12 +6,12 @@
 // background stops the clock. A click on ×, Escape, or a drag past 48px (up or
 // sideways) dismisses; a drag never selects text anywhere.
 
-import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { observeSize } from "../lib/resize";
 import { dragExit, dragOpacity, dragState, holdSelection, startsDrag, TOAST_DRAG_MS } from "../lib/toastDrag";
 import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
 import { nextExpiry, toastTtl } from "../state/toasts";
+import { CircleAlert, CircleCheck, Info, X } from "./icons";
 import { cx, Pill, Spinner } from "./primitives";
 
 /** How far the cards behind the front one peek over its top edge, and how much smaller each is. */

@@ -9,11 +9,11 @@
 // goes through the same scope bar as every other server setting. A row set from
 // here waits for that machine's next launch, which the footer says.
 
-import { ArrowLeft, RefreshCw, Trash2, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Harness } from "../acp/types";
 import { devicePlatform, deviceRoute, deviceStatus, machineAccess, versionLine } from "../state/deviceRows";
 import { accountState } from "../state/harness";
+import { addMachineRoute, removeMachineRoute, setMachineRouteOff } from "../state/machineRoutes";
 import {
   disconnectMachine,
   lastSeen,
@@ -47,10 +47,11 @@ import {
 } from "../state/settingsScope";
 import { openSettings, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
+import { ArrowLeft, Plus, RefreshCw, Trash2, Unplug } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
-import { cx, Switch } from "./primitives";
-import { Action, Chip, ErrorDetails, Group, Row, SectionTitle } from "./settingsKit";
+import { cx, noTextHelpers, Segments, Spinner, Switch, Tooltip } from "./primitives";
+import { Action, Chip, ErrorDetails, fieldClass, Group, Row, SectionTitle } from "./settingsKit";
 import { SYNC_COLUMNS, syncRows } from "./syncRows";
 
 /** One machine's name, state and controls. */
@@ -193,27 +194,48 @@ function Access({ machine }: { machine: Machine }) {
   );
 }
 
-/** Every route saved for the machine with what the last test of it found, and one button that tests them all now. */
+/**
+ * Every route saved for the machine with what the last test of it found, one button that tests
+ * them all now, a switch per route, and Add route: SSH (any server this computer signs in to) or an
+ * address (a NetBird or Tailscale one once that network is up on both computers).
+ */
 function Routes({ machine }: { machine: Machine }) {
   const probing = useMachines((state) => state.probing);
+  const [adding, setAdding] = useState(false);
+  const inUse = machine.state === "connected" ? machine.route?.address : undefined;
+  const on = machine.routes.filter((route) => !route.off).length;
   return (
     <Group
       title="Routes"
       action={
-        <Action quiet size="sm" disabled={probing} onClick={() => void probeMachineRoutes(machine)}>
-          <RefreshCw size={12} />
-          {probing ? "Testing…" : "Test routes"}
-        </Action>
+        <div className="flex items-center gap-1">
+          <Action quiet size="sm" disabled={probing} onClick={() => void probeMachineRoutes(machine)}>
+            <RefreshCw size={12} />
+            {probing ? "Testing…" : "Test routes"}
+          </Action>
+          {!adding && (
+            <Action quiet size="sm" onClick={() => setAdding(true)}>
+              <Plus size={12} />
+              Add route
+            </Action>
+          )}
+        </div>
       }
-      hint="Test routes opens a plain connection to each address, with no sign-in, and shows whether it answers and how fast. The app tries the LAN first and the VPN when the LAN does not answer."
+      hint="The app tries the LAN first, then a VPN such as NetBird or Tailscale, then SSH, and keeps the first that answers. A route that is off is never tried. Test routes connects to each one without signing in. The machine reports its own addresses on every connection, so a NetBird or Tailscale address appears here once that network is up on both computers."
     >
-      {machine.routes.length === 0 && (
-        <Row title="No route saved" subtitle="Pair the machine again to add one." />
+      {machine.routes.length === 0 && !adding && (
+        <Row title="No route saved" subtitle="Add one: SSH works with any server you can sign in to." />
       )}
       {machine.routes.map((route) => (
         <Row
           key={route.address}
-          title={routeLabel(route)}
+          title={
+            <span className="flex items-center gap-2">
+              {routeLabel(route)}
+              {inUse === route.address && <Chip tone="ok">In use</Chip>}
+              {route.off && <Chip tone="idle">Off</Chip>}
+            </span>
+          }
           subtitle={
             route.probe?.detail ??
             (route.kind === "public" && !route.probe
@@ -222,14 +244,134 @@ function Routes({ machine }: { machine: Machine }) {
           }
           status={
             <span className="tabular">
-              {route.address}
+              {route.sshDestination
+                ? `${route.sshDestination} › port ${route.sshGatewayPort ?? 17879}`
+                : route.address}
               {route.probe && ` · tested ${lastSeen(route.probe.at)}`}
             </span>
           }
           badge={<Chip tone={probeTone(route.probe)}>{probeLabel(route.probe)}</Chip>}
-        />
+        >
+          <Switch
+            label={`Use ${routeLabel(route)} at ${route.address}`}
+            checked={!route.off}
+            // The last route on stays on: the machine would have no way in.
+            disabled={!route.off && on <= 1}
+            onChange={(next) => void setMachineRouteOff(machine, route.address, !next)}
+          />
+          <Tooltip
+            label={
+              route.manual
+                ? "Remove this route"
+                : "Remove this route. The machine reports it again on its next connection; turn it off to keep it unused."
+            }
+          >
+            <Action
+              quiet
+              size="sm"
+              aria-label={`Remove ${route.address}`}
+              disabled={!route.off && on <= 1}
+              onClick={() => void removeMachineRoute(machine, route.address)}
+            >
+              <Trash2 size={12} />
+            </Action>
+          </Tooltip>
+        </Row>
       ))}
+      {adding && <AddRoute machine={machine} onDone={() => setAdding(false)} />}
     </Group>
+  );
+}
+
+type RouteMethod = "ssh" | "address";
+const ROUTE_METHODS: { value: RouteMethod; label: string }[] = [
+  { value: "ssh", label: "SSH" },
+  { value: "address", label: "Address" },
+];
+
+/** Add route: an SSH host from `~/.ssh/config` or `user@host`, or a network address. Tested when added. */
+function AddRoute({ machine, onDone }: { machine: Machine; onDone: () => void }) {
+  const [method, setMethod] = useState<RouteMethod>("ssh");
+  const [value, setValue] = useState("");
+  const [port, setPort] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const portNumber = Number.parseInt(port, 10);
+  const add = async () => {
+    if (busy || !value.trim()) return;
+    setBusy(true);
+    setError(null);
+    const failed = await addMachineRoute(
+      machine,
+      method === "ssh"
+        ? { kind: "ssh", destination: value, gatewayPort: Number.isFinite(portNumber) ? portNumber : null }
+        : { kind: "address", address: value },
+    );
+    setBusy(false);
+    if (failed) setError(failed);
+    else onDone();
+  };
+  return (
+    <div className="flex flex-col gap-2 px-3 py-3">
+      <div className="flex items-center gap-2">
+        <Segments
+          value={method}
+          options={ROUTE_METHODS}
+          onChange={(next) => {
+            setMethod(next);
+            setError(null);
+          }}
+          label="Route type"
+        />
+        <span className="text-caption text-fg-muted">
+          {method === "ssh"
+            ? "Through your own ssh, its config and agent. Nothing else to install."
+            : "A LAN, NetBird or Tailscale address of this machine."}
+        </span>
+      </div>
+      <div className="flex w-full flex-wrap items-center gap-2">
+        <input
+          autoFocus
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void add();
+            if (event.key === "Escape") onDone();
+          }}
+          placeholder={
+            method === "ssh" ? "lars@box or an alias from ~/.ssh/config" : "100.90.16.237 or box.local"
+          }
+          aria-label={method === "ssh" ? "SSH host" : "Address"}
+          disabled={busy}
+          {...noTextHelpers}
+          className={cx(fieldClass, "min-w-0 flex-[2] font-mono")}
+        />
+        {method === "ssh" && (
+          <input
+            value={port}
+            onChange={(event) => setPort(event.target.value.replace(/\D/g, "").slice(0, 5))}
+            placeholder="17879"
+            aria-label="RustCode's port there"
+            disabled={busy}
+            inputMode="numeric"
+            {...noTextHelpers}
+            className={cx(fieldClass, "w-20 font-mono")}
+          />
+        )}
+        <Action prominent disabled={busy || !value.trim()} onClick={() => void add()}>
+          {busy ? <Spinner /> : null}
+          {busy ? "Testing…" : "Add"}
+        </Action>
+        <Action quiet disabled={busy} onClick={onDone}>
+          Cancel
+        </Action>
+      </div>
+      {error && (
+        <p role="alert" className="m-0 text-callout text-danger leading-normal">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

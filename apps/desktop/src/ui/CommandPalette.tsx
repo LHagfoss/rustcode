@@ -3,28 +3,6 @@
 // harness, panels, views, settings pages and the engine. ">" shows actions
 // only; ⇥ switches threads between all projects and this one.
 
-import {
-  CircleCheck,
-  CircleDashed,
-  Columns3,
-  CornerDownLeft,
-  Eye,
-  FileDiff,
-  Settings as Gear,
-  GitBranch,
-  Hand,
-  MessageSquare,
-  Moon,
-  PanelLeft,
-  PanelRight,
-  RefreshCw,
-  Search,
-  SquarePen,
-  SquareTerminal,
-  Sun,
-  SunMoon,
-  Zap,
-} from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { modelName, projectName } from "../acp/types";
@@ -53,6 +31,30 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { createSkillWithAgent } from "../state/threadOpen";
+import {
+  CircleCheck,
+  CircleDashed,
+  Columns3,
+  CornerDownLeft,
+  Eye,
+  FileDiff,
+  Settings as Gear,
+  GitBranch,
+  Hand,
+  MessageSquare,
+  Moon,
+  PanelLeft,
+  PanelRight,
+  RefreshCw,
+  Search,
+  Sparkles,
+  SquarePen,
+  SquareTerminal,
+  Sun,
+  SunMoon,
+  Zap,
+} from "./icons";
 import {
   matches,
   type PaletteAction,
@@ -182,6 +184,14 @@ export function baseActions(): PaletteAction[] {
               ]),
         ]
       : []),
+    {
+      id: "create-skill",
+      label: "Create a skill with an agent",
+      detail: "Starts a thread that writes a SKILL.md with you",
+      icon: Sparkles,
+      words: "new skill capability make write",
+      run: () => createSkillWithAgent(),
+    },
     {
       id: "new-worktree",
       label: "New thread in a worktree",

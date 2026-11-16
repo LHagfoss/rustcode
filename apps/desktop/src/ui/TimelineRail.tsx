@@ -14,10 +14,10 @@
 // inside: moving into it never re-picks a turn, and a click on its body still
 // goes to the turn.
 
-import { ChevronDown, ChevronUp, History } from "lucide-react";
 import { type MouseEvent, memo, type ReactNode, useEffect, useRef, useState } from "react";
 import type { Checkpoint } from "../acp/v2";
 import { clip } from "../lib/clip";
+import { ChevronDown, ChevronUp, History } from "./icons";
 import { cx, Pill, Tooltip } from "./primitives";
 import { rewindNote } from "./TurnChanges";
 

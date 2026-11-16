@@ -145,9 +145,13 @@ one unless it names another. A paused machine keeps its
 connection and its existing threads, and **Run on** refuses it until it is
 resumed. Below them are its **Routes**: each saved address (the VPN route is
 saved with its port like the others) with the last test of it, reachable,
-refused, timed out or unreachable, with the latency, and a **Test routes**
-button that connects to every address now (a plain connect with no sign-in; the
-shell's `machines_probe`), then that machine's harnesses with their install and
+refused, timed out or unreachable, with the latency, **In use** on the one
+connected, a switch to turn each off and Remove, **Add route** (an SSH route or
+an address, tested when added; [remote.md › SSH routes](remote.md#ssh-routes)),
+and a **Test routes** button that connects to every address now (a plain
+connect with no sign-in; the shell's `machines_probe`). A LAN route on this
+computer's own loopback is a port something else forwards and reads
+**Forwarded port**. Then that machine's harnesses with their install and
 sign-in state and one **Check** (re-detect there, read its snapshot again), and
 **What syncs**: one row per Settings row, generated from the same registry the
 **Applying to** bar reads, in three columns — Shared, This machine only, This
@@ -173,7 +177,11 @@ it reads that machine's `_rustcode/harnesses` — its harnesses, models, logins
 and default — over the machine's own connection and keeps the answer per
 machine (`remoteHarnesses` in `src/state/store.ts`), so the model picker, the
 `@` agents and the harness defaults are the machine's; this computer's list is
-untouched. The composer's Run on pill starts a thread there
+untouched. That snapshot carries only the models a harness has learned there,
+so a machine set up fresh lists none: the picker (and an agent's
+`list_harnesses` or `start_session` on it) asks the machine's own
+`_rustcode/harnesses/models`, which starts the harness briefly, and reads the
+snapshot again. The composer's Run on pill starts a thread there
 (`startNewThread(folder, host)`), and any other new thread starts here. A folder picked on this disk — "Choose Folder…", "New
 Thread in Folder…", the palette's Add project folder — always starts here: a
 path alone never names a machine, so two Macs that share a checkout path cannot
@@ -261,8 +269,15 @@ The project follows the machine: `src/state/projects.ts` finds the same project
 there by path, then by git remote (`_meta.rustcode.remote`, normalized so
 `git@…` and `https://…` compare equal), then by folder name, and otherwise the
 composer offers that machine's most recent project and its other folders from
-its thread list ("Choose Folder…" stays this computer's, since no code here can
-browse a machine's disk). The folder list shows each folder once, without
+its thread list. Its disk has no file dialog here, so the picker's last row is
+"Browse Folders…" instead of "Choose Folder…": a dialog
+(`src/ui/MachineFolderBrowser.tsx`) that lists that machine's folders one at a
+time through its engine (`_rustcode/project/browse`, from its home folder or the
+thread's), goes up and home, and with **New Project** makes a folder in the one
+shown and runs `git init` there (`_rustcode/project/create`). **Open** starts the
+next thread there (**Move Here** for an open thread). A fresh server with no
+threads gets the same row under "No projects on … yet", and a machine on an
+older RustCode answers that it needs an update. The folder list shows each folder once, without
 Windows' `\\?\` prefix, and never RustCode's own data or install folder. With
 no folder chosen and none to go on, a new thread starts in that machine's home
 folder (the composer shows *Home folder*; `session/new` is sent no folder,
@@ -534,7 +549,7 @@ Every key above except the composer's is a command in one table
 (`src/lib/keys.ts`) with an id, a label and a default binding, and Settings ›
 Keyboard rebinds it: click the key, press the new combination, Esc cancels;
 a row whose binding differs from its default offers a reset. A binding needs
-⌘ (or ⌥) unless it is a function key; ⌘Q, ⌘W, ⌘H, ⌘M and ⌘Tab are refused
+⌘ (or ⌥) unless it is a function key; ⌘Q, ⌘H, ⌘M and ⌘Tab are refused
 because macOS keeps them, and so are the editing keys (⌘C, ⌘V, ⌘X, ⌘A, ⌘Z,
 ⌘⇧Z) that the window's menu answers before the page sees the keydown. A key
 another command already answers is refused with its name, so two commands
@@ -542,9 +557,10 @@ never share one. Only the overrides are kept, as `rustcode.shortcuts`
 (`{ "command-id": "mod+alt+s" }`) in localStorage: an unknown id, a corrupt
 value or a binding equal to the default is dropped, and the rest of the table
 stays the default it ships with. `state/shortcuts.ts` runs a matched command;
-the transcript matches "find in thread" against the same table. The app sets
-no menu of its own (`src-tauri/src/lib.rs`), so a remap has no native
-accelerator to fight; ⌘R (reload the view, `ui/Recover.tsx`) and the
+the transcript matches "find in thread" against the same table. ⌘W (Ctrl+W elsewhere) settles the current thread with Undo and keeps the window
+open, including from the terminal; with no selected thread it does nothing.
+The native menu (`src-tauri/src/lib.rs`) keeps the default editing and app
+items but removes Close so its accelerator cannot hide the window; ⌘R (reload the view, `ui/Recover.tsx`) and the
 composer's keys stay outside the table.
 
 ## Features
@@ -955,16 +971,21 @@ composer's keys stay outside the table.
   the app's data folder (`src-tauri/src/banner.rs`; the setting keeps the copy's
   name) and decoded once. *Effect* draws it in coloured text (ASCII, inverted
   on a light background, drawn once per size on an offscreen canvas so a
-  resize scales the last drawing), as is (None), blurred and faded (Haze, CSS
-  only), or re-printed as a 4×4 Bayer Dither, a Halftone of dots on a 4px grid
+  resize scales the last drawing), as is (None), blurred and faded (Haze), or re-printed as a 4×4 Bayer Dither, a Halftone of dots on a 4px grid
   or Scanlines. Those three run once per picture, effect and theme in a Web
-  Worker on an OffscreenCanvas (`lib/bannerEffects.worker.ts`, pure pixel
+  Worker on plain pixel buffers (`lib/bannerEffects.worker.ts`, pure pixel
   functions in `lib/bannerEffects.ts`), from a copy at most 2048px on its long
-  edge, and are kept as PNG blob URLs (four at most; a new picture drops the
-  old one's): a resize never renders again, and with no picture nothing runs.
-  Where there is no worker or OffscreenCanvas the picture shows as is. It fades
+  edge, and are kept as PNG blob URLs (six at most; a new picture drops the
+  old one's; the CSP's `img-src` allows `blob:` for them): a resize never
+  renders again, and with no picture nothing runs.
+  The page scales the picture in a canvas and encodes the PNG, so the worker
+  needs no OffscreenCanvas or ImageBitmap (WebKitGTK); where no worker runs,
+  the page processes the pixels itself. It fades
   in, and does not move under Reduce motion. *Darken* (0–80%, black over it)
-  and *Blur* (0–40px) apply everywhere; *Show on* is New threads (default) or
+  and *Blur* (0–40px) apply everywhere: macOS blurs live in CSS, and Windows
+  and Linux, which paint no live blur, have the same worker bake it (and
+  Haze's) into the picture or the text drawing once, with a three-pass box
+  blur (`boxBlur`), re-rendered only after a resize or a drag settles; *Show on* is New threads (default) or
   All threads, and *Visibility* (0–60%, 20% by default) is how strongly an open
   thread shows it, behind the transcript. 20% is the 80% wash of the pane
   colour first measured: a white photo in the dark theme left the body text at
@@ -1185,11 +1206,16 @@ composer's keys stay outside the table.
   unread, counts in *Needs you*, badges the Dock or notifies the system. It
   comes back when its snooze ends, or when you write in it, with the state it
   reached then and one notification at most (`snoozed` in the store;
-  `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`). Every
+  `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`).
+  Needs you counts distinct threads in the active filter; its inbox opens all
+  projects. Approval and question rows keep their sort position and say what they
+  ask on line 3. Remote rows always keep their machine tag; local rows
+  show it only when the filtered list spans several machines. Every
   thread row is the same 68px grid of three lines, each a left and a right part
   (`docs/design.md` › Sidebar rows): the title and its state or age, then the
-  project and the computer it runs on with the diff and pull request, then the
-  branch (or what the thread asks of you) with the model and harness mark or
+  working folder (home as `~`, worktrees use their own folder, middle-truncated
+  with the full path on hover) and the computer it runs on with the diff and pull request, then the
+  branch (or what the thread asks of you; no repeated path for non-git folders) with the model and always its harness mark or
   the stack of delegates. *Sidebar rows: Compact* (Settings › Appearance, or
   ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`) draws each thread on
   one 28px line instead: a status dot (needs you, working, failed, finished

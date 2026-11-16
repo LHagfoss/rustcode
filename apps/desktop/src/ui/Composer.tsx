@@ -1,5 +1,6 @@
 import { formatBinding } from "../lib/keys";
 import { primaryModifier } from "../lib/platform";
+
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
 // in front of it; pasted links stay inline as text) and its foot: + on the left,
@@ -12,28 +13,7 @@ import { primaryModifier } from "../lib/platform";
 // closes suggestions, then leaves a queued edit, then clears the draft, then
 // stops the turn.
 
-import {
-  ArrowUp,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Clock,
-  Command,
-  FileText,
-  Folder,
-  GitBranch,
-  ListEnd,
-  Paperclip,
-  Pencil,
-  Shield,
-  ShieldCheck,
-  ShieldOff,
-  Square,
-  SquarePen,
-  WifiOff,
-  X,
-} from "lucide-react";
-import { Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { harnessPlanKey } from "../acp/rustcode";
 import { type Harness, projectName, type SlashCommand } from "../acp/types";
@@ -42,7 +22,6 @@ import { suggestBranch, validBranch } from "../acp/v2";
 import { insertTranscript } from "../lib/dictation";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { measuredFieldHeight } from "../lib/fieldHeight";
-import { matchSpans } from "../lib/folderList";
 import { haptic } from "../lib/haptics";
 import {
   clipboardImage,
@@ -96,6 +75,7 @@ import {
   type MentionNode,
   type MentionSection,
   mentionNodes,
+  rankMachines,
 } from "../state/mentionDrawer";
 import { modeLabel, PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import { noteRecentFile, recentFiles, recentFirst } from "../state/recentFiles";
@@ -145,12 +125,35 @@ import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { threadMachine } from "./composerFooterLayout";
 import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
+import { DRAWER_NAME, Marked } from "./drawerMarks";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Command,
+  FileText,
+  Folder,
+  GitBranch,
+  ListEnd,
+  Paperclip,
+  Pencil,
+  Shield,
+  ShieldCheck,
+  ShieldOff,
+  Square,
+  SquarePen,
+  WifiOff,
+  X,
+} from "./icons";
 import { LinkChip } from "./LinkChip";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineSelector } from "./MachineSelector";
 import { ModelPicker } from "./ModelPicker";
+import { MachineMentionRow, useMachineMentions } from "./machineMentions";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import { cx, MenuQuickActions, noTextHelpers, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
@@ -301,9 +304,11 @@ function agentChoices(
 }
 
 /** The group keywords the drawer offers first, while what is typed is empty or still a prefix. */
-function keywordEntries(query: string): MentionScope[] {
+function keywordEntries(query: string, machines: boolean): MentionScope[] {
   const asked = query.trim().toLowerCase();
-  return SCOPES.filter((scope) => scope.word.startsWith(asked)).map((scope) => scope.scope);
+  return SCOPES.filter((scope) => scope.word.startsWith(asked))
+    .map((scope) => scope.scope)
+    .filter((scope) => machines || scope !== "machines");
 }
 
 /** The folder a thread is grouped by: a worktree's repo, else the thread's own folder. */
@@ -341,25 +346,6 @@ const MENTION_TINT: Record<MentionState, string> = {
 
 // The drawer's row, shared by all four kinds: one line, the mark first, what it is last.
 const DRAWER_ROW = "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left";
-const DRAWER_NAME = "min-w-[96px] max-w-[45%] shrink-0 truncate font-medium text-fg text-sub";
-
-/** `text` with the letters the query matched marked, as the folder picker marks a folder's name. */
-function Marked({ text, query }: { text: string; query: string }) {
-  return (
-    <>
-      {matchSpans(text, query).map((span, i) =>
-        span.hit ? (
-          <mark key={i} className="rounded-xs bg-fill-strong text-fg">
-            {span.text}
-          </mark>
-        ) : (
-          <Fragment key={i}>{span.text}</Fragment>
-        ),
-      )}
-    </>
-  );
-}
-
 export const Composer = memo(function Composer({
   thread,
   compact,
@@ -536,6 +522,8 @@ export const Composer = memo(function Composer({
     [harnesses, plans, signedOut, parent],
   );
   const mentioning = !!hash || !!at;
+  // `@`'s machines: where the agent should run the work, so it need not look for one.
+  const machineMentions = useMachineMentions(host);
   // The sections the reader opened whole with a `Show all` row: a few rows of each is what the
   // drawer offers first, and this is the rest of the ones they asked for.
   const [expanded, setExpanded] = useState<ReadonlySet<MentionSection>>(NOT_EXPANDED);
@@ -555,9 +543,10 @@ export const Composer = memo(function Composer({
     return mentionNodes({
       query: mentionQuery,
       scope,
-      keywords: scope ? [] : keywordEntries(mentionQuery),
+      keywords: scope ? [] : keywordEntries(mentionQuery, machineMentions.length > 0),
       // Ranked over everything, so a match past the few rows on screen still answers what is typed.
       agents: rankAgents(mentionQuery, agents, ALL_MATCHES),
+      machines: rankMachines(machineMentions, mentionQuery),
       delegates: rankThreads(delegates, mentionQuery, ALL_MATCHES),
       threads: rankThreads(threadChoices, mentionQuery, ALL_MATCHES),
       files: mentionQuery.trim() ? ranked : recentFirst(ranked, recentFiles(cwdForFiles)),
@@ -569,6 +558,7 @@ export const Composer = memo(function Composer({
     mentionQuery,
     scope,
     agents,
+    machineMentions,
     delegates,
     threadChoices,
     files,
@@ -1001,6 +991,9 @@ export const Composer = memo(function Composer({
           token: entry.agent.token,
         });
         return;
+      case "machine":
+        addMention({ kind: "machine", id: entry.machine.id, name: entry.machine.name });
+        return;
       case "thread":
         addMention({ kind: "thread", id: entry.thread.id, title: entry.thread.title });
         return;
@@ -1361,6 +1354,16 @@ export const Composer = memo(function Composer({
               </span>
             )}
           </button>
+        );
+      case "machine":
+        return (
+          <MachineMentionRow
+            key={`mc:${entry.machine.id}`}
+            machine={entry.machine}
+            query={drawerQuery}
+            row={row}
+            onPick={() => accept(entry, false)}
+          />
         );
       case "thread": {
         const thread = entry.thread;

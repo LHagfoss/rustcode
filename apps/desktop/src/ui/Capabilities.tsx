@@ -1,20 +1,12 @@
 import { basename, join } from "../lib/paths";
 import { appPlatform, fileManagerName } from "../lib/platform";
+
 // Settings › Capabilities: skills and MCP servers in one place, through the
 // engine process that runs them (`_rustcode/capabilities*`), so a status
 // is never a guess. Skills by where they come from, each with its file;
 // servers with their state, tools, errors and log lines.
 
-import {
-  ChevronRight,
-  FilePlus2,
-  FolderOpen,
-  Plus,
-  RefreshCw,
-  Search,
-  SquarePen,
-  Trash2,
-} from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
@@ -23,7 +15,21 @@ import { hasShell } from "../lib/shell";
 import { failureSummary, mcpCopy, runOnMachines, secretTargetReason } from "../state/settingsRegistry";
 import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
-import { cardInset, cx, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
+import { createSkillWithAgent } from "../state/threadOpen";
+import {
+  ChevronRight,
+  Copy,
+  Ellipsis,
+  FilePlus2,
+  FolderOpen,
+  Plus,
+  RefreshCw,
+  Search,
+  Sparkles,
+  SquarePen,
+  Trash2,
+} from "./icons";
+import { cardInset, cx, MenuContent, menuItem, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
 import { SettingsScopeBar } from "./SettingsScope";
 import {
   Action,
@@ -833,11 +839,18 @@ function SkillsSection({
       <SectionTitle
         title={`Skills · ${on} of ${data.skills.length} on`}
         action={
-          hasShell() && (
-            <Action quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
-              <FilePlus2 size={12} /> New skill
-            </Action>
-          )
+          <div className="flex items-center gap-1">
+            <Tooltip label="Start a thread that asks an agent to write the skill with you">
+              <Action quiet size="sm" onClick={() => createSkillWithAgent(host)}>
+                <Sparkles size={12} /> Create with agent
+              </Action>
+            </Tooltip>
+            {hasShell() && (
+              <Action quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
+                <FilePlus2 size={12} /> New skill
+              </Action>
+            )}
+          </div>
         }
       />
       {creating && <NewSkill onDone={() => setCreating(false)} />}
@@ -854,51 +867,14 @@ function SkillsSection({
           hint={sourceOf(source).hint}
         >
           {skills.map((s) => (
-            <Row
+            <SkillRow
               key={`${s.source}/${s.name}`}
-              title={s.name}
-              subtitle={
-                <>
-                  {s.description}
-                  {s.path && <PathText path={s.path} className="block text-fg-faint" />}
-                </>
-              }
-            >
-              {s.path && hasShell() && (
-                <div className="flex shrink-0 items-center">
-                  {!s.readOnly && (
-                    <Tooltip label="Edit SKILL.md">
-                      <button
-                        type="button"
-                        aria-label={`Edit ${s.name}`}
-                        onClick={() => openPath(skillFile(s.path))}
-                        className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-                      >
-                        <SquarePen size={13} />
-                      </button>
-                    </Tooltip>
-                  )}
-                  <Tooltip label={`Show in ${fileManagerName()}`}>
-                    <button
-                      type="button"
-                      aria-label={`Show ${s.name} in ${fileManagerName()}`}
-                      onClick={() => revealPath(s.path)}
-                      className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-                    >
-                      <FolderOpen size={13} />
-                    </button>
-                  </Tooltip>
-                </div>
-              )}
-              {others.length > 0 && <SkillCopy skill={s} host={host} others={others} onChanged={onChanged} />}
-              <Switch
-                label={`Use ${s.name}`}
-                checked={s.enabled}
-                onChange={(v) =>
-                  void run(Method.capabilitiesSet, { kind: "skill", name: s.name, enabled: v })
-                }
-              />
-            </Row>
+              skill={s}
+              host={host}
+              others={others}
+              run={run}
+              onChanged={onChanged}
+            />
           ))}
         </Group>
       ))}
@@ -906,19 +882,26 @@ function SkillsSection({
   );
 }
 
-/** Copy one skill's definition (its SKILL.md) to another connected machine. */
-function SkillCopy({
-  skill,
+/**
+ * One skill on one line: its name, the start of its description, a menu for its file and copies,
+ * and its switch. The full description and the path are in the tip on the text, so a page of
+ * dozens of skills stays scannable.
+ */
+function SkillRow({
+  skill: s,
   host,
   others,
+  run,
   onChanged,
 }: {
   skill: Skill;
   host: string;
   others: { host: string; name: string; online: boolean; local: boolean }[];
+  run: (method: string, params: JsonObject, timeout?: number) => Promise<boolean>;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const files = Boolean(s.path) && hasShell();
   const copyTo = async (target: string) => {
     const nodes = target === "all" ? others : others.filter((machine) => machine.host === target);
     if (!nodes.length) return;
@@ -928,21 +911,21 @@ function SkillCopy({
       const answer = await machineRequest(
         host,
         "_rustcode/skills/get",
-        { name: skill.name, path: skill.path },
+        { name: s.name, path: s.path },
         15_000,
       );
       const content = str(obj(answer)?.content);
       if (!content) {
-        toast(`Could not read ${skill.name}'s SKILL.md.`, "error");
+        toast(`Could not read ${s.name}'s SKILL.md.`, "error");
         return;
       }
       const result = await runOnMachines(nodes, (machine) =>
-        machineRequest(machine.host, "_rustcode/skills/add", { name: skill.name, content }, 30_000),
+        machineRequest(machine.host, "_rustcode/skills/add", { name: s.name, content }, 30_000),
       );
       if (result.succeeded.length) {
         const where = result.succeeded.map((machine) => machine.name).join(", ");
         toast(
-          `Copied ${skill.name}'s SKILL.md to ${where}. Other files in the skill stay on the source machine.`,
+          `Copied ${s.name}'s SKILL.md to ${where}. Other files in the skill stay on the source machine.`,
           "success",
         );
         onChanged();
@@ -954,13 +937,67 @@ function SkillCopy({
       setBusy(false);
     }
   };
+  const tip =
+    s.description || s.path ? (
+      <span className="block max-w-[420px]">
+        {s.description}
+        {s.path && <PathText path={s.path} className="mt-1 block text-fg-faint" />}
+      </span>
+    ) : undefined;
   return (
-    <CopyMenu
-      label={`Copy ${skill.name}`}
-      busy={busy}
-      others={others}
-      onCopy={(target) => void copyTo(target)}
-    />
+    <div className="flex min-h-10 items-center gap-3 px-4 py-1.5" data-setting={s.name}>
+      <Tooltip label={tip}>
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="max-w-[45%] shrink-0 truncate font-medium text-body text-fg">{s.name}</span>
+          <span className="min-w-0 flex-1 truncate text-callout text-fg-muted">{s.description}</span>
+        </div>
+      </Tooltip>
+      {(files || others.length > 0) && (
+        <DropdownMenu.Root modal={false}>
+          <DropdownMenu.Trigger asChild>
+            <button
+              type="button"
+              aria-label={`More for ${s.name}`}
+              disabled={busy}
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong disabled:opacity-50"
+            >
+              {busy ? <Spinner size={12} /> : <Ellipsis size={14} />}
+            </button>
+          </DropdownMenu.Trigger>
+          <MenuContent align="end" className="min-w-[200px]">
+            {files && !s.readOnly && (
+              <DropdownMenu.Item className={menuItem} onSelect={() => openPath(skillFile(s.path))}>
+                <SquarePen size={13} /> Edit SKILL.md
+              </DropdownMenu.Item>
+            )}
+            {files && (
+              <DropdownMenu.Item className={menuItem} onSelect={() => revealPath(s.path)}>
+                <FolderOpen size={13} /> Show in {fileManagerName()}
+              </DropdownMenu.Item>
+            )}
+            {others.map((machine) => (
+              <DropdownMenu.Item
+                key={machine.host}
+                className={menuItem}
+                onSelect={() => void copyTo(machine.host)}
+              >
+                <Copy size={13} /> Copy to {machine.name}
+              </DropdownMenu.Item>
+            ))}
+            {others.length > 1 && (
+              <DropdownMenu.Item className={menuItem} onSelect={() => void copyTo("all")}>
+                <Copy size={13} /> Copy to all machines
+              </DropdownMenu.Item>
+            )}
+          </MenuContent>
+        </DropdownMenu.Root>
+      )}
+      <Switch
+        label={`Use ${s.name}`}
+        checked={s.enabled}
+        onChange={(v) => void run(Method.capabilitiesSet, { kind: "skill", name: s.name, enabled: v })}
+      />
+    </div>
   );
 }
 

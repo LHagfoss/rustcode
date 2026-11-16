@@ -2,7 +2,6 @@
 // mono inline code on a quiet rounded fill, code blocks on the `code-bg` surface
 // with a Copy button and Xcode colours, tables and quotes on rounded-xs fills.
 
-import { Check, Copy, MessagesSquare } from "lucide-react";
 import {
   type ComponentProps,
   memo,
@@ -25,6 +24,7 @@ import { openExternal, openInEditor } from "../lib/native";
 import { advance, newRevealState, type RevealState, rehypeReveal } from "../lib/reveal";
 import { hasShell } from "../lib/shell";
 import { selectThread, toast, useApp } from "../state/store";
+import { Check, Copy, MessagesSquare } from "./icons";
 import { LinkChip } from "./LinkChip";
 import { MarkdownImage, MermaidBlock } from "./MarkdownMedia";
 import { copyText, cx, Pill } from "./primitives";

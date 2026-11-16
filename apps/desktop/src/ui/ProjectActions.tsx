@@ -2,7 +2,6 @@
 // shell command that runs in the workspace terminal in the thread's folder, and the editor that
 // names them. ⌘K lists the same actions (ui/paletteActions.ts).
 
-import { Pencil, Play, Plus, Trash2, Zap } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { projectName } from "../acp/types";
@@ -19,6 +18,7 @@ import {
 import { setTerminalOpen, toast, useApp } from "../state/store";
 import { terminalTabForAction } from "../state/terminalTabs";
 import type { ThreadState } from "../state/thread";
+import { Pencil, Play, Plus, Trash2, Zap } from "./icons";
 import {
   ClusterButton,
   cx,

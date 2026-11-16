@@ -1,5 +1,6 @@
 import { formatBinding } from "../lib/keys";
 import { primaryModifier } from "../lib/platform";
+
 // The Review screen for one thread: its changes as a file tree and a diff
 // (unified or side by side, highlighted, with the words that changed marked
 // inside each line), from the working tree, the worktree's branch, one turn's
@@ -8,16 +9,6 @@ import { primaryModifier } from "../lib/platform";
 // draft a comment; the drafts go to the agent as one message, or to the pull
 // request as one review with line comments (`_rustcode/pulls/review`).
 
-import {
-  ChevronDown,
-  ChevronRight,
-  FileDiff,
-  Folder,
-  MessageSquarePlus,
-  RefreshCw,
-  Send,
-  X,
-} from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { JsonObject } from "../acp/jsonrpc";
 import { type PullRequest, parsePullError, pullErrorTitle, repositoryOf } from "../acp/rustcode";
@@ -50,6 +41,7 @@ import {
 import { ViewHeader } from "./Board";
 import { StatusMark, splitUnifiedDiff } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
+import { ChevronDown, ChevronRight, FileDiff, Folder, MessageSquarePlus, RefreshCw, Send, X } from "./icons";
 import { cx, noTextHelpers, Pill, Segments, Select, Skeleton, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 

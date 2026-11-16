@@ -47,6 +47,7 @@ export {
 } from "./threadActions";
 
 import {
+  clearSettledNotifications,
   clearStatusMark,
   reconcileStatusMarks,
   sessionById,
@@ -353,6 +354,8 @@ import {
   beginTurn,
   finishTurn,
   foldingBatch,
+  isContinueMessage,
+  isWakeMessage,
   localId,
   requeueSteers,
   settleEveryWait,
@@ -777,8 +780,10 @@ export interface AppState {
   limitWaits: Record<string, LimitWait>;
   /** The threads waiting for the internet, by thread id (state/internetWait.ts). */
   internetWaits: Record<string, InternetWait>;
-  /** The interface in SF Pro Rounded (the default) or the standard system font. */
-  roundedFont: boolean;
+  /** The interface's typeface: Inter (the default), the system's own, or SF Pro Rounded. */
+  font: AppFont;
+  /** Text scale: small is Default in Appearance; medium and large are Large and Larger. */
+  textSize: TextSize;
   /** A streaming reply's new words fade in as the model writes them. */
   animateStreaming: boolean;
   /** Glass is solid on every OS (Settings › Appearance); the system's own request does the same. */
@@ -940,6 +945,8 @@ export const STORAGE = {
   /** When a restart last resumed each thread, so a resume cut off again is not repeated in a loop. */
   resumedThreads: "rustcode.resumedThreads",
   roundedFont: "rustcode.roundedFont",
+  font: "rustcode.font",
+  textSize: "rustcode.textSize",
   animateStreaming: "rustcode.animateStreaming",
   reduceTransparency: "rustcode.reduceTransparency",
   chatWidth: "rustcode.chatWidth",
@@ -978,7 +985,8 @@ export const STORAGE = {
  */
 export const SETTINGS_DEFAULTS = {
   theme: "system" as AppState["theme"],
-  roundedFont: false,
+  font: "inter" as AppFont,
+  textSize: "small" as TextSize,
   animateStreaming: true,
   reduceTransparency: false,
   chatWidth: CHAT_WIDTH_DEFAULT,
@@ -1110,7 +1118,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   internetWaits: storedJson<Record<string, InternetWait>>(STORAGE.internetWaits, {}),
-  roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
+  font: parseAppFont(stored(STORAGE.font), stored(STORAGE.roundedFont)),
+  textSize: parseTextSize(stored(STORAGE.textSize)),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
   reduceTransparency: storedFlag(STORAGE.reduceTransparency, SETTINGS_DEFAULTS.reduceTransparency),
   chatWidth: parseChatWidth(stored(STORAGE.chatWidth)),
@@ -2154,6 +2163,7 @@ function onSessionUpdate(params: JsonObject) {
   }
   const status = statusInUpdate(params);
   if (status) {
+    if (status === "done") clearSettledNotifications([sessionId]);
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, status } : x)) }));
     clearStatusMark(sessionId);
     // A lost turn on this thread is settled now if the machine says it stopped running there.
@@ -2409,6 +2419,18 @@ export async function runPrompt(
     alreadyShown?: boolean;
   } = {},
 ): Promise<TurnOutcome> {
+  // Check again when a queued notice starts: settling may have happened after delivery.
+  if (
+    (options.automatic ||
+      options.autoCompact ||
+      options.autoResume ||
+      options.continued ||
+      options.wake ||
+      isContinueMessage(text) ||
+      isWakeMessage(text)) &&
+    (get().statusMarks[id] ?? sessionById(get(), id)?.status) === "done"
+  )
+    return "skipped";
   // The turn runs on the thread's own computer, which may have gone away since it was opened.
   const conn = connectionForThread(id);
   if (!conn) {
@@ -2968,9 +2990,27 @@ export function markActive(now = Date.now()) {
   store(STORAGE.lastActive, String(now));
 }
 
-export function setRoundedFont(on: boolean) {
-  set({ roundedFont: on });
-  store(STORAGE.roundedFont, on ? "1" : "0");
+export type AppFont = "inter" | "system" | "rounded";
+export type TextSize = "small" | "medium" | "large";
+
+/** The saved font; before the Font setting, the Rounded font switch was the only choice. */
+export function parseAppFont(saved: string | null, legacyRounded: string | null): AppFont {
+  if (saved === "inter" || saved === "system" || saved === "rounded") return saved;
+  return legacyRounded === "1" ? "rounded" : SETTINGS_DEFAULTS.font;
+}
+
+export function parseTextSize(saved: string | null): TextSize {
+  return saved === "small" || saved === "medium" || saved === "large" ? saved : SETTINGS_DEFAULTS.textSize;
+}
+
+export function setFont(font: AppFont) {
+  set({ font });
+  store(STORAGE.font, font);
+}
+
+export function setTextSize(textSize: TextSize) {
+  set({ textSize });
+  store(STORAGE.textSize, textSize);
 }
 
 /** A command's shortcut as the app shows it ("⌘B"), or "" when it has none. */

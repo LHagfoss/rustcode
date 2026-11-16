@@ -68,6 +68,7 @@ describe("a group keyword narrows @", () => {
     expect(scopeOf("file")).toBe("files");
     expect(scopeOf("files")).toBe("files");
     expect(scopeOf("agent")).toBe("agents");
+    expect(scopeOf("machine")).toBe("machines");
     expect(scopeOf("agentsx")).toBeUndefined();
   });
 

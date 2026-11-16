@@ -157,15 +157,91 @@ export function applyEffect(
   }
 }
 
-// ---------------------------------------------------------------- cache
-
-/** One rendered picture per picture, effect and theme. */
-export function effectKey(name: string, effect: PixelEffect, dark: boolean): string {
-  return `${name}\n${effect}\n${dark ? "dark" : "light"}`;
+/**
+ * A print effect (or none), then a baked blur (or none): what the worker, or the page where there
+ * is no worker, does to a picture's pixels. A new array; the source untouched.
+ */
+export function processPixels(
+  src: Uint8ClampedArray,
+  width: number,
+  height: number,
+  effect: PixelEffect | null,
+  dark: boolean,
+  blur: number,
+): Uint8ClampedArray {
+  const printed = effect ? applyEffect(effect, src, width, height, dark) : new Uint8ClampedArray(src);
+  return blur > 0 ? boxBlur(printed, width, height, blur) : printed;
 }
 
-/** Rendered pictures kept: a theme switch and an effect or two back, no more. */
-export const EFFECT_CACHE_LIMIT = 4;
+// ---------------------------------------------------------------- blur
+
+/**
+ * The pixels blurred by about `radius` px (the CSS `blur()` standard deviation): three box blurs
+ * each way, which add up to a near-Gaussian. Windows and Linux paint no live blur
+ * (docs/design.md › Platforms), so there the banner's blur is baked into its picture once with
+ * this instead. A new array; the source untouched.
+ */
+export function boxBlur(
+  src: Uint8ClampedArray,
+  width: number,
+  height: number,
+  radius: number,
+): Uint8ClampedArray {
+  const r = Math.round(radius);
+  if (r <= 0 || width <= 0 || height <= 0 || src.length < width * height * 4)
+    return new Uint8ClampedArray(src);
+  let a = new Uint8ClampedArray(src);
+  let b = new Uint8ClampedArray(src.length);
+  for (let pass = 0; pass < 3; pass++) {
+    boxPass(a, b, r, 4, width * 4, width, height);
+    [a, b] = [b, a];
+    boxPass(a, b, r, width * 4, 4, height, width);
+    [a, b] = [b, a];
+  }
+  return a;
+}
+
+/**
+ * One box blur along lines `length` pixels long, `step` bytes apart, the lines `stride` bytes
+ * apart; edges repeat their last pixel.
+ */
+function boxPass(
+  src: Uint8ClampedArray,
+  dst: Uint8ClampedArray,
+  r: number,
+  step: number,
+  stride: number,
+  length: number,
+  lines: number,
+) {
+  const span = 2 * r + 1;
+  const last = length - 1;
+  for (let line = 0; line < lines; line++) {
+    const base = line * stride;
+    for (let c = 0; c < 4; c++) {
+      const at = (i: number) => src[base + Math.min(last, Math.max(0, i)) * step + c] ?? 0;
+      let sum = 0;
+      for (let i = -r; i <= r; i++) sum += at(i);
+      for (let i = 0; i < length; i++) {
+        dst[base + i * step + c] = sum / span;
+        sum += at(i + r + 1) - at(i - r);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- cache
+
+/**
+ * One rendered picture per picture, look (a print effect, or how a plain or text picture is
+ * shown), theme and baked blur radius.
+ */
+export function effectKey(name: string, look: string, dark: boolean, blur = 0): string {
+  return `${name}\n${look}\n${dark ? "dark" : "light"}${blur > 0 ? `\n${blur}` : ""}`;
+}
+
+/** Rendered pictures kept: a theme switch, an effect or two back and a blur or two, no more. */
+export const EFFECT_CACHE_LIMIT = 6;
 
 /**
  * Rendered effects by {@link effectKey}, oldest dropped first. A dropped entry's URL is released

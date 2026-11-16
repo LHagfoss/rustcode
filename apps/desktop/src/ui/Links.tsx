@@ -3,18 +3,6 @@
 // "Working for" banner in a thread doing work for another, and the prompt that
 // asks the user before a thread reaches another one.
 
-import {
-  CircleCheck,
-  CircleX,
-  Clock,
-  CornerDownRight,
-  GitBranch,
-  Hand,
-  Laptop,
-  LoaderCircle,
-  PauseCircle,
-  Rows3,
-} from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
@@ -26,6 +14,18 @@ import { openSettings, selectThread, setView, useApp } from "../state/store";
 import { formatDuration } from "../state/thread";
 import { AgentRow, SubagentRow, useNow } from "./AgentViews";
 import { GrantWhy } from "./GrantWhy";
+import {
+  CircleCheck,
+  CircleX,
+  Clock,
+  CornerDownRight,
+  GitBranch,
+  Hand,
+  Laptop,
+  LoaderCircle,
+  PauseCircle,
+  Rows3,
+} from "./icons";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const NO_AGENTS: SubagentInfo[] = [];

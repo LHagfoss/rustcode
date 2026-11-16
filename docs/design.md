@@ -256,8 +256,10 @@ rather than a `hover:bg-…` utility a class rule would beat.
 The composer floats over the transcript as one card: the field, and under it one control row with
 every control the send needs. Its `/` and `@` menus are a solid drawer attached to the box's top
 edge, each opened by the token at the caret, at the start of the message or after whitespace
-anywhere in it: `/` lists commands, and `@` lists agents, threads and the project's files under
-those quiet headings, in that order. `@` shows a few rows of each section to begin with — what the
+anywhere in it: `/` lists commands, and `@` lists agents, machines, threads and the project's
+files under those quiet headings, in that order. Machines are listed once another computer is
+paired: this one first, then each paired one, dimmed while it is away; picking one writes `@Name`
+and the message says `@Name (machine: <id>)`, the id the thread tools take in `machine`. `@` shows a few rows of each section to begin with — what the
 folder's picks pointed at last, the threads used last, and each harness's own models under a
 sub-heading carrying that harness's mark (left out when a harness has one row that is simply the
 harness by name) — and the rest of a section waits behind its `Show N more` row, which draws it in
@@ -265,7 +267,7 @@ place, with `Show fewer` under it to put the short list back. What is typed sear
 not only the rows on screen.
 `#` opens the same drawer straight on the threads. A keyword
 is the drawer's first row while what is typed is empty or still a prefix of it — `@agents`,
-`@threads`, `@files` — and completing one keeps the drawer open on that group, so `@agents pi`
+`@machines`, `@threads`, `@files` — and completing one keeps the drawer open on that group, so `@agents pi`
 looks inside the agents for `pi`. The arrow keys walk the rows across the groups and never onto a
 heading or a harness's name; ⏎ on `Show N more` opens that section and ⏎ on `Show fewer` closes it,
 and Esc closes the drawer. Everything in the card starts on one left edge: the field, the chips,
@@ -338,22 +340,27 @@ its lane and re-centres in the room that is left (Right panel below).
 
 ## Type
 
-macOS text styles one point up (read at a laptop's distance), SF Pro
-(Settings › Appearance › Rounded font switches to SF Pro Rounded) / SF Mono.
-Replies read at 14px on a 1.625 line height (22.75px, `leading-relaxed`,
-set on the reply's own scope so the app's rows keep 19px), in `fg` at 90%,
-with headings at 26/21/18/16 (`h1`–`h4`) in semibold, a step bigger than the 14px body so a
-long reply scans by its headings:
+Inter (bundled, `@fontsource-variable/inter`, the same face on every OS) /
+SF Mono. Settings › Appearance › Font picks Inter, System (the platform's own
+face, below) or Rounded (SF Pro Rounded). Settings › Appearance › Text size
+picks Default (the original compact scale in `@theme`), Large
+(one more point for the reading sizes, captions unchanged) or
+Larger (one more again, captions too); `:root[data-text-size]` swaps the
+`--text-*` variables, so every `text-*` class follows. Sizes below are Default /
+Large / Larger. Replies read at `text-body` on a 1.625 line height
+(`leading-relaxed`, set on the reply's own scope so the app's rows keep
+theirs), in `fg` at 90%, with headings at 26/21/18/16 (`h1`–`h4`) in
+semibold, a step bigger than the body so a long reply scans by its headings:
 
-| Class | Size / line | Use |
+| Class | Size / line (Default · Large · Larger) | Use |
 |---|---|---|
-| `text-caption` | 11/14 | Metadata, badges |
-| `text-sub` | 12/15 | Sidebar secondary lines, section headers |
-| `text-callout` | 13/17 | Controls, chips, secondary copy |
-| `text-body` | 14/19 | Body, rows, tool rows |
-| `text-title3` | 16/21 | Card titles |
-| `text-title2` | 18/23 | Onboarding, a document's headings |
-| `text-title` | 23/29 | Empty-state heading |
+| `text-caption` | 11/14 · 11/14 · 12/15 | Metadata, badges |
+| `text-sub` | 12/15 · 13/16 · 14/17 | Sidebar secondary lines, section headers |
+| `text-callout` | 13/17 · 14/18 · 15/19 | Controls, chips, secondary copy |
+| `text-body` | 14/19 · 15/20 · 16/21 | Body, rows, tool rows |
+| `text-title3` | 16/21 · 17/22 · 18/23 | Card titles |
+| `text-title2` | 18/23 · 19/24 · 20/25 | Onboarding, a document's headings |
+| `text-title` | 23/29 · 24/30 · 25/31 | Empty-state heading |
 | `text-[26px]`, `text-[21px]` | 26/31, 21/26 | A reply's `h1`, `h2` (`Markdown.tsx`) |
 
 Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
@@ -478,11 +485,13 @@ which reads that attribute. To look at Windows in the mock, open it at
 first render is already that platform.
 
 Blur is macOS's alone. Windows and Linux paint no blur at all, in the page or
-behind the window, decorative ones included.
+behind the window, decorative ones included. The chat background's Blur setting is not
+painted there either: the effects worker bakes it into the picture once
+(`boxBlur` in `lib/bannerEffects.ts`).
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Sans (`--font-sans`, `--font-rounded`) | SF Pro / SF Pro Rounded | Segoe UI Variable Text, Segoe UI | Inter, Cantarell, Ubuntu, Noto Sans |
+| Sans (`--font-sans`, `--font-rounded`) | Inter by default; System: SF Pro / SF Pro Rounded | Inter by default; System: Segoe UI Variable Text, Segoe UI | Inter by default; System: Inter, Cantarell, Ubuntu, Noto Sans |
 | Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
 | Font smoothing | `antialiased` | system (ClearType) | system |
 | Glass | the recipe above | none: solid `surface-2` | none: solid `surface-2` |
@@ -557,7 +566,11 @@ the default arrow on static text; the text cursor only in fields and
 
 ## Icons
 
-Lucide, stroke 1.75 (2.5 for chevrons at 10–12px). Sizes, and no others
+Hugeicons' free stroke-rounded set at stroke 1.5 (2.5 for chevrons at 10–12px),
+imported from `ui/icons.tsx` under the Lucide names, with Lucide's props; never
+import `lucide-react` directly. The four shapes the set has no match for (the
+raised hand, `CircleDot`, `SunMoon`, `GitBranchPlus`) are Lucide drawn at the
+same weight in that file. Sizes, and no others
 (`design.test.ts` checks every `size={n}` in `ui/`): 10 for a glyph inside a
 status dot and a spinner in a caption line, 12 inside chips and caption rows,
 13 in menus, 14 in toolbar and composer buttons, 16 in page headers and tool
@@ -691,7 +704,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   mount; a project's folder (`project:<path>`) is kept. Threads from every paired
   machine share the one list; a thread from another machine carries its glyph
   and name in muted text on its meta line, and a thread from this computer
-  carries none (docs/desktop.md › Several machines). Under the Needs you row
+  names this computer only when the filtered rows span several machines
+  (docs/desktop.md › Several machines). The Needs you badge counts distinct
+  threads in the active filter; opening it still opens the full inbox. Under the Needs you row
   sits the sidebar's toolbar (`ui/SidebarToolbar.tsx`), on by default and
   turned off in Settings › Appearance or ⌘K: a search field that narrows the
   list as it is typed (title, project folder, branch; it opens shut shelves and
@@ -722,7 +737,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `fg-muted`, with 14px folder icons: the label,
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
-- **Sidebar rows:** every thread row is one fixed grid of three lines, 68px
+- **Sidebar rows:** project groups inset their threads by 32px. A full-width New thread
+  button sits above search. Every detailed thread row is one fixed grid of three lines, 68px
   tall whatever it holds, with `rounded-xl`, so a column of rows reads as a
   table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`). Each line
   is a left part that truncates and a right part against the row's edge that
@@ -734,12 +750,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `Failed` in `danger`, `Done` in `success` until the thread is opened,
   `Review` in `accent`), else the hour a snoozed thread wakes, else its age
   (`5m`, `3h`, with a check before it when settled).
-  Line 2 (`text-sub`, `fg-muted`): the project's 14px mark and name (under a
-  project heading, the harness instead) and the computer it runs on — another
-  computer always, this one too once a machine is paired; at the right, the
+  Line 2 (`text-sub`, `fg-muted`): the project's 14px mark and the working
+  folder (home as `~`, a worktree's own folder), truncated in the middle with
+  the full path on hover, including under project headings. The computer tag
+  appears for another computer always, for this one only when filtered rows
+  span several machines; at the right, the
   diff (`+N −N` in `success`/`danger`) and the pull request's mark, led by the
   count of running delegates and subagents (a 11px bot and the number, muted,
   with the list in its tooltip; `delegateCount` in `state/agentStack.ts`).
+  Approval and question rows keep their sort position; line 3 says what they
+  ask, in `warning`. Non-git folders do not repeat their path on line 3.
   Line 3: the branch, or what the thread asks of you in
   `warning` in its place (`in <parent title>` for a delegated row drawn on its
   own); at the right, always the harness mark and the model;
@@ -778,7 +798,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   started are the marks, and one it messaged is what makes the chip say
   `Waiting`. Hovering lists
   the running threads and their state, and the row opens the parent. The open
-  delegate itself is drawn as an indented row, with a subtle tree line, directly
+  delegate itself is drawn as a compact one-line indented row, with a thin inward elbow, directly
   under its parent's row, unfolding in with the list's fold motion and folding
   away when the user opens another thread or goes back; the threads between it
   and its nearest row of its own come with it, and a parent in the Settled shelf
@@ -1104,7 +1124,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   most 80% wide, `p-3`; consecutive messages soften the corners they share,
   `rounded-tr-md` / `rounded-br-md`; its time and actions on hover, 12px,
   clipped to the bubble, the actions before the time so a steer's kept badge and
-  time end flush with the bubble rather than before their empty room), the final answer (the replies after the last
+  time end flush with the bubble rather than before their empty room; the first message of a day
+  keeps its time in view, with the day, `yesterday at 12:33` or `today at 09:10`, so a thread that
+  ran over several days shows where each began; the row under a bubble takes the narrow gap, since
+  that time line is already its air), the final answer (the replies after the last
   step), warnings and errors, and the footer, which says only the time: no
   duration, so a folded turn never states it twice. A quiet notice the app
   appends for what it did on the thread's behalf (a call an access mode let

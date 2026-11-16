@@ -182,6 +182,7 @@ import {
   createSession,
   dropInternetWait,
   dropLimitWait,
+  ensureHarnessModels,
   errorText,
   harnessesOn,
   loadMachineHarnesses,
@@ -1145,7 +1146,13 @@ async function machineHarnesses(machine: MachineRef): Promise<JsonObject[] | nul
 /** Another machine's harnesses, read over its own connection (kept per machine). */
 async function remoteSnapshot(machine: MachineRef): Promise<HarnessSnapshot | Failure> {
   const snapshot = await loadMachineHarnesses(machine.host);
-  if (snapshot) return snapshot;
+  if (snapshot) {
+    // A harness that never ran there has learned no models: ask the machine, as its picker does.
+    const empty = snapshot.harnesses.filter((h) => !unavailableReason(h) && !h.builtin && !h.models.length);
+    if (!empty.length) return snapshot;
+    await Promise.all(empty.map((h) => ensureHarnessModels(h.id, machine.host)));
+    return useApp.getState().remoteHarnesses[machine.host] ?? snapshot;
+  }
   return machineUnavailable(machine) ?? failure("failed", `could not read ${machine.name}'s harnesses`);
 }
 

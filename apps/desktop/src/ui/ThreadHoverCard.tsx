@@ -6,12 +6,12 @@
 // Escape or the moment its row is dragged (ui/sidebarDrag.tsx); the timing is the
 // one every tooltip shares (lib/hover.ts).
 
-import { Folder, GitBranch, Laptop, MessageSquare } from "lucide-react";
 import { HoverCard } from "radix-ui";
 import { type ReactNode, useEffect, useMemo } from "react";
 import { displayPath, type SessionSummary } from "../acp/types";
 import { useHoverTip } from "../lib/hover";
 import { lastWords, messageTime, type TranscriptItem } from "../state/thread";
+import { Folder, GitBranch, Laptop, MessageSquare } from "./icons";
 import { ProjectMark } from "./ProjectMark";
 import { cx, surfaceCollisionPadding, tipSurface } from "./primitives";
 

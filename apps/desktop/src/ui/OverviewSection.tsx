@@ -4,8 +4,8 @@
 // them, not by a card or a line: the panel is one column, and the header alone
 // says where one section ends (docs/design.md › Borders, Spacing).
 
-import { ChevronRight } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
+import { ChevronRight } from "./icons";
 import type { OverviewSection as SectionId } from "./overview";
 import { cx, Tooltip } from "./primitives";
 

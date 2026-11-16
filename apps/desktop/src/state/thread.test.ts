@@ -25,6 +25,7 @@ import {
   idleSettled,
   lastWords,
   messageTime,
+  newDayMessages,
   requeueSteers,
   settledWait,
   settleEveryWait,
@@ -1259,6 +1260,25 @@ describe("messageTime", () => {
     expect(at(new Date(2026, 9, 20, 9, 30))).toMatch(/Oct/);
     expect(at(new Date(2025, 9, 20, 9, 30))).toMatch(/2025/);
     expect(messageTime(undefined, now)).toBe("");
+  });
+});
+
+describe("newDayMessages", () => {
+  const now = new Date(2026, 10, 4, 15, 0).getTime();
+  const sent = (id: string, d: Date) => ({ kind: "user" as const, id, text: id, at: d.getTime() });
+  test("marks the first message of each day, and the first one only when it is not from today", () => {
+    const items = [
+      sent("a", new Date(2026, 10, 2, 9, 0)),
+      { kind: "assistant" as const, id: "r", text: "ok" },
+      sent("b", new Date(2026, 10, 2, 11, 0)),
+      sent("c", new Date(2026, 10, 4, 8, 0)),
+      sent("d", new Date(2026, 10, 4, 9, 0)),
+    ];
+    expect([...newDayMessages(items, now)]).toEqual(["a", "c"]);
+  });
+  test("a thread that started today marks nothing", () => {
+    const items = [sent("a", new Date(2026, 10, 4, 9, 0)), sent("b", new Date(2026, 10, 4, 10, 0))];
+    expect(newDayMessages(items, now).size).toBe(0);
   });
 });
 

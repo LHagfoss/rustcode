@@ -141,8 +141,12 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   const low = plan?.windows.find((w) => w !== shown && leftPercent(w) < 20);
   const fraction = usage?.size ? Math.min(1, usage.used / usage.size) : null;
   if (left === null && fraction === null) return null;
+  const planSummary =
+    shown && left !== null
+      ? [`${left}% of the ${windowTitle(shown)} window left`, resetLabel(shown)].filter(Boolean).join(" · ")
+      : null;
   const said = [
-    left === null ? null : `${left}% of the ${windowTitle(shown!)} window left`,
+    planSummary,
     fraction === null ? null : `context ${percentOf(usage!.used, usage!.size)} full`,
   ].filter(Boolean);
   return (
@@ -169,7 +173,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
                     "block h-full rounded-full transition-[width] duration-300 ease-snappy",
                     planTint(left),
                   )}
-                  style={{ width: `max(3px, ${left}%)` }}
+                  style={{ width: `max(${left > 0 ? 3 : 0}px, ${left}%)` }}
                 />
               </span>
               <span
@@ -179,7 +183,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
                   running && "rc-shimmer",
                 )}
               >
-                {left}%
+                {left}% left
               </span>
             </span>
           )}
@@ -199,6 +203,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
           className={cx(tipSurface, "z-40 flex w-[320px] flex-col overflow-hidden p-3")}
           {...tip.contentProps}
         >
+          {planSummary && <p className="mb-3 text-caption text-fg-muted">{planSummary}</p>}
           <UsageCard
             plan={plan}
             cached={fromCache}

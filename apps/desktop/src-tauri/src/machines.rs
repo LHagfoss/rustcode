@@ -83,6 +83,13 @@ pub struct RouteView {
     encrypted: bool,
     /// What the last test of this route found, or none if it was never tested.
     probe: Option<ProbeView>,
+    /// Turned off by the user: shown, never dialled.
+    off: bool,
+    /// Added by the user, so removing it is final.
+    manual: bool,
+    /// An SSH route's `user@host` or alias, and the gateway port there.
+    ssh_destination: Option<String>,
+    ssh_gateway_port: Option<u16>,
 }
 
 impl RouteView {
@@ -93,6 +100,10 @@ impl RouteView {
             provider: route.provider.map(OverlayProvider::as_str),
             encrypted: route.is_encrypted(),
             probe: machine.probe_for(&route.address).map(ProbeView::of),
+            off: route.off,
+            manual: route.manual,
+            ssh_destination: route.ssh.as_ref().map(|ssh| ssh.destination.clone()),
+            ssh_gateway_port: route.ssh.as_ref().map(|ssh| ssh.gateway_port),
         }
     }
 }
@@ -1409,6 +1420,7 @@ pub async fn machines_connect_ssh(
     identity: Option<String>,
     allow_install: bool,
     name: Option<String>,
+    via: Option<rustcode_client::ssh::Via>,
 ) -> Result<MachineView, String> {
     let identity = identity
         .map(|path| path.trim().to_owned())
@@ -1442,14 +1454,14 @@ pub async fn machines_connect_ssh(
             &connector,
             &target,
             rustcode_client::ssh::Options {
+                via: via.unwrap_or_default(),
                 approve_install: &mut approve,
                 progress: &mut progress,
             },
         )
         .await
         .map_err(chain)?;
-        let welcome = connected.paired.session.welcome().clone();
-        let mut machine = machine_from_pairing(&welcome, connected.route, name);
+        let mut machine = connected.machine(name);
         machine.describes = true;
         save_pairing(&machines, machine, &connected.paired).await
     }
@@ -1679,6 +1691,110 @@ pub fn machines_set_paused(id: String, paused: bool) -> Result<(), String> {
     let config_dir = config_dir()?;
     let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
     registry.set_paused(&id, paused).map_err(chain)
+}
+
+/// Add a route to a saved machine by hand: an SSH route (`ssh` is
+/// `user@host` or an alias from `~/.ssh/config`) or a network address. The
+/// route is tested at once, and a machine waiting out its backoff is tried
+/// again when it answers. Answers the refreshed machines.
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub async fn machines_route_add(
+    machines: tauri::State<'_, Arc<Machines>>,
+    id: String,
+    ssh: Option<String>,
+    ssh_port: Option<u16>,
+    identity: Option<String>,
+    gateway_port: Option<u16>,
+    address: Option<String>,
+) -> Result<Vec<MachineView>, String> {
+    let route = match (
+        ssh.map(|s| s.trim().to_owned()),
+        address.map(|a| a.trim().to_owned()),
+    ) {
+        (Some(destination), _) if !destination.is_empty() => {
+            let identity = identity
+                .map(|path| path.trim().to_owned())
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from);
+            let target = rustcode_client::ssh::SshTarget::parse(&destination, ssh_port, identity)
+                .map_err(chain)?;
+            Route::ssh(rustcode_client::SshRoute {
+                destination: target.destination,
+                port: target.port,
+                identity: target.identity,
+                gateway_port: gateway_port
+                    .filter(|port| *port != 0)
+                    .unwrap_or(rustcode_client::DEFAULT_PORT),
+            })
+        }
+        (_, Some(address)) if !address.is_empty() => {
+            rustcode_client::transport::dial_target(&address).map_err(chain)?;
+            if !rustcode_client::may_send_secrets(&address) {
+                return Err(format!(
+                    "{address} is a public address: RustCode never sends a sign-in over one unencrypted. Use a LAN, VPN (NetBird, Tailscale) or SSH route instead."
+                ));
+            }
+            Route::new(address)
+        }
+        _ => return Err("Type an SSH host or an address.".to_owned()),
+    };
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry
+        .add_manual_route(&id, route.clone())
+        .map_err(chain)?;
+    let machine = registry
+        .get(&id)
+        .ok_or("That machine is no longer saved.")?
+        .clone();
+    let connector = Machines::connector(&config_dir)?;
+    let probe = connector.probe_route(&route).await;
+    let answered = probe.outcome == ProbeOutcome::Reachable;
+    let mut probes: Vec<RouteProbe> = machine
+        .probes
+        .iter()
+        .filter(|saved| saved.address != probe.address)
+        .cloned()
+        .collect();
+    probes.push(probe);
+    registry.set_probes(&id, probes).map_err(chain)?;
+    if answered {
+        machines.retry(Some(&id));
+    }
+    machines.list()
+}
+
+/// Remove one route of a saved machine. A route the machine reports comes
+/// back on its next connection; turning it off keeps it from being dialled.
+#[tauri::command(async)]
+pub fn machines_route_remove(
+    machines: tauri::State<'_, Arc<Machines>>,
+    id: String,
+    address: String,
+) -> Result<Vec<MachineView>, String> {
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry.remove_route(&id, &address).map_err(chain)?;
+    machines.list()
+}
+
+/// Turn one route of a saved machine on or off. The connection in use keeps
+/// running; the next one follows the change.
+#[tauri::command(async)]
+pub fn machines_route_set_off(
+    machines: tauri::State<'_, Arc<Machines>>,
+    id: String,
+    address: String,
+    off: bool,
+) -> Result<Vec<MachineView>, String> {
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry.set_route_off(&id, &address, off).map_err(chain)?;
+    if !off {
+        machines.retry(Some(&id));
+    }
+    machines.list()
 }
 
 /// Test every route of one machine (all of them when `id` is none) with a plain

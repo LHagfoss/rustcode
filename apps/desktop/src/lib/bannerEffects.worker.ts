@@ -1,39 +1,37 @@
-// The banner's print effects, off the main thread (lib/banner.ts): a picture already scaled to
-// at most 2048px arrives as an ImageBitmap and goes back as a PNG, once per effect and theme.
+// The banner's print effects and baked blur, off the main thread (lib/banner.ts): the pixels of a
+// picture already scaled to at most 2048px arrive as a transferred buffer and go back the same way,
+// once per effect, theme and blur. Only plain arrays here, no OffscreenCanvas or ImageBitmap, so
+// every web view that runs a worker (WebKitGTK on Linux included) runs this one.
 
-import { applyEffect, type PixelEffect } from "./bannerEffects";
+import { type PixelEffect, processPixels } from "./bannerEffects";
 
 export interface EffectRequest {
   id: number;
-  bitmap: ImageBitmap;
-  effect: PixelEffect;
+  /** RGBA, `width * height * 4` bytes. */
+  pixels: ArrayBuffer;
+  width: number;
+  height: number;
+  /** Null for the picture as it came: only blurred. */
+  effect: PixelEffect | null;
   dark: boolean;
+  /** Blur radius in these pixels, 0 for none (Windows and Linux; macOS blurs live). */
+  blur: number;
 }
 
 export interface EffectResponse {
   id: number;
-  /** Null when this web view cannot draw off screen. */
-  png: Blob | null;
+  /** The processed RGBA, or null when it failed. */
+  pixels: ArrayBuffer | null;
 }
 
-self.onmessage = async (event: MessageEvent<EffectRequest>) => {
-  const { id, bitmap, effect, dark } = event.data;
-  let png: Blob | null = null;
+self.onmessage = (event: MessageEvent<EffectRequest>) => {
+  const { id, pixels, width, height, effect, dark, blur } = event.data;
+  let out: ArrayBuffer | null = null;
   try {
-    const { width, height } = bitmap;
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (ctx) {
-      ctx.drawImage(bitmap, 0, 0);
-      const pixels = ctx.getImageData(0, 0, width, height);
-      pixels.data.set(applyEffect(effect, pixels.data, width, height, dark));
-      ctx.putImageData(pixels, 0, 0);
-      png = await canvas.convertToBlob({ type: "image/png" });
-    }
+    out = processPixels(new Uint8ClampedArray(pixels), width, height, effect, dark, blur)
+      .buffer as ArrayBuffer;
   } catch {
-    png = null;
-  } finally {
-    bitmap.close();
+    out = null;
   }
-  self.postMessage({ id, png } satisfies EffectResponse);
+  self.postMessage({ id, pixels: out } satisfies EffectResponse, out ? [out] : []);
 };

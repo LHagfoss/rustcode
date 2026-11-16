@@ -3,23 +3,6 @@
 // approval cards — and the right panel docked beside it (ui/RightPanel.tsx). A
 // new thread centres the composer and places its optional overview below it.
 
-import {
-  ChevronDown,
-  CircleCheck,
-  CircleDashed,
-  CircleDot,
-  Eye,
-  FileDiff,
-  GitBranch,
-  GitPullRequest,
-  Laptop,
-  ListChecks,
-  type LucideIcon,
-  PanelRight,
-  Sparkles,
-  SquareTerminal,
-  Zap,
-} from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, modelName, projectName } from "../acp/types";
@@ -73,6 +56,24 @@ import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
 import { GitHeaderButton } from "./GitActions";
 import { HarnessIcon } from "./HarnessIcon";
+import {
+  ChevronDown,
+  CircleCheck,
+  CircleDashed,
+  CircleDot,
+  Eye,
+  FileDiff,
+  GitBranch,
+  GitPullRequest,
+  Laptop,
+  ListChecks,
+  type LucideIcon,
+  PanelRight,
+  SlidersHorizontal,
+  Sparkles,
+  SquareTerminal,
+  Zap,
+} from "./icons";
 import { LinkedThreads } from "./Links";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
@@ -168,26 +169,28 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
   const wt = useApp((s) => worktreeOf(s, threadId));
   return (
     <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <button
-          type="button"
-          aria-label={`Thread status: ${STATUS_LABEL[status]}`}
-          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
-        >
-          {wt && (
-            <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">
-              <GitBranch size={12} className="shrink-0" />
-              <span className="truncate">{wt.branch}</span>
-            </span>
-          )}
-          {/* The icon says it; the sidebar and the working line say the rest. */}
-          {status === "idle" ? (
-            <CircleDashed size={12} />
-          ) : (
-            <StatusChip status={status} compact className="-mx-1" />
-          )}
-        </button>
-      </DropdownMenu.Trigger>
+      <Tooltip label="Thread actions" side="bottom">
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            aria-label={`Thread actions (status: ${STATUS_LABEL[status]})`}
+            className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
+          >
+            {wt && (
+              <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">
+                <GitBranch size={12} className="shrink-0" />
+                <span className="truncate">{wt.branch}</span>
+              </span>
+            )}
+            {/* Idle still presents an action menu; other states keep their status marker. */}
+            {status === "idle" ? (
+              <SlidersHorizontal size={14} />
+            ) : (
+              <StatusChip status={status} compact className="-mx-1" />
+            )}
+          </button>
+        </DropdownMenu.Trigger>
+      </Tooltip>
       <MenuContent align="end" className="w-[280px]">
         <ThreadQuickActions threadId={threadId} />
         <DropdownMenu.Item className={menuItem} onSelect={() => setView({ kind: "review", threadId })}>
@@ -308,7 +311,7 @@ function ChangesHeaderButton() {
 }
 
 export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
-  status: { label: "Status", icon: CircleDashed, kind: "pill", Button: StatusHeaderButton },
+  status: { label: "Status", icon: SlidersHorizontal, kind: "pill", Button: StatusHeaderButton },
   plan: { label: "Plan", icon: ListChecks, kind: "pill", Button: PlanHeaderButton },
   git: { label: "Git", icon: GitBranch, kind: "pill", Button: GitHeaderButton },
   actions: { label: "Project actions", icon: Zap, kind: "cluster", Button: ProjectActionsButton },
@@ -760,9 +763,12 @@ function NewThreadHeading({
   });
   const shortcut = useShortcutHint(tip?.command ?? "");
   return (
-    <div className="flex min-w-0 max-w-full flex-col items-center gap-2 pb-2 text-center">
-      {/* No pill behind the words: over a picture, a soft halo of the pane's colour carries them
-          instead (index.css `.rc-text-over-image`), and over the pane itself nothing is needed. */}
+    <div
+      className={cx(
+        "relative isolate flex min-w-0 max-w-full flex-col items-center gap-2 pb-2 text-center",
+        banner && "rc-heading-over-image",
+      )}
+    >
       <h2
         className={cx(
           "min-w-0 max-w-full font-semibold text-title tracking-tight",

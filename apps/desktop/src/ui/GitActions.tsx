@@ -2,7 +2,6 @@
 // (Commit, Push, Pull, Create Pull Request), a menu with the rest, and the commit sheet. The engine
 // runs git in the thread's folder (state/gitActions.ts), never the agent, so hooks and signing apply.
 
-import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, RefreshCw } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openExternal } from "../lib/native";
@@ -28,6 +27,7 @@ import { readPullList, usePullList } from "../state/pullQueries";
 import { request, toast } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
+import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, RefreshCw } from "./icons";
 import {
   cx,
   inputClass,

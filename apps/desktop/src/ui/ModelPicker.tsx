@@ -7,7 +7,6 @@
 // is as tall as the longest list it can show, up to the room the window has, and only the lists
 // scroll. What the thread's harness cannot do is greyed out with the reason, from capability flags.
 
-import { Check, ChevronUp, Lock, RotateCcw, Star, UserRound, Zap } from "lucide-react";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { harnessPlanKey, leftPercent, shownWindow } from "../acp/rustcode";
 import {
@@ -58,6 +57,7 @@ import type { ThreadState } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
+import { Check, ChevronUp, Lock, RotateCcw, Star, UserRound, Zap } from "./icons";
 import { cx, MenuSearchField, menuLabel, menuSeparator, Skeleton, Switch, Tooltip } from "./primitives";
 
 interface Choice {

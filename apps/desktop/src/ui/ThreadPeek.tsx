@@ -4,12 +4,12 @@
 // asked in beside its parent, so its tab has a field of its own (`SideChatField`), and closing
 // the panel keeps the thread.
 
-import { ExternalLink, MessageSquareQuote } from "lucide-react";
 import { useCallback } from "react";
 import { modelName, relationshipOf } from "../acp/types";
 import { cancel, runPrompt, selectThread, setDraft, useApp } from "../state/store";
 import { PermissionMenu } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
+import { ExternalLink, MessageSquareQuote } from "./icons";
 import { noTextHelpers, Pill, Spinner } from "./primitives";
 import { Transcript } from "./Transcript";
 

@@ -284,9 +284,7 @@ export function forgetAskedModels(): void {
  * and is not kept: the next ask, such as opening the picker, tries again.
  */
 export function ensureHarnessModels(id: string, host = LOCAL_HOST): Promise<void> {
-  // A machine lists its own harnesses' models, and only its own `_rustcode/harnesses/models` can
-  // ask (`docs/desktop.md` › Several machines): what its snapshot carries is what the picker has.
-  if (host) return Promise.resolve();
+  if (host) return ensureMachineHarnessModels(id, host);
   const harness = get().harnesses?.harnesses.find((h) => h.id === id);
   if (!harness || harness.builtin || harness.models.length || get().status !== "ready")
     return Promise.resolve();
@@ -297,6 +295,35 @@ export function ensureHarnessModels(id: string, host = LOCAL_HOST): Promise<void
       .catch(() => undefined)
       .finally(() => modelsAsked.delete(id));
     modelsAsked.set(id, asked);
+  }
+  return asked;
+}
+
+/**
+ * The same on a paired machine: its own `_rustcode/harnesses/models` lists them (`docs/desktop.md`
+ * › Several machines), and the machine's snapshot is read again so the picker has them. A machine
+ * set up fresh has learned none until asked, and its picker would otherwise stay empty. An older
+ * machine whose gateway refuses the method keeps what its snapshot carries, quietly.
+ */
+function ensureMachineHarnessModels(id: string, host: string): Promise<void> {
+  const harness = get().remoteHarnesses[host]?.harnesses.find((h) => h.id === id);
+  if (!harness || harness.builtin || harness.models.length) return Promise.resolve();
+  const conn = connectionFor(host);
+  if (!conn) return Promise.resolve();
+  const key = `${host}\u0000${id}`;
+  let asked = modelsAsked.get(key);
+  if (!asked) {
+    asked = conn
+      .request(Method.harnessModels, { harness: id }, 60_000)
+      .then(async () => {
+        if (connectionFor(host) !== conn) return;
+        const snapshot = parseHarnessSnapshot(await conn.request(Method.harnesses, {}, 15_000));
+        if (connectionFor(host) !== conn) return;
+        set((st) => ({ remoteHarnesses: { ...st.remoteHarnesses, [host]: snapshot } }));
+      })
+      .catch(() => undefined)
+      .finally(() => modelsAsked.delete(key));
+    modelsAsked.set(key, asked);
   }
   return asked;
 }

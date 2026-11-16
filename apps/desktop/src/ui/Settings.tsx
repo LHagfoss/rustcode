@@ -6,6 +6,7 @@ import { ComputerUseGroup } from "./ComputerUseGroup";
 import { ProjectGenerators } from "./ProjectGenerators";
 import { TextGeneration } from "./TextGeneration";
 import { VoiceGroup } from "./VoiceGroup";
+
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -15,32 +16,6 @@ import { VoiceGroup } from "./VoiceGroup";
 // themes, Usage, Statistics) read and write through `_rustcode/*` requests.
 // Diagnostics (DiagnosticsPage.tsx) asks the shell about the server itself.
 
-import {
-  Blocks,
-  ChartColumn,
-  Check,
-  FolderOpen,
-  Gauge,
-  Settings as Gear,
-  Info,
-  Keyboard,
-  KeyRound,
-  Laptop,
-  Layers,
-  MessageSquare,
-  Mic,
-  Network,
-  Palette,
-  Plug,
-  Plus,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-  Smartphone,
-  Stethoscope,
-  TerminalSquare,
-  X,
-} from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { type PayloadCapture, parsePayloadCapture } from "../acp/rustcode";
@@ -100,15 +75,16 @@ import {
   setAnimateStreaming,
   setChatWidth,
   setDefaultCwd,
+  setFont,
   setNotificationsBackgroundOnly,
   setOnboarding,
   setRecapHours,
   setRecapWhileAway,
   setReduceTransparency,
-  setRoundedFont,
   setShowToolCalls,
   setSmartUi,
   setSystemNotifications,
+  setTextSize,
   setTheme,
   toast,
   useApp,
@@ -126,6 +102,32 @@ import {
   useUpdates,
 } from "../state/updates";
 import { AddHarnessForm } from "./AddHarness";
+import {
+  Blocks,
+  ChartColumn,
+  Check,
+  FolderOpen,
+  Gauge,
+  Settings as Gear,
+  Info,
+  Keyboard,
+  KeyRound,
+  Laptop,
+  Layers,
+  MessageSquare,
+  Mic,
+  Network,
+  Palette,
+  Plug,
+  Plus,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  Smartphone,
+  Stethoscope,
+  TerminalSquare,
+  X,
+} from "./icons";
 
 const CapabilitiesPage = lazy(() => import("./Capabilities").then((m) => ({ default: m.CapabilitiesPage })));
 
@@ -1286,7 +1288,8 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
 
 function AppearancePage() {
   const mode = useApp((s) => s.theme);
-  const roundedFont = useApp((s) => s.roundedFont);
+  const font = useApp((s) => s.font);
+  const textSize = useApp((s) => s.textSize);
   const animateStreaming = useApp((s) => s.animateStreaming);
   const reduceTransparency = useApp((s) => s.reduceTransparency);
   const active = useApp((s) => s.themeActive);
@@ -1320,11 +1323,40 @@ function AppearancePage() {
           />
         </Row>
         <Row
-          title="Rounded font"
-          reset={roundedFont ? () => setRoundedFont(SETTINGS_DEFAULTS.roundedFont) : undefined}
-          subtitle="SF Pro Rounded for the interface and chat. Code stays monospaced."
+          title="Font"
+          reset={font !== SETTINGS_DEFAULTS.font ? () => setFont(SETTINGS_DEFAULTS.font) : undefined}
+          subtitle="For the interface and chat. Code stays monospaced."
         >
-          <Switch label="Rounded font" checked={roundedFont} onChange={setRoundedFont} />
+          <Choice
+            label="Font"
+            value={font}
+            onChange={setFont}
+            options={[
+              { value: "inter", label: "Inter" },
+              { value: "system", label: "System" },
+              { value: "rounded", label: "Rounded" },
+            ]}
+          />
+        </Row>
+        <Row
+          title="Text size"
+          reset={
+            textSize !== SETTINGS_DEFAULTS.textSize
+              ? () => setTextSize(SETTINGS_DEFAULTS.textSize)
+              : undefined
+          }
+          subtitle="Larger sizes scale the chat and sidebar text."
+        >
+          <Choice
+            label="Text size"
+            value={textSize}
+            onChange={setTextSize}
+            options={[
+              { value: "small", label: "Default" },
+              { value: "medium", label: "Large" },
+              { value: "large", label: "Larger" },
+            ]}
+          />
         </Row>
         <Row
           title="Animate streaming text"

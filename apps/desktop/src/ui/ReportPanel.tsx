@@ -4,10 +4,10 @@
 // scrolls inside. Escape and a click outside close it, after any popover or
 // menu over it, and never stop the running turn.
 
-import { X } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { readReport } from "../state/report";
 import { closeReport } from "../state/store";
+import { X } from "./icons";
 import { CopyButton, Markdown } from "./Markdown";
 
 /** A Radix popover, menu or dialog is above the panel and takes Escape or the click first. */

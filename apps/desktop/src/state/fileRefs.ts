@@ -1,12 +1,12 @@
 // `@` references in the composer: finding the word being typed, narrowing it to
-// one group (`@agents`, `@threads`, `@files`), ranking a project's files
+// one group (`@agents`, `@machines`, `@threads`, `@files`), ranking a project's files
 // against it, and writing the reference in. A reference is plain text in the
 // message (`@src/main.tsx`), which every harness can read.
 
 import type { TokenRange } from "./compose";
 
 /** The groups an `@` token can name to look in one of them. */
-export type MentionScope = "agents" | "threads" | "files";
+export type MentionScope = "agents" | "machines" | "threads" | "files";
 
 /**
  * What narrows `@` to a group, in the order the drawer offers them: the word it writes, the name it
@@ -14,6 +14,7 @@ export type MentionScope = "agents" | "threads" | "files";
  */
 export const SCOPES: { scope: MentionScope; word: string; label: string; hint: string }[] = [
   { scope: "agents", word: "agents", label: "Agents", hint: "Harnesses and models to delegate to" },
+  { scope: "machines", word: "machines", label: "Machines", hint: "Computers to run the work on" },
   { scope: "threads", word: "threads", label: "Threads", hint: "Other threads to point the agent at" },
   { scope: "files", word: "files", label: "Files", hint: "This project's files and folders" },
 ];

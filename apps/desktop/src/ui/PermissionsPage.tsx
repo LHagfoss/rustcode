@@ -3,7 +3,6 @@
 // chose their own, the approvals the app remembers, and what still asks at Full access. Every
 // control applies at once: the store changes first and the server follows (settingsScope.ts).
 
-import { Check, Shield, ShieldCheck, ShieldOff } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import type { Json } from "../acp/jsonrpc";
 import { activeGrants, grantRemaining } from "../state/grants";
@@ -31,6 +30,7 @@ import {
   useApp,
 } from "../state/store";
 import { useNow } from "./AgentViews";
+import { Check, Shield, ShieldCheck, ShieldOff } from "./icons";
 import { cx } from "./primitives";
 import { ScopedValue, SettingsScopeBar } from "./SettingsScope";
 import { Action, Group, Row, Select } from "./settingsKit";

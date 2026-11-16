@@ -7,28 +7,12 @@
 // The derivation is pure (state/inbox.ts); this file draws it and owns the keys:
 // ↑/↓ move the row, ⏎ opens its thread, 1–9 run its answers.
 
-import {
-  ArrowUpRight,
-  CircleAlert,
-  CircleCheck,
-  CornerDownRight,
-  Hand,
-  MessageCircleQuestion,
-  Sparkles,
-  X,
-} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
 import { assessApproval, grantAllowed, optionScope } from "../lib/approval";
-import {
-  type DecidedItem,
-  foldDecided,
-  groupInbox,
-  type InboxGroup,
-  type InboxItem,
-  showsNeedsYou,
-} from "../state/inbox";
+import { type DecidedItem, foldDecided, groupInbox, type InboxGroup, type InboxItem } from "../state/inbox";
 import { useInboxItems } from "../state/inboxRead";
+import { filteredNeedsCount } from "../state/sidebarGroups";
 import {
   answerPermission,
   answerQuestionOptions,
@@ -42,6 +26,16 @@ import {
 import { relativeAge } from "../state/thread";
 import { orderedOptions, QuestionCard } from "./AttentionCards";
 import { ViewHeader } from "./Board";
+import {
+  ArrowUpRight,
+  CircleAlert,
+  CircleCheck,
+  CornerDownRight,
+  Hand,
+  MessageCircleQuestion,
+  Sparkles,
+  X,
+} from "./icons";
 import { ProjectMark } from "./ProjectMark";
 import { cx, Kbd, Pill } from "./primitives";
 import { WhileAwayCard } from "./WhileAway";
@@ -339,24 +333,21 @@ function DecidedRow({ item }: { item: DecidedItem }) {
  * while something waits on the user (`showsNeedsYou`), so an empty row never
  * stands over the threads as if it headed them.
  *
- * It counts inbox items, not threads — an approval, a question, a failed turn, a
- * delegate — and opens the page that lists them all, so it keeps the name; the
- * sidebar's Threads list says "Needs you" in the chip of a thread that has one of
- * those open. The 6px under it matches the brand header's, so the row closes the
- * top block instead of heading the list.
+ * It counts distinct threads in the sidebar's active filter; the destination still
+ * opens the full inbox. The 6px under it closes the top block rather than heading the list.
  */
-export function NeedsYouRow() {
+export function NeedsYouRow({ threadIds }: { threadIds: ReadonlySet<string> }) {
   const items = useInboxItems();
   const here = useApp((s) => s.view.kind === "inbox");
-  if (!showsNeedsYou(items)) return null;
-  const count = items.length;
+  const count = filteredNeedsCount(items, threadIds);
+  if (!count) return null;
   return (
     <div className="shrink-0 px-2 pb-1.5">
       <button
         type="button"
         onClick={() => setView({ kind: "inbox" })}
         aria-current={here ? "page" : undefined}
-        title="Approvals, questions, failed turns and delegates across every thread"
+        title="Threads in the current filter that need you. Open the inbox for all projects."
         className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body hover:bg-fill"
       >
         <Hand size={14} className="shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />

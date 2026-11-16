@@ -3,7 +3,6 @@
 // diff stat of its branch, its answer, and Open / Review. "Keep this" puts
 // the chosen thread up for review and marks the others done.
 
-import { Check, ExternalLink, FileDiff, GitBranch } from "lucide-react";
 import { useEffect, useState } from "react";
 import { gitChangeSummary } from "../lib/native";
 import { keepFanOut, stateOf } from "../state/host";
@@ -11,6 +10,7 @@ import { accountLabelOf } from "../state/logins";
 import { LINK_LABEL, type Link } from "../state/orchestration";
 import { selectThread, setView, statusOf, useApp, worktreeOf } from "../state/store";
 import { ViewHeader } from "./Board";
+import { Check, ExternalLink, FileDiff, GitBranch } from "./icons";
 import { Markdown } from "./Markdown";
 import { Pill, Spinner } from "./primitives";
 import { DiffCount } from "./Rows";

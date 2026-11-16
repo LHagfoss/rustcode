@@ -41,6 +41,7 @@ pub mod routes;
 pub mod ssh;
 pub mod tokens;
 pub mod transport;
+pub mod tunnel;
 
 pub use connect_code::ConnectCode;
 pub use discovery::{DiscoveredMachine, SERVICE_TYPE, browse, browse_async};
@@ -59,7 +60,7 @@ pub use reconnect::{
 };
 pub use registry::{
     Machine, MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteChange, RouteKind,
-    RouteProbe,
+    RouteProbe, SshRoute, may_send_secrets,
 };
 pub use routes::{
     AddressSpace, DialFailure, LAN_GRACE, RACE_DEADLINE, Race, RaceSettings, RouteFailure,

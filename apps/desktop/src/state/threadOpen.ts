@@ -189,6 +189,21 @@ export function startNewThread(cwd?: string, host?: string) {
   if (target) void loadMachineHarnesses(target);
 }
 
+/**
+ * The draft "Create with agent" starts a thread with (Settings › Capabilities, the command
+ * palette). It names the built-in `create-skill` skill and both ways to save one, so a harness
+ * that does not load RustCode's built-in skills still knows where a skill goes; it ends open for
+ * the reader to say what the skill is for.
+ */
+export const CREATE_SKILL_PROMPT =
+  'Create a new RustCode skill. Follow the create-skill skill if you have it. Save it with the RustCode MCP tool manage_capabilities (kind "skill", action "create"), or write ~/.config/rustcode/skills/<name>/SKILL.md. Ask me anything you need first.\n\nThe skill should: ';
+
+/** A new thread (on `host`'s machine when named) whose draft asks an agent to write a skill. */
+export function createSkillWithAgent(host?: string) {
+  startNewThread(undefined, host || undefined);
+  setDraft("new", CREATE_SKILL_PROMPT);
+}
+
 /** The folder of the new thread being written (⌘O there, the composer footer's folder menu). */
 export function setProjectCwd(cwd: string) {
   set({ projectCwd: cwd });
@@ -753,8 +768,8 @@ export function newThreadChoice(
   const harness = snapshot.harnesses.find((h) => h.id === s.newThread?.harness);
   if (!harness || unavailableReason(harness)) return preferredDefault(snapshot);
   const choice = normalizeDefault(snapshot, s.newThread);
-  // A machine's `_rustcode/harnesses` lists only the models a harness has already learned there,
-  // and `_rustcode/harnesses/models` is not on its gateway: with none listed, keep no model, so
+  // A machine's `_rustcode/harnesses` lists only the models a harness has already learned there
+  // (the picker asks for the rest, `ensureHarnessModels`): with none listed yet, keep no model, so
   // the machine's own harness default applies rather than a model picked on this computer.
   if (s.newThreadHost && !harness.models.length) return { ...choice, model: null, effort: null };
   return choice;

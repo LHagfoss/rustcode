@@ -489,6 +489,15 @@ describe("mention tokens", () => {
     ).toBe("@pi/deepseek/deepseek-flash (delegate: harness=pi, model=deepseek/deepseek-flash, effort=high)");
   });
 
+  test("a machine keeps its name in the draft and sends the id the thread tools take", () => {
+    const studio = { kind: "machine" as const, id: "m-7", name: "Mac Studio" };
+    expect(mentionToken(studio)).toBe("@Mac Studio");
+    expect(mentionText(studio)).toBe("@Mac Studio (machine: m-7)");
+    expect(serializeMentions("run it on @Mac Studio please", [studio])).toBe(
+      "run it on @Mac Studio (machine: m-7) please",
+    );
+  });
+
   test("a title with a bracket is escaped, so the link ends where it should", () => {
     expect(mentionText({ ...thread, title: "fix [bug] in a.ts" })).toBe(
       "#[fix \\[bug\\] in a.ts](rustcode://thread/42)",

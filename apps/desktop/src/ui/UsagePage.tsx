@@ -10,7 +10,6 @@
 // that failed. Claude's numbers come from Claude Code's sign-in in the macOS
 // Keychain; opening this page reads each login.
 
-import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { parsePlans, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
@@ -45,6 +44,7 @@ import {
 } from "../state/usagePage";
 import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
+import { RefreshCw } from "./icons";
 import { Skeleton, Spinner } from "./primitives";
 import { Action, Group, Row, SectionTitle } from "./settingsKit";
 

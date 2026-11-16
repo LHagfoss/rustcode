@@ -41,6 +41,10 @@ pub enum RouteKind {
     Tailscale,
     /// A public host name or address.
     Public,
+    /// Through the user's own `ssh` to the machine, carried by a process per
+    /// connection (`crate::tunnel`): works with any host this computer signs
+    /// in to, the gateway there listening on its own loopback only.
+    Ssh,
 }
 
 impl RouteKind {
@@ -50,6 +54,7 @@ impl RouteKind {
             Self::Vpn => "vpn",
             Self::Tailscale => "tailscale",
             Self::Public => "public",
+            Self::Ssh => "ssh",
         }
     }
 
@@ -57,17 +62,19 @@ impl RouteKind {
     /// rather than plain on the LAN. Only a tunnel encrypts, the rule the
     /// gateway applies to its own connections (#3701): a LAN, a loopback or
     /// a public address never does, and an address nothing is known about is
-    /// a public one.
+    /// a public one. SSH is a tunnel of its own.
     pub fn is_encrypted(self) -> bool {
-        matches!(self, Self::Vpn | Self::Tailscale)
+        matches!(self, Self::Vpn | Self::Tailscale | Self::Ssh)
     }
 
-    /// The race order: LAN first, then an overlay, then a public route.
+    /// The race order: LAN first, then an overlay, then SSH (a process and a
+    /// sign-in per connection, so the fallback), then a public route.
     pub fn rank(self) -> u8 {
         match self {
             Self::Lan => 0,
             Self::Vpn | Self::Tailscale => 1,
-            Self::Public => 2,
+            Self::Ssh => 2,
+            Self::Public => 3,
         }
     }
 }
@@ -135,6 +142,37 @@ pub struct Route {
     /// Which mesh product the address is on, when the machine named one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<OverlayProvider>,
+    /// How an [`RouteKind::Ssh`] route signs in and where the gateway listens
+    /// there; `address` is its `ssh://destination` name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<SshRoute>,
+    /// Turned off by the user: kept, shown, never dialled. A route the
+    /// machine reports again stays off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
+    /// Added by the user rather than reported by the machine, so removing it
+    /// is final (a reported one comes back on the next connection).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual: bool,
+}
+
+/// An SSH route: `ssh -W 127.0.0.1:<gateway_port> <destination>` per
+/// connection, with the user's own ssh configuration and agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshRoute {
+    /// `user@host` or a `Host` alias from `~/.ssh/config`.
+    pub destination: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<PathBuf>,
+    /// The RustCode gateway's port on that machine.
+    #[serde(default = "default_gateway_port")]
+    pub gateway_port: u16,
+}
+
+fn default_gateway_port() -> u16 {
+    crate::transport::DEFAULT_PORT
 }
 
 impl Route {
@@ -142,11 +180,7 @@ impl Route {
     pub fn new(address: impl Into<String>) -> Self {
         let address = address.into();
         let kind = classify_address(&address);
-        Self {
-            kind,
-            address,
-            provider: provider_for_kind(kind),
-        }
+        Self::with_kind(kind, address)
     }
 
     pub fn with_kind(kind: RouteKind, address: impl Into<String>) -> Self {
@@ -154,7 +188,41 @@ impl Route {
             kind,
             address: address.into(),
             provider: provider_for_kind(kind),
+            ssh: None,
+            off: false,
+            manual: false,
         }
+    }
+
+    /// An SSH route to `ssh`, added by the user.
+    pub fn ssh(ssh: SshRoute) -> Self {
+        let mut address = format!("ssh://{}", ssh.destination);
+        if let Some(port) = ssh.port {
+            address.push_str(&format!(":{port}"));
+        }
+        Self {
+            kind: RouteKind::Ssh,
+            address,
+            provider: None,
+            ssh: Some(ssh),
+            off: false,
+            manual: true,
+        }
+    }
+
+    /// Whether a credential may travel over this route: an SSH route carries
+    /// it inside SSH, any other one by its address ([`may_send_secrets`]).
+    pub fn may_send_secrets(&self) -> bool {
+        match self.kind {
+            RouteKind::Ssh => self.ssh.is_some(),
+            _ => may_send_secrets(&self.address),
+        }
+    }
+
+    /// Whether a connection tries this route: not turned off, and allowed to
+    /// carry a credential.
+    pub fn is_dialable(&self) -> bool {
+        !self.off && self.may_send_secrets()
     }
 
     /// A route learned from a handshake `routes` entry: the kind and product
@@ -176,9 +244,8 @@ impl Route {
                     _ => RouteKind::Vpn,
                 };
                 Self {
-                    kind,
-                    address,
                     provider,
+                    ..Self::with_kind(kind, address)
                 }
             }
             _ => Self {
@@ -201,6 +268,7 @@ impl Route {
             Some(provider) => provider.display_name().to_owned(),
             None if self.kind == RouteKind::Tailscale => "Tailscale".to_owned(),
             None if self.kind == RouteKind::Vpn => "the VPN".to_owned(),
+            None if self.kind == RouteKind::Ssh => "SSH".to_owned(),
             None => "the LAN".to_owned(),
         }
     }
@@ -558,6 +626,16 @@ fn explicit_overlay_address(route: &Route) -> String {
 
 /// The same endpoint spelled `studio.local:17879` and `studio.local`.
 fn same_address(left: &str, right: &str) -> bool {
+    // An SSH route's `ssh://host` names a sign-in, not a socket: it is never
+    // the same endpoint as a network address that happens to share the host.
+    let ssh = |address: &str| {
+        address
+            .get(..6)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("ssh://"))
+    };
+    if ssh(left) != ssh(right) {
+        return false;
+    }
     left.eq_ignore_ascii_case(right) || dial_host(left) == dial_host(right)
 }
 
@@ -567,6 +645,13 @@ fn dial_host(address: &str) -> String {
         crate::transport::host_part(address).to_ascii_lowercase(),
         crate::transport::port_or_default(address)
     )
+}
+
+fn find_machine<'a>(machines: &'a mut [Machine], host_id: &str) -> Result<&'a mut Machine> {
+    machines
+        .iter_mut()
+        .find(|machine| machine.host_id == host_id)
+        .ok_or_else(|| anyhow::anyhow!("no saved machine has host id {host_id}"))
 }
 
 /// The saved machines, loaded once and written through.
@@ -892,6 +977,81 @@ impl MachineRegistry {
         })
     }
 
+    /// Add a route the user typed or set up (an address, an SSH route). It is
+    /// placed like a learned one; the same address already saved is turned
+    /// back on instead. Returns whether anything changed.
+    pub fn add_manual_route(&mut self, host_id: &str, mut route: Route) -> Result<bool> {
+        route.manual = true;
+        route.off = false;
+        self.mutate(|machines| {
+            let machine = find_machine(machines, host_id)?;
+            if let Some(existing) = machine
+                .routes
+                .iter_mut()
+                .find(|existing| same_address(&existing.address, &route.address))
+            {
+                let changed = existing.off || existing.ssh != route.ssh;
+                existing.off = false;
+                if route.ssh.is_some() {
+                    existing.ssh = route.ssh;
+                }
+                return Ok(changed);
+            }
+            ensure!(
+                machine.routes.len() < MAX_ROUTES_PER_MACHINE,
+                "{} already has {MAX_ROUTES_PER_MACHINE} routes; remove one first",
+                machine.display()
+            );
+            Ok(machine.learn_route(route))
+        })
+    }
+
+    /// Remove one route. A route the machine reports comes back on the next
+    /// connection; turn it off instead to keep it from being dialled.
+    pub fn remove_route(&mut self, host_id: &str, address: &str) -> Result<()> {
+        self.mutate(|machines| {
+            let machine = find_machine(machines, host_id)?;
+            let before = machine.routes.len();
+            machine
+                .routes
+                .retain(|route| !same_address(&route.address, address));
+            ensure!(
+                machine.routes.len() < before,
+                "{address} is not one of its routes"
+            );
+            machine
+                .probes
+                .retain(|probe| !same_address(&probe.address, address));
+            Ok(())
+        })
+    }
+
+    /// Turn one route on or off. At least one route stays on, so the machine
+    /// can still be reached.
+    pub fn set_route_off(&mut self, host_id: &str, address: &str, off: bool) -> Result<()> {
+        self.mutate(|machines| {
+            let machine = find_machine(machines, host_id)?;
+            let index = machine
+                .routes
+                .iter()
+                .position(|route| same_address(&route.address, address))
+                .ok_or_else(|| anyhow::anyhow!("{address} is not one of its routes"))?;
+            if off {
+                let others_on = machine
+                    .routes
+                    .iter()
+                    .enumerate()
+                    .any(|(i, route)| i != index && !route.off);
+                ensure!(
+                    others_on,
+                    "turn another route on first, or the machine cannot be reached"
+                );
+            }
+            machine.routes[index].off = off;
+            Ok(())
+        })
+    }
+
     /// Save what a test of the machine's routes found, replacing the last one.
     /// Only a route the machine still has keeps its entry.
     pub fn set_probes(&mut self, host_id: &str, probes: Vec<RouteProbe>) -> Result<()> {
@@ -1096,6 +1256,64 @@ mod tests {
             Route::new(address),
             Utc::now(),
         )
+    }
+
+    #[test]
+    fn routes_are_added_turned_off_and_removed_by_hand() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-vps", "VPS", "127.0.0.1:17880"))
+            .unwrap();
+        let ssh = Route::ssh(SshRoute {
+            destination: "LagosVPS".to_owned(),
+            port: None,
+            identity: None,
+            gateway_port: 17879,
+        });
+        assert!(store.add_manual_route("gw-vps", ssh.clone()).unwrap());
+        // An SSH name is never the same endpoint as a network address of that host.
+        assert!(
+            store
+                .add_manual_route("gw-vps", Route::new("LagosVPS"))
+                .unwrap()
+        );
+        let vps = load(dir.path()).machines()[0].clone();
+        assert_eq!(vps.routes.len(), 3);
+        let saved = vps
+            .routes
+            .iter()
+            .find(|route| route.kind == RouteKind::Ssh)
+            .unwrap();
+        assert!(saved.manual && saved.is_encrypted() && saved.is_dialable());
+
+        store
+            .set_route_off("gw-vps", "127.0.0.1:17880", true)
+            .unwrap();
+        store.set_route_off("gw-vps", "LagosVPS", true).unwrap();
+        // The last route on stays on.
+        assert!(
+            store
+                .set_route_off("gw-vps", "ssh://LagosVPS", true)
+                .is_err()
+        );
+        // A route the machine reports again keeps the user's choice.
+        store
+            .learn_routes("gw-vps", &[Route::new("127.0.0.1:17880")])
+            .unwrap();
+        let vps = load(dir.path()).machines()[0].clone();
+        assert!(
+            vps.routes
+                .iter()
+                .find(|route| route.address == "127.0.0.1:17880")
+                .unwrap()
+                .off
+        );
+
+        store.remove_route("gw-vps", "127.0.0.1:17880").unwrap();
+        let vps = load(dir.path()).machines()[0].clone();
+        assert_eq!(vps.routes.len(), 2);
+        assert!(store.remove_route("gw-vps", "127.0.0.1:17880").is_err());
     }
 
     #[test]

@@ -4,10 +4,10 @@
 // with the note's first line. Hovering it, or a click, gives the whole note and when it was sent,
 // which is also what keeps it readable once the turn it landed in has folded.
 
-import { CornerDownRight } from "lucide-react";
 import { useState } from "react";
 import { type SteerNote, steerLine } from "../state/steer";
 import { messageTime } from "../state/thread";
+import { CornerDownRight } from "./icons";
 import { cx, Tooltip } from "./primitives";
 
 /** The whole note and when it was sent, for a tip or an opened marker. */

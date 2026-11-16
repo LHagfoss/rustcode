@@ -6,7 +6,6 @@
 // rows that do something are the ones with an act behind them: the project
 // opens the file manager, the branch copies itself.
 
-import { Copy, Folder, Gauge, GitBranch, ShieldCheck, UserRound } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { type ConfigOption, effortLabel, modelName, projectName } from "../acp/types";
 import { revealPath } from "../lib/native";
@@ -16,6 +15,7 @@ import { type AppState, permissionModeOf, statusOf, useApp } from "../state/stor
 import type { ThreadState } from "../state/thread";
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { HarnessIcon } from "./HarnessIcon";
+import { Copy, Folder, Gauge, GitBranch, ShieldCheck, UserRound } from "./icons";
 import { OverviewSection } from "./OverviewSection";
 import { copyText, cx } from "./primitives";
 import { StatusChip, StatusIcon } from "./Status";

@@ -14,7 +14,6 @@
 // read covers both so a sparkline and the daily chart have their days, and the
 // breakdown's bar and table share the model rows.
 
-import { ChevronRight, RefreshCw } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { parseUsageReport, type UsageRow, type UsageTotals, windowTitle } from "../acp/rustcode";
 import { type Harness, Method } from "../acp/types";
@@ -54,6 +53,7 @@ import { openSettings, useApp } from "../state/store";
 import { formatTokens as compactTokens, relativeAge } from "../state/thread";
 import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
+import { ChevronRight, RefreshCw } from "./icons";
 import { cx, Skeleton, Spinner } from "./primitives";
 import {
   ChartSkeleton,

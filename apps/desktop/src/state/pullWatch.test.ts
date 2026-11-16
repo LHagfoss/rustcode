@@ -94,3 +94,81 @@ test("only a create command's PR output opts into CI delivery", () => {
   expect(createdPull({ command: "gh pr view 42" }, "https://github.com/o/r/pull/42")).toBeUndefined();
   expect(createdPull({ command: "gh pr create" }, "failed")).toBeUndefined();
 });
+
+test("late PR news cannot wake a settled thread", async () => {
+  resetForTests();
+  const id = "pr-thread";
+  const t = { ...emptyThread(id, "/tmp"), loaded: true, running: true };
+  useApp.setState({ threads: { [id]: t }, sessions: [{ id, cwd: "/tmp", status: "done" }] });
+  const conn = new AcpConnection(() => {
+    throw new Error("settled thread must not claim news");
+  });
+  await deliverPullWatch(conn, { watch });
+  expect(useApp.getState().threads[id]?.queue).toEqual([]);
+  conn.close("test finished");
+});
+
+test("engine settling clears queued notices and unread marks, keeping user messages", () => {
+  resetForTests();
+  const id = "machine/pr-thread";
+  const conn = new AcpConnection(() => {});
+  watchMachineConnection("machine", conn);
+  const t = {
+    ...emptyThread(id, "/tmp"),
+    loaded: true,
+    running: true,
+    queue: [
+      { id: "notice", text: `CI failed\n\n${PULL_MARK}` },
+      { id: "user", text: "follow up" },
+    ],
+  };
+  useApp.setState({
+    threads: { [id]: t },
+    sessions: [{ id, cwd: "/tmp", status: "idle" }],
+    finished: { [id]: 1 },
+    failed: { [id]: 1 },
+  });
+  conn.receive(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "pr-thread",
+        update: { sessionUpdate: "session_info_update", _meta: { rustcode: { status: "done" } } },
+      },
+    }),
+  );
+  expect(useApp.getState().threads[id]?.queue.map((row) => row.text)).toEqual(["follow up"]);
+  expect(useApp.getState().finished[id]).toBeUndefined();
+  expect(useApp.getState().failed[id]).toBeUndefined();
+  conn.close("test finished");
+});
+
+test("late merge results and queued automatic turns cannot reopen a settled thread", async () => {
+  resetForTests();
+  const { deliver } = await import("./host");
+  const { runPrompt } = await import("./store");
+  const id = "machine/pr-thread";
+  const conn = new AcpConnection(() => {
+    throw new Error("must not start a notice turn");
+  });
+  watchMachineConnection("machine", conn);
+  useApp.setState({
+    sessions: [{ id, cwd: "/tmp", status: "done" }],
+    threads: { [id]: { ...emptyThread(id, "/tmp"), loaded: true, running: true } },
+  });
+  const notice = `Pull request #7: Merged\n\n${PULL_MARK}`;
+  deliver(id, notice, "", "");
+  expect(useApp.getState().threads[id]?.queue).toEqual([]);
+  expect(await runPrompt(id, notice)).toBe("skipped");
+  expect(await runPrompt(id, "Continue", undefined, { continued: true })).toBe("skipped");
+  // A user's follow-up still enters the ordinary queue while the old turn finishes.
+  await runPrompt(id, "Please continue");
+  expect(useApp.getState().threads[id]?.queue.map((row) => row.text)).toEqual(["Please continue"]);
+  useApp.setState({ threads: { [id]: { ...emptyThread(id, "/tmp"), loaded: true } } });
+  expect(await runPrompt(id, notice)).toBe("skipped");
+  expect(await runPrompt(id, "Continue", undefined, { continued: true })).toBe("skipped");
+  deliver(id, notice, "", "");
+  expect(useApp.getState().threads[id]?.running).toBe(false);
+  conn.close("test finished");
+});

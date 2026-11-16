@@ -2,6 +2,7 @@
 // small fixed set, so a paired machine and this computer are told apart at a
 // glance. A chosen tint comes from the app's chart palette, never a literal.
 
+import type { MachineIcon } from "../state/machines";
 import {
   Box,
   CircleHelp,
@@ -12,8 +13,7 @@ import {
   Server,
   Smartphone,
   SquareTerminal,
-} from "lucide-react";
-import type { MachineIcon } from "../state/machines";
+} from "./icons";
 import { cx } from "./primitives";
 
 /** The glyph a machine draws, tinted from the app's series palette when it picked one. */

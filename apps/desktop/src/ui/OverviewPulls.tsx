@@ -4,14 +4,6 @@
 // sections, state/pullQueries.ts holds the reads). The first three rows show;
 // a thread with more work on the go lists the rest behind "Show N more".
 
-import {
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
-  MoreHorizontal,
-  Plus,
-} from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useMemo, useState } from "react";
 import { type PullRequest, pullErrorTitle } from "../acp/rustcode";
@@ -20,6 +12,14 @@ import { PULL_LIMIT, readPullList, usePullList } from "../state/pullQueries";
 import { pullState } from "../state/pulls";
 import { setDraft, showPanel, startNewThread } from "../state/store";
 import { relativeAge } from "../state/thread";
+import {
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  MoreHorizontal,
+  Plus,
+} from "./icons";
 import { OverviewSection, SectionButton, sectionIconButton } from "./OverviewSection";
 import { type PullPill, pullPill, pullsForBranches } from "./overview";
 import { cx, MenuContent, menuItem, menuSeparator, Pill } from "./primitives";

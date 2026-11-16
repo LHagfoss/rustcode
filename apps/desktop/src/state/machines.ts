@@ -68,8 +68,9 @@ export type MachineReason =
   | "rejected"
   | "dropped";
 
-/** One way to reach a machine: a LAN address, Tailscale, a VPN, or public. */
+/** One way to reach a machine: a LAN address, Tailscale, a VPN, SSH, or public. */
 export interface MachineRoute {
+  /** `lan`, `netbird`, `tailscale`, `zerotier`, `vpn`, `ssh` or `public`. */
   kind: string;
   address: string;
   /** The mesh product the address is on (`netbird`, `tailscale`, `zerotier`), when the machine named it. */
@@ -78,6 +79,13 @@ export interface MachineRoute {
   encrypted: boolean;
   /** What the last test of this route found, or null if it was never tested. */
   probe?: RouteProbe | null;
+  /** Turned off in its settings: shown, never dialled. */
+  off?: boolean;
+  /** Added by hand, so removing it is final; one the machine reports comes back. */
+  manual?: boolean;
+  /** An SSH route's `user@host` or alias, and RustCode's port there. */
+  sshDestination?: string | null;
+  sshGatewayPort?: number | null;
 }
 
 /** The last plain connect to one route: whether it answered and how fast. */
@@ -621,7 +629,15 @@ const ROUTE_NAME: Record<string, string> = {
   zerotier: "ZeroTier",
   vpn: "VPN",
   public: "Public",
+  ssh: "SSH",
 };
+
+/** A LAN route on this computer's own loopback: a port forwarded to the machine by something else. */
+export function isLocalForward(route: Pick<MachineRoute, "kind" | "address">): boolean {
+  if (route.kind !== "lan") return false;
+  const host = route.address.replace(/^\[/, "").replace(/\]?(:\d+)?$/, "");
+  return host === "localhost" || host === "::1" || /^127\./.test(host);
+}
 
 /**
  * The network a route travels over, as people know it: `LAN`, `NetBird`,
@@ -631,6 +647,7 @@ const ROUTE_NAME: Record<string, string> = {
 export function routeName(route: MachineRoute | null | undefined, kind?: string): string {
   const wire = route?.provider || route?.kind || kind;
   if (!wire) return "No route saved";
+  if (route && isLocalForward(route)) return "Forwarded port";
   return ROUTE_NAME[wire] ?? ROUTE_NAME[kind ?? ""] ?? wire;
 }
 
@@ -641,6 +658,8 @@ export function routeName(route: MachineRoute | null | undefined, kind?: string)
  */
 export function routeLabel(route: MachineRoute | null | undefined): string {
   if (!route) return "No route saved";
+  // Whatever forwards the port decides; this computer cannot tell.
+  if (isLocalForward(route)) return "Forwarded port";
   return `${routeName(route)} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
 }
 
@@ -951,13 +970,13 @@ export async function startMachines(): Promise<void> {
  * instead of a spinner. A machine that is away must never hold the page: the
  * shell reads and writes its own files, so a few seconds is generous.
  */
-const SHELL_READ_MS = 10_000;
+export const SHELL_READ_MS = 10_000;
 /** Bonjour browses for a few seconds; the rest is the overlay rows. */
 const DISCOVER_MS = 20_000;
 /** `rustcode server status --json` starts a process. */
 const SERVER_STATUS_MS = 15_000;
 /** One task per machine runs in parallel, each with its own connect timeout. */
-const PROBE_MS = 45_000;
+export const PROBE_MS = 45_000;
 
 /** Read the machines and their live state from the shell. */
 export async function refreshMachines(): Promise<void> {
@@ -1825,6 +1844,7 @@ export async function connectOverSsh(
   target: string,
   allowInstall: boolean,
   mutual = false,
+  via: SshVia = "auto",
 ): Promise<boolean> {
   const typed = target.trim();
   if (!typed) {
@@ -1847,6 +1867,7 @@ export async function connectOverSsh(
       identity: null,
       allowInstall,
       name: null,
+      via,
     });
     useMachines.setState((state) => ({
       machines: [...state.machines.filter((saved) => saved.id !== machine.id), machine],
@@ -1975,6 +1996,9 @@ export async function probeMachineRoutes(machine?: Pick<Machine, "id">): Promise
     return false;
   }
 }
+
+/** How a machine paired over SSH is reached: its network address with SSH as the fallback, or SSH only. */
+export type SshVia = "auto" | "ssh";
 
 /** Pause new threads on a machine, or let them start there again. */
 export async function setMachinePaused(machine: Pick<Machine, "id">, paused: boolean): Promise<void> {

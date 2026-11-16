@@ -4,7 +4,6 @@
 // one action that settles it. Dismiss puts it away until the next break; the
 // inbox keeps a row that brings the same card back.
 
-import { ArrowUpRight, CircleCheck, Hand, RotateCw, Sparkles, X } from "lucide-react";
 import { useEffect } from "react";
 import { type PermissionRequest, projectName } from "../acp/types";
 import { useRecap } from "../state/inboxRead";
@@ -21,6 +20,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { ArrowUpRight, CircleCheck, Hand, RotateCw, Sparkles, X } from "./icons";
 import { ProjectMark } from "./ProjectMark";
 import { ChromeButton, cx, Pill } from "./primitives";
 

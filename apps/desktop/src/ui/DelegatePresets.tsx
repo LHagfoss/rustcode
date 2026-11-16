@@ -5,7 +5,6 @@
 // (rustcode/engine/src/orchestration/presets.rs). Rules live in
 // state/delegatePresets.ts.
 
-import { Plus } from "lucide-react";
 import { useState } from "react";
 import {
   type DelegatePreset,
@@ -19,6 +18,7 @@ import {
 import { PERMISSION_MODES } from "../state/permissions";
 import { useScopedSetting } from "../state/settingsScope";
 import { useApp } from "../state/store";
+import { Plus } from "./icons";
 import { cx, noTextHelpers } from "./primitives";
 import { Action, fieldClass, Group, Row, Select } from "./settingsKit";
 

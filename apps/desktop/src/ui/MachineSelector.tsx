@@ -8,7 +8,6 @@
 // exists already has its machine, so this is the new-thread strip's own control. The composer
 // mounts it and nothing else (`ui/Composer.tsx`).
 
-import { Check, ChevronDown, Plus, Settings2 } from "lucide-react";
 import { appPlatform } from "../lib/platform";
 import {
   type Machine,
@@ -24,6 +23,7 @@ import {
 } from "../state/machines";
 import { openSettings, setNewThreadHost, useApp } from "../state/store";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
+import { Check, ChevronDown, Plus, Settings2 } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { type MachineChoice, machineChoices } from "./machineLabels";
 import { cx } from "./primitives";

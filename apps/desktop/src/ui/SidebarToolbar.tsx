@@ -6,7 +6,6 @@
 // A filter that hides threads always says so: "Only <project>" shows as a chip under the field,
 // with its own clear button, so a short list is never a mystery.
 
-import { Check, ListFilter, SquarePen, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import type { KeyboardEvent, Ref } from "react";
 import { projectName } from "../acp/types";
@@ -19,7 +18,17 @@ import {
   useSidebarSort,
 } from "../state/sidebarPrefs";
 import { startNewThread, toast, useApp, useShortcutHint } from "../state/store";
-import { cx, MenuContent, MenuSearchField, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
+import { Check, ListFilter, SquarePen, X } from "./icons";
+import {
+  cx,
+  MenuContent,
+  MenuSearchField,
+  menuItem,
+  menuLabel,
+  menuSeparator,
+  Pill,
+  Tooltip,
+} from "./primitives";
 
 const TOOL_BUTTON =
   "relative inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill data-[state=open]:text-fg";
@@ -52,6 +61,11 @@ export function SidebarToolbar({
   };
   return (
     <div className="flex shrink-0 flex-col gap-1.5 px-3 pb-2">
+      <Pill size="lg" aria-label="New thread" className="w-full" onClick={() => startNewThread()}>
+        <SquarePen size={14} />
+        <span className="flex-1 text-left">New thread</span>
+        {newKey && <span className="text-caption text-fg-faint">{newKey}</span>}
+      </Pill>
       <div className="flex items-center gap-1">
         <MenuSearchField
           size="sm"
@@ -65,16 +79,6 @@ export function SidebarToolbar({
           placeholder="Search threads"
         />
         <ViewMenu filtering={filtering} />
-        <Tooltip label={newKey ? `New thread (${newKey})` : "New thread"}>
-          <button
-            type="button"
-            aria-label="New thread"
-            className={TOOL_BUTTON}
-            onClick={() => startNewThread()}
-          >
-            <SquarePen size={14} />
-          </button>
-        </Tooltip>
       </div>
       {filtering && (
         <div className="flex min-w-0 items-center">

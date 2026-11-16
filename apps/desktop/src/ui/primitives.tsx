@@ -1,7 +1,6 @@
 // Small building blocks shared by every view, matching the SwiftUI app's
 // ChromeButton, ToolbarCluster, PillButtonStyle and mini spinner.
 
-import { Check, ChevronDown, CircleAlert, Search, TriangleAlert, X } from "lucide-react";
 import {
   ContextMenu as RadixContextMenu,
   DropdownMenu as RadixDropdownMenu,
@@ -24,6 +23,7 @@ import { useHoverTip } from "../lib/hover";
 import { useIntentRest } from "../lib/intent";
 import { quickActionTarget } from "../lib/menuNavigation";
 import { errorText, toast } from "../state/store";
+import { Check, ChevronDown, CircleAlert, Search, TriangleAlert, X } from "./icons";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");

@@ -52,3 +52,18 @@ export function byProjectName(groups: ProjectGroup[]): ProjectGroup[] {
       (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
   );
 }
+
+/** The working folder, including a worktree rather than its parent repository. */
+export function threadFolder(session: Pick<SessionSummary, "cwd" | "worktree">): string {
+  return session.worktree?.path || session.cwd || "";
+}
+
+/** Pairing alone does not make a local-only filtered list a mixed list. */
+export function spansMachines(items: readonly Pick<SessionSummary, "host">[]): boolean {
+  return new Set(items.map(hostOf)).size > 1;
+}
+
+/** Count threads in the active filter once, even when they have several inbox items. */
+export function filteredNeedsCount(items: readonly { threadId: string }[], ids: ReadonlySet<string>): number {
+  return new Set(items.filter((item) => ids.has(item.threadId)).map((item) => item.threadId)).size;
+}

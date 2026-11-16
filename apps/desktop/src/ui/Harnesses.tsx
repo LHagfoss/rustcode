@@ -2,7 +2,6 @@
 // onboarding and Settings › Harnesses (docs/harnesses.md). RustCode never
 // signs in for a harness: "Sign in" shows the harness's own login command.
 
-import { Check, ChevronRight, Minus, Plus, SquareTerminal, X } from "lucide-react";
 import { Popover } from "radix-ui";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { effortLabel, type Harness, type HarnessAccount, type HarnessSnapshot } from "../acp/types";
@@ -41,6 +40,7 @@ import {
 } from "../state/store";
 import { HarnessCommandFields } from "./AddHarness";
 import { HarnessIcon } from "./HarnessIcon";
+import { Check, ChevronRight, Minus, Plus, SquareTerminal, X } from "./icons";
 import { CopyButton } from "./Markdown";
 import { cx, noTextHelpers, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, Chip, Choice, ErrorDetails, PathText, Select, type SelectOption } from "./settingsKit";

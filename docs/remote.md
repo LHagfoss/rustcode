@@ -778,6 +778,13 @@ Machines › **Connect over SSH**, type `lars@box` or an alias from
 rustcode machines add-ssh lars@box [--port 2222] [--identity ~/.ssh/key] [--yes | --no-install] [--mutual | --one-way] [--json]
 ```
 
+**Connect through** chooses how the machine is reached afterwards:
+**Automatic** (the default) pairs over its network address when one answers
+(the same LAN, NetBird or Tailscale) and saves an [SSH route](#ssh-routes) as
+the fallback; when none answers, or the server there listens on its own
+loopback only, it pairs and stays on SSH. **SSH only** pairs through SSH and
+saves the network addresses the machine reports turned off.
+
 By default this pairs **one way**: this computer can see and run threads on
 `box`, and `box` cannot reach this computer. Choose **both ways** to let `box`
 reach this one too ([Mutual access](#mutual-access)).
@@ -788,7 +795,7 @@ reach this one too ([Mutual access](#mutual-access)).
 | Checking RustCode | a POSIX login shell (`sh -l -s`) reports `uname` and every `rustcode` with its version (`~/.rustcode/bin` too); with no POSIX shell, Windows PowerShell does | *RustCode has no build for Linux on riscv64*, or no usable shell |
 | Installing RustCode X.Y.Z | only when it is missing or older than this computer's: this release's `install.sh --no-app --version X.Y.Z --bin-dir ~/.rustcode/bin` (or `install.ps1 -NoApp -Version X.Y.Z`) sent over SSH's standard input, checked against the release `SHA256SUMS` as always. The app's checkbox, `--yes` or the terminal prompt allow it; `--no-install` and a run with no terminal refuse | the installer's last line |
 | Starting its server | `rustcode up --yes --json` there | what `up` said |
-| Pairing | the connect code from that JSON, redeemed here over the routes it lists | *box is reachable over SSH, but not on RustCode's port (…). Put both computers on the same network or a VPN such as NetBird or Tailscale.* The open code is withdrawn there |
+| Pairing | the connect code from that JSON, redeemed here over the routes it lists, else through SSH (`ssh -W`) | *box is reachable over SSH, but pairing through it failed: …*, with what its network address answered. The open code is withdrawn there |
 
 - Every command uses this computer's own `ssh`, its config and agent, with
   `BatchMode=yes`, `ConnectTimeout=10`, `ServerAliveInterval=15`,
@@ -799,10 +806,7 @@ reach this one too ([Mutual access](#mutual-access)).
   passed after `--`. Scripts go on standard input or as an encoded PowerShell
   command; the only words put in a remote command line are the version and the
   path the remote reported, quoted for its shell.
-- **The pairing secret travels inside SSH only.** Afterwards the two talk over
-  the gateway's routes like any paired machines, so a host reachable over SSH
-  alone (a VPS with only a public address) cannot be paired yet: that needs
-  SSH as a route of its own.
+- **The pairing secret travels inside SSH only**, whichever route pairs.
 - Nothing is stopped or removed. To take the service off that computer:
   `ssh box rustcode server uninstall`.
 - On Windows the server runs as the logon task in the user's desktop session,
@@ -812,6 +816,35 @@ reach this one too ([Mutual access](#mutual-access)).
   `{"connected": {...}}` or `{"error": {"step", "kind", "message"}}`.
   In the mock, a host containing `denied` or `novpn` shows the two common
   failures.
+
+#### SSH routes
+
+An SSH route reaches a machine's gateway through this computer's own `ssh`, so
+a VPS with only a public address, or a server whose gateway listens on its own
+loopback (`remote.bind = "127.0.0.1"`), works with nothing else installed.
+For each connection the client listens on a free port of its own loopback and
+runs `ssh -W 127.0.0.1:<gateway port> <host>` with the options above plus
+`ExitOnForwardFailure=yes` (`rustcode/client/src/tunnel.rs`); the WebSocket
+dials that port as it dials a LAN address. Each connection owns its `ssh`
+process, which ends with it, so no tunnel is left running.
+
+- The race tries SSH last: LAN first, overlays after a second, SSH a second
+  after them, with a 30-second deadline instead of 5 when an SSH route is in
+  it. A failure names what `ssh` said (sign-in refused, host key, nothing on
+  RustCode's port there).
+- The route is saved as `ssh://<host>` with the host, SSH port, key and
+  gateway port. The gateway sees a loopback connection; the app labels it
+  **SSH · Encrypted**.
+- Settings › Machines › *machine* › **Routes** › **Add route** adds an SSH
+  route (`user@host` or a `~/.ssh/config` alias, and RustCode's port there) or
+  an address, and tests it. Each route has a switch (an off route is never
+  dialled, and stays off when the machine reports it again; the last route on
+  stays on) and Remove (a route the machine reports comes back on its next
+  connection). The shell's `machines_route_add`, `machines_route_remove` and
+  `machines_route_set_off`.
+- A machine reports its own addresses on every connection, so after NetBird
+  or Tailscale is up on both computers its address appears under Routes and is
+  raced before SSH, with no pairing again.
 
 #### Mutual access
 
@@ -1276,9 +1309,8 @@ access work as on the other systems. What differs:
   the app still runs it, answers "session is already active": a live session
   cannot be opened twice. Close the thread in the app and open it again.
 - No push notifications.
-- `rustcode machines` reaches a machine over its WebSocket only: no SSH route
-  (SSH only sets a machine up and pairs it, [Connect over SSH](#connect-over-ssh)),
-  no relay, and a route list is not reordered or learned yet (steps 1.8 and
+- `rustcode machines` reaches a machine over its WebSocket, directly or through
+  an [SSH route](#ssh-routes); there is no relay, and a route list is not reordered or learned yet (steps 1.8 and
   1.11 of the machine network plan). Connect over SSH pairs one way unless *Both ways* is chosen
   ([Mutual access](#mutual-access)); a connect code or an address request
   still pairs one way, and agents cannot start a pairing yet (no
@@ -1324,13 +1356,17 @@ Client requests and notifications are restricted to these exact methods:
 - `_rustcode/threads/search`, `_rustcode/data/activity`, `_rustcode/project/read`,
   `_rustcode/project/clone` and `_rustcode/worktrees/state`: what an agent on the
   paired computer reads and does here (`docs/orchestrator.md` › Machines)
+- `_rustcode/project/browse` and `_rustcode/project/create`: the folders in one
+  folder, and a new project folder with `git init`, for the picker's Browse
+  Folders… on a machine with no project yet (`docs/desktop.md`). Neither
+  reaches past what `session/new` in any folder already can.
 
 The only allowed prefixes are `session/`, `_rustcode/pulls` and
 `_rustcode/capabilities` (which includes adding an MCP server, that is, running
 a command on this machine: consistent with "can see and run all threads").
 Everything else is denied, including provider credentials and login, pairing
-and remote management, `_rustcode/server/*`, data-store SQL and usage, project
-creation and worktree handoff. Denied requests receive a JSON-RPC
+and remote management, `_rustcode/server/*`, data-store SQL and usage,
+and worktree handoff. Denied requests receive a JSON-RPC
 error with the same `id`, numeric code `-32601` and
 `data: {"code":"unauthorized_access"}`. Denied notifications are dropped.
 JSON-RPC responses pass through only for an outstanding server request ID,

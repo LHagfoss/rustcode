@@ -20,6 +20,15 @@ const press = (key: string, mods: Partial<KeyEventLike> = {}): KeyEventLike => (
 const cmd = (key: string, mods: Partial<KeyEventLike> = {}) => press(key, { metaKey: true, ...mods });
 
 describe("shortcut bindings", () => {
+  test("Cmd/Ctrl+W always settles the current thread", () => {
+    expect(commandFor({}, cmd("w"))).toBe("settle-current-thread");
+    expect(commandFor({ "settle-current-thread": "mod+x" }, cmd("w"))).toBe("settle-current-thread");
+    expect(commandFor({}, cmd("w", { shiftKey: true }))).toBeNull();
+    for (const platform of ["windows", "linux"] as const) {
+      expect(bindingFromEvent(press("w", { ctrlKey: true }), platform)).toBe("mod+w");
+    }
+  });
+
   test("reads a keydown as the table's canonical text", () => {
     expect(bindingFromEvent(cmd("b"))).toBe("mod+b");
     expect(bindingFromEvent(press("b", { ctrlKey: true }))).toBeNull();

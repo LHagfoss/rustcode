@@ -86,6 +86,9 @@ pub fn run() {
             machines::machines_probe,
             machines::machines_retry,
             machines::machines_set_paused,
+            machines::machines_route_add,
+            machines::machines_route_remove,
+            machines::machines_route_set_off,
             machines::machines_set_display_name,
             machines::machines_apply_fleet,
             machines::machines_set_icon,
@@ -147,6 +150,22 @@ pub fn run() {
             webview::webview_blur,
         ])
         .setup(|app| {
+            // Release Cmd/Ctrl+W to Settle, preserving the native editing and app menus.
+            // Tauri puts Close in both File and Window.
+            let menu = tauri::menu::Menu::default(app.handle())?;
+            let close_text = tauri::menu::PredefinedMenuItem::close_window(app, None)?.text()?;
+            for item in menu.items()? {
+                if let Some(submenu) = item.as_submenu() {
+                    for child in submenu.items()? {
+                        if let Some(predefined) = child.as_predefined_menuitem() {
+                            if predefined.text()? == close_text {
+                                submenu.remove(&child)?;
+                            }
+                        }
+                    }
+                }
+            }
+            app.set_menu(menu)?;
             // The engine starts with the app, in parallel with the webview loading the UI.
             app.state::<EngineState>().prestart();
             // An AppImage's bundled binary lives in a mount that goes away with the app, so the

@@ -1,4 +1,3 @@
-import { CircleCheck, CircleDashed, CircleDot, Copy, Pin, PinOff } from "lucide-react";
 import { type ContextMenu, DropdownMenu } from "radix-ui";
 import { copyThreadLink } from "../state/deepLinks";
 import {
@@ -10,6 +9,7 @@ import {
   togglePin,
   useApp,
 } from "../state/store";
+import { CircleCheck, CircleDashed, CircleDot, Copy, Pin, PinOff } from "./icons";
 import { MenuQuickActions } from "./primitives";
 
 /** The same frequent actions in a thread row's dropdown, right-click menu and header. */

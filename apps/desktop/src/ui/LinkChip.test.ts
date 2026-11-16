@@ -46,7 +46,7 @@ describe("a link chip", () => {
     // The shell has no metadata in a test, and a favicon that will not decode takes the same path
     // (ui/LinkChip.tsx): the icon follows the text's colour rather than a site's own image.
     const out = drawn("https://example.com/a");
-    expect(out).toContain("lucide-globe");
+    expect(out).toContain('data-icon="Globe"');
     expect(out).not.toContain("<img");
   });
 

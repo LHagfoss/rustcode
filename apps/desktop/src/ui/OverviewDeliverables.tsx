@@ -3,10 +3,10 @@
 // draws the sections, ui/overview.ts finds them). A tile grid by default, a list
 // when the reader asks for one, so a thread with eight screenshots stays short.
 
-import { FileText, Image as ImageIcon, LayoutGrid, List } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { revealPath } from "../lib/native";
 import type { TranscriptItem } from "../state/thread";
+import { FileText, Image as ImageIcon, LayoutGrid, List } from "./icons";
 import { MarkdownImage } from "./MarkdownMedia";
 import { OverviewSection, SectionButton } from "./OverviewSection";
 import {

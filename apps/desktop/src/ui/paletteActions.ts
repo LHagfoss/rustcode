@@ -3,24 +3,6 @@
 // options, pinning and snoozing the open thread, and the Settled shelf. Plain data over the
 // store, so the tests can read the actions without drawing the palette.
 
-import {
-  Archive,
-  ArrowDownUp,
-  BarChart3,
-  Clock,
-  Filter,
-  FolderPlus,
-  Gauge,
-  GitPullRequest,
-  Layers,
-  type LucideIcon,
-  Pencil,
-  Pin,
-  PinOff,
-  Play,
-  Rows3,
-  Search,
-} from "lucide-react";
 import type { PullRequest } from "../acp/rustcode";
 import { projectName, type SessionSummary } from "../acp/types";
 import { pickFolder } from "../lib/native";
@@ -54,6 +36,24 @@ import {
 } from "../state/store";
 import { idleSettled } from "../state/thread";
 import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
+import {
+  Archive,
+  ArrowDownUp,
+  BarChart3,
+  Clock,
+  Filter,
+  FolderPlus,
+  Gauge,
+  GitPullRequest,
+  Layers,
+  type LucideIcon,
+  Pencil,
+  Pin,
+  PinOff,
+  Play,
+  Rows3,
+  Search,
+} from "./icons";
 import { openProjectActionsEditor, runProjectAction } from "./ProjectActions";
 
 export interface PaletteAction {

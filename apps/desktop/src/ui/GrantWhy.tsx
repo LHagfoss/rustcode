@@ -2,10 +2,10 @@
 // `permitted`): only a named account to spend on asks then. Its own file, so the card in
 // Links.tsx gains one line.
 
-import { Info } from "lucide-react";
 import type { GrantAsk } from "../state/orchestration";
 import { ACCOUNT_PROMPT_WHY, delegationAllowed } from "../state/permissions";
 import { permissionModeOf, useApp } from "../state/store";
+import { Info } from "./icons";
 
 export function GrantWhy({ grant }: { grant: GrantAsk }) {
   const covered = useApp((s) => delegationAllowed(permissionModeOf(s, grant.caller), grant.kind));

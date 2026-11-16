@@ -6,6 +6,8 @@
 
 import { BUILTIN_THEMES } from "../lib/themes";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
+import { mockBrowse, mockCreate } from "./mockFolders";
+import { mockRouteCommand } from "./mockMachineRoutes";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
@@ -3759,20 +3761,10 @@ export class MockEngine {
           default_branch: "main",
         };
       }
-      case "_rustcode/project/create": {
-        const path = str(obj(params)?.path) || "/Users/me/code/new-project";
-        const init = obj(params)?.init !== false;
-        return {
-          path,
-          name: path.split("/").filter(Boolean).pop() ?? path,
-          is_git: init,
-          remote: null,
-          branch: init ? "main" : null,
-          default_branch: init ? "main" : null,
-          created: true,
-          initialized: init,
-        };
-      }
+      case "_rustcode/project/create":
+        return mockCreate(obj(params) ?? {});
+      case "_rustcode/project/browse":
+        return mockBrowse(obj(params) ?? {});
       case "_rustcode/project/clone": {
         const ask = obj(params) ?? {};
         const parent = str(ask.parent) || "/Users/me/code";
@@ -7079,10 +7071,6 @@ export class MockTransport implements Transport {
       });
       return this.machineList;
     }
-    if (command === "machines_remove") {
-      this.machineList = this.machineList.filter((machine) => machine.id !== String(args.id));
-      return null;
-    }
     if (command === "app_version") return "1.28.0";
     if (command === "server_service_status") return mockServerService(this.serverInstalled);
     if (command === "server_service_install") {
@@ -7090,6 +7078,10 @@ export class MockTransport implements Transport {
       return mockServerService(true);
     }
     if (command === "server_link_path") return mockServerService(this.serverInstalled);
+    if (command === "machines_remove" || command.startsWith("machines_route_")) {
+      this.machineList = mockRouteCommand(command, args, this.machineList);
+      return command === "machines_remove" ? null : this.machineList;
+    }
     if (command === "machines_set_paused") {
       this.machineList = this.machineList.map((machine) =>
         machine.id === String(args.id) ? { ...machine, paused: args.paused === true } : machine,

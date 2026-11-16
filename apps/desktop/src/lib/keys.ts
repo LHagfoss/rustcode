@@ -32,6 +32,13 @@ export interface AppCommand {
 }
 
 export const APP_COMMANDS: readonly AppCommand[] = [
+  {
+    id: "settle-current-thread",
+    label: "Settle this thread",
+    binding: "mod+w",
+    group: "Threads",
+    remappable: false,
+  },
   { id: "new-thread", label: "New thread", binding: "mod+n", group: "Threads", remappable: true },
   {
     id: "thread-folder",
@@ -326,7 +333,7 @@ export function commandHint(binding: string, command?: AppCommand): string {
   return command?.display ?? formatBinding(binding);
 }
 
-/** Combos the system or the app's own menu owns; a remap may not take them. */
+/** System shortcuts and the fixed Settle shortcut; a remap may not take them. */
 export const RESERVED_BINDINGS: readonly string[] = ["mod+q", "mod+w", "mod+h", "mod+m", "mod+tab"];
 
 /** Editing keys owned by text fields; an app shortcut would consume them first. */
@@ -447,6 +454,7 @@ export function bindingProblem(
 export function commandFor(overrides: Readonly<Record<string, string>>, event: KeyEventLike): string | null {
   const pressed = bindingFromEvent(event);
   if (!pressed) return null;
+  if (pressed === "mod+w") return "settle-current-thread";
   const bindings = bindingsFor(overrides);
   const command = CHANGEABLE_COMMANDS.find((c) => !c.list && bindings[c.id] === pressed);
   return command?.id ?? null;
