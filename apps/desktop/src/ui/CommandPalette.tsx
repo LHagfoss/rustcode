@@ -19,6 +19,7 @@ import {
   PanelRight,
   RefreshCw,
   Search,
+  Sparkles,
   SquarePen,
   SquareTerminal,
   Sun,
@@ -53,6 +54,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { createSkillWithAgent } from "../state/threadOpen";
 import {
   matches,
   type PaletteAction,
@@ -182,6 +184,14 @@ export function baseActions(): PaletteAction[] {
               ]),
         ]
       : []),
+    {
+      id: "create-skill",
+      label: "Create a skill with an agent",
+      detail: "Starts a thread that writes a SKILL.md with you",
+      icon: Sparkles,
+      words: "new skill capability make write",
+      run: () => createSkillWithAgent(),
+    },
     {
       id: "new-worktree",
       label: "New thread in a worktree",

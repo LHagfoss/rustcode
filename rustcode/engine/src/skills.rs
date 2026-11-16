@@ -63,6 +63,7 @@ pub fn discover_all_skills() -> Vec<SkillMetadata> {
 const BUILTIN_SKILLS: &[&str] = &[
     include_str!("skills_builtin/smart-ui.md"),
     include_str!("skills_builtin/rustcode-themes.md"),
+    include_str!("skills_builtin/create-skill.md"),
 ];
 
 /// The directory a built-in skill reports: not on disk, named so `/skills`
@@ -1154,6 +1155,28 @@ mod tests {
         }
         for command in ["theme new", "theme show", "theme validate", "theme set"] {
             assert!(content.contains(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn builtin_create_skill_is_listed_and_names_the_mcp_action() {
+        let skills = with_builtin_skills(Vec::new());
+        let create = skills
+            .iter()
+            .find(|skill| skill.name == "create-skill")
+            .unwrap();
+        assert_eq!(create.path, builtin_skill_path("create-skill"));
+        let content = builtin_skill_content("create-skill").unwrap();
+        let tokens = crate::network::compaction::estimate_tokens(&content);
+        assert!(tokens < 800, "the create-skill skill is {tokens} tokens");
+        for name in [
+            "~/.config/rustcode/skills",
+            ".rustcode/skills",
+            "manage_capabilities",
+            "action: \"create\"",
+            "rustcode skill list",
+        ] {
+            assert!(content.contains(name), "the skill names {name}");
         }
     }
 
