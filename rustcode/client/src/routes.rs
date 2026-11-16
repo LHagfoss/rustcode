@@ -40,6 +40,10 @@ pub const LAN_GRACE: Duration = Duration::from_secs(1);
 /// The whole race. Past this, no route is still worth the wait.
 pub const RACE_DEADLINE: Duration = Duration::from_secs(5);
 
+/// The whole race when it has an SSH route: two graces before it starts, then
+/// a sign-in, the forward and the handshake.
+pub const SSH_RACE_DEADLINE: Duration = Duration::from_secs(30);
+
 /// How a race spends its time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RaceSettings {
@@ -264,62 +268,66 @@ where
 /// Race the routes and return the first that dials, within the settings.
 ///
 /// LAN routes start together. When there is no LAN route, or none answers
-/// inside [`RaceSettings::lan_grace`], the overlay routes start too. A public
-/// route is never raced: the caller refuses it before a credential travels.
+/// inside [`RaceSettings::lan_grace`], the overlay routes start too, and the
+/// SSH routes one grace after them (each signs in with a process of its own,
+/// so it is the fallback, not a contender). A race with an SSH route gets at
+/// least [`SSH_RACE_DEADLINE`]. A public route is never raced: the caller
+/// refuses it before a credential travels.
 pub async fn race<T, F, Fut>(routes: &[Route], settings: &RaceSettings, dial: F) -> Race<T>
 where
     F: Fn(Route) -> Fut + Sync,
     Fut: Future<Output = Result<T, DialFailure>> + Send,
 {
     let ordered = ordered(routes);
-    let mut lan: VecDeque<Route> = ordered
-        .iter()
-        .filter(|route| route.kind == RouteKind::Lan)
-        .cloned()
-        .collect();
-    let mut overlay: VecDeque<Route> = ordered
-        .iter()
-        .filter(|route| route.kind != RouteKind::Lan && route.kind != RouteKind::Public)
-        .cloned()
-        .collect();
+    let wave = |kinds: &[RouteKind]| -> VecDeque<Route> {
+        ordered
+            .iter()
+            .filter(|route| kinds.contains(&route.kind))
+            .cloned()
+            .collect()
+    };
+    // Waves in order; an empty one is skipped, so the next starts in its place.
+    let mut waves: VecDeque<VecDeque<Route>> = [
+        wave(&[RouteKind::Lan]),
+        wave(&[RouteKind::Vpn, RouteKind::Tailscale]),
+        wave(&[RouteKind::Ssh]),
+    ]
+    .into_iter()
+    .filter(|wave| !wave.is_empty())
+    .collect();
 
-    let had_lan = !lan.is_empty();
     let start = Instant::now();
-    let deadline = start + settings.deadline;
-    let overlay_due = start + settings.lan_grace;
-    let mut overlay_started = !had_lan;
+    let deadline = if routes.iter().any(|route| route.kind == RouteKind::Ssh) {
+        start + settings.deadline.max(SSH_RACE_DEADLINE)
+    } else {
+        start + settings.deadline
+    };
     let mut failures: Vec<RouteFailure> = Vec::new();
     let mut in_flight: FuturesUnordered<DialFuture<'_, T>> = FuturesUnordered::new();
-
-    for route in lan.drain(..) {
-        in_flight.push(dial_one(&dial, route));
-    }
-    if overlay_started {
-        for route in overlay.drain(..) {
-            in_flight.push(dial_one(&dial, route));
-        }
-    }
+    let mut next_wave = start;
 
     loop {
-        if in_flight.is_empty() && (overlay_started || overlay.is_empty()) {
-            break;
-        }
         let now = Instant::now();
-        let wake = if overlay_started {
-            deadline
-        } else {
-            overlay_due.min(deadline)
-        };
-        if now >= wake {
-            if !overlay_started {
-                overlay_started = true;
-                for route in overlay.drain(..) {
+        if !waves.is_empty() && now >= next_wave {
+            if let Some(wave) = waves.pop_front() {
+                for route in wave {
                     in_flight.push(dial_one(&dial, route));
                 }
-                continue;
             }
+            next_wave = now + settings.lan_grace;
+            continue;
+        }
+        if in_flight.is_empty() && waves.is_empty() {
             break;
         }
+        if now >= deadline {
+            break;
+        }
+        let wake = if waves.is_empty() {
+            deadline
+        } else {
+            next_wave.min(deadline)
+        };
         tokio::select! {
             biased;
             Some((route, result)) = in_flight.next() => match result {
@@ -334,16 +342,7 @@ where
                     refusal: failure.refusal,
                 }),
             },
-            _ = tokio::time::sleep_until(wake) => {
-                if !overlay_started {
-                    overlay_started = true;
-                    for route in overlay.drain(..) {
-                        in_flight.push(dial_one(&dial, route));
-                    }
-                } else {
-                    break;
-                }
-            }
+            _ = tokio::time::sleep_until(wake) => {}
         }
     }
     Race::Lost { failures }
@@ -518,6 +517,67 @@ mod tests {
             }
             other => panic!("expected a LAN win, got {other:?}"),
         }
+    }
+
+    fn ssh_route(destination: &str) -> Route {
+        Route::ssh(crate::registry::SshRoute {
+            destination: destination.to_owned(),
+            port: None,
+            identity: None,
+            gateway_port: 17879,
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ssh_starts_one_grace_after_the_overlay_and_gets_its_longer_deadline() {
+        let routes = [ssh_route("lars@box"), overlay("100.90.16.237:17879", None)];
+        let start = Instant::now();
+        let outcome = race(
+            &routes,
+            &settings(),
+            dialer(HashMap::from([
+                (
+                    "100.90.16.237:17879".into(),
+                    (
+                        Duration::from_millis(10),
+                        Err(DialFailure::unreachable("refused")),
+                    ),
+                ),
+                // Slower than the plain race's deadline: an SSH sign-in.
+                ("ssh://lars@box".into(), (RACE_DEADLINE, Ok("ssh"))),
+            ])),
+        )
+        .await;
+        match outcome {
+            Race::Won {
+                value, failures, ..
+            } => {
+                assert_eq!(value, "ssh");
+                assert_eq!(failures.len(), 1, "the overlay was tried first");
+            }
+            other => panic!("expected SSH to win, got {other:?}"),
+        }
+        assert!(
+            start.elapsed() >= LAN_GRACE + RACE_DEADLINE,
+            "SSH waited a grace"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_ssh_route_alone_starts_at_once() {
+        let routes = [ssh_route("box")];
+        let start = Instant::now();
+        let outcome = race(
+            &routes,
+            &settings(),
+            dialer(HashMap::from([(
+                "ssh://box".into(),
+                (Duration::from_millis(30), Ok("ssh")),
+            )])),
+        )
+        .await;
+        assert!(matches!(outcome, Race::Won { value: "ssh", .. }));
+        assert!(start.elapsed() < LAN_GRACE);
     }
 
     #[tokio::test(start_paused = true)]

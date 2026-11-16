@@ -328,12 +328,15 @@ fn connection_route(route: &Route) -> ConnectionRoute {
             }),
         ),
         RouteKind::Public => (ConnectionPath::Other, None),
+        // `ssh -W` connects from the machine itself: its gateway sees its own
+        // loopback, and SSH encrypts the way there.
+        RouteKind::Ssh => (ConnectionPath::Loopback, None),
     };
     ConnectionRoute {
         path,
         provider,
         local_address: route.address.clone(),
-        encrypted: path == ConnectionPath::Overlay,
+        encrypted: path == ConnectionPath::Overlay || route.kind == RouteKind::Ssh,
     }
 }
 
@@ -825,6 +828,7 @@ async fn add_ssh(
         &connector,
         target,
         ssh::Options {
+            via: ssh::Via::Auto,
             approve_install: &mut approve,
             progress: &mut progress,
         },

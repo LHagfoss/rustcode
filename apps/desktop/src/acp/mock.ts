@@ -6,6 +6,7 @@
 
 import { BUILTIN_THEMES } from "../lib/themes";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
+import { mockRouteCommand } from "./mockMachineRoutes";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
@@ -7079,10 +7080,6 @@ export class MockTransport implements Transport {
       });
       return this.machineList;
     }
-    if (command === "machines_remove") {
-      this.machineList = this.machineList.filter((machine) => machine.id !== String(args.id));
-      return null;
-    }
     if (command === "app_version") return "1.28.0";
     if (command === "server_service_status") return mockServerService(this.serverInstalled);
     if (command === "server_service_install") {
@@ -7090,6 +7087,10 @@ export class MockTransport implements Transport {
       return mockServerService(true);
     }
     if (command === "server_link_path") return mockServerService(this.serverInstalled);
+    if (command === "machines_remove" || command.startsWith("machines_route_")) {
+      this.machineList = mockRouteCommand(command, args, this.machineList);
+      return command === "machines_remove" ? null : this.machineList;
+    }
     if (command === "machines_set_paused") {
       this.machineList = this.machineList.map((machine) =>
         machine.id === String(args.id) ? { ...machine, paused: args.paused === true } : machine,

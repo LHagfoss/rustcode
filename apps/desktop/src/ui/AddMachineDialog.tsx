@@ -34,6 +34,7 @@ import {
   platformIcon,
   platformName,
   routeName,
+  type SshVia,
   useMachines,
   versionSkew,
 } from "../state/machines";
@@ -437,10 +438,11 @@ function SshPane() {
   const [target, setTarget] = useState("");
   const [allowInstall, setAllowInstall] = useState(true);
   const [mutual, setMutual] = useState(false);
+  const [via, setVia] = useState<SshVia>("auto");
   const running = run?.running === true;
   const connect = () => {
     if (running || !target.trim()) return;
-    void connectOverSsh(target, allowInstall, mutual).then((paired) => {
+    void connectOverSsh(target, allowInstall, mutual, via).then((paired) => {
       if (paired) setTarget("");
     });
   };
@@ -478,6 +480,7 @@ function SshPane() {
           Install or update RustCode there when needed (in ~/.rustcode/bin, with a background service)
         </label>
       </Field>
+      <ViaChoice via={via} disabled={running} host={sshHost(target)} onChange={setVia} />
       <AccessChoice mutual={mutual} disabled={running} host={sshHost(target)} onChange={setMutual} />
       {run && (
         <ProgressSteps steps={sshProgress(run.steps, running, mutual)} label="Connect over SSH progress" />
@@ -490,10 +493,42 @@ function SshPane() {
       {error && !running && <Failure method="ssh" error={error} onRetry={connect} onClose={dismissSsh} />}
       <p className="m-0 text-caption text-fg-muted leading-normal">
         A key with a passphrase must be in the agent (ssh-add), and a new host key must be accepted once in a
-        terminal. The two computers still need a network between them for RustCode itself (the same LAN, or
-        NetBird or Tailscale).
+        terminal. The way in can be changed later under the machine's Routes.
       </p>
     </div>
+  );
+}
+
+/** How the machine is reached once paired: its network address with SSH kept as the fallback, or SSH only. */
+function ViaChoice({
+  via,
+  host,
+  disabled,
+  onChange,
+}: {
+  via: SshVia;
+  host: string;
+  disabled?: boolean;
+  onChange: (via: SshVia) => void;
+}) {
+  return (
+    <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0" disabled={disabled}>
+      <legend className="p-0 pb-1 text-callout font-medium text-fg">Connect through</legend>
+      <label className="flex items-start gap-2 text-callout text-fg-muted">
+        <input type="radio" name="ssh-via" checked={via === "auto"} onChange={() => onChange("auto")} />
+        <span>
+          <b className="font-medium text-fg">Automatic:</b> {host}'s network address when it answers (the same
+          LAN, NetBird or Tailscale), with SSH kept as the fallback.
+        </span>
+      </label>
+      <label className="flex items-start gap-2 text-callout text-fg-muted">
+        <input type="radio" name="ssh-via" checked={via === "ssh"} onChange={() => onChange("ssh")} />
+        <span>
+          <b className="font-medium text-fg">SSH only:</b> always through SSH. Works with any server you can
+          sign in to, nothing else to install. Best for a VPS.
+        </span>
+      </label>
+    </fieldset>
   );
 }
 
