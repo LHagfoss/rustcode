@@ -5663,32 +5663,34 @@ export class MockEngine {
           ],
         });
       }
-      const reply = /\bheadings?\b/i.test(prompt)
-        ? MOCK_HEADINGS
-        : /\bdashboard\b/i.test(prompt)
-          ? MOCK_DASH
-          : /\bkit\b/i.test(prompt)
-            ? MOCK_KIT
-            : /\bproposal\b/i.test(prompt)
-              ? MOCK_PROPOSAL
-              : /\b(hover|trend|graph)\b/i.test(prompt)
-                ? MOCK_CHARTS
-                : /\btable\b/i.test(prompt)
-                  ? MOCK_TABLE
-                  : /\bview\b/i.test(prompt)
-                    ? MOCK_VIEW
-                    : /\bcharts?\b/i.test(prompt)
-                      ? MOCK_VIZ
-                      : [
-                          "Done. ",
-                          "I updated the greeting in `src/app.ts` ",
-                          "and the tests pass.\n\n",
-                          "```ts\n",
-                          'const greeting = "hello, world";\n',
-                          "export default greeting;\n",
-                          "```\n\n",
-                          "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-                        ];
+      const reply = /\breview\b/i.test(prompt)
+        ? MOCK_REVIEW
+        : /\bheadings?\b/i.test(prompt)
+          ? MOCK_HEADINGS
+          : /\bdashboard\b/i.test(prompt)
+            ? MOCK_DASH
+            : /\bkit\b/i.test(prompt)
+              ? MOCK_KIT
+              : /\bproposal\b/i.test(prompt)
+                ? MOCK_PROPOSAL
+                : /\b(hover|trend|graph)\b/i.test(prompt)
+                  ? MOCK_CHARTS
+                  : /\btable\b/i.test(prompt)
+                    ? MOCK_TABLE
+                    : /\bview\b/i.test(prompt)
+                      ? MOCK_VIEW
+                      : /\bcharts?\b/i.test(prompt)
+                        ? MOCK_VIZ
+                        : [
+                            "Done. ",
+                            "I updated the greeting in `src/app.ts` ",
+                            "and the tests pass.\n\n",
+                            "```ts\n",
+                            'const greeting = "hello, world";\n',
+                            "export default greeting;\n",
+                            "```\n\n",
+                            "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+                          ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -5712,6 +5714,24 @@ export class MockEngine {
     }
   }
 }
+
+/** A Smart UI review: findings by severity, two fixed and one set aside with a Reopen chip. */
+export const MOCK_REVIEW = [
+  "Two fixed, one set aside; the branch is ready to merge.\n\n",
+  "```rustcode-ui v1\n<title>Review of the refunds branch</title>\n",
+  '<div class="rc-head"><b>Review</b><span class="rc-muted">Codex sol + Gemini 3 Pro · 2 fixed, 1 set aside · 4m 20s</span></div>\n',
+  '<div class="rc-findings">\n',
+  '<div class="rc-finding" data-severity="high"><div><code>src/refunds/router.ts:21</code> · Codex and Gemini</div>',
+  "<p>The limiter runs after the idempotency lookup, so a replayed request spends budget without doing anything.</p>",
+  '<p class="rc-finding-note rc-ok">Fixed by Opus 5.5 in round 2</p></div>\n',
+  '<div class="rc-finding" data-severity="medium"><div><code>src/charges/limit.ts:42</code> · Codex</div>',
+  "<p>Refunds share the charges bucket, so a busy partner gets refunds refused.</p>",
+  '<p class="rc-finding-note">Set aside: the spec says one budget per partner. <button class="rc-chip" data-rc-send="Reopen the finding at src/charges/limit.ts:42">Reopen</button></p></div>\n',
+  '<div class="rc-finding" data-severity="low"><div><code>src/refunds/limit.test.ts:52</code> · Gemini</div>',
+  "<p>The reset test waits on the wall clock; use fake timers so it cannot flake.</p>",
+  '<p class="rc-finding-note rc-ok">Fixed by Opus 5.5 in round 2</p></div>\n',
+  "</div>\n```\n",
+];
 
 /** A `rustcode-viz` reply: a bar chart and a checklist. */
 export const MOCK_VIZ = [

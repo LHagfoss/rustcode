@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MOCK_CHARTS, MOCK_DASH, MOCK_KIT, MOCK_PROPOSAL, MOCK_VIEW } from "../acp/mock";
+import { MOCK_CHARTS, MOCK_DASH, MOCK_KIT, MOCK_PROPOSAL, MOCK_REVIEW, MOCK_VIEW } from "../acp/mock";
 import {
   AutoRun,
   claimLive,
@@ -353,7 +353,7 @@ describe("smart ui", () => {
   });
 
   test("the mock's views are kit only, on the theme and the rhythm", () => {
-    for (const lines of [MOCK_VIEW, MOCK_KIT, MOCK_CHARTS, MOCK_DASH, MOCK_PROPOSAL]) {
+    for (const lines of [MOCK_VIEW, MOCK_KIT, MOCK_CHARTS, MOCK_DASH, MOCK_PROPOSAL, MOCK_REVIEW]) {
       const source = splitReply(lines.join(""))
         .filter((p) => p.kind === "ui")
         .map((p) => p.source)
@@ -467,6 +467,9 @@ describe("smart ui", () => {
       ".rc-active",
       ".rc-failed",
       ".rc-todo",
+      ".rc-findings",
+      ".rc-finding",
+      ".rc-finding-note",
       ".rc-details",
       ".rc-tree",
       ".rc-term",

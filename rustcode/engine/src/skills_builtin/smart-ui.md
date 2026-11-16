@@ -75,6 +75,7 @@ so leave out margins (16 px; 28 px inside `.rc-dash`). A `.rc-card` is already a
   An item is a label row with an optional trailing value and may carry a description block (`div` or `p`).
   `<ul class="rc-list"><li class="rc-item"><span>Name</span><span class="rc-badge rc-ok">Ready</span></li></ul>`
 - Plans: `<ol class="rc-steps"><li class="rc-step rc-done">Built</li></ol>`, also `rc-active rc-failed rc-todo`.
+- Review: `.rc-findings > .rc-finding[data-severity=high|medium|low]` holding `<div><code>a.ts:21</code> · Codex</div><p>…</p><p class="rc-finding-note rc-ok">Fixed</p>`; a set-aside note drops `rc-ok` and ends with a `data-rc-send` Reopen chip.
 - Sources: `<details class="rc-details rc-sources"><summary>Sources</summary><ol><li><a href="https://…">Title</a></li></ol></details>`; a link opens in the browser.
 - Folding: `<details class="rc-details"><summary>Files</summary>…</details>`,
   `.rc-tree` around nested ones, `.rc-file` rows of name and value.

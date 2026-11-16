@@ -299,6 +299,20 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-steps:has(.rc-done, .rc-active, .rc-failed) .rc-todo { color: var(--rc-muted); }
 .rc-todo::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--rc-faint); }
 
+/* A review's findings: the severity in its own column, then where (file:line) and who found it,
+   the finding, and what the author did about it. */
+.rc-findings { display: flex; flex-direction: column; }
+.rc-finding { display: grid; grid-template-columns: 64px minmax(0, 1fr); column-gap: 12px; row-gap: 2px; padding: 8px 0;
+  border-bottom: 1px solid var(--rc-separator); }
+.rc-finding:last-child { border-bottom: 0; }
+.rc-finding::before { content: attr(data-severity); grid-row: 1 / span 8; font-weight: 600; text-transform: capitalize; }
+.rc-finding[data-severity="high" i]::before, .rc-finding[data-severity="critical" i]::before { color: var(--rc-danger); }
+.rc-finding[data-severity="medium" i]::before { color: var(--rc-warning); }
+.rc-finding[data-severity="low" i]::before, .rc-finding[data-severity="nit" i]::before { color: var(--rc-muted); }
+.rc-finding > * { grid-column: 2; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.rc-finding-note { color: var(--rc-muted); font-size: var(--rc-text-size-sm); }
+.rc-finding-note.rc-ok::before { content: "\\2713\\00a0"; color: var(--rc-success); }
+
 .rc-details { border-bottom: 1px solid var(--rc-separator); }
 .rc-details:last-child { border-bottom: 0; }
 .rc-details > summary { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-weight: 500; cursor: pointer; list-style: none; }

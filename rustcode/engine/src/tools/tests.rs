@@ -5121,6 +5121,7 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         ".rc-bar",
         ".rc-table",
         ".rc-steps",
+        ".rc-findings",
         ".rc-details",
         ".rc-term",
         ".rc-chip",
@@ -5177,9 +5178,11 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // sortable-table and hover pieces, and the folded-sources rule cost about
     // 400 over the 1,592 it was; the dashboard layout (headline, context,
     // stats, chart) and the chart marks add about 170 more, paid on every turn
-    // of every external thread, so it stays under 2,198 (1,998 plus 10%).
+    // of every external thread, so it stays under 2,198 (1,998 plus 10%). The
+    // review findings class adds about 80 more (its markup is in the smart-ui
+    // skill, not here), so the cap is 2,300.
     assert!(
-        SMART_UI_HARNESS_HINT.len() < 2_198,
+        SMART_UI_HARNESS_HINT.len() < 2_300,
         "{}",
         SMART_UI_HARNESS_HINT.len()
     );
