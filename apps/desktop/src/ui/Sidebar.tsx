@@ -3,8 +3,8 @@ import { copyThreadId } from "../state/deepLinks";
 import { HiddenDot, ProjectHeader, RowAction } from "./ProjectHeader";
 
 // The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
-// Settings), the Needs you row, the toolbar (search, the sort and filter menu and
-// New thread; ui/SidebarToolbar.tsx, optional), then one list: pinned threads
+// Settings and search), the Needs you row, the navigation toolbar
+// (ui/SidebarToolbar.tsx, optional), then one list: pinned threads
 // first, then one Threads list (by project when asked) in the chosen sort, then
 // the Snoozed and Settled shelves at the foot, each folding on its own header.
 // ⌘K searches threads too, and holds the actions (add project, pull requests,
@@ -123,7 +123,6 @@ import {
   shelfKey,
   shelfOpen,
   sortSection,
-  threadMatches,
   visibleRows,
 } from "../state/sidebarRows";
 import { snoozePresets, wakeLabel } from "../state/snooze";
@@ -140,6 +139,7 @@ import {
   selectThread,
   setPinned,
   setSectionOrder,
+  setSwitcher,
   setThreadStatus,
   settleThread,
   settleThreads,
@@ -197,6 +197,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Search,
   ShieldQuestion,
   Sparkles,
   SquareTerminal,
@@ -1642,11 +1643,6 @@ export function Sidebar() {
   }
   const [settleDays] = usePref<number>(PREF.settleAfterDays, SETTLE_AFTER_DEFAULT_DAYS);
   const settleMs = settleAfterMs(settleAfterDays(settleDays));
-  // The search narrows the list as it is typed; it is this window's, not a stored preference, and
-  // goes when the toolbar is hidden.
-  const [rawQuery, setQuery] = useState("");
-  const query = toolbarOn ? rawQuery.trim() : "";
-  const searching = query !== "";
   // The projects folded under "group by project" (`project:<path>`); the shelves keep their own.
   const [folded, setFolded] = usePref<string[]>(PREF.folded, NO_FOLDS);
   // A section header never folds, so a `working` or `threads` entry an older release stored would
@@ -1712,11 +1708,9 @@ export function Sidebar() {
   const filtered = useMemo(
     () =>
       sessions.filter(
-        (s) =>
-          (!onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd) &&
-          threadMatches(s, query),
+        (s) => !onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd,
       ),
-    [sessions, onlyProject, projectCwd, query],
+    [sessions, onlyProject, projectCwd],
   );
   const mixedMachines = useMemo(() => spansMachines(filtered), [filtered]);
   // The threads waiting on work they handed out, though no turn of theirs runs: the Threads list
@@ -1750,11 +1744,11 @@ export function Sidebar() {
   }, [sessions, links, pinned, messaged]);
   // A delegate started from another project, with the list filtered to its own: its parent's row is
   // not drawn, so it takes a row of its own here, marked with where it came from, rather than
-  // vanishing from the project it works in (state/delegateOrigin.ts). A search already draws every
-  // match as a row; with no filter its parent is drawn and it nests there, never twice in one list.
+  // vanishing from the project it works in (state/delegateOrigin.ts). With no filter its parent
+  // is drawn and it nests there, never twice in one list.
   const detached = useMemo(
-    () => (searching ? new Set<string>() : detachedDelegates(new Set(filtered.map((s) => s.id)), ownerOf)),
-    [filtered, ownerOf, searching],
+    () => detachedDelegates(new Set(filtered.map((s) => s.id)), ownerOf),
+    [filtered, ownerOf],
   );
   // The parents the list draws its rows under: every nested thread's, but a detached one's.
   const parentOf = useMemo(() => {
@@ -1799,10 +1793,8 @@ export function Sidebar() {
   // The last delegate drawn under each row, kept while it folds away: an unmount would skip the
   // animation, and the session is no longer in the chain by then.
   const lastSubs = useRef(new Map<string, SessionSummary>());
-  // The threads a drawn row's stack and branch rows are read from: a search keeps to its matches,
-  // and the project filter does not, so a parent still shows the delegates it started in another
-  // project, nested as usual.
-  const kin = searching ? filtered : sessions;
+  // A parent still shows the delegates it started in another project, nested as usual.
+  const kin = sessions;
   const childrenByParent = useMemo(() => {
     const map: Record<string, SessionSummary[]> = {};
     for (const s of kin) {
@@ -1870,15 +1862,13 @@ export function Sidebar() {
     const pendingRows = Object.values(pendingById)
       .filter(
         (setup) =>
-          !searching &&
-          (!onlyProject || !projectCwd || setup.cwd === projectCwd || setup.worktree?.repo === projectCwd),
+          !onlyProject || !projectCwd || setup.cwd === projectCwd || setup.worktree?.repo === projectCwd,
       )
       .map(pendingSummary);
     for (const s of filtered) {
       // A delegated thread has no row of its own, unless the filter left the open one with no row
       // to hang under (`orphanOpen`).
-      // A search shows a delegate that matches as a row of its own, saying which thread it is under.
-      if (parentOf.has(s.id) && s.id !== orphanOpen && !searching) continue;
+      if (parentOf.has(s.id) && s.id !== orphanOpen) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
       // Settled: threads settled (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
@@ -1918,17 +1908,16 @@ export function Sidebar() {
     // their section gives them (state/sidebarRows.ts `sortSection`).
     // Sorted by title, the Threads list keeps each row where it was last drawn: a harness renames
     // its thread as it works, and the row must not jump each time (state/sidebarOrder.ts
-    // `keepPlaces`). A search draws what it finds without changing the places.
+    // `keepPlaces`).
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) => {
       const key = sectionOrderKey(id, project);
       let sorted = sortSection(id, items, keyOf, sort);
       if (sort === "title" && id === "threads") {
         sorted = keepPlaces(sorted, drawnPlaces.current.get(key));
-        if (!searching)
-          drawnPlaces.current.set(
-            key,
-            sorted.map((s) => s.id),
-          );
+        drawnPlaces.current.set(
+          key,
+          sorted.map((s) => s.id),
+        );
       }
       return applyOrder(sorted, layout[key]);
     };
@@ -1988,7 +1977,6 @@ export function Sidebar() {
     layout,
     sort,
     settleMs,
-    searching,
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
@@ -2017,8 +2005,6 @@ export function Sidebar() {
   // whatever `folded` holds, so an id an older release stored can never shut a list with no control
   // to open it.
   const isOpen = (id: string) => {
-    // A search shows every match, in a shut shelf or folder too.
-    if (searching) return true;
     if (isShelf(id, layoutMode)) return shelfIsOpen[id];
     if (id.startsWith("project:")) return !folded.includes(id);
     return true;
@@ -2029,7 +2015,7 @@ export function Sidebar() {
     else if (id === "settled") setSettledStored(!isOpen(id));
     else setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
   };
-  const settledLimit = searching ? Number.POSITIVE_INFINITY : Math.max(settledShown, settledAt + 1);
+  const settledLimit = Math.max(settledShown, settledAt + 1);
 
   // Which list each drawn row arranges, and the rows drawn in it: a drag and ⌥↑/↓ both move a row
   // inside the one list it was drawn in — a section, or one project's run of rows under its heading
@@ -2084,7 +2070,7 @@ export function Sidebar() {
     rowAttribute: "data-project-id",
     handleSelector: "[data-project-handle]",
     homeOf: () => ({ key: "projects", ids: projectIds }),
-    enabled: !searching,
+    enabled: true,
     drop: (home, id, index) =>
       setSectionOrder(home.key, reorder(layout[home.key] ?? [], home.ids, id, index)),
   });
@@ -2507,20 +2493,18 @@ export function Sidebar() {
               <PanelLeft size={14} />
             </ClusterButton>
             {!mac && <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch" />}
+            <ClusterButton
+              label="Search threads"
+              tooltip="Search threads (⌘K)"
+              onClick={() => setSwitcher(true)}
+            >
+              <Search size={14} />
+            </ClusterButton>
             <SettingsButton />
           </TitlebarControls>
         </TitlebarRow>
         <NeedsYouRow threadIds={new Set(filtered.map((s) => s.id))} />
-        {toolbarOn && (
-          <SidebarToolbar
-            query={rawQuery}
-            onQuery={setQuery}
-            onOpenFirst={() => {
-              const first = orderIds[0];
-              if (first) selectThread(rowIdOf(first));
-            }}
-          />
-        )}
+        {toolbarOn && <SidebarToolbar />}
         <nav
           ref={list}
           data-focus-default
@@ -2541,11 +2525,7 @@ export function Sidebar() {
           {!sessionsLoaded && <ThreadRowsSkeleton />}
           {sessionsLoaded && !filtered.length && (
             <div className="px-2 py-3 text-callout text-fg-muted">
-              {searching
-                ? `No threads match “${query}”.`
-                : onlyProject
-                  ? "No threads in this project yet."
-                  : "No threads yet."}
+              {onlyProject ? "No threads in this project yet." : "No threads yet."}
             </div>
           )}
           <div className="flex min-h-full flex-col">

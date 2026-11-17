@@ -39,7 +39,7 @@ export function SidebarToolbarSetting() {
     <Row
       title="Sidebar toolbar"
       reset={on ? undefined : () => setOn(true)}
-      subtitle="Search, sort and filter, and New thread, over the thread list."
+      subtitle="New thread, Loops, Capabilities and Usage above the thread list."
       hint="⌘K has every action too."
     >
       <Switch label="Sidebar toolbar" checked={on} onChange={setOn} />
