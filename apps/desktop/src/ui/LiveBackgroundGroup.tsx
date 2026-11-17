@@ -19,7 +19,7 @@ import { useBanner } from "../lib/banner";
 import { newThreadChoice, useApp } from "../state/store";
 import { LiveBackdrop as Field } from "./LiveBackdrop";
 import { cx } from "./primitives";
-import { Choice, Group, Row, Slider } from "./settingsKit";
+import { Action, Choice, Group, Row, Slider } from "./settingsKit";
 
 const PATTERNS: { value: LivePattern; label: string }[] = [
   { value: "streaks", label: "Streaks" },
@@ -91,6 +91,15 @@ export function LiveBackgroundGroup() {
       enabled={on}
       onEnabledChange={(enabled) => patchLiveBackdrop({ source: enabled ? "pattern" : "off" })}
       switchLabel="Show the live background"
+      // A preset also sets what has no row of its own (where the light gathers, how far it
+      // reaches, its angle): this puts all of it back, where each row's reset puts back its own.
+      action={
+        on && !sameLiveBackdrop(cfg, d) ? (
+          <Action quiet onClick={() => setLiveBackdrop(d)}>
+            Reset
+          </Action>
+        ) : undefined
+      }
       footer={
         banner.name
           ? "A chosen chat background picture shows instead on new threads."

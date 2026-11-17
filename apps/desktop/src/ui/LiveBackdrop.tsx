@@ -107,11 +107,20 @@ interface Props {
   status?: ThreadStatus;
   /** Any thread is working: a new thread's light drifts a little quicker and does not rest. */
   busy?: boolean;
+  /** A dialog covers it: the field holds still underneath. */
+  covered?: boolean;
   /** Draw this instead of the stored setting (Settings' swatches). */
   config?: LiveConfig;
 }
 
-export function LiveBackdrop({ surface, harness, status = "idle", busy = false, config }: Props) {
+export function LiveBackdrop({
+  surface,
+  harness,
+  status = "idle",
+  busy = false,
+  covered = false,
+  config,
+}: Props) {
   const stored = useLiveBackdrop();
   const cfg = config ?? stored;
   const { ground, accent } = useThemeColours();
@@ -142,6 +151,7 @@ export function LiveBackdrop({ surface, harness, status = "idle", busy = false, 
     hue: custom ? hue : undefined,
     sat: custom ? sat : undefined,
     ground: ground ?? undefined,
+    covered,
   } as const;
 
   if (thread) {
