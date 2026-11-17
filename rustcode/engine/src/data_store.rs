@@ -407,10 +407,18 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
                 OR json_extract(m.payload_json, '$.params.update._meta.jetbrains.air.contextCompaction.preTokens') IS NOT NULL)
          ON CONFLICT(thread_id, external_id) DO NOTHING;",
     ),
+    (
+        14,
+        "remove_duplicate_backfill_turns",
+        "DELETE FROM turns WHERE status = 'backfill' AND EXISTS (
+            SELECT 1 FROM turns live WHERE live.thread_id = turns.thread_id
+              AND live.status != 'backfill'
+         );",
+    ),
     // Equal usage is only evidence of a possible duplicate, not proof. Keep
     // the original rows intact and expose candidates for review.
     (
-        14,
+        15,
         "flag_repeated_claude_turn_usage",
         "CREATE VIEW suspected_repeated_claude_turn_usage AS
          SELECT current.id AS turn_id, previous.id AS previous_turn_id,
@@ -1901,6 +1909,7 @@ fn write_cumulative_turn(
     // a concurrent turn would be lost instead of waiting its turn.
     let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
+    remove_backfill(&transaction, &turn.thread_id)?;
     let baseline = baseline(&transaction, &turn.thread_id, &harness, series, &cumulative)?;
     let (spent, next) = advance(&cumulative, baseline.as_ref());
     let mut row = turn.clone();
@@ -2191,6 +2200,16 @@ pub fn recorded(
         .map_err(|error| error.to_string())
 }
 
+fn remove_backfill(connection: &Connection, thread_id: &str) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM turns WHERE thread_id = ?1 AND status = 'backfill'",
+            [thread_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn write_turn(connection: &Connection, turn: &TurnRow) -> Result<(), String> {
     let transaction = connection
         .unchecked_transaction()
@@ -2202,6 +2221,7 @@ fn write_turn(connection: &Connection, turn: &TurnRow) -> Result<(), String> {
 /// [`write_turn`] inside a transaction the caller already opened, so a turn and
 /// its usage cursor move together.
 fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String> {
+    remove_backfill(transaction, &turn.thread_id)?;
     let thread = live_thread(turn);
     upsert_thread(transaction, &thread)?;
     transaction
@@ -2993,7 +3013,8 @@ pub fn backfill(connection: &Connection, config_dir: &Path) -> Result<BackfillRe
             "INSERT INTO turns (thread_id, started_at, finished_at, harness, model,
                     input_tokens, output_tokens, cached_tokens, cache_write_tokens,
                     cost_usd, tool_calls, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 'backfill')
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 'backfill'
+             WHERE NOT EXISTS (SELECT 1 FROM turns WHERE thread_id = ?1 AND status != 'backfill')
              ON CONFLICT(thread_id, started_at) DO UPDATE SET
                 finished_at = excluded.finished_at,
                 input_tokens = excluded.input_tokens,
@@ -6105,6 +6126,33 @@ mod tests {
     }
 
     #[test]
+    fn migration_removes_only_backfills_with_live_turns() {
+        let config = tempfile::tempdir().unwrap();
+        fake_config(config.path());
+        let path = config.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        backfill(&connection, config.path()).unwrap();
+        let thread = "01a10000-0000-0000-0000-000000000001";
+        connection.execute(
+            "INSERT INTO turns (thread_id, started_at, status) VALUES (?1, '2026-11-04T11:00:00Z', 'completed')",
+            [thread],
+        ).unwrap();
+        connection
+            .execute("DELETE FROM schema_migrations WHERE id = 14", [])
+            .unwrap();
+        drop(connection);
+        let connection = open(&path).unwrap();
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM turns WHERE thread_id = ?1 AND status = 'backfill'",
+                [thread],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
     fn a_live_turn_after_backfill_counts_only_the_growth() {
         let config = tempfile::tempdir().unwrap();
         fake_config(config.path());
@@ -6156,18 +6204,19 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
-        assert_eq!(turns, 3, "one backfill row and two live rows");
-        assert_eq!(input, 900, "700 backfilled plus 0 plus 200");
+        assert_eq!(turns, 2, "only live rows remain");
+        assert_eq!(input, 900);
         assert_eq!(output, 90);
         assert!((cost - 0.6).abs() < 1e-9, "cost adds up to the last total");
-        let backfill: (i64, String) = connection
+        backfill(&connection, config.path()).unwrap();
+        let summaries: i64 = connection
             .query_row(
-                "SELECT input_tokens, status FROM turns WHERE started_at LIKE '2026-11-04T09:00%'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                "SELECT COUNT(*) FROM turns WHERE thread_id = ?1 AND status = 'backfill'",
+                [thread],
+                |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(backfill, (700, "backfill".to_owned()));
+        assert_eq!(summaries, 0);
     }
 
     #[test]

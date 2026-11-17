@@ -11,6 +11,12 @@
 # unless explicitly confirmed. --dry-run prints every command that would run;
 # --yes accepts every confirmation for explicitly authorized automation.
 
+# This script uses Bash semantics. Do not change the caller's zsh options or traps.
+if [ -n "${ZSH_VERSION:-}" ]; then
+    printf '%s\n' 'release.sh requires Bash; run scripts/release.sh --from-phase PHASE instead of sourcing it from zsh.' >&2
+    return 1 2>/dev/null || exit 1
+fi
+
 set -euo pipefail
 
 # ── Globals ──────────────────────────────────────────────────────────────────
@@ -23,6 +29,7 @@ CATEGORY="Features"
 NOTES_FILE=""
 DRY_RUN=false
 YES=false
+NO_WAIT=false
 BUMP_PART=""
 FROM_PHASE=""
 MERGE_COMMIT_OVERRIDE=""
@@ -169,6 +176,7 @@ Optional:
   --ci-timeout SECS    Max seconds to wait for release-PR CI (default: 1500)
   --build-timeout SECS Max seconds to wait for the tag build workflow
                        (default: 1800)
+  --no-wait            Stop after creating the PR or pushing the tag
   --dry-run            Print every command without executing
   --yes                Skip all interactive prompts
   --help               Show this help message
@@ -200,6 +208,7 @@ parse_args() {
                 ;;
             --dry-run)    DRY_RUN=true; shift ;;
             --yes)        YES=true; shift ;;
+            --no-wait)    NO_WAIT=true; shift ;;
             --full-verify) FULL_VERIFY=true; shift ;;
             --patch|--minor|--major|--beta)
                 if [[ -n "$BUMP_PART" ]]; then
@@ -1597,6 +1606,15 @@ main() {
 
     for ((i = start_index; i < ${#PHASES[@]}; i++)); do
         run_phase "${PHASES[$i]}"
+        if $NO_WAIT && [[ "${PHASES[$i]}" == pr ]]; then
+            info "After the PR merges, resume: scripts/release.sh --version $VERSION --from-phase tag --no-wait --yes"
+            return 0
+        fi
+        if $NO_WAIT && [[ "${PHASES[$i]}" == tag ]]; then
+            info "Monitor the build: https://github.com/LHagfoss/rustcode/actions/workflows/build.yml"
+            info "After the build succeeds, resume: scripts/release.sh --version $VERSION --from-phase release --yes"
+            return 0
+        fi
     done
 
     info "═══════════════════════════════════════════════════════"

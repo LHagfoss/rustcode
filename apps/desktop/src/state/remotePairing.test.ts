@@ -1,130 +1,99 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { parseRemoteStatus } from "../acp/remote";
-import { PairingCard } from "../ui/RemoteAccessPage";
-import { applyRemoteStatus } from "./remoteAccess";
-import { remainingPairingSeconds } from "./remotePairing";
+import { applyRemoteStatus, dismissRemoteChallenge, tickRemotePairing } from "./remoteAccess";
+import { type PhonePairing, remainingPairingSeconds, transitionPairing } from "./remotePairing";
 import { resetForTests, useApp } from "./store";
 
 const offer = parseRemoteStatus({
   offer: { qrPayload: "qr", code: "12345678", address: "host", expiresInSecs: 120, challenge: 7 },
 }).offer!;
-const snapshot = (seconds: number, extra: object = {}) =>
+const snapshot = (extra: object = {}) =>
   parseRemoteStatus({
     enabled: true,
-    gateway: { connected: true, pairingOpen: true, pairing: { expiresInSecs: seconds, challenge: 7 } },
+    gateway: { connected: true, pairingOpen: true, pairing: { challenge: 7 } },
     devices: [],
     ...extra,
   });
+const idle: PhonePairing = { phase: "idle" };
+const asking: PhonePairing = { phase: "asking", askedAt: 1000, baselineIds: ["old"], inFlight: true };
+const showing: PhonePairing = {
+  phase: "showing",
+  challenge: { offer, expiresAt: 121_000, baselineIds: ["old"] },
+};
 
 beforeEach(() => resetForTests());
-describe("remote pairing", () => {
-  test("keeps the challenge across page remount and uses one deadline across refreshes", () => {
-    useApp.setState({ remoteChallenge: { offer, expiresAt: 121_000, baselineIds: [] } });
-    applyRemoteStatus(snapshot(110), 11_000);
-    expect(remainingPairingSeconds(useApp.getState().remoteChallenge!.expiresAt, 11_000)).toBe(110);
-    applyRemoteStatus(snapshot(60), 61_000);
-    const remountedPageChallenge = useApp.getState().remoteChallenge;
-    expect(remountedPageChallenge?.offer.code).toBe("12345678");
-    expect(remainingPairingSeconds(remountedPageChallenge!.expiresAt, 61_000)).toBe(60);
-    applyRemoteStatus(parseRemoteStatus({ enabled: false }), 62_000);
-    expect(useApp.getState().remoteChallenge).toBeNull();
+
+describe("phone pairing transitions", () => {
+  test("asks, holds while a read lands, and shows the answer", () => {
+    expect(transitionPairing(idle, { type: "ask", now: 1000, baselineIds: ["old"] })).toEqual(asking);
+    expect(transitionPairing(asking, { type: "status", status: snapshot(), now: 2000 })).toEqual(asking);
+    expect(
+      transitionPairing(asking, { type: "status", status: snapshot({ offer }), now: 1000, answer: true }),
+    ).toEqual(showing);
+    expect(
+      transitionPairing(asking, { type: "status", status: snapshot(), now: 1000, answer: true }),
+    ).toEqual(idle);
   });
-  test("renders the remaining time after status updates and remount, then hides a stopped gateway", () => {
-    const originalNow = Date.now;
-    try {
-      useApp.setState({ status: "ready", remoteChallenge: { offer, expiresAt: 121_000, baselineIds: [] } });
-      Date.now = () => 11_000;
-      applyRemoteStatus(snapshot(110));
-      const render = () => {
-        const state = useApp.getState();
-        const challenge = state.remoteChallenge;
-        return challenge
-          ? renderToStaticMarkup(
-              createElement(PairingCard, {
-                offer: challenge.offer,
-                expiresAt: challenge.expiresAt,
-                pairing: state.remote?.gateway?.pairing,
-                now: Date.now(),
-                pending: false,
-                overdue: false,
-                busy: false,
-                onRenew: () => {},
-                onStop: () => {},
-                onDismiss: () => {},
-              }),
-            )
-          : "";
-      };
-      expect(render()).toContain("Expires in 1:50");
-      Date.now = () => 61_000;
-      applyRemoteStatus(snapshot(60));
-      expect(render()).toContain("Expires in 1:00");
-      applyRemoteStatus(parseRemoteStatus({ enabled: false }));
-      expect(render()).not.toContain("12345678");
-    } finally {
-      Date.now = originalNow;
-    }
-  });
-  test("detects a newly paired device by id after a section change", () => {
-    useApp.setState({ remoteChallenge: { offer, expiresAt: 121_000, baselineIds: ["old"] } });
-    applyRemoteStatus(snapshot(110, { devices: [{ id: "old", name: "iPhone" }] }), 11_000);
-    expect(useApp.getState().remoteChallenge).not.toBeNull();
+
+  test("keeps one deadline across reads and detects a newly paired device", () => {
+    useApp.setState({ pairing: showing });
+    applyRemoteStatus(snapshot({ devices: [{ id: "old", name: "Phone" }] }), 11_000);
+    const state = useApp.getState().pairing;
+    expect(state.phase).toBe("showing");
+    if (state.phase === "showing")
+      expect(remainingPairingSeconds(state.challenge.expiresAt, 11_000)).toBe(110);
     applyRemoteStatus(
-      snapshot(100, {
+      snapshot({
         devices: [
-          { id: "old", name: "iPhone" },
-          { id: "new", name: "iPhone" },
+          { id: "old", name: "Phone" },
+          { id: "new", name: "Phone" },
         ],
       }),
       21_000,
     );
-    expect(useApp.getState().remoteChallenge).toBeNull();
-    expect(useApp.getState().remotePaired?.name).toBe("iPhone");
+    expect(useApp.getState().pairing).toEqual({ phase: "paired", name: "Phone" });
   });
-  test("clears an offer when the gateway restarts and reuses its challenge serial", () => {
-    const original = parseRemoteStatus({
-      offer: { qrPayload: "qr", code: "12345678", expiresInSecs: 120, challenge: 1, instanceId: "first" },
-    }).offer!;
-    useApp.setState({ remoteChallenge: { offer: original, expiresAt: 121_000, baselineIds: [] } });
-    applyRemoteStatus(
-      parseRemoteStatus({
-        enabled: true,
-        gateway: {
-          connected: true,
-          instanceId: "second",
-          pairingOpen: true,
-          pairing: { expiresInSecs: 110, challenge: 1 },
-        },
-        devices: [],
-      }),
-      11_000,
-    );
-    expect(useApp.getState().remoteChallenge).toBeNull();
+
+  test("expires on the clock or engine status, and turns off or dismisses", () => {
+    expect(transitionPairing(showing, { type: "tick", now: 120_999 })).toEqual(showing);
+    expect(transitionPairing(showing, { type: "tick", now: 121_000 })).toEqual({ phase: "expired" });
+    expect(
+      transitionPairing(showing, { type: "status", status: snapshot({ pairingExpired: true }), now: 2000 }),
+    ).toEqual({ phase: "expired" });
+    expect(transitionPairing(showing, { type: "off" })).toEqual(idle);
+    expect(
+      transitionPairing(showing, { type: "status", status: snapshot({ enabled: false }), now: 2000 }),
+    ).toEqual(idle);
+    useApp.setState({ pairing: showing });
+    dismissRemoteChallenge();
+    expect(useApp.getState().pairing).toEqual(idle);
+    useApp.setState({ pairing: showing });
+    tickRemotePairing(121_000);
+    expect(useApp.getState().pairing.phase).toBe("expired");
   });
-  test("clears a closed, replaced, expired or failed challenge", () => {
-    const invalid = [
-      snapshot(110, { gateway: { connected: true, pairingOpen: false } }),
-      snapshot(110, {
-        gateway: { connected: true, pairingOpen: true, pairing: { expiresInSecs: 110, challenge: 8 } },
-      }),
-      snapshot(110, {
-        gateway: {
-          connected: true,
-          pairingOpen: true,
-          pairing: { expiresInSecs: 110, attemptsLeft: 0, challenge: 7 },
-        },
-      }),
-      snapshot(110, { offer: { qrPayload: "another", code: "87654321", expiresInSecs: 110 } }),
-      snapshot(110, { pairingExpired: true }),
-      snapshot(110, { pairingError: "failed" }),
-      snapshot(110, { error: "stopped" }),
-    ];
-    for (const status of invalid) {
-      useApp.setState({ remoteChallenge: { offer, expiresAt: 121_000, baselineIds: [] } });
-      applyRemoteStatus(status, 11_000);
-      expect(useApp.getState().remoteChallenge).toBeNull();
+
+  test("records failures and clears invalid challenges", () => {
+    expect(transitionPairing(asking, { type: "failure", error: "offline" })).toEqual({
+      phase: "failed",
+      error: "offline",
+    });
+    expect(
+      transitionPairing(showing, { type: "status", status: snapshot({ pairingError: "failed" }), now: 2000 }),
+    ).toEqual({ phase: "failed", error: "failed" });
+    for (const status of [
+      snapshot({ gateway: { connected: true, pairingOpen: false } }),
+      snapshot({ gateway: { connected: true, pairingOpen: true, pairing: { challenge: 8 } } }),
+      snapshot({ offer: { ...offer, qrPayload: "another" } }),
+      snapshot({ error: "stopped" }),
+    ]) {
+      expect(transitionPairing(showing, { type: "status", status, now: 2000 })).toEqual(idle);
     }
+  });
+
+  test("preserves paired state until off or a new request", () => {
+    const paired: PhonePairing = { phase: "paired", name: "Phone" };
+    expect(transitionPairing(paired, { type: "status", status: snapshot(), now: 2000 })).toEqual(paired);
+    expect(transitionPairing(paired, { type: "off" })).toEqual(idle);
+    expect(transitionPairing(paired, { type: "ask", now: 1000, baselineIds: ["old"] })).toEqual(asking);
   });
 });

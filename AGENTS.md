@@ -108,6 +108,8 @@ instructions for work in this repository.
     local release build instead of keeping both profiles around.
 - The phone app is an Expo app in its own repository, `rustcode-mobile`;
   see `docs/mobile.md`.
+- Run release.sh with Bash, not sourced from zsh. Use `--no-wait` to hand off
+  after PR creation and tag push; follow its printed resume commands.
 - For releases, load `~/.agents/skills/release-automation/SKILL.md`;
   use `scripts/release.sh` as the source of truth. Draft the notes with
   `scripts/release-notes.sh > notes.md` (each PR's `## Changelog` line, else

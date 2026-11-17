@@ -32,7 +32,12 @@ import {
 import { pendingRequestsOn } from "./pending";
 import { projectEntry, relocateProjectEntries, updateProjectEntry } from "./projectBook";
 import { QUEUE_REASON } from "./queue";
-import { answerConnectRequest, pairRemoteDevice, refreshRemote } from "./remoteAccess";
+import {
+  answerConnectRequest,
+  dismissRemoteChallenge,
+  pairRemoteDevice,
+  refreshRemote,
+} from "./remoteAccess";
 import {
   type AppState,
   addHarnessAccount,
@@ -313,6 +318,26 @@ describe("engine controller with the mock engine", () => {
     }
   });
 
+  test("a status read started before dismiss cannot restore a pairing code", async () => {
+    const transport = new DelayedRemoteStatusTransport();
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    try {
+      await refreshRemote();
+      await pairRemoteDevice();
+      expect(useApp.getState().pairing.phase).toBe("showing");
+      transport.holdNextStatus = true;
+      const staleRead = refreshRemote();
+      await until(() => transport.heldResponse !== null);
+      dismissRemoteChallenge();
+      transport.releaseStatus();
+      await staleRead;
+      expect(useApp.getState().pairing.phase).toBe("idle");
+    } finally {
+      await transport.stop();
+    }
+  });
+
   test("accepting a phone's request takes down the QR code it replaced", async () => {
     const transport = new MockTransport({ delayMs: 0, remote: "connect" });
     await connect(transport);
@@ -322,10 +347,10 @@ describe("engine controller with the mock engine", () => {
       const id = initial?.connectRequests[0]?.id;
       if (!id) throw new Error("the mock must seed a connection request");
       await pairRemoteDevice();
-      expect(useApp.getState().remoteChallenge).not.toBeNull();
+      expect(useApp.getState().pairing.phase).toBe("showing");
 
       expect(await answerConnectRequest(id, true)).toBe(true);
-      expect(useApp.getState().remoteChallenge).toBeNull();
+      expect(useApp.getState().pairing.phase).not.toBe("showing");
       expect(useApp.getState().connectCode?.requestId).toBe(id);
     } finally {
       await transport.stop();

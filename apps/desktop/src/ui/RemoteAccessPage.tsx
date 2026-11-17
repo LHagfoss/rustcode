@@ -37,8 +37,9 @@ import {
   pairRemoteDevice,
   refreshRemote,
   setRemoteAccess,
+  tickRemotePairing,
 } from "../state/remoteAccess";
-import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
+import { remainingPairingSeconds } from "../state/remotePairing";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { connectionDirection, peerOutbound } from "./connectionDirection";
 import { Copy, RefreshCw, Smartphone, WifiOff } from "./icons";
@@ -67,9 +68,7 @@ export function RemoteAccessPage() {
   const [now, setNow] = useState(() => Date.now());
   const server = useMachines((s) => s.server);
   const installing = useMachines((s) => s.serverInstall.status === "running");
-  const challenge = useApp((s) => s.remoteChallenge);
-  const paired = useApp((s) => s.remotePaired);
-  const [pairAskedAt, setPairAskedAt] = useState<number | null>(null);
+  const phonePairing = useApp((s) => s.pairing);
 
   const refresh = useCallback(async () => {
     await refreshRemote();
@@ -95,19 +94,19 @@ export function RemoteAccessPage() {
   const devices = remote?.devices ?? [];
   const refused = remote?.refusedConnections ?? [];
   const gateway = remote?.gateway;
-  const active = activeChallenge(challenge, now);
+  const active = phonePairing.phase === "showing" ? phonePairing.challenge : null;
   const offer = active?.offer;
   const pairing = gateway?.pairing;
   const unavailable = remote?.available === false;
   const enabled = remote?.enabled === true;
-  const pending = busy === "pair" || remote?.pairingPending === true;
-  const expired = remote?.pairingExpired === true;
-  const pairingError = remote?.pairingError;
+  const pending = phonePairing.phase === "asking";
+  const expired = phonePairing.phase === "expired";
+  const pairingError = phonePairing.phase === "failed" ? phonePairing.error : undefined;
   const ended = remote?.error;
 
   useEffect(() => {
-    if (challenge && now >= challenge.expiresAt) dismissRemoteChallenge();
-  }, [challenge, now]);
+    tickRemotePairing(now);
+  }, [now]);
 
   const run = async (label: string, action: () => Promise<unknown>) => {
     setBusy(label);
@@ -150,8 +149,7 @@ export function RemoteAccessPage() {
   };
 
   const pair = () => {
-    setPairAskedAt(Date.now());
-    void run("pair", () => pairRemoteDevice());
+    void pairRemoteDevice().then(() => refresh());
   };
 
   const sharedCount = gateway?.sessions ?? 0;
@@ -187,7 +185,7 @@ export function RemoteAccessPage() {
           <Switch
             label="Network access"
             checked={enabled}
-            disabled={unavailable || busy !== null}
+            disabled={unavailable || busy !== null || pending}
             onChange={toggle}
           />
         </Row>
@@ -208,7 +206,7 @@ export function RemoteAccessPage() {
           {server === null ? null : server.installed ? (
             <Chip tone={server.running ? "ok" : "warn"}>{server.running ? "Running" : "Not running"}</Chip>
           ) : (
-            <Action disabled={busy !== null || installing} onClick={() => void installServer()}>
+            <Action disabled={busy !== null || pending || installing} onClick={() => void installServer()}>
               {installing ? <Spinner /> : null}
               Install
             </Action>
@@ -260,28 +258,28 @@ export function RemoteAccessPage() {
                   : undefined
           }
         >
-          <Action prominent disabled={unavailable || busy !== null} onClick={pair}>
-            {busy === "pair" ? <Spinner /> : <Smartphone size={13} />}
+          <Action prominent disabled={unavailable || busy !== null || pending} onClick={pair}>
+            {pending ? <Spinner /> : <Smartphone size={13} />}
             Show pairing code
           </Action>
         </Row>
       </Group>
 
-      {paired ? (
+      {phonePairing.phase === "paired" ? (
         <Group title="Pairing">
           <div className="flex flex-wrap items-center gap-3 px-4 py-4">
             <Chip tone="ok">Paired</Chip>
             <p className="m-0 min-w-0 flex-1 text-callout text-fg">
-              <span className="font-medium">{paired.name}</span> can now open the shared threads.
+              <span className="font-medium">{phonePairing.name}</span> can now open the shared threads.
             </p>
             <Action disabled={busy !== null} onClick={pair}>
-              {busy === "pair" ? <Spinner /> : <Smartphone size={12} />}
+              <Smartphone size={12} />
               Pair another device
             </Action>
           </div>
         </Group>
       ) : (
-        (offer || pending || pairingError || busy === "pair") && (
+        (offer || pending || pairingError) && (
           <Group title="Pairing">
             <PairingCard
               offer={offer}
@@ -291,8 +289,8 @@ export function RemoteAccessPage() {
               error={pairingError}
               now={now}
               expiresAt={active?.expiresAt}
-              overdue={pending && pairAskedAt !== null && now - pairAskedAt > PAIR_DEADLINE_MS}
-              busy={busy === "pair"}
+              overdue={phonePairing.phase === "asking" && now - phonePairing.askedAt > PAIR_DEADLINE_MS}
+              busy={pending}
               onRenew={pair}
               onStop={() => toggle(false)}
               onDismiss={dismissRemoteChallenge}
