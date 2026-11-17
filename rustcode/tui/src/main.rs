@@ -6,6 +6,7 @@ mod cli;
 mod inline_terminal;
 mod machines;
 mod manage_command;
+mod price_estimate;
 mod run;
 mod runtime;
 mod server_command;
