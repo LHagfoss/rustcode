@@ -738,34 +738,28 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
 - **Sidebar rows:** project groups inset their threads by 32px. A full-width New thread
-  button sits above search. Every detailed thread row is one fixed grid of three lines, 68px
+  button sits above search. Every detailed thread row is one fixed grid of two lines, 54px
   tall whatever it holds, with `rounded-xl`, so a column of rows reads as a
   table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`). Each line
   is a left part that truncates and a right part against the row's edge that
   takes what it needs (at least 76px on line 1, room for the three 24px hover
   actions), so the right side is never cut and every right edge lines up.
-  Line 1: the pin, fork or side-chat glyph and the title (`text-body`); at the
+  Line 1: the project’s 14px mark, pin, fork or side-chat glyph and the title (`text-body`); at the
   right, one state by `rowStatus` as an icon and a word in its tone (`Working`
   with its clock in `accent`, `Needs you` in `warning`, `Waiting` muted,
   `Failed` in `danger`, `Done` in `success` until the thread is opened,
   `Review` in `accent`), else the hour a snoozed thread wakes, else its age
   (`5m`, `3h`, with a check before it when settled).
-  Line 2 (`text-sub`, `fg-muted`): the project's 14px mark and the working
-  folder (home as `~`, a worktree's own folder), truncated in the middle with
-  the full path on hover, including under project headings. The computer tag
-  appears for another computer always, for this one only when filtered rows
-  span several machines; at the right, the
-  diff (`+N −N` in `success`/`danger`) and the pull request's mark, led by the
-  count of running delegates and subagents (a 11px bot and the number, muted,
-  with the list in its tooltip; `delegateCount` in `state/agentStack.ts`).
-  Approval and question rows keep their sort position; line 3 says what they
-  ask, in `warning`. Non-git folders do not repeat their path on line 3.
-  Line 3: the branch, or what the thread asks of you in
-  `warning` in its place (`in <parent title>` for a delegated row drawn on its
-  own); at the right, always the harness mark and the model;
-  renaming edits the title in place at the row's height. A line with
-  nothing to say stays empty rather than collapsing, so the height never
-  changes. Counts are shown only for a thread the app has already read.
+  Line 2 (`text-sub`, `fg-muted`): the working folder (home as `~`, a
+  worktree's own folder), middle-truncated with the full path on hover,
+  including under project headings. At the right, the harness mark and model
+  (harness name when no model is known), then the running delegate count,
+  pull request and machine glyph. Machine names appear on hover. Remote
+  rows always keep their machine glyph; local rows show it in a mixed list.
+  Branch and activity details stay on the hover card. Approval and question
+  rows keep their sort position and state indicator. Renaming edits the
+  title in place at the row's height. Counts are shown only for a thread
+  the app has already read.
   What wants you — a request, a failure, a turn that ended while you were
   elsewhere, the open thread, a picked row — is weight 500 in full `fg`; what
   works, waits or is settled recedes to weight 400 at 75%, back to full on
