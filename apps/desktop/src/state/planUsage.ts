@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Plan usage: the composer meter's numbers and the shared plan cache, the requests that fill them
 // and the poll that keeps them fresh. The pure rules for what to ask live in `state/plans.ts`;
 // this file owns the timers and the requests. Split out of state/store.ts; the state it writes
@@ -419,7 +420,7 @@ export function ownPlanUsageDue(own: PlanUsage | null | undefined, now = Date.no
 function refreshSelectedPlanUsage(force = false, now = Date.now()): void {
   const s = get();
   const id = s.selectedId;
-  if (!id || s.status !== "ready" || !s.threads[id]?.loaded) return;
+  if (!id || s.status !== "ready" || !isLoaded(s.threads[id])) return;
   if (force || ownPlanUsageDue(s.planUsage[id], now)) void refreshPlanUsage(id);
 }
 

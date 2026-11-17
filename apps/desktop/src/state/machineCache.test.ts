@@ -1,3 +1,4 @@
+import { isLoaded, isLoading, openError } from "./thread";
 // The copy this computer keeps of a paired machine's threads: its round trip through storage, the
 // bounds that keep it small, and what the sidebar and the chat do with it while the machine is
 // away (state/machineCache.ts, state/machines.ts, state/store.ts).
@@ -58,7 +59,11 @@ function row(id: string, updatedAt: number, extra: Partial<SessionSummary> = {})
 }
 
 function thread(key: string, items: TranscriptItem[]): ThreadState {
-  return { ...emptyThread(key, "/Users/lars/code/studio", "Fix the build"), items, loaded: true };
+  return {
+    ...emptyThread(key, "/Users/lars/code/studio", "Fix the build"),
+    items,
+    load: { phase: "loaded" as const },
+  };
 }
 
 const said = (id: string, text: string): TranscriptItem => ({ kind: "assistant", id, text });
@@ -116,7 +121,7 @@ describe("the transcripts kept", () => {
     expect(back?.title).toBe("Fix the build");
     expect(back?.cwd).toBe("/Users/lars/code/studio");
     const restored = threadFromTranscript(back!);
-    expect(restored.loaded).toBe(true);
+    expect(isLoaded(restored)).toBe(true);
     expect(restored.running).toBe(false);
     expect(restored.id).toBe(KEY);
   });
@@ -288,7 +293,7 @@ describe("a machine that is away", () => {
     const opened = useApp.getState().threads[KEY]!;
     expect(opened.items.map((i) => i.id)).toEqual(["u1", "a1"]);
     expect(opened.running).toBe(false);
-    expect(opened.loading).toBe(false);
+    expect(isLoading(opened)).toBe(false);
     expect(threadOffline(KEY)).toBe(true);
 
     const other = `${STUDIO}/mock-studio-2`;
@@ -310,8 +315,8 @@ describe("a machine that is away", () => {
     await Bun.sleep(5);
     const live = useApp.getState().threads[KEY]!;
     expect(live.items).toEqual([]);
-    expect(live.loaded).toBe(true);
-    expect(live.openFailed).toBeUndefined();
+    expect(isLoaded(live)).toBe(true);
+    expect(openError(live)).toBeUndefined();
   });
 
   test("keeps a thread's transcript while its machine answers, for the next time it is away", async () => {

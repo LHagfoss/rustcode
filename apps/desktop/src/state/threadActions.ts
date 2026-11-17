@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Thread actions: confirming, retrying and editing a message, the inbox, pins and sidebar order,
 // archiving, renaming and trashing a thread. Split out of state/store.ts; the state these write still
 // lives in the app store.
@@ -141,7 +142,7 @@ export function restoreInbox(keys: readonly string[]): void {
  * lives in its transcript; its last message is the one the failure answered.
  */
 export async function retryThread(id: string): Promise<void> {
-  if (!get().threads[id]?.loaded) await openThread(id);
+  if (!isLoaded(get().threads[id])) await openThread(id);
   const thread = get().threads[id];
   if (!thread) return;
   for (let i = thread.items.length - 1; i >= 0; i--) {

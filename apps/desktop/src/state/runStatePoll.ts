@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Run state: the poll that reads which threads the engine is running, and folding that list into
 // the threads this window follows. Split out of state/store.ts; the state these write still lives in
 // the app store.
@@ -44,7 +45,7 @@ export function reconcileRunState(listed: readonly SessionSummary[]): void {
   for (const id of result.settle) {
     updateThread(id, (t) => (t.running ? finishTurn(t, "completed", Date.now()) : t));
     // What the turn left is the engine's to say: read the thread again.
-    if (get().threads[id]?.loaded) void reloadThread(id);
+    if (isLoaded(get().threads[id])) void reloadThread(id);
   }
 }
 

@@ -1,3 +1,4 @@
+import { openError } from "../state/thread";
 // A suggested next prompt (issue 3606): when a completed reply ends by offering something ("Want
 // me to add tests?", "Next step: run the migration."), an empty composer shows the accepting reply
 // as ghost text. It is read off the reply here, on this computer: no model call, no quota, and a
@@ -162,7 +163,8 @@ function isAside(item: TranscriptItem): boolean {
  * turn has no `turnEnd` row until the next message; its timing (`pendingTurn`) stands in for it.
  */
 export function completedReply(thread: ThreadState): { id: string; text: string } | null {
-  if (thread.running || thread.permissions.length || thread.queue.length || thread.error) return null;
+  if (thread.running || thread.permissions.length || thread.queue.length || openError(thread) || thread.error)
+    return null;
   let ended = false;
   for (let i = thread.items.length - 1; i >= 0; i--) {
     const item = thread.items[i];

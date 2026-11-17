@@ -199,7 +199,9 @@ test("an ended run tells its thread once, even when two clients hear of it", asy
   });
   watchMachineConnection("machine", conn);
   const key = "machine/t1";
-  useApp.setState({ threads: { [key]: { ...emptyThread(key, "/tmp"), loaded: true, running: true } } });
+  useApp.setState({
+    threads: { [key]: { ...emptyThread(key, "/tmp"), load: { phase: "loaded" as const }, running: true } },
+  });
   const ended = {
     status: "done",
     finished_at: Date.now(),
@@ -240,7 +242,9 @@ test("a thread's runs load once from the engine, and an old ended run is not ann
   );
   watchMachineConnection("machine", conn);
   const key = "machine/t1";
-  useApp.setState({ threads: { [key]: { ...emptyThread(key, "/tmp"), loaded: true, running: true } } });
+  useApp.setState({
+    threads: { [key]: { ...emptyThread(key, "/tmp"), load: { phase: "loaded" as const }, running: true } },
+  });
   await loadWorkflowRuns(key);
   await loadWorkflowRuns(key);
   await settle();

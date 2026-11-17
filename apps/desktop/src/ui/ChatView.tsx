@@ -1,3 +1,4 @@
+import { isLoading, openError } from "../state/thread";
 // The chat view: the header (project / title, plan, usage, panels), then one row
 // holding the chat column — transcript and composer stack with error and
 // approval cards — and the right panel docked beside it (ui/RightPanel.tsx). A
@@ -540,7 +541,7 @@ function ErrorBanner({
 
 /** The harness a thread runs on, by name: the one its failure names first, else its own. */
 function failedHarnessName(thread: ThreadState): string {
-  const named = failureHarness(thread.errorDetail ?? thread.error);
+  const named = failureHarness(thread.errorDetail ?? openError(thread) ?? thread.error);
   if (named) return named;
   const id = thread.harness?.id;
   const known = harnessesOn(useApp.getState(), splitThreadKey(thread.id).host)?.harnesses.find(
@@ -551,7 +552,10 @@ function failedHarnessName(thread: ThreadState): string {
 
 /** A refused login said plainly (`Codex is signed out.`), the raw text kept under Details. */
 function signedOutText(thread: ThreadState): string | undefined {
-  const advice = turnErrorAdvice(thread.errorDetail ?? thread.error, contextPercent(thread.usage));
+  const advice = turnErrorAdvice(
+    thread.errorDetail ?? openError(thread) ?? thread.error,
+    contextPercent(thread.usage),
+  );
   return advice.signedOut ? `${failedHarnessName(thread)} is signed out.` : undefined;
 }
 
@@ -563,7 +567,10 @@ function signedOutText(thread: ThreadState): string | undefined {
  */
 function ErrorFixes({ thread }: { thread: ThreadState }) {
   if (thread.running) return null;
-  const { fixes } = turnErrorAdvice(thread.errorDetail ?? thread.error, contextPercent(thread.usage));
+  const { fixes } = turnErrorAdvice(
+    thread.errorDetail ?? openError(thread) ?? thread.error,
+    contextPercent(thread.usage),
+  );
   if (!fixes.length) return null;
   const first = fixes[0];
   return (
@@ -922,7 +929,8 @@ export function ChatView() {
   // The approval just answered, which stands where its card was for a moment.
   const resolved = useApp((s) => (thread ? s.resolvedApprovals[thread.id] : undefined));
   const report = useApp((s) => s.report);
-  const error = thread?.error && thread.error !== dismissed ? thread.error : undefined;
+  const failure = openError(thread) ?? thread?.error;
+  const error = failure && failure !== dismissed ? failure : undefined;
   // The lane's gutter sits outside the cap: `px-3 sm:px-12` on the transcript's scroller (its rows
   // carry the cap alone) and `inset-x-3 sm:inset-x-12` here, so the field's edges and a message's
   // edges are one line at every width.
@@ -986,7 +994,7 @@ export function ChatView() {
             // Preferred over the thread: while its message is still arriving, the screen that has it
             // is this one, and the row it draws is the row the transcript draws (`FIRST_ROW_PAD`).
             <PendingSetupView pending={setup} />
-          ) : thread && !thread.loading ? (
+          ) : thread && !isLoading(thread) ? (
             // Keyed: each thread gets a fresh virtualizer that starts at its end (Transcript.tsx).
             <Transcript
               key={thread.id}
@@ -994,7 +1002,7 @@ export function ChatView() {
               bottomInset={stackHeight + 32}
               topInset={HEADER_HEIGHT}
             />
-          ) : thread?.loading ? (
+          ) : isLoading(thread) ? (
             <TranscriptSkeleton />
           ) : (
             <div className="flex-1" />
