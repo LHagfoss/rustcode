@@ -1,3 +1,4 @@
+import { applySidebarSort } from "../state/threadActions";
 // What ⌘K can do that the sidebar no longer has a button for, and how it finds a thread: the
 // project folder picker, the pull requests, usage and statistics pages, the sidebar's view
 // options, pinning and snoozing the open thread, and the Settled shelf. Plain data over the
@@ -234,7 +235,7 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
         detail: sort === option.id ? "On" : undefined,
         icon: ArrowDownUp,
         words: "view order sort list threads",
-        run: () => writePref(PREF.sort, option.id),
+        run: () => applySidebarSort(option.id),
       }),
     ),
     {

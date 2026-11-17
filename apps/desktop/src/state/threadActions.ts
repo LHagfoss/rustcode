@@ -15,6 +15,7 @@ import { dismissRows, restoreRows } from "./inboxDismissed";
 import { forgetThreadOutbox, queueChange } from "./machineOutbox";
 import { forget } from "./orchestration";
 import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
+import { PREF, type SidebarSort, writePref } from "./sidebarPrefs";
 import {
   type AppState,
   applySnooze,
@@ -276,6 +277,14 @@ export function setSectionOrder(key: string, ids: string[]) {
   const sidebarOrder = { ...get().sidebarOrder, [key]: ids };
   set({ sidebarOrder });
   store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
+}
+
+/** Applying a sort replaces manual project and thread arrangements, even for the current sort. */
+export function applySidebarSort(sort: SidebarSort) {
+  const sidebarOrder = {};
+  set({ sidebarOrder });
+  store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
+  writePref(PREF.sort, sort);
 }
 
 /** The arrangement, written only when it changed (`state/sidebarOrder.ts`). */

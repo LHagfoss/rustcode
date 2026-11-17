@@ -18,6 +18,7 @@ import {
   useSidebarSort,
 } from "../state/sidebarPrefs";
 import { toast, useApp, useShortcutHint } from "../state/store";
+import { applySidebarSort } from "../state/threadActions";
 import { startNewThreadFromContext } from "../state/threadOpen";
 import { ArrowDownUp, Check, ListFilter, SquarePen, X } from "./icons";
 import { cx, MenuContent, MenuSearchField, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
@@ -101,7 +102,7 @@ export function SidebarToolbar({
 
 /** Ordering is independent of which threads the list shows. */
 function SortMenu() {
-  const [sort, setSort] = useSidebarSort();
+  const [sort] = useSidebarSort();
   return (
     <DropdownMenu.Root>
       <Tooltip label="Sort threads">
@@ -116,9 +117,14 @@ function SortMenu() {
       </Tooltip>
       <MenuContent align="end" className="min-w-[220px]">
         <DropdownMenu.Label className={menuLabel}>Sort by</DropdownMenu.Label>
-        <DropdownMenu.RadioGroup value={sort} onValueChange={(v) => setSort(v as typeof sort)}>
+        <DropdownMenu.RadioGroup value={sort}>
           {SIDEBAR_SORTS.map((option) => (
-            <DropdownMenu.RadioItem key={option.id} value={option.id} className={menuItem}>
+            <DropdownMenu.RadioItem
+              key={option.id}
+              value={option.id}
+              className={menuItem}
+              onSelect={() => applySidebarSort(option.id)}
+            >
               {option.label}
               {sort === option.id && <Check size={14} className="ms-auto shrink-0 text-accent" />}
             </DropdownMenu.RadioItem>
