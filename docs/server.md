@@ -431,12 +431,13 @@ build or a prerelease build never updates itself. A server started by the app or
 by a terminal is not updated by this; the app has its own setting for that
 (Settings › About).
 
-It is on by default. To turn it off, set in the machine's `config.toml` (user
+It is off by default: an install restarts the server, so turning it on is a
+decision. To turn it on, set in the machine's `config.toml` (user
 configuration only; a project file cannot change it):
 
 ```toml
 [server]
-auto_update = false
+auto_update = true
 ```
 
 The server reads it at each look, so no restart is needed. The app does not show

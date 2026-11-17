@@ -309,12 +309,13 @@ the rest of the section it is read from the user configuration only.
 ## Keeping the server up to date
 
 A RustCode server that runs as a background service installs the newest stable
-release by itself once no turn is running, then restarts onto it. It is on by
-default; turn it off in the user configuration:
+release by itself once no turn is running, then restarts onto it. It is off by
+default, since an install restarts the server; turn it on in the user
+configuration:
 
 ```toml
 [server]
-auto_update = false
+auto_update = true
 ```
 
 It is read from the user configuration only. How it works and what it logs is
