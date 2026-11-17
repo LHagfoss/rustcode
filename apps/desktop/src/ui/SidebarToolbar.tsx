@@ -18,6 +18,7 @@ import {
   useSidebarSort,
 } from "../state/sidebarPrefs";
 import { toast, useApp, useShortcutHint } from "../state/store";
+import { applySidebarSort } from "../state/threadActions";
 import { startNewThreadFromContext } from "../state/threadOpen";
 import { Check, ListFilter, SquarePen, X } from "./icons";
 import {
@@ -105,7 +106,7 @@ export function SidebarToolbar({
 /** Sort, what the list shows and how dense its rows are: the sidebar's view, in one menu. */
 function ViewMenu({ filtering }: { filtering: boolean }) {
   const projectCwd = useApp((s) => s.projectCwd);
-  const [sort, setSort] = useSidebarSort();
+  const [sort] = useSidebarSort();
   const [onlyProject, setOnlyProject] = usePref(PREF.onlyProject, false);
   const [byProject, setByProject] = usePref(PREF.groupByProject, false);
   const [working, setWorking] = usePref(PREF.workingSection, true);
@@ -128,9 +129,14 @@ function ViewMenu({ filtering }: { filtering: boolean }) {
       </Tooltip>
       <MenuContent align="end" className="min-w-[220px]">
         <DropdownMenu.Label className={menuLabel}>Sort by</DropdownMenu.Label>
-        <DropdownMenu.RadioGroup value={sort} onValueChange={(v) => setSort(v as typeof sort)}>
+        <DropdownMenu.RadioGroup value={sort}>
           {SIDEBAR_SORTS.map((option) => (
-            <DropdownMenu.RadioItem key={option.id} value={option.id} className={menuItem}>
+            <DropdownMenu.RadioItem
+              key={option.id}
+              value={option.id}
+              className={menuItem}
+              onSelect={() => applySidebarSort(option.id)}
+            >
               {option.label}
               {check(sort === option.id)}
             </DropdownMenu.RadioItem>
