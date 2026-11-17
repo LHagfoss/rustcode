@@ -772,7 +772,12 @@ composer's keys stay outside the table.
   `api.anthropic.com/api/oauth/usage` (5-hour, weekly, weekly per model),
   read-only and never refreshed (`provider_auth/claude_usage.rs`). The first
   read happens when Usage opens or a Claude account is used; macOS may ask to
-  allow Keychain access. ChatGPT's numbers are cached a minute; Claude's five
+  allow Keychain access. A thread on a paired machine reads that machine's
+  login instead: the plans call only reaches this computer's engine, so the
+  composer meter takes the thread's own `_rustcode/usage/limits`, which for
+  Claude Code off macOS reads that machine's `.credentials.json` (no Keychain
+  to ask), and keeps those numbers on the thread rather than in this
+  computer's plan cache. ChatGPT's numbers are cached a minute; Claude's five
   minutes, with a failed read retried after one. That is one Anthropic request
   per login per interval however often the view is opened, because the endpoint
   rate-limits: when it answers 429 the engine waits out its `Retry-After` (or

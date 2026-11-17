@@ -147,7 +147,9 @@ export function settleStopWait(
   const reply = s.threads[id]?.items.slice(startIndex).findLast((i) => i.kind === "assistant");
   const replied = reply?.kind === "assistant" ? reply.text : undefined;
   const key = planKeyFor(s, id);
-  const windows = (key ? s.planCache[key]?.windows : undefined) ?? [];
+  // The thread's own windows first: a thread on a paired machine has no entry
+  // in this computer's cache, and its own are its login's anyway.
+  const windows = s.planUsage[id]?.windows ?? (key ? s.planCache[key]?.windows : undefined) ?? [];
   const now = Date.now();
   // Either can say the limit: Claude Code writes it as the reply, and again as the turn's error
   // (`Internal error: You've hit your 5-hour limit · resets 2:40am (Europe/Oslo): {"errorKind":…}`).

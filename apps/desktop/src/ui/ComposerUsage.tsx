@@ -28,6 +28,7 @@ import {
   useApp,
 } from "../state/store";
 import { formatTokens, isRunning, relativeAge } from "../state/thread";
+import { isRemoteThread } from "../state/threadKeys";
 import { usagePressTarget } from "../state/usagePage";
 import { cx, Pill, Segments, surfaceCollisionPadding, Tooltip, tipSurface } from "./primitives";
 
@@ -118,7 +119,10 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   const autoCompactAt = useApp((s) => (threadId ? autoCompactThresholdFor(s, threadId) : undefined));
   // The thread's own account has its own numbers: the meter never shows
   // another login's plan, not even the same harness's default one.
+  // A thread on a paired machine runs on that machine's login: this computer's
+  // cache holds another sign-in's numbers, so only the thread's own are shown.
   const cached = useApp((s) => {
+    if (threadId && isRemoteThread(threadId)) return undefined;
     const key = planKeyFor(s, threadId);
     if (!key) return onlyCachedPlan(s.planCache);
     if (key.includes("#")) return s.planCache[key];
