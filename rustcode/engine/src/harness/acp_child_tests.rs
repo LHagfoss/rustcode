@@ -1503,3 +1503,40 @@ fn a_sign_in_error_names_the_advertised_terminal_login() {
     assert_eq!(terminal_login(&perch, &json!({"authMethods": []})), None);
     assert_eq!(terminal_login(&perch, &json!({})), None);
 }
+
+#[test]
+fn prompt_usage_sums_into_session_totals_with_the_latest_window() {
+    let mut state = State::default();
+    let window = with_totals(&mut state, UsageUpdate::new(8_676, 1_048_576));
+    assert!(window.meta.is_none(), "no totals before a turn answered");
+    // Antigravity's `session/prompt` answer, as `agy acp` 1.5.10 sends it.
+    let answer = json!({"stopReason": "end_turn", "usage": {
+        "inputTokens": 8630, "outputTokens": 46, "cachedReadTokens": 0,
+        "cachedWriteTokens": 0, "thoughtTokens": 45, "totalTokens": 8676}});
+    let first = fold_prompt_usage(&mut state, &answer).unwrap();
+    assert_eq!((first.used, first.size), (8_676, 1_048_576));
+    let second =
+        json!({"usage": {"inputTokens": 9000, "outputTokens": 10, "cachedReadTokens": 8000}});
+    let update = fold_prompt_usage(&mut state, &second).unwrap();
+    let value = serde_json::to_value(SessionUpdate::UsageUpdate(update)).unwrap();
+    let totals = crate::data_store::totals(&value).unwrap();
+    assert_eq!(totals.input, Some(17_630));
+    assert_eq!(totals.output, Some(56));
+    assert_eq!(totals.cached, Some(8_000));
+    assert_eq!(totals.cache_write, Some(0));
+    // The agent's next context update keeps the totals on it.
+    let next = with_totals(&mut state, UsageUpdate::new(9_010, 1_048_576));
+    let value = serde_json::to_value(SessionUpdate::UsageUpdate(next)).unwrap();
+    assert_eq!(
+        crate::data_store::totals(&value).unwrap().input,
+        Some(17_630)
+    );
+}
+
+#[test]
+fn an_answer_without_usage_counts_changes_nothing() {
+    let mut state = State::default();
+    assert!(fold_prompt_usage(&mut state, &json!({"stopReason": "end_turn"})).is_none());
+    assert!(fold_prompt_usage(&mut state, &json!({"usage": {"totalTokens": 5}})).is_none());
+    assert!(state.totals.is_none());
+}

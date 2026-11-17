@@ -14,7 +14,7 @@ use super::{HarnessModel, ResolvedHarness, process::HarnessProcess};
 use agent_client_protocol::schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOptions, SessionUpdate, StopReason,
+    SessionConfigSelectOptions, SessionUpdate, StopReason, UsageUpdate,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -87,6 +87,91 @@ struct State {
     echo_reminder: Option<String>,
     /// A tail of the echo that may still become the start of that block.
     echo_pending: String,
+    /// The context window of the agent's latest `usage_update`.
+    window: Option<(u64, u64)>,
+    /// The session's token totals, summed from each `session/prompt`
+    /// answer's `usage` (`fold_prompt_usage`).
+    totals: Option<PromptTotals>,
+}
+
+/// Token totals summed from the `usage` an ACP agent puts on its
+/// `session/prompt` answer (Antigravity, Gemini CLI). That `usage` is the
+/// turn's own, so the session total is their sum.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct PromptTotals {
+    input: u64,
+    output: u64,
+    cached: u64,
+    cache_write: u64,
+}
+
+impl PromptTotals {
+    /// Adds one answer's `usage`; false when it carries no counts.
+    fn add(&mut self, usage: &Value) -> bool {
+        let count = |key: &str| usage.get(key).and_then(Value::as_u64);
+        let (input, output) = (count("inputTokens"), count("outputTokens"));
+        if input.is_none() && output.is_none() {
+            return false;
+        }
+        self.input += input.unwrap_or(0);
+        self.output += output.unwrap_or(0);
+        self.cached += count("cachedReadTokens").unwrap_or(0);
+        self.cache_write += count("cachedWriteTokens").unwrap_or(0);
+        true
+    }
+
+    /// The totals as `_meta.rustcode`, the shape `data_store::totals` reads.
+    fn meta(self) -> serde_json::Map<String, Value> {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "rustcode".to_owned(),
+            json!({
+                "kind": "usage",
+                "version": crate::acp::usage::USAGE_META_VERSION,
+                "estimated": false,
+                "inputTokens": self.input,
+                "outputTokens": self.output,
+                "cachedTokens": self.cached,
+                "cacheWriteTokens": self.cache_write,
+            }),
+        );
+        meta
+    }
+}
+
+/// Folds a `session/prompt` answer's `usage` into the session totals and
+/// returns the `usage_update` that carries them, with the agent's latest
+/// context window (0 / 0 when it sent none).
+fn fold_prompt_usage(state: &mut State, answer: &Value) -> Option<UsageUpdate> {
+    let usage = answer.get("usage")?;
+    let mut totals = state.totals.unwrap_or_default();
+    if !totals.add(usage) {
+        return None;
+    }
+    state.totals = Some(totals);
+    let (used, size) = state.window.unwrap_or((0, 0));
+    Some(UsageUpdate::new(used, size).meta(totals.meta()))
+}
+
+/// The agent's own `usage_update` carries only the context window: keep it,
+/// and carry the session totals already summed so the latest update still
+/// has them.
+fn with_totals(state: &mut State, mut update: UsageUpdate) -> UsageUpdate {
+    let ours = update
+        .meta
+        .as_ref()
+        .is_some_and(|meta| meta.contains_key("rustcode"));
+    if ours {
+        return update;
+    }
+    state.window = Some((update.used, update.size));
+    if let Some(totals) = state.totals {
+        update
+            .meta
+            .get_or_insert_with(serde_json::Map::new)
+            .extend(totals.meta());
+    }
+    update
 }
 
 pub(crate) struct AcpAdapter {
@@ -97,6 +182,10 @@ pub(crate) struct AcpAdapter {
     killed: AtomicBool,
     /// The agent takes `_session/steering`: a message added to the running turn.
     steering: bool,
+    out: OutputSender,
+    /// Token totals come from each `session/prompt` answer's `usage`. Off
+    /// for a harness whose own log is the source (`harness_usage::log_based`).
+    prompt_usage: bool,
 }
 
 fn lock(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
@@ -447,6 +536,7 @@ impl AcpAdapter {
             Arc::clone(&state),
             out.clone(),
         ));
+        let prompt_usage = !crate::harness_usage::log_based(&harness.id);
         let describe = |error: RpcError| format!("{}: {}", harness.name, error.describe());
         let initialized = peer
             .request_within(
@@ -615,6 +705,8 @@ impl AcpAdapter {
             state,
             killed: AtomicBool::new(false),
             steering,
+            out,
+            prompt_usage,
         };
         // Read before the thread's own choice is applied, so each model's
         // default effort is the harness's and not this thread's.
@@ -690,8 +782,19 @@ impl AcpAdapter {
         // The turn's last updates arrived before its answer; pass them on
         // first.
         self.peer.barrier().await;
-        // A half-read echo does not outlive the turn that carried it.
-        lock(&self.state).echo_pending.clear();
+        let usage = {
+            let mut state = lock(&self.state);
+            // A half-read echo does not outlive the turn that carried it.
+            state.echo_pending.clear();
+            self.prompt_usage
+                .then(|| fold_prompt_usage(&mut state, &answer))
+                .flatten()
+        };
+        if let Some(usage) = usage {
+            let _ = self
+                .out
+                .send(Output::Update(SessionUpdate::UsageUpdate(usage)));
+        }
         Ok(answer
             .get("stopReason")
             .cloned()
@@ -1076,6 +1179,9 @@ async fn relay(
                                 mapped_options(&state),
                             ),
                         )
+                    }
+                    SessionUpdate::UsageUpdate(usage) => {
+                        SessionUpdate::UsageUpdate(with_totals(&mut lock(&state), usage))
                     }
                     other => other,
                 };

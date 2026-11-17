@@ -336,6 +336,26 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         requires: None,
         native_questions: false,
     },
+    // Google's Antigravity CLI (`agy`) speaks ACP with `agy acp` since 1.5.0.
+    // Its `session/prompt` answer carries the turn's token usage
+    // (`acp_child.rs` › `fold_prompt_usage`). `agy acp --login` signs in by
+    // pasting a code from Google's page, so it works without a browser.
+    KnownHarness {
+        id: "antigravity",
+        name: "Antigravity",
+        kind: HarnessKind::Acp,
+        command: &["agy", "acp"],
+        login_command: Some(&["agy", "acp", "--login"]),
+        install_hint: Some(if cfg!(windows) {
+            "irm https://antigravity.google/cli/install.ps1 | iex"
+        } else {
+            "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+        }),
+        version: Some(("agy", &["--version"])),
+        auth_probe: None,
+        requires: None,
+        native_questions: false,
+    },
 ];
 
 pub(crate) fn known(id: &str) -> Option<&'static KnownHarness> {
@@ -1502,6 +1522,7 @@ mod tests {
                 "opencode",
                 "pi",
                 "perch",
+                "antigravity",
                 "my-agent"
             ]
         );
