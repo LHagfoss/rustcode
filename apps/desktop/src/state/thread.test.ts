@@ -801,10 +801,10 @@ describe("auto-settle", () => {
 });
 
 describe("a turn the engine wakes", () => {
-  test("runs again with a quiet line, and a parked count clears", () => {
+  test("runs again with a quiet line, preserving outstanding background work", () => {
     const parked = { ...finishTurn(beginTurn(emptyThread("s", "/p"), "go", 0), "completed", 5), waiting: 2 };
     const woken = wakeTurn(parked, 10);
-    expect(woken).toMatchObject({ turn: { kind: "woken", startedAt: 10 }, waiting: undefined });
+    expect(woken).toMatchObject({ turn: { kind: "woken", startedAt: 10 }, waiting: 2 });
     expect(woken.items.at(-1)).toMatchObject({
       kind: "notice",
       tone: "info",
@@ -1419,14 +1419,24 @@ describe("the turn state machine", () => {
       errorDetail: "HTTP 500",
     };
     for (const started of [beginTurn(left, "go", 10), beginQuietTurn(left, 10)]) {
-      expect(started).toMatchObject({ queueHeld: undefined, waiting: undefined, error: undefined });
+      expect(started).toMatchObject({ queueHeld: undefined, waiting: 2, error: undefined });
       expect(started.errorDetail).toBeUndefined();
     }
     // The engine's own turn keeps the hold a stop left, as it always did; the queue does not run
     // under a turn either way.
     const woken = wakeTurn(left, 10);
-    expect(woken).toMatchObject({ queueHeld: true, waiting: undefined, error: undefined });
+    expect(woken).toMatchObject({ queueHeld: true, waiting: 2, error: undefined });
     expect(queueHeld(woken)).toBe(false);
+  });
+
+  test("pending background work survives a follow-up or compaction until the turn finishes", () => {
+    const parked = { ...emptyThread("s", "/p"), waiting: 2 };
+    const turns = [beginTurn(parked, "check progress", 10), beginQuietTurn(parked, 10), wakeTurn(parked, 10)];
+    for (const running of turns) {
+      const ended = finishTurn(running, "completed", 20);
+      expect(isRunning(ended)).toBe(false);
+      expect(ended.waiting).toBe(2);
+    }
   });
 
   test("a turn that starts over a quiet one is the user's, with nothing of the old one", () => {
@@ -1440,7 +1450,7 @@ describe("the turn state machine", () => {
     const running = { ...beginTurn(emptyThread("s", "/p"), "go", 10), waiting: 1 };
     const woken = wakeTurn(running, 40);
     expect(woken.turn).toBe(running.turn);
-    expect(woken.waiting).toBeUndefined();
+    expect(woken.waiting).toBe(1);
   });
 
   test("finishing clears the whole turn in one step and hands its clock and usage to the footer", () => {
