@@ -1047,6 +1047,17 @@ pub enum OutsideCommands {
         #[arg(long)]
         ask: Option<bool>,
     },
+    /// A one-time code that approves one sign-in on this machine's public
+    /// sign-in page (`[outside] public_url`, for ChatGPT, Claude and other
+    /// hosted agents). It works once, for 10 minutes
+    Code {
+        /// The most the app may do: read_only (default), delegate, manage or admin
+        #[arg(long)]
+        access: Option<String>,
+        /// Ask in the app before each change (default: on above read_only)
+        #[arg(long)]
+        ask: Option<bool>,
+    },
     /// Revoke an app's token; it stops working at once
     Revoke {
         id: String,

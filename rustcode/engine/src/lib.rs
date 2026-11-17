@@ -45,6 +45,9 @@ pub use orchestration::hub::ORCHESTRATOR_TOKEN_ENV;
 pub use orchestration::mcp_server::run as run_mcp_orchestrator;
 pub use orchestration::mcp_server::run_outside as run_mcp_connect;
 pub use orchestration::outside::TOKEN_ENV as MCP_CONNECT_TOKEN_ENV;
+pub use orchestration::outside_http::{
+    SignInCode as OutsideSignInCode, sign_in_code as outside_sign_in_code,
+};
 mod platform;
 pub mod preview;
 mod project_hooks;

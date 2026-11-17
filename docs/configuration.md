@@ -306,6 +306,21 @@ roots = ["/Volumes/Work", "/opt/projects"]   # absolute or ~/…; missing ones a
 The gateway reads `roots` on every request, so a change needs no restart. Like
 the rest of the section it is read from the user configuration only.
 
+## Outside agents on a public address
+
+Hosted agents (ChatGPT, Claude.ai) reach this machine's MCP endpoint through a
+tunnel that serves an HTTPS hostname. Tell RustCode that hostname:
+
+```toml
+[outside]
+public_url = "https://rustcode.example.com"   # a bare https:// origin, no path
+```
+
+The endpoint then answers requests for that host as well as `127.0.0.1`, and
+signs agents in on its own page with a code from `rustcode outside code`. Read
+from the user configuration only, and when the server starts. Setup:
+[mcp-outside-agents.md › Hosted agents](mcp-outside-agents.md#hosted-agents-chatgpt-claude-and-other-cloud-clients).
+
 ## Keeping the server up to date
 
 A RustCode server that runs as a background service installs the newest stable
