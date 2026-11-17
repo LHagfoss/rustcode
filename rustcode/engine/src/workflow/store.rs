@@ -238,6 +238,27 @@ impl Store {
         runs
     }
 
+    /// Remove the settled runs past the newest `keep` (counted among settled
+    /// runs, newest first), so a thread's `workflows` folder does not grow
+    /// without end. A running run is never removed: it may be resumed. How
+    /// many were removed.
+    pub(super) fn prune(&self, keep: usize) -> usize {
+        let mut removed = 0;
+        for record in self
+            .list()
+            .into_iter()
+            .filter(|record| record.status.settled())
+            .skip(keep)
+        {
+            if let Some(dir) = self.run_dir(&record.id)
+                && std::fs::remove_dir_all(&dir).is_ok()
+            {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     pub(super) fn append_call(&self, run_id: &str, call: &CallRecord) -> Result<(), String> {
         let path = self
             .file(run_id, CALLS_FILE)
@@ -374,6 +395,30 @@ mod tests {
         changed.status = RunStatus::Done;
         store.save(&changed).unwrap();
         assert_eq!(store.load("wf-1-aaaaaaaa").unwrap().status, RunStatus::Done);
+    }
+
+    #[test]
+    fn prune_keeps_the_newest_settled_runs_and_every_running_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join("workflows"));
+        let runs = [
+            ("wf-1-aaaaaaaa", RunStatus::Done),
+            ("wf-2-bbbbbbbb", RunStatus::Running),
+            ("wf-3-cccccccc", RunStatus::Failed),
+            ("wf-4-dddddddd", RunStatus::Cancelled),
+            ("wf-5-eeeeeeee", RunStatus::Done),
+        ];
+        for (at, (id, status)) in runs.into_iter().enumerate() {
+            let mut run = record(id);
+            run.started_at = at as i64;
+            run.status = status;
+            store.create(&run, "").unwrap();
+        }
+        assert_eq!(store.prune(2), 2);
+        let ids: Vec<String> = store.list().into_iter().map(|run| run.id).collect();
+        assert_eq!(ids, ["wf-5-eeeeeeee", "wf-4-dddddddd", "wf-2-bbbbbbbb"]);
+        assert!(!dir.path().join("workflows/wf-1-aaaaaaaa").exists());
+        assert_eq!(store.prune(2), 0);
     }
 
     #[test]

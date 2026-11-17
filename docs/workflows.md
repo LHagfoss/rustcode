@@ -171,6 +171,10 @@ branches on which of several calls settled first, a resumed run can order later
 calls differently; keying by hash and occurrence (not by position) keeps those
 calls matched to their answers anyway.
 
+**Retention.** A thread keeps its 20 newest settled runs (`done`, `failed`,
+`timed_out`, `cancelled`); when a run starts, older settled runs' folders are
+removed. A run still `running` is never removed, since it may be resumed.
+
 **When a run resumes.** The engine resumes the runs a thread left `running`
 when that thread registers with the engine's orchestrator hub (the thread is
 opened or started on a harness with the orchestration tools). Until then
@@ -223,4 +227,4 @@ reads them when it starts.
 
 - The built-in RustCode harness and outside agents (`mcp-connect`) as callers.
 - A button to resume a run a restart left undriven without opening its thread.
-- Retention of old runs.
+- A setting for how many runs a thread keeps.
