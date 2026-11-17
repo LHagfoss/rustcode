@@ -7,6 +7,7 @@
 import { useCallback } from "react";
 import { modelName, relationshipOf } from "../acp/types";
 import { cancel, runPrompt, selectThread, setDraft, useApp } from "../state/store";
+import { isRunning } from "../state/thread";
 import { PermissionMenu } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
 import { ExternalLink, MessageSquareQuote } from "./icons";
@@ -16,7 +17,7 @@ import { Transcript } from "./Transcript";
 /** The peeked thread's composer when it is a side chat: send, or stop the turn it is running. */
 function SideChatField({ id }: { id: string }) {
   const draft = useApp((s) => s.drafts[id] ?? "");
-  const running = useApp((s) => !!s.threads[id]?.running);
+  const running = useApp((s) => isRunning(s.threads[id]));
   // Opened from a message, the field starts on its quote: it mounts per thread (`key`), takes the
   // keyboard and puts the caret at the end of the quote.
   const start = useCallback((el: HTMLTextAreaElement | null) => {

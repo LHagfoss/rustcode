@@ -71,7 +71,9 @@ describe("momentOf", () => {
     expect(moment.request).toEqual({ key: "1", question: true });
     expect(momentOf(thread({ error: "boom" }), undefined).failed).toBe(true);
     expect(momentOf(undefined, 5).failed).toBe(true);
-    expect(momentOf(thread({ running: true, error: "old" }), undefined).failed).toBe(false);
+    expect(momentOf(thread({ turn: { kind: "user", startedAt: 0 }, error: "old" }), undefined).failed).toBe(
+      false,
+    );
   });
 });
 

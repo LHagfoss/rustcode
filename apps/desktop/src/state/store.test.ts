@@ -164,7 +164,7 @@ import {
   wakeSnoozed,
   windowNow,
 } from "./store";
-import { emptyThread, turnCompletion } from "./thread";
+import { emptyThread, isRunning, turnCompletion } from "./thread";
 import { type DelegatedThread, topLevel } from "./topLevel";
 
 const until = async (check: () => boolean, ms = 2000) => {
@@ -713,7 +713,7 @@ describe("engine controller with the mock engine", () => {
     // The user stops the turn: what waited stays where it is, and says why.
     await cancel();
     await done;
-    await until(() => !selected()!.running);
+    await until(() => !isRunning(selected()!));
     expect(selected()!.queueHeld).toBe(true);
     expect(selected()!.queue.map((q) => q.text)).toEqual(["yolo second", "yolo third"]);
     const sent = () =>
@@ -724,7 +724,7 @@ describe("engine controller with the mock engine", () => {
     // Resume starts the first one where it waits; the rest follow it as each turn completes.
     expect(await resumeQueue(id)).toBe(true);
     expect(selected()!.queueHeld).toBeUndefined();
-    await until(() => !selected()!.running && selected()!.queue.length === 0, 5000);
+    await until(() => !isRunning(selected()!) && selected()!.queue.length === 0, 5000);
     expect(sent().slice(-2)).toEqual(["yolo second", "yolo third"]);
   });
 
@@ -784,13 +784,13 @@ describe("engine controller with the mock engine", () => {
     await submit("yolo held message");
     await cancel();
     await done;
-    await until(() => !selected()!.running && selected()!.queue.length === 1);
+    await until(() => !isRunning(selected()!) && selected()!.queue.length === 1);
     expect(selected()!.queueHeld).toBe(true);
     await submit("yolo a new message");
     // Nothing the user wrote is skipped: the held message starts, the new one waits behind it.
     expect(selected()!.queue.map((q) => q.text)).toEqual(["yolo a new message"]);
-    await until(() => selected()!.running);
-    await until(() => selected()!.queue.length === 0 && !selected()!.running, 5000);
+    await until(() => isRunning(selected()!));
+    await until(() => selected()!.queue.length === 0 && !isRunning(selected()!), 5000);
     const sent = selected()!
       .items.filter((i) => i.kind === "user")
       .map((i) => (i as { text: string }).text);
@@ -840,7 +840,9 @@ describe("engine controller with the mock engine", () => {
     await until(() => !!useApp.getState().sessionCommands[useApp.getState().sessions[0]!.id]);
     const items = selected()!.items.length;
     await submit("/status");
-    await until(() => !selected()!.running && (useApp.getState().report?.text.includes("Folder") ?? false));
+    await until(
+      () => !isRunning(selected()!) && (useApp.getState().report?.text.includes("Folder") ?? false),
+    );
     expect(useApp.getState().report?.text.startsWith("**Status**")).toBe(true);
     expect(selected()!.items.length).toBe(items);
     closeReport();
@@ -1231,13 +1233,13 @@ describe("engine controller with the mock engine", () => {
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
     const thread = selected()!;
-    expect(thread.running).toBe(true);
+    expect(isRunning(thread)).toBe(true);
     expect(thread.permissions[0]?.diffs[0]?.path).toBe("src/app.ts");
     answerPermission(thread.permissions[0]!, thread.permissions[0]!.options[0]!);
     await done;
     await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
     const after = selected()!;
-    expect(after.running).toBe(false);
+    expect(isRunning(after)).toBe(false);
     expect(after.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "completed" });
     expect(
       after.items.some((i) => i.kind === "tool" && i.status === "completed" && i.diffs.length === 1),
@@ -1487,7 +1489,7 @@ describe("engine controller with the mock engine", () => {
     expect(confirm?.action).toBe("Send");
     confirm!.run();
     await until(
-      () => selected()?.items.filter((i) => i.kind === "turnEnd").length === 1 && !selected()!.running,
+      () => selected()?.items.filter((i) => i.kind === "turnEnd").length === 1 && !isRunning(selected()!),
     );
     const users = selected()!
       .items.filter((i) => i.kind === "user")
@@ -1619,7 +1621,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().links.fanOuts.length === 1);
     const fan = useApp.getState().links.fanOuts[0]!;
     expect(fan.links).toHaveLength(2);
-    await until(() => !selected()?.running, 5000);
+    await until(() => !isRunning(selected()), 5000);
     const s = useApp.getState();
     const targets = s.links.links.map((l) => l.target);
     expect(targets.every((t) => s.threads[t]?.worktree?.branch.startsWith("feat/"))).toBe(true);
@@ -1641,7 +1643,7 @@ describe("engine controller with the mock engine", () => {
     selectThread(parent);
     await until(() => selected()?.loaded === true);
     // The turn that asks: it runs, so the wait it opens belongs to one.
-    updateThread(parent, (t) => ({ ...t, running: true }));
+    updateThread(parent, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: Date.now() } }));
     const starting = answerOrchestration({
       sessionId: parent,
       tool: "start_session",
@@ -1657,7 +1659,7 @@ describe("engine controller with the mock engine", () => {
       tool: "wait_session",
       args: { link_ids: [link], timeout_ms: 5000 },
     });
-    updateThread(parent, (t) => ({ ...t, running: false }));
+    updateThread(parent, (t) => ({ ...t, turn: undefined }));
     // The child settling is the parent's news, not a wait's answer nobody reads: it is woken with it.
     const woken = () =>
       useApp.getState().threads[parent]!.items.some((i) => i.kind === "user" && !!i.wake) ||
@@ -1680,7 +1682,7 @@ describe("engine controller with the mock engine", () => {
     selectThread(parent);
     await until(() => selected()?.loaded === true);
     // The turn that asks: it runs, so the wait belongs to one.
-    updateThread(parent, (t) => ({ ...t, running: true }));
+    updateThread(parent, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: Date.now() } }));
     const link: Link = {
       id: `${parent}/1`,
       orchestrator: parent,
@@ -1723,7 +1725,7 @@ describe("engine controller with the mock engine", () => {
    * wake that reports one thing can start another one after it, so every approval is answered.
    */
   const runQueuedWake = async (thread: string) => {
-    updateThread(thread, (t) => ({ ...t, running: false }));
+    updateThread(thread, (t) => ({ ...t, turn: undefined }));
     let done = false;
     const run = resumeQueue(thread).then(() => {
       done = true;
@@ -1801,7 +1803,11 @@ describe("engine controller with the mock engine", () => {
     }));
     selectThread(parent);
     await until(() => selected()?.loaded === true);
-    updateThread(parent, (t) => ({ ...t, running: true, cwd: "/Users/you/code/rustcode" }));
+    updateThread(parent, (t) => ({
+      ...t,
+      turn: { kind: "user" as const, startedAt: Date.now() },
+      cwd: "/Users/you/code/rustcode",
+    }));
     updateThread(target, (t) => ({ ...t, cwd: "/Users/you/code/rustcode" }));
     const link: Link = {
       id: `${parent}/1`,
@@ -1823,7 +1829,7 @@ describe("engine controller with the mock engine", () => {
     const at = Date.now() - 5000;
     updateThread(target, (thread) => ({
       ...thread,
-      running: true,
+      turn: { kind: "user" as const, startedAt: Date.now() },
       items: [{ kind: "notice", id: "last-activity", at, text: "Working", tone: "info" }],
     }));
     const answer = await answerOrchestration({
@@ -2053,10 +2059,10 @@ describe("engine controller with the mock engine", () => {
       "already runs in a worktree",
     );
     // A thread mid-turn would keep writing in a folder it is losing.
-    updateThread(child, (t) => ({ ...t, running: true }));
+    updateThread(child, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: Date.now() } }));
     const running = await refuse({ session_id: child });
     expect(running.error).toMatchObject({ code: "conflict" });
-    updateThread(child, (t) => ({ ...t, running: false }));
+    updateThread(child, (t) => ({ ...t, turn: undefined }));
     // None of them asked the user, and none reached the engine.
     expect(useApp.getState().grant).toBeNull();
     expect(transport.asked(V2Method.worktreeHandoff)).toHaveLength(0);
@@ -2073,7 +2079,11 @@ describe("engine controller with the mock engine", () => {
     }));
     selectThread(parent);
     await until(() => selected()?.loaded === true);
-    updateThread(parent, (t) => ({ ...t, running: true, cwd: "/Users/you/code/rustcode" }));
+    updateThread(parent, (t) => ({
+      ...t,
+      turn: { kind: "user" as const, startedAt: Date.now() },
+      cwd: "/Users/you/code/rustcode",
+    }));
     // The mock's login-form thread has uncommitted changes in its worktree.
     const dirty = useApp.getState().sessions.find((x) => x.worktree?.branch === "feat/login-form");
     expect(dirty).toBeDefined();
@@ -2504,7 +2514,7 @@ describe("engine controller with the mock engine", () => {
       ],
       [parent, child],
     );
-    updateThread(child, (t) => ({ ...t, running: true }));
+    updateThread(child, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: Date.now() } }));
     await runPrompt(child, RESUME_TEXT, undefined, { automatic: true, resumeLinks: [`${parent}/1`] });
     // Not dropped: the row waits behind the turn, with the links it will answer when it starts.
     const row = useApp.getState().threads[child]?.queue.at(-1);
@@ -2512,7 +2522,7 @@ describe("engine controller with the mock engine", () => {
     expect(row?.resume).toEqual([`${parent}/1`]);
     expect(staged.linkOf(`${parent}/1`)?.state).toBe("interrupted");
     // That turn ends, the row starts, and from there the link works for it.
-    updateThread(child, (t) => ({ ...t, running: false }));
+    updateThread(child, (t) => ({ ...t, turn: undefined }));
     const run = resumeQueue(child);
     await until(() => staged.linkOf(`${parent}/1`)?.state === "working", 3000);
     expect(staged.linkOf(`${parent}/1`)?.resumedAt).toBeDefined();
@@ -2724,14 +2734,14 @@ describe("engine controller with the mock engine", () => {
     useApp.setState((s) => ({
       threads: {
         ...s.threads,
-        [id]: { ...s.threads[id]!, running: true, turnStartedAt: Date.now() - 60_000 },
+        [id]: { ...s.threads[id]!, turn: { kind: "user", startedAt: Date.now() - 60_000 } },
       },
     }));
     expect(statusOf(useApp.getState(), id)).toBe("running");
     await refreshSessions({ quiet: true });
-    expect(useApp.getState().threads[id]?.running).toBe(true);
+    expect(isRunning(useApp.getState().threads[id])).toBe(true);
     await refreshSessions({ quiet: true });
-    expect(useApp.getState().threads[id]?.running).toBe(false);
+    expect(isRunning(useApp.getState().threads[id])).toBe(false);
     expect(statusOf(useApp.getState(), id)).not.toBe("running");
   });
 
@@ -3145,14 +3155,14 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().threads[a.id]?.loaded === true);
     setDraft(a.id, "half-written reply");
     setDraft("new", "the next idea");
-    updateThread(a.id, (t) => ({ ...t, running: true }));
+    updateThread(a.id, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: Date.now() } }));
 
     await settleThread(a.id);
     const s = useApp.getState();
     expect(s.selectedId).toBeNull();
     expect(s.drafts[a.id]).toBe("half-written reply");
     expect(s.drafts.new).toBe("the next idea");
-    expect(s.threads[a.id]?.running).toBe(true);
+    expect(isRunning(s.threads[a.id])).toBe(true);
   });
 
   test("snoozing the thread on screen leaves it for a new thread in its folder", async () => {
@@ -3286,7 +3296,7 @@ describe("a thread that sleeps through its work", () => {
     // Nothing answers it for the user, and the turn stays held by the question.
     const question = s.threads[a.id]!.permissions[0]!;
     expect(question.question?.text).toBe("Which test runner should I use?");
-    expect(s.threads[a.id]?.running).toBe(true);
+    expect(isRunning(s.threads[a.id])).toBe(true);
     // The request is not a row in Needs you, nor a thread the Dock counts, until the snooze ends.
     expect(inboxOf(s).some((item) => item.threadId === a.id)).toBe(false);
     expect(badgeCount(s)).toBe(0);
@@ -3311,7 +3321,7 @@ describe("a thread that sleeps through its work", () => {
     selectThread(a.id);
     // Long enough that the turn is still running when the message arrives: it waits in the queue.
     const running = runPrompt(a.id, "keep working");
-    await until(() => useApp.getState().threads[a.id]?.running === true);
+    await until(() => isRunning(useApp.getState().threads[a.id]) === true);
     await setSnoozed(a.id, Date.now() + 3_600_000);
     expect(await submit("one more thing")).toBe(true);
     const s = useApp.getState();
@@ -3995,7 +4005,9 @@ describe("which thread endings are announced", () => {
 
   test("a turn that ends while a delegate still works says nothing", async () => {
     const { finishToast } = await import("./store");
-    await stage({ a: live("a"), c: live("c", { running: true }) }, [delegate("a", "c")]);
+    await stage({ a: live("a"), c: live("c", { turn: { kind: "user" as const, startedAt: Date.now() } }) }, [
+      delegate("a", "c"),
+    ]);
     finishToast("a", "completed");
     expect(said()).toEqual([]);
   });
@@ -4546,7 +4558,7 @@ describe("what an agent may do with the messages it queued", () => {
   const busy = async (caller: string) => {
     const target = elsewhere(caller);
     await openThread(target);
-    updateThread(target, (t) => ({ ...t, running: true }));
+    updateThread(target, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: Date.now() } }));
     return target;
   };
   const queueOn = async (caller: string, target: string, message: string) => {
@@ -4731,7 +4743,7 @@ describe("what an agent may do with the messages it queued", () => {
     await openThread(target);
     selectThread(target);
     const turning = submit("do the thing");
-    await until(() => useApp.getState().threads[target]?.running === true);
+    await until(() => isRunning(useApp.getState().threads[target]) === true);
     await queueOn(caller, target, "instead, do this");
     const id = queue(target)[0]!.id;
     const steered = await manage(caller, target, { action: "steer", queue_id: id });
@@ -4773,7 +4785,7 @@ describe("what an agent may do with the messages it queued", () => {
     await openThread(target);
     selectThread(target);
     const turning = submit("do the thing");
-    await until(() => useApp.getState().threads[target]?.running === true);
+    await until(() => isRunning(useApp.getState().threads[target]) === true);
     const result = await answerOrchestration({
       sessionId: caller,
       tool: "message_session",
@@ -4799,7 +4811,7 @@ describe("what an agent may do with the messages it queued", () => {
     };
     updateThread(target, (t) => ({
       ...t,
-      running: true,
+      turn: { kind: "user" as const, startedAt: Date.now() },
       harness: t.harness && {
         ...t.harness,
         capabilities: { ...t.harness.capabilities, steering: only },
@@ -5957,7 +5969,7 @@ describe("a delegate whose turn failed", () => {
     // keeps the error on screen, which used to read as "could not be opened".
     updateThread(target, (t) => ({
       ...t,
-      running: false,
+      turn: undefined,
       error: "Codex rejected the request (HTTP 400 Bad Request).",
     }));
     const answer = await send(caller, target, "try again with less");
@@ -6096,14 +6108,14 @@ describe("a delegate whose turn failed", () => {
 
   test("a message queued on it fails with the reason instead of staying Queued", async () => {
     const { caller, target } = await ready();
-    updateThread(target, (t) => ({ ...t, running: true }));
+    updateThread(target, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: Date.now() } }));
     const answer = await send(caller, target, "after that, this");
     expect(answer.receipt).toBe("queued");
     const id = String(answer.link_id);
     // The user's own queued message stays held for Resume.
     updateThread(target, (t) => ({
       ...t,
-      running: false,
+      turn: undefined,
       queueHeld: true,
       queue: [...t.queue, { id: "user-1", text: "mine", queuedAt: Date.now() }],
     }));

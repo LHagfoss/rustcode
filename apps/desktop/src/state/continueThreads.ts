@@ -46,7 +46,7 @@ import {
   toast,
   useApp,
 } from "./store";
-import { RESUME_MARK } from "./thread";
+import { isRunning, RESUME_MARK } from "./thread";
 import { threadName } from "./threadNotices";
 import { openThread } from "./threadOpen";
 
@@ -273,7 +273,7 @@ export async function continueDueThreads(now = Date.now()): Promise<void> {
         await new Promise((r) => setTimeout(r, 100));
       }
       const thread = get().threads[id];
-      if (!thread?.loaded || thread.running) continue;
+      if (!thread?.loaded || isRunning(thread)) continue;
       if (!holds()) {
         dropLimitWait(id);
         continue;
@@ -334,7 +334,7 @@ export async function continueInternetThreads(now = Date.now()): Promise<void> {
         await new Promise((r) => setTimeout(r, 100));
       }
       const thread = get().threads[id];
-      if (!thread?.loaded || thread.running) continue;
+      if (!thread?.loaded || isRunning(thread)) continue;
       if (!holds()) {
         dropInternetWait(id);
         continue;
@@ -401,7 +401,7 @@ export const RESUME_TEXT = `${RESUME_NOTICE}.\nThe app restarted while you were 
 
 const runningIds = (s: AppState) =>
   Object.values(s.threads)
-    .filter((t) => t.running)
+    .filter((t) => isRunning(t))
     .map((t) => t.id)
     .sort();
 

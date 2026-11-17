@@ -28,7 +28,7 @@ import {
   useApp,
   wakeOnWrite,
 } from "./store";
-import { localId } from "./thread";
+import { isRunning, localId } from "./thread";
 import { unsettleThreads } from "./threadStatus";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
@@ -129,7 +129,7 @@ async function deliverScheduled(threadId: string, item: ScheduledMessage): Promi
   const thread = get().threads[threadId]!;
   // A turn runs, or the queue is held by a stopped turn, or messages wait in it: this goes behind
   // them and Resume starts the head, exactly as a message typed meanwhile does (`submit`).
-  if (thread.running || thread.queue.length || thread.queueHeld) {
+  if (isRunning(thread) || thread.queue.length || thread.queueHeld) {
     unsettleThreads([threadId], { quiet: true });
     wakeOnWrite(threadId);
     updateThread(threadId, (t) => ({
@@ -144,7 +144,7 @@ async function deliverScheduled(threadId: string, item: ScheduledMessage): Promi
       ],
     }));
     // Held for Resume: nothing starts until the user presses it. A queue with no turn starts its head.
-    if (!thread.running && !thread.queueHeld) void resumeQueue(threadId);
+    if (!isRunning(thread) && !thread.queueHeld) void resumeQueue(threadId);
     return "sent";
   }
   void runPrompt(threadId, item.text, extras ?? emptyExtras);

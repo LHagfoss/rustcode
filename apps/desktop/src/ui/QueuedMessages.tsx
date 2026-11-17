@@ -323,7 +323,7 @@ export function QueuedAnnouncer({ threadId }: { threadId: string }) {
   const [line, setLine] = useState("");
   const last = useRef<string | null>(null);
   useEffect(() => {
-    const view = queueView({ queue, running: false, queueHeld: held });
+    const view = queueView({ queue, queueHeld: held });
     // A folded wake keeps its row id while its summary grows: the line is part of what changed.
     const sig = `${queue.map((q) => (q.wake ? `${q.id}:${wakeLine(q.text)}` : q.id)).join(",")}|${held}|${editing}`;
     if (last.current === sig) return;

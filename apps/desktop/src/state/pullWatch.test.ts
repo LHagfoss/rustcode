@@ -2,14 +2,18 @@ import { afterEach, expect, test } from "bun:test";
 import { AcpConnection, type JsonObject } from "../acp/jsonrpc";
 import { deliverPullWatch, PULL_WATCHES, subscribePullWatches } from "./pullWatch";
 import { resetForTests, useApp, watchMachineConnection } from "./store";
-import { emptyThread, isContinueMessage, PULL_MARK, wakeLine } from "./thread";
+import { emptyThread, isContinueMessage, isRunning, PULL_MARK, wakeLine } from "./thread";
 
 const watch = { sessionId: "pr-thread", number: 7, link: true };
 afterEach(() => resetForTests());
 
 test("subscribes and claims events once across notifications and reconnects", async () => {
   resetForTests();
-  const t = { ...emptyThread("pr-thread", "/tmp"), loaded: true, running: true };
+  const t = {
+    ...emptyThread("pr-thread", "/tmp"),
+    loaded: true,
+    turn: { kind: "user" as const, startedAt: 0 },
+  };
   useApp.setState({ threads: { [t.id]: t } });
   const calls: JsonObject[] = [];
   let delivered = false;
@@ -70,7 +74,11 @@ test("watch notifications route to the linked thread on their own machine", asyn
     queueMicrotask(() => conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result })));
   });
   watchMachineConnection("machine", conn);
-  useApp.setState({ threads: { [id]: { ...emptyThread(id, "/tmp"), loaded: true, running: true } } });
+  useApp.setState({
+    threads: {
+      [id]: { ...emptyThread(id, "/tmp"), loaded: true, turn: { kind: "user" as const, startedAt: 0 } },
+    },
+  });
   const notification = JSON.stringify({ jsonrpc: "2.0", method: "_rustcode/pulls/watch", params: { watch } });
   conn.receive(notification);
   conn.receive(notification);
@@ -98,7 +106,7 @@ test("only a create command's PR output opts into CI delivery", () => {
 test("late PR news cannot wake a settled thread", async () => {
   resetForTests();
   const id = "pr-thread";
-  const t = { ...emptyThread(id, "/tmp"), loaded: true, running: true };
+  const t = { ...emptyThread(id, "/tmp"), loaded: true, turn: { kind: "user" as const, startedAt: 0 } };
   useApp.setState({ threads: { [id]: t }, sessions: [{ id, cwd: "/tmp", status: "done" }] });
   const conn = new AcpConnection(() => {
     throw new Error("settled thread must not claim news");
@@ -116,7 +124,7 @@ test("engine settling clears queued notices and unread marks, keeping user messa
   const t = {
     ...emptyThread(id, "/tmp"),
     loaded: true,
-    running: true,
+    turn: { kind: "user" as const, startedAt: 0 },
     queue: [
       { id: "notice", text: `CI failed\n\n${PULL_MARK}` },
       { id: "user", text: "follow up" },
@@ -155,7 +163,9 @@ test("late merge results and queued automatic turns cannot reopen a settled thre
   watchMachineConnection("machine", conn);
   useApp.setState({
     sessions: [{ id, cwd: "/tmp", status: "done" }],
-    threads: { [id]: { ...emptyThread(id, "/tmp"), loaded: true, running: true } },
+    threads: {
+      [id]: { ...emptyThread(id, "/tmp"), loaded: true, turn: { kind: "user" as const, startedAt: 0 } },
+    },
   });
   const notice = `Pull request #7: Merged\n\n${PULL_MARK}`;
   deliver(id, notice, "", "");
@@ -169,6 +179,6 @@ test("late merge results and queued automatic turns cannot reopen a settled thre
   expect(await runPrompt(id, notice)).toBe("skipped");
   expect(await runPrompt(id, "Continue", undefined, { continued: true })).toBe("skipped");
   deliver(id, notice, "", "");
-  expect(useApp.getState().threads[id]?.running).toBe(false);
+  expect(isRunning(useApp.getState().threads[id])).toBe(false);
   conn.close("test finished");
 });

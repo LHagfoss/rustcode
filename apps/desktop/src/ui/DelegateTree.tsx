@@ -25,7 +25,7 @@ import {
 } from "../state/delegates";
 import { type CostTotals, costOf } from "../state/pricing";
 import { selectThread, useApp } from "../state/store";
-import { stripHarnessMarkup } from "../state/thread";
+import { isRunning, stripHarnessMarkup } from "../state/thread";
 import { AgentAvatar, AgentTip, useNow } from "./AgentViews";
 import { ChevronRight, ListTree, MessageSquareText } from "./icons";
 import { Markdown } from "./Markdown";
@@ -81,7 +81,7 @@ function useDelegateViews(threadId: string, costs: ReadonlyMap<string, CostTotal
     ids
       .map((id) => {
         const thread = s.threads[id];
-        return [id, thread?.permissions[0]?.at ?? "", thread?.running ? 1 : 0].join(FIELD_SEP);
+        return [id, thread?.permissions[0]?.at ?? "", isRunning(thread) ? 1 : 0].join(FIELD_SEP);
       })
       .join(ACTIVITY_SEP),
   );

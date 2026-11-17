@@ -6,7 +6,7 @@ import type { SessionSummary } from "../acp/types";
 import { reloadThread } from "./lostTurns";
 import { type DriftReads, engineBusy, noDrift, pollDelay, reconcileRuns } from "./runState";
 import { type AppState, connection, refreshSessions, updateThread, useApp } from "./store";
-import { finishTurn } from "./thread";
+import { finishTurn, isRunning } from "./thread";
 import { isRemoteThread } from "./threadKeys";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
@@ -28,7 +28,7 @@ export function reconcileRunState(listed: readonly SessionSummary[]): void {
   const state = get();
   const local = Object.values(state.threads)
     .filter((t) => !isRemoteThread(t.id))
-    .map((t) => ({ id: t.id, running: t.running, startedAt: t.turnStartedAt }));
+    .map((t) => ({ id: t.id, running: isRunning(t), startedAt: t.turn?.startedAt }));
   const result = reconcileRuns(
     local,
     listed.filter((x) => !x.host).map((x) => ({ id: x.id, status: x.status })),
@@ -42,7 +42,7 @@ export function reconcileRunState(listed: readonly SessionSummary[]): void {
     set({ engineRunning: Object.fromEntries(result.adopt.map((id) => [id, true as const])) });
   }
   for (const id of result.settle) {
-    updateThread(id, (t) => (t.running ? finishTurn(t, "completed", Date.now()) : t));
+    updateThread(id, (t) => (isRunning(t) ? finishTurn(t, "completed", Date.now()) : t));
     // What the turn left is the engine's to say: read the thread again.
     if (get().threads[id]?.loaded) void reloadThread(id);
   }
@@ -53,7 +53,7 @@ function runStateActive(): boolean {
   const s = get();
   if (Object.keys(s.engineRunning).length) return true;
   if (Object.keys(driftReads.stale).length || Object.keys(driftReads.missed).length) return true;
-  if (Object.values(s.threads).some((t) => t.running)) return true;
+  if (Object.values(s.threads).some((t) => isRunning(t))) return true;
   return s.sessions.some((x) => !x.host && engineBusy(x.status));
 }
 

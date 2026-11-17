@@ -60,6 +60,7 @@ import {
   appendSteer,
   departQueued,
   dropDeparted,
+  isRunning,
   localId,
   messagesAfter,
   type QueuedPrompt,
@@ -187,7 +188,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   // A bare "status" in a thread with delegates is answered from what the app knows, with no turn.
   if (!hasExtras(extras) && !get().editing[id] && answerStatusLocally(id, trimmed)) return true;
   const edit = get().editing[id];
-  if (edit && !thread.running) {
+  if (edit && !isRunning(thread)) {
     cancelEdit(id);
     const later = messagesAfter(thread, edit.itemId);
     const go = async () => {
@@ -212,7 +213,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     // Its message may wait behind the running turn: the thread comes back all the same.
     wakeOnWrite(id);
   }
-  if (thread.running) {
+  if (isRunning(thread)) {
     updateThread(id, (t) => ({
       ...t,
       queue: [
@@ -393,7 +394,7 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
   const id = get().selectedId;
   const thread = id ? get().threads[id] : undefined;
   const trimmed = text.trim();
-  if (!id || !thread?.running || !get().agent?.steer) return submit(text, extras);
+  if (!id || !isRunning(thread) || !get().agent?.steer) return submit(text, extras);
   // Nothing typed and nothing attached: take what waits first, by the row's own rule.
   if (!trimmed && !hasExtras(extras)) {
     const next = thread.queue[0];
@@ -481,7 +482,7 @@ export function steeringOf(thread?: ThreadState): SteeringCapabilities {
 /** What the thread's turn is doing, for the one send rule. */
 export function turnState(thread?: ThreadState): TurnState {
   return {
-    running: thread?.running ?? false,
+    running: isRunning(thread),
     awaitingUser: (thread?.permissions.length ?? 0) > 0,
   };
 }
@@ -609,8 +610,8 @@ function glideAway(id: string, item: QueuedPrompt) {
  */
 export async function resumeQueue(id: string): Promise<boolean> {
   const thread = get().threads[id];
-  if (!thread || thread.running) return false;
-  const next = nextQueued(thread.queue, { running: false });
+  if (!thread || isRunning(thread)) return false;
+  const next = nextQueued(thread.queue, {});
   updateThread(id, (t) => ({ ...t, queueHeld: undefined }));
   if (!next) return false;
   removeQueued(id, next.id);

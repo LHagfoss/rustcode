@@ -12,6 +12,7 @@ import { useState } from "react";
 import type { Checkpoint, PatchFile } from "../acp/v2";
 import { parsePatch } from "../state/diff";
 import { canRewind, rewindCheckpoint, setView, turnDiff, useApp } from "../state/store";
+import { isRunning } from "../state/thread";
 import { Patch } from "./DiffView";
 import { FileDiff, History } from "./icons";
 import { Pill, Skeleton, Tooltip } from "./primitives";
@@ -30,7 +31,7 @@ export function TurnChanges({
   const [files, setFiles] = useState<PatchFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const thread = useApp((s) => s.threads[threadId]);
-  const running = thread?.running ?? false;
+  const running = isRunning(thread);
   const rewind = thread ? canRewind(thread) : false;
   const keep = useApp((s) => !!s.agent?.checkpointAttempts);
   const load = () => {

@@ -42,7 +42,7 @@ import {
   useApp,
   without,
 } from "./store";
-import { localId, messagesAfter, type ThreadState, truncateBefore, userIndexOf } from "./thread";
+import { isRunning, localId, messagesAfter, type ThreadState, truncateBefore, userIndexOf } from "./thread";
 import { splitThreadKey } from "./threadKeys";
 import { clearStatusMark } from "./threadStatus";
 
@@ -61,7 +61,7 @@ export function closeConfirm() {
 
 /** Whether the thread can be taken back to one of its messages. */
 export function canRewind(thread: ThreadState): boolean {
-  return !!get().agent?.rewind && (thread.harness?.capabilities.rewind ?? true) && !thread.running;
+  return !!get().agent?.rewind && (thread.harness?.capabilities.rewind ?? true) && !isRunning(thread);
 }
 
 export async function rewindTo(id: string, itemId: string, text: string): Promise<boolean> {
@@ -318,7 +318,7 @@ export function pruneSidebarOrder(known: readonly string[]) {
 export function setArchived(id: string, on: boolean) {
   const archived = { ...get().archived };
   if (on) {
-    if (get().threads[id]?.running) {
+    if (isRunning(get().threads[id])) {
       toast("Stop the running turn before archiving this thread.", "info");
       return;
     }
@@ -414,7 +414,7 @@ export function threadDeleted(params: unknown) {
 export async function trashThread(id: string): Promise<boolean> {
   // A thread that still runs is stopped first, forced when it will not stop, so moving it to the
   // Trash works in every state (issue 3652).
-  if (get().threads[id]?.running && !(await stopNow(id))) {
+  if (isRunning(get().threads[id]) && !(await stopNow(id))) {
     toast(`Could not stop the running turn before moving this thread to the ${trashName()}.`, "error");
     return false;
   }

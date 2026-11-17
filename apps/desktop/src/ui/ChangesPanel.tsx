@@ -10,6 +10,7 @@ import { latest } from "../lib/latest";
 import { type GitChanges, gitChanges } from "../lib/native";
 import { parsePatch } from "../state/diff";
 import { useApp } from "../state/store";
+import { isRunning } from "../state/thread";
 import { Patch } from "./DiffView";
 import { ChevronRight, CircleCheck, RefreshCw } from "./icons";
 import { Cluster, ClusterButton, cx, Segments, Spinner, Tooltip } from "./primitives";
@@ -129,7 +130,7 @@ function FileSection({
 
 export function ChangesPanel() {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
-  const running = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.running : false) ?? false);
+  const running = useApp((s) => (s.selectedId ? isRunning(s.threads[s.selectedId]) : false));
   // What was read, and for which folder: an answer for another thread's folder
   // is not drawn with this thread's name, even for the frame before it is
   // dropped.

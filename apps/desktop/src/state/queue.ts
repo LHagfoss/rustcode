@@ -5,7 +5,14 @@
 // no I/O here, so tests drive it.
 
 import type { ComposeExtras } from "./compose";
-import { isContinueMessage, type QueuedPrompt, wakeLine } from "./thread";
+import {
+  isContinueMessage,
+  isRunning,
+  type QueuedPrompt,
+  queueHeld,
+  type ThreadTurn,
+  wakeLine,
+} from "./thread";
 
 /**
  * A queued app notice (a pull request's news, a workflow's end, a continue or resume prompt): the
@@ -36,7 +43,7 @@ export interface QueueView {
 /** The end of a thread's queue, as the transcript draws it. */
 export function queueView(thread: {
   queue: readonly QueuedPrompt[];
-  running: boolean;
+  turn?: ThreadTurn;
   queueHeld?: boolean;
 }): QueueView {
   const wake = thread.queue.find((q) => q.wake);
@@ -44,8 +51,8 @@ export function queueView(thread: {
     messages: thread.queue.filter(isQueuedMessage),
     notices: thread.queue.filter(isQueuedNotice),
     wake: wake ? wakeLine(wake.text) : undefined,
-    held: !!thread.queueHeld && !thread.running,
-    resumable: !!thread.queueHeld && !thread.running && thread.queue.length > 0,
+    held: queueHeld(thread),
+    resumable: queueHeld(thread) && thread.queue.length > 0,
   };
 }
 
@@ -55,9 +62,9 @@ export function queueView(thread: {
  */
 export function nextQueued(
   queue: readonly QueuedPrompt[],
-  state: { running: boolean; queueHeld?: boolean },
+  state: { turn?: ThreadTurn; queueHeld?: boolean },
 ): QueuedPrompt | undefined {
-  if (state.running || state.queueHeld) return undefined;
+  if (isRunning(state) || state.queueHeld) return undefined;
   return queue[0];
 }
 

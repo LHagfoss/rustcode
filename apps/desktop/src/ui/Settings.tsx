@@ -158,6 +158,7 @@ const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ defa
 
 import { refreshServerService, useMachines } from "../state/machines";
 import { useSettingsAttention } from "../state/settingsAttention";
+import { isRunning } from "../state/thread";
 import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
@@ -541,7 +542,7 @@ function ChatPage() {
   const smartUiPending = useApp((s) => s.smartUiPending);
   const chatWidth = useApp((s) => s.chatWidth);
   const showToolCalls = useApp((s) => s.showToolCalls);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   const [nextPrompt, setNextPromptState] = useState(nextPromptEnabled);
   return (
@@ -870,7 +871,7 @@ function OrchestrationGroup() {
   const threadLimit = Number(threadLimitSetting.value ?? SETTINGS_DEFAULTS.threadLimit);
   const totalLimit = Number(totalLimitSetting.value ?? SETTINGS_DEFAULTS.totalLimit);
   const pending = useApp((s) => s.orchestrationPending);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
   const links = useApp((s) => s.links);
   const running = useMemo(() => activeDelegates(links), [links]);
   const busiest = useMemo(() => busiestThreadDelegates(links), [links]);
@@ -1569,7 +1570,7 @@ function AppVersion() {
  */
 function RecordRequestBodiesGroup() {
   const status = useApp((s) => s.status);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
   const [capture, setCapture] = useState<PayloadCapture | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);

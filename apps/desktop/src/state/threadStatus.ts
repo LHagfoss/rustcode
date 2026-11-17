@@ -24,7 +24,7 @@ import {
   useApp,
   without,
 } from "./store";
-import { isContinueMessage, isWakeMessage } from "./thread";
+import { isContinueMessage, isRunning, isWakeMessage } from "./thread";
 import { splitThreadKey } from "./threadKeys";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
@@ -53,7 +53,7 @@ export function sessionById(s: AppState, id: string): SessionSummary | undefined
 export function statusOf(s: AppState, id: string): ThreadStatus {
   const t = s.threads[id];
   if (t?.permissions.length) return "needs_input";
-  if (t?.running) return "running";
+  if (isRunning(t)) return "running";
   // The engine's list says it works and this window has no turn for it (`reconcileRunState`).
   if (s.engineRunning[id]) return "running";
   const listed = sessionById(s, id)?.status;

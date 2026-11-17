@@ -54,6 +54,7 @@ import {
   useApp,
 } from "../state/store";
 import type { ThreadState } from "../state/thread";
+import { isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
@@ -1015,7 +1016,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const newAccount = useApp((s) => newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins));
   const account = isNew ? newAccount : (thread?.harness?.account ?? null);
   // A running thread keeps its login, as it keeps its harness.
-  const accountBlocked = !isNew && !!thread?.running;
+  const accountBlocked = !isNew && isRunning(thread);
   // What is left of each login's plan: this computer's plan read, which a paired machine's logins
   // have no part in.
   const planCache = useApp((s) => (host ? NO_PLANS : s.planCache));
@@ -1047,7 +1048,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     if (!harness) return;
     if (isNew) pickNewThreadAccount(id);
     // The row of the login the thread is already on asks nothing of the engine.
-    else if (thread && !thread.running && (thread.harness?.account ?? null) !== id)
+    else if (thread && !isRunning(thread) && (thread.harness?.account ?? null) !== id)
       void switchThreadAccount(thread.id, id);
   };
 
@@ -1091,7 +1092,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     isNew ? !h.builtin || h.enabled || h.id === effective.harness : !h.builtin || h.id === harness?.id,
   );
   const providerId = isNew ? effective.harness : (harness?.id ?? "rustcode");
-  const canSwitch = isNew || !thread?.running;
+  const canSwitch = isNew || !isRunning(thread);
   // The current harness first, then the rest in the order Settings lists them.
   const ordered = [
     ...providers.filter((h) => h.id === providerId),

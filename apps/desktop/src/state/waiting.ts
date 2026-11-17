@@ -8,6 +8,7 @@ import { useMemo } from "react";
 import { stateOf, subtreeQuiet, subtreeQuietBelow } from "./host";
 import { isActive, type Link, type LinkState, linkThreads } from "./orchestration";
 import { useApp } from "./store";
+import { isRunning } from "./thread";
 
 /** What {@link waitingOn} reads of the app. */
 export interface WaitingRead {
@@ -104,7 +105,7 @@ export const waitingTitle = (wait: Waiting) =>
 export function useWaiting(threadId: string): Waiting | undefined {
   const turns = useApp((s) =>
     Object.keys(s.threads)
-      .filter((id) => s.threads[id]!.running)
+      .filter((id) => isRunning(s.threads[id]!))
       .join(" "),
   );
   const running = useMemo(() => new Set(turns.split(" ")), [turns]);
@@ -185,7 +186,7 @@ export function waitingIds(read: WaitingIdsRead): Set<string> {
 export function useWaitingIds(ids: readonly string[]): ReadonlySet<string> {
   const turns = useApp((s) =>
     Object.keys(s.threads)
-      .filter((id) => s.threads[id]!.running)
+      .filter((id) => isRunning(s.threads[id]!))
       .join(" "),
   );
   const running = useMemo(() => new Set(turns.split(" ")), [turns]);

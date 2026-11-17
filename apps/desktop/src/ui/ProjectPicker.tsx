@@ -17,6 +17,7 @@ import { registeredProjects } from "../state/projectBook";
 import { isCurrentProject, moveBlockedReason } from "../state/projectPick";
 import { startNewThread, toast, useApp, useMachineOfThread } from "../state/store";
 import type { ThreadState } from "../state/thread";
+import { isRunning } from "../state/thread";
 import { CardMenuItem, CardPopover, type CardTriggerProps, menuKeys } from "./cardPopover";
 import { Check, Code, Copy, FolderOpen, FolderPlus, GitBranch, SquarePen, SquareTerminal } from "./icons";
 import { MachineFolderBrowser } from "./MachineFolderBrowser";
@@ -29,7 +30,7 @@ const PATH_CHARS = 30;
 export function useMoveBlockedReason(thread?: ThreadState): string | undefined {
   const canMove = useApp((s) => !!s.agent?.sessionMove);
   return moveBlockedReason(
-    thread ? { id: thread.id, cwd: thread.cwd, running: thread.running } : undefined,
+    thread ? { id: thread.id, cwd: thread.cwd, running: isRunning(thread) } : undefined,
     canMove,
   );
 }
@@ -86,7 +87,7 @@ export function ProjectPicker({
   // The search appears once there is a list worth searching, and stays while it holds something.
   const searchable = all.length > 4 || !!filter.trim();
   const picked = thread
-    ? { id: thread.id, cwd: thread.cwd, running: thread.running, repo: thread.worktree?.repo }
+    ? { id: thread.id, cwd: thread.cwd, running: isRunning(thread), repo: thread.worktree?.repo }
     : undefined;
   const choose = (path: string) => void pickProject(thread?.id, path);
   const label = thread

@@ -80,7 +80,7 @@ describe("the reply a completed turn ended on", () => {
     const items = [user("u"), reply("a", "Want me to fix it?")];
     expect(completedReply(thread([...items, end("cancelled")]))).toBeNull();
     expect(completedReply(thread([...items, end("failed")]))).toBeNull();
-    expect(completedReply(thread(items, { running: true }))).toBeNull();
+    expect(completedReply(thread(items, { turn: { kind: "user" as const, startedAt: 0 } }))).toBeNull();
     expect(completedReply(thread([...items, end("completed")], { error: "boom" }))).toBeNull();
     // A message the user just sent: the reply belongs to the turn before it.
     expect(completedReply(thread([...items, end("completed"), user("u2")]))).toBeNull();

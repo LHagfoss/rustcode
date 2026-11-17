@@ -8,6 +8,7 @@ import { registeredProjects, registerProject } from "./projectBook";
 import { type PickedThread, projectPick } from "./projectPick";
 import { projectsOn } from "./projects";
 import { moveThread, setDefaultCwd, setProjectCwd, startNewThread, toast, useApp } from "./store";
+import { isRunning } from "./thread";
 import { LOCAL_HOST } from "./threadKeys";
 
 export async function chooseFolder(asDefault: boolean): Promise<void> {
@@ -21,7 +22,7 @@ export async function chooseFolder(asDefault: boolean): Promise<void> {
   }
   const id = s.selectedId;
   // A running thread cannot move: say so before the picker, not after it.
-  if (id && s.threads[id]?.running) {
+  if (id && isRunning(s.threads[id])) {
     toast("Stop the running turn before moving this thread to another folder.");
     return;
   }
@@ -37,7 +38,7 @@ export async function chooseFolder(asDefault: boolean): Promise<void> {
 export function pickedThread(id: string | null | undefined): PickedThread | undefined {
   const thread = id ? useApp.getState().threads[id] : undefined;
   if (!thread) return undefined;
-  return { id: thread.id, cwd: thread.cwd, running: thread.running, repo: thread.worktree?.repo };
+  return { id: thread.id, cwd: thread.cwd, running: isRunning(thread), repo: thread.worktree?.repo };
 }
 
 /**

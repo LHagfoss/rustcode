@@ -11,6 +11,7 @@ import { modelName } from "../acp/types";
 import { type GitChanges, gitChangeSummary } from "../lib/native";
 import { selectOption } from "../state/harness";
 import { useApp, worktreeOf } from "../state/store";
+import { isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { delegateBranchCount } from "./DelegateTree";
 import { DelegatesSection } from "./OverviewDelegates";
@@ -71,7 +72,7 @@ export function ThreadDetails() {
         : [],
     [id, links, sessions, threads],
   );
-  const changes = useChanges(thread?.cwd, !!thread?.running);
+  const changes = useChanges(thread?.cwd, isRunning(thread));
   // Which sections are folded away: the reader's habit, kept for every thread.
   const [folded, setFolded] = useState<SectionId[]>(readFolded);
   // A row elsewhere (`+2 nested` in the strip's popover) opens a section: the fold is read again.

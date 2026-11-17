@@ -5,7 +5,7 @@ import type { JsonObject } from "../acp/jsonrpc";
 import { agentActive, parseAgentList, type SubagentInfo } from "../acp/rustcode";
 import { Method, parseSessionUpdate } from "../acp/types";
 import { type AppState, connectionForThread, useApp } from "./store";
-import { applyUpdate, emptyThread, finishLoad, type ThreadState } from "./thread";
+import { applyUpdate, emptyThread, finishLoad, isRunning, type ThreadState } from "./thread";
 import { splitThreadKey } from "./threadKeys";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
@@ -60,7 +60,7 @@ export function startAgentPolling() {
     const thread = id ? s.threads[id] : undefined;
     if (!id || !thread || s.status !== "ready" || !hasAgents(thread)) return;
     const known = s.agents[id];
-    if (thread.running || known?.some(agentActive) || (known === undefined && thread.loaded)) {
+    if (isRunning(thread) || known?.some(agentActive) || (known === undefined && thread.loaded)) {
       void refreshAgents(id);
     }
   }, 2000);

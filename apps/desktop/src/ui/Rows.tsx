@@ -29,6 +29,7 @@ import {
 import {
   diffCounts,
   formatDuration,
+  isRunning,
   messageTime,
   noticeLine,
   stripMarks,
@@ -782,7 +783,7 @@ export const ToolRow = memo(function ToolRow({
   const [open, setOpen] = useState(kind === "edit" && item.diffs.length > 0 && item.diffs.length <= 2);
   const Icon = KIND_ICON[kind] ?? Wrench;
   // Only a turn that runs has a call in flight: a row its turn left open does not spin.
-  const turnRunning = useApp((s) => (threadId ? !!s.threads[threadId]?.running : true));
+  const turnRunning = useApp((s) => (threadId ? isRunning(s.threads[threadId]) : true));
   const running = toolInFlight(item.status, turnRunning);
   const failed = item.status === "failed";
   const detail = toolDetail(item, kind);

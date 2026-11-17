@@ -91,6 +91,7 @@ import {
 } from "./store";
 import {
   isContinueMessage,
+  isRunning,
   isWakeMessage,
   localId,
   type QueuedPrompt,
@@ -241,7 +242,7 @@ export async function updateSession(
     // runs, and answering "running" read as if the settle had been refused (issue 3529). It is
     // settled now and leaves the active list when its turn ends; `running` says it still works.
     status: call.status ? STATUS_OF_CHOICE[call.status] : (after?.status ?? "idle"),
-    running: !!useApp.getState().threads[target.id]?.running,
+    running: isRunning(useApp.getState().threads[target.id]),
     snoozed_until: until ? new Date(until).toISOString() : null,
     ...(keepTitle && {
       title_kept:
@@ -864,7 +865,7 @@ export async function messageNow(
   if (openError || !thread || thread.openFailed) {
     return failureJson(failure("target_unavailable", openError ?? "that thread could not be opened"));
   }
-  const busy = thread.running;
+  const busy = isRunning(thread);
   const session = afterOpen.sessions.find((x) => x.id === target.id);
   const harnessName = session?.harness
     ? afterOpen.harnesses?.harnesses.find((h) => h.id === session.harness)?.name
@@ -947,7 +948,7 @@ export function deliver(
   )
     return;
   const thread = useApp.getState().threads[target];
-  if (thread?.running) {
+  if (isRunning(thread)) {
     // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
     updateThread(target, (t) => ({
       ...t,
@@ -1028,7 +1029,7 @@ export async function manageQueue(caller: RuleThread, call: ManageQueueCall): Pr
     return {
       session_id: target.id,
       title: target.title,
-      running: !!thread?.running,
+      running: isRunning(thread),
       ...(thread?.queueHeld ? { held: true } : {}),
       queued: own.map((item) => listedQueueItem(item, caller)),
       // What waits there that this thread may not touch: the user's own messages, or another
@@ -1085,7 +1086,7 @@ export async function manageQueue(caller: RuleThread, call: ManageQueueCall): Pr
     }
     case "steer": {
       const thread = useApp.getState().threads[target.id];
-      if (!thread?.running) {
+      if (!isRunning(thread)) {
         return failureJson(failure("conflict", "no turn is running in that thread to steer into"));
       }
       const verdict = sendDecisionFor(thread, again.extras);

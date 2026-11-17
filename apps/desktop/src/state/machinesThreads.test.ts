@@ -41,7 +41,7 @@ import {
   useApp,
   watchMachineConnection,
 } from "./store";
-import { emptyThread } from "./thread";
+import { emptyThread, isRunning } from "./thread";
 import { LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
@@ -562,7 +562,7 @@ describe("a remote thread's operations", () => {
     const answer = sent().find((frame) => frame.id === 88);
     expect(JSON.stringify(answer)).toContain("not_allowed");
     // Nothing of this computer's was started for it.
-    expect(useApp.getState().threads[LINUX_THREAD]?.running ?? false).toBe(false);
+    expect(isRunning(useApp.getState().threads[LINUX_THREAD])).toBe(false);
   });
 
   test("an answer on a connected machine goes back on its connection", async () => {
@@ -591,8 +591,7 @@ describe("a remote thread's operations", () => {
         ...s.threads,
         [LINUX_THREAD]: {
           ...s.threads[LINUX_THREAD]!,
-          running: true,
-          turnStartedAt: Date.now() - 1000,
+          turn: { kind: "user" as const, startedAt: Date.now() - 1000 },
         },
       },
     }));
@@ -604,7 +603,7 @@ describe("a remote thread's operations", () => {
     const thread = useApp.getState().threads[LINUX_THREAD];
     // The connection the request arrived on is gone, so the turn ends and the card goes with it,
     // saying why, rather than holding an answer nothing can carry.
-    expect(thread?.running).toBe(false);
+    expect(isRunning(thread)).toBe(false);
     expect(thread?.permissions).toHaveLength(0);
     expect(thread?.error).toContain("machine disconnected");
     expect(threadOffline(LINUX_THREAD)).toBe(true);

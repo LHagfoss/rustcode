@@ -70,7 +70,7 @@ import {
   statusOf,
   useApp,
 } from "./store";
-import { localId } from "./thread";
+import { isRunning, localId } from "./thread";
 import { splitThreadKey } from "./threadKeys";
 import { orchestrationTool } from "./toolNames";
 
@@ -555,7 +555,7 @@ export function stateOf(s: AppState, link: Link) {
 function activityOfThread(s: AppState, id: string): ThreadStatus | undefined {
   const open = s.threads[id];
   if (open?.permissions.length) return "needs_input";
-  if (open?.running) return "running";
+  if (isRunning(open)) return "running";
   // The list's index, not a scan: `stateOf` runs in selectors on each store change (state/store.ts).
   return sessionById(s, id)?.status;
 }
@@ -669,7 +669,7 @@ export async function wait(
   const result = (link: Link, shown = shownOf(link)) => {
     const s = useApp.getState();
     const now = Date.now();
-    const activity = activityOf(s.threads[link.target]?.items ?? [], s.threads[link.target]?.children);
+    const activity = activityOf(s.threads[link.target]?.items ?? [], s.threads[link.target]?.turn?.children);
     // A settled link with no answer still has one: the target's last reply, read now.
     const reply = link.answer?.trim()
       ? link
@@ -714,7 +714,7 @@ export async function wait(
       const ready: Link[] = [];
       let pending = false;
       let asking = false;
-      if (caller && !caller.running) {
+      if (caller && !isRunning(caller)) {
         return {
           status: "timeout",
           waited_until: until,

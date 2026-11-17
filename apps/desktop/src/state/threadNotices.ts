@@ -22,6 +22,7 @@ import {
   toast,
   useApp,
 } from "./store";
+import { isRunning } from "./thread";
 import { splitThreadKey } from "./threadKeys";
 import { sessionById } from "./threadStatus";
 import { waitingOn as backgroundWork } from "./waiting";
@@ -76,7 +77,7 @@ function stillWaiting(id: string): boolean {
   const thread = s.threads[id];
   return !!backgroundWork({
     id,
-    running: thread?.running ?? false,
+    running: isRunning(thread),
     commands: thread?.waiting,
     links: s.links.links,
     state: (link) => stateOf(s, link),

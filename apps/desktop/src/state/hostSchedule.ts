@@ -329,7 +329,7 @@ export async function threadStatus(
     const recorded = Array.isArray(activity?.items) ? obj(activity.items[0]) : undefined;
     const recordedAt = typeof recorded?.at === "string" ? Date.parse(recorded.at) : NaN;
     const transcript = useApp.getState().threads[entry.id];
-    const transcriptAt = activityOf(transcript?.items ?? [], transcript?.children).lastAt;
+    const transcriptAt = activityOf(transcript?.items ?? [], transcript?.turn?.children).lastAt;
     const times = [transcriptAt, Number.isFinite(recordedAt) ? recordedAt : undefined].filter(
       (time): time is number => time !== undefined,
     );
