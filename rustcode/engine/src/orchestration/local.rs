@@ -94,6 +94,7 @@ pub(crate) async fn answer_json(
         super::START_SESSION => super::local_threads::start(session_id, args).await,
         super::MESSAGE_SESSION => super::local_threads::message(session_id, args).await,
         super::FAN_OUT => super::local_threads::fan_out(session_id, args).await,
+        super::UPDATE_SESSION => update_own_session(session_id, args),
         _ => app_required(name),
     };
     if let Some(key) = key
@@ -120,6 +121,56 @@ fn app_required(name: &str) -> Value {
             "{name} needs the RustCode app open to {verb}; this thread runs on a machine whose app is not attached. Open the RustCode app and retry. Nothing was sent."
         ),
     )
+}
+
+/// `update_session` on the caller's own thread: its status and pin, stored in
+/// the thread's folder and told to every client (`thread_status`). This is
+/// how an agent settles itself on a machine whose app is not the host. A
+/// title, a read mark, a snooze or another thread (which asks the user first)
+/// still needs the app, and then nothing is changed.
+fn update_own_session(session_id: &str, args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    let target = args
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|target| !target.is_empty());
+    let given = |key: &str| !matches!(args.get(key), None | Some(Value::Null));
+    let app_only = given("title") || given("unread") || args.get("snoozed_until").is_some();
+    if target.is_some_and(|target| target != session_id) || app_only {
+        return app_required(super::UPDATE_SESSION);
+    }
+    if let Some(pinned) = args.get("pinned").and_then(Value::as_bool)
+        && let Err(why) = crate::thread_status::set_pinned(session_id, pinned)
+    {
+        return error("failed", why);
+    }
+    let status = args
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|choice| match choice {
+            "settled" => "done",
+            "active" => "idle",
+            other => other,
+        });
+    if let Some(status) = status
+        && let Err(why) = crate::thread_status::set(session_id, status)
+    {
+        return error("failed", why);
+    }
+    let title = crate::config::session_meta_by_id(session_id).map(|meta| meta.title);
+    json!({
+        "session_id": session_id,
+        "title": title,
+        "pinned": crate::thread_status::pinned(session_id),
+        // The status this call set: a thread settled in its own last turn still
+        // runs until that turn ends (issue 3529); `running` says so.
+        "status": status.unwrap_or_else(|| crate::thread_status::current(session_id).as_str()),
+        "running": crate::thread_status::is_running(session_id),
+        "snoozed_until": Value::Null,
+    })
 }
 
 /// The call's `machine` names this computer, or the tool needs the app to
@@ -1433,6 +1484,41 @@ mod tests {
             assert!(message.contains(tool), "{message}");
             assert!(message.contains("RustCode app open"), "{message}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_thread_settles_and_pins_itself_without_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = super::super::local_threads::test_thread(dir.path());
+        let answer = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::UPDATE_SESSION,
+            &json!({"status": "settled", "pinned": true}),
+        )
+        .await;
+        assert_eq!(answer["status"], "done", "{answer}");
+        assert_eq!(answer["pinned"], true, "{answer}");
+        assert_eq!(crate::thread_status::current(&caller), crate::thread_status::Status::Done);
+        // Naming itself explicitly is the same call.
+        let answer = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::UPDATE_SESSION,
+            &json!({"session_id": caller, "status": "active"}),
+        )
+        .await;
+        assert_eq!(answer["status"], "idle", "{answer}");
+        // A rename still needs the app, and changes nothing else in the call.
+        let answer = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::UPDATE_SESSION,
+            &json!({"title": "renamed", "status": "settled"}),
+        )
+        .await;
+        assert_eq!(answer["error"]["code"], "unavailable", "{answer}");
+        assert_ne!(crate::thread_status::current(&caller), crate::thread_status::Status::Done);
     }
 
     #[tokio::test]

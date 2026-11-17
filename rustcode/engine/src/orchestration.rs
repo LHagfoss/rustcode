@@ -484,6 +484,18 @@ pub fn client_meta_version(meta: Option<&serde_json::Map<String, Value>>) -> u8 
         .map_or(0, |version| version.min(u64::from(VERSION)) as u8)
 }
 
+/// Whether a client that hosts no orchestration asks the engine to serve the
+/// tools itself: `_meta.rustcode.engineOrchestration` in `initialize`. The
+/// desktop app sends it on its connection to a paired machine while its own
+/// setting is on; it refuses tool calls from there, so without this a thread
+/// on that machine had no tools at all.
+pub fn client_meta_engine_hosted(meta: Option<&serde_json::Map<String, Value>>) -> bool {
+    meta.and_then(|meta| meta.get("rustcode"))
+        .and_then(|rustcode| rustcode.get("engineOrchestration"))
+        .and_then(Value::as_u64)
+        .is_some_and(|version| version >= 1)
+}
+
 /// The schema a client of `version` gets. Named-account targeting arrived in
 /// version 5, so a client that advertised less is never told about `account`;
 /// [`execute_versioned`] refuses one it sends anyway.

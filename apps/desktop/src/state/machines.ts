@@ -16,7 +16,7 @@ import { create } from "zustand";
 import { AcpConnection, bool, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { RemoteMethod } from "../acp/remote";
 import { isTauri, MachineTransport } from "../acp/transport";
-import { initializeParams, Method, parseSessionList, type SessionSummary } from "../acp/types";
+import { Method, parseSessionList, type SessionSummary } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
@@ -25,12 +25,12 @@ import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } 
 import { loadMirroredList, mirrorThreadList, withMirroredRows } from "./machineMirror";
 import { forgetMachineOutbox, forgetThreadOutbox } from "./machineOutbox";
 import {
-  APP_VERSION,
   askConfirm,
   deferAnnouncement,
   flushMachineOutbox,
   isTombstoned,
   keptUnlisted,
+  machineInitializeParams,
   noteThreadList,
   request,
   settleKeptUnlisted,
@@ -1286,7 +1286,7 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
     if (!link?.ready) {
       // A machine's server announces its threads to the clients that list them
       // (`_rustcode/threads/created`, docs/desktop.md › Several machines).
-      await connection.request("initialize", initializeParams(APP_VERSION, { threads: 1 }), 10_000);
+      await connection.request("initialize", machineInitializeParams(), 10_000);
       if (link) link.ready = true;
     }
     const sessions: SessionSummary[] = [];
