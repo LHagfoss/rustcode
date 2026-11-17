@@ -23,6 +23,7 @@ import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
 import { appVersion } from "../lib/updater";
 import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
+import { type LinkState, LinkTable, linkConnection, linkMachineState } from "./machineLink";
 import { loadMirroredList, mirrorThreadList, withMirroredRows } from "./machineMirror";
 import { forgetMachineOutbox, forgetThreadOutbox } from "./machineOutbox";
 import {
@@ -895,15 +896,9 @@ export function codeComplete(code: string, length: number): boolean {
 
 // ---------------------------------------------------------------- the shell
 
-interface Link {
-  transport: MachineTransport;
-  connection: AcpConnection | null;
-  /** The connection has answered `initialize`: a later listing only asks for sessions. */
-  ready: boolean;
-}
+/** Each saved machine's link, moved only through `transitionLink` (`state/machineLink.ts`). */
+const links = new LinkTable();
 
-const links = new Map<string, Link>();
-const opening = new Set<string>();
 /** Hear when a machine's connection opens or drops, so the store can route its threads there. */
 const linkListeners = new Set<(id: string, connection: AcpConnection | null) => void>();
 let started = false;
@@ -1027,8 +1022,8 @@ export async function refreshMachines(): Promise<void> {
       if (machine.state !== "connected") void drawMirrored(machine.id);
     }
     for (const machine of machines) void attach(machine);
-    for (const id of [...links.keys()]) {
-      if (!machines.some((machine) => machine.id === id)) detach(id);
+    for (const [id, link] of links.entries()) {
+      if (link.phase !== "removed" && !machines.some((machine) => machine.id === id)) detach(id);
     }
   } catch (error) {
     useMachines.setState({ ready: true, error: errorText(error) });
@@ -1113,10 +1108,10 @@ export function forgetMachineThread(machine: string, sessionId: string): void {
  * saved, whatever state it is in.
  */
 async function attach(machine: Machine): Promise<void> {
-  if (links.has(machine.id) || opening.has(machine.id)) return;
-  opening.add(machine.id);
   const transport = new MachineTransport(machine.id, machine.name);
-  const link: Link = { transport, connection: null, ready: false };
+  // Already attached, or still opening: one channel per machine.
+  const attached = links.step(machine.id, { type: "attach", transport });
+  if (attached.after === attached.before) return;
   try {
     await transport.start((event) => {
       if (event.type === "open") {
@@ -1159,21 +1154,26 @@ async function attach(machine: Machine): Promise<void> {
             },
           }));
         });
-        link.connection = connection;
-        link.ready = false;
-        markMachine(machine.id, "connected", null);
+        const { before, after } = links.step(machine.id, { type: "opened", transport, connection });
+        // A channel of a machine since removed, or one a newer attach replaced: nothing to route.
+        if (after === before) {
+          connection.close("The machine was removed.");
+          return;
+        }
+        markMachine(machine.id, after, null);
         announce(machine.id, connection);
-        void readThreads(machine.id, connection, link);
+        void readThreads(machine.id, connection);
       } else if (event.type === "line") {
-        link.connection?.receive(event.line);
+        links.connectionOf(machine.id, transport)?.receive(event.line);
       } else if (event.type === "lines") {
-        for (const line of event.lines) link.connection?.receive(line);
+        const connection = links.connectionOf(machine.id, transport);
+        for (const line of event.lines) connection?.receive(line);
       } else if (event.type === "closed") {
-        link.connection?.close(event.reason);
-        link.connection = null;
-        link.ready = false;
+        const { before, after } = links.step(machine.id, { type: "closed", transport });
+        if (after === before) return;
+        linkConnection(before)?.close(event.reason);
         // The sidebar and the chat say the same as the shell's supervisor: it is away, read-only.
-        markMachine(machine.id, "offline", event.reason || null);
+        markMachine(machine.id, after, event.reason || null);
         announce(machine.id, null);
         useMachines.setState((state) => {
           const counts = { ...state.counts };
@@ -1182,11 +1182,12 @@ async function attach(machine: Machine): Promise<void> {
         });
       }
     });
-    links.set(machine.id, link);
+    links.step(machine.id, { type: "started", transport });
+    // Removed while the channel opened: stop the supervisor that start just made.
+    if (links.get(machine.id)?.phase === "removed") void transport.stop();
   } catch (error) {
+    links.step(machine.id, { type: "failed", transport });
     useMachines.setState({ error: errorText(error) });
-  } finally {
-    opening.delete(machine.id);
   }
 }
 
@@ -1196,7 +1197,9 @@ async function attach(machine: Machine): Promise<void> {
  * retry clock `machines_list` gave it: only a machine that was connected turns offline here, and
  * nothing but `machines_list` writes `retryInSecs`.
  */
-function markMachine(id: string, state: MachineState, detail: string | null): void {
+function markMachine(id: string, link: LinkState | undefined, detail: string | null): void {
+  const state = linkMachineState(link);
+  if (!state) return;
   useMachines.setState((current) => ({
     machines: current.machines.map((machine) => {
       if (machine.id !== id) return machine;
@@ -1214,13 +1217,13 @@ function markMachine(id: string, state: MachineState, detail: string | null): vo
  * machines never reach another's.
  */
 export function resetMachinesForTests(): void {
-  for (const [id, link] of [...links]) {
-    link.connection?.close("The app reset its machines.");
+  for (const [id, link] of links.entries()) {
+    if (link.phase === "removed") continue;
+    linkConnection(link)?.close("The app reset its machines.");
     void link.transport.stop();
     announce(id, null);
   }
   links.clear();
-  opening.clear();
   linkListeners.clear();
   started = false;
   useMachines.setState({
@@ -1251,11 +1254,11 @@ function detach(id: string): void {
   forgetMachineOutbox(id);
   // Nothing of it is listed any more, and that is the whole truth: what waited on its threads goes.
   noteThreadList(id, true);
-  const link = links.get(id);
-  links.delete(id);
-  if (!link) return;
-  link.connection?.close("The machine was removed.");
+  const { before: link } = links.step(id, { type: "remove" });
+  if (!link || link.phase === "removed") return;
+  linkConnection(link)?.close("The machine was removed.");
   announce(id, null);
+  // A channel still opening is stopped here too, and again by `attach` once its start answers.
   void link.transport.stop();
   useMachines.setState((state) => {
     const counts = { ...state.counts };
@@ -1272,13 +1275,15 @@ function detach(id: string): void {
  * is asked once per connection, so re-listing (a focus, a reconnect) is one
  * request.
  */
-async function readThreads(id: string, connection: AcpConnection, link?: Link): Promise<void> {
+async function readThreads(id: string, connection: AcpConnection): Promise<void> {
   try {
-    if (!link?.ready) {
+    const link = links.get(id);
+    if (!(link?.phase === "ready" && link.connection === connection)) {
       // A machine's server announces its threads to the clients that list them
       // (`_rustcode/threads/created`, docs/desktop.md › Several machines).
       await connection.request("initialize", machineInitializeParams(), 10_000);
-      if (link) link.ready = true;
+      // Only this connection is marked: an answer from one a reconnect replaced is dropped.
+      links.step(id, { type: "initialized", connection });
     }
     const sessions: SessionSummary[] = [];
     let cursor: string | undefined;
@@ -1340,14 +1345,14 @@ export interface MachineLink {
 
 /** The connection to one machine, while it is open. */
 export function machineConnection(id: string): AcpConnection | null {
-  return links.get(id)?.connection ?? null;
+  return linkConnection(links.get(id));
 }
 
 /** Every saved machine with its connection, in the sidebar's order. */
 export function machineLinks(): MachineLink[] {
   return useMachines.getState().machines.map((machine) => ({
     machine,
-    connection: links.get(machine.id)?.connection ?? null,
+    connection: linkConnection(links.get(machine.id)),
   }));
 }
 
@@ -1411,7 +1416,10 @@ if (typeof window !== "undefined") {
 
 /** Re-read every connected machine's thread list (a window focus, a reconnect). */
 export function refreshMachineThreads(): void {
-  for (const [id, link] of links) if (link.connection) void readThreads(id, link.connection, link);
+  for (const [id, link] of links.entries()) {
+    const connection = linkConnection(link);
+    if (connection) void readThreads(id, connection);
+  }
 }
 
 // ---------------------------------------------------------------- actions
@@ -2061,7 +2069,7 @@ export async function disconnectMachine(machine: Pick<Machine, "id">): Promise<v
  */
 export function reconnectMachine(machine: Pick<Machine, "id">): void {
   const link = links.get(machine.id);
-  if (!link) {
+  if (!link || link.phase === "removed" || link.phase === "opening") {
     void refreshMachines();
     return;
   }
@@ -2071,9 +2079,8 @@ export function reconnectMachine(machine: Pick<Machine, "id">): void {
       entry.id === machine.id ? { ...entry, state: "connecting", detail: null, retryInSecs: null } : entry,
     ),
   }));
-  link.connection?.close("Reconnecting.");
-  link.connection = null;
-  link.ready = false;
+  linkConnection(link)?.close("Reconnecting.");
+  links.step(machine.id, { type: "reconnect" });
   void link.transport
     .restart()
     .then(() => refreshMachines())
