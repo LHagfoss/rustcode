@@ -1,46 +1,51 @@
 import { useEffect, useState } from "react";
+import { opError, opRunning, useOp } from "../lib/op";
 import { request } from "../state/store";
 import { inputClass, Pill, Select } from "./primitives";
 
 type Generator = { id: string; provider: string; model: string; baseUrl: string | null };
 type Config = { generators: Generator[]; selected: string | null };
+const EMPTY: Config = { generators: [], selected: null };
 export function TextGeneration() {
-  const [config, setConfig] = useState<Config>({ generators: [], selected: null });
+  const [listed, runList] = useOp<Config>();
+  const [configured, runConfigure] = useOp<Config>();
+  const config = configured.data ?? listed.data ?? EMPTY;
   const [provider, setProvider] = useState("openai");
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [key, setKey] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  // Once a change was asked, its outcome replaces the first read's.
+  const error =
+    (configured.status === "idle" && configured.data === undefined ? opError(listed) : opError(configured)) ??
+    "";
+  const busy = opRunning(configured);
   async function configure(action: string, id: string | null = null) {
-    setBusy(true);
-    setError("");
-    try {
-      const value = await request("_rustcode/textGeneration/configure", {
-        action,
-        id,
-        generator:
-          action === "set"
-            ? { id: crypto.randomUUID(), provider, model, baseUrl: provider === "custom" ? baseUrl : null }
-            : null,
-        apiKey: action === "set" ? key : null,
-      });
-      setConfig(value as Config);
-      if (action === "set") {
-        setKey("");
-        setModel("");
-      }
-    } catch {
-      setError("Could not update text generators.");
-    } finally {
-      setBusy(false);
+    const done = await runConfigure(
+      async () =>
+        (await request("_rustcode/textGeneration/configure", {
+          action,
+          id,
+          generator:
+            action === "set"
+              ? { id: crypto.randomUUID(), provider, model, baseUrl: provider === "custom" ? baseUrl : null }
+              : null,
+          apiKey: action === "set" ? key : null,
+        })) as Config,
+      { describe: () => "Could not update text generators." },
+    );
+    if (done.status === "done" && action === "set") {
+      setKey("");
+      setModel("");
     }
   }
   useEffect(() => {
-    void request("_rustcode/textGeneration/configure", { action: "list" })
-      .then((value) => setConfig(value as Config))
-      .catch(() => setError("Could not load text generators."));
-  }, []);
+    void runList(
+      async () => (await request("_rustcode/textGeneration/configure", { action: "list" })) as Config,
+      {
+        describe: () => "Could not load text generators.",
+      },
+    );
+  }, [runList]);
   return (
     <section className="flex flex-col gap-3" aria-label="Text generation">
       <h3 className="font-semibold">Text generation</h3>

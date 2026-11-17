@@ -4,6 +4,7 @@
 
 import { Dialog } from "radix-ui";
 import { useState } from "react";
+import { opRunning, useOp } from "../lib/op";
 import { normalizeDefault, preferredDefault, validateDefault } from "../state/harness";
 import {
   completeOnboarding,
@@ -19,7 +20,8 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   const snapshot = useApp((s) => s.harnesses);
   const [step, setStep] = useState<0 | 1>(0);
   const [choice, setChoice] = useState<NewThreadChoice | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [save, runSave] = useOp();
+  const saving = opRunning(save);
   // A first run suggests Claude Code (or the first agent that can run); later runs show the saved default.
   const value = choice ??
     (snapshot ? (snapshot.onboarded ? snapshot.default : preferredDefault(snapshot)) : null) ?? {
@@ -31,11 +33,11 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
 
   const finish = async () => {
     if (!snapshot || problem) return;
-    setSaving(true);
-    await setDefaultHarness(value);
-    await completeOnboarding();
-    setSaving(false);
-    onClose();
+    const saved = await runSave(async () => {
+      await setDefaultHarness(value);
+      await completeOnboarding();
+    });
+    if (saved.status === "done") onClose();
   };
 
   return (

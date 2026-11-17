@@ -17,6 +17,7 @@ import { AcpConnection, bool, type JsonObject, num, obj, str } from "../acp/json
 import { RemoteMethod } from "../acp/remote";
 import { isTauri, MachineTransport } from "../acp/transport";
 import { Method, parseSessionList, type SessionSummary } from "../acp/types";
+import type { Op } from "../lib/op";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
@@ -260,16 +261,6 @@ export type Pairing =
  * went away — must not leave the page on a spinner (issue 3325).
  */
 export const PAIR_DEADLINE_MS = 30_000;
-
-/** One async operation; starting a retry replaces its previous failure. */
-export type Op<T = never> =
-  | { status: "idle"; data?: T }
-  | { status: "running"; data?: T }
-  | { status: "failed"; error: string; data?: T };
-
-export function opError(op: Op<unknown>): string | null {
-  return op.status === "failed" ? op.error : null;
-}
 
 /** Run a simple operation, preserving its caller's return value and failure policy. */
 async function runOp<T>(key: "serverInstall" | "serverLink" | "probe", action: () => Promise<T>): Promise<T> {

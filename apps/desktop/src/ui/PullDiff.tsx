@@ -9,6 +9,7 @@ import { createContext, memo, useContext, useEffect, useMemo, useRef, useState }
 import type { PullDetail, PullRequest } from "../acp/rustcode";
 import { pullErrorTitle } from "../acp/rustcode";
 import { formatBinding } from "../lib/keys";
+import { opError, opRunning, useOp } from "../lib/op";
 import { primaryModifier } from "../lib/platform";
 import { count } from "../lib/plural";
 import { appendToDraft, type FeedbackItem, feedbackItems, formatReviewFeedback } from "../lib/reviewFeedback";
@@ -114,8 +115,9 @@ export function CommentField({
   onCancel: () => void;
 }) {
   const [body, setBody] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [sending, runSend] = useOp();
+  const busy = opRunning(sending);
+  const error = opError(sending);
   // Completion (issue 3769): `#` lists issues and pull requests, `@` the pull's people.
   const source = useContext(CompletionSource);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -154,11 +156,10 @@ export function CommentField({
   };
   const submit = async () => {
     if (!body.trim() || busy) return;
-    setBusy(true);
-    setError(null);
-    const failed = await send(body);
-    setBusy(false);
-    if (failed) setError(failed);
+    await runSend(async () => {
+      const failed = await send(body);
+      if (failed) throw new Error(failed);
+    });
   };
   return (
     <div className="flex flex-col gap-1.5 rounded-lg bg-fill-subtle p-2 font-sans">
@@ -523,20 +524,17 @@ const PullFile = memo(function PullFile({
 
 /** The pull request's diff and review conversations, read when the view opens. */
 export function PullDiff({ cwd, pull, detail }: { cwd: string; pull: PullRequest; detail?: PullDetail }) {
-  const [files, setFiles] = useState<PullDiffFile[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // A diff for a pull request already left is dropped, not drawn over the one opened after it.
+  const [diff, runLoad] = useOp<PullDiffFile[]>();
+  const files = diff.data ?? null;
+  const error = opError(diff);
   useEffect(() => {
-    let live = true;
-    setError(null);
-    void loadPullDiff(cwd, pull.number).then((answer) => {
-      if (!live) return;
-      if (answer.error) setError(`${pullErrorTitle(answer.error.code)}: ${answer.error.message}`);
-      else setFiles(pullDiffFiles(answer.diff ?? ""));
+    void runLoad(async () => {
+      const answer = await loadPullDiff(cwd, pull.number);
+      if (answer.error) throw new Error(`${pullErrorTitle(answer.error.code)}: ${answer.error.message}`);
+      return pullDiffFiles(answer.diff ?? "");
     });
-    return () => {
-      live = false;
-    };
-  }, [cwd, pull.number]);
+  }, [cwd, pull.number, runLoad]);
   const conversations = useMemo(() => (detail ? reviewConversations(detail) : []), [detail]);
   const general = useMemo(
     () => (detail ? feedbackItems(detail).filter((item) => item.kind !== "line") : []),

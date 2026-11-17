@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Transport } from "../acp/transport";
+import { opError } from "../lib/op";
 import { setShellTransport } from "../lib/shell";
 import {
   askMachine,
@@ -33,7 +34,6 @@ import {
   machineName,
   machineTint,
   mergeDiscovered,
-  opError,
   PAIR_DEADLINE_MS,
   pairMachine,
   platformIcon,

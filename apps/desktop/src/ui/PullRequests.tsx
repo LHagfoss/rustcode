@@ -18,6 +18,7 @@ import {
 import { Method } from "../acp/types";
 import { useIntentRest } from "../lib/intent";
 import { openExternal } from "../lib/native";
+import { opRunning, useOp } from "../lib/op";
 import { count } from "../lib/plural";
 import { type FeedbackItem, feedbackItems, feedbackLocation, keepSelected } from "../lib/reviewFeedback";
 import {
@@ -158,28 +159,28 @@ function ErrorView({ error }: { error: PullError }) {
 function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullRequest; onDone: () => void }) {
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
   const [body, setBody] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [posting, runPost] = useOp();
+  const busy = opRunning(posting);
   const repository = repositoryOf(pull.url);
   const submit = async () => {
     if (!repository) return;
-    setBusy(true);
-    try {
-      const result = (await request(
-        Method.pullReview,
-        { cwd, repository, number: pull.number, commitId: pull.headSha, event, body, comments: [] },
-        60_000,
-      )) as JsonObject;
-      const error = parsePullError(result);
-      if (error) toast(`${pullErrorTitle(error.code)}: ${error.message}`, "error");
-      else {
-        toast("Review posted", "success");
-        onDone();
+    await runPost(async () => {
+      try {
+        const result = (await request(
+          Method.pullReview,
+          { cwd, repository, number: pull.number, commitId: pull.headSha, event, body, comments: [] },
+          60_000,
+        )) as JsonObject;
+        const error = parsePullError(result);
+        if (error) toast(`${pullErrorTitle(error.code)}: ${error.message}`, "error");
+        else {
+          toast("Review posted", "success");
+          onDone();
+        }
+      } catch (e) {
+        toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "error");
       }
-    } catch (e) {
-      toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "error");
-    } finally {
-      setBusy(false);
-    }
+    });
   };
   return (
     <div className="mt-3 rounded-lg bg-fill-subtle p-2">
@@ -614,7 +615,8 @@ function PullThreadSheet({
   const checks = failingChecks(detail);
   const [parts, setParts] = useState({ body: true, comments: true, checks: true });
   const [instruction, setInstruction] = useState(DEFAULT_PULL_INSTRUCTION);
-  const [starting, setStarting] = useState(false);
+  const [startOp, runStart] = useOp<string | undefined>();
+  const starting = opRunning(startOp);
   const [linked, setLinked] = useState<string>();
   useEffect(() => {
     let live = true;
@@ -628,12 +630,10 @@ function PullThreadSheet({
     };
   }, [pull.number, pull.url]);
   const start = async () => {
-    setStarting(true);
-    const id = await startPullThread(cwd, pull, (prepared) =>
-      pullThreadMessage(pull, detail, parts, instruction, prepared),
+    const started = await runStart(() =>
+      startPullThread(cwd, pull, (prepared) => pullThreadMessage(pull, detail, parts, instruction, prepared)),
     );
-    setStarting(false);
-    if (!id) return;
+    if (started.status !== "done" || !started.value) return;
     setPanel(null);
     onClose();
   };

@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from "react";
 import type { Harness } from "../acp/types";
+import { opError, opRunning, useOp } from "../lib/op";
 import { devicePlatform, deviceRoute, deviceStatus, machineAccess, versionLine } from "../state/deviceRows";
 import { accountState } from "../state/harness";
 import { addMachineRoute, removeMachineRoute, setMachineRouteOff } from "../state/machineRoutes";
@@ -294,22 +295,22 @@ function AddRoute({ machine, onDone }: { machine: Machine; onDone: () => void })
   const [method, setMethod] = useState<RouteMethod>("ssh");
   const [value, setValue] = useState("");
   const [port, setPort] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [adding, runAdd, resetAdd] = useOp();
+  const busy = opRunning(adding);
+  const error = opError(adding);
   const portNumber = Number.parseInt(port, 10);
   const add = async () => {
     if (busy || !value.trim()) return;
-    setBusy(true);
-    setError(null);
-    const failed = await addMachineRoute(
-      machine,
-      method === "ssh"
-        ? { kind: "ssh", destination: value, gatewayPort: Number.isFinite(portNumber) ? portNumber : null }
-        : { kind: "address", address: value },
-    );
-    setBusy(false);
-    if (failed) setError(failed);
-    else onDone();
+    const added = await runAdd(async () => {
+      const failed = await addMachineRoute(
+        machine,
+        method === "ssh"
+          ? { kind: "ssh", destination: value, gatewayPort: Number.isFinite(portNumber) ? portNumber : null }
+          : { kind: "address", address: value },
+      );
+      if (failed) throw new Error(failed);
+    });
+    if (added.status === "done") onDone();
   };
   return (
     <div className="flex flex-col gap-2 px-3 py-3">
@@ -319,7 +320,7 @@ function AddRoute({ machine, onDone }: { machine: Machine; onDone: () => void })
           options={ROUTE_METHODS}
           onChange={(next) => {
             setMethod(next);
-            setError(null);
+            if (error) resetAdd();
           }}
           label="Route type"
         />
@@ -378,24 +379,23 @@ function AddRoute({ machine, onDone }: { machine: Machine; onDone: () => void })
 /** The harnesses that machine reports, what they need, and one Check for all of them. */
 function Harnesses({ machine }: { machine: Machine }) {
   const harness = useMachineHarness(machine.id);
-  const [busy, setBusy] = useState(false);
-  const [checked, setChecked] = useState<string | null>(null);
+  const [checking, runCheck] = useOp<string>();
+  const busy = opRunning(checking);
+  const checked = busy ? null : (checking.data ?? null);
   const harnesses = harness.snapshot?.harnesses ?? [];
   const online = machine.state === "connected";
-  const check = async () => {
-    setBusy(true);
-    setChecked(null);
-    // One request for all of them: a harness that is slow to answer holds only itself.
-    const lines = await checkMachineHarnesses(
-      machine.id,
-      harnesses.map((entry) => entry.id),
-    );
-    setChecked(
-      harnesses.map((entry) => `${entry.name}: ${lines[entry.id]}`).join(" · ") ||
-        "The machine listed no harnesses.",
-    );
-    setBusy(false);
-  };
+  const check = () =>
+    runCheck(async () => {
+      // One request for all of them: a harness that is slow to answer holds only itself.
+      const lines = await checkMachineHarnesses(
+        machine.id,
+        harnesses.map((entry) => entry.id),
+      );
+      return (
+        harnesses.map((entry) => `${entry.name}: ${lines[entry.id]}`).join(" · ") ||
+        "The machine listed no harnesses."
+      );
+    });
   return (
     <Group
       title="Harnesses"
