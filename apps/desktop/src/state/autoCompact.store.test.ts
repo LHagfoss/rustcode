@@ -16,6 +16,7 @@ import {
 import { emptyExtras, sentMessages } from "./compose";
 import { foldTurns } from "./fold";
 import type { Link } from "./orchestration";
+import { hydrateLocalServerSettings } from "./settingsScope";
 import {
   answerPermission,
   cancel,
@@ -76,6 +77,9 @@ const compactPrompt = (id: string) =>
 async function openClaudeThread(delayMs = 0) {
   await connect(new MockTransport({ delayMs }));
   await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
+  // The engine's own settings (the mock's are size at 150k) land once per process; wait for them,
+  // or they arrive after a test sets its own mode and overwrite it.
+  await hydrateLocalServerSettings();
   const id = useApp.getState().sessions[0]!.id;
   selectThread(id);
   await until(() => isLoaded(useApp.getState().threads[id]) === true);
