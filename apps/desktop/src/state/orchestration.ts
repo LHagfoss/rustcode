@@ -654,6 +654,7 @@ export type Call =
   | {
       tool: "update_project";
       path: string;
+      destination?: string;
       name?: string;
       harness?: string;
       model?: string;
@@ -1165,12 +1166,13 @@ export function parseCall(params: JsonObject): Call | Failure {
       const path = (s(args.path) ?? "").trim();
       if (!path) return failure("invalid", "path is required");
       const change = {
+        destination: s(args.destination)?.trim() || undefined,
         name: s(args.name)?.trim() || undefined,
         harness: s(args.harness)?.trim() || undefined,
         model: s(args.model)?.trim() || undefined,
       };
-      if (!change.name && !change.harness && !change.model) {
-        return failure("invalid", "give at least one of name, harness or model");
+      if (!change.destination && !change.name && !change.harness && !change.model) {
+        return failure("invalid", "give at least one of destination, name, harness or model");
       }
       return { tool: "update_project", path, ...change };
     }

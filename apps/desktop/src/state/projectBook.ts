@@ -127,3 +127,16 @@ export function projectChoice(path: string): { harness?: string; model?: string 
   const entry = projectEntry(path);
   return { harness: entry?.harness, model: entry?.model };
 }
+
+/** Carry project names and defaults with a relocated folder and its subfolders. */
+export function relocateProjectEntries(oldPath: string, newPath: string): void {
+  const old = projectKey(oldPath);
+  const destination = projectKey(newPath);
+  const book = readProjectBook();
+  const moved: ProjectBook = {};
+  for (const [path, entry] of Object.entries(book)) {
+    const key = path === old || path.startsWith(`${old}/`) ? destination + path.slice(old.length) : path;
+    moved[key] = entry;
+  }
+  writeProjectBook(moved);
+}

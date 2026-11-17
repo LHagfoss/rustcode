@@ -174,11 +174,15 @@ describe("management tools", () => {
     expect(parseCall({ tool: "update_project", args: { path: "/abs/p", harness: " codex " } })).toEqual({
       tool: "update_project",
       path: "/abs/p",
+      destination: undefined,
       name: undefined,
       harness: "codex",
       model: undefined,
     });
     expect(isFailure(parseCall({ tool: "update_project", args: { path: "/abs/p" } }))).toBe(true);
+    expect(
+      parseCall({ tool: "update_project", args: { path: "/abs/p", destination: " /abs/new " } }),
+    ).toMatchObject({ destination: "/abs/new" });
     expect(parseCall({ tool: "remove_project", args: { path: "/abs/p" } })).toEqual({
       tool: "remove_project",
       path: "/abs/p",

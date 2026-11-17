@@ -98,6 +98,7 @@ export const Method = {
    * A project folder's git facts, the folders in one (a paired machine's, which has no file dialog
    * here), and a folder the project tools make or clone.
    */
+  projectRelocate: "_rustcode/project/relocate",
   projectRead: "_rustcode/project/read",
   projectBrowse: "_rustcode/project/browse",
   projectCreate: "_rustcode/project/create",

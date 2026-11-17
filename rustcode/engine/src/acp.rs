@@ -18,6 +18,7 @@ mod permissions;
 mod presence;
 mod preview;
 mod projects;
+mod project_relocate;
 mod prompt;
 pub(crate) mod questions;
 mod remote;
@@ -2781,6 +2782,25 @@ async fn serve_connection(
                     }?;
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: project_relocate::RelocateRequest, responder, _connection| {
+                    // Hold both registries through validation and writes: a closed thread
+                    // cannot be loaded between the check and its path being replaced.
+                    let sessions = server.sessions.lock().await;
+                    let external = server.external.lock().await;
+                    match project_relocate::relocate(request, |id| {
+                        sessions.contains_key(id) || external.get(id).is_some_and(|s| !s.is_closed())
+                    }) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params().data(error)),
+                    }
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )

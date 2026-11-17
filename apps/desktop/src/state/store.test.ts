@@ -30,7 +30,7 @@ import {
   type Link,
 } from "./orchestration";
 import { pendingRequestsOn } from "./pending";
-import { projectEntry, updateProjectEntry } from "./projectBook";
+import { projectEntry, relocateProjectEntries, updateProjectEntry } from "./projectBook";
 import { QUEUE_REASON } from "./queue";
 import { answerConnectRequest, pairRemoteDevice, refreshRemote } from "./remoteAccess";
 import {
@@ -6167,6 +6167,23 @@ describe("projects and scheduled work", () => {
       answerOrchestration({ sessionId: session.id, tool, args });
     return { caller: session.id, folder: session.cwd ?? "", call };
   }
+
+  test("relocation keeps project names and defaults, including nested project folders", () => {
+    const storage = testStorage();
+    try {
+      updateProjectEntry("/old/app", { name: "App", harness: "codex", model: "chosen" });
+      updateProjectEntry("/old/app/docs", { name: "Docs", registeredAt: 123 });
+      updateProjectEntry("/old/application", { name: "Other" });
+      relocateProjectEntries("/old/app", "/new/app");
+      expect(projectEntry("/old/app")).toBeUndefined();
+      expect(projectEntry("/old/app/docs")).toBeUndefined();
+      expect(projectEntry("/new/app")).toEqual({ name: "App", harness: "codex", model: "chosen" });
+      expect(projectEntry("/new/app/docs")).toEqual({ name: "Docs", registeredAt: 123 });
+      expect(projectEntry("/old/application")?.name).toBe("Other");
+    } finally {
+      storage.done();
+    }
+  });
 
   test("a project reads without asking, and every change is asked first", async () => {
     // The project book lives in app storage, as the app's own settings do.
