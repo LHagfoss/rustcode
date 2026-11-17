@@ -1017,7 +1017,10 @@ pub fn outcome(
 /// What a pull request reverts: the number in GitHub's `Reverts owner/name#N`
 /// body (or `Reverts #N`), and the title inside a `Revert "<title>"` title.
 pub fn reverts(value: &Value, repository: &str) -> (Option<u64>, Option<String>) {
-    let body = value.get("body").and_then(Value::as_str).unwrap_or_default();
+    let body = value
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let number = body.lines().find_map(|line| {
         let rest = line.trim().strip_prefix("Reverts ")?;
         let (repo, number) = rest.split_once('#')?;
@@ -1333,6 +1336,23 @@ mod tests {
         store
             .start("s1", Path::new("/r"), 7, Interests::default(), 1_000)
             .unwrap()
+    }
+
+    #[test]
+    fn a_revert_names_the_pull_request_and_title_it_reverts() {
+        let value = json!({
+            "title": "Revert \"feat: x\"",
+            "body": "Reverts o/r#41\n\nBecause it broke the build.",
+        });
+        assert_eq!(
+            reverts(&value, "o/r"),
+            (Some(41), Some("feat: x".to_owned()))
+        );
+        // Another repository's pull request is not this one's.
+        let other = json!({"title": "fix: y", "body": "Reverts other/repo#41"});
+        assert_eq!(reverts(&other, "o/r"), (None, None));
+        let short = json!({"title": "fix: y", "body": "Reverts #5"});
+        assert_eq!(reverts(&short, "o/r"), (Some(5), None));
     }
 
     #[test]

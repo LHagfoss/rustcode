@@ -2354,8 +2354,14 @@ mod tests {
             })
         ));
         assert!(
-            Cli::try_parse_from(["rustcode", "usage", "--pull-requests", "--since", "2026-11-01"])
-                .is_err(),
+            Cli::try_parse_from([
+                "rustcode",
+                "usage",
+                "--pull-requests",
+                "--since",
+                "2026-11-01"
+            ])
+            .is_err(),
             "the report covers every recorded pull request"
         );
         assert!(matches!(

@@ -488,8 +488,6 @@ fn run_storage_command(
     Ok(())
 }
 
-/// `rustcode usage`: tokens per harness and model from the local data store.
-/// Disk usage is `storage usage`; this never prices requests.
 /// `rustcode usage --pull-requests`: the `pr_outcomes_by_model` view (#3907).
 fn run_pull_request_usage_command(json: bool) -> Result<(), String> {
     rustcode::data_store::ensure_ready()?;
@@ -520,7 +518,8 @@ fn run_pull_request_usage_command(json: bool) -> Result<(), String> {
             .and_then(serde_json::Value::as_i64)
             .map_or_else(dash, thousands)
     };
-    let real = |row: &serde_json::Value, key: &str| row.get(key).and_then(serde_json::Value::as_f64);
+    let real =
+        |row: &serde_json::Value, key: &str| row.get(key).and_then(serde_json::Value::as_f64);
     let table: Vec<Vec<String>> = answer
         .rows
         .iter()
@@ -564,6 +563,8 @@ fn run_pull_request_usage_command(json: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// `rustcode usage`: tokens per harness and model from the local data store.
+/// Disk usage is `storage usage`; this never prices requests.
 fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
     let since = match since {
         Some(value) => Some(rustcode::data_store::parse_since(value)?),

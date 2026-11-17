@@ -7422,6 +7422,140 @@ mod tests {
         assert_eq!(approval["tool_name"], "run_command");
     }
 
+    fn pull(number: u64, state: &str, head: &str, failed: bool) -> PullRequestOutcome {
+        PullRequestOutcome {
+            url: format!("https://github.com/acme/app/pull/{number}"),
+            number,
+            title: format!("feat: change {number}"),
+            state: state.to_owned(),
+            head: head.to_owned(),
+            checks_failed: failed,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_pull_requests_ci_failures_fix_rounds_merge_and_revert_are_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let at = "2026-11-17T10:00:00.000Z";
+        // Head a fails twice (one failure, read twice), a fix pushes b, which
+        // fails too, then c goes green and merges.
+        for read in [
+            pull(7, "open", "a", true),
+            pull(7, "open", "a", true),
+            pull(7, "open", "b", true),
+            pull(7, "open", "c", false),
+            PullRequestOutcome {
+                merged_at: Some("2026-11-17T11:00:00Z".to_owned()),
+                ..pull(7, "merged", "c", false)
+            },
+        ] {
+            record_pull_request_at(&path, "t", &read, at).unwrap();
+        }
+        let row = one_row(&path, "SELECT * FROM thread_outcomes");
+        assert_eq!(row["repo"], "acme/app");
+        assert_eq!(row["pr_number"], 7);
+        assert_eq!(row["state"], "merged");
+        assert_eq!(row["ci_failures"], 2, "{row}");
+        assert_eq!(row["fix_rounds"], 2, "{row}");
+        assert_eq!(row["merged_at"], "2026-11-17T11:00:00Z");
+        assert_eq!(row["closed_unmerged"], 0);
+        assert_eq!(row["reverted"], 0);
+        let thread = one_row(
+            &path,
+            "SELECT pull_request_state, final_commit FROM threads WHERE id = 't'",
+        );
+        assert_eq!(thread["pull_request_state"], "merged");
+        assert_eq!(thread["final_commit"], "c");
+
+        // A merged revert of #7 marks it reverted.
+        let revert = PullRequestOutcome {
+            reverts_number: Some(7),
+            ..pull(8, "merged", "r", false)
+        };
+        record_pull_request_at(&path, "u", &revert, at).unwrap();
+        let reverted = one_row(
+            &path,
+            "SELECT reverted, reverted_by FROM thread_outcomes WHERE pr_number = 7",
+        );
+        assert_eq!(reverted["reverted"], 1);
+        assert_eq!(reverted["reverted_by"], 8);
+
+        // Closed without merging.
+        record_pull_request_at(&path, "v", &pull(9, "closed", "x", false), at).unwrap();
+        let closed = one_row(
+            &path,
+            "SELECT closed_unmerged, closed_at, merged_at FROM thread_outcomes WHERE pr_number = 9",
+        );
+        assert_eq!(closed["closed_unmerged"], 1);
+        assert!(closed["closed_at"].is_string(), "{closed}");
+        assert!(closed["merged_at"].is_null(), "{closed}");
+    }
+
+    #[test]
+    fn pr_outcomes_by_model_reports_cost_and_tokens_per_merged_pull_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        {
+            let connection = open(&path).unwrap();
+            for (thread, cost) in [("m", 3.0), ("c", 1.0)] {
+                write_turn(
+                    &connection,
+                    &TurnRow {
+                        harness: Some("claude".to_owned()),
+                        model: Some("opus".to_owned()),
+                        cached_tokens: Some(100),
+                        cache_write_tokens: Some(0),
+                        cost_usd: Some(cost),
+                        ..turn(thread, "2026-11-17T10:00:00Z", (1000, 200), "completed")
+                    },
+                )
+                .unwrap();
+            }
+            // A thread without a pull request is not counted.
+            write_turn(
+                &connection,
+                &TurnRow {
+                    harness: Some("claude".to_owned()),
+                    model: Some("opus".to_owned()),
+                    cost_usd: Some(50.0),
+                    ..turn("none", "2026-11-17T10:00:00Z", (9, 9), "completed")
+                },
+            )
+            .unwrap();
+        }
+        let at = "2026-11-17T10:00:00.000Z";
+        record_pull_request_at(&path, "m", &pull(1, "open", "a", true), at).unwrap();
+        record_pull_request_at(&path, "m", &pull(1, "merged", "b", false), at).unwrap();
+        record_pull_request_at(&path, "c", &pull(2, "closed", "z", false), at).unwrap();
+        let row = one_row(
+            &path,
+            "SELECT * FROM pr_outcomes_by_model WHERE harness = 'claude'",
+        );
+        assert_eq!(row["model"], "opus");
+        assert_eq!(row["threads"], 2);
+        assert_eq!(row["pull_requests"], 2);
+        assert_eq!(row["merged"], 1);
+        assert_eq!(row["closed_unmerged"], 1);
+        assert_eq!(row["merge_share"], 0.5);
+        assert_eq!(row["avg_ci_failures"], 0.5);
+        // Every linked thread's spend, merged or not, over the merged count.
+        assert_eq!(row["cost_per_merged_pr"], 4.0);
+        assert_eq!(row["tokens_per_merged_pr"], 2600);
+        let report = query_path(&path, PULL_REQUEST_OUTCOMES_SQL, 10).unwrap();
+        assert_eq!(report.rows.len(), 1, "{:?}", report.rows);
+    }
+
+    #[test]
+    fn pull_request_repository_reads_owner_and_name() {
+        assert_eq!(
+            pull_request_repository("https://github.com/acme/app/pull/12").as_deref(),
+            Some("acme/app")
+        );
+        assert_eq!(pull_request_repository("https://example.test/pull/9"), None);
+    }
+
     #[test]
     fn by_default_old_and_large_payloads_are_kept() {
         let dir = tempfile::tempdir().unwrap();
