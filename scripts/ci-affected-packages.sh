@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read changed paths on stdin and print the affected Cargo packages.
+# Read changed paths on stdin and print Cargo packages including consumers.
 # Output is a fixed list of Cargo arguments, safe to pass as shell words.
 set -euo pipefail
 
@@ -7,7 +7,6 @@ all=false
 engine=false
 tui=false
 client=false
-core=()
 
 while IFS= read -r path; do
     case "$path" in
@@ -26,11 +25,9 @@ while IFS= read -r path; do
         rustcode/client/Cargo.toml|rustcode/client/build.rs|rustcode/client/src/*|rustcode/client/tests/*|rustcode/client/benches/*|rustcode/client/examples/*)
             client=true ;;
         rustcode/core/*/Cargo.toml|rustcode/core/*/build.rs|rustcode/core/*/src/*|rustcode/core/*/tests/*|rustcode/core/*/benches/*|rustcode/core/*/examples/*)
-            crate="${path#rustcode/core/}"
-            crate="${crate%%/*}"
-            if [[ "$crate" == rustcode-* ]]; then
-                core+=("$crate")
-            fi ;;
+            # Core crates are shared across the workspace. Selecting only the
+            # changed crate misses behavioral tests in its consumers.
+            all=true ;;
     esac
 done
 
@@ -39,12 +36,12 @@ if "$all"; then
     exit 0
 fi
 
+# Both libraries feed the TUI; compile and test their consumer as well.
+if "$engine" || "$client"; then tui=true; fi
+
 args=()
 if "$engine"; then args+=(-p rustcode); fi
 if "$tui"; then args+=(-p rustcode-tui); fi
 if "$client"; then args+=(-p rustcode-client); fi
-if ((${#core[@]})); then
-    while IFS= read -r crate; do args+=(-p "$crate"); done < <(printf '%s\n' "${core[@]}" | LC_ALL=C sort -u)
-fi
 if ((${#args[@]})); then printf '%s ' "${args[@]}"; fi
 printf '\n'

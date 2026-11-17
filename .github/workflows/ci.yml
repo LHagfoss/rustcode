@@ -204,8 +204,8 @@ jobs:
               # These tests depend on user-installed skills or runner-specific
               # ripgrep output. Keep them in the local suite, but exclude them
               # from the clean-runner gate until they have portable fixtures.
-              # Test only packages with changed source. Workspace build inputs
-              # (Cargo manifests/lock/toolchain) still select the full suite.
+              # Include consumers of changed libraries. Shared core changes and
+              # workspace build inputs select the full suite.
               # Sandbox-gated tests skip themselves when bubblewrap cannot run
               # (GitHub runners block unprivileged user namespaces).
               shell: bash
