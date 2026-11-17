@@ -1662,3 +1662,73 @@
   --text-title: 25px;
   --text-title--line-height: 31px;
 }
+
+/* ── live background (ui/DitherField.tsx, after Sable's art.css, MIT) ── */
+
+.rc-dither {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 900ms var(--ease-snappy);
+  /* Its own layer: a new frame never repaints or relayouts anything around it. */
+  contain: strict;
+}
+
+.rc-dither[data-ready="true"] {
+  opacity: var(--dither-opacity, 1);
+}
+
+/* A low-resolution bitmap (one pixel per cell), sized in whole cells by the component and scaled up hard. */
+.rc-dither canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+
+/* Characters and dots are drawn at device resolution; soft is a low-resolution field scaled up smoothly. */
+.rc-dither[data-texture="ascii"],
+.rc-dither[data-texture="halftone"],
+.rc-dither[data-texture="soft"] {
+  background: var(--rc-bg);
+}
+
+.rc-dither[data-texture="ascii"] canvas,
+.rc-dither[data-texture="halftone"] canvas,
+.rc-dither[data-texture="soft"] canvas {
+  image-rendering: auto;
+}
+
+/* The screen: hairline gaps of the pane colour between cells make the pixels read as tiles. */
+.rc-dither-grid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--rc-bg) 42%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--rc-bg) 42%, transparent) 1px, transparent 1px);
+  background-size: var(--cell) var(--cell);
+}
+
+/* The band an open thread's composer stands on: an arc of light that crests just under the
+   composer's top edge and sinks to the pane's lower corners. Its upward fade is an overlay in the
+   pane colour, not a mask over the animated field. */
+.rc-live-band {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.rc-live-band::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    transparent 0%,
+    color-mix(in srgb, var(--rc-bg) 10%, transparent) 52%,
+    color-mix(in srgb, var(--rc-bg) 70%, transparent) 80%,
+    var(--rc-bg) 100%
+  );
+}

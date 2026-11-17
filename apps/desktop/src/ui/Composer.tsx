@@ -19,6 +19,7 @@ import { harnessPlanKey } from "../acp/rustcode";
 import { type Harness, projectName, type SlashCommand } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { suggestBranch, validBranch } from "../acp/v2";
+import { fieldBeat } from "../lib/backdrop/events";
 import { insertTranscript } from "../lib/dictation";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { measuredFieldHeight } from "../lib/fieldHeight";
@@ -874,6 +875,8 @@ export const Composer = memo(function Composer({
     change(() => emptyExtras);
     // The field comes back empty in a breath: the message has left for the transcript, not blinked.
     fadeClearedField(fieldBox.current);
+    // The live background answers with a wave from the composer (lib/backdrop/events.ts).
+    fieldBeat("send", fieldBox.current);
     const sending = steer ? steerOrSubmit(text, sentExtras) : submit(text, sentExtras);
     void sending.then((sent) => {
       // A thread that could not start keeps the message for another try.

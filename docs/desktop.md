@@ -999,6 +999,23 @@ composer's keys stay outside the table.
   new thread keeps a 35% wash. Kept with the banner (`lib/banner.ts`); in the
   browser build and the mock, `showSampleBanner("dither")` from that module
   shows a bundled sample (`src/assets/banner-sample.png`).
+- **Live background.** Settings › Appearance › Live background
+  (`ui/LiveBackgroundGroup.tsx`, stored under `rustcode.liveBackground` by
+  `lib/backdrop/config.ts`): a field of dithered light behind the chat, ported
+  from Sable (https://github.com/Leonxlnx/sable, MIT; the engine in
+  `lib/backdrop/field*.ts`, the host in `ui/DitherField.tsx`). On by default at
+  a quiet strength. A new thread shows it across the pane (`NewThreadLight` in
+  `ui/ChatLight.tsx`); an open thread shows a band of it under the composer
+  (`ThreadLight`) that quickens while a turn runs, turns amber and stills when
+  the thread waits on you, and settles while the end of a turn plays. Sending
+  plays a wave from the composer, a finished turn a ring that closes on it, a
+  failed one a dip. Presets (Quiet, Glow, Streaks, Corner, ASCII, Halftone,
+  Still, Mono, Vivid), Pattern, Texture, Colour (the harness's: Claude orange,
+  Codex blue, Gemini a spectrum, OpenCode grey, the accent for RustCode and the
+  rest; Mono; or a custom hue), strength on new and open threads, Speed,
+  Detail and React. A chosen chat background picture takes its place on new
+  threads. On a light theme the field is drawn as ink below the pane colour
+  instead of light above it.
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
   machine's switch: **Network access** turned on starts the remote gateway
   (or uses the one the RustCode server runs, which keeps this computer

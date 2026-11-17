@@ -17,7 +17,10 @@ menu item.
 
 - **Calm.** The transcript is the content; chrome stays quiet. One accent,
   used sparingly. Nothing moves, glows or changes colour unless the user did
-  something or the state changed.
+  something or the state changed. The one exception is the live background
+  (below, Motion): a slow field of light behind the chat that rests after 20
+  seconds without input, holds still under Reduce motion, and can be turned
+  off.
 - **Neutral.** Greys are true neutrals (no warm or blue cast), and every
   grey comes from a token. Translucent fills are drawn from `--rc-text`, so
   they stay neutral on any background.
@@ -367,6 +370,16 @@ Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
 that change use `tabular`.
 
 ## Motion
+
+- **Live background** (`ui/LiveBackdrop.tsx`, engine in `lib/backdrop/`,
+  ported from Sable, MIT): the one ambient loop. It draws in a Web Worker on an
+  OffscreenCanvas (the main thread where that is missing), only while visible
+  and the window is focused, rests to a still frame after 20 s without input
+  or a running turn, sheds effects and frame rate under load, and holds still
+  under Reduce motion. Its colour is the only colour outside the accent and
+  the state colours: the harness's own (as its mark), or the accent. It
+  answers moments with one-shot beats (`fieldBeat` in `lib/backdrop/events.ts`):
+  `send` from the composer, `done` and `fail` when a turn ends.
 
 - Hover: **in 60ms, out 120ms** (`--rc-hover-in`, `--rc-hover-out`),
   colour only, set once in `index.css` for every button, link, row,
