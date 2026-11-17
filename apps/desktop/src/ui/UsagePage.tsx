@@ -55,7 +55,7 @@ interface PageRead {
 }
 
 export function UsagePage() {
-  const status = useApp((s) => s.status);
+  const status = useApp((s) => s.engine.phase);
   const [answer, setAnswer] = useState<PageAnswer<UsageAnswer> | null>(
     () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null,
   );

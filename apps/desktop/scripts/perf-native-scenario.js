@@ -47,7 +47,7 @@ async () => {
     };
   }
 
-  await until(() => app()?.useApp.getState().sessionsLoaded);
+  await until(() => app()?.useApp.getState().engine.sessions === "listed");
   await sleep(1500);
   await phase("idle", () => sleep(3000));
   budget = Math.max(8, q(P.frames, 0.5));

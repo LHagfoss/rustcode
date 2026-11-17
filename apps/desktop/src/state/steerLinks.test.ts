@@ -3,6 +3,7 @@
 // sidebar and the parent's delegate row stop saying "working" without the thread being opened.
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import type { EngineState } from "./engine";
 import {
   linkSteered,
   reconcileLinks,
@@ -15,6 +16,9 @@ import {
 import { emptyBook, type Link, liveState } from "./orchestration";
 import { resetForTests, statusOf, updateThread, useApp } from "./store";
 import { emptyThread, requeueSteers } from "./thread";
+
+/** The engine answered and listed this computer's threads: links may be reconciled. */
+const LISTED: EngineState = { phase: "ready", sessions: "listed", restarted: false };
 
 const PARENT = "parent";
 const TARGET = "delegate";
@@ -169,7 +173,7 @@ describe("a delegate steered mid-turn", () => {
 describe("a link whose thread stopped (issue 3541)", () => {
   const idle = () =>
     useApp.setState((s) => ({
-      sessionsLoaded: true,
+      engine: LISTED,
       threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, turn: undefined } },
     }));
 
@@ -204,7 +208,7 @@ describe("a link whose thread stopped (issue 3541)", () => {
 
   test("a running thread, a link that is only starting and a queued message are left working", () => {
     // Running: nothing to reconcile.
-    useApp.setState({ sessionsLoaded: true });
+    useApp.setState({ engine: LISTED });
     reconcileLinks(10_000_000);
     expect(state("own")?.state).toBe("working");
     idle();

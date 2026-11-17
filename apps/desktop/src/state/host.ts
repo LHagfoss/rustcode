@@ -21,6 +21,7 @@ import {
 import { currentPlatform } from "../lib/platform";
 import { readStorage, writeStorage } from "../lib/storage";
 import { titleFrom } from "../lib/title";
+import { sessionsListed } from "./engine";
 import { unavailableReason } from "./harness";
 import { cleanupWorktree, handoffWorktree, mergeWhenGreen, worktreeStatus } from "./hostDelegates";
 import {
@@ -2883,7 +2884,7 @@ export const UNSTARTED_LINK_MS = 10 * 60_000;
  */
 export function reconcileLinks(now = Date.now()): void {
   const state = useApp.getState();
-  if (!state.sessionsLoaded) return;
+  if (!sessionsListed(state.engine)) return;
   const stale = book().links.filter((link) => {
     if (link.state !== "working" && link.state !== "needs_user") return false;
     // A link that is only starting (a worktree being made, a cold harness) has an idle thread beside

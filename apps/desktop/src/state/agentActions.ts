@@ -59,7 +59,7 @@ export function startAgentPolling() {
     const s = get();
     const id = s.selectedId;
     const thread = id ? s.threads[id] : undefined;
-    if (!id || !thread || s.status !== "ready" || !hasAgents(thread)) return;
+    if (!id || !thread || s.engine.phase !== "ready" || !hasAgents(thread)) return;
     const known = s.agents[id];
     if (isRunning(thread) || known?.some(agentActive) || (known === undefined && isLoaded(thread))) {
       void refreshAgents(id);

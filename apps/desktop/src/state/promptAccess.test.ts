@@ -35,7 +35,7 @@ describe("a prompt names the thread's access level", () => {
   test("Full access, then Ask, each on the prompt that follows the change", async () => {
     const transport = new RecordingTransport({ delayMs: 0 });
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const id = useApp.getState().sessions[0]!.id;
     selectThread(id);
     await until(() => isLoaded(useApp.getState().threads[id]) === true);

@@ -61,7 +61,7 @@ const PAIR_DEADLINE_MS = 20_000;
 const WRONG_CODES_ALLOWED = 5;
 
 export function RemoteAccessPage() {
-  const engine = useApp((s) => s.status);
+  const engine = useApp((s) => s.engine.phase);
   const remote = useApp((s) => s.remote);
   const remoteError = useApp((s) => s.remoteError);
   const [busy, setBusy] = useState<string | null>(null);

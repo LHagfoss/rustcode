@@ -65,7 +65,7 @@ function ScheduledCard({
 /** Every message this thread is holding for a time, soonest first; nothing at all when there are none. */
 export function ScheduledMessages({ threadId }: { threadId: string }) {
   const rows = useApp(useShallow((s) => s.scheduled[threadId] ?? EMPTY));
-  const ready = useApp((s) => s.status === "ready");
+  const ready = useApp((s) => s.engine.phase === "ready");
   // The countdown is the only thing that changes while the card waits: one tick a second.
   const now = useNow(rows.length > 0);
   if (!rows.length) return null;

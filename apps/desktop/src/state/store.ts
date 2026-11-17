@@ -274,6 +274,14 @@ import {
 } from "./continueThreads";
 import { contextPercent } from "./details";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
+import {
+  type EngineEvent,
+  type EngineState,
+  initialEngine,
+  sessionsListed,
+  startingText,
+  transitionEngine,
+} from "./engine";
 import type { TimedGrant } from "./grants";
 import { selectOption, unavailableReason } from "./harness";
 import {
@@ -618,8 +626,8 @@ export interface CachedPlan extends PlanUsage {
 }
 
 export interface AppState {
-  status: "connecting" | "ready" | "closed";
-  statusDetail?: string;
+  /** This computer's engine connection (`state/engine.ts`); `engine.phase === "ready"` is when it answers. */
+  engine: EngineState;
   transport?: Transport["name"];
   engineLog: string[];
   agent?: AgentInfo;
@@ -628,7 +636,6 @@ export interface AppState {
   machineNames: Record<string, string>;
   /** The paired machines whose connection is open now: their threads can be driven, not only read. */
   connectedHosts: string[];
-  sessionsLoaded: boolean;
   /** The session list stopped at the page cap, so some threads may be absent. */
   sessionsCapped: boolean;
   threads: Record<string, ThreadState>;
@@ -1183,12 +1190,11 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   planUsage: {},
   planCache: prunePlans(storedJson<Record<string, CachedPlan>>(STORAGE.planCache, {})),
   signedOutLogins: {},
-  status: "connecting",
+  engine: initialEngine,
   engineLog: [],
   sessions: [],
   machineNames: {},
   connectedHosts: [],
-  sessionsLoaded: false,
   sessionsCapped: false,
   threads: {},
   selectedId: null,
@@ -1659,32 +1665,31 @@ const logs = frameQueue<string>(
  */
 const ENGINE_TOAST = "engine";
 const ENGINE_SLOW_MS = 2000;
-let bootProgress = 0;
 let slowTimer: ReturnType<typeof setTimeout> | undefined;
 let engineWatch: (() => void) | undefined;
-/** The engine stopped since it was last ready: its next start is a restart. */
-let crashed = false;
 
-function bootStep(progress: number) {
-  bootProgress = progress;
-  updateToast(ENGINE_TOAST, { progress });
+/** The store fields an engine event changes, for a `set` that changes more beside it. */
+function engineAfter(s: AppState, event: EngineEvent): Pick<AppState, "engine"> {
+  return { engine: transitionEngine(s.engine, event) };
 }
 
-function onEngineStatus(s: AppState, prev?: AppState) {
+function engineEvent(event: EngineEvent) {
+  set((s) => engineAfter(s, event));
+}
+
+/** The engine toast follows the engine's phase; `prev` is absent for the first read. */
+function onEngineChange(engine: EngineState, prev?: EngineState) {
   // Settings' answers name this engine's accounts and plans: none of them may
   // show for the next one (a restart can reach a different config).
-  if (s.status !== "ready") clearPageCache();
+  if (engine.phase !== "ready") clearPageCache();
   clearTimeout(slowTimer);
-  if (s.status === "ready") {
-    // Batched updates can go from closed straight to ready: this keys on `crashed` alone.
-    if (crashed && prev) toast("The server restarted", "success", { id: ENGINE_TOAST });
+  if (engine.phase === "ready") {
+    if (engine.restarted && prev) toast("The server restarted", "success", { id: ENGINE_TOAST });
     else dismissToast(ENGINE_TOAST);
-    crashed = false;
     return;
   }
-  if (s.status === "closed") {
-    crashed = true;
-    toast(s.statusDetail ?? "The server stopped.", "error", {
+  if (engine.phase === "closed") {
+    toast(engine.detail || "The server stopped.", "error", {
       id: ENGINE_TOAST,
       action: { label: "Restart", run: () => void restartEngine() },
     });
@@ -1693,21 +1698,22 @@ function onEngineStatus(s: AppState, prev?: AppState) {
   // Starting: an error toast from before goes at once; a slow start gets its own.
   if (get().toasts.some((t) => t.id === ENGINE_TOAST && t.tone === "error")) dismissToast(ENGINE_TOAST);
   slowTimer = setTimeout(() => {
-    if (get().status !== "connecting") return;
-    toast(crashed ? "Restarting the server…" : "Starting the server…", "info", {
-      id: ENGINE_TOAST,
-      persist: true,
-      progress: bootProgress,
-    });
+    const now = get().engine;
+    if (now.phase !== "connecting") return;
+    toast(startingText(now), "info", { id: ENGINE_TOAST, persist: true, progress: now.progress });
   }, ENGINE_SLOW_MS);
 }
 
 function watchEngine() {
   if (engineWatch) return;
   engineWatch = useApp.subscribe((s, prev) => {
-    if (s.status !== prev.status) onEngineStatus(s, prev);
+    if (s.engine.phase !== prev.engine.phase) onEngineChange(s.engine, prev.engine);
+    // A start that is already slow shows how far it has got.
+    else if (s.engine.phase === "connecting" && prev.engine.phase === "connecting")
+      if (s.engine.progress !== prev.engine.progress)
+        updateToast(ENGINE_TOAST, { progress: s.engine.progress });
   });
-  onEngineStatus(get());
+  onEngineChange(get().engine);
 }
 
 /** Start the transport once; every engine (re)start then gets a fresh ACP connection. */
@@ -1717,8 +1723,7 @@ export async function connect(next: Transport): Promise<void> {
   startAgentPolling();
   startPlanPolling();
   startRunStatePoll();
-  bootProgress = 0.15;
-  set({ status: "connecting", transport: next.name, statusDetail: undefined });
+  set((s) => ({ ...engineAfter(s, { type: "start" }), transport: next.name }));
   watchEngine();
   try {
     await next.start((event) => {
@@ -1736,7 +1741,7 @@ export async function connect(next: Transport): Promise<void> {
     // The paired computers' supervisors are the shell's too: follow the connections they open.
     void startMachineRouting();
   } catch (error) {
-    set({ status: "closed", statusDetail: errorText(error) });
+    engineEvent({ type: "closed", detail: errorText(error) });
   }
 }
 
@@ -1747,9 +1752,8 @@ async function handshake(): Promise<void> {
   conn.onInbound((message) => {
     if (connection === conn) void handleInbound(message);
   });
-  set({ status: "connecting", statusDetail: undefined });
+  engineEvent({ type: "handshake" });
   forgetAskedModels();
-  bootStep(0.5);
   try {
     const result = await conn.request(
       Method.initialize,
@@ -1771,13 +1775,12 @@ async function handshake(): Promise<void> {
     void import("./settingsScope").then((scope) => scope.hydrateLocalServerSettings());
     // Read before the reset below marks every thread idle.
     const interrupted = interruptedThreads();
-    set({
+    set((s) => ({
       agent,
-      status: "ready",
-      statusDetail: undefined,
+      ...engineAfter(s, { type: "ready" }),
       smartUiPending: false,
       orchestrationPending: false,
-    });
+    }));
     // Threads that were open lost their engine-side state with the old process.
     forgetRunDrift();
     set((s) => ({
@@ -1822,7 +1825,7 @@ async function handshake(): Promise<void> {
       void continueInternetThreads();
     }
   } catch (error) {
-    set({ status: "closed", statusDetail: errorText(error) });
+    engineEvent({ type: "closed", detail: errorText(error) });
   }
 }
 
@@ -1971,10 +1974,8 @@ export function featureMissing(feature: keyof AppState["features"]): string | nu
 
 export async function restartEngine(): Promise<void> {
   if (!transport) return;
-  crashed = true;
-  bootProgress = 0.15;
-  set({ status: "connecting", statusDetail: "Restarting the server…" });
-  await transport.restart().catch((error) => set({ status: "closed", statusDetail: errorText(error) }));
+  engineEvent({ type: "restart" });
+  await transport.restart().catch((error) => engineEvent({ type: "closed", detail: errorText(error) }));
 }
 
 /**
@@ -2044,8 +2045,7 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
         return;
       }
       set((s) => ({
-        status: "closed",
-        statusDetail: message.reason,
+        ...engineAfter(s, { type: "closed", detail: message.reason }),
         threads: Object.fromEntries(
           Object.entries(s.threads).map(([id, t]) => [
             id,
@@ -2291,7 +2291,7 @@ export function threadIsGone(id: string): boolean {
   const s = get();
   if (s.sessions.some((x) => x.id === id)) return false;
   const host = isRemoteThread(id) ? splitThreadKey(id).host : LOCAL_HOST;
-  if (host === LOCAL_HOST && (!s.sessionsLoaded || s.sessionsCapped)) return false;
+  if (host === LOCAL_HOST && (!sessionsListed(s.engine) || s.sessionsCapped)) return false;
   return wholeLists.has(host);
 }
 
@@ -2299,7 +2299,7 @@ export async function refreshSessions(options: { quiet?: boolean } = {}): Promis
   const conn = connection;
   if (!conn || !get().agent?.listSessions) {
     noteThreadList(LOCAL_HOST, false);
-    set({ sessionsLoaded: true, sessionsCapped: false });
+    set((s) => ({ ...engineAfter(s, { type: "listed" }), sessionsCapped: false }));
     return;
   }
   try {
@@ -2339,7 +2339,7 @@ export async function refreshSessions(options: { quiet?: boolean } = {}): Promis
       noteThreadList(LOCAL_HOST, !capped);
       return {
         sessions,
-        sessionsLoaded: true,
+        ...engineAfter(s, { type: "listed" }),
         sessionsCapped: capped,
         // The new-thread screen starts in this computer's most recent project: another machine's
         // folder is not a folder here (**Run on** moves the thread there, with its own project).
@@ -2354,7 +2354,7 @@ export async function refreshSessions(options: { quiet?: boolean } = {}): Promis
     // A link still Working beside a thread the engine says is idle is settled (issue 3541).
     reconcileLinks();
   } catch (error) {
-    set({ sessionsLoaded: true });
+    engineEvent({ type: "listed" });
     if (!options.quiet) toast(`Could not list threads: ${errorText(error)}`, "error");
   }
 }
@@ -3143,7 +3143,7 @@ export function setLimitFallbackMap(value: Parameters<typeof parseRules>[0]) {
 export function setOrchestration(on: boolean) {
   set((s) => ({
     orchestration: on,
-    orchestrationPending: s.status === "ready" ? !s.orchestrationPending : s.orchestrationPending,
+    orchestrationPending: s.engine.phase === "ready" ? !s.orchestrationPending : s.orchestrationPending,
   }));
   store(STORAGE.orchestration, on ? "1" : "0");
 }
@@ -3253,7 +3253,10 @@ export function setNewWorktree(change: Partial<AppState["newWorktree"]>) {
 }
 
 export function setSmartUi(on: boolean) {
-  set((s) => ({ smartUi: on, smartUiPending: s.status === "ready" ? !s.smartUiPending : s.smartUiPending }));
+  set((s) => ({
+    smartUi: on,
+    smartUiPending: s.engine.phase === "ready" ? !s.smartUiPending : s.smartUiPending,
+  }));
   store(STORAGE.smartUi, on ? "1" : "0");
 }
 
@@ -3548,7 +3551,6 @@ export function resetForTests() {
   forcingStops.clear();
   engineWatch?.();
   engineWatch = undefined;
-  crashed = false;
   forgetAskedModels();
   connection = null;
   transport = null;
@@ -3557,14 +3559,13 @@ export function resetForTests() {
   opening.clear();
   autoRepaired.clear();
   set({
-    status: "connecting",
+    engine: initialEngine,
     remote: null,
     pairing: { phase: "idle" },
     remoteByThread: {},
     remoteError: null,
     engineLog: [],
     sessions: [],
-    sessionsLoaded: false,
     sessionsCapped: false,
     threads: {},
     engineRunning: {},

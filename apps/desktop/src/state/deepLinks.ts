@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "../acp/transport";
 import { parseDeepLink, promptLink, threadLink, threadReference } from "../lib/deepLinks";
+import { sessionsListed } from "./engine";
 import { setAddMachineOpen, useMachines } from "./machines";
 import { projectsOn, remoteRepository } from "./projects";
 import {
@@ -96,7 +97,7 @@ export function startDeepLinks(): () => void {
   };
   const drain = () => {
     const s = useApp.getState();
-    if (!live || s.status !== "ready" || !s.sessionsLoaded || !s.harnesses) return;
+    if (!live || !sessionsListed(s.engine) || !s.harnesses) return;
     for (const raw of pending.splice(0)) openDeepLink(raw);
   };
   const unsubscribe = useApp.subscribe(drain);

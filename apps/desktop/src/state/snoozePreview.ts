@@ -33,7 +33,7 @@ export function installSnoozePreview(): void {
   Object.assign(window, { __snoozePreview: { stage: stageSnoozedWorking } });
   let done = false;
   const run = () => {
-    if (done || useApp.getState().status !== "ready") return;
+    if (done || useApp.getState().engine.phase !== "ready") return;
     // Set before the store notifies its subscribers, so staging cannot happen twice.
     done = true;
     if (stageSnoozedWorking()) off?.();

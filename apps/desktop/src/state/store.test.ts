@@ -7,6 +7,7 @@ import { type HarnessModel, type HarnessSnapshot, Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { branchesOf, originOf } from "./branches";
 import { type ComposeExtras, emptyExtras } from "./compose";
+import { sessionsListed } from "./engine";
 import { preferredDefault, rememberedEffort } from "./harness";
 import type { AgentUsage } from "./harnessUsage";
 import {
@@ -298,7 +299,7 @@ describe("engine controller with the mock engine", () => {
   test("an old status read cannot restore a connection prompt after Accept", async () => {
     const transport = new DelayedRemoteStatusTransport();
     await connect(transport);
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     try {
       const initial = await refreshRemote();
       const id = initial?.connectRequests[0]?.id;
@@ -321,7 +322,7 @@ describe("engine controller with the mock engine", () => {
   test("a status read started before dismiss cannot restore a pairing code", async () => {
     const transport = new DelayedRemoteStatusTransport();
     await connect(transport);
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     try {
       await refreshRemote();
       await pairRemoteDevice();
@@ -341,7 +342,7 @@ describe("engine controller with the mock engine", () => {
   test("accepting a phone's request takes down the QR code it replaced", async () => {
     const transport = new MockTransport({ delayMs: 0, remote: "connect" });
     await connect(transport);
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     try {
       const initial = await refreshRemote();
       const id = initial?.connectRequests[0]?.id;
@@ -384,9 +385,33 @@ describe("engine controller with the mock engine", () => {
     }
   });
 
+  test("a crash shows the error, the shell's restart says the server restarted (issue 3911)", async () => {
+    await connect(new MockTransport({ delayMs: 0, crashAfterMs: 30 }));
+    await until(() => sessionsListed(useApp.getState().engine));
+    expect(useApp.getState().engine).toEqual({ phase: "ready", sessions: "listed", restarted: false });
+    // The mock crashes once and its shell starts it again: closed, then ready as a restart.
+    await until(() => {
+      const engine = useApp.getState().engine;
+      return engine.phase === "ready" && engine.restarted;
+    });
+    expect(useApp.getState().toasts.find((t) => t.id === "engine")?.text).toBe("The server restarted");
+  });
+
+  test("Restart reads as a restart and ends in the server restarted (issue 3911)", async () => {
+    const { restartEngine } = await import("./store");
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => sessionsListed(useApp.getState().engine));
+    const restarting = restartEngine();
+    expect(useApp.getState().engine).toMatchObject({ phase: "connecting", restart: true });
+    await restarting;
+    await until(() => sessionsListed(useApp.getState().engine));
+    expect(useApp.getState().engine).toEqual({ phase: "ready", sessions: "listed", restarted: true });
+    expect(useApp.getState().toasts.find((t) => t.id === "engine")?.text).toBe("The server restarted");
+  });
+
   test("connects, lists threads and replays one", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const s = useApp.getState();
     expect(s.sessions[0]?.title).toBe("Fix the composer focus ring");
     expect(s.projectCwd).toBe("/Users/you/code/rustcode");
@@ -411,7 +436,7 @@ describe("engine controller with the mock engine", () => {
 
   test("commands the app answers itself never reach the engine", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const first = useApp.getState().sessions[0]!;
     selectThread(first.id);
     await until(() => isLoaded(selected()) === true);
@@ -447,7 +472,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a new thread's drawer has commands before it starts, and follows its harness", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     // The catalog is asked for on connect, so a thread with no session has a menu.
     await until(() => commandsFor(useApp.getState(), null).some((c) => c.name === "/status"));
     startNewThread();
@@ -474,7 +499,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a chip of another harness moves the new thread there, on that account", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     switchNewThreadHarness("codex");
     expect(useApp.getState().newThread?.harness).toBe("codex");
     // The mock's Claude Code lists the `paral-2` login; pressing its chip is
@@ -488,7 +513,7 @@ describe("engine controller with the mock engine", () => {
   test("a full-access request for an unloaded thread is answered, not shown in the parent", async () => {
     const transport = new MockTransport({ delayMs: 0 });
     await connect(transport);
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     useApp.setState((s) => ({
       links: {
         ...s.links,
@@ -543,7 +568,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a message with images queues whole while a turn runs, and stays editable", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
@@ -593,7 +618,7 @@ describe("engine controller with the mock engine", () => {
 
   test("Send now steers pictures where the harness takes them, and a file waits", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     // Codex in the mock steers live and takes images, and is not the built-in harness.
     switchNewThreadHarness("codex");
@@ -633,7 +658,7 @@ describe("engine controller with the mock engine", () => {
 
   test("⌘⏎ and the queued row's Send now agree, case by case", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     switchNewThreadHarness("codex");
     const done = submit("change the greeting");
@@ -698,7 +723,7 @@ describe("engine controller with the mock engine", () => {
 
   test("⌘⏎ and Send now read the harness's freshest steering record", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     switchNewThreadHarness("codex");
     const done = submit("change the greeting");
@@ -724,7 +749,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a stopped turn holds the queue, and Resume starts its first message", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
@@ -755,7 +780,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a harness that can neither steer nor queue stops the turn, and the message runs next", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
@@ -802,7 +827,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a message sent while idle goes behind a held queue and resumes it", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
@@ -824,7 +849,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a queued message is edited in the composer and saved where it waits", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
@@ -859,7 +884,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a report command answers in the panel and leaves the transcript as it was", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     selectThread(useApp.getState().sessions[0]!.id);
     await until(() => isLoaded(selected()) === true);
     await until(() => !!useApp.getState().sessionCommands[useApp.getState().sessions[0]!.id]);
@@ -877,7 +902,7 @@ describe("engine controller with the mock engine", () => {
   test("two starts at a limit's edge take one slot, not two", async () => {
     setOrchestration(true);
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 2);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 2);
     const [caller, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
     selectThread(caller);
     await until(() => isLoaded(selected()) === true);
@@ -916,7 +941,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a delegated thread must name a harness that can run and a model it lists", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const caller = useApp.getState().sessions[0]!.id;
     const start = (args: Record<string, string>) =>
       answerOrchestration({ sessionId: caller, tool: "start_session", args: { prompt: "do it", ...args } });
@@ -936,7 +961,7 @@ describe("engine controller with the mock engine", () => {
 
   test("list_harnesses names the accounts start_session can target, and which are signed out", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     const caller = useApp.getState().sessions[0]!.id;
     await addHarnessAccount("codex", "work", "Work");
     // The plan read found this login signed out, so naming it will be refused.
@@ -960,7 +985,7 @@ describe("engine controller with the mock engine", () => {
     const storage = testStorage();
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
       const caller = useApp.getState().sessions[0]!.id;
       type Listed = {
         id: string;
@@ -1027,7 +1052,7 @@ describe("engine controller with the mock engine", () => {
         return send(line);
       };
       await connect(transport);
-      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
       const stale = Date.now() - PLAN_CACHE_POLL_MS - 1_000;
       const entry = (account: string | null, fetchedAt: number, usedPercent: number): CachedPlan => ({
         source: "claude-code",
@@ -1102,7 +1127,7 @@ describe("engine controller with the mock engine", () => {
         return send(line);
       };
       await connect(transport);
-      await until(() => useApp.getState().status === "ready" && asks.length > 0);
+      await until(() => useApp.getState().engine.phase === "ready" && asks.length > 0);
       expect(asks.every((ask) => !ask.claude)).toBe(true);
       commitPlansAnswer([], true);
       expect(backgroundPlansAsk().claude).toBe(true);
@@ -1115,7 +1140,7 @@ describe("engine controller with the mock engine", () => {
     const storage = testStorage();
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready");
+      await until(() => useApp.getState().engine.phase === "ready");
       // Consent on, nothing paused: the default login and whatever account the
       // thread on screen runs on — never `claudeAccounts`, which is the page's
       // explicit look and can read a login nobody asked about.
@@ -1143,7 +1168,7 @@ describe("engine controller with the mock engine", () => {
 
   test("read_session says why a thread could not be opened instead of reporting no turns", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const s = useApp.getState();
     const caller = s.sessions[0]!;
     // A listed thread the engine cannot load, as one whose folder is gone is.
@@ -1165,7 +1190,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a thread moves to another folder, and a new thread starts in the default one", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const id = useApp.getState().sessions[0]!.id;
     selectThread(id);
     await until(() => isLoaded(selected()) === true);
@@ -1195,7 +1220,7 @@ describe("engine controller with the mock engine", () => {
 
   test("Full access answers the edit approval itself and the turn finishes", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     setPermissionMode(undefined, "full");
     try {
@@ -1215,7 +1240,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a timed approval is listed from the engine and can be revoked", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     await until(() => useApp.getState().grants.length > 0);
     const grant = useApp.getState().grants[0]!;
     expect(grant.prefix).toBe("bun test");
@@ -1225,7 +1250,7 @@ describe("engine controller with the mock engine", () => {
 
   test("an answered approval settles into one line, then leaves", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
@@ -1242,7 +1267,7 @@ describe("engine controller with the mock engine", () => {
 
   test("opening the inbox dismisses the attention toasts it lists", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     toast("A thread needs approval", "info");
     toast("Copied", "info");
     setView({ kind: "inbox" });
@@ -1253,7 +1278,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a new thread streams a turn, asks for approval and finishes", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const done = submit("change the greeting");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
@@ -1276,7 +1301,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a question is answered with an option, and cancel answers pending requests", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const done = submit("ask me a question");
     await until(() => (selected()?.permissions.length ?? 0) > 0);
@@ -1461,7 +1486,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a rewind keeps the turns it leaves as an earlier attempt", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const id = "mock-thread-attempts";
     selectThread(id);
     await until(() => isLoaded(useApp.getState().threads[id]) === true);
@@ -1497,7 +1522,7 @@ describe("engine controller with the mock engine", () => {
 
   test("edit and resend rewinds the thread to the message first", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     await submit("yolo first");
     await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
@@ -1530,7 +1555,7 @@ describe("engine controller with the mock engine", () => {
 
   test("editing a message sent with a long paste keeps the paste in its text", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     const paste = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
     const typed = "yolo why does this fail?";
@@ -1563,7 +1588,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a turn that starts agents lists them, and their conversation reads", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     await submit("yolo split this between agents");
     await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
@@ -1579,7 +1604,7 @@ describe("engine controller with the mock engine", () => {
 
   test("the plan poll re-reads the open thread's own limits without a message", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     await submit("yolo hello");
     await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
@@ -1626,7 +1651,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a new thread gets the chosen effort even when session/new ignores it", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     setProjectCwd("/tmp/project");
     setNewThreadChoice({ harness: "rustcode", model: "chatgpt/gpt-6-luna", effort: "low" });
     const done = submit("yolo hi");
@@ -1637,7 +1662,9 @@ describe("engine controller with the mock engine", () => {
   test("a fan-out asks once, starts a worktree thread per harness and returns their answers", async () => {
     setOrchestration(true);
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.worktrees === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.worktrees === true,
+    );
     setProjectCwd("/Users/you/code/rustcode");
     await submit("fan out: update the greeting");
     await until(() => useApp.getState().grant !== null);
@@ -1662,7 +1689,9 @@ describe("engine controller with the mock engine", () => {
   test("a wait_session its ended turn left behind stops swallowing the settled child's wake", async () => {
     setOrchestration(true);
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.worktrees === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.worktrees === true,
+    );
     setProjectCwd("/Users/you/code/rustcode");
     const parent = useApp.getState().sessions[0]!.id;
     selectThread(parent);
@@ -1702,7 +1731,7 @@ describe("engine controller with the mock engine", () => {
   const stagedWait = async () => {
     setOrchestration(true);
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
     selectThread(parent);
     await until(() => isLoaded(selected()) === true);
@@ -1820,7 +1849,7 @@ describe("engine controller with the mock engine", () => {
     setOrchestration(true);
     const transport = new MergeTransport({ delayMs: 0 });
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
     // One project: a merge reaches only this project's threads.
     useApp.setState((st) => ({
@@ -2097,7 +2126,7 @@ describe("engine controller with the mock engine", () => {
     setOrchestration(true);
     const transport = new MergeTransport({ delayMs: 0 });
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const parent = useApp.getState().sessions[0]!.id;
     useApp.setState((st) => ({
       sessions: st.sessions.map((x) => ({ ...x, cwd: "/Users/you/code/rustcode" })),
@@ -2266,7 +2295,7 @@ describe("engine controller with the mock engine", () => {
   test("a start-up does not wake a result that was already delivered", async () => {
     const transport = new MockTransport({ delayMs: 0 });
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     setOrchestration(true);
     const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
     const at = Date.now() - 600_000;
@@ -2295,7 +2324,7 @@ describe("engine controller with the mock engine", () => {
     resetForTests();
     setOrchestration(true);
     await connect(transport);
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     // Long enough for the start-up tick to open the parent and start a turn, were it going to.
     await new Promise((r) => setTimeout(r, 2500));
     expect(wakeTurns(parent)).toHaveLength(0);
@@ -2308,7 +2337,7 @@ describe("engine controller with the mock engine", () => {
     // queued it was closed first, so only the book knows.
     const transport = new MockTransport({ delayMs: 0 });
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     setOrchestration(true);
     const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
     const at = Date.now() - 60_000;
@@ -2337,7 +2366,7 @@ describe("engine controller with the mock engine", () => {
     resetForTests();
     setOrchestration(true);
     await connect(transport);
-    await until(() => useApp.getState().status === "ready");
+    await until(() => useApp.getState().engine.phase === "ready");
     // Nothing here ticks the wake machinery: getting ready is what does it (`syncLinkBook` then tick).
     const wakeTurn = () =>
       (useApp.getState().threads[parent]?.items ?? []).some((i) => i.kind === "user" && !!i.wake);
@@ -2372,7 +2401,7 @@ describe("engine controller with the mock engine", () => {
     try {
       setOrchestration(true);
       await connect(transport);
-      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
       setOrchestration(true);
       const linkOf = () => useApp.getState().links.links.find((l) => l.id === link.id);
       // The restart severed it on load, and the resume turn the app runs takes it back as its own
@@ -2415,7 +2444,7 @@ describe("engine controller with the mock engine", () => {
   const stagedRestart = async (links: Link[], open: readonly string[]) => {
     setOrchestration(true);
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 2);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 2);
     setOrchestration(true);
     for (const id of open) {
       selectThread(id);
@@ -2739,7 +2768,9 @@ describe("engine controller with the mock engine", () => {
 
   test("review and done marks, and the engine's auto-done", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.status === true,
+    );
     const id = useApp.getState().sessions[0]!.id;
     await setThreadStatus(id, "review");
     expect(statusOf(useApp.getState(), id)).toBe("review");
@@ -2750,7 +2781,9 @@ describe("engine controller with the mock engine", () => {
 
   test("a turn the engine no longer runs stops reading as running after two list reads (issue 3652)", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.status === true,
+    );
     const id = useApp.getState().sessions[0]!.id;
     await setThreadStatus(id, "idle");
     selectThread(id);
@@ -2772,7 +2805,9 @@ describe("engine controller with the mock engine", () => {
 
   test("a thread the engine runs shows as running, and Stop reaches it (issue 3652)", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.status === true,
+    );
     const id = useApp.getState().sessions[0]!.id;
     const state = useApp.getState();
     expect(statusOf({ ...state, engineRunning: { [id]: true } }, id)).toBe("running");
@@ -2793,7 +2828,9 @@ describe("engine controller with the mock engine", () => {
 
   test("sending in a settled thread unsettles it without a toast", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.status === true,
+    );
     const id = useApp.getState().sessions[0]!.id;
     await setThreadStatus(id, "done");
     selectThread(id);
@@ -2811,7 +2848,9 @@ describe("engine controller with the mock engine", () => {
 
   test("a queued, steered or Send now message unsettles a settled thread quietly", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.status === true,
+    );
     setProjectCwd("/tmp/project");
     // Codex in the mock steers live, so a busy thread takes both a queue and a steer.
     switchNewThreadHarness("codex");
@@ -2868,7 +2907,9 @@ describe("engine controller with the mock engine", () => {
 
   test("unsettling a mixed selection leaves the reviewed threads in review", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.status === true,
+    );
     const [a, b, c] = useApp.getState().sessions;
     await setThreadStatus(a!.id, "review");
     await setThreadStatus(b!.id, "done");
@@ -2892,7 +2933,9 @@ describe("engine controller with the mock engine", () => {
 
   test("a status changed outside the window shows on the next list", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    await until(
+      () => useApp.getState().engine.phase === "ready" && useApp.getState().features.status === true,
+    );
     const id = useApp.getState().sessions[0]!.id;
     await setThreadStatus(id, "review");
     expect(statusOf(useApp.getState(), id)).toBe("review");
@@ -2913,7 +2956,7 @@ describe("engine controller with the mock engine", () => {
 
   test("a window focus re-lists threads at most once per five seconds", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length === 15);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length === 15);
     const at = Date.now();
 
     // Nothing is listed twice in the gap: a list per focus would read every thread each time.
@@ -2929,7 +2972,7 @@ describe("engine controller with the mock engine", () => {
 
   test("the panel is remembered per thread and never opens on its own", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
 
     // The view ⌘⌥B opens with when a thread has none is the thread's own overview.
@@ -3032,7 +3075,7 @@ describe("engine controller with the mock engine", () => {
     } as unknown as Storage;
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
       const [a, b] = useApp.getState().sessions;
 
       selectThread(a!.id);
@@ -3087,7 +3130,7 @@ describe("engine controller with the mock engine", () => {
 
   test("settling the thread on screen leaves it for a new thread, with an Undo", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 2);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 2);
     const [a, b, c] = useApp.getState().sessions;
     selectThread(a!.id);
     await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
@@ -3133,7 +3176,7 @@ describe("engine controller with the mock engine", () => {
 
   test("an agent settling the thread on screen when asked leaves it for a new thread", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     selectThread(a!.id);
     await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
@@ -3153,7 +3196,7 @@ describe("engine controller with the mock engine", () => {
 
   test("settling on the board stays on the board, and its Undo restores every status", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     selectThread(a!.id);
     await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
@@ -3177,7 +3220,7 @@ describe("engine controller with the mock engine", () => {
 
   test("settling keeps drafts and the turn that is still running", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const a = useApp.getState().sessions[0]!;
     selectThread(a.id);
     await until(() => isLoaded(useApp.getState().threads[a.id]) === true);
@@ -3195,7 +3238,7 @@ describe("engine controller with the mock engine", () => {
 
   test("snoozing the thread on screen leaves it for a new thread in its folder", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     selectThread(a!.id);
     await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
@@ -3219,7 +3262,7 @@ describe("engine controller with the mock engine", () => {
 
   test("snoozing another thread, or one an agent snoozes, leaves the screen alone", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     selectThread(b!.id);
     await until(() => isLoaded(useApp.getState().threads[b!.id]) === true);
@@ -3250,7 +3293,7 @@ describe("engine controller with the mock engine", () => {
 
   test("the new-thread screen has no panel, and neither does the thread it starts", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     selectThread(useApp.getState().sessions[0]!.id);
     startNewThread();
     expect(useApp.getState().panel).toBeNull();
@@ -3268,7 +3311,7 @@ describe("a thread that sleeps through its work", () => {
     // `resetForTests` keeps the unread marks, as other suites rely on: this one starts without them.
     useApp.setState({ finished: {}, failed: {} });
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     await openThread(a!.id);
     await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
@@ -3474,7 +3517,7 @@ describe("list_harnesses on a harness with hundreds of models", () => {
 
   const ready = async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     return useApp.getState().sessions[0]!.id;
   };
 
@@ -3614,7 +3657,7 @@ describe("the sidebar's arrangement", () => {
     const storage = testStorage();
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
       const [a, b] = useApp.getState().sessions;
       setSectionOrder("pinned", [a!.id, b!.id]);
       setSectionOrder("threads", [b!.id, a!.id]);
@@ -3633,7 +3676,7 @@ describe("the sidebar's arrangement", () => {
     const storage = testStorage();
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
       const [a, b] = useApp.getState().sessions;
       // One thread the engine lists, one it does not (trashed from another app, or before this
       // field existed): the listed one keeps its place and the other stops taking one up.
@@ -3659,7 +3702,7 @@ describe("model picker", () => {
   test("a new thread on an external harness lists its models once asked", async () => {
     const { pickerModels } = await import("../ui/ModelPicker");
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     const codex = () => useApp.getState().harnesses!.harnesses.find((h) => h.id === "codex")!;
     const choice = { harness: "codex", model: null, effort: null };
     // `_rustcode/harnesses` leaves an external harness's models empty until asked.
@@ -3674,7 +3717,7 @@ describe("model picker", () => {
   test("an existing thread offers its config options", async () => {
     const { pickerModels } = await import("../ui/ModelPicker");
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     selectThread(useApp.getState().sessions[0]!.id);
     await until(() => isLoaded(selected()) === true);
     const picked = pickerModels(
@@ -3692,7 +3735,7 @@ describe("model picker", () => {
 describe("model memory per harness (#2797, #2798)", () => {
   test("switching harness in the new-thread picker restores each one's last model and effort", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     expect(useApp.getState().harnesses?.remembers).toBe(true);
     await ensureHarnessModels("codex");
     pickNewThreadChoice({ harness: "codex", model: "gpt-6-astra", effort: "high" });
@@ -3718,7 +3761,7 @@ describe("model memory per harness (#2797, #2798)", () => {
   test("a restored external thread asks for its harness's models and offers them", async () => {
     const { pickerModels } = await import("../ui/ModelPicker");
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     selectThread("mock-thread-2");
     await until(() => isLoaded(selected()) === true);
     expect(selected()!.harness?.id).toBe("codex");
@@ -3741,7 +3784,7 @@ describe("model memory per harness (#2797, #2798)", () => {
       return send(line);
     };
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     // Claude Code needs a sign-in in the mock: the listing fails.
     await ensureHarnessModels("claude-code");
     await ensureHarnessModels("claude-code");
@@ -3751,7 +3794,7 @@ describe("model memory per harness (#2797, #2798)", () => {
   test("the new-thread slider starts on the model's default effort", async () => {
     const { pickerModels } = await import("../ui/ModelPicker");
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     const rustcode = useApp.getState().harnesses!.harnesses.find((h) => h.id === "rustcode")!;
     const picked = pickerModels(undefined, rustcode, { harness: "rustcode", model: null, effort: null }, []);
     expect(picked.efforts.length).toBeGreaterThan(1);
@@ -3764,7 +3807,7 @@ describe("effort memory per model", () => {
     const storage = testStorage();
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
       await ensureHarnessModels("codex");
       pickNewThreadChoice({ harness: "codex", model: "gpt-6-luna", effort: "low" });
       pickNewThreadChoice({ harness: "codex", model: "gpt-6-astra", effort: "high" });
@@ -3798,7 +3841,7 @@ describe("effort memory per model", () => {
     });
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
       expect(localChoices()).toEqual({ codex: { model: "gpt-6-astra", effort: "high" } });
       await ensureHarnessModels("codex");
       pickNewThreadChoice({ harness: "codex", model: "gpt-6-luna", effort: "low" });
@@ -3822,7 +3865,7 @@ describe("effort memory per model", () => {
     });
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
       expect(localChoices()).toEqual({
         codex: { model: null, effort: null, efforts: { "gpt-6-astra": "high" } },
       });
@@ -3833,7 +3876,7 @@ describe("effort memory per model", () => {
 
   test("the new-thread picker keeps its choice across a visit to another thread", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     await ensureHarnessModels("codex");
     pickNewThreadChoice({ harness: "codex", model: "gpt-6-luna", effort: "high" });
     pickNewThreadAccountOn("codex", "paral");
@@ -3859,7 +3902,7 @@ describe("effort memory per model", () => {
 describe("the choice a new thread starts on", () => {
   test("a kept draft on a harness that cannot run falls back to the first-run default", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     const snapshot = useApp.getState().harnesses!;
     // Gemini CLI is not installed in the mock; the draft the screen kept names it anyway.
     setNewThreadChoice({ harness: "gemini", model: null, effort: null });
@@ -3871,14 +3914,14 @@ describe("the choice a new thread starts on", () => {
 
   test("a kept draft on a harness that is gone falls back the same way", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     setNewThreadChoice({ harness: "ghost-harness", model: "m", effort: "high" });
     expect(newThreadChoice(useApp.getState())).toEqual(preferredDefault(useApp.getState().harnesses!));
   });
 
   test("a draft on a harness that can run is normalized to the model and level it lists", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     await ensureHarnessModels("codex");
     // A model and a level the harness no longer lists: the picker's own normalization, on read.
     setNewThreadChoice({ harness: "codex", model: "gpt-6-gone", effort: "turbo" });
@@ -3898,7 +3941,7 @@ describe("the choice a new thread starts on", () => {
 
   test("a new Settings default drops the draft, so the screen shows the default", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    await until(() => useApp.getState().engine.phase === "ready" && !!useApp.getState().harnesses);
     await ensureHarnessModels("codex");
     setNewThreadChoice({ harness: "rustcode", model: "chatgpt/gpt-6-luna", effort: "low" });
     await setDefaultHarness({ harness: "codex", model: "gpt-6-astra", effort: "high" });
@@ -3914,7 +3957,7 @@ describe("the choice a new thread starts on", () => {
     const storage = testStorage();
     try {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+      await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
       await ensureHarnessModels("codex");
       // The user's own pick in the new-thread screen.
       pickNewThreadChoice({ harness: "codex", model: "gpt-6-luna", effort: "low" });
@@ -4236,7 +4279,7 @@ test("Use default for all clears each listed thread's own choice, and only those
 describe("what a delegated thread may do without asking", () => {
   const ready = async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     return useApp.getState().sessions[0]!.id;
   };
   /** A call whose card, if the caller's own access does not already allow it, is allowed once. */
@@ -4463,7 +4506,7 @@ describe("what a delegated thread may do without asking", () => {
 describe("retrying a call that starts or messages a thread", () => {
   const ready = async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const caller = useApp.getState().sessions[0]!.id;
     // Full access answers for the user on the card, so these tests see the
     // receipt and nothing else.
@@ -4577,7 +4620,7 @@ describe("retrying a call that starts or messages a thread", () => {
 describe("what an agent may do with the messages it queued", () => {
   const ready = async (delayMs = 0) => {
     await connect(new MockTransport({ delayMs }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const caller = useApp.getState().sessions[0]!.id;
     // Full access answers for the user, so the tests see the queue and nothing else.
     setPermissionMode(caller, "full");
@@ -4872,7 +4915,7 @@ describe("what an agent may do with the messages it queued", () => {
 describe("a delegated thread's place in the sidebar", () => {
   const ready = async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     return useApp.getState().sessions[0]!.id;
   };
 
@@ -4922,7 +4965,7 @@ describe("a delegated thread's place in the sidebar", () => {
 describe("forks and side chats", () => {
   const ready = async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const id = useApp.getState().sessions[0]!.id;
     await openThread(id);
     selectThread(id);
@@ -5023,7 +5066,7 @@ describe("forks and side chats", () => {
 describe("a message sent from the new-thread screen", () => {
   const ready = async (transport = new MockTransport({ delayMs: 0 })) => {
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     startNewThread();
   };
   /**
@@ -5625,7 +5668,7 @@ describe("continuing after a limit", () => {
     const { connect, continueDueThreads, continueInternetThreads, threadIsGone } = await import("./store");
     resetForTests();
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessionsLoaded);
+    await until(() => useApp.getState().engine.phase === "ready" && sessionsListed(useApp.getState().engine));
     const later = { until: Date.now() + 3_600_000, harness: "claude-code", account: null, attempts: 1 };
     const net = { since: Date.now(), attempts: 0, harness: "claude-code", account: null };
     // The list stopped at its page cap: the thread may be past it, so nothing waiting on it is dropped.
@@ -5712,7 +5755,7 @@ async function readyWithFailingTurns() {
   const storage = testStorage();
   const transport = new FailingPromptTransport();
   await connect(transport);
-  await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+  await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
   const id = useApp.getState().sessions[0]!.id;
   await openThread(id);
   const sent = () => transport.requests.filter((request) => request.method === Method.sessionPrompt);
@@ -5938,7 +5981,7 @@ describe("a delegate whose turn failed", () => {
   const ready = async () => {
     const transport = new HeldSessionLoadTransport({ delayMs: 0 });
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const caller = useApp.getState().sessions[0]!.id;
     setPermissionMode(caller, "full");
     const target = useApp
@@ -6029,7 +6072,7 @@ describe("a delegate whose turn failed", () => {
   test("a message waits for one in-flight open and is delivered once", async () => {
     const transport = new HeldSessionLoadTransport();
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const caller = useApp.getState().sessions[0]!.id;
     setPermissionMode(caller, "full");
     const target = useApp
@@ -6079,7 +6122,7 @@ describe("a delegate whose turn failed", () => {
   test("a thread archived while it is opening does not receive a delegate message", async () => {
     const transport = new HeldSessionLoadTransport();
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const caller = useApp.getState().sessions[0]!.id;
     setPermissionMode(caller, "full");
     const target = useApp
@@ -6186,7 +6229,7 @@ describe("projects and scheduled work", () => {
   async function ready() {
     setOrchestration(true);
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
     const session = useApp.getState().sessions[0]!;
     const call = (tool: string, args: JsonObject) =>
       answerOrchestration({ sessionId: session.id, tool, args });
@@ -6431,7 +6474,7 @@ describe("a thread whose record names another folder", () => {
     const transport = new MismatchedRecordTransport();
     configure(transport);
     await connect(transport);
-    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
     const target = useApp.getState().sessions.find((x) => x.id !== useApp.getState().selectedId)!.id;
     transport.target = target;
     return { transport, target };

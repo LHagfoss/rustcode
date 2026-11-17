@@ -287,7 +287,7 @@ export function forgetAskedModels(): void {
 export function ensureHarnessModels(id: string, host = LOCAL_HOST): Promise<void> {
   if (host) return ensureMachineHarnessModels(id, host);
   const harness = get().harnesses?.harnesses.find((h) => h.id === id);
-  if (!harness || harness.builtin || harness.models.length || get().status !== "ready")
+  if (!harness || harness.builtin || harness.models.length || get().engine.phase !== "ready")
     return Promise.resolve();
   let asked = modelsAsked.get(id);
   if (!asked) {

@@ -368,7 +368,7 @@ export const Composer = memo(function Composer({
   const newThreadHost = useApp((s) => s.newThreadHost);
   const host = thread ? splitThreadKey(thread.id).host : newThreadHost;
   const harnesses = useApp((s) => harnessesOn(s, host)?.harnesses); // re-render when harness capabilities arrive
-  const status = useApp((s) => s.status);
+  const status = useApp((s) => s.engine.phase);
   const field = useRef<HTMLTextAreaElement>(null);
   // The field's own box (the mirror and the field): what fades when the message leaves it.
   const fieldBox = useRef<HTMLDivElement>(null);

@@ -46,6 +46,7 @@ import {
   systemInfo,
 } from "../lib/native";
 import { hasShell } from "../lib/shell";
+import { engineDetail } from "../state/engine";
 import { errorText, request, restartEngine, SERVER_LOG_LINES, toast, useApp } from "../state/store";
 import { Copy, Download, FileText, FolderOpen, Pause, Play, RefreshCw } from "./icons";
 import { cx, noTextHelpers, rowInset } from "./primitives";
@@ -170,8 +171,8 @@ function useHarnessDiagnostics(): HarnessDiagnostics[] {
 }
 
 export function DiagnosticsPage() {
-  const status = useApp((s) => s.status);
-  const detail = useApp((s) => s.statusDetail);
+  const status = useApp((s) => s.engine.phase);
+  const detail = useApp((s) => engineDetail(s.engine));
   const transport = useApp((s) => s.transport);
   const [server, setServer] = useState<ServerInfo | null>(null);
   const [system, setSystem] = useState<SystemInfo | null>(null);
@@ -212,8 +213,8 @@ export function DiagnosticsPage() {
     const app = useApp.getState();
     return buildDebugReport({
       generatedAt: new Date(),
-      state: serverState(app.status, freshServer ?? server),
-      stateDetail: app.statusDetail ?? null,
+      state: serverState(app.engine.phase, freshServer ?? server),
+      stateDetail: engineDetail(app.engine) ?? null,
       transport: app.transport ?? null,
       server: freshServer ?? server,
       system: freshSystem ?? system,

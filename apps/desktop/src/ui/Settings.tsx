@@ -252,7 +252,7 @@ const STATUS_READ_MS = 8_000;
 
 function PresenceRow() {
   const projectCwd = useApp((s) => s.projectCwd || s.defaultCwd);
-  const status = useApp((s) => s.status);
+  const status = useApp((s) => s.engine.phase);
   const [state, setState] = useState<{ enabled: boolean; discordDetected: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -1570,7 +1570,7 @@ function AppVersion() {
  * restart right below it.
  */
 function RecordRequestBodiesGroup() {
-  const status = useApp((s) => s.status);
+  const status = useApp((s) => s.engine.phase);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
   const [capture, setCapture] = useState<PayloadCapture | null>(null);
   const [error, setError] = useState<string | null>(null);
