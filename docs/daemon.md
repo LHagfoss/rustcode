@@ -93,6 +93,51 @@ than a harness or account. Nothing starts the daemon for them: without
 `rustcode daemon start`, `list_scheduled_tasks` says `daemon_running: false`
 and the other calls refuse with that instruction.
 
+## Loops
+
+A Loop is a job whose action is `loop`: a prompt run on a schedule, each run
+in a fresh top-level thread on any harness. The desktop app's Loops page
+creates, edits, pauses, resumes, runs and deletes them through
+`_rustcode/loops/*` (`engine/src/acp/loops.rs`) and the scheduled run/delete
+methods, so `rustcode cron list` shows the same jobs.
+
+```json
+{
+  "type": "loop",
+  "prompt": "Check CI on main and tell me only if something broke.",
+  "workspace": "/absolute/project",
+  "harness": "codex",
+  "model": null,
+  "effort": "medium",
+  "read_only": true
+}
+```
+
+- **One thread per run.** The daemon opens the ACP endpoint the app's engine
+  publishes (`run/engine.json`, else a shared server's) and sends the same
+  `session/new` and `session/prompt` the app does
+  (`orchestration/local_threads.rs` › `run_loop_thread`). The thread is titled
+  with the Loop's name and runs in the project's own folder, no worktree. The
+  run's output records `{"thread_id": …}`, which the page links to.
+- **Read-only by default.** A read-only run is prompted at Ask access and
+  every permission request is declined, so edits, commands that ask, commits
+  and pushes do not happen. Turned off, the run is at Full access, as a
+  delegate is.
+- **The app must be open.** With no engine to reach, the run is recorded as
+  cancelled with `{"skipped": …}` and does not count as a failure.
+- **A missed run fires once.** A Loop's cron uses the `run_once` misfire
+  policy: runs missed while the computer slept coalesce into one.
+- **No overlapping runs.** The scheduler never claims a job with a run still
+  active, so a run waits for the previous one to end.
+- **Three failures pause it.** When the last three settled runs all failed
+  (or ended ambiguous), the scheduler pauses the Loop; the page shows the last
+  error as the reason. Resuming starts counting again.
+- A run's agent turn may take 25 minutes before it is stopped.
+
+Editing a job (`DaemonRequest::Update`) keeps its id, creation time, paused
+state and history, moves its next run to what the new schedule says, and is
+refused while a run is going.
+
 ## Safety and recovery
 
 Every run is durably claimed with a lease and fence. A daemon crash after an
