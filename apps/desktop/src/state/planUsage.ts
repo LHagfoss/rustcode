@@ -30,7 +30,7 @@ import {
   store,
   useApp,
 } from "./store";
-import { splitThreadKey } from "./threadKeys";
+import { isRemoteThread, splitThreadKey } from "./threadKeys";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
 // while this one loads.
@@ -194,12 +194,14 @@ export async function refreshPlanUsage(id: string): Promise<void> {
     const fetchedAt = Date.now();
     set((s) => ({ planUsage: { ...s.planUsage, [id]: usage && { ...usage, fetchedAt } } }));
     // The same numbers serve every thread on that harness; a thread that has
-    // none of its own (Claude Code's limits answer null) reads it from the cache.
+    // none of its own (Claude Code's limits answer null on macOS) reads it from the cache.
     // A native thread's numbers belong to the provider it runs on, which the
     // harness id does not name (`rustcode`): they stay on the thread, so no
     // other native thread reads them as its own.
+    // A thread on a paired machine reads that machine's login, not this one's:
+    // its numbers stay on the thread, so they never pass for the Mac's own plan.
     const harness = harnessOf(get(), id);
-    if (usage && harness && harness !== "rustcode") {
+    if (usage && harness && harness !== "rustcode" && !isRemoteThread(id)) {
       // The account's own row, so it never overwrites another login's numbers.
       const key = harnessPlanKey(harness, accountOn(get(), id));
       commitPlans({
@@ -414,8 +416,9 @@ export function ownPlanUsageDue(own: PlanUsage | null | undefined, now = Date.no
 /**
  * Re-reads the limits of the thread on screen when they are due (`force`: at
  * once). `refreshPlanUsage` already keeps one request per thread in flight, and
- * it never touches the Keychain: Claude Code's limits answer null, so the plans
- * read (`refreshPlanCache`) stays the only thing that does.
+ * it never touches the Keychain: Claude Code's limits answer null on macOS (and
+ * read `.credentials.json` elsewhere), so the plans read (`refreshPlanCache`)
+ * stays the only thing that does.
  */
 function refreshSelectedPlanUsage(force = false, now = Date.now()): void {
   const s = get();

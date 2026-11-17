@@ -285,18 +285,57 @@ pub(crate) fn account_home(session_id: &str, harness: &str) -> Option<std::path:
 
 /// `_rustcode/usage/limits` for a thread on another harness: the Codex CLI's
 /// windows of the login in `home` (the Mac's own `~/.codex` for `None`), and
-/// nothing (null) for a harness whose plan the engine cannot read without
-/// asking (Claude Code's is in the Keychain). A login's numbers are its own:
-/// the account the thread runs on, never another Codex home's.
+/// Claude Code's where reading them asks nothing of the user. A login's numbers
+/// are its own: the account the thread runs on, never another home's.
 pub(crate) async fn harness_limits(
     harness: &str,
     home: Option<&std::path::Path>,
 ) -> serde_json::Value {
-    if harness != "codex" {
-        return serde_json::Value::Null;
+    match harness {
+        "codex" => {
+            let limits = crate::provider_auth::codex_usage::rate_limits(home).await;
+            limits_json(limits.as_ref(), "codex")
+        }
+        "claude-code" if claude_limits_without_asking() => {
+            use crate::provider_auth::claude_usage::{Freshness, usage};
+            let read = usage(home, Freshness::Cached).await;
+            limits_json(claude_limits(&read).as_ref(), "claude-code")
+        }
+        _ => serde_json::Value::Null,
     }
-    let limits = crate::provider_auth::codex_usage::rate_limits(home).await;
-    limits_json(limits.as_ref(), "codex")
+}
+
+/// Whether a thread's own limits call may read Claude Code's sign-in. On macOS
+/// it is in the Keychain, which can prompt, so the app reads it only through
+/// `_rustcode/usage/plans` after the user chose to. Elsewhere it is
+/// `<config dir>/.credentials.json`, read like any file. That is what lets a
+/// Mac show the plan of a Claude Code thread running on a paired Linux machine:
+/// its plans call only ever reaches the Mac's own engine and sign-in.
+fn claude_limits_without_asking() -> bool {
+    !cfg!(target_os = "macos")
+}
+
+/// Claude's plan windows as the two a limits answer carries: the 5-hour window
+/// first and the weekly one second, as the composer's meter reads them. A
+/// failed read, or one with neither window, is no numbers (null).
+fn claude_limits(
+    read: &crate::provider_auth::claude_usage::ClaudeUsage,
+) -> Option<crate::provider_auth::ProviderRateLimits> {
+    use crate::provider_auth::claude_usage::ClaudeUsage;
+    let ClaudeUsage::Windows { windows, .. } = read else {
+        return None;
+    };
+    let labelled = |label: &str| {
+        windows
+            .iter()
+            .find(|w| w.label == label)
+            .map(|w| w.window.clone())
+    };
+    let limits = crate::provider_auth::ProviderRateLimits {
+        primary: labelled("5-hour"),
+        secondary: labelled("Weekly"),
+    };
+    (limits.primary.is_some() || limits.secondary.is_some()).then_some(limits)
 }
 
 /// `_rustcode/usage/plans`: every subscription this machine is signed in to,
@@ -1058,7 +1097,7 @@ mod tests {
 
 #[cfg(test)]
 mod harness_tests {
-    use super::{external_harness, harness_limits};
+    use super::{claude_limits, external_harness, harness_limits};
     use crate::harness::store::{HarnessRecord, save};
 
     #[tokio::test]
@@ -1076,7 +1115,45 @@ mod harness_tests {
             Some("codex")
         );
         assert_eq!(external_harness("usage-no-such-thread"), None);
-        // Claude Code's plan needs the user's consent to read: none here.
-        assert!(harness_limits("claude-code", None).await.is_null());
+        // A harness with no plan to read answers null.
+        assert!(harness_limits("gemini", None).await.is_null());
+    }
+
+    #[test]
+    fn claude_windows_become_the_limits_answer() {
+        use crate::provider_auth::RateLimitWindow;
+        use crate::provider_auth::claude_usage::{ClaudeUsage, LabelledWindow, NoUsage};
+        let window = |used: f64, minutes: u64| RateLimitWindow {
+            used_percent: used,
+            window_minutes: Some(minutes),
+            resets_at: Some(1_800_000_000),
+        };
+        let read = ClaudeUsage::Windows {
+            plan: Some("max".into()),
+            windows: vec![
+                LabelledWindow {
+                    label: "Weekly · Opus",
+                    window: window(90.0, 10_080),
+                },
+                LabelledWindow {
+                    label: "Weekly",
+                    window: window(40.0, 10_080),
+                },
+                LabelledWindow {
+                    label: "5-hour",
+                    window: window(12.0, 300),
+                },
+            ],
+            as_of: None,
+        };
+        let limits = claude_limits(&read).expect("windows");
+        assert_eq!(limits.primary, Some(window(12.0, 300)));
+        assert_eq!(limits.secondary, Some(window(40.0, 10_080)));
+        assert_eq!(claude_limits(&ClaudeUsage::NotSignedIn), None);
+        let failed = ClaudeUsage::Unavailable {
+            reason: NoUsage::Expired,
+            message: "expired".into(),
+        };
+        assert_eq!(claude_limits(&failed), None);
     }
 }
