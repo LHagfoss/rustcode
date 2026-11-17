@@ -4,7 +4,7 @@
 
 import type { JsonObject } from "../acp/jsonrpc";
 import { parseRemoteStatus, RemoteMethod, type RemoteStatus } from "../acp/remote";
-import { challengeIsValid, makeChallenge, newPairedDevice } from "./remotePairing";
+import { transitionPairing } from "./remotePairing";
 import { errorText, request, toast, useApp } from "./store";
 
 /** Ignore machine-status reads that started before a newer answer changed remote state. */
@@ -36,18 +36,15 @@ function commitRemoteStatus(status: RemoteStatus) {
 
 export function dismissRemoteChallenge() {
   invalidateRemoteStatusReads();
-  useApp.setState({ remoteChallenge: null });
+  useApp.setState((s) => ({ pairing: transitionPairing(s.pairing, { type: "dismiss" }) }));
 }
 
 export function applyRemoteStatus(status: RemoteStatus, now = Date.now()) {
   useApp.setState((s) => {
-    const challenge = s.remoteChallenge;
-    const fresh = challenge && newPairedDevice(challenge.baselineIds, status.devices);
     return {
       remote: status,
       remoteError: null,
-      remotePaired: fresh ? { name: fresh.name } : status.enabled ? s.remotePaired : null,
-      remoteChallenge: challenge && !fresh && challengeIsValid(challenge, status, now) ? challenge : null,
+      pairing: transitionPairing(s.pairing, { type: "status", status, now }),
     };
   });
 }
@@ -93,7 +90,7 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
  */
 export async function setRemoteAccess(on: boolean): Promise<void> {
   invalidateRemoteStatusReads();
-  if (!on) useApp.setState({ remoteChallenge: null, remotePaired: null });
+  if (!on) useApp.setState((s) => ({ pairing: transitionPairing(s.pairing, { type: "off" }) }));
   if (on) {
     useApp.setState({
       remote: {
@@ -134,31 +131,29 @@ export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
   const baselineIds = (useApp.getState().remote?.devices ?? []).map((device) => device.id);
   invalidateRemoteStatusReads();
   const revision = remoteStatusRevision;
-  useApp.setState({ remoteChallenge: null, remotePaired: null });
+  useApp.setState((s) => ({
+    pairing: transitionPairing(s.pairing, { type: "ask", now: Date.now(), baselineIds }),
+  }));
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.pair, {}, 20_000));
     if (revision === remoteStatusRevision) {
-      const fresh = newPairedDevice(baselineIds, status.devices);
-      const instanceChanged =
-        status.offer?.instanceId &&
-        status.gateway?.instanceId &&
-        status.offer.instanceId !== status.gateway.instanceId;
-      useApp.setState({
-        remotePaired: fresh ? { name: fresh.name } : null,
-        remoteChallenge:
-          status.offer && !fresh && !instanceChanged
-            ? makeChallenge(status.offer, Date.now(), baselineIds)
-            : null,
-      });
+      useApp.setState((s) => ({
+        pairing: transitionPairing(s.pairing, { type: "status", status, now: Date.now(), answer: true }),
+      }));
       commitRemoteStatus(status);
     } else {
       // Dismissed, switched off or answered meanwhile: the code is not shown, but the machine's
       // state did change, so read it again.
       void refreshRemote();
     }
-    if (status.pairingError) toast(status.pairingError, "error");
+    const pairing = useApp.getState().pairing;
+    if (pairing.phase === "failed") toast(pairing.error, "error");
     return status;
   } catch (error) {
+    if (revision === remoteStatusRevision)
+      useApp.setState((s) => ({
+        pairing: transitionPairing(s.pairing, { type: "failure", error: errorText(error) }),
+      }));
     toast(errorText(error), "error");
     return null;
   }
@@ -212,5 +207,15 @@ export async function revokeRemoteDevice(id: string): Promise<void> {
     else if (status.revoked) toast(`${status.revoked.name} can no longer connect.`, "success");
   } catch (error) {
     toast(errorText(error), "error");
+  }
+}
+
+/** Advance the visible challenge deadline without invalidating newer reads. */
+export function tickRemotePairing(now: number) {
+  const pairing = useApp.getState().pairing;
+  const next = transitionPairing(pairing, { type: "tick", now });
+  if (next !== pairing) {
+    invalidateRemoteStatusReads();
+    useApp.setState({ pairing: next });
   }
 }
