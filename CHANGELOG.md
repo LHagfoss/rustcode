@@ -1,3 +1,12 @@
+## [v1.39.4](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.4) - 2026-11-17
+
+### Features
+- Align and tighten sidebar thread rows, preserve single-project headings, and add contextual ⌘N with ⌘⇧N for the default folder. (#3876)
+- Add spacing below project folders and drag projects into a saved sidebar order; applying a sort resets manual arrangements. (#3877)
+- Refine the sidebar actions and separate the sort and filter buttons. (#3878)
+- Allow starting another thread while an earlier one initializes, and remove the Starting label. (#3880)
+- Smart UI is more visual: thicker bars, taller charts, option cards instead of flat tables, clickable cards and rows, and tidy sources folds. (#3879)
+- Run desktop CI checks concurrently and include dependent Rust packages in CI coverage. (#3884)
 ## [v1.39.3](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.3) - 2026-11-16
 
 ### Features
