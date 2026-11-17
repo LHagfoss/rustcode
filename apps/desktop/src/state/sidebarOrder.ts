@@ -43,6 +43,28 @@ export function applyOrder<T extends Pick<SessionSummary, "id">>(
   return [...arranged, ...rest];
 }
 
+/**
+ * The sorted items with the rows already drawn kept where they were (`before`, the ids drawn
+ * last time): a thread renamed by its harness, or one that starts or ends a turn, stays in its
+ * slot instead of jumping. A row not drawn before goes where the sort puts it, just after the
+ * row it follows there, or first.
+ */
+export function keepPlaces<T extends Pick<SessionSummary, "id">>(
+  sorted: readonly T[],
+  before: readonly string[] | undefined,
+): T[] {
+  if (!before?.length) return [...sorted];
+  const rank = new Map<string, number>();
+  for (const id of before) if (!rank.has(id)) rank.set(id, rank.size);
+  const out = sorted.filter((item) => rank.has(item.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
+  let prev: T | undefined;
+  for (const item of sorted) {
+    if (!rank.has(item.id)) out.splice(prev ? out.indexOf(prev) + 1 : 0, 0, item);
+    prev = item;
+  }
+  return out;
+}
+
 /** The stored order with the ids it does not name yet, in the order the section draws them. */
 function merged(stored: readonly string[], drawn: readonly string[]): string[] {
   const ids = [...stored];

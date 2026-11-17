@@ -4,6 +4,7 @@ import {
   advanceDrag,
   applyOrder,
   DRAG_THRESHOLD,
+  keepPlaces,
   keepThreads,
   moveBy,
   reorder,
@@ -182,5 +183,28 @@ describe("project arrangements", () => {
       projects: ["/b", "/a"],
       threads: ["kept"],
     });
+  });
+});
+
+describe("rows keep their places", () => {
+  const rows = (...ids: string[]) => ids.map((id) => ({ id }));
+  const ids = (list: { id: string }[]) => list.map((x) => x.id);
+
+  test("a row the sort would move stays where it was drawn", () => {
+    // "b" was renamed and now sorts first: it stays second.
+    expect(ids(keepPlaces(rows("b", "a", "c"), ["a", "b", "c"]))).toEqual(["a", "b", "c"]);
+  });
+
+  test("a new row goes after the row it follows in the sort", () => {
+    expect(ids(keepPlaces(rows("a", "n", "c"), ["c", "a"]))).toEqual(["c", "a", "n"]);
+    expect(ids(keepPlaces(rows("n", "a", "c"), ["a", "c"]))).toEqual(["n", "a", "c"]);
+  });
+
+  test("nothing drawn before takes the sort as it is", () => {
+    expect(ids(keepPlaces(rows("b", "a"), undefined))).toEqual(["b", "a"]);
+  });
+
+  test("a row that went is dropped", () => {
+    expect(ids(keepPlaces(rows("a", "c"), ["a", "b", "c"]))).toEqual(["a", "c"]);
   });
 });
