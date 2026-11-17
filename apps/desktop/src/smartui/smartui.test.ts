@@ -347,7 +347,7 @@ describe("smart ui", () => {
     expect(BASE_CSS).toContain(".rc-scroll { max-height: 320px; overflow: auto; }");
     expect(BASE_CSS).toContain("var(--rc-text-size-value)");
     expect(BASE_CSS).toContain("var(--rc-text-size-xs)");
-    expect(BASE_CSS).toContain(".rc-chart { position: relative; height: 200px; }");
+    expect(BASE_CSS).toContain(".rc-chart { position: relative; height: 240px; }");
     expect(BASE_CSS).toContain(".rc-chart[data-size=sm]");
     expect(BASE_CSS).toContain(".rc-chart[data-size=lg]");
   });
@@ -427,10 +427,10 @@ describe("smart ui", () => {
     );
   });
 
-  test("bar rows are tall pills with room between them", () => {
-    expect(BASE_CSS).toContain("max-content; gap: 10px;");
-    expect(BASE_CSS).toMatch(/\.rc-bar::before \{[^}]*height: 14px; border-radius: var\(--rc-radius-pill\)/);
-    expect(BASE_CSS).toMatch(/\.rc-bar > i \{[^}]*height: 14px; border-radius: var\(--rc-radius-pill\)/);
+  test("bar rows are thick rounded bars with room between them", () => {
+    expect(BASE_CSS).toContain("max-content; gap: 10px 12px;");
+    expect(BASE_CSS).toMatch(/\.rc-bar::before \{[^}]*height: 22px; border-radius: 6px/);
+    expect(BASE_CSS).toMatch(/\.rc-bar > i \{[^}]*height: 22px; border-radius: 6px/);
     expect(BASE_CSS).toMatch(/\.rc-badge \{[^}]*white-space: nowrap/);
   });
 
@@ -623,7 +623,7 @@ describe("smart ui", () => {
 
   test("the chart marks shade a band, draw a labelled line and mark the last point", () => {
     const { marks, defaults } = runChartTheme({ vars: (name) => (name === "--rc-text" ? "#ffffff" : "") });
-    expect(defaults.elements.line.borderWidth).toBe(2);
+    expect(defaults.elements.line.borderWidth).toBe(2.5);
     expect(marks).toBeDefined();
     const calls: string[] = [];
     const ctx = {
@@ -1123,9 +1123,32 @@ describe("smart ui", () => {
     expect(() => new Function(script)).not.toThrow();
   });
 
+  test("cards, bars and pressable blocks read as visual controls", () => {
+    // A card lays out a title row and full-width lines, and a tint rings the recommended one.
+    expect(BASE_CSS).toContain(".rc-card > .rc-badge { margin-left: auto; }");
+    expect(BASE_CSS).toContain(".rc-card:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) {");
+    // Thick bars and taller charts.
+    expect(BASE_CSS).toContain("height: 22px; border-radius: 6px;");
+    expect(CHART_THEME_SCRIPT).toContain("d.datasets.bar.categoryPercentage = 0.86;");
+    // Anything that sends answers the pointer, Tab and Enter like a button.
+    expect(BASE_CSS).toContain(
+      ":is(.rc-card, .rc-stat, .rc-item, .rc-callout):is([data-rc-send], [data-rc-copy]):active",
+    );
+    const script = runtimeScript(
+      "t",
+      pageTheme("dark", () => ""),
+    );
+    expect(script).toContain('el.setAttribute("role", "button")');
+    expect(script).toContain("focused.matches(RC_PRESSABLE)");
+  });
+
   test("sources fold quietly and charts answer the pointer at once", () => {
     expect(BASE_CSS).toContain(".rc-sources { border-bottom: 0;");
     expect(BASE_CSS).toContain(".rc-sources-host {");
+    // The prompt's form is a bare `details.rc-sources`: it needs the kit's summary without `.rc-details`.
+    expect(BASE_CSS).toMatch(/\ndetails > summary \{[^}]*cursor: pointer;/);
+    expect(BASE_CSS).toContain("details > summary::-webkit-details-marker { display: none; }");
+    expect(BASE_CSS).toContain(".rc-sources > summary > .rc-sources-count {");
     expect(CHART_THEME_SCRIPT).toContain("d.animation = false;");
     expect(CHART_THEME_SCRIPT).not.toContain("duration: 180");
   });

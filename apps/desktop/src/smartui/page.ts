@@ -151,7 +151,8 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 button { font: inherit; font-weight: 500; color: var(--rc-text); background: var(--rc-surface);
   border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-pill); padding: 3px 12px; cursor: pointer; }
 button:hover { background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
-button:active { opacity: 0.75; }
+button { transition: transform 90ms ease-out, background-color 90ms ease-out; }
+button:active:not(:disabled) { transform: scale(0.97); opacity: 0.85; }
 button.primary, button[data-primary] { background: var(--rc-accent); color: var(--rc-accent-text); border-color: transparent; }
 button:disabled { opacity: 0.45; cursor: default; }
 code, kbd, pre { font-family: var(--rc-mono); font-size: var(--rc-text-size-sm); }
@@ -165,7 +166,19 @@ canvas { max-width: 100%; }
 .rc-mono { font-family: var(--rc-mono); }
 .rc-num { font-variant-numeric: tabular-nums; }
 td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
-.rc-card { background: var(--rc-surface); border-radius: var(--rc-radius); padding: 10px 12px; }
+/* A card is a tile: a bold title with its badge at the right, then full-width lines (a sentence,
+   a number, a bar) a few pixels apart, not the page's 16 px rhythm. A tint (.rc-ok, .rc-bad…)
+   washes it and rings it, so the recommended option of a grid stands out. */
+.rc-card { display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: 8px; min-width: 0;
+  padding: 12px 14px; background: var(--rc-surface); border-radius: var(--rc-radius); }
+.rc-card > * { flex: 0 0 100%; min-width: 0; margin: 0; }
+.rc-card > :is(b, strong, .rc-badge, .rc-chip) { flex: 0 1 auto; }
+.rc-card > :is(b, strong):first-child { font-weight: 600; }
+.rc-card > .rc-badge { margin-left: auto; }
+.rc-card > :is(p, .rc-lead) { color: var(--rc-muted); font-size: var(--rc-text-size-sm); }
+.rc-card > .rc-stat-value { font-size: var(--rc-text-size-value); font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.rc-card:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) { background: color-mix(in srgb, var(--rc-tint) 9%, var(--rc-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rc-tint) 38%, transparent); }
 .rc-scroll { max-height: 320px; overflow: auto; }
 
 .rc-title { font-size: var(--rc-text-size-title); font-weight: 600; line-height: 1.3; }
@@ -208,16 +221,28 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
   background: transparent; border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-pill); }
 .rc-chip:hover { color: var(--rc-text); }
 [data-rc-send], [data-rc-copy] { cursor: pointer; }
+/* A card, stat, item, bar or row that sends a follow-up looks pressable: a wash on hover, a
+   small press on click. Buttons and chips have their own states above. */
+:is(.rc-card, .rc-stat, .rc-item, .rc-bar, .rc-callout, tr):is([data-rc-send], [data-rc-copy]) {
+  border-radius: var(--rc-radius-sm); transition: background-color 90ms ease-out, transform 90ms ease-out; }
+:is(.rc-stat, .rc-item, .rc-bar, .rc-callout):is([data-rc-send], [data-rc-copy]):hover,
+tr:is([data-rc-send], [data-rc-copy]):hover > td { background: color-mix(in srgb, var(--rc-text) 6%, transparent); }
+.rc-card:is([data-rc-send], [data-rc-copy]):hover { background: color-mix(in srgb, var(--rc-text) 6%, var(--rc-surface)); }
+.rc-card:is(.rc-ok, .rc-warn, .rc-bad, .rc-info):is([data-rc-send], [data-rc-copy]):hover {
+  background: color-mix(in srgb, var(--rc-tint) 15%, var(--rc-surface)); }
+:is(.rc-card, .rc-stat, .rc-item, .rc-callout):is([data-rc-send], [data-rc-copy]):active { transform: scale(0.985); }
+.rc-item.rc-item:is([data-rc-send], [data-rc-copy]) { padding-left: 8px; padding-right: 8px; }
+.rc-stat:is([data-rc-send], [data-rc-copy]):hover { border-color: color-mix(in srgb, var(--rc-text) 22%, transparent); }
 
-.rc-progress { height: 6px; overflow: hidden; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
+.rc-progress { height: 8px; overflow: hidden; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--rc-tint, var(--rc-accent)); }
 
-.rc-bars { display: grid; grid-template-columns: fit-content(40%) minmax(32px, 1fr) max-content; gap: 10px; align-items: center; }
+.rc-bars { display: grid; grid-template-columns: fit-content(40%) minmax(32px, 1fr) max-content; gap: 10px 12px; align-items: center; }
 .rc-bar { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; position: relative;
-  font-size: var(--rc-text-size-sm); line-height: 16px; }
-.rc-bar::before { content: ""; grid-area: 1 / 2; height: 14px; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
+  font-size: var(--rc-text-size-sm); line-height: 20px; }
+.rc-bar::before { content: ""; grid-area: 1 / 2; height: 22px; border-radius: 6px; background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-bar > span { grid-area: 1 / 1; color: var(--rc-muted); }
-.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 4px; height: 14px; border-radius: var(--rc-radius-pill); background: var(--rc-tint, var(--rc-accent)); }
+.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 6px; height: 22px; border-radius: 6px; background: var(--rc-tint, var(--rc-accent)); }
 .rc-bar > b { grid-area: 1 / 3; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
 .rc-bar:hover::before { background: color-mix(in srgb, var(--rc-text) 16%, transparent); }
 .rc-bar:hover > span, .rc-bar:hover > b { color: var(--rc-text); }
@@ -252,10 +277,10 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 #rc-stream .rc-chart { border-radius: var(--rc-radius); background: color-mix(in srgb, var(--rc-text) 4%, transparent); }
 #rc-stream .rc-chart > canvas { visibility: hidden; }
 /* One chart height, from one class: data-size steps it instead of an inline height. */
-.rc-chart { position: relative; height: 200px; }
-.rc-chart[data-size=sm] { height: 140px; }
-.rc-chart[data-size=lg] { height: 260px; }
-.rc-chart[data-size=xl] { height: 340px; }
+.rc-chart { position: relative; height: 240px; }
+.rc-chart[data-size=sm] { height: 160px; }
+.rc-chart[data-size=lg] { height: 300px; }
+.rc-chart[data-size=xl] { height: 380px; }
 .rc-chart > canvas { display: block; }
 .rc-donut-total { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   pointer-events: none; font-variant-numeric: tabular-nums; }
@@ -315,23 +340,29 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 
 .rc-details { border-bottom: 1px solid var(--rc-separator); }
 .rc-details:last-child { border-bottom: 0; }
-.rc-details > summary { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-weight: 500; cursor: pointer; list-style: none; }
-.rc-details > summary::-webkit-details-marker { display: none; }
-.rc-details > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px;
+/* Any fold gets the kit's summary: a bare <details> or a sources fold drew the browser's own
+   triangle with no pointer, and the count ran into its label ("Sources3"). */
+details > summary { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-weight: 500; cursor: pointer; list-style: none;
+  user-select: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px;
   border-right: 1.5px solid var(--rc-muted); border-bottom: 1.5px solid var(--rc-muted);
   transform: rotate(-45deg); transition: transform 120ms ease-out; }
-.rc-details[open] > summary::before { transform: rotate(45deg); }
-.rc-details > summary > :last-child:not(:first-child) { margin-left: auto; font-weight: 400; }
-.rc-details > :not(summary) { margin-bottom: 8px; }
+details[open] > summary::before { transform: rotate(45deg); }
+details > summary:hover::before { border-color: var(--rc-text); }
+.rc-details > summary > :last-child:not(:first-child, .rc-sources-count) { margin-left: auto; font-weight: 400; }
+:is(.rc-details, .rc-sources) > :not(summary) { margin-bottom: 8px; }
 .rc-tree .rc-details { border-bottom: 0; }
 .rc-tree .rc-details > :not(summary) { margin: 0 0 0 5px; padding-left: 12px; border-left: 1px solid var(--rc-separator); }
 .rc-sources { border-bottom: 0; font-size: var(--rc-text-size-sm); }
-.rc-sources > summary { padding: 4px 0; color: var(--rc-muted); }
+.rc-sources > summary { width: fit-content; gap: 6px; padding: 4px 0; font-weight: 400; color: var(--rc-muted); }
+.rc-sources > summary::before { width: 5px; height: 5px; }
 .rc-sources > summary:focus-visible { outline: 2px solid var(--rc-accent); outline-offset: 2px; }
 .rc-sources > summary:hover, .rc-sources[open] > summary { color: var(--rc-text); }
-.rc-details.rc-sources > summary > .rc-sources-count { margin-left: 4px; font-size: var(--rc-text-size-xs); color: var(--rc-faint); font-variant-numeric: tabular-nums; }
-.rc-sources :is(ol, ul) { display: grid; gap: 3px; margin: 0 0 4px; padding-left: 22px; color: var(--rc-muted); }
-.rc-sources li::marker { font-variant-numeric: tabular-nums; }
+.rc-sources > summary > .rc-sources-count { min-width: 18px; padding: 0 5px; font-size: var(--rc-text-size-xs); line-height: 16px; text-align: center;
+  color: var(--rc-muted); font-variant-numeric: tabular-nums; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
+.rc-sources :is(ol, ul) { display: grid; gap: 4px; margin: 2px 0 4px; padding-left: 24px; color: var(--rc-muted); }
+.rc-sources li::marker { font-variant-numeric: tabular-nums; color: var(--rc-faint); }
 .rc-sources a { text-decoration: none; overflow-wrap: anywhere; }
 .rc-sources a:hover { text-decoration: underline; }
 .rc-sources-host { margin-left: 6px; font-size: var(--rc-text-size-xs); color: var(--rc-faint); }
@@ -361,7 +392,8 @@ pre.rc-term { white-space: pre-wrap; }
   background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-sm);
   visibility: hidden; opacity: 0; transition: opacity 80ms ease-out; }
 .rc-tip:hover > span, .rc-tip:focus > span { visibility: visible; opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .rc-details > summary::before, .rc-bar[data-rc-tip]::after { transition: none; } }
+@media (prefers-reduced-motion: reduce) { details > summary::before, .rc-bar[data-rc-tip]::after, button, [data-rc-send], [data-rc-copy] { transition: none; }
+  :is(button, [data-rc-send], [data-rc-copy]):active { transform: none; } }
 `;
 
 /**
@@ -583,6 +615,7 @@ ${KIT_SCRIPT}
     if (event.target instanceof HTMLDetailsElement && event.target.open) refitCharts(event.target);
     report();
   }, true);
+  const RC_PRESSABLE = ":is([data-rc-send], [data-rc-copy]):not(button, a, form, input, select, textarea, summary, label)";
   document.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
@@ -615,6 +648,12 @@ ${KIT_SCRIPT}
     if (sortable && (event.key === "Enter" || event.key === " ") && sortable.tHead && sortable.tHead.contains(heading)) {
       event.preventDefault();
       sortTable(sortable, heading.cellIndex);
+      return;
+    }
+    // A card, row or bar marked data-rc-send is a button too: Enter or Space presses it.
+    if (focused && (event.key === "Enter" || event.key === " ") && focused.matches(RC_PRESSABLE)) {
+      event.preventDefault();
+      focused.click();
       return;
     }
     const tab = focused ? focused.closest("[data-rc-tab]") : null;
@@ -655,6 +694,11 @@ ${KIT_SCRIPT}
     }
     for (const table of document.querySelectorAll("table.rc-table[data-rc-sort]")) {
       for (const heading of (table.tHead ? table.tHead.rows[0].cells : [])) heading.tabIndex = 0;
+    }
+    // A card, row, stat or bar that sends or copies is reachable by Tab and named a button.
+    for (const el of document.querySelectorAll(RC_PRESSABLE)) {
+      if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
+      if (!el.hasAttribute("role")) el.setAttribute("role", "button");
     }
     // A sources fold says how many it holds and which site each link is on.
     for (const sources of document.querySelectorAll("details.rc-sources")) {
@@ -856,13 +900,19 @@ export const CHART_THEME_SCRIPT = `(() => {
     }
     // The category type's defaults may carry no grid object yet, so make one.
     if (d.scales && d.scales.category) d.scales.category.grid = Object.assign(d.scales.category.grid || {}, { display: false });
-    d.elements.line.borderWidth = 2;
+    d.elements.line.borderWidth = 2.5;
     d.elements.point.radius = 0;
-    d.elements.point.hoverRadius = 4;
+    d.elements.point.hoverRadius = 5;
     d.elements.point.hoverBorderWidth = 2;
     // A line drawn without points is still easy to hover.
     d.elements.point.hitRadius = 10;
-    d.elements.bar.borderRadius = 4;
+    d.elements.bar.borderRadius = 6;
+    // Wide columns: a few bars fill their slot instead of standing as thin sticks.
+    if (d.datasets && d.datasets.bar) {
+      d.datasets.bar.categoryPercentage = 0.86;
+      d.datasets.bar.barPercentage = 0.92;
+      d.datasets.bar.maxBarThickness = 64;
+    }
   };
   // A view's script runs while the frame is still settling, and a chart measured at
   // 0 x 0 stays blank until something resizes it. Ask again on the next frames.

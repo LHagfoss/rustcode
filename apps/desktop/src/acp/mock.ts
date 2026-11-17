@@ -5936,6 +5936,9 @@ export const MOCK_KIT = [
   '  <button class="rc-chip" data-rc-send="Show the failing tests">Show the failures</button>\n',
   '  <button class="rc-chip" data-rc-copy="128 run, 7 failed, 41 s median">Copy numbers</button>\n',
   "</div>\n",
+  '<details class="rc-sources"><summary>Source</summary><ol>\n',
+  '  <li><a href="https://github.com/LHagfoss/rustcode/pull/3877">Pull request 3877</a></li>\n',
+  "</ol></details>\n",
   "```\n",
 ];
 
@@ -5987,7 +5990,7 @@ export const MOCK_CHARTS = [
   "new Chart(canvases[1], { type: 'doughnut', data: { labels: ['engine','desktop','auth','core'],\n",
   "  datasets: [{ label: 'Runs', data: [64,38,19,7] }] }, options: { plugins: { legend: { display: false } } } });\n",
   "</script>\n",
-  '<details class="rc-details rc-sources"><summary>Sources</summary><ol>\n',
+  '<details class="rc-sources"><summary>Sources</summary><ol>\n',
   '  <li><a href="https://github.com/LHagfoss/rustcode/actions">CI runs, this week</a></li>\n',
   '  <li><a href="https://www.example.com/flaky-tests">Flaky test triage notes</a></li>\n',
   "</ol></details>\n",

@@ -19,9 +19,9 @@ Caveats go in the view (`.rc-callout`, `.rc-muted`); sources go last in it,
 folded (Kit › Sources), never as a Markdown list after it.
 
 Pick by question: a trend over time → line chart; parts of a whole → stacked
-bar or donut; a ranking → `.rc-bars`; exact values the user will scan → a table
-(sortable past eight rows); numbers → the dashboard below. Comparisons are a
-table, the form the user likes best. Asked for graphs or hover, chart with
+bar or donut; a ranking → `.rc-bars`; options → a `.rc-grid` of `.rc-card`s;
+many exact rows → a table (sortable past eight); numbers → the dashboard
+below. Prefer bars, cards and charts to a flat table. Asked for graphs or hover, chart with
 Chart.js: tooltips, legend toggles and the eight series colours come free, and
 hovering a column shows that column.
 
