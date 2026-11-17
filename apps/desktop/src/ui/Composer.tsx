@@ -147,7 +147,6 @@ import {
   Square,
   SquarePen,
   WifiOff,
-  X,
 } from "./icons";
 import { LinkChip } from "./LinkChip";
 import { DeviceGlyphIcon } from "./MachineGlyph";
@@ -1701,30 +1700,6 @@ export const Composer = memo(function Composer({
               }}
             />
             <span className="flex-1" />
-            {suggestion && (
-              // The pointer's way to the same two choices Tab and Escape make.
-              <div className="flex min-w-0 shrink items-center gap-0.5 rc-in">
-                <Tooltip label="Put the suggestion in the field to edit (⇥)">
-                  <button
-                    type="button"
-                    onClick={acceptSuggestion}
-                    className="h-7 rounded-sm px-2 text-caption text-fg-muted hover:bg-fill hover:text-fg"
-                  >
-                    Use suggestion
-                  </button>
-                </Tooltip>
-                <Tooltip label="Dismiss the suggestion (Esc)">
-                  <button
-                    type="button"
-                    aria-label="Dismiss suggestion"
-                    onClick={dismissSuggestion}
-                    className="flex size-7 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
-                  >
-                    <X size={12} strokeWidth={2.25} />
-                  </button>
-                </Tooltip>
-              </div>
-            )}
             <div className="flex shrink-0 items-center gap-2">
               {!offline && <DictationButton dictation={dictation} />}
               <ModelPicker thread={thread} compact={compact} />
