@@ -1,5 +1,6 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
 import { copyThreadId } from "../state/deepLinks";
+import { HiddenDot, ProjectHeader, RowAction } from "./ProjectHeader";
 
 // The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
 // Settings), the Needs you row, the toolbar (search, the sort and filter menu and
@@ -181,7 +182,6 @@ import {
   Eye,
   FileDiff,
   FileText,
-  Folder,
   FolderOpen,
   FolderPlus,
   FolderX,
@@ -199,7 +199,6 @@ import {
   PinOff,
   ShieldQuestion,
   Sparkles,
-  SquarePen,
   SquareTerminal,
   Trash2,
   Wrench,
@@ -582,36 +581,6 @@ function RowStatusLabel({ status, startedAt }: { status: RowStatus; startedAt?: 
         </span>
       )}
     </span>
-  );
-}
-
-/** A small icon button in a row's hover slot: 24px, so three of them take the 80px slot. */
-function RowAction({
-  label,
-  hint,
-  onClick,
-  children,
-}: {
-  label: string;
-  /** The key that does the same thing, shown on the tooltip. */
-  hint?: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Tooltip label={hint ? `${label} (${hint})` : label}>
-      <button
-        type="button"
-        aria-label={label}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClick();
-        }}
-        className="flex size-6 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
-      >
-        {children}
-      </button>
-    </Tooltip>
   );
 }
 
@@ -1531,27 +1500,6 @@ function BranchRows({
   );
 }
 
-/** The dot a folded group shows for what it hides. */
-function HiddenDot({ kind }: { kind?: HiddenKind }) {
-  if (!kind) return null;
-  return (
-    <span
-      role="img"
-      aria-label={
-        kind === "needs"
-          ? "A thread here needs you"
-          : kind === "working"
-            ? "A thread here is working"
-            : "A thread here finished"
-      }
-      className={cx(
-        "size-1.5 shrink-0 rounded-full",
-        kind === "needs" ? "bg-warning" : kind === "working" ? "bg-accent animate-pulse" : "bg-success",
-      )}
-    />
-  );
-}
-
 function SectionHeader({
   section,
   open,
@@ -1609,63 +1557,6 @@ function SectionLabel({ section }: { section: Section }) {
       <span className="shrink-0 font-normal text-fg-faint">
         <RollingNumber value={section.items.length} />
       </span>
-    </div>
-  );
-}
-
-/**
- * A project's folder: the folder and its name, a dot for
- * what it hides and its count only while folded, the chevron at the end, and
- * a new-thread button on hover. It reads as its section's own labels do: the same 32px, the same
- * quiet 14px type, so a list of projects is one quiet column of headings.
- */
-function ProjectHeader({
-  label,
-  count,
-  open,
-  hidden,
-  onToggle,
-  onNew,
-}: {
-  label: string;
-  count: number;
-  open: boolean;
-  hidden?: HiddenKind;
-  onToggle: () => void;
-  onNew?: () => void;
-}) {
-  return (
-    <div className="group/p relative flex h-8 items-center">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left font-medium text-body text-fg/90 hover:bg-fill-subtle"
-      >
-        {open ? (
-          <FolderOpen size={14} className="shrink-0 text-fg-muted" />
-        ) : (
-          <Folder size={14} className="shrink-0 text-fg-muted" />
-        )}
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        {!open && <HiddenDot kind={hidden} />}
-        {!open && <RollingNumber value={count} className="font-normal text-fg-faint text-sub" />}
-        <ChevronDown
-          size={12}
-          className={cx(
-            "shrink-0 text-fg-faint transition-transform duration-200 ease-snappy",
-            !open && "-rotate-90",
-            onNew && "group-hover/p:invisible group-has-[:focus-visible]/p:invisible",
-          )}
-        />
-      </button>
-      {onNew && (
-        <span className="absolute right-1.5 hidden group-hover/p:flex group-has-[:focus-visible]/p:flex">
-          <RowAction label={`New thread in ${label}`} onClick={onNew}>
-            <SquarePen size={12} />
-          </RowAction>
-        </span>
-      )}
     </div>
   );
 }
@@ -2040,7 +1931,10 @@ export function Sidebar() {
         if (project.project) project.label = projectLabel(project.project);
         project.items = arranged("threads", project.items, project.key);
       }
-      byProjectName(projects);
+      projects = applyOrder(
+        byProjectName(projects).map((p) => ({ ...p, id: p.key })),
+        layout.projects,
+      );
     }
     // The sections this layout draws, in its order: Pinned and the one Threads list, and the
     // shelves close it (state/sidebarRows.ts `sectionsOf`).
@@ -2171,6 +2065,16 @@ export function Sidebar() {
     list,
     homeOf: (id) => homes.get(id),
     enabled: true,
+    drop: (home, id, index) =>
+      setSectionOrder(home.key, reorder(layout[home.key] ?? [], home.ids, id, index)),
+  });
+  const projectIds = sections.flatMap((section) => section.projects?.map((p) => p.key) ?? []);
+  const projectDrag = useThreadDrag({
+    list,
+    rowAttribute: "data-project-id",
+    handleSelector: "[data-project-handle]",
+    homeOf: () => ({ key: "projects", ids: projectIds }),
+    enabled: !searching,
     drop: (home, id, index) =>
       setSectionOrder(home.key, reorder(layout[home.key] ?? [], home.ids, id, index)),
   });
@@ -2616,7 +2520,10 @@ export function Sidebar() {
           onFocus={onListFocus}
           onClickCapture={onListClick}
           // A press on a row is a drag if the pointer moves (ui/sidebarDrag.tsx), and a click if not.
-          onPointerDown={drag.start}
+          onPointerDown={(e) => {
+            drag.start(e);
+            projectDrag.start(e);
+          }}
           aria-label="Thread list"
           className="relative min-h-0 flex-1 overflow-y-auto px-3 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
@@ -2659,7 +2566,7 @@ export function Sidebar() {
                             const projectOpen = isOpen(`project:${p.key}`);
                             const onNew = p.project ? () => startNewThread(p.project) : undefined;
                             return (
-                              <div key={p.key} className="mb-1">
+                              <div key={p.key} data-project-id={p.key} className="relative mb-1">
                                 <ProjectHeader
                                   label={p.label}
                                   count={p.items.length}
@@ -2678,7 +2585,7 @@ export function Sidebar() {
                                 />
                                 {/* Only delegates are indented; project threads keep the full row width. */}
                                 <Fold open={projectOpen}>
-                                  <div>{rows(p.items, true)}</div>
+                                  <div className={cx(!compact && "pt-0.5")}>{rows(p.items, true)}</div>
                                 </Fold>
                               </div>
                             );
