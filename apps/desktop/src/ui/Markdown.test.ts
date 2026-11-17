@@ -128,4 +128,10 @@ test("a blocked image shows its path, reason and file actions", async () => {
     expect(out).toContain(">Open</button>");
     expect(out).toContain(">Reveal in Finder</button>");
   }
+  // A picture on a paired machine has nothing to open here.
+  const remote = renderToStaticMarkup(
+    createElement(BlockedImage, { path: "/tmp/shot.png", reason: "No such picture.", remote: true }),
+  );
+  expect(remote).toContain("/tmp/shot.png");
+  expect(remote).not.toContain(">Open</button>");
 });

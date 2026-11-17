@@ -16,6 +16,11 @@ pub(crate) struct AttachmentReadRequest {
     pub path: String,
     #[serde(default)]
     pub offset: u64,
+    /// The thread whose reply names the picture, on this computer. With it, an
+    /// image file in that thread's folders or the temporary folders is served
+    /// too, not only the stored attachments.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 /// Send one chunk of an image ahead of the prompt that carries it.
@@ -40,7 +45,12 @@ pub(crate) struct AttachmentUploadRequest {
 }
 
 pub(crate) fn read(request: AttachmentReadRequest) -> Result<serde_json::Value, String> {
-    let chunk = crate::controller::read_image_chunk(&request.path, request.offset)?;
+    let chunk = match request.session_id.as_deref() {
+        Some(session_id) => {
+            crate::controller::read_thread_image_chunk(session_id, &request.path, request.offset)?
+        }
+        None => crate::controller::read_image_chunk(&request.path, request.offset)?,
+    };
     serde_json::to_value(chunk).map_err(|error| error.to_string())
 }
 
@@ -65,6 +75,10 @@ mod tests {
         let read: AttachmentReadRequest =
             serde_json::from_str(r#"{"path":"/a/attachments/x.png"}"#).unwrap();
         assert_eq!(read.offset, 0);
+        assert_eq!(read.session_id, None);
+        let read: AttachmentReadRequest =
+            serde_json::from_str(r#"{"path":"/tmp/a.png","sessionId":"abc"}"#).unwrap();
+        assert_eq!(read.session_id.as_deref(), Some("abc"));
         let upload: AttachmentUploadRequest = serde_json::from_str(
             r#"{"uploadId":"1_2","mimeType":"image/png","offset":5,"data":"QQ==","done":true}"#,
         )

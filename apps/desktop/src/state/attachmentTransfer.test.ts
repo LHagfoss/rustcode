@@ -83,5 +83,15 @@ describe("attachment transfer", () => {
     expect(image.mimeType).toBe("image/png");
     expect(Array.from(image.bytes)).toEqual(Array.from(stored));
     expect(e.calls.map((c) => c.params.offset)).toEqual([0, 4, 8]);
+    expect(e.calls.some((c) => "sessionId" in c.params)).toBe(false);
+  });
+
+  test("a reply's picture names its thread on every chunk", async () => {
+    const e = engine(new Uint8Array([1, 2, 3, 4, 5]));
+    await readImage(e.request, "/tmp/shots/a.png", "thread-1");
+    expect(e.calls.map((c) => c.params)).toEqual([
+      { path: "/tmp/shots/a.png", offset: 0, sessionId: "thread-1" },
+      { path: "/tmp/shots/a.png", offset: 4, sessionId: "thread-1" },
+    ]);
   });
 });

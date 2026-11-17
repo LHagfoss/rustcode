@@ -69,8 +69,8 @@ pub use apply::{
 };
 pub use attachments::{
     IMAGE_CHUNK_BYTES, IMAGE_MARKER, ImageChunk, UploadAnswer, image_extension, image_marker,
-    materialize_images, read_image_chunk, save_image_attachment, stored_image, stored_image_marker,
-    upload_image_chunk,
+    materialize_images, read_image_chunk, read_thread_image_chunk, save_image_attachment,
+    stored_image, stored_image_marker, upload_image_chunk,
 };
 pub use config::{
     AgentMode, ApiProtocol, AppConfig, ModelProfile, MonthlyUsage, SandboxMode, SessionMeta,

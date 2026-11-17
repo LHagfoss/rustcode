@@ -145,8 +145,101 @@ fn read_image_chunk_in(
 ) -> Result<ImageChunk, String> {
     let path = stored_image_in(config_dir, path_or_uri)
         .ok_or_else(|| "that image is not kept on this computer".to_owned())?;
-    let mime = image_mime(&path).unwrap_or("application/octet-stream");
-    let mut file = fs::File::open(&path).map_err(|error| error.to_string())?;
+    read_chunk(&path, offset, false)
+}
+
+/// One chunk of a picture a thread's reply names (`![alt](path)`): a stored
+/// image as [`read_image_chunk`] serves it, or else an image file inside the
+/// thread's own folders (its working directory and added directories) or this
+/// computer's scratch folders, where an agent saves its screenshots. A paired
+/// computer's app cannot read this disk, so it asks for them here.
+pub fn read_thread_image_chunk(
+    session_id: &str,
+    path_or_uri: &str,
+    offset: u64,
+) -> Result<ImageChunk, String> {
+    let config_dir = config_dir().map_err(|error| error.to_string())?;
+    if let Some(path) = stored_image_in(&config_dir, path_or_uri) {
+        return read_chunk(&path, offset, false);
+    }
+    if !rustcode_session::valid_session_id(session_id) {
+        return Err("no such thread".to_owned());
+    }
+    let workspace = crate::config::load_session_workspace(session_id);
+    let cwd = workspace
+        .as_ref()
+        .map(|workspace| workspace.cwd.clone())
+        .or_else(|| crate::checkpoints::thread_cwd(session_id));
+    let mut roots: Vec<PathBuf> = cwd.into_iter().collect();
+    if let Some(workspace) = workspace {
+        roots.extend(workspace.additional_directories);
+    }
+    roots.extend(crate::config::get_active_session_dir(session_id));
+    let path = thread_image_in(
+        path_or_uri,
+        &roots,
+        &scratch_roots(),
+        crate::home::home_dir().as_deref(),
+    )?;
+    read_chunk(&path, offset, true)
+}
+
+/// The OS scratch folders a thread's pictures may also be in.
+fn scratch_roots() -> Vec<PathBuf> {
+    let mut roots = vec![std::env::temp_dir()];
+    if cfg!(unix) {
+        roots.extend([PathBuf::from("/tmp"), PathBuf::from("/private/tmp")]);
+    }
+    if cfg!(target_os = "macos") {
+        roots.extend([
+            PathBuf::from("/var/folders"),
+            PathBuf::from("/private/var/folders"),
+        ]);
+    }
+    roots
+}
+
+/// A reply's picture path resolved (a relative one against the thread's first
+/// folder, symlinks followed) and checked to be an image file inside one of
+/// `roots` or `scratch`.
+fn thread_image_in(
+    path_or_uri: &str,
+    roots: &[PathBuf],
+    scratch: &[PathBuf],
+    home: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let raw = path_or_uri.strip_prefix("file://").unwrap_or(path_or_uri);
+    let raw = crate::home::expand_home(raw, home);
+    let joined = if raw.is_absolute() {
+        raw
+    } else {
+        roots
+            .first()
+            .ok_or_else(|| "this thread has no folder".to_owned())?
+            .join(raw)
+    };
+    image_mime(&joined).ok_or_else(|| "not a picture".to_owned())?;
+    let real = fs::canonicalize(&joined).map_err(|_| "No such picture.".to_owned())?;
+    if !real.is_file() {
+        return Err("not a file".to_owned());
+    }
+    let inside = roots
+        .iter()
+        .chain(scratch)
+        .filter(|root| root.is_absolute())
+        .filter_map(|root| fs::canonicalize(root).ok())
+        .any(|root| real.starts_with(root));
+    if !inside {
+        return Err("outside the thread's folders and the temporary folders".to_owned());
+    }
+    Ok(real)
+}
+
+/// `sniffed`: the first chunk must start the way the image its name says does,
+/// so a project file renamed to `.png` is not served.
+fn read_chunk(path: &Path, offset: u64, sniffed: bool) -> Result<ImageChunk, String> {
+    let mime = image_mime(path).unwrap_or("application/octet-stream");
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let size = file.metadata().map_err(|error| error.to_string())?.len();
     if size > MAX_IMAGE_BYTES as u64 {
         return Err("the image is larger than 20 MiB".to_owned());
@@ -160,6 +253,9 @@ fn read_image_chunk_in(
     file.take(IMAGE_CHUNK_BYTES as u64)
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
+    if sniffed && offset == 0 && sniff(&bytes) != Some(mime) {
+        return Err("the file's contents are not the picture its name says".to_owned());
+    }
     let next = offset + bytes.len() as u64;
     Ok(ImageChunk {
         mime_type: mime.to_owned(),
@@ -415,6 +511,40 @@ mod tests {
     }
 
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n-rest-of-a-png";
+
+    #[test]
+    fn serves_a_thread_picture_only_inside_its_folders() {
+        let project = tempfile::tempdir().expect("tempdir");
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let elsewhere = tempfile::tempdir().expect("tempdir");
+        let roots = [project.path().to_path_buf()];
+        let scratch_roots = [scratch.path().to_path_buf()];
+        fs::create_dir_all(project.path().join("shots")).unwrap();
+        fs::write(project.path().join("shots/a.png"), PNG).unwrap();
+        fs::write(scratch.path().join("b.png"), PNG).unwrap();
+        fs::write(elsewhere.path().join("c.png"), PNG).unwrap();
+        fs::write(project.path().join("notes.png"), b"not a picture").unwrap();
+        fs::write(project.path().join("notes.txt"), b"text").unwrap();
+        let resolve = |path: &str| thread_image_in(path, &roots, &scratch_roots, None);
+
+        // Relative to the thread's folder, absolute, and a file:// URI.
+        let relative = resolve("shots/a.png").unwrap();
+        assert_eq!(
+            resolve(&project.path().join("shots/a.png").display().to_string()).unwrap(),
+            relative
+        );
+        let scratch_file = scratch.path().join("b.png");
+        assert!(resolve(&format!("file://{}", scratch_file.display())).is_ok());
+        // Outside every folder, not a picture, or missing.
+        assert!(resolve(&elsewhere.path().join("c.png").display().to_string()).is_err());
+        assert!(resolve("../escape.png").is_err());
+        assert!(resolve("notes.txt").is_err());
+        assert!(resolve("missing.png").is_err());
+
+        assert!(read_chunk(&relative, 0, true).unwrap().done);
+        let renamed = resolve("notes.png").unwrap();
+        assert!(read_chunk(&renamed, 0, true).is_err());
+    }
 
     #[test]
     fn serves_only_images_kept_in_the_attachment_stores() {

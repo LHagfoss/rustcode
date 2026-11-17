@@ -1489,7 +1489,7 @@ function seedThreads(): MockThread[] {
         update("mock-agent-images", {
           sessionUpdate: "agent_message_chunk",
           content: text(
-            "![Temp screenshot](/tmp/rustcode/mock-agent-images/screenshot.png)\n\n![Blocked screenshot](/Users/you/Private/screenshot.png)",
+            "![Temp screenshot](/tmp/rustcode/mock-agent-images/screenshot.png)\n\n**Settings, light theme.** The blocked one sits in the same paragraph as this sentence.\n![Blocked screenshot](/Users/you/Private/screenshot.png)\nThe text after it starts on its own line.",
           ),
           ...turn(2000),
         }),
