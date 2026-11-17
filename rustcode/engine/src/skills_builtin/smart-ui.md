@@ -19,12 +19,9 @@ Caveats go in the view (`.rc-callout`, `.rc-muted`); sources go last in it,
 folded (Kit › Sources), never as a Markdown list after it.
 
 Pick by question: a trend over time → line chart; parts of a whole → stacked
-bar or donut; a ranking → `.rc-bars`; options side by side → a `.rc-grid` of
-`.rc-card`s (title, badge, a number or bar, one line why); many rows of exact
-values → a table (sortable past eight rows); numbers → the dashboard below.
-The user prefers the visual form: reach for bars, cards and charts before a
-flat table, and put a bar or badge in a table cell when a column is a size or
-a state. Asked for graphs or hover, chart with
+bar or donut; a ranking → `.rc-bars`; options → a `.rc-grid` of `.rc-card`s;
+many exact rows → a table (sortable past eight); numbers → the dashboard
+below. Prefer bars, cards and charts to a flat table. Asked for graphs or hover, chart with
 Chart.js: tooltips, legend toggles and the eight series colours come free, and
 hovering a column shows that column.
 
@@ -138,7 +135,6 @@ All kit, no CSS: the same intent reads the same way in every turn.
 
 - Ranking: `<div class="rc-bars"><div class="rc-bar"><span>engine</span><i style="width:100%"></i><b>42 s</b></div><div class="rc-bar rc-bad"><span>auth</span><i style="width:25%"></i><b>10.5 s</b></div></div>`
 - A point and its why: `<li class="rc-item"><b>Two tools</b><p>Extend the old one.</p></li>`
-- Options: `<div class="rc-grid rc-gap-3"><div class="rc-card rc-ok"><b>Tauri 2</b><span class="rc-badge rc-ok">Pick</span><p>9 MB, system webview.</p><div class="rc-progress"><span style="width:10%"></span></div></div><div class="rc-card"><b>Electron</b><p>95 MB, bundles Chromium.</p><div class="rc-progress"><span style="width:100%"></span></div></div></div>`
 
 ## Design
 
