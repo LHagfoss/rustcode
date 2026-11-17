@@ -22,6 +22,7 @@ import {
   toggleSidebar,
   useApp,
 } from "./store";
+import { HOME_FOLDER, startNewThreadFromContext } from "./threadOpen";
 
 function zoom(direction: 1 | -1 | 0) {
   void stepZoom(direction).then((level) => toast(`Zoom ${Math.round(level * 100)}%`, "info"));
@@ -35,7 +36,10 @@ export function runShortcut(command: string): boolean {
       if (s.selectedId) void settleThread(s.selectedId);
       return true;
     case "new-thread":
-      startNewThread();
+      startNewThreadFromContext();
+      return true;
+    case "new-thread-default":
+      startNewThread(s.defaultCwd || HOME_FOLDER);
       return true;
     case "thread-folder":
       void chooseFolder(false);

@@ -20,6 +20,7 @@ import {
   resetMachinesForTests as resetMachineLinksForTests,
   useMachines,
 } from "./machines";
+import { runShortcut } from "./shortcuts";
 import {
   connectionFor,
   createSession,
@@ -128,6 +129,19 @@ function localThreads(): void {
 }
 
 describe("the default Run on", () => {
+  test("new-thread shortcuts reuse context or explicitly use the default", () => {
+    localThreads();
+    useApp.setState({ selectedId: "local-1", defaultCwd: "/default" });
+    runShortcut("new-thread");
+    expect(useApp.getState().projectCwd).toBe(LOCAL_CWD);
+    runShortcut("new-thread");
+    expect(useApp.getState().projectCwd).toBe(LOCAL_CWD);
+    runShortcut("new-thread-default");
+    expect(useApp.getState().projectCwd).toBe("/default");
+    expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
+    useApp.setState({ defaultCwd: "" });
+  });
+
   test("a new thread starts on this computer, whatever a machine's group was used for", async () => {
     localThreads();
     await setNewThreadHost(STUDIO);

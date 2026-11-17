@@ -41,6 +41,13 @@ export const APP_COMMANDS: readonly AppCommand[] = [
   },
   { id: "new-thread", label: "New thread", binding: "mod+n", group: "Threads", remappable: true },
   {
+    id: "new-thread-default",
+    label: "New thread in default folder",
+    binding: "mod+shift+n",
+    group: "Threads",
+    remappable: true,
+  },
+  {
     id: "thread-folder",
     label: "Folder of this thread (a new one, or move this one)",
     binding: "mod+o",

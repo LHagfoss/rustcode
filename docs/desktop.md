@@ -64,7 +64,7 @@ stays under its parent whichever machine it runs on. A machine that is away
 lists the copy this computer last read from it, read-only, and its chat says
 “‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
 updates when the machine is back.”; the Settings gear shows an amber dot while any paired
-machine is not connected. New thread and ⌘N still start here; the draft's Run on selector picks another machine (each with its status and address, and *Add machine…* at the end), and Settings › Machines keeps the
+machine is not connected. New thread and ⌘N reuse the last thread or project’s folder and machine; ⌘⇧N starts here in the configured default folder; the draft's Run on selector picks another machine (each with its status and address, and *Add machine…* at the end), and Settings › Machines keeps the
 pairing, Reconnect and each machine's own page. A machine that is away while
 the app retries it on its own reads **Reconnecting…** rather than Offline (in
 Settings › Machines and in the notice of its open thread), because it is coming

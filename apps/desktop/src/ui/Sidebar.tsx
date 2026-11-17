@@ -644,8 +644,8 @@ const SWAPPED_ON_HOVER = cx(
  * takes what it needs (a running turn's "Working 12:07", the model), so the right side is never
  * cut and one line's right part never narrows another line's left one.
  */
-const ROW_HEIGHT = 68;
-const ROW_GRID = "grid h-[68px] grid-rows-[20px_16px_16px] content-center gap-y-0.5 rounded-xl px-3";
+const ROW_HEIGHT = 64;
+const ROW_GRID = "grid h-16 grid-rows-[20px_16px_16px] content-center rounded-xl px-3";
 /** One line of the row: its left part and its right part. */
 const ROW_LINE = "flex min-w-0 items-center gap-2";
 /** A line's left part: truncated. */
@@ -2031,10 +2031,10 @@ export function Sidebar() {
     // their section gives them (state/sidebarRows.ts `sortSection`).
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
       applyOrder(sortSection(id, items, keyOf, sort), layout[sectionOrderKey(id, project)]);
-    // The threads by project, when the pref is on and there is more than one project.
+    // The threads by project, whenever the preference is on, including a single project.
     const grouped = sidebarProjects(active);
     let projects: ProjectGroup[] | undefined;
-    if (byProject && grouped.length > 1) {
+    if (byProject && grouped.length > 0) {
       projects = grouped;
       for (const project of projects) {
         if (project.project) project.label = projectLabel(project.project);
@@ -2676,9 +2676,9 @@ export function Sidebar() {
                                   onToggle={() => toggle(`project:${p.key}`)}
                                   onNew={onNew}
                                 />
-                                {/* Inset threads so the project's hierarchy reads before its delegates. */}
+                                {/* Only delegates are indented; project threads keep the full row width. */}
                                 <Fold open={projectOpen}>
-                                  <div className="pl-8">{rows(p.items, true)}</div>
+                                  <div>{rows(p.items, true)}</div>
                                 </Fold>
                               </div>
                             );
