@@ -11,11 +11,12 @@ import { HiddenDot, ProjectHeader, RowAction } from "./ProjectHeader";
 // usage). A section header never folds.
 // Every thread row is one fixed grid of 3 lines, each a left and a right part, so
 // each row is the same height and each thing has one place (`ROW_GRID`). The left
-// parts hold the title, then the project and computer, then the branch or what the
-// thread asks; the right ones hold the state (`Needs you`, `Working 2m`,
-// `Waiting`, `Failed`, `Done`, `Review`, the time it wakes, or its age —
-// state/sidebarRows.ts `rowStatus`), then the diff and pull request, then the
-// model and harness mark (a count of running delegates sits beside the diff). Hovering swaps the state for the row's actions.
+// parts hold the title, then what the thread is doing (what it asks, its plan, what
+// it waits on), then its folder and branch; the right ones hold the state (`Needs
+// you`, `Working 2m`, `Waiting`, `Failed`, `Done`, `Review`, the time it wakes, or
+// its age — state/sidebarRows.ts `rowStatus`), then the model and harness mark,
+// then the computer, running delegates and pull request. Hovering swaps the state
+// for the row's actions.
 
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import {
@@ -81,7 +82,7 @@ import {
   spansMachines,
   threadFolder,
 } from "../state/sidebarGroups";
-import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
+import { applyOrder, keepPlaces, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import {
   PREF,
   SETTLE_AFTER_DEFAULT_DAYS,
@@ -122,7 +123,6 @@ import {
   shelfKey,
   shelfOpen,
   sortSection,
-  threadDiff,
   threadMatches,
   visibleRows,
 } from "../state/sidebarRows";
@@ -651,17 +651,6 @@ function CompactDot({ mark }: { mark?: CompactMark }) {
   );
 }
 
-/** What a thread's calls changed, small enough for the row's second line or its trailing slot. */
-function DiffStat({ diff }: { diff: { added: number; removed: number } }) {
-  return (
-    <span className="shrink-0 font-mono text-[10px] tabular">
-      {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-      {diff.added > 0 && diff.removed > 0 && " "}
-      {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
-    </span>
-  );
-}
-
 /**
  * A row's fill, drawn as its own child under the row's content.
  *
@@ -821,10 +810,7 @@ const ThreadRow = memo(function ThreadRow({
   const unsynced = useOutbox((o) => hasPendingChange(o.byHost, session.id));
   const finishedAt = useApp((s) => s.finished[session.id]);
   const failedAt = useApp((s) => s.failed[session.id]);
-  // What the thread's calls changed, from the diffs the app already read: a thread never opened
-  // here has no items, and shows nothing rather than a made-up zero.
   const items = useApp((s) => s.threads[session.id]?.items);
-  const diff = useMemo(() => threadDiff(items), [items]);
   // Its own subagents count with the threads it started: one stack, whichever way they were spawned.
   const ownAgents = useApp((s) => s.agents[session.id] ?? NO_AGENTS);
   const stack = useMemo(() => {
@@ -1083,48 +1069,7 @@ const ThreadRow = memo(function ThreadRow({
                       <span className="flex min-w-0 items-center justify-end">{state}</span>
                     </span>
                   </span>
-                  {/* Line 2: the working folder and, when needed, the computer. */}
-                  <span className={ROW_LINE}>
-                    <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-                      <ProjectMark name={project} size={14} className={markTint} />
-                      <span className="min-w-0 flex-1" title={folderPath}>
-                        <MiddlePath path={folder} />
-                      </span>
-                    </span>
-                    <span className={cx(ROW_RIGHT, "gap-1.5")}>
-                      {place && (
-                        <span
-                          className="flex min-w-0 max-w-[104px] shrink items-center gap-1 text-sub text-fg-muted"
-                          title={
-                            unsynced
-                              ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
-                              : `Runs on ${place.name}`
-                          }
-                        >
-                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
-                          <span className="min-w-0 truncate">{place.name}</span>
-                          {unsynced && (
-                            <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />
-                          )}
-                        </span>
-                      )}
-                      {delegates && (
-                        <Tooltip label={delegates.title}>
-                          <span
-                            role="img"
-                            aria-label={delegates.title}
-                            className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
-                          >
-                            <Bot size={12} />
-                            {delegates.count}
-                          </span>
-                        </Tooltip>
-                      )}
-                      {diff && <DiffStat diff={diff} />}
-                      {pull && <PullMark pull={pull} />}
-                    </span>
-                  </span>
-                  {/* Line 3: the branch, or what the thread asks for in its place. */}
+                  {/* Line 2: what the thread is doing: what it asks, its plan, what it waits on, where it came from. */}
                   <span className={ROW_LINE}>
                     <span
                       className={cx(
@@ -1170,13 +1115,6 @@ const ThreadRow = memo(function ThreadRow({
                             {from.project && <span className="shrink-0">· {from.project}</span>}
                           </span>
                         </Tooltip>
-                      ) : gitBranch ? (
-                        <>
-                          <GitBranch size={12} className="shrink-0" />
-                          <span className="min-w-0 truncate" title={gitBranch}>
-                            {rowBranch(gitBranch)}
-                          </span>
-                        </>
                       ) : null}
                     </span>
                     {/* The harness mark always accompanies the model. */}
@@ -1195,6 +1133,55 @@ const ThreadRow = memo(function ThreadRow({
                           {model}
                         </span>
                       )}
+                    </span>
+                  </span>
+                  {/* Line 3: the working folder and its branch, then the computer and pull request. */}
+                  <span className={ROW_LINE}>
+                    <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+                      <ProjectMark name={project} size={14} className={markTint} />
+                      <span className="min-w-0 flex-1" title={folderPath}>
+                        <MiddlePath path={folder} />
+                      </span>
+                      {gitBranch && (
+                        <span
+                          className="flex min-w-0 max-w-[55%] shrink-0 items-center gap-1"
+                          title={gitBranch}
+                        >
+                          <GitBranch size={12} className="shrink-0" />
+                          <span className="min-w-0 truncate">{rowBranch(gitBranch)}</span>
+                        </span>
+                      )}
+                    </span>
+                    <span className={cx(ROW_RIGHT, "gap-1.5")}>
+                      {place && (
+                        <span
+                          className="flex min-w-0 max-w-[104px] shrink items-center gap-1 text-sub text-fg-muted"
+                          title={
+                            unsynced
+                              ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
+                              : `Runs on ${place.name}`
+                          }
+                        >
+                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
+                          <span className="min-w-0 truncate">{place.name}</span>
+                          {unsynced && (
+                            <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />
+                          )}
+                        </span>
+                      )}
+                      {delegates && (
+                        <Tooltip label={delegates.title}>
+                          <span
+                            role="img"
+                            aria-label={delegates.title}
+                            className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
+                          >
+                            <Bot size={12} />
+                            {delegates.count}
+                          </span>
+                        </Tooltip>
+                      )}
+                      {pull && <PullMark pull={pull} />}
                     </span>
                   </span>
                 </>
@@ -1645,6 +1632,14 @@ export function Sidebar() {
   // thread settles on its own (Settings › Appearance).
   const [toolbarOn] = usePref(PREF.toolbar, true);
   const [sort] = useSidebarSort();
+  // The order each Threads list was last drawn in under the Title sort, by section key, so a
+  // rename does not move a row; a new sort starts again from its own order.
+  const drawnPlaces = useRef(new Map<string, string[]>());
+  const placesSort = useRef(sort);
+  if (placesSort.current !== sort) {
+    placesSort.current = sort;
+    drawnPlaces.current = new Map();
+  }
   const [settleDays] = usePref<number>(PREF.settleAfterDays, SETTLE_AFTER_DEFAULT_DAYS);
   const settleMs = settleAfterMs(settleAfterDays(settleDays));
   // The search narrows the list as it is typed; it is this window's, not a stored preference, and
@@ -1921,8 +1916,22 @@ export function Sidebar() {
     // The order the user arranged comes over the section's own (state/sidebarOrder.ts): a row that
     // was dragged or ⌥↑/↓'d is drawn where it was put, and the rows nobody arranged keep the order
     // their section gives them (state/sidebarRows.ts `sortSection`).
-    const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
-      applyOrder(sortSection(id, items, keyOf, sort), layout[sectionOrderKey(id, project)]);
+    // Sorted by title, the Threads list keeps each row where it was last drawn: a harness renames
+    // its thread as it works, and the row must not jump each time (state/sidebarOrder.ts
+    // `keepPlaces`). A search draws what it finds without changing the places.
+    const arranged = (id: SectionId, items: SessionSummary[], project?: string) => {
+      const key = sectionOrderKey(id, project);
+      let sorted = sortSection(id, items, keyOf, sort);
+      if (sort === "title" && id === "threads") {
+        sorted = keepPlaces(sorted, drawnPlaces.current.get(key));
+        if (!searching)
+          drawnPlaces.current.set(
+            key,
+            sorted.map((s) => s.id),
+          );
+      }
+      return applyOrder(sorted, layout[key]);
+    };
     // The threads by project, whenever the preference is on, including a single project.
     const grouped = sidebarProjects(active);
     let projects: ProjectGroup[] | undefined;

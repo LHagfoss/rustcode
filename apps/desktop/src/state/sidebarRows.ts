@@ -1,9 +1,8 @@
-// The sidebar's rows as data: the order they are drawn in, what a thread's calls changed, and
+// The sidebar's rows as data: the order they are drawn in, what a row says, and
 // the rules that move and pick them. Pure, so the sidebar and its tests share one answer
 // (ui/Sidebar.tsx).
 
 import type { PlanEntry, SessionSummary } from "../acp/types";
-import { diffCounts, type TranscriptItem } from "./thread";
 
 /** A row the list draws: a top-level thread, or the open delegate's indented row. */
 export interface OrderRow {
@@ -232,55 +231,6 @@ export function compactMark(status: RowStatus | undefined): CompactMark | undefi
     default:
       return undefined;
   }
-}
-
-/**
- * What a thread's calls changed, from the diffs the app already read (`_rustcode/rewind`
- * history, replayed when the thread is opened). Null when it has none to count: a thread never
- * opened in this run has no items, and shows no totals.
- *
- * A file counts once, by the widest edit it was given: a thread that goes back to the same file
- * forty times has not added forty times the file's lines, and summing the calls is what turned a
- * row's `+12` into `+12404`. Only a path's own line counts bound the number now, so it reads as
- * the size of what the thread touched rather than as churn.
- */
-const counts = new WeakMap<object, Map<string, { added: number; removed: number }>>();
-
-export function threadDiff(
-  items: readonly TranscriptItem[] | undefined,
-): { added: number; removed: number } | null {
-  if (!items?.length) return null;
-  const perFile = new Map<string, { added: number; removed: number }>();
-  for (const item of items) {
-    if (item.kind !== "tool" || !item.diffs?.length) continue;
-    // A held item's diffs do not change: read once, however often a reply streams past.
-    let files = counts.get(item);
-    if (!files) {
-      files = new Map();
-      for (const diff of item.diffs) {
-        const n = diffCounts([diff]);
-        files.set(diff.path, { added: n.added, removed: n.removed });
-      }
-      counts.set(item, files);
-    }
-    for (const [path, n] of files) {
-      const seen = perFile.get(path);
-      perFile.set(
-        path,
-        seen
-          ? { added: Math.max(seen.added, n.added), removed: Math.max(seen.removed, n.removed) }
-          : { added: n.added, removed: n.removed },
-      );
-    }
-  }
-  if (!perFile.size) return null;
-  let added = 0;
-  let removed = 0;
-  for (const n of perFile.values()) {
-    added += n.added;
-    removed += n.removed;
-  }
-  return { added, removed };
 }
 
 /**
