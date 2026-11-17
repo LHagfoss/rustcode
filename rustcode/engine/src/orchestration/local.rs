@@ -1499,7 +1499,10 @@ mod tests {
         .await;
         assert_eq!(answer["status"], "done", "{answer}");
         assert_eq!(answer["pinned"], true, "{answer}");
-        assert_eq!(crate::thread_status::current(&caller), crate::thread_status::Status::Done);
+        assert_eq!(
+            crate::thread_status::current(&caller),
+            crate::thread_status::Status::Done
+        );
         // Naming itself explicitly is the same call.
         let answer = answer_json(
             &caller,
@@ -1518,7 +1521,10 @@ mod tests {
         )
         .await;
         assert_eq!(answer["error"]["code"], "unavailable", "{answer}");
-        assert_ne!(crate::thread_status::current(&caller), crate::thread_status::Status::Done);
+        assert_ne!(
+            crate::thread_status::current(&caller),
+            crate::thread_status::Status::Done
+        );
     }
 
     #[tokio::test]
