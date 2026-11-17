@@ -53,7 +53,7 @@ beforeEach(() => {
       ...s.threads,
       [TARGET]: {
         ...emptyThread(TARGET, CWD, "Run the tests"),
-        loaded: true,
+        load: { phase: "loaded" as const },
         turn: { kind: "user" as const, startedAt: 0 },
       },
     },

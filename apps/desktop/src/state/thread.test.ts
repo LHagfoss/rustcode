@@ -24,12 +24,15 @@ import {
   formatClock,
   formatDuration,
   idleSettled,
+  isLoaded,
+  isLoading,
   isQuiet,
   isRunning,
   isWoken,
   lastWords,
   messageTime,
   newDayMessages,
+  openError,
   queueHeld,
   requeueSteers,
   settledWait,
@@ -201,7 +204,7 @@ describe("thread reducer", () => {
       "turnEnd",
     ]);
     expect(s.items[5]).toMatchObject({ elapsedMs: 7000 });
-    expect(s.loaded).toBe(true);
+    expect(isLoaded(s)).toBe(true);
   });
 
   test("a turn cut short by a new message keeps how long it ran", () => {
@@ -1342,6 +1345,40 @@ describe("wake turns and the queue they hold", () => {
     // A turn starting clears it: the held queue runs again.
     const held = { ...emptyThread("s", "/p"), queueHeld: true, queue: [queued] };
     expect(beginTurn(held, "go").queueHeld).toBeUndefined();
+  });
+});
+
+describe("thread load lifecycle", () => {
+  test("idle and loading are distinct from loaded", () => {
+    const idle = emptyThread("load", "/tmp");
+    expect(idle.load).toEqual({ phase: "idle" });
+    expect(isLoaded(idle)).toBe(false);
+    expect(isLoading(idle)).toBe(false);
+    const loading: ThreadState = { ...idle, load: { phase: "loading" }, error: "Turn failed" };
+    expect(isLoading(loading)).toBe(true);
+    const loaded = finishLoad(loading);
+    expect(loaded.load).toEqual({ phase: "loaded" });
+    expect(isLoading(loaded)).toBe(false);
+    expect(loaded.error).toBe("Turn failed");
+  });
+
+  test("open failures are separate from turn failures and clear on load completion", () => {
+    const failed: ThreadState = {
+      ...emptyThread("load", "/tmp"),
+      load: { phase: "failed", error: "Could not open this thread" },
+      error: "Turn failed",
+      errorDetail: "Turn failure detail",
+    };
+    expect(isLoaded(failed)).toBe(false);
+    expect(isLoading(failed)).toBe(false);
+    expect(openError(failed)).toBe("Could not open this thread");
+    const loaded = finishLoad(failed);
+    expect(openError(loaded)).toBeUndefined();
+    expect(loaded.error).toBe("Turn failed");
+    expect(loaded.errorDetail).toBe("Turn failure detail");
+    expect(isLoaded(undefined)).toBe(false);
+    expect(isLoading(undefined)).toBe(false);
+    expect(openError(undefined)).toBeUndefined();
   });
 });
 

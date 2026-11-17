@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Continuing threads by themselves: one that waits for a usage limit to reset or for the internet
 // to come back, and one a restart of the app cut off mid-turn. Split out of state/store.ts; the
 // state these write still lives in the app store.
@@ -269,11 +270,11 @@ export async function continueDueThreads(now = Date.now()): Promise<void> {
       }
       if (!waitDue(wait, now)) continue;
       await openThread(id);
-      for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) {
+      for (let i = 0; i < 100 && !isLoaded(get().threads[id]); i++) {
         await new Promise((r) => setTimeout(r, 100));
       }
       const thread = get().threads[id];
-      if (!thread?.loaded || isRunning(thread)) continue;
+      if (!isLoaded(thread) || isRunning(thread)) continue;
       if (!holds()) {
         dropLimitWait(id);
         continue;
@@ -330,11 +331,11 @@ export async function continueInternetThreads(now = Date.now()): Promise<void> {
       upSince.set(id, since);
       if (sending.has(id) || !internetDue(wait, since, now) || get().status !== "ready") continue;
       await openThread(id);
-      for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) {
+      for (let i = 0; i < 100 && !isLoaded(get().threads[id]); i++) {
         await new Promise((r) => setTimeout(r, 100));
       }
       const thread = get().threads[id];
-      if (!thread?.loaded || isRunning(thread)) continue;
+      if (!isLoaded(thread) || isRunning(thread)) continue;
       if (!holds()) {
         dropInternetWait(id);
         continue;
@@ -473,9 +474,10 @@ async function resumeAll(
     if (resumeVerdict(id, known, book, now) !== "resume") continue;
     await openThread(id);
     // The selected thread may already be loading from the handshake: wait for it.
-    for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 100 && !isLoaded(get().threads[id]); i++)
+      await new Promise((r) => setTimeout(r, 100));
     const thread = get().threads[id];
-    if (!thread?.loaded) continue;
+    if (!isLoaded(thread)) continue;
     started++;
     // Noted once the thread really gets the turn: a resume cut off again soon is the user's to restart.
     resumedAt[id] = now;

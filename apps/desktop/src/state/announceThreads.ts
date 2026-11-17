@@ -1,3 +1,4 @@
+import { isLoading, openError } from "./thread";
 // What a screen reader is told about threads (issue 3609): the window's title names the open
 // thread and its status, and a thread's major moments are announced once each (`lib/announce.ts`).
 // The open thread says when it starts working, finishes, asks, waits on an approval or fails; a
@@ -39,9 +40,9 @@ export function momentOf(thread: ThreadState | undefined, failedAt: number | und
     running: isRunning(thread),
     quiet: isQuiet(thread),
     request: request ? { key: String(request.rpcId), question: !!request.question } : undefined,
-    failed: !isRunning(thread) && (!!thread?.error || failedAt !== undefined),
+    failed: !isRunning(thread) && (!!(openError(thread) ?? thread?.error) || failedAt !== undefined),
     continues: (thread?.waiting ?? 0) > 0 || (thread?.queue.length ?? 0) > 0,
-    loading: thread?.loading ?? false,
+    loading: isLoading(thread) ?? false,
   };
 }
 

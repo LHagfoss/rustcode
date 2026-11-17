@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // The queue a thread keeps across a restart (state/queues.ts, wired in state/host.ts): the round trip
 // through storage, the bounds, the ids that were sent so nothing is delivered twice, and a restart
 // that puts a thread's queue back and runs it.
@@ -213,7 +214,7 @@ describe("a restart puts a thread's queue back", () => {
     );
     await withStorage(kept, async () => {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().threads["mock-thread-1"]?.loaded === true);
+      await until(() => isLoaded(useApp.getState().threads["mock-thread-1"]) === true);
       const thread = useApp.getState().threads["mock-thread-1"]!;
       // It started a turn of its own: the queue is empty and the message is in the transcript.
       await until(() =>
@@ -277,7 +278,7 @@ describe("a restart puts a thread's queue back", () => {
       await until(() => useApp.getState().status === "ready");
       const id = "mock-thread-1";
       await openThread(id);
-      await until(() => useApp.getState().threads[id]?.loaded === true);
+      await until(() => isLoaded(useApp.getState().threads[id]) === true);
       // The user queues two messages: they are written down without anything being sent.
       updateThread(id, (t) => ({ ...t, queue: [item("q1"), item("q2")] }));
       await until(() => (JSON.parse(data.get(QUEUES_KEY) ?? "{}") as QueueBook).threads[id]?.length === 2);

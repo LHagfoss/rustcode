@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Auto-compaction run by the app: the per-thread timers, the `/compact` turn it sends, and the
 // notice that turn leaves behind. The decision is pure (`state/autoCompact.ts`); this file owns the
 // clock and the side effects. Split out of state/store.ts; the settings it writes (`autoCompact`,
@@ -328,7 +329,7 @@ function settleAutoCompactTurn(id: string, before: SessionUsage | undefined): vo
 export function scheduleAutoCompact(id: string): void {
   clearAutoCompactTimer(id);
   const s = get();
-  if (!s.threads[id]?.loaded) return;
+  if (!isLoaded(s.threads[id])) return;
   const decision = autoCompactDecision(autoCompactInput(s, id, Date.now()));
   if (decision.action === "compact") {
     autoCompactTimers.set(

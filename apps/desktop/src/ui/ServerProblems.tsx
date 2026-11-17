@@ -31,8 +31,8 @@ function withCode(message: string): ReactNode[] {
 }
 
 function Fix({ problem }: { problem: ServerProblem }) {
-  const linking = useMachines((s) => s.serverLinking);
-  const installing = useMachines((s) => s.serverInstalling);
+  const linking = useMachines((s) => s.serverLink.status === "running");
+  const installing = useMachines((s) => s.serverInstall.status === "running");
   if (problem.code === "path-version-mismatch") {
     return (
       <Action size="sm" disabled={linking} onClick={() => void linkCliToApp()}>

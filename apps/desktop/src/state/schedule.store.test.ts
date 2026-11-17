@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Send later as the store keeps it (state/store.ts): a message written now, the card that waits for
 // its time, a restart that reads it back, sending once due, Send now, and Delete.
 
@@ -53,7 +54,7 @@ const openMockThread = async (id: string) => {
   await connect(new MockTransport({ delayMs: 0 }));
   await until(() => useApp.getState().status === "ready");
   await openThread(id);
-  await until(() => useApp.getState().threads[id]?.loaded === true);
+  await until(() => isLoaded(useApp.getState().threads[id]) === true);
 };
 
 const said = (id: string, text: string) =>

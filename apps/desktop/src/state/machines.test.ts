@@ -13,9 +13,12 @@ import {
   codeCheckOverdue,
   codeComplete,
   codeDigits,
+  connectOverSsh,
+  connectWithCode,
   DEV_APP_VERSION,
   defaultSelfName,
   discoverMachines,
+  dismissSsh,
   forgetLocalAppVersion,
   type GatewayService,
   gatewayLine,
@@ -30,11 +33,13 @@ import {
   machineName,
   machineTint,
   mergeDiscovered,
+  opError,
   PAIR_DEADLINE_MS,
   pairMachine,
   platformIcon,
   platformName,
   probeLabel,
+  probeMachineRoutes,
   probeTone,
   readUntilAnswering,
   refreshMachines,
@@ -83,6 +88,7 @@ class FakeShell implements Transport {
     expiresInSecs: 120,
   };
   pairError: Error | null = null;
+  operationError: Error | null = null;
   /** `machines_ask` waits for `finishAsk`, as the shell does while the owner decides. */
   askHangs = false;
   /** What `machines_discover` finds. */
@@ -125,6 +131,15 @@ class FakeShell implements Transport {
   async call(command: string, args: Record<string, unknown> = {}): Promise<unknown> {
     this.calls.push({ command, args });
     switch (command) {
+      case "machines_connect_code":
+      case "machines_connect_ssh":
+        if (this.operationError) throw this.operationError;
+        return MACHINE;
+      case "machines_ssh_progress":
+        return { running: false, steps: [{ step: "check", state: "done", label: "Checked" }] };
+      case "machines_probe":
+        if (this.operationError) throw this.operationError;
+        return this.machines;
       case "machines_list":
         return this.machines;
       case "machine_connect":
@@ -214,13 +229,11 @@ beforeEach(() => {
     machines: [],
     counts: {},
     discovered: null,
-    discovering: false,
-    discoverError: null,
-    pairing: null,
-    pairingError: null,
+    discovery: { status: "idle" },
+    pairing: { status: "idle" },
     server: null,
-    serverInstalling: false,
-    serverLinking: false,
+    serverInstall: { status: "idle" },
+    serverLink: { status: "idle" },
   });
   forgetLocalAppVersion();
 });
@@ -251,13 +264,13 @@ describe("machines page state", () => {
   });
 
   test("asking a machine waits for its owner, then asks for the code", async () => {
-    expect(useMachines.getState().pairing).toBeNull();
+    expect(useMachines.getState().pairing.data ?? null).toBeNull();
     await askMachine("192.168.1.20:17879", "Studio");
     const asked = shell.command("machines_ask") ?? {};
     expect(asked).toMatchObject({ address: "192.168.1.20:17879", name: "Studio" });
     // The id is the page's, made before the shell was asked.
     expect(String(asked.askId)).toMatch(/^ask-[a-z0-9]+-\d+$/);
-    const pairing = useMachines.getState().pairing;
+    const pairing = useMachines.getState().pairing.data ?? null;
     expect(pairing?.stage).toBe("code");
     if (pairing?.stage !== "code") throw new Error("the code stage never arrived");
     expect(pairing.askId).toBe(asked.askId as string);
@@ -268,54 +281,54 @@ describe("machines page state", () => {
   test("a machine that refuses the request says why, and leaves nothing waiting", async () => {
     shell.ask = new Error("Studio did not answer the request. Ask again.");
     await askMachine("192.168.1.20:17879", "Studio");
-    expect(useMachines.getState().pairing).toBeNull();
-    expect(useMachines.getState().pairingError).toContain("did not answer");
+    expect(useMachines.getState().pairing.data ?? null).toBeNull();
+    expect(opError(useMachines.getState().pairing)).toContain("did not answer");
     cancelPairing();
-    expect(useMachines.getState().pairingError).toBeNull();
+    expect(opError(useMachines.getState().pairing)).toBeNull();
   });
 
   test("the code pairs the machine, and it is listed at once", async () => {
     await askMachine("192.168.1.31:17879", "Lars's Linux box");
-    const pairing = useMachines.getState().pairing;
+    const pairing = useMachines.getState().pairing.data ?? null;
     if (pairing?.stage !== "code") throw new Error("the code stage never arrived");
     await pairMachine("48219034");
     // One id from the first press to the code: the page's own.
     expect(shell.command("machines_pair")).toEqual({ askId: pairing.askId, code: "48219034" });
-    expect(useMachines.getState().pairing).toBeNull();
+    expect(useMachines.getState().pairing.data ?? null).toBeNull();
     expect(useMachines.getState().machines[0]?.name).toBe("Lars's Linux box");
   });
 
   test("a second ask cancels the first one's request", async () => {
     shell.askHangs = true;
     void askMachine("192.168.1.31:17879", "Lars's Linux box");
-    const first = useMachines.getState().pairing?.askId;
+    const first = (useMachines.getState().pairing.data ?? null)?.askId;
     shell.finishAsk({ askId: first, codeLength: 8, expiresInSecs: 120 });
     shell.askHangs = false;
     await askMachine("192.168.1.20:17879", "Studio");
     expect(shell.command("machines_cancel")).toEqual({ askId: first });
-    expect(useMachines.getState().pairing?.askId).not.toBe(first);
+    expect((useMachines.getState().pairing.data ?? null)?.askId).not.toBe(first);
   });
 
   test("cancelling before the machine answers drops the ask by its own id", async () => {
     shell.askHangs = true;
     const asking = askMachine("192.168.1.31:17879", "Lars's Linux box");
     // The id exists before anything is dialled, so Cancel always has one.
-    const askId = useMachines.getState().pairing?.askId;
+    const askId = (useMachines.getState().pairing.data ?? null)?.askId;
     expect(askId).toBeString();
     cancelPairing();
     expect(shell.command("machines_cancel")).toEqual({ askId });
     // A late accept does not put the page back into the code stage.
     shell.finishAsk({ askId, codeLength: 8, expiresInSecs: 120 });
     await asking;
-    expect(useMachines.getState().pairing).toBeNull();
+    expect(useMachines.getState().pairing.data ?? null).toBeNull();
   });
 
   test("a spent code is over: the page asks for a new request instead of retyping", async () => {
     shell.pairError = new Error("That connection request is over. Ask the machine again.");
     await askMachine("192.168.1.31:17879", "Lars's Linux box");
     await pairMachine("48219034");
-    expect(useMachines.getState().pairing).toBeNull();
-    expect(useMachines.getState().pairingError).toContain("request is over");
+    expect(useMachines.getState().pairing.data ?? null).toBeNull();
+    expect(opError(useMachines.getState().pairing)).toContain("request is over");
   });
 
   test("a failed read is an error on the page, not an empty list", async () => {
@@ -329,15 +342,17 @@ describe("machines page state", () => {
     const asked = Date.now();
     useMachines.setState({
       pairing: {
-        stage: "pairing",
-        address: "192.168.1.31:17879",
-        host: "Lars's MacBook Pro",
-        askId: "ask-test-1",
-        since: asked,
+        status: "running",
+        data: {
+          stage: "pairing",
+          address: "192.168.1.31:17879",
+          host: "Lars's MacBook Pro",
+          askId: "ask-test-1",
+          since: asked,
+        },
       },
-      pairingError: null,
     });
-    const pairing = useMachines.getState().pairing;
+    const pairing = useMachines.getState().pairing.data ?? null;
     expect(codeCheckOverdue(pairing, asked + 1000)).toBe(false);
     expect(codeCheckOverdue(pairing, asked + PAIR_DEADLINE_MS - 1)).toBe(false);
     expect(codeCheckOverdue(pairing, asked + PAIR_DEADLINE_MS + 1)).toBe(true);
@@ -354,13 +369,13 @@ describe("machines page state", () => {
 
   test("the pairing stage is cancelled by its own ask id", async () => {
     await askMachine("192.168.1.31:17879", "Lars's Linux box");
-    const pairing = useMachines.getState().pairing;
+    const pairing = useMachines.getState().pairing.data ?? null;
     if (pairing?.stage !== "code") throw new Error("the code stage never arrived");
     const pairing_ = pairMachine("48219034");
-    expect(useMachines.getState().pairing?.stage).toBe("pairing");
+    expect((useMachines.getState().pairing.data ?? null)?.stage).toBe("pairing");
     cancelPairing();
     expect(shell.command("machines_cancel")).toEqual({ askId: pairing.askId });
-    expect(useMachines.getState().pairing).toBeNull();
+    expect(useMachines.getState().pairing.data ?? null).toBeNull();
     await pairing_;
     // The shell still paired it: the machine is listed, and the page only
     // stopped waiting for the answer.
@@ -535,7 +550,7 @@ describe("the machines a browse and a handshake find", () => {
     shell.discovered = [studio, studioOverlay];
     await discoverMachines();
     expect(useMachines.getState().discovered).toHaveLength(1);
-    expect(useMachines.getState().discovering).toBe(false);
+    expect(useMachines.getState().discovery.status === "running").toBe(false);
   });
 
   test("a browse that fails still lists the overlay rows, and says why", async () => {
@@ -545,13 +560,13 @@ describe("the machines a browse and a handshake find", () => {
     shell.discoverNotice = "Could not look for machines on this network: no multicast interface";
     await discoverMachines();
     expect(useMachines.getState().discovered?.map((row) => row.name)).toEqual(["Studio"]);
-    expect(useMachines.getState().discoverError).toContain("no multicast interface");
-    expect(useMachines.getState().discovering).toBe(false);
+    expect(opError(useMachines.getState().discovery)).toContain("no multicast interface");
+    expect(useMachines.getState().discovery.status === "running").toBe(false);
     // Looking again clears the notice once the browse answers.
     shell.discoverNotice = null;
     await discoverMachines();
     expect(useMachines.getState().discovered).toHaveLength(1);
-    expect(useMachines.getState().discoverError).toBeNull();
+    expect(opError(useMachines.getState().discovery)).toBeNull();
   });
 
   test("an overlay address says which product made it", () => {
@@ -696,7 +711,7 @@ describe("the RustCode server in the background", () => {
     expect(useMachines.getState().server?.installed).toBe(false);
     expect(await installServer()).toBe(true);
     expect(useMachines.getState().server?.running).toBe(true);
-    expect(useMachines.getState().serverInstalling).toBe(false);
+    expect(useMachines.getState().serverInstall.status === "running").toBe(false);
     expect(updateAdvice("macos")).toContain("brew upgrade rustcode");
   });
 
@@ -708,18 +723,18 @@ describe("the RustCode server in the background", () => {
     ]);
     expect(await linkCliToApp()).toBe(true);
     expect(useMachines.getState().server?.problems).toEqual([]);
-    expect(useMachines.getState().serverLinking).toBe(false);
+    expect(useMachines.getState().serverLink.status === "running").toBe(false);
     // A copy the CLI refuses to touch (Homebrew's) keeps its reason on screen.
     shell.installError = new Error("Homebrew's copy; run `brew upgrade lhagfoss/tap/rustcode`");
     expect(await linkCliToApp()).toBe(false);
-    expect(useMachines.getState().serverLinking).toBe(false);
+    expect(useMachines.getState().serverLink.status === "running").toBe(false);
   });
 
   test("an install that fails says why, and leaves the page without a server", async () => {
     shell.serverInstalled = false;
     shell.installError = new Error("a development build; run `rustcode server install` from a release");
     expect(await installServer()).toBe(false);
-    expect(useMachines.getState().serverInstalling).toBe(false);
+    expect(useMachines.getState().serverInstall.status === "running").toBe(false);
     // Nothing is claimed installed that the shell never confirmed.
     expect(useMachines.getState().server?.installed ?? false).toBe(false);
   });
@@ -729,7 +744,7 @@ describe("the RustCode server in the background", () => {
     shell.installAnswersInstalled = false;
     expect(await installServer()).toBe(false);
     expect(useMachines.getState().server?.error).toContain("installed but");
-    expect(useMachines.getState().serverInstalling).toBe(false);
+    expect(useMachines.getState().serverInstall.status === "running").toBe(false);
   });
 });
 
@@ -877,5 +892,81 @@ describe("route change notices", () => {
     expect(routeChangeNotices([back], seen)).toEqual([
       { machineId: "studio", text: "Studio: Now on NetBird · Encrypted", tone: "info" },
     ]);
+  });
+});
+
+describe("machine operation transitions", () => {
+  test("discovery retries replace the error before the next answer", async () => {
+    shell.discoverNotice = "No multicast interface";
+    await discoverMachines();
+    expect(useMachines.getState().discovery).toEqual({ status: "failed", error: shell.discoverNotice });
+    shell.discoverNotice = null;
+    const retry = discoverMachines();
+    expect(useMachines.getState().discovery).toEqual({ status: "running" });
+    await retry;
+    expect(useMachines.getState().discovery).toEqual({ status: "idle" });
+  });
+
+  test.each(["serverInstall", "serverLink", "probe"] as const)(
+    "%s fails, then retries through running to idle",
+    async (key) => {
+      const action = { serverInstall: installServer, serverLink: linkCliToApp, probe: probeMachineRoutes }[
+        key
+      ];
+      shell.installError = shell.operationError = new Error("Unavailable");
+      const failed = action();
+      expect(useMachines.getState()[key]).toEqual({ status: "running" });
+      expect(await failed).toBe(false);
+      expect(useMachines.getState()[key]).toEqual({ status: "failed", error: "Unavailable" });
+      shell.installError = shell.operationError = null;
+      const retry = action();
+      expect(useMachines.getState()[key]).toEqual({ status: "running" });
+      expect(await retry).toBe(true);
+      expect(useMachines.getState()[key]).toEqual({ status: "idle" });
+    },
+  );
+
+  test("connect code errors clear on retry and keep the shared busy state", async () => {
+    shell.operationError = new Error("Invalid code");
+    expect(await connectWithCode("1234")).toBe(false);
+    expect(useMachines.getState().connect).toEqual({ status: "failed", error: "Invalid code" });
+    shell.operationError = null;
+    const retry = connectWithCode("5678");
+    expect(useMachines.getState().connect).toEqual({ status: "running" });
+    expect(await retry).toBe(true);
+    expect(useMachines.getState().connect).toEqual({ status: "idle" });
+  });
+
+  test("pairing retry clears failure, and cancellation returns to idle", async () => {
+    shell.ask = new Error("Request refused");
+    await askMachine("box");
+    expect(useMachines.getState().pairing.status).toBe("failed");
+    shell.ask = { requestId: "new", codeLength: 8, expiresInSecs: 120 };
+    shell.askHangs = true;
+    const retry = askMachine("box");
+    expect(useMachines.getState().pairing.status).toBe("running");
+    expect(opError(useMachines.getState().pairing)).toBeNull();
+    cancelPairing();
+    shell.finishAsk(shell.ask);
+    await retry;
+    expect(useMachines.getState().pairing).toEqual({ status: "idle" });
+  });
+
+  test("SSH retains final steps, clears errors on retry and dismisses in one transition", async () => {
+    shell.operationError = new Error("SSH refused");
+    expect(await connectOverSsh("box", true)).toBe(false);
+    expect(useMachines.getState().ssh).toMatchObject({
+      status: "failed",
+      error: "SSH refused",
+      data: { steps: [{ step: "check" }] },
+    });
+    shell.operationError = null;
+    const retry = connectOverSsh("box", true);
+    expect(useMachines.getState().ssh).toEqual({ status: "running", data: { steps: [] } });
+    expect(await retry).toBe(true);
+    expect(useMachines.getState().ssh.status).toBe("idle");
+    expect(useMachines.getState().ssh.data?.steps).toHaveLength(1);
+    dismissSsh();
+    expect(useMachines.getState().ssh).toEqual({ status: "idle" });
   });
 });

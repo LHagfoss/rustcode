@@ -143,7 +143,10 @@ async function started(): Promise<string> {
     links: { ...emptyBook(), links: [link] },
     threads: {
       ...s.threads,
-      [PARENT]: { ...emptyThread(PARENT, "/Users/lagos/code/rustcode", "Report the specs"), loaded: true },
+      [PARENT]: {
+        ...emptyThread(PARENT, "/Users/lagos/code/rustcode", "Report the specs"),
+        load: { phase: "loaded" as const },
+      },
     },
   }));
   return thread;
@@ -216,7 +219,11 @@ describe("a delegate on a paired machine", () => {
       sessions: s.sessions.filter((x) => x.id !== thread),
       threads: {
         ...s.threads,
-        [PARENT]: { ...s.threads[PARENT]!, turn: { kind: "user" as const, startedAt: 0 }, loaded: true },
+        [PARENT]: {
+          ...s.threads[PARENT]!,
+          turn: { kind: "user" as const, startedAt: 0 },
+          load: { phase: "loaded" as const },
+        },
       },
     }));
 
@@ -259,7 +266,7 @@ describe("a delegate on a paired machine", () => {
         [PARENT]: {
           ...emptyThread(PARENT, "/Users/lagos/code/rustcode", "Report the specs"),
           turn: { kind: "user" as const, startedAt: 0 },
-          loaded: true,
+          load: { phase: "loaded" as const },
         },
         [target]: emptyThread(target, CWD, "Gone"),
       },
@@ -285,7 +292,11 @@ describe("a delegate on a paired machine", () => {
     useApp.setState((s) => ({
       threads: {
         ...s.threads,
-        [PARENT]: { ...s.threads[PARENT]!, turn: { kind: "user" as const, startedAt: 0 }, loaded: true },
+        [PARENT]: {
+          ...s.threads[PARENT]!,
+          turn: { kind: "user" as const, startedAt: 0 },
+          load: { phase: "loaded" as const },
+        },
       },
     }));
 

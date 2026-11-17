@@ -1,3 +1,4 @@
+import { isLoading } from "../state/thread";
 // A thread next to the one you are in: the panel's Thread tab reads another
 // thread live, so you can watch a thread you started without leaving yours.
 // To write in a thread seen here, open it. A side chat is the exception: it was opened to be
@@ -88,7 +89,7 @@ export function ThreadPeek() {
         </Pill>
       </div>
       <div className="relative min-h-0 flex-1">
-        {thread && !thread.loading ? (
+        {thread && !isLoading(thread) ? (
           <Transcript key={id} thread={thread} bottomInset={16} peek />
         ) : (
           <div role="status" aria-label="Loading" className="flex h-full items-center justify-center">

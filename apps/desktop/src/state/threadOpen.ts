@@ -1,3 +1,4 @@
+import { isLoaded, isLoading } from "./thread";
 // Selecting, opening and creating threads: the thread on screen, a new thread's folder, machine and
 // harness, opening a thread's history and repairing one that will not open, creating its session,
 // and the setup a new worktree runs. Split out of state/store.ts; the state these write still lives
@@ -401,14 +402,14 @@ export function openThread(id: string): Promise<string | null> {
   // with the chat and the composer saying so (docs/desktop.md › Several machines). Without this it
   // would draw as a new thread, with this computer's folder and controls.
   if (!conn && threadIsRemote(id)) {
-    if (!existing || (!existing.loaded && !existing.items.length)) {
+    if (!existing || (!isLoaded(existing) && !existing.items.length)) {
       const summary = get().sessions.find((x) => x.id === id);
       // The last copy this computer read from the machine, if it kept one; it is replaced by the
       // machine's own replay when the machine is back (`watchMachineConnection`).
       const cached = loadTranscript(id);
       const base = cached
         ? threadFromTranscript(cached)
-        : { ...emptyThread(id, summary?.cwd ?? "", summary?.title), loaded: false };
+        : { ...emptyThread(id, summary?.cwd ?? "", summary?.title), load: { phase: "idle" as const } };
       set((s) => ({
         threads: {
           ...s.threads,
@@ -421,7 +422,7 @@ export function openThread(id: string): Promise<string | null> {
         void loadMirroredTranscript(id).then((mirrored) => {
           if (!mirrored || connectionForThread(id)) return;
           const now = get().threads[id];
-          if (!now || now.loaded || now.items.length) return;
+          if (!now || isLoaded(now) || now.items.length) return;
           const copy = threadFromTranscript(mirrored);
           set((s) => ({
             threads: {
@@ -436,8 +437,7 @@ export function openThread(id: string): Promise<string | null> {
   }
   // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
   // be opened once (the engine was restarting, its harness was down) is not refused for good.
-  if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
-    return Promise.resolve(null);
+  if (!conn || isLoaded(existing) || isLoading(existing) || loading.has(id)) return Promise.resolve(null);
   const summary = get().sessions.find((x) => x.id === id);
   const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
   let pending: Promise<string | null>;
@@ -472,7 +472,7 @@ export function openThread(id: string): Promise<string | null> {
       return null;
     } catch (error) {
       const message = `Could not open this thread: ${errorText(error)}`;
-      updateThread(id, (t) => ({ ...finishLoad(t), error: message, openFailed: true }));
+      updateThread(id, (t) => ({ ...finishLoad(t), load: { phase: "failed", error: message } }));
       return message;
     } finally {
       loading.delete(id);
@@ -482,7 +482,7 @@ export function openThread(id: string): Promise<string | null> {
   opening.set(id, pending);
   loading.add(id);
   set((s) => ({
-    threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
+    threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), load: { phase: "loading" } } },
   }));
   return pending;
 }
@@ -664,7 +664,7 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
   const cwd = worktree?.path ?? options.cwd;
   const thread: ThreadState = {
     ...emptyThread(id, cwd, options.title),
-    loaded: true,
+    load: { phase: "loaded" as const },
     configOptions: parseConfigOptions(result.configOptions),
     harness: parseSessionHarness(result),
     worktree,

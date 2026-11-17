@@ -6,13 +6,17 @@ import {
   autoInstallDecision,
   autoRetryDelay,
   compareVersions,
+  failedInstallBackoff,
   installProgress,
   isPrerelease,
   newerVersion,
   readAutoInstall,
   readChannel,
   shouldShowWhatsNew,
+  transitionInstall,
+  type UpdateInstall,
   updateHint,
+  useUpdates,
 } from "./updates";
 
 describe("updates", () => {
@@ -214,5 +218,71 @@ describe("automatic install retries", () => {
     expect(autoRetryDelay(2)).toBe(5 * 60_000);
     expect(autoRetryDelay(3)).toBe(15 * 60_000);
     expect(autoRetryDelay(4)).toBeNull();
+  });
+});
+
+describe("install transitions", () => {
+  test("waiting starts an install, failure clears progress, and Retry clears the error", () => {
+    const waiting = transitionInstall({ phase: "idle" }, { type: "wait", reason: "whenIdle" });
+    expect(waiting).toEqual({ phase: "waiting", reason: "whenIdle", intent: "whenIdle" });
+    const started = transitionInstall(waiting, { type: "start" });
+    expect(started).toEqual({ phase: "installing", progress: null, intent: "whenIdle" });
+    const downloading = transitionInstall(started, {
+      type: "progress",
+      progress: { phase: "downloading", received: 10, total: 20 },
+    });
+    expect(downloading.phase === "installing" && downloading.progress).toEqual({
+      phase: "downloading",
+      received: 10,
+      total: 20,
+    });
+    const failed = transitionInstall(downloading, { type: "fail", error: "offline" });
+    expect(failed).toEqual({ phase: "failed", error: "offline", intent: "whenIdle" });
+    expect(transitionInstall(failed, { type: "start" })).toEqual(started);
+  });
+
+  test("scheduler checks and late progress cannot interrupt an install or revive a failure", () => {
+    const running: UpdateInstall = { phase: "installing", progress: null };
+    expect(transitionInstall(running, { type: "wait", reason: "setting" })).toBe(running);
+    expect(transitionInstall(running, { type: "stopWaiting" })).toBe(running);
+    const failed: UpdateInstall = { phase: "failed", error: "offline" };
+    expect(transitionInstall(failed, { type: "progress", progress: { phase: "verifying" } })).toBe(failed);
+    const waiting = transitionInstall({ phase: "idle" }, { type: "wait", reason: "setting" });
+    expect(transitionInstall(waiting, { type: "stopWaiting" }).phase).toBe("idle");
+  });
+
+  test("each phase can be staged with a single store update", () => {
+    const original = useUpdates.getState();
+    const phases: UpdateInstall[] = [
+      { phase: "idle" },
+      { phase: "waiting", reason: "setting" },
+      { phase: "waiting", reason: "whenIdle", intent: "whenIdle" },
+      { phase: "installing", progress: null },
+      { phase: "failed", error: "offline" },
+    ];
+    try {
+      for (const install of phases) {
+        useUpdates.setState({ install });
+        expect(useUpdates.getState().install).toEqual(install);
+      }
+    } finally {
+      useUpdates.setState(original);
+    }
+  });
+
+  test("backoff retains the timing and exhaustion for one version and resets for the next", () => {
+    let backoff = failedInstallBackoff(null, "1.0.0", 100);
+    expect(backoff).toEqual({ version: "1.0.0", failures: 1, notBefore: 60_100 });
+    backoff = failedInstallBackoff(backoff, "1.0.0", 200);
+    expect(backoff.notBefore).toBe(300_200);
+    backoff = failedInstallBackoff(backoff, "1.0.0", 300);
+    expect(backoff.notBefore).toBe(900_300);
+    backoff = failedInstallBackoff(backoff, "1.0.0", 400);
+    expect(autoRetryDelay(backoff.failures)).toBeNull();
+    expect(failedInstallBackoff(backoff, "1.1.0", 500)).toEqual({
+      version: "1.1.0",
+      failures: 1,
+      notBefore: 60_500,
+    });
   });
 });

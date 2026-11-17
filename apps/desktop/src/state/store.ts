@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // App state (Zustand) and the engine controller that drives it over ACP.
 // Components read slices with `useApp(selector)` and call the actions below.
 
@@ -1374,7 +1375,7 @@ const KEEP_TRANSCRIPT_MS = 2_000;
 function keepRemoteTranscript(key: string): void {
   transcriptTimers.delete(key);
   const thread = get().threads[key];
-  if (!thread?.loaded || thread.loading || !machineConnections.has(splitThreadKey(key).host)) return;
+  if (!isLoaded(thread) || !machineConnections.has(splitThreadKey(key).host)) return;
   saveTranscript(thread, key);
   // The same read also goes to this computer's disk, where nothing ages out (docs/data-store.md ›
   // Thread mirror).
@@ -1565,7 +1566,9 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
     connectedHosts: [...machineConnections.keys()],
     threads: Object.fromEntries(
       Object.entries(s.threads).map(([key, t]) =>
-        splitThreadKey(key).host === id ? [key, { ...endTurn(t), loaded: false }] : [key, t],
+        splitThreadKey(key).host === id
+          ? [key, { ...endTurn(t), load: { phase: "idle" as const } }]
+          : [key, t],
       ),
     ),
   }));
@@ -1764,7 +1767,10 @@ async function handshake(): Promise<void> {
     set((s) => ({
       engineRunning: {},
       threads: Object.fromEntries(
-        Object.entries(s.threads).map(([id, t]) => [id, { ...endTurn(t), loaded: false, permissions: [] }]),
+        Object.entries(s.threads).map(([id, t]) => [
+          id,
+          { ...endTurn(t), load: { phase: "idle" as const }, permissions: [] },
+        ]),
       ),
     }));
     await Promise.all([
@@ -1875,7 +1881,7 @@ async function repairNoticeMessaged(): Promise<void> {
         continue;
       const error = await openThread(session.id);
       const thread = get().threads[session.id];
-      if (error || !thread?.loaded || thread.openFailed) continue;
+      if (error || !isLoaded(thread)) continue;
       // A real message sent while history was loading must keep its row.
       if (get().messaged[session.id] !== stamp) continue;
       if (noticeOnlyHistory(thread.items)) {
@@ -2059,7 +2065,7 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
         // A thread this window has not opened (a child started elsewhere, or a thread after a
         // restart) is loaded first: the request is shown in its own chat and in the thread that
         // started it, and both answer it through the same card.
-        if (!get().threads[parsed.sessionId]?.loaded) await openThread(parsed.sessionId);
+        if (!isLoaded(get().threads[parsed.sessionId])) await openThread(parsed.sessionId);
         const request = { ...parsed, at: Date.now() };
         if (!get().threads[request.sessionId]) {
           conn?.respond(message.id, permissionCancelled);
@@ -2712,7 +2718,7 @@ export async function cancel(id = get().selectedId): Promise<void> {
   // The engine may run a turn this window lost track of (`engineRunning`, the list's status): Stop
   // still stops it.
   const engineRuns =
-    !!get().engineRunning[id] || (!thread?.loaded && engineBusy(sessionById(get(), id)?.status));
+    !!get().engineRunning[id] || (!isLoaded(thread) && engineBusy(sessionById(get(), id)?.status));
   if (!isRunning(thread) && !engineRuns) return;
   // Recorded first: a quit inside the harness's cancel grace would otherwise leave the thread
   // listed as running, and the restart would resume a turn the user stopped.

@@ -18,6 +18,18 @@ import { type ComposeExtras, type SentAttachment, splitImageMarkers } from "./co
 import type { Link } from "./orchestration";
 import { activeStep, advancePlanClocks, type PlanClocks, type SteerNote } from "./steer";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "./toolNames";
+import { type ChildActivity, isQuiet, isRunning, type ThreadTurn, type TurnKind } from "./turn";
+
+// The running turn lives in `turn.ts`; callers read it from here with the rest of the thread.
+export {
+  type ChildActivity,
+  isQuiet,
+  isRunning,
+  isWoken,
+  queueHeld,
+  type ThreadTurn,
+  type TurnKind,
+} from "./turn";
 
 export type TranscriptItem =
   | {
@@ -370,63 +382,6 @@ export const toolInFlight = (status: ToolStatus | undefined, turnRunning: boolea
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
 
-/** What the engine last saw of the processes a harness started, from `_rustcode/session/childActivity`. */
-export interface ChildActivity {
-  /** How many are running. */
-  processes: number;
-  /** CPU time they have used in total, in milliseconds. */
-  cpuMs: number;
-  /** The one that used the most (`rustc`). */
-  busiest?: string;
-  /** When they last added CPU, in this app's clock; absent while they have not. */
-  activeAt?: number;
-}
-
-/**
- * Who started the running turn:
- * - `user`: a prompt the app sent (the user's, a queued one or a wake message);
- * - `woken`: the engine resumed the turn itself, when the background commands it parked on finished;
- * - `quiet`: the app's own turn (an automatic compaction). It writes no rows, so the answer the user
- *   has not read stays the last thing in the transcript and one notice below it says what the app
- *   did (`applyUpdate`).
- */
-export type TurnKind = "user" | "woken" | "quiet";
-
-/** A running turn: `ThreadState.turn`, absent while the thread is idle. */
-export interface ThreadTurn {
-  kind: TurnKind;
-  /** When the app saw it begin, for the elapsed clock and the footer's duration. */
-  startedAt: number;
-  /** Its usage samples, handed to its footer when it ends. */
-  usage?: TurnUsage;
-  /**
-   * The processes its harness started (a build, a test run), as the engine last sampled them. A
-   * tool that prints nothing for minutes still counts as progress while they use CPU
-   * (`orchestration.ts` `stallNotice`).
-   */
-  children?: ChildActivity;
-}
-
-/** Whether a turn runs on the thread. */
-export function isRunning<T extends { turn?: ThreadTurn }>(
-  thread: T | undefined,
-): thread is T & { turn: ThreadTurn } {
-  return thread?.turn !== undefined;
-}
-
-/** Whether the running turn is one the engine resumed itself, not a prompt the app sent. */
-export const isWoken = (thread: { turn?: ThreadTurn } | undefined): boolean => thread?.turn?.kind === "woken";
-
-/** Whether the running turn is the app's own (an automatic compaction). */
-export const isQuiet = (thread: { turn?: ThreadTurn } | undefined): boolean => thread?.turn?.kind === "quiet";
-
-/**
- * Whether the queue waits for Resume. Only an idle thread holds it: a turn that runs is already
- * taking from the queue, whatever hold an earlier stop left.
- */
-export const queueHeld = (thread: { turn?: ThreadTurn; queueHeld?: boolean }): boolean =>
-  !!thread.queueHeld && thread.turn === undefined;
-
 export interface ThreadState {
   id: string;
   cwd: string;
@@ -462,24 +417,33 @@ export interface ThreadState {
    * starts clears it.
    */
   waiting?: number;
-  /** The replay of `session/load` is still arriving. */
-  loading: boolean;
-  loaded: boolean;
+  /** Lifecycle of the thread history replay, separate from turn failures. */
+  load: ThreadLoad;
   harness?: SessionHarness;
   /** The worktree the thread runs in, from `session/new` or the list. */
   worktree?: import("../acp/v2").Worktree;
-  /** What went wrong, as the thread shows it: a failed open or a failed turn. */
+  /** What went wrong, as the thread shows it: a failed turn. */
   error?: string;
   /** The failure as the harness or engine sent it, when {@link error} says it in other words. */
   errorDetail?: string;
-  /**
-   * Opening it failed (`store.ts` `openThread`), as opposed to a turn that failed: the next open
-   * tries again instead of keeping the failed copy.
-   */
-  openFailed?: boolean;
   /** Turn timing seen on replayed replies, closed into a `turnEnd` row at the next user message. */
   pendingTurn?: { id?: string; elapsedMs?: number; at?: number; outcome?: string };
 }
+
+export type ThreadLoad =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "loaded" }
+  | { phase: "failed"; error: string };
+
+export const isLoaded = (
+  thread: ThreadState | undefined,
+): thread is ThreadState & { load: { phase: "loaded" } } => thread?.load.phase === "loaded";
+export const isLoading = (
+  thread: ThreadState | undefined,
+): thread is ThreadState & { load: { phase: "loading" } } => thread?.load.phase === "loading";
+export const openError = (thread: ThreadState | undefined): string | undefined =>
+  thread?.load.phase === "failed" ? thread.load.error : undefined;
 
 let counter = 0;
 export const localId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(++counter).toString(36)}`;
@@ -497,8 +461,7 @@ export function emptyThread(id: string, cwd: string, title?: string): ThreadStat
     configOptions: [],
     permissions: [],
     queue: [],
-    loading: false,
-    loaded: false,
+    load: { phase: "idle" },
   };
 }
 
@@ -1047,7 +1010,7 @@ export function finishTurn(
 /** The replay of `session/load` finished. */
 export function finishLoad(state: ThreadState): ThreadState {
   const closed = closePendingTurn(state);
-  return { ...closed, loading: false, loaded: true, items: finishAllThoughts(closed.items, Date.now()) };
+  return { ...closed, load: { phase: "loaded" }, items: finishAllThoughts(closed.items, Date.now()) };
 }
 
 /** The id of the one row a running compaction owns, so its card can take its place. */

@@ -11,7 +11,7 @@ test("subscribes and claims events once across notifications and reconnects", as
   resetForTests();
   const t = {
     ...emptyThread("pr-thread", "/tmp"),
-    loaded: true,
+    load: { phase: "loaded" as const },
     turn: { kind: "user" as const, startedAt: 0 },
   };
   useApp.setState({ threads: { [t.id]: t } });
@@ -76,7 +76,11 @@ test("watch notifications route to the linked thread on their own machine", asyn
   watchMachineConnection("machine", conn);
   useApp.setState({
     threads: {
-      [id]: { ...emptyThread(id, "/tmp"), loaded: true, turn: { kind: "user" as const, startedAt: 0 } },
+      [id]: {
+        ...emptyThread(id, "/tmp"),
+        load: { phase: "loaded" as const },
+        turn: { kind: "user" as const, startedAt: 0 },
+      },
     },
   });
   const notification = JSON.stringify({ jsonrpc: "2.0", method: "_rustcode/pulls/watch", params: { watch } });
@@ -106,7 +110,11 @@ test("only a create command's PR output opts into CI delivery", () => {
 test("late PR news cannot wake a settled thread", async () => {
   resetForTests();
   const id = "pr-thread";
-  const t = { ...emptyThread(id, "/tmp"), loaded: true, turn: { kind: "user" as const, startedAt: 0 } };
+  const t = {
+    ...emptyThread(id, "/tmp"),
+    load: { phase: "loaded" as const },
+    turn: { kind: "user" as const, startedAt: 0 },
+  };
   useApp.setState({ threads: { [id]: t }, sessions: [{ id, cwd: "/tmp", status: "done" }] });
   const conn = new AcpConnection(() => {
     throw new Error("settled thread must not claim news");
@@ -123,7 +131,7 @@ test("engine settling clears queued notices and unread marks, keeping user messa
   watchMachineConnection("machine", conn);
   const t = {
     ...emptyThread(id, "/tmp"),
-    loaded: true,
+    load: { phase: "loaded" as const },
     turn: { kind: "user" as const, startedAt: 0 },
     queue: [
       { id: "notice", text: `CI failed\n\n${PULL_MARK}` },
@@ -164,7 +172,11 @@ test("late merge results and queued automatic turns cannot reopen a settled thre
   useApp.setState({
     sessions: [{ id, cwd: "/tmp", status: "done" }],
     threads: {
-      [id]: { ...emptyThread(id, "/tmp"), loaded: true, turn: { kind: "user" as const, startedAt: 0 } },
+      [id]: {
+        ...emptyThread(id, "/tmp"),
+        load: { phase: "loaded" as const },
+        turn: { kind: "user" as const, startedAt: 0 },
+      },
     },
   });
   const notice = `Pull request #7: Merged\n\n${PULL_MARK}`;
@@ -175,7 +187,7 @@ test("late merge results and queued automatic turns cannot reopen a settled thre
   // A user's follow-up still enters the ordinary queue while the old turn finishes.
   await runPrompt(id, "Please continue");
   expect(useApp.getState().threads[id]?.queue.map((row) => row.text)).toEqual(["Please continue"]);
-  useApp.setState({ threads: { [id]: { ...emptyThread(id, "/tmp"), loaded: true } } });
+  useApp.setState({ threads: { [id]: { ...emptyThread(id, "/tmp"), load: { phase: "loaded" as const } } } });
   expect(await runPrompt(id, notice)).toBe("skipped");
   expect(await runPrompt(id, "Continue", undefined, { continued: true })).toBe("skipped");
   deliver(id, notice, "", "");

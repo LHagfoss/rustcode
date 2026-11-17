@@ -261,6 +261,29 @@ export type Pairing =
  */
 export const PAIR_DEADLINE_MS = 30_000;
 
+/** One async operation; starting a retry replaces its previous failure. */
+export type Op<T = never> =
+  | { status: "idle"; data?: T }
+  | { status: "running"; data?: T }
+  | { status: "failed"; error: string; data?: T };
+
+export function opError(op: Op<unknown>): string | null {
+  return op.status === "failed" ? op.error : null;
+}
+
+/** Run a simple operation, preserving its caller's return value and failure policy. */
+async function runOp<T>(key: "serverInstall" | "serverLink" | "probe", action: () => Promise<T>): Promise<T> {
+  useMachines.setState({ [key]: { status: "running" } });
+  try {
+    const result = await action();
+    useMachines.setState({ [key]: { status: "idle" } });
+    return result;
+  } catch (error) {
+    useMachines.setState({ [key]: { status: "failed", error: errorText(error) } });
+    throw error;
+  }
+}
+
 interface MachinesStore {
   /** The first `machines_list` came back (or failed). */
   ready: boolean;
@@ -277,30 +300,24 @@ interface MachinesStore {
   /** Last successfully fetched thread list per machine, retained across disconnects. */
   sessions: Record<string, SessionSummary[]>;
   discovered: DiscoveredMachine[] | null;
-  discovering: boolean;
-  discoverError: string | null;
-  pairing: Pairing | null;
-  pairingError: string | null;
+  discovery: Op;
+  pairing: Op<Pairing>;
   /** The connect code this computer shows for another one, while it is open. */
   connectOffer: ConnectOffer | null;
-  /** Creating, withdrawing or redeeming a connect code is running now. */
-  connectBusy: boolean;
-  connectError: string | null;
+  /** Creating and redeeming share the busy state used by the Add machine UI. */
+  connect: Op;
   /** The connection over SSH in progress, or the last one: its steps as they go. */
-  ssh: SshRun | null;
-  sshError: string | null;
-  /** The SSH connection worked but its second direction did not; one-way pairing stays. */
-  sshNotice: string | null;
+  ssh: Op<{ steps: SshStep[]; notice?: string }>;
   /** This computer's RustCode server as a background service, once asked. */
   server: ServerService | null;
   /** This computer's own name and icon, kept here because it is not paired. */
   local: MachineIdentity;
   /** An install is running now. */
-  serverInstalling: boolean;
+  serverInstall: Op;
   /** Pointing the `rustcode` on PATH at this app's engine is running now. */
-  serverLinking: boolean;
+  serverLink: Op;
   /** A route test is running now. */
-  probing: boolean;
+  probe: Op;
   /** The Add machine dialog is open (Settings › Machines, or the new-thread selector asked). */
   incomingConnectCode?: string;
   addOpen: boolean;
@@ -314,20 +331,15 @@ export const useMachines = create<MachinesStore>(() => ({
   counts: {},
   sessions: {},
   discovered: null,
-  discovering: false,
-  discoverError: null,
-  pairing: null,
-  pairingError: null,
+  discovery: { status: "idle" },
+  pairing: { status: "idle" },
   connectOffer: null,
-  connectBusy: false,
-  connectError: null,
-  ssh: null,
-  sshError: null,
-  sshNotice: null,
+  connect: { status: "idle" },
+  ssh: { status: "idle" },
   server: null,
-  serverInstalling: false,
-  serverLinking: false,
-  probing: false,
+  serverInstall: { status: "idle" },
+  serverLink: { status: "idle" },
+  probe: { status: "idle" },
   addOpen: false,
   local: readLocalIdentity(),
 }));
@@ -1228,14 +1240,14 @@ export function resetMachinesForTests(): void {
     counts: {},
     sessions: {},
     discovered: null,
-    discovering: false,
-    discoverError: null,
-    pairing: null,
-    pairingError: null,
+    connect: { status: "idle" },
+    ssh: { status: "idle" },
+    discovery: { status: "idle" },
+    pairing: { status: "idle" },
     server: null,
-    serverInstalling: false,
-    serverLinking: false,
-    probing: false,
+    serverInstall: { status: "idle" },
+    serverLink: { status: "idle" },
+    probe: { status: "idle" },
     addOpen: false,
   });
 }
@@ -1415,14 +1427,17 @@ export function refreshMachineThreads(): void {
 
 /** Look for machines on this network (Bonjour, a few seconds). */
 export async function discoverMachines(): Promise<void> {
-  useMachines.setState({ discovering: true, discoverError: null });
+  useMachines.setState({ discovery: { status: "running" } });
   try {
     const { rows, notice } = await shellCallWithin<Discovery>(DISCOVER_MS, "machines_discover");
     // A failed browse still lists the overlay rows: the notice says why the
     // local search found nothing, and the saved machines are below it.
-    useMachines.setState({ discovered: mergeDiscovered(rows), discoverError: notice, discovering: false });
+    useMachines.setState({
+      discovered: mergeDiscovered(rows),
+      discovery: notice ? { status: "failed", error: notice } : { status: "idle" },
+    });
   } catch (error) {
-    useMachines.setState({ discovering: false, discoverError: errorText(error) });
+    useMachines.setState({ discovery: { status: "failed", error: errorText(error) } });
   }
 }
 
@@ -1461,10 +1476,12 @@ export async function refreshServerService(): Promise<void> {
  * with the reason shown here. Answers whether it ended up installed.
  */
 export async function installServer(): Promise<boolean> {
-  useMachines.setState({ serverInstalling: true });
   try {
-    const server = await shellCall<ServerService>("server_service_install");
-    useMachines.setState({ server, serverInstalling: false });
+    const server = await runOp("serverInstall", async () => {
+      const server = await shellCall<ServerService>("server_service_install");
+      useMachines.setState({ server });
+      return server;
+    });
     if (server.installed) {
       toast(
         "The RustCode server is installed as a background service and starts when you log in. It runs the remote gateway too, while Remote access is on.",
@@ -1475,7 +1492,6 @@ export async function installServer(): Promise<boolean> {
     }
     return server.installed;
   } catch (error) {
-    useMachines.setState({ serverInstalling: false });
     toast(`Could not install the RustCode server: ${errorText(error)}`, "error");
     return false;
   }
@@ -1488,10 +1504,12 @@ export async function installServer(): Promise<boolean> {
  * `brew` command. Answers whether the page now reads no version mismatch.
  */
 export async function linkCliToApp(): Promise<boolean> {
-  useMachines.setState({ serverLinking: true });
   try {
-    const server = await shellCall<ServerService>("server_link_path");
-    useMachines.setState({ server, serverLinking: false });
+    const server = await runOp("serverLink", async () => {
+      const server = await shellCall<ServerService>("server_link_path");
+      useMachines.setState({ server });
+      return server;
+    });
     const stale = server.problems.some((problem) => problem.code.startsWith("path-version-mismatch"));
     if (stale) {
       toast("The `rustcode` on PATH still is not this app's version. See the warning on this page.", "error");
@@ -1503,7 +1521,6 @@ export async function linkCliToApp(): Promise<boolean> {
     }
     return !stale;
   } catch (error) {
-    useMachines.setState({ serverLinking: false });
     toast(`Could not point \`rustcode\` at this app: ${errorText(error)}`, "error");
     return false;
   }
@@ -1597,21 +1614,24 @@ export async function askMachine(address: string, name?: string): Promise<void> 
   if (!target) return;
   // One ask at a time: a second press drops the first request (and its socket)
   // instead of leaving two in front of two machines' owners.
-  if (useMachines.getState().pairing) cancelPairing();
+  if (useMachines.getState().pairing.data) cancelPairing();
   const host = name?.trim() || target;
   const askId = newAskId();
   const asked = { address: target, host, askId, since: Date.now() };
-  useMachines.setState({ pairing: { stage: "waiting", ...asked }, pairingError: null });
-  const current = () => useMachines.getState().pairing?.askId === askId;
+  useMachines.setState({ pairing: { status: "running", data: { stage: "waiting", ...asked } } });
+  const current = () => useMachines.getState().pairing.data?.askId === askId;
   const waiting = (event: PairingEvent) => {
     if (!current()) return;
     if (event.type === "approved")
       useMachines.setState({
         pairing: {
-          stage: "code",
-          ...asked,
-          codeLength: event.codeLength,
-          expiresAt: Date.now() + event.expiresInSecs * 1000,
+          status: "running",
+          data: {
+            stage: "code",
+            ...asked,
+            codeLength: event.codeLength,
+            expiresAt: Date.now() + event.expiresInSecs * 1000,
+          },
         },
       });
   };
@@ -1639,7 +1659,7 @@ export async function askMachine(address: string, name?: string): Promise<void> 
   } catch (error) {
     // Cancelled: the request was the point, and its refusal is not the user's.
     if (!current()) return;
-    useMachines.setState({ pairing: null, pairingError: errorText(error) });
+    useMachines.setState({ pairing: { status: "failed", error: errorText(error) } });
   }
 }
 
@@ -1656,18 +1676,17 @@ type PairingEvent =
  * for its code.
  */
 export function cancelPairing(): void {
-  const pairing = useMachines.getState().pairing;
-  useMachines.setState({ pairing: null, pairingError: null });
+  const pairing = useMachines.getState().pairing.data;
+  useMachines.setState({ pairing: { status: "idle" } });
   if (pairing) void shellCall("machines_cancel", { askId: pairing.askId }).catch(() => undefined);
 }
 
 /** Send the code the machine shows. */
 export async function pairMachine(code: string): Promise<void> {
-  const pairing = useMachines.getState().pairing;
+  const pairing = useMachines.getState().pairing.data;
   if (pairing?.stage !== "code") return;
   useMachines.setState({
-    pairing: { ...pairing, stage: "pairing", since: Date.now() },
-    pairingError: null,
+    pairing: { status: "running", data: { ...pairing, stage: "pairing", since: Date.now() } },
   });
   try {
     const machine = await shellCall<Machine>("machines_pair", {
@@ -1675,14 +1694,14 @@ export async function pairMachine(code: string): Promise<void> {
       code,
     });
     useMachines.setState((state) => ({
-      pairing: null,
+      pairing: { status: "idle" },
       machines: [...state.machines.filter((saved) => saved.id !== machine.id), machine],
     }));
     toast(`Connected to ${machine.name}.`, "success");
     await refreshMachines();
   } catch (error) {
     // The request is spent either way; asking again is what recovers it.
-    useMachines.setState({ pairing: null, pairingError: errorText(error) });
+    useMachines.setState({ pairing: { status: "failed", error: errorText(error) } });
   }
 }
 
@@ -1734,26 +1753,29 @@ export function parseConnectOffer(value: unknown, now = Date.now()): ConnectOffe
 
 /** Create a connect code on this computer. Remote access is switched on first if it was off. */
 export async function createConnectCode(): Promise<void> {
-  useMachines.setState({ connectBusy: true, connectError: null });
+  useMachines.setState({ connect: { status: "running" } });
   try {
     const answer = obj(await request<JsonObject>(RemoteMethod.connectCode, {}, 20_000));
     const offer = parseConnectOffer(answer?.connectCode);
     const error = str(answer?.connectCodeError);
     useMachines.setState({
       connectOffer: offer,
-      connectError: offer ? null : (error ?? "The gateway did not hand out a connect code."),
+      connect: offer
+        ? { status: "idle" }
+        : { status: "failed", error: error ?? "The gateway did not hand out a connect code." },
     });
   } catch (error) {
-    useMachines.setState({ connectError: errorText(error) });
-  } finally {
-    useMachines.setState({ connectBusy: false });
+    useMachines.setState({ connect: { status: "failed", error: errorText(error) } });
   }
 }
 
 /** Withdraw the open connect code, or take a spent one off the screen. */
 export async function cancelConnectCode(): Promise<void> {
   const offer = useMachines.getState().connectOffer;
-  useMachines.setState({ connectOffer: null, connectError: null });
+  useMachines.setState((state) => ({
+    connectOffer: null,
+    connect: state.connect.status === "running" ? state.connect : { status: "idle" },
+  }));
   if (!offer || offer.pairedWith || offer.usedUp || offer.expiresAt <= Date.now()) return;
   try {
     await request(RemoteMethod.connectCode, { cancel: true }, 15_000);
@@ -1793,10 +1815,10 @@ export async function followConnectCode(): Promise<void> {
 export async function connectWithCode(code: string, address?: string): Promise<boolean> {
   const typed = code.trim();
   if (!typed) {
-    useMachines.setState({ connectError: "Paste or type the connect code first." });
+    useMachines.setState({ connect: { status: "failed", error: "Paste or type the connect code first." } });
     return false;
   }
-  useMachines.setState({ connectBusy: true, connectError: null });
+  useMachines.setState({ connect: { status: "running" } });
   try {
     const machine = await shellCallWithin<Machine>(PAIR_DEADLINE_MS, "machines_connect_code", {
       code: typed,
@@ -1808,12 +1830,11 @@ export async function connectWithCode(code: string, address?: string): Promise<b
     }));
     toast(`Connected to ${machine.name}.`, "success");
     await refreshMachines();
+    useMachines.setState({ connect: { status: "idle" } });
     return true;
   } catch (error) {
-    useMachines.setState({ connectError: errorText(error) });
+    useMachines.setState({ connect: { status: "failed", error: errorText(error) } });
     return false;
-  } finally {
-    useMachines.setState({ connectBusy: false });
   }
 }
 
@@ -1830,10 +1851,7 @@ export interface SshRun {
   steps: SshStep[];
 }
 
-/**
- * How long the page waits for a connection over SSH: an install downloads a release on the other
- * computer, which the native side bounds at ten minutes, plus sign-in, start and pairing.
- */
+/** SSH deadline: a ten-minute install on the other computer, plus sign-in, start and pairing. */
 export const SSH_DEADLINE_MS = 15 * 60_000;
 
 /**
@@ -1848,18 +1866,27 @@ export async function connectOverSsh(
 ): Promise<boolean> {
   const typed = target.trim();
   if (!typed) {
-    useMachines.setState({ sshError: "Type the host first, like lars@box or an alias from ~/.ssh/config." });
+    useMachines.setState({
+      ssh: {
+        status: "failed",
+        error: "Type the host first, like lars@box or an alias from ~/.ssh/config.",
+        data: useMachines.getState().ssh.data,
+      },
+    });
     return false;
   }
-  useMachines.setState({ ssh: { running: true, steps: [] }, sshError: null, sshNotice: null });
+  useMachines.setState({ ssh: { status: "running", data: { steps: [] } } });
   const poll = setInterval(() => {
     void shellCall<SshRun>("machines_ssh_progress").then(
       (run) => {
-        if (useMachines.getState().ssh?.running) useMachines.setState({ ssh: { ...run, running: true } });
+        if (useMachines.getState().ssh.status === "running")
+          useMachines.setState({ ssh: { status: "running", data: { steps: run.steps } } });
       },
       () => {},
     );
   }, 400);
+  let failure: string | null = null;
+  let notice: string | undefined;
   try {
     const machine = await shellCallWithin<Machine>(SSH_DEADLINE_MS, "machines_connect_ssh", {
       target: typed,
@@ -1874,19 +1901,22 @@ export async function connectOverSsh(
     }));
     if (mutual) {
       const failure = await pairBack(typed);
-      if (failure) useMachines.setState({ sshNotice: pairBackNotice(machine.name, failure) });
+      if (failure) notice = pairBackNotice(machine.name, failure);
     }
     toast(`Connected to ${machine.name}.`, "success");
     await refreshMachines();
     return true;
   } catch (error) {
-    useMachines.setState({ sshError: errorText(error) });
+    failure = errorText(error);
     return false;
   } finally {
     clearInterval(poll);
     const last = await shellCall<SshRun>("machines_ssh_progress").catch(() => null);
     useMachines.setState((state) => ({
-      ssh: { running: false, steps: last?.steps ?? state.ssh?.steps ?? [] },
+      ssh: {
+        ...(failure ? { status: "failed" as const, error: failure } : { status: "idle" as const }),
+        data: { steps: last?.steps ?? state.ssh.data?.steps ?? [], notice },
+      },
     }));
   }
 }
@@ -1929,7 +1959,7 @@ export function pairBackNotice(name: string, reason: string): string {
 
 /** Clear the steps of a finished connection over SSH. */
 export function dismissSsh(): void {
-  useMachines.setState({ ssh: null, sshError: null, sshNotice: null });
+  useMachines.setState({ ssh: { status: "idle" } });
 }
 
 /** Forget a machine, after asking: its token and its routes go with it. */
@@ -1981,17 +2011,13 @@ export function probeTone(probe: RouteProbe | null | undefined): "ok" | "bad" | 
  * plain connect, and show what each found. Answers whether the test ran.
  */
 export async function probeMachineRoutes(machine?: Pick<Machine, "id">): Promise<boolean> {
-  useMachines.setState({ probing: true });
   try {
-    const machines = await shellCallWithin<Machine[]>(
-      PROBE_MS,
-      "machines_probe",
-      machine ? { id: machine.id } : {},
+    const machines = await runOp("probe", () =>
+      shellCallWithin<Machine[]>(PROBE_MS, "machines_probe", machine ? { id: machine.id } : {}),
     );
-    useMachines.setState({ machines, probing: false });
+    useMachines.setState({ machines });
     return true;
   } catch (error) {
-    useMachines.setState({ probing: false });
     toast(`Could not test the routes: ${errorText(error)}`, "error");
     return false;
   }
@@ -2022,7 +2048,8 @@ export function setAddMachineOpen(open: boolean): void {
 
 /** Clear what the last attempt to connect with a code said, so the dialog starts clean. */
 export function clearConnectError(): void {
-  useMachines.setState({ connectError: null });
+  if (useMachines.getState().connect.status === "failed")
+    useMachines.setState({ connect: { status: "idle" } });
 }
 
 /** Close a machine's connection without forgetting it; Run on can still use it another time. */

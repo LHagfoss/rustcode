@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Thread status: looking a thread up, its review/done/idle status and the marks that keep it, and
 // settling threads. Split out of state/store.ts; the state these write still lives in the app store.
 
@@ -59,7 +60,7 @@ export function statusOf(s: AppState, id: string): ThreadStatus {
   const listed = sessionById(s, id)?.status;
   // A thread this window holds no stream for (never opened, or reset by a restart) has only the
   // engine's list to go by, and the list is read every few seconds (`startRunStatePoll`).
-  if (!t?.loaded && !threadIsRemote(id) && engineBusy(listed)) return listed as ThreadStatus;
+  if (!isLoaded(t) && !threadIsRemote(id) && engineBusy(listed)) return listed as ThreadStatus;
   const pending = remoteStatusPending.get(id);
   if (pending) return pending.status;
   const queued = threadIsRemote(id) ? pendingStatus(id) : undefined;

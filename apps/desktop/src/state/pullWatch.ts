@@ -3,7 +3,7 @@
 import { type AcpConnection, arr, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { deliver } from "./host";
 import { openThread, useApp } from "./store";
-import { withPullMark } from "./thread";
+import { isLoaded, withPullMark } from "./thread";
 import { threadKey } from "./threadKeys";
 import { sessionById } from "./threadStatus";
 
@@ -31,7 +31,7 @@ export async function deliverPullWatch(conn: AcpConnection, params: JsonObject, 
   if (settled()) return;
   // Load before claiming: a failed load leaves the durable events pending.
   await openThread(id);
-  if (!useApp.getState().threads[id]?.loaded || settled()) return;
+  if (!isLoaded(useApp.getState().threads[id]) || settled()) return;
   const answer = obj(await conn.request(PULL_WATCHES, { sessionId, take: number }, 15_000));
   const said = arr(answer?.events).flatMap((event) => {
     const message = str(obj(event)?.message);

@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Subagents: listing a thread's subagents, reading one's history, and the poll that keeps the
 // list fresh while a thread runs. Split out of state/store.ts; the state it writes still lives in the app store.
 
@@ -60,7 +61,7 @@ export function startAgentPolling() {
     const thread = id ? s.threads[id] : undefined;
     if (!id || !thread || s.status !== "ready" || !hasAgents(thread)) return;
     const known = s.agents[id];
-    if (isRunning(thread) || known?.some(agentActive) || (known === undefined && thread.loaded)) {
+    if (isRunning(thread) || known?.some(agentActive) || (known === undefined && isLoaded(thread))) {
       void refreshAgents(id);
     }
   }, 2000);

@@ -1,3 +1,4 @@
+import { isLoaded, isLoading } from "./thread";
 // The app's side of threads starting and messaging threads: it answers the
 // engine's `_rustcode/orchestration` requests by checking the rules
 // (state/orchestration.ts), asking the user, creating threads and
@@ -2127,7 +2128,7 @@ export function restoreQueuedThreads(): void {
   const s = useApp.getState();
   const known = new Set(s.sessions.map((session) => session.id));
   const waiting = Object.keys(queueBook.threads).filter(
-    (id) => known.has(id) && !s.threads[id]?.loaded && pendingRows(queueBook!, id).length > 0,
+    (id) => known.has(id) && !isLoaded(s.threads[id]) && pendingRows(queueBook!, id).length > 0,
   );
   for (const id of waiting.slice(0, RESTORE_MAX)) void openThread(id);
 }
@@ -2165,7 +2166,7 @@ function queuesChanged(state: AppState): void {
   let next = loaded;
   const drain: string[] = [];
   for (const [id, thread] of Object.entries(state.threads)) {
-    if (!thread.loaded || thread.loading) {
+    if (!isLoaded(thread) || isLoading(thread)) {
       restoredQueues.delete(id);
       watchedQueues.delete(id);
       continue;
@@ -2386,7 +2387,7 @@ function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
   const state = useApp.getState();
   const parent = state.threads[wake.parent];
   const known = state.sessions.some((s) => s.id === wake.parent);
-  if (!parent || parent.loading) {
+  if (!parent || isLoading(parent)) {
     // Opening it is the app's job; the wake waits rather than landing in a turn it cannot see.
     if (!parent && known) void openThread(wake.parent);
     const tries = (wakeWaits.get(wake.parent) ?? 0) + 1;
@@ -2894,7 +2895,7 @@ export function reconcileLinks(now = Date.now()): void {
     const idleFor = link.startedAt === undefined ? now - link.createdAt : now - link.startedAt;
     if (idleFor < (link.startedAt === undefined ? UNSTARTED_LINK_MS : STALE_LINK_MS)) return false;
     const thread = state.threads[link.target];
-    if (thread?.loading || thread?.queue.some((q) => q.link === link.id)) return false;
+    if (isLoading(thread) || thread?.queue.some((q) => q.link === link.id)) return false;
     if (!thread && !sessionById(state, link.target)) return false;
     // A thread held for a usage limit, the internet or background commands carries on by itself.
     if (state.limitWaits[link.target] || state.internetWaits[link.target] || thread?.waiting) return false;

@@ -66,7 +66,7 @@ export function RemoteAccessPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const server = useMachines((s) => s.server);
-  const installing = useMachines((s) => s.serverInstalling);
+  const installing = useMachines((s) => s.serverInstall.status === "running");
   const challenge = useApp((s) => s.remoteChallenge);
   const paired = useApp((s) => s.remotePaired);
   const [pairAskedAt, setPairAskedAt] = useState<number | null>(null);

@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Durable workflow runs in the app (docs/workflows.md, issue 3394). The engine drives a run and keeps it
 // under the thread that started it; this module holds each thread's runs as the engine last said
 // them (a list when the thread opens, a notification on every change), stops one, and tells the
@@ -210,7 +211,7 @@ async function wakeIfEnded(key: string, run: WorkflowRun): Promise<void> {
   waking.add(run.id);
   try {
     await openThread(key);
-    if (!useApp.getState().threads[key]?.loaded) return;
+    if (!isLoaded(useApp.getState().threads[key])) return;
     const { host, id } = splitThreadKey(key);
     const conn = connectionFor(host);
     if (!conn) return;

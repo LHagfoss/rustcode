@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // `?queuePreview` in a dev browser: stages a thread's queue so the mock can show what waits at the
 // end of a thread — queued rows, a message another thread sent, a wake line, and a held queue — with
 // no engine and no model turn. Like `?updatePreview` (state/updates.ts), it only fills the store.
@@ -32,7 +33,7 @@ export function stageQueuePreview(held: boolean): boolean {
   const s = useApp.getState();
   const id = s.selectedId;
   const thread = id ? s.threads[id] : undefined;
-  if (!id || !thread?.loaded) return false;
+  if (!id || !isLoaded(thread)) return false;
   const at = Date.now();
   useApp.setState((state) => ({
     // A draft from an earlier visit to the preview would sit in the field over the staged queue.

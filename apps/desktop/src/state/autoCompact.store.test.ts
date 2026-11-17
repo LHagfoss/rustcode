@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Store-level tests for auto-compaction's scheduling side effects. The rules
 // themselves are pure (`autoCompact.test.ts`); these drive the store and the
 // mock engine, so a guard or a quiet turn is tested where it runs.
@@ -77,7 +78,7 @@ async function openClaudeThread(delayMs = 0) {
   await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
   const id = useApp.getState().sessions[0]!.id;
   selectThread(id);
-  await until(() => useApp.getState().threads[id]?.loaded === true);
+  await until(() => isLoaded(useApp.getState().threads[id]) === true);
   const capabilities = useApp
     .getState()
     .harnesses!.harnesses.find((harness) => harness.id === "claude-code")!.capabilities;

@@ -1,3 +1,4 @@
+import { isLoaded, openError } from "./thread";
 // **Run on**: the computer a new thread starts on (docs/desktop.md › Several machines). This
 // computer by default, a machine's group in the sidebar for one of its own, and with it that
 // machine's harnesses, its projects, and `session/new` over its own connection. The shell and the
@@ -263,8 +264,8 @@ describe("a thread started on a machine", () => {
     const key = `${STUDIO}/mock-studio-1`;
     await openThread(key);
     const thread = useApp.getState().threads[key];
-    expect(thread?.openFailed).toBeUndefined();
-    expect(thread?.loaded).toBe(true);
+    expect(openError(thread)).toBeUndefined();
+    expect(isLoaded(thread)).toBe(true);
     expect(thread?.items.length ?? 0).toBeGreaterThan(0);
   });
 });

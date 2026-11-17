@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // A thread on a paired computer, keyed by (machine, thread) and driven over
 // that machine's own connection: the routing `state/store.ts` `connectionFor`
 // does, the keys `state/threadKeys.ts` makes, and the read-only state a thread
@@ -537,14 +538,14 @@ describe("a remote thread's operations", () => {
     await openThread(LINUX_THREAD);
     const thread = useApp.getState().threads[LINUX_THREAD];
     expect(thread).toBeDefined();
-    expect(thread?.loaded).toBe(false);
+    expect(isLoaded(thread)).toBe(false);
     expect(thread?.cwd).toBe(LINUX_CWD);
     expect(thread?.title).toBe("Run the tests");
     expect(threadOffline(LINUX_THREAD)).toBe(true);
     expect(machineOfThread(LINUX_THREAD)).toBe("Lars's Linux box");
     // Opening again asks the machine once it is back, and opens this state meanwhile.
     await openThread(LINUX_THREAD);
-    expect(useApp.getState().threads[LINUX_THREAD]?.loaded).toBe(false);
+    expect(isLoaded(useApp.getState().threads[LINUX_THREAD])).toBe(false);
   });
 
   test("a machine's delegation is refused instead of starting a thread here", async () => {
@@ -627,7 +628,7 @@ describe("a remote thread's operations", () => {
         ...s.threads,
         [LINUX_THREAD]: {
           ...emptyThread(LINUX_THREAD, LINUX_CWD, "Run the tests"),
-          loaded: true,
+          load: { phase: "loaded" as const },
           permissions: [request],
         },
       },

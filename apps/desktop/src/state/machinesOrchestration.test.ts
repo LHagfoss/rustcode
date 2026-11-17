@@ -149,8 +149,7 @@ function listed(): void {
         queue: [],
         permissions: [],
         turn: { kind: "user", startedAt: 0 },
-        loaded: true,
-        loading: false,
+        load: { phase: "loaded" },
       },
     } as never,
     links: {
@@ -188,8 +187,7 @@ function withRemoteThread(): void {
         ],
         queue: [],
         permissions: [],
-        loaded: true,
-        loading: false,
+        load: { phase: "loaded" },
       },
     } as never,
     links: {
@@ -233,6 +231,16 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  // Stage operation lifecycles atomically without carrying errors between scenarios.
+  useMachines.setState({
+    discovery: { status: "idle" },
+    connect: { status: "idle" },
+    pairing: { status: "idle" },
+    ssh: { status: "idle" },
+    serverInstall: { status: "idle" },
+    serverLink: { status: "idle" },
+    probe: { status: "idle" },
+  });
   forgetMachineProjectsForTests();
   listed();
   useMachines.setState({
