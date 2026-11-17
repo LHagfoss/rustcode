@@ -52,7 +52,7 @@ const withStorage = async (seed: ScheduleBook | null, run: () => Promise<void>) 
 /** A connected app with one thread open and loaded. */
 const openMockThread = async (id: string) => {
   await connect(new MockTransport({ delayMs: 0 }));
-  await until(() => useApp.getState().status === "ready");
+  await until(() => useApp.getState().engine.phase === "ready");
   await openThread(id);
   await until(() => isLoaded(useApp.getState().threads[id]) === true);
 };

@@ -116,7 +116,7 @@ export function resetFocusList(): void {
  * `now` is a parameter so it can be felt with a clock in tests.
  */
 export async function refreshSessionsOnFocus(now = Date.now()): Promise<void> {
-  if (!connection || get().status !== "ready") return;
+  if (!connection || get().engine.phase !== "ready") return;
   if (now - lastFocusListAt < FOCUS_LIST_GAP_MS) return;
   lastFocusListAt = now;
   await refreshSessions();

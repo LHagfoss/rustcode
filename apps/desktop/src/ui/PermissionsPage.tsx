@@ -207,7 +207,7 @@ function RememberedGroup() {
   const timed = useApp((s) => s.grants);
   const book = useApp((s) => s.links);
   const sessions = useApp((s) => s.sessions);
-  const status = useApp((s) => s.status);
+  const status = useApp((s) => s.engine.phase);
   useEffect(() => {
     if (status === "ready") void refreshGrants();
   }, [status]);

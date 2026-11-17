@@ -295,7 +295,7 @@ function currentPlansAsk(explicit: boolean): PlansAsk {
  * once instead of after that minute.
  */
 export async function refreshPlanCache(again = false): Promise<void> {
-  if (!connectionFor("") || get().status !== "ready") return;
+  if (!connectionFor("") || get().engine.phase !== "ready") return;
   const ask = currentPlansAsk(again);
   // An explicit check asks again even after an answer paused a login.
   if (again) planPauses = NO_PAUSES;
@@ -357,7 +357,7 @@ let planLoginsAskedAt = 0;
  * caller's answer stays cache-only: this never awaits.
  */
 export function refreshReadPlanLogins(now = Date.now()): void {
-  if (!connectionFor("") || get().status !== "ready") return;
+  if (!connectionFor("") || get().engine.phase !== "ready") return;
   if (now - planLoginsAskedAt < PLAN_CACHE_POLL_MS) return;
   planLoginsAskedAt = now;
   const cache = get().planCache;
@@ -423,7 +423,7 @@ export function ownPlanUsageDue(own: PlanUsage | null | undefined, now = Date.no
 function refreshSelectedPlanUsage(force = false, now = Date.now()): void {
   const s = get();
   const id = s.selectedId;
-  if (!id || s.status !== "ready" || !isLoaded(s.threads[id])) return;
+  if (!id || s.engine.phase !== "ready" || !isLoaded(s.threads[id])) return;
   if (force || ownPlanUsageDue(s.planUsage[id], now)) void refreshPlanUsage(id);
 }
 

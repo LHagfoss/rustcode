@@ -747,7 +747,7 @@ export function useEngineData<T>(
   params: JsonObject = {},
   { skip = false }: { skip?: boolean } = {},
 ) {
-  const status = useApp((s) => s.status);
+  const status = useApp((s) => s.engine.phase);
   const key = pageKey(method, params);
   const [data, setDataState] = useState<T | null>(() => cachedPage<T>(key)?.data ?? null);
   const [error, setError] = useState<string | null>(null);

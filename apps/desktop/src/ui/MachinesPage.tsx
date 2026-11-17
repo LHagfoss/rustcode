@@ -176,7 +176,7 @@ export function MachinesPage() {
  * this app runs are its own engine's, and end when the app does.
  */
 function ThisComputer() {
-  const status = useApp((s) => s.status);
+  const status = useApp((s) => s.engine.phase);
   const open = useApp((s) => Object.values(s.threads).filter((thread) => isLoaded(thread)).length);
   const server = useMachines((s) => s.server);
   const installing = useMachines((s) => s.serverInstall.status === "running");

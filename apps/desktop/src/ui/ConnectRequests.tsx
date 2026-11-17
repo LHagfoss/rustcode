@@ -27,7 +27,7 @@ import { copyText, Pill, Spinner } from "./primitives";
 const SHOWN = 4;
 
 export function ConnectRequests() {
-  const engine = useApp((s) => s.status);
+  const engine = useApp((s) => s.engine.phase);
   const remote = useApp((s) => s.remote);
   const code = useApp((s) => s.connectCode);
   const [now, setNow] = useState(() => Date.now());

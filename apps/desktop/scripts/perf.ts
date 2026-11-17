@@ -229,7 +229,7 @@ await evaluate(
   "new Promise((r) => (document.readyState === 'complete' ? r(0) : addEventListener('load', r)))",
 );
 await evaluate(
-  "window.__perf.until(() => window.__rustcode?.useApp.getState().sessionsLoaded && document.querySelectorAll('aside li, aside [role=button], aside button').length > 50, 60000)",
+  "window.__perf.until(() => window.__rustcode?.useApp.getState().engine.sessions === 'listed' && document.querySelectorAll('aside li, aside [role=button], aside button').length > 50, 60000)",
 );
 const startup = await evaluate<{ fcp: number; list: number }>(`(() => ({
   fcp: performance.getEntriesByName("first-contentful-paint")[0]?.startTime ?? -1,

@@ -16,7 +16,7 @@ const SHOWN = 3;
 const IDLE_POLL_MS = 30_000;
 
 export function OutsideApprovals() {
-  const engine = useApp((s) => s.status);
+  const engine = useApp((s) => s.engine.phase);
   const status = useOutside((s) => s.status);
   const connected = (status?.grants.length ?? 0) > 0;
 

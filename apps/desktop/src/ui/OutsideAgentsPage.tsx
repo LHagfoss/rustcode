@@ -43,7 +43,7 @@ const PLATFORM_OPTIONS = OUTSIDE_PLATFORMS.map((platform) => ({
 }));
 
 export function OutsideAgentsPage() {
-  const engine = useApp((s) => s.status);
+  const engine = useApp((s) => s.engine.phase);
   const status = useOutside((s) => s.status);
   const error = useOutside((s) => s.error);
   const [created, setCreated] = useState<OutsideCreated | null>(null);

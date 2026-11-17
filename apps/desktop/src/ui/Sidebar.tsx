@@ -46,6 +46,7 @@ import {
   originText,
   sameProject,
 } from "../state/delegateOrigin";
+import { sessionsListed } from "../state/engine";
 import { addDroppedFolders } from "../state/folders";
 import { stateOf } from "../state/host";
 import { hasPendingChange, useOutbox } from "../state/machineOutbox";
@@ -1468,7 +1469,8 @@ export function Sidebar() {
     () => ({ ...backgroundSetups, ...(pending ? { [pending.id]: pending } : {}) }),
     [backgroundSetups, pending],
   );
-  const sessionsLoaded = useApp((s) => s.sessionsLoaded);
+  // Loading until this computer's list is in; a restart keeps the rows it already shows.
+  const listing = useApp((s) => !sessionsListed(s.engine) && !s.sessions.length);
   const selectedId = useApp((s) => s.selectedId);
   // Which threads need you or work, as a string so a streamed chunk does not change it.
   const flags = useApp((s) =>
@@ -2428,8 +2430,8 @@ export function Sidebar() {
           className="relative min-h-0 flex-1 overflow-y-auto px-3 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
-          {!sessionsLoaded && <ThreadRowsSkeleton />}
-          {sessionsLoaded && !filtered.length && (
+          {listing && <ThreadRowsSkeleton />}
+          {!listing && !filtered.length && (
             <div className="px-2 py-3 text-callout text-fg-muted">
               {onlyProject ? "No threads in this project yet." : "No threads yet."}
             </div>

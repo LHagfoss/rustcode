@@ -86,7 +86,7 @@ export function startRunStatePoll(): void {
     if (
       !runPollReading &&
       connection &&
-      get().status === "ready" &&
+      get().engine.phase === "ready" &&
       (typeof document === "undefined" || !document.hidden)
     ) {
       runPollReading = true;

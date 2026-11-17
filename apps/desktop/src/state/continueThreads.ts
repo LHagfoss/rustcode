@@ -248,7 +248,7 @@ const resuming = new Set<string>();
 
 /** Each thread whose limit or overload has passed carries on, unless it now runs on something else. */
 export async function continueDueThreads(now = Date.now()): Promise<void> {
-  if (continuing || get().status !== "ready") return;
+  if (continuing || get().engine.phase !== "ready") return;
   continuing = true;
   try {
     for (const [id, wait] of Object.entries(get().limitWaits)) {
@@ -331,7 +331,7 @@ export async function continueInternetThreads(now = Date.now()): Promise<void> {
       }
       const since = upSince.get(id) ?? now;
       upSince.set(id, since);
-      if (sending.has(id) || !internetDue(wait, since, now) || get().status !== "ready") continue;
+      if (sending.has(id) || !internetDue(wait, since, now) || get().engine.phase !== "ready") continue;
       await openThread(id);
       for (let i = 0; i < 100 && !isLoaded(get().threads[id]); i++) {
         await new Promise((r) => setTimeout(r, 100));
@@ -417,7 +417,7 @@ let lastRunning = "";
  */
 export function watchRunningThreads(): void {
   useApp.subscribe((s) => {
-    if (s.status !== "ready") return;
+    if (s.engine.phase !== "ready") return;
     const ids = runningIds(s).join("\n");
     if (ids === lastRunning) return;
     lastRunning = ids;

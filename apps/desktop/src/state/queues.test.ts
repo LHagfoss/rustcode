@@ -256,7 +256,7 @@ describe("a restart puts a thread's queue back", () => {
     const kept = withQueue({ threads: {}, acked: ["q1"] }, "mock-thread-1", [item("q1")], now);
     await withStorage(kept, async () => {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready");
+      await until(() => useApp.getState().engine.phase === "ready");
       // Nothing to run in storage, so the thread is not opened for it, and no turn starts.
       await sleep(50);
       expect(useApp.getState().threads["mock-thread-1"]).toBeUndefined();
@@ -275,7 +275,7 @@ describe("a restart puts a thread's queue back", () => {
   test("a queue waiting behind a reloaded thread is written back as it was", async () => {
     await withStorage(undefined, async () => {
       await connect(new MockTransport({ delayMs: 0 }));
-      await until(() => useApp.getState().status === "ready");
+      await until(() => useApp.getState().engine.phase === "ready");
       const id = "mock-thread-1";
       await openThread(id);
       await until(() => isLoaded(useApp.getState().threads[id]) === true);

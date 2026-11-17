@@ -54,7 +54,7 @@ async function staged() {
     send(line);
   };
   await connect(transport);
-  await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+  await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
   // The mock lists a thread of another project too; a link needs two of the same one.
   const same = useApp.getState().sessions.filter((x) => x.cwd === "/Users/you/code/rustcode");
   const [parent, child] = same.map((x) => x.id) as [string, string];

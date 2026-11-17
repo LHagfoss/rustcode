@@ -262,7 +262,7 @@ export const REPORT_LOG_LINES = 200;
 export interface DebugReportInput {
   generatedAt: Date;
   state: ServerState;
-  /** What the app's connection says (`statusDetail`), when anything. */
+  /** What the app's connection says (`engineDetail` in `state/engine.ts`), when anything. */
   stateDetail?: string | null;
   transport?: string | null;
   server?: ServerInfo | null;

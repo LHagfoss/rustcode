@@ -1020,7 +1020,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   // What is left of each login's plan: this computer's plan read, which a paired machine's logins
   // have no part in.
   const planCache = useApp((s) => (host ? NO_PLANS : s.planCache));
-  const engineReady = useApp((s) => (host ? s.connectedHosts.includes(host) : s.status === "ready"));
+  const engineReady = useApp((s) => (host ? s.connectedHosts.includes(host) : s.engine.phase === "ready"));
 
   const { models, efforts, model, effort } = pickerModels(thread, harness, effective, knownConfig);
   // The model's own entry: what its effort levels are, and where the reset returns to.

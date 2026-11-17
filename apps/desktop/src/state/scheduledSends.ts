@@ -66,7 +66,7 @@ export function scheduleMessage(
   extras: ComposeExtras,
   due: number,
 ): ScheduledMessage | { refused: ScheduleRefusal | "offline" } {
-  if (get().status !== "ready") return { refused: "offline" };
+  if (get().engine.phase !== "ready") return { refused: "offline" };
   if (!text.trim() && !hasExtras(extras)) return { refused: "empty" };
   if (!(due > Date.now())) return { refused: "time" };
   const item: ScheduledMessage = {
@@ -91,7 +91,7 @@ export function removeScheduled(threadId: string, id: string): void {
 export async function sendScheduledNow(threadId: string, id: string): Promise<boolean> {
   const item = get().scheduled[threadId]?.find((row) => row.id === id);
   if (!item) return false;
-  if (get().status !== "ready") {
+  if (get().engine.phase !== "ready") {
     toast("Not connected: the message stays scheduled.", "error");
     return false;
   }
@@ -183,7 +183,7 @@ function syncScheduleTimer() {
 
 /** Every message whose time has come goes out, the soonest first. */
 export async function continueDueScheduled(now = Date.now()): Promise<void> {
-  if (sendingScheduled || get().status !== "ready") return;
+  if (sendingScheduled || get().engine.phase !== "ready") return;
   const due = dueScheduled(get().scheduled, now);
   if (!due.length) return;
   sendingScheduled = true;

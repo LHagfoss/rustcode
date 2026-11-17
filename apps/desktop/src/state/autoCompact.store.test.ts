@@ -75,7 +75,7 @@ const compactPrompt = (id: string) =>
 /** An open thread on Claude Code's two-rule policy, its size threshold at 20k. */
 async function openClaudeThread(delayMs = 0) {
   await connect(new MockTransport({ delayMs }));
-  await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+  await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 0);
   const id = useApp.getState().sessions[0]!.id;
   selectThread(id);
   await until(() => isLoaded(useApp.getState().threads[id]) === true);
