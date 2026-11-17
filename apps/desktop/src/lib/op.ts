@@ -18,13 +18,13 @@ export function opRunning(op: Op<unknown>): boolean {
 export type OpEvent<T> =
   | { type: "start" }
   | { type: "succeed"; data: T }
-  | { type: "fail"; error: string }
+  | { type: "fail"; error: string; dropData?: boolean }
   | { type: "reset" };
 
 /**
  * The one transition for an operation. A start clears the last failure and
  * keeps the last data, so a retry shows the previous answer under its spinner
- * instead of a blank; a reset forgets both.
+ * instead of a blank; a failure keeps it unless told to drop it; a reset forgets both.
  */
 export function opTransition<T>(op: Op<T>, event: OpEvent<T>): Op<T> {
   switch (event.type) {
@@ -33,7 +33,9 @@ export function opTransition<T>(op: Op<T>, event: OpEvent<T>): Op<T> {
     case "succeed":
       return { status: "idle", data: event.data };
     case "fail":
-      return { status: "failed", error: event.error, data: op.data };
+      return event.dropData
+        ? { status: "failed", error: event.error }
+        : { status: "failed", error: event.error, data: op.data };
     case "reset":
       return { status: "idle" };
   }
@@ -53,6 +55,8 @@ export function failureText(error: unknown): string {
 export interface RunOptions {
   /** Turns a thrown error into the text the operation keeps. */
   describe?: (error: unknown) => string;
+  /** A failure forgets the last answer, so a retry starts blank instead of showing it. */
+  dropDataOnFailure?: boolean;
 }
 
 export interface OpRunner<T> {
@@ -85,7 +89,7 @@ export function createOpRunner<T>(apply: (event: OpEvent<T>) => void): OpRunner<
       } catch (failure) {
         if (!current()) return { status: "stale" };
         const error = (options?.describe ?? failureText)(failure);
-        apply({ type: "fail", error });
+        apply({ type: "fail", error, dropData: options?.dropDataOnFailure });
         return { status: "failed", error };
       }
     },

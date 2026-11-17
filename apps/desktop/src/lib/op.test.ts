@@ -77,6 +77,17 @@ describe("createOpRunner", () => {
     expect(opError(op())).toBe("no such folder");
   });
 
+  test("failure: dropDataOnFailure forgets the last answer", async () => {
+    const { runner, op } = harness<number>();
+    await runner.run(() => Promise.resolve(1));
+    await runner.run(() => Promise.reject(new Error("boom")), { dropDataOnFailure: true });
+    expect(op()).toEqual({ status: "failed", error: "boom" });
+    const retry = runner.run(() => Promise.resolve(2));
+    expect(op()).toEqual({ status: "running", data: undefined });
+    await retry;
+    expect(op()).toEqual({ status: "idle", data: 2 });
+  });
+
   test("failure: a caller's describe names the text", async () => {
     const { runner, op } = harness<void>();
     await runner.run(() => Promise.reject("raw"), { describe: (e) => `said ${String(e)}` });

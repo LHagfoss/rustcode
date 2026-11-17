@@ -171,11 +171,13 @@ function useCapabilities(host: string, version: number) {
   useEffect(() => {
     void load();
   }, [load, version]);
+  // The next poll waits for the last read to settle, so a read slower than the poll is not overtaken.
+  const reading = opRunning(read);
   useEffect(() => {
-    if (!data?.mcpServers.some((server) => server.connection === "connecting")) return;
-    const timer = setInterval(() => void load(), 1000);
-    return () => clearInterval(timer);
-  }, [data, load]);
+    if (reading || !data?.mcpServers.some((server) => server.connection === "connecting")) return;
+    const timer = setTimeout(() => void load(), 1000);
+    return () => clearTimeout(timer);
+  }, [data, reading, load]);
   const run = async (method: string, params: JsonObject, timeout = 30_000) => {
     try {
       const next = parseCapabilities(await machineRequest(host, method, params, timeout));

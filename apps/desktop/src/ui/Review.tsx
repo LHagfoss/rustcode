@@ -331,7 +331,7 @@ export function Review({ threadId }: { threadId: string }) {
   const [collapsed, setCollapsed] = useState(false);
   // A diff for a source already left is dropped, not drawn over the one chosen after it.
   const [diff, runLoad] = useOp<ReviewFile[]>();
-  const files = diff.status === "failed" ? null : (diff.data ?? null);
+  const files = diff.data ?? null;
   const error = opError(diff);
   const loading = opRunning(diff);
   const [selected, setSelected] = useState<string | null>(null);
@@ -360,50 +360,54 @@ export function Review({ threadId }: { threadId: string }) {
   );
   const load = useCallback(
     async (force = false) => {
-      const loaded = await runLoad(async () => {
-        let out: ReviewFile[] = [];
-        if (source.kind === "turn") {
-          out = (await turnDiff(threadId, source.turn)).map((f) => ({
-            path: f.path,
-            status: STATUS_LETTER[f.status] ?? "M",
-            added: f.insertions,
-            removed: f.deletions,
-            lines: parsePatch(f.patch),
-          }));
-        } else if (source.kind === "pull") {
-          // Through the pull store: a diff read on intent (the pointer resting on
-          // the pull segment) is the one this draws, so the click waits for nothing.
-          const answer = await loadPullDiff(cwd, source.pull.number, { force });
-          if (answer.error) {
-            throw new Error(`${pullErrorTitle(answer.error.code)}: ${answer.error.message}`);
+      const loaded = await runLoad(
+        async () => {
+          let out: ReviewFile[] = [];
+          if (source.kind === "turn") {
+            out = (await turnDiff(threadId, source.turn)).map((f) => ({
+              path: f.path,
+              status: STATUS_LETTER[f.status] ?? "M",
+              added: f.insertions,
+              removed: f.deletions,
+              lines: parsePatch(f.patch),
+            }));
+          } else if (source.kind === "pull") {
+            // Through the pull store: a diff read on intent (the pointer resting on
+            // the pull segment) is the one this draws, so the click waits for nothing.
+            const answer = await loadPullDiff(cwd, source.pull.number, { force });
+            if (answer.error) {
+              throw new Error(`${pullErrorTitle(answer.error.code)}: ${answer.error.message}`);
+            }
+            const chunks = splitUnifiedDiff(answer.diff ?? "");
+            out = Object.entries(chunks).map(([path, lines]) => {
+              const parsed = parsePatch(lines);
+              return {
+                path,
+                status: "M",
+                added: parsed.filter((l) => l.kind === "add").length,
+                removed: parsed.filter((l) => l.kind === "del").length,
+                lines: parsed,
+              };
+            });
+          } else {
+            const folder = source.kind === "branch" && wt ? wt.path : cwd;
+            const changes = await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
+            if (!changes)
+              throw new Error("Reading changes needs the desktop app: git runs in its native shell.");
+            const chunks = splitUnifiedDiff(changes.diff);
+            out = changes.files.map((f) => ({
+              path: f.path,
+              status: f.status,
+              added: f.added,
+              removed: f.removed,
+              lines: parsePatch(chunks[f.path] ?? []),
+            }));
           }
-          const chunks = splitUnifiedDiff(answer.diff ?? "");
-          out = Object.entries(chunks).map(([path, lines]) => {
-            const parsed = parsePatch(lines);
-            return {
-              path,
-              status: "M",
-              added: parsed.filter((l) => l.kind === "add").length,
-              removed: parsed.filter((l) => l.kind === "del").length,
-              lines: parsed,
-            };
-          });
-        } else {
-          const folder = source.kind === "branch" && wt ? wt.path : cwd;
-          const changes = await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
-          if (!changes)
-            throw new Error("Reading changes needs the desktop app: git runs in its native shell.");
-          const chunks = splitUnifiedDiff(changes.diff);
-          out = changes.files.map((f) => ({
-            path: f.path,
-            status: f.status,
-            added: f.added,
-            removed: f.removed,
-            lines: parsePatch(chunks[f.path] ?? []),
-          }));
-        }
-        return out;
-      });
+          return out;
+        },
+        // A failed diff is not drawn again under the next try's skeleton.
+        { dropDataOnFailure: true },
+      );
       if (loaded.status !== "done") return;
       const out = loaded.value;
       setSelected((cur) => (cur && out.some((f) => f.path === cur) ? cur : (out[0]?.path ?? null)));

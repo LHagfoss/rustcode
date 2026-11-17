@@ -615,7 +615,7 @@ function PullThreadSheet({
   const checks = failingChecks(detail);
   const [parts, setParts] = useState({ body: true, comments: true, checks: true });
   const [instruction, setInstruction] = useState(DEFAULT_PULL_INSTRUCTION);
-  const [startOp, runStart] = useOp<string | null>();
+  const [startOp, runStart] = useOp<string | undefined>();
   const starting = opRunning(startOp);
   const [linked, setLinked] = useState<string>();
   useEffect(() => {
