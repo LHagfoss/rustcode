@@ -1893,28 +1893,41 @@ impl ExternalSession {
             cost_usd: usage.as_ref().and_then(crate::data_store::cost_usd),
             at: None,
         };
-        if cumulative.tokens.is_empty() {
+        let mut actual_model = None;
+        if cumulative.tokens.is_empty() || crate::harness_usage::log_based(&self.harness.id) {
             let harness = self.harness.id.clone();
             let native = record.native_session_id.clone();
             let cwd = self.cwd.clone();
             let account_dir = account_config_dir(&record, &harness);
             let scanned = tokio::task::spawn_blocking(move || {
-                crate::harness_usage::session_usage(
+                let paths = crate::harness_usage::session_logs(
                     &harness,
                     native.as_deref(),
                     Some(cwd.as_path()),
                     account_dir.as_deref(),
-                )
+                );
+                let model = crate::harness_usage::turn_model(&harness, &paths, started_at);
+                let usage = crate::harness_usage::session_usage(
+                    &harness,
+                    native.as_deref(),
+                    Some(cwd.as_path()),
+                    account_dir.as_deref(),
+                );
+                (model, usage)
             })
             .await
-            .ok()
-            .flatten();
-            if let Some(logged) = scanned {
-                cumulative.tokens = logged.tokens;
-                if cumulative.cost_usd.is_none() {
-                    cumulative.cost_usd = logged.cost_usd;
+            .ok();
+            if let Some((model, logged)) = scanned {
+                actual_model = model;
+                if let Some(logged) = logged {
+                    if cumulative.tokens.is_empty() {
+                        cumulative.tokens = logged.tokens;
+                    }
+                    if cumulative.cost_usd.is_none() {
+                        cumulative.cost_usd = logged.cost_usd;
+                    }
+                    cumulative.at = logged.at;
                 }
-                cumulative.at = logged.at;
             }
         }
         let finished_at = chrono::Utc::now();
@@ -1928,6 +1941,7 @@ impl ExternalSession {
             .and_then(|usage| usage.get("size"))
             .and_then(serde_json::Value::as_u64)
             .filter(|size| *size > 0)
+            .or_else(|| live_window(&record))
             .map(|size| size as i64);
         let stop_reason = match result {
             Ok(StopReason::EndTurn) => "end_turn",
@@ -1944,7 +1958,7 @@ impl ExternalSession {
                 started_at: started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 finished_at: Some(finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
                 harness: Some(self.harness.id.clone()),
-                model: record.model.clone(),
+                model: actual_model.or_else(|| record.model.clone()),
                 input_tokens: None,
                 output_tokens: None,
                 cached_tokens: None,

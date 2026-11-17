@@ -75,6 +75,61 @@ pub fn session_logs(
     }
 }
 
+/// Model reported by an assistant response during this turn, if the harness
+/// records one. Ignore earlier responses so failed turns cannot inherit a model.
+pub fn turn_model(
+    harness: &str,
+    paths: &[PathBuf],
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    if !log_based(harness) {
+        return None;
+    }
+    let mut latest: Option<(chrono::DateTime<chrono::Utc>, String)> = None;
+    for path in paths {
+        scan(path, |line| {
+            if !line.contains("\"model\"") {
+                return;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                return;
+            };
+            let kind = value.get("type").and_then(Value::as_str);
+            if (harness == "claude-code" && kind != Some("assistant"))
+                || (harness == "pi" && kind != Some("message"))
+            {
+                return;
+            }
+            let Some(message) = value.get("message") else {
+                return;
+            };
+            if harness == "pi" && message.get("role").and_then(Value::as_str) != Some("assistant") {
+                return;
+            }
+            let Some(model) = message
+                .get("model")
+                .and_then(Value::as_str)
+                .filter(|model| !model.is_empty() && *model != "<synthetic>")
+            else {
+                return;
+            };
+            let Some(at) = timestamp(if harness == "pi" {
+                message.get("timestamp")
+            } else {
+                value.get("timestamp")
+            })
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc)) else {
+                return;
+            };
+            if at >= started_at && latest.as_ref().is_none_or(|(previous, _)| at >= *previous) {
+                latest = Some((at, model.to_owned()));
+            }
+        });
+    }
+    latest.map(|(_, model)| model)
+}
+
 /// A set of logs' identity: a poll is worth a read only when this changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LogStamp {
@@ -560,6 +615,52 @@ mod tests {
             .iter()
             .find_map(|base| claude_log_in(&base.join("projects"), id, None));
         assert_eq!(found, Some(folder.join(format!("{id}.jsonl"))));
+    }
+
+    #[test]
+    fn turn_model_ignores_previous_and_synthetic_responses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "model.jsonl",
+            &[
+                r#"{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"model":"old"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-01-01T00:00:02Z","message":{"model":"claude-opus-5-5"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-01-01T00:00:03Z","message":{"model":"<synthetic>"}}"#,
+            ],
+        );
+        let start = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:01Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            turn_model("claude-code", &[path], start).as_deref(),
+            Some("claude-opus-5-5")
+        );
+    }
+
+    #[test]
+    fn pi_turn_model_uses_assistant_not_selected_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "pi.jsonl",
+            &[
+                r#"{"type":"model_change","model":"default","timestamp":"2026-01-01T00:00:01Z"}"#,
+                r#"{"type":"message","message":{"role":"assistant","model":"openai/gpt-6-luna","timestamp":1767225602000}}"#,
+                r#"{"type":"message","message":{"role":"user","model":"wrong","timestamp":1767225603000}}"#,
+            ],
+        );
+        let start = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:01Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            turn_model("pi", std::slice::from_ref(&path), start).as_deref(),
+            Some("openai/gpt-6-luna")
+        );
+        assert_eq!(
+            turn_model("pi", &[path], start + chrono::Duration::seconds(5)),
+            None
+        );
     }
 
     #[test]
