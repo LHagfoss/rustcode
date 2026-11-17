@@ -43,6 +43,65 @@ export const AUTO_INSTALL_RETRY_MS = 10_000;
  */
 export const AUTO_INSTALL_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
+/** Only a running install has progress; only a failed one has an error.
+ * The explicit idle request survives retries, as the user's choice did before.
+ */
+export type UpdateInstall = (
+  | { phase: "idle" }
+  | { phase: "waiting"; reason: "setting" | "whenIdle" }
+  | { phase: "installing"; progress: InstallProgress | null }
+  | { phase: "failed"; error: string }
+) & { intent?: "whenIdle" };
+
+export interface InstallBackoff {
+  version: string;
+  failures: number;
+  notBefore: number;
+}
+
+type InstallEvent =
+  | { type: "wait"; reason: "setting" | "whenIdle" }
+  | { type: "stopWaiting" }
+  | { type: "start" }
+  | { type: "progress"; progress: InstallProgress }
+  | { type: "fail"; error: string };
+
+/** Pure transitions shared by the installer and its scheduler. */
+export function transitionInstall(state: UpdateInstall, event: InstallEvent): UpdateInstall {
+  const intent = state.intent;
+  switch (event.type) {
+    case "wait":
+      if (state.phase === "installing") return state;
+      return {
+        phase: "waiting",
+        reason: event.reason,
+        intent: event.reason === "whenIdle" ? "whenIdle" : intent,
+      };
+    case "stopWaiting":
+      return state.phase === "waiting" ? { phase: "idle", intent } : state;
+    case "start":
+      return { phase: "installing", progress: null, intent };
+    case "progress":
+      return state.phase === "installing" ? { ...state, progress: event.progress } : state;
+    case "fail":
+      return state.phase === "installing" ? { phase: "failed", error: event.error, intent } : state;
+  }
+}
+
+function transition(event: InstallEvent) {
+  useUpdates.setState((state) => ({ install: transitionInstall(state.install, event) }));
+}
+
+/** A different version starts with its own retry schedule. */
+export function failedInstallBackoff(
+  previous: InstallBackoff | null,
+  version: string,
+  now: number,
+): InstallBackoff {
+  const failures = (previous?.version === version ? previous.failures : 0) + 1;
+  return { version, failures, notBefore: now + (autoRetryDelay(failures) ?? 0) };
+}
+
 interface UpdatesState {
   /** This app's version from the shell, known before any check answers. */
   version: string | null;
@@ -58,15 +117,9 @@ interface UpdatesState {
   /** Why the last check failed, for Settings › Advanced; null after a good check. */
   error: string | null;
   checkedAt: number | null;
-  installing: boolean;
-  /** The install's progress, for the sidebar row's bar. */
-  progress: InstallProgress | null;
-  /** Why the last install failed, kept on the sidebar row with its Retry; null while one runs or after a good one. */
-  installError: string | null;
-  /** The update installs by itself once no thread is working: "Update when idle", or the setting, while it waits. */
-  waiting: boolean;
-  /** "Update when idle" was chosen for this offer, whatever the setting says. */
-  whenIdle: boolean;
+  install: UpdateInstall;
+  /** Automatic retry history belongs to one offered version. */
+  backoff: InstallBackoff | null;
   /** The release notes to show once, after the app was updated. */
   whatsNew: WhatsNew | null;
 }
@@ -90,11 +143,8 @@ export const useUpdates = create<UpdatesState>(() => ({
   autoInstall: readAutoInstall(read(AUTO_KEY)),
   error: null,
   checkedAt: null,
-  installing: false,
-  progress: null,
-  installError: null,
-  waiting: false,
-  whenIdle: false,
+  install: { phase: "idle" },
+  backoff: null,
   whatsNew: null,
 }));
 
@@ -321,14 +371,6 @@ export function autoRetryDelay(failures: number): number | null {
 }
 
 let autoTimer: ReturnType<typeof setTimeout> | undefined;
-/** The version an automatic install gave up on: left to the sidebar row, not retried in a loop. */
-let autoFailed: string | null = null;
-/** Automatic installs that failed in a row for `autoFailedVersion`. */
-let autoFailures = 0;
-let autoFailedVersion: string | null = null;
-/** No automatic try before this time: every check calls `maybeAutoInstall`, and none may jump the backoff. */
-let autoNotBefore = 0;
-
 /**
  * Install the offered update by itself when the setting is on and no thread is
  * working (`autoInstallDecision`). Called after every check and when the setting
@@ -339,24 +381,29 @@ export function maybeAutoInstall() {
   void (async () => {
     // The store imports this module through the machines list, so it loads on demand.
     const { useApp, toast } = await import("./store");
-    const { info, channel, skipped, installing, autoInstall, whenIdle } = useUpdates.getState();
-    if (info?.latest && info.latest === autoFailed) return;
+    const { info, channel, skipped, install, autoInstall, backoff } = useUpdates.getState();
+    const retry = backoff?.version === info?.latest ? backoff : null;
+    if (retry && autoRetryDelay(retry.failures) === null) return;
     const decision = autoInstallDecision({
-      enabled: autoInstall || whenIdle,
+      enabled: autoInstall || install.intent === "whenIdle",
       development: isDevBuild(),
       info,
       channel,
       skipped,
-      installing,
+      installing: install.phase === "installing",
       busy: anyThreadBusy(useApp.getState().threads),
     });
-    useUpdates.setState({ waiting: decision === "wait" });
+    transition(
+      decision === "wait"
+        ? { type: "wait", reason: install.intent === "whenIdle" ? "whenIdle" : "setting" }
+        : { type: "stopWaiting" },
+    );
     if (decision === "wait") {
       autoTimer = setTimeout(maybeAutoInstall, AUTO_INSTALL_RETRY_MS);
       return;
     }
     if (decision !== "install" || !info?.latest) return;
-    const wait = autoNotBefore - Date.now();
+    const wait = (retry?.notBefore ?? 0) - Date.now();
     if (wait > 0) {
       autoTimer = setTimeout(maybeAutoInstall, wait);
       return;
@@ -365,14 +412,10 @@ export function maybeAutoInstall() {
     toast(`Updating to ${version}…`);
     const failed = await applyUpdate();
     if (!failed) return;
-    if (autoFailedVersion !== version) {
-      autoFailedVersion = version;
-      autoFailures = 0;
-    }
-    autoFailures += 1;
-    const retryIn = autoRetryDelay(autoFailures);
+    const nextBackoff = failedInstallBackoff(useUpdates.getState().backoff, version, Date.now());
+    useUpdates.setState({ backoff: nextBackoff });
+    const retryIn = autoRetryDelay(nextBackoff.failures);
     if (retryIn === null) {
-      autoFailed = version;
       toast(`The update did not install: ${failed}`, "error", {
         action: { label: "Release page", run: () => info.page && openExternal(info.page) },
       });
@@ -382,7 +425,6 @@ export function maybeAutoInstall() {
       `The update did not install: ${failed} Trying again in ${Math.round(retryIn / 60_000)} min.`,
       "error",
     );
-    autoNotBefore = Date.now() + retryIn;
     autoTimer = setTimeout(maybeAutoInstall, retryIn);
   })();
 }
@@ -393,9 +435,7 @@ export function setAutoInstall(enabled: boolean) {
   write(AUTO_KEY, enabled ? null : "0");
   useUpdates.setState({ autoInstall: enabled });
   if (enabled) {
-    autoFailed = null;
-    autoFailures = 0;
-    autoNotBefore = 0;
+    useUpdates.setState({ backoff: null });
     maybeAutoInstall();
   } else {
     clearTimeout(autoTimer);
@@ -504,15 +544,15 @@ export async function applyUpdate(): Promise<string | null> {
     return null;
   }
   clearTimeout(autoTimer);
-  useUpdates.setState({ installing: true, progress: null, installError: null, waiting: false });
+  transition({ type: "start" });
   write(UPDATED_FROM_KEY, info.current);
   try {
-    await installUpdate(channel, skipped, (progress) => useUpdates.setState({ progress }));
+    await installUpdate(channel, skipped, (progress) => transition({ type: "progress", progress }));
     return null;
   } catch (error) {
     write(UPDATED_FROM_KEY, null);
     const message = error instanceof Error ? error.message : String(error);
-    useUpdates.setState({ installing: false, progress: null, installError: message });
+    transition({ type: "fail", error: message });
     return message;
   }
 }
@@ -545,10 +585,8 @@ export async function requestUpdate(): Promise<string | null> {
     alt: {
       action: "Update When Idle",
       run: () => {
-        autoFailed = null;
-        autoFailures = 0;
-        autoNotBefore = 0;
-        useUpdates.setState({ whenIdle: true, installError: null });
+        useUpdates.setState({ backoff: null });
+        transition({ type: "wait", reason: "whenIdle" });
         maybeAutoInstall();
       },
     },
