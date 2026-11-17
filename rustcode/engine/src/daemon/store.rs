@@ -301,9 +301,10 @@ impl JobStore {
         }
         let runs = self.history(id, limit)?;
         Ok(runs.len() == limit
-            && runs
-                .iter()
-                .all(|run| matches!(run.state, JobRunState::Failed | JobRunState::Ambiguous)))
+            && runs.iter().all(|run| {
+                run.finished_at.is_some()
+                    && matches!(run.state, JobRunState::Failed | JobRunState::Ambiguous)
+            }))
     }
 
     /// Explicit deletion also removes this job's history and invalidates its leases.
@@ -845,6 +846,37 @@ mod tests {
         assert!(!store.get("job-1").unwrap().paused);
         store.delete("job-1").unwrap();
         assert!(matches!(store.get("job-1"), Err(DaemonError::NotFound(_))));
+    }
+
+    #[test]
+    fn an_update_keeps_the_jobs_identity_and_waits_for_an_active_run() {
+        let mut store = JobStore::in_memory().unwrap();
+        let original = job("edit", at(10));
+        store.create(original.clone()).unwrap();
+        let mut edit = original.clone();
+        edit.name = "Renamed".into();
+        edit.schedule = ScheduleSpec::daily(6, 30, "UTC", MisfirePolicy::RunOnce).unwrap();
+        // What the caller sends for these is ignored: the store keeps its own.
+        edit.created_at = at(500);
+        edit.schedule_revision = 99;
+        let updated = store.update(edit, at(0)).unwrap();
+        assert_eq!(updated.name, "Renamed");
+        assert_eq!(updated.created_at, original.created_at);
+        assert_eq!(updated.schedule_revision, original.schedule_revision + 1);
+        assert_eq!(updated.next_due_at.hour(), 6);
+        assert_eq!(updated.next_due_at.minute(), 30);
+        assert_eq!(store.get("edit").unwrap(), updated);
+
+        store.create(job("busy", at(0))).unwrap();
+        store
+            .claim_due(at(0), "daemon-a", Duration::minutes(5), 10)
+            .unwrap();
+        let mut busy = store.get("busy").unwrap();
+        busy.name = "Changed".into();
+        assert!(matches!(
+            store.update(busy, at(1)),
+            Err(DaemonError::Conflict(_))
+        ));
     }
 
     #[test]

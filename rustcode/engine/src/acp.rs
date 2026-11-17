@@ -10,6 +10,7 @@ pub(crate) mod data;
 mod edit_diff;
 mod harnesses;
 mod hosted;
+mod loops;
 mod machine_sync;
 mod mcp_app;
 mod mirror;
@@ -2908,6 +2909,58 @@ async fn serve_connection(
             async move |request: machine_sync::MachineSyncRequest, responder, connection| {
                 connection.spawn(async move {
                     match machine_sync::sync(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: loops::LoopsListRequest, responder, connection| {
+                connection.spawn(async move {
+                    match { let _ = request; loops::list().await } {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: loops::LoopsSaveRequest, responder, connection| {
+                connection.spawn(async move {
+                    match loops::save(request).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: loops::LoopsSetPausedRequest, responder, connection| {
+                connection.spawn(async move {
+                    match loops::set_paused(request).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: loops::LoopsStartDaemonRequest, responder, connection| {
+                connection.spawn(async move {
+                    match { let _ = request; loops::start_daemon().await } {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder
                             .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),

@@ -219,6 +219,34 @@ impl Scheduler {
     }
 
     fn settle(&self, run: &JobRunRecord, outcome: RunOutcome) -> Result<()> {
+        let result = self.settle_outcome(run, outcome);
+        if result.is_ok() {
+            self.pause_failing_loop(&run.job_id);
+        }
+        result
+    }
+
+    /// A Loop whose last [`LOOP_FAILURE_LIMIT`] runs all failed is paused, so
+    /// a broken prompt or harness stops spending runs until the user looks.
+    /// The failed runs stay in its history and say why.
+    fn pause_failing_loop(&self, job_id: &str) {
+        let mut store = self.store.lock().unwrap();
+        let Ok(job) = store.get(job_id) else {
+            return;
+        };
+        if job.paused || !matches!(job.action, super::model::JobAction::Loop { .. }) {
+            return;
+        }
+        if store
+            .failed_in_a_row(job_id, super::model::LOOP_FAILURE_LIMIT)
+            .unwrap_or(false)
+            && let Err(error) = store.set_paused(job_id, true, self.clock.now())
+        {
+            crate::dbg_log!("[daemon] could not pause failing loop {job_id}: {error}");
+        }
+    }
+
+    fn settle_outcome(&self, run: &JobRunRecord, outcome: RunOutcome) -> Result<()> {
         let now = self.clock.now();
         let (state, summary, error, output) = match outcome {
             RunOutcome::Succeeded { summary, output } => {
@@ -681,6 +709,76 @@ mod tests {
             scheduler.shutdown();
             task.await.unwrap().unwrap();
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_loop_pauses_after_three_failed_runs_in_a_row() {
+        use crate::daemon::model::{JobRunState, LOOP_FAILURE_LIMIT};
+        let clock = TestClock::new(at(0));
+        let mut store = JobStore::in_memory().unwrap();
+        let mut record = job("loop", at(0), None);
+        record.action = JobAction::Loop {
+            prompt: "Check CI".into(),
+            workspace: "/tmp".into(),
+            harness: None,
+            model: None,
+            effort: None,
+            read_only: true,
+        };
+        store.create(record).unwrap();
+        let scheduler = Scheduler::new(
+            Arc::new(Mutex::new(store)),
+            Arc::new(clock.clone()),
+            Arc::new(OutcomeExecutor(RunOutcome::Permanent {
+                error: "harness is off".into(),
+                output: None,
+            })),
+            "owner",
+            1,
+        );
+        let task = tokio::spawn(scheduler.clone().run());
+        for settled in 1..=LOOP_FAILURE_LIMIT {
+            let mut seen = false;
+            for _ in 0..400 {
+                let runs = scheduler
+                    .store()
+                    .lock()
+                    .unwrap()
+                    .history("loop", 10)
+                    .unwrap();
+                if runs.len() == settled && runs.iter().all(|run| run.state == JobRunState::Failed)
+                {
+                    seen = true;
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(seen, "run {settled} did not fail");
+            let job = scheduler.store().lock().unwrap().get("loop").unwrap();
+            if settled < LOOP_FAILURE_LIMIT {
+                assert!(!job.paused, "paused after {settled} failures");
+                clock.set(job.next_due_at);
+                scheduler.notify_changed();
+            }
+        }
+        let mut paused = false;
+        for _ in 0..200 {
+            if scheduler
+                .store()
+                .lock()
+                .unwrap()
+                .get("loop")
+                .unwrap()
+                .paused
+            {
+                paused = true;
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(paused, "a loop with three failed runs keeps running");
+        scheduler.shutdown();
+        task.await.unwrap().unwrap();
     }
 
     #[tokio::test(start_paused = true)]

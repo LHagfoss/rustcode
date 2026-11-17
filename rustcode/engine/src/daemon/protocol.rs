@@ -11,14 +11,35 @@ pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonRequest {
     Status,
-    Create { job: JobRecord },
+    Create {
+        job: JobRecord,
+    },
+    /// Replace a job's name, schedule, action and workspace, keeping its
+    /// history (`JobStore::update`).
+    Update {
+        job: JobRecord,
+    },
     List,
-    Get { job_id: String },
-    SetPaused { job_id: String, paused: bool },
-    Delete { job_id: String },
-    History { job_id: String, limit: usize },
-    RunNow { job_id: String },
-    Shutdown { instance_id: String },
+    Get {
+        job_id: String,
+    },
+    SetPaused {
+        job_id: String,
+        paused: bool,
+    },
+    Delete {
+        job_id: String,
+    },
+    History {
+        job_id: String,
+        limit: usize,
+    },
+    RunNow {
+        job_id: String,
+    },
+    Shutdown {
+        instance_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
