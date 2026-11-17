@@ -7,8 +7,10 @@ into its own harness threads (`docs/orchestrator.md`): an outside agent is not
 a thread, has no thread's token, and its token opens nothing else.
 
 Connections on this computer use stdio (`rustcode mcp-connect`) or localhost
-HTTP with OAuth. The engine checks every call. Hosted clients need the
-reachability work in #3199; a localhost URL is not reachable from their cloud.
+HTTP with OAuth. Hosted agents (ChatGPT, Claude.ai, other cloud MCP clients)
+reach the same endpoint through a public HTTPS address that a tunnel serves;
+see [Hosted agents](#hosted-agents-chatgpt-claude-and-other-cloud-clients).
+The engine checks every call either way.
 
 ## Connect an app
 
@@ -107,7 +109,6 @@ reads them.
 
 ## Not in this release
 
-- Remote hosted clients (#3199).
 - Reaching another paired computer (`machine`) from an outside agent, `unread`
   and `snoozed_until` in `update_session`, and changing a thread's model or
   effort with `configure_session`: they need the app.
@@ -136,27 +137,117 @@ running while connecting. See the client walkthrough below.
 Discovery is at `/.well-known/oauth-protected-resource/mcp` (also the root
 protected-resource path) and `/.well-known/oauth-authorization-server`.
 An unauthenticated MCP request returns a Bearer challenge with the metadata URL.
-Use a public `client_id` identifying your app, an exact loopback HTTP callback
-on `127.0.0.1`, `response_type=code`, `resource` equal to the MCP URL, one scope
-(`read_only`, `delegate`, `manage` or `admin`), `state`, and an S256 PKCE challenge.
-Only S256 is supported. Client registration and remote callbacks are not
-supported in this localhost slice.
+A client either registers at `/register` (RFC 7591; see below) or uses a
+public `client_id` naming itself, with a loopback HTTP callback (`127.0.0.1`,
+`localhost` or `[::1]`). It sends `response_type=code`, `resource` equal to the
+MCP URL (or none), `state`, an S256 PKCE challenge and `scope`: one or more of
+`read_only`, `delegate`, `manage`, `admin`, of which the highest counts; other
+words are ignored, and none means Read-only. Only S256 is supported.
+
+Registration stores nothing: the `client_id` it returns carries the app's name
+and callbacks, signed with a key kept in `<config>/outside-oauth-key`
+(`0600`), so an unauthenticated caller cannot grow the server's state and
+nobody can add a callback to an id. Deleting the key makes every app register
+again. A registered client may use only the callbacks it registered (a
+loopback one on any port, RFC 8252 §7.3; any other exactly). An `https`
+callback, as hosted agents use, is accepted only through the public address.
 
 Open `/authorize` with those parameters. In RustCode's Outside agents approval
 list, the user sees the requesting app, callback destination and requested
 access and approves or declines. The callback receives a single-use code
-(valid for 60 seconds). POST form fields to `/token`: `grant_type`, `code`,
-`client_id`, the identical `redirect_uri` and `resource`, and `code_verifier`.
-The access token expires after one hour; send it only as an Authorization Bearer
-header. It cannot authenticate the stdio bridge. Every request checks expiry
-and the shared revocable grant store; every tool call uses the existing scope,
-per-change approval and audit gate.
+(valid for 60 seconds) and `iss` (RFC 9207). POST form fields to `/token`:
+`grant_type`, `code`, `client_id`, the identical `redirect_uri`, `resource` (or
+none) and `code_verifier`. The answer has an access token that expires after
+one hour and a refresh token; send the access token only as an Authorization
+Bearer header. It cannot authenticate the stdio bridge. Every request checks
+expiry and the shared revocable grant store; every tool call uses the existing
+scope, per-change approval and audit gate.
 
-After expiry, revocation, a declined/timed-out approval, or an engine restart,
-start authorization again with fresh PKCE and state. There are no refresh tokens.
+`grant_type=refresh_token` with `refresh_token` and the same `client_id`
+returns a new access token and a new refresh token for the same connection,
+with the same access. The used refresh token never works again, and a refresh
+token works only for the client it was issued to. A sign-in lasts 30 days from
+approval; after that, or after revocation or a declined or timed-out approval,
+start authorization again with fresh PKCE and state. Connections whose sign-in
+has ended are dropped from the store when the next app connects.
 Revoke connections in Settings › Outside agents. Codes and tokens are never
 logged. Remote hosted clients remain out of scope until #3199.
 
+
+## Hosted agents (ChatGPT, Claude and other cloud clients)
+
+A hosted agent runs in its provider's cloud, so it needs an HTTPS address on
+the internet. RustCode does not listen on the internet itself: a tunnel such
+as Cloudflare Tunnel (`cloudflared`) forwards one hostname to the loopback
+endpoint, and RustCode answers requests for that hostname as well as its
+loopback one. Run it on a machine that stays on, such as a VPS running
+`rustcode server run` (`docs/server.md`).
+
+1. Tell RustCode its public address, in the user `config.toml` (a project
+   config cannot set it):
+
+   ```toml
+   [outside]
+   public_url = "https://rustcode.example.com"
+   ```
+
+   Restart the server. Only a bare `https://` origin is accepted.
+2. Point the tunnel at the endpoint's port (`43871` unless
+   `<config>/outside-http-port` says otherwise). With `cloudflared`:
+
+   ```sh
+   cloudflared tunnel login
+   cloudflared tunnel create rustcode
+   cloudflared tunnel route dns rustcode rustcode.example.com
+   ```
+
+   and in `~/.cloudflared/config.yml`:
+
+   ```yaml
+   tunnel: rustcode
+   credentials-file: /home/you/.cloudflared/<tunnel-id>.json
+   ingress:
+     - hostname: rustcode.example.com
+       service: http://127.0.0.1:43871
+     - service: http_status:404
+   ```
+
+   Run it as a service (`cloudflared service install`). The tunnel must keep
+   the request's `Host`; a proxy that rewrites it to `127.0.0.1` is refused
+   (set `httpHostHeader` back to the public host if it does).
+3. In the hosted app, add a custom MCP server (a connector, app or plugin)
+   with the URL `https://rustcode.example.com/mcp` and OAuth authentication.
+   No client ID or secret is needed: the app registers itself.
+4. The app opens RustCode's sign-in page. It names the app (the name it gave
+   itself), where access goes (for example `chatgpt.com`: whoever runs that
+   service gets the access) and the level it asks for. On the machine, run
+
+   ```sh
+   rustcode outside code --access delegate
+   ```
+
+   and type the `XXXX-XXXX` code it prints. The code works once, for 10
+   minutes, and sets the most the app may do: the connection gets the lower
+   of what the app asked for and what the code allows. `--ask false` makes the
+   app's changes run without waiting for approval in the app, which a
+   headless machine with no app open needs; leave it on otherwise.
+5. Ask the agent to call `whoami`.
+
+The page is the only way to approve a sign-in through the public address: the
+approval card in the app is offered only to apps signing in over loopback, so
+nobody on the internet can put a card in front of you. After ten wrong codes in
+ten minutes the page stops checking codes for a while. Connections from the
+public address show and revoke in Settings › Outside agents and
+`rustcode outside list` like any other.
+
+**What the tunnel sees.** TLS ends at the tunnel's edge, so the tunnel
+provider can read the traffic between the hosted agent and RustCode: prompts,
+answers and tokens. The hop from the tunnel to RustCode is loopback HTTP on the
+same machine. Use a tunnel you trust with that.
+
+**Signing in from another computer.** An agent on your laptop (Claude Code,
+Codex) can use the public URL as well; it signs in through the same page and
+its loopback callback returns to the laptop.
 
 ## Client walkthrough and compatibility
 
@@ -168,9 +259,9 @@ Use the copied connection URL if its port differs from these examples.
 | Client | stdio configuration | HTTP configuration and current limit | Live verification |
 | --- | --- | --- | --- |
 | Codex CLI | `~/.codex/config.toml`, `command`, `args`, and `env` below | `url`, explicit OAuth client ID and one scope below; then `codex mcp login rustcode` | not yet verified with a live client |
-| Claude Code | `claude mcp add-json rustcode` with the JSON below | `claude mcp add --transport http --client-id rustcode-claude rustcode http://127.0.0.1:43871/mcp`, then `/mcp`; current documented `localhost` callback is refused by RustCode, which requires `127.0.0.1`. Scope selection must also request exactly one supported scope | not yet verified with a live client |
-| Claude Desktop | Settings › Developer › Edit Config; merge the `mcpServers` entry below and restart | Settings › Connectors › Add custom connector uses a remote URL. Anthropic connects from its cloud, so this localhost endpoint is unavailable | not yet verified with a live client |
-| ChatGPT web (hosted custom MCP) | No stdio configuration in the documented custom MCP flow | Enable developer mode, then create a custom MCP app/plugin with a remote server URL and OAuth authentication. This localhost endpoint is unavailable; remote reachability is tracked in #3199 | not yet verified with a live client |
+| Claude Code | `claude mcp add-json rustcode` with the JSON below | `claude mcp add --transport http --client-id rustcode-claude rustcode http://127.0.0.1:43871/mcp`, then `/mcp`; its `localhost` callback is accepted | not yet verified with a live client |
+| Claude Desktop | Settings › Developer › Edit Config; merge the `mcpServers` entry below and restart | Settings › Connectors › Add custom connector uses a remote URL. Anthropic connects from its cloud, so use the public URL; see [Hosted agents](#hosted-agents-chatgpt-claude-and-other-cloud-clients) | not yet verified with a live client |
+| ChatGPT web (hosted custom MCP) | No stdio configuration in the documented custom MCP flow | Enable developer mode, then create a custom MCP app/plugin with the public URL (`https://<public_url>/mcp`) and OAuth authentication; see [Hosted agents](#hosted-agents-chatgpt-claude-and-other-cloud-clients) | not yet verified with a live client |
 
 ChatGPT desktop also documents local MCP servers under Settings › MCP servers:
 Add server, choose STDIO or Streamable HTTP, enter the command or URL, save
@@ -236,9 +327,9 @@ tool_timeout_sec = 180
 client_id = "rustcode-codex"
 ```
 
-Run `codex mcp login rustcode`. Explicit client ID avoids dynamic registration,
-which RustCode does not implement; a single scope avoids requesting all three
-access levels. In RustCode's approval card, check the client, callback and
+Run `codex mcp login rustcode`. With an explicit client ID Codex skips
+registration; without one it registers itself at `/register`. Requesting one
+scope keeps the level you chose (the highest scope requested counts). In RustCode's approval card, check the client, callback and
 Read-only access, then press Allow. The browser returns to the client's
 loopback callback. Ask Codex to call `whoami`; it should report Read-only.
 This sequence still needs live verification, including the client's callback
@@ -248,8 +339,9 @@ configuration as a successful connection.
 After expiration or restart, log in again; after revocation, authorize a new
 connection. The saved port normally keeps the URL stable. If another process
 occupies it, copy the updated URL from RustCode and update the client.
-Do not publish or tunnel this endpoint as a workaround for hosted clients:
-it validates the loopback Host, origin and callback.
+To reach this endpoint from another computer or a hosted agent, set
+`[outside] public_url` and serve it through a tunnel, as described next; the
+endpoint answers only its loopback Host and that one public host.
 
 ### Documentation sources
 

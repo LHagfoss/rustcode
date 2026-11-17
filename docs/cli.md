@@ -87,6 +87,7 @@ Not available to agents: an agent never adds, signs out or mints a credential.
 | `rustcode outside list` | Connected outside agents and their access | — | |
 | `rustcode outside create <name> [--platform] [--access] [--ask]` | Connect an app; prints its token and snippet once (**asks** above read-only) | `outside-agents.json` | |
 | `rustcode outside update <id> [--access] [--ask]` | Change its access or whether it asks | `outside-agents.json` | |
+| `rustcode outside code [--access] [--ask]` | A one-time code (10 minutes) that approves one sign-in on the public sign-in page, at most at `--access` (`docs/mcp-outside-agents.md` › Hosted agents) | `outside-codes.json` | |
 | `rustcode outside revoke <id>` | Its token stops working at once (**asks**) | `outside-agents.json` | |
 
 ## Data and storage

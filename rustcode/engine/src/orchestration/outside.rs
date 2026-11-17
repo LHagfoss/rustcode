@@ -235,9 +235,24 @@ pub struct Grant {
     pub last_used_at: Option<String>,
     #[serde(default)]
     pub last_tool: Option<String>,
+    /// OAuth grants only: SHA-256 of the current refresh token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_hash: Option<String>,
+    /// OAuth grants only: when the sign-in ends and the app must be approved again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_until: Option<i64>,
+    /// OAuth grants only: SHA-256 of the client id the refresh token is bound to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client: Option<String>,
 }
 
 impl Grant {
+    /// An OAuth grant whose access token and sign-in have both run out.
+    fn is_dead(&self, now: i64) -> bool {
+        self.expires_at.is_some_and(|expiry| expiry <= now)
+            && self.refresh_until.is_none_or(|until| until <= now)
+    }
+
     /// What Settings shows: everything but the hash.
     pub fn view(&self) -> Value {
         json!({
@@ -336,6 +351,9 @@ pub fn create_at(
     };
     let _guard = lock();
     let mut clients = read(path);
+    // OAuth sign-ins that ran out would otherwise fill the store.
+    let now_secs = chrono::Utc::now().timestamp();
+    clients.retain(|grant| !grant.is_dead(now_secs));
     if clients.len() >= MAX_GRANTS {
         return Err(format!(
             "{MAX_GRANTS} apps are already connected; revoke one first"
@@ -365,6 +383,9 @@ pub fn create_at(
         created_at: now(),
         last_used_at: None,
         last_tool: None,
+        refresh_hash: None,
+        refresh_until: None,
+        oauth_client: None,
     };
     clients.push(grant.clone());
     write(path, &clients)?;
@@ -1682,8 +1703,15 @@ mod tests {
     #[tokio::test]
     async fn http_scope_refusal_uses_the_same_gate() {
         let fixture = Fixture::new();
-        let (_, token) =
-            create_http(&fixture.settings.grants, "HTTP app", Scope::ReadOnly).unwrap();
+        let token = create_http(
+            &fixture.settings.grants,
+            "HTTP app",
+            "app",
+            Scope::ReadOnly,
+            None,
+        )
+        .unwrap()
+        .access;
         let answer = answer_transport_with(
             &fixture.settings,
             &fixture.runner,
@@ -2010,6 +2038,9 @@ mod tests {
             created_at: String::new(),
             last_used_at: None,
             last_tool: None,
+            refresh_hash: None,
+            refresh_until: None,
+            oauth_client: None,
         };
         let text = instructions(&grant);
         assert!(text.contains("Codex") && text.contains("Delegate") && text.contains("whoami"));
@@ -2056,16 +2087,51 @@ mod tests {
     }
 }
 
+/// How long an OAuth access token works before the app refreshes it.
+pub(super) const HTTP_ACCESS_SECS: i64 = 3600;
+/// How long an OAuth sign-in lasts before the app must be approved again.
+pub(super) const HTTP_SIGN_IN_SECS: i64 = 30 * 24 * 3600;
+const REFRESH_PREFIX: &str = "rcr_";
+
+/// A fresh OAuth access token and refresh token for one grant.
+pub(super) struct HttpTokens {
+    pub grant: Grant,
+    pub access: String,
+    pub refresh: String,
+}
+
+fn random_secret() -> String {
+    format!(
+        "{:032x}{:032x}",
+        rand::random::<u128>(),
+        rand::random::<u128>()
+    )
+}
+
+/// Give `grant` a new access token and refresh token; the old ones stop working.
+fn rotate(grant: &mut Grant, now: i64) -> (String, String) {
+    let access = format!("rch_{}_{}", grant.id, random_secret());
+    let refresh = format!("{REFRESH_PREFIX}{}_{}", grant.id, random_secret());
+    let until = grant.refresh_until.unwrap_or(now + HTTP_SIGN_IN_SECS);
+    grant.token_hash = hash_token(&access);
+    grant.expires_at = Some((now + HTTP_ACCESS_SECS).min(until));
+    grant.refresh_hash = Some(hash_token(&refresh));
+    grant.refresh_until = Some(until);
+    (access, refresh)
+}
+
 /// OAuth credentials share the revocable grant store, but cannot authenticate stdio.
 pub(super) fn create_http(
     path: &Path,
     name: &str,
+    client_id: &str,
     scope: Scope,
-) -> Result<(Grant, String), String> {
-    let (mut grant, token) = create_at(path, name, "other", scope, None)?;
-    let token = token.replacen("rcx_", "rch_", 1);
-    grant.token_hash = hash_token(&token);
-    grant.expires_at = Some(chrono::Utc::now().timestamp() + 3600);
+    ask: Option<bool>,
+) -> Result<HttpTokens, String> {
+    let (mut grant, _) = create_at(path, name, "other", scope, ask)?;
+    let now = chrono::Utc::now().timestamp();
+    grant.oauth_client = Some(hash_token(client_id));
+    let (access, refresh) = rotate(&mut grant, now);
     let _guard = lock();
     let mut clients = read(path);
     let Some(saved) = clients.iter_mut().find(|g| g.id == grant.id) else {
@@ -2073,7 +2139,138 @@ pub(super) fn create_http(
     };
     *saved = grant.clone();
     write(path, &clients)?;
-    Ok((grant, token))
+    Ok(HttpTokens {
+        grant,
+        access,
+        refresh,
+    })
+}
+
+/// Trade a refresh token for new tokens on the same grant, keeping its access
+/// and the end of its sign-in. A used refresh token never works again.
+pub(super) fn refresh_http(path: &Path, refresh: &str, client_id: &str) -> Option<HttpTokens> {
+    let rest = refresh.strip_prefix(REFRESH_PREFIX)?;
+    let (id, _) = rest.split_once('_')?;
+    let hash = hash_token(refresh.trim());
+    let client = hash_token(client_id);
+    let now = chrono::Utc::now().timestamp();
+    let _guard = lock();
+    let mut clients = read(path);
+    let grant = clients.iter_mut().find(|grant| {
+        grant.id == id
+            && grant
+                .refresh_hash
+                .as_deref()
+                .is_some_and(|saved| same(saved, &hash))
+            && grant
+                .oauth_client
+                .as_deref()
+                .is_some_and(|saved| same(saved, &client))
+            && grant.refresh_until.is_some_and(|until| until > now)
+    })?;
+    let (access, refresh) = rotate(grant, now);
+    let grant = grant.clone();
+    write(path, &clients).ok()?;
+    Some(HttpTokens {
+        grant,
+        access,
+        refresh,
+    })
+}
+
+// --------------------------------------------------- one-time sign-in codes
+
+const CODE_FILE: &str = "outside-codes.json";
+/// How long a sign-in code from `rustcode outside code` can be used.
+pub const SIGN_IN_CODE_SECS: i64 = 600;
+const MAX_OPEN_CODES: usize = 10;
+/// No 0/O or 1/I, so a code read off a screen is typed right.
+const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/// One unused sign-in code. Only its hash is kept.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SignInCode {
+    hash: String,
+    scope: Scope,
+    #[serde(default)]
+    ask: Option<bool>,
+    expires_at: i64,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct CodeStore {
+    #[serde(default)]
+    codes: Vec<SignInCode>,
+}
+
+/// Where the open sign-in codes are kept.
+pub fn sign_in_code_path() -> Option<PathBuf> {
+    crate::config::get_config_dir().map(|dir| dir.join(CODE_FILE))
+}
+
+fn normalize_code(code: &str) -> String {
+    code.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+fn read_codes(path: &Path, now: i64) -> Vec<SignInCode> {
+    let mut codes = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<CodeStore>(&bytes).ok())
+        .map(|store| store.codes)
+        .unwrap_or_default();
+    codes.retain(|code| code.expires_at > now);
+    codes
+}
+
+fn write_codes(path: &Path, codes: &[SignInCode]) -> Result<(), String> {
+    let bytes =
+        serde_json::to_vec_pretty(&json!({ "codes": codes })).map_err(|error| error.to_string())?;
+    crate::service::write_private(path, &bytes).map_err(|error| error.to_string())
+}
+
+/// A one-time code that approves one OAuth sign-in on this machine's sign-in
+/// page, at most at `scope`. Shown as `XXXX-XXXX`; it works once, for
+/// [`SIGN_IN_CODE_SECS`].
+pub fn create_sign_in_code_at(
+    path: &Path,
+    scope: Scope,
+    ask: Option<bool>,
+) -> Result<String, String> {
+    let now = chrono::Utc::now().timestamp();
+    let _guard = lock();
+    let mut codes = read_codes(path, now);
+    if codes.len() >= MAX_OPEN_CODES {
+        // The oldest open code makes room; it was never used.
+        codes.sort_by_key(|code| code.expires_at);
+        codes.remove(0);
+    }
+    let raw: String = (0..8)
+        .map(|_| CODE_ALPHABET[rand::random::<u8>() as usize % CODE_ALPHABET.len()] as char)
+        .collect();
+    codes.push(SignInCode {
+        hash: hash_token(&raw),
+        scope,
+        ask,
+        expires_at: now + SIGN_IN_CODE_SECS,
+    });
+    write_codes(path, &codes)?;
+    Ok(format!("{}-{}", &raw[..4], &raw[4..]))
+}
+
+/// Spend a sign-in code: the access it allows and whether changes ask first,
+/// or `None` when it is unknown, used or expired.
+pub(super) fn redeem_sign_in_code_at(path: &Path, code: &str) -> Option<(Scope, Option<bool>)> {
+    let hash = hash_token(&normalize_code(code));
+    let now = chrono::Utc::now().timestamp();
+    let _guard = lock();
+    let mut codes = read_codes(path, now);
+    let index = codes.iter().position(|saved| same(&saved.hash, &hash))?;
+    let spent = codes.remove(index);
+    write_codes(path, &codes).ok()?;
+    Some((spent.scope, spent.ask))
 }
 
 pub(super) async fn approve_connection(name: &str, destination: &str, scope: Scope) -> bool {

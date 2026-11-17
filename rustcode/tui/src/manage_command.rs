@@ -564,6 +564,24 @@ pub async fn credentials(command: &Commands) -> Option<Result<(), String>> {
                         .map(|_| println!("Updated {id}."))
                 }
             }
+            OutsideCommands::Code { access, ask } => {
+                rustcode::outside_sign_in_code(access.as_deref(), *ask).map(|answer| {
+                    println!("Sign-in code: {}", answer.code);
+                    println!(
+                        "It approves one sign-in with at most {} access and works once, for {} minutes.",
+                        answer.scope, answer.minutes
+                    );
+                    match answer.public_url {
+                        Some(Ok(url)) => println!(
+                            "Enter it on the sign-in page your app opens at {url}. Its MCP URL is {url}/mcp."
+                        ),
+                        Some(Err(error)) => println!("Warning: {error}"),
+                        None => println!(
+                            "Warning: no [outside] public_url is set in config.toml, so no sign-in page asks for this code (docs/mcp-outside-agents.md › Hosted agents)."
+                        ),
+                    }
+                })
+            }
             OutsideCommands::Revoke { id, yes } => {
                 if !*yes && !confirm(&format!("Revoke {id}? Its token stops working at once. [y/N] ")) {
                     Err("not revoked; pass --yes to confirm".to_owned())

@@ -189,6 +189,20 @@ pub struct RemoteConfig {
     pub roots: Vec<String>,
 }
 
+/// `[outside]` in config.toml: how agents RustCode did not start reach this
+/// machine's MCP endpoint. User config only: a checked-out project must not
+/// decide that this machine answers on the internet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutsideConfig {
+    /// The `https://` address a tunnel or proxy serves this machine's MCP
+    /// endpoint on, e.g. `https://rustcode.example.com`. Set, the endpoint
+    /// also answers requests for that host: hosted agents (ChatGPT, Claude)
+    /// can register and sign in, approved with a code from
+    /// `rustcode outside code`. Unset, it answers only on 127.0.0.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
+}
+
 /// `[server]` in config.toml: how this machine's background server behaves.
 /// User config only: a checked-out project must not decide whether a
 /// machine installs software.
@@ -1473,6 +1487,9 @@ pub struct AppConfig {
     /// Remote gateway address (`[remote]` in config.toml). User config only.
     #[serde(default)]
     pub remote: RemoteConfig,
+    /// Outside-agent MCP endpoint (`[outside]` in config.toml). User config only.
+    #[serde(default)]
+    pub outside: OutsideConfig,
     /// Background server behaviour (`[server]` in config.toml). User config only.
     #[serde(default)]
     pub server: ServerConfig,
@@ -1839,6 +1856,8 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     remote: Option<RemoteConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    outside: Option<OutsideConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     server: Option<ServerConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_active_session_id: Option<String>,
@@ -2020,6 +2039,7 @@ impl Default for AppConfig {
             loop_guard: LoopGuardConfig::default(),
             computer_use: Default::default(),
             remote: RemoteConfig::default(),
+            outside: OutsideConfig::default(),
             server: ServerConfig::default(),
             vision_model: Some("gemini-3.6-flash".to_string()),
             last_active_session_id: None,
@@ -2517,6 +2537,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         loop_guard: Some(config.loop_guard),
         computer_use: Some(config.computer_use.clone()),
         remote: (config.remote != RemoteConfig::default()).then(|| config.remote.clone()),
+        outside: (config.outside != OutsideConfig::default()).then(|| config.outside.clone()),
         server: (config.server != ServerConfig::default()).then_some(config.server),
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
@@ -2656,6 +2677,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(remote) = file.remote {
         config.remote = remote;
     }
+    if let Some(outside) = file.outside {
+        config.outside = outside;
+    }
     if let Some(server) = file.server {
         config.server = server;
     }
@@ -2782,6 +2806,8 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     file.computer_use = None;
     // Which interface exposes the user's sessions is the user's decision.
     file.remote = None;
+    // So is whether this machine answers outside agents on the internet.
+    file.outside = None;
     // Whether this machine installs updates by itself is the user's decision.
     file.server = None;
     // Delegation is an explicit user-level capability; checked-out project
@@ -2922,6 +2948,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         loop_guard: None,
         computer_use: None,
         remote: None,
+        outside: None,
         server: None,
         last_active_session_id: None,
         mcp_servers: None,
