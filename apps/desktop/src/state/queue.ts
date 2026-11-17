@@ -86,9 +86,6 @@ export interface TurnState {
   awaitingUser: boolean;
 }
 
-/** What a message sent now does: it steers, it waits, or it stops the turn and starts the next. */
-export type SendAction = "steer" | "queue" | "interruptRestart";
-
 /** Why a message cannot be steered: it goes with the next turn. */
 export type QueueReason =
   | "idle"

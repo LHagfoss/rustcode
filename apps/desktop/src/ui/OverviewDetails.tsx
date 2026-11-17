@@ -9,6 +9,7 @@ import { type ReactNode, useEffect, useMemo } from "react";
 import type { SubagentInfo } from "../acp/rustcode";
 import { delegateParent, displayPath, modelName } from "../acp/types";
 import { type GitChanges, openTerminalAt } from "../lib/native";
+import { useNow } from "../lib/useNow";
 import { branchesOf, branchLine, originLine, originOf } from "../state/branches";
 import { contextPercent, planProgress, type SubagentLine, subagentLines } from "../state/details";
 import { activeGrants, grantRemaining } from "../state/grants";
@@ -26,7 +27,7 @@ import {
   useApp,
 } from "../state/store";
 import { formatDuration, formatTokens, shortAge, type ThreadState } from "../state/thread";
-import { AgentRow, AgentTip, LINK_AGENT_STATE, useNow } from "./AgentViews";
+import { AgentRow, AgentTip, LINK_AGENT_STATE } from "./AgentViews";
 import {
   Clock,
   CornerDownRight,

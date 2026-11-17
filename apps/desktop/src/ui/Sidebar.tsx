@@ -33,6 +33,7 @@ import { formatBinding, listCommandFor } from "../lib/keys";
 import { onFileDrop, openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
+import { useClock } from "../lib/useNow";
 import { delegateCount, liveSubagents, type StackAgent } from "../state/agentStack";
 import { autoCompactOffFor, setAutoCompactForThread } from "../state/autoCompactRun";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
@@ -1254,15 +1255,6 @@ const PendingRow = memo(function PendingRow({
   );
 });
 
-function useNow() {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
-  }, []);
-  return now;
-}
-
 /** The list's sections by name: the one Threads list, and the shelves that close it. */
 const LABELS: Record<SectionId, string> = {
   working: "Working",
@@ -1607,7 +1599,7 @@ export function Sidebar() {
     });
   }, [hidden, width]);
   const dragging = useRef(false);
-  const now = useNow();
+  const now = useClock();
   // Settled lists 5 threads, then 25 more at a time.
   const [settledShown, setSettledShown] = useState(5);
   // design-lint: allow (mask alpha, not a colour)

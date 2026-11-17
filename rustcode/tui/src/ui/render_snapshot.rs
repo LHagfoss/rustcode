@@ -6,7 +6,6 @@ use rustcode::controller::{
 use std::sync::Arc;
 
 /// Immutable data captured for one UI render attempt.
-#[allow(dead_code)]
 pub(crate) struct RenderSnapshot {
     revision: u64,
     input_buffer: String,
@@ -22,9 +21,7 @@ pub(crate) struct RenderSnapshot {
     last_compaction: Option<rustcode::controller::CompactionStats>,
     current_turn_token_usage: Option<TokenUsage>,
     current_round_token_usage: Option<TokenUsage>,
-    current_round_estimated_input_tokens: u32,
     current_round_estimated_output_tokens: u32,
-    current_provider_request_prompt_estimate: u32,
     current_turn_token_usage_is_estimated: bool,
     token_usage_in_flight: bool,
     provider_request_in_flight: bool,
@@ -32,13 +29,11 @@ pub(crate) struct RenderSnapshot {
     current_thought_time_ms: u64,
     current_thought_tokens: u32,
     current_thought_started_at: Option<std::time::Instant>,
-    model_quota_remaining: Option<f32>,
     provider_rate_limits: Option<rustcode::controller::ProviderRateLimits>,
     pending_queue: Vec<String>,
     pending_steers: Vec<String>,
     draft_submit_mode: rustcode::controller::DraftSubmitMode,
     steering_interruptible: bool,
-    steering_escape_will_interrupt: bool,
     status: AppStatus,
     active_suggestion_index: Option<usize>,
     dismissed_completion: Option<String>,
@@ -70,7 +65,6 @@ pub(crate) struct RenderSnapshot {
     delegation_active: bool,
     modal_open: bool,
     user_overlay_open: bool,
-    last_copy_text: Option<(String, std::time::Instant)>,
     transient_notice: Option<String>,
     expanded_thoughts: std::collections::HashSet<usize>,
     expanded_tool_runs: std::collections::HashSet<usize>,
@@ -220,9 +214,7 @@ impl RenderSnapshot {
             last_compaction: view.last_compaction.clone(),
             current_turn_token_usage: view.current_turn_token_usage.clone(),
             current_round_token_usage: view.current_round_token_usage.clone(),
-            current_round_estimated_input_tokens: view.current_round_estimated_input_tokens,
             current_round_estimated_output_tokens: view.current_round_estimated_output_tokens,
-            current_provider_request_prompt_estimate: view.current_provider_request_prompt_estimate,
             current_turn_token_usage_is_estimated: view.current_turn_token_usage_is_estimated,
             token_usage_in_flight: view.token_usage_in_flight,
             provider_request_in_flight: view.provider_request_in_flight,
@@ -230,13 +222,11 @@ impl RenderSnapshot {
             current_thought_time_ms: view.current_thought_time_ms,
             current_thought_tokens: view.current_thought_tokens,
             current_thought_started_at: view.current_thought_started_at,
-            model_quota_remaining: view.model_quota_remaining,
             provider_rate_limits: view.provider_rate_limits.clone(),
             pending_queue: view.pending_queue.clone(),
             pending_steers: view.pending_steers.clone(),
             draft_submit_mode: view.draft_submit_mode,
             steering_interruptible: view.steering_interruptible,
-            steering_escape_will_interrupt: view.steering_escape_will_interrupt,
             status: view.status.clone(),
             active_suggestion_index: view.active_suggestion_index,
             dismissed_completion: view.dismissed_completion.clone(),
@@ -266,7 +256,6 @@ impl RenderSnapshot {
             delegation_active: view.delegation_active,
             modal_open: view.modal_open(),
             user_overlay_open: view.user_overlay_open(),
-            last_copy_text: view.last_copy_text.clone(),
             transient_notice: view.transient_notice.clone(),
             expanded_thoughts: view.expanded_thoughts.clone(),
             expanded_tool_runs: view.expanded_tool_runs.clone(),
@@ -730,7 +719,6 @@ impl SubAgentSnapshot {
 }
 
 /// The selected child context rendered in place of the root conversation.
-#[allow(dead_code)]
 pub(crate) struct SelectedSubagentSnapshot {
     #[cfg(test)]
     id: u32,

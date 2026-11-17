@@ -328,10 +328,6 @@ export function menuQuickActionKeys(event: KeyboardEvent<HTMLElement>): boolean 
   return true;
 }
 
-/** A popover's surface: width and anything else its content needs goes after it. */
-export const popoverSurface =
-  "elevated rounded-2xl z-50 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-y-auto p-3";
-
 /**
  * A row's trailing shortcut (⌘K, ⏎), pushed to the far edge of its menu row. One spelling of it
  * everywhere, so the alignment matches from menu to menu.

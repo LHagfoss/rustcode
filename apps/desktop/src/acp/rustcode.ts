@@ -94,17 +94,6 @@ export function parseAgentList(result: Json | undefined): SubagentInfo[] {
 export const agentActive = (a: SubagentInfo) =>
   a.activeTurn || a.status === "queued" || a.status === "running" || a.status === "cancelling";
 
-export const AGENT_STATUS_LABEL: Record<AgentStatus, string> = {
-  queued: "Queued",
-  running: "Running",
-  cancelling: "Cancelling…",
-  interrupted: "Interrupted",
-  completed: "Done",
-  failed: "Failed",
-  cancelled: "Cancelled",
-  unknown: "Unknown",
-};
-
 /** The child a `spawn_agent` result names: its JSON receipt, or the older `subagent 3 started` line. */
 export function spawnedAgentId(output: string | undefined): number | undefined {
   if (!output) return undefined;
@@ -112,14 +101,6 @@ export function spawnedAgentId(output: string | undefined): number | undefined {
     /^\s*(?:spawn_agent:\s*)?\{[^}]*"agent_id"\s*:\s*(\d+)/.exec(output) ??
     /^\s*(?:spawn_agent:\s*)?subagent (\d+) started/.exec(output);
   return m ? Number(m[1]) : undefined;
-}
-
-/** `950`, `12.4k`, `1.2M`. */
-export function compactCount(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
-  if (n < 1_000_000) return `${Math.floor(n / 1000)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 /** How long the child ran, or has run so far, as `1m 05s`. */

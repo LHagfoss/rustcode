@@ -1,6 +1,4 @@
-use crate::app::state::{AppState, AppStatus, LiveToolCall, StreamTracker, TokenUsage};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use crate::app::state::{AppState, AppStatus};
 
 pub fn should_notify_response_finished(
     response_just_finished: bool,
@@ -9,33 +7,14 @@ pub fn should_notify_response_finished(
     response_just_finished && !terminal_focused
 }
 
-#[allow(dead_code)]
 pub struct StatusState<'a> {
-    status: &'a mut AppStatus,
-    response_time: &'a mut Option<Duration>,
-    generation_start_time: &'a mut Option<Instant>,
-    current_token_usage: &'a mut Option<TokenUsage>,
-    current_thought_time_ms: &'a mut u64,
-    current_thought_tokens: &'a mut u32,
-    stream_tracker: &'a mut Option<StreamTracker>,
-    running_tools: &'a mut Vec<String>,
-    live_tool_calls: &'a Arc<Vec<LiveToolCall>>,
-    current_terminal_title: &'a mut Option<String>,
+    status: &'a AppStatus,
 }
 
 impl<'a> StatusState<'a> {
     pub fn new(state: &'a mut AppState) -> Self {
         Self {
-            status: &mut state.status,
-            response_time: &mut state.response_time,
-            generation_start_time: &mut state.generation_start_time,
-            current_token_usage: &mut state.current_token_usage,
-            current_thought_time_ms: &mut state.current_thought_time_ms,
-            current_thought_tokens: &mut state.current_thought_tokens,
-            stream_tracker: &mut state.stream_tracker,
-            running_tools: &mut state.running_tools,
-            live_tool_calls: &state.live_tool_calls,
-            current_terminal_title: &mut state.current_terminal_title,
+            status: &state.status,
         }
     }
 

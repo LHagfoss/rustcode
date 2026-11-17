@@ -56,7 +56,6 @@ pub(crate) enum TranscriptEvent {
     Resize,
 }
 
-#[allow(dead_code)]
 #[derive(Default)]
 pub(crate) struct TranscriptModel {
     committed: Vec<HistoryCell>,
