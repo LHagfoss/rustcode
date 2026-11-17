@@ -1,12 +1,12 @@
 // A Smart UI block in the transcript: the agent's HTML in a sandboxed frame
-// with no chrome, so it reads like the rest of the reply. Copy, Show source
+// with no chrome, so it reads like the rest of the reply. Copy, Save as HTML, Show source
 // and Stop/Run are small icons that appear on hover or focus. See
 // docs/smart-ui.md for the format, limits and security model.
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
 import { KEYBOARD_NAV, TAB_FOCUS_EVENT, tabMovesFocus } from "../lib/focusModality";
-import { openExternal } from "../lib/native";
+import { openExternal, saveText } from "../lib/native";
 import { shellCall } from "../lib/shell";
 import { cssVar, isDark, onAppThemeChange } from "../lib/theme";
 import { chartSource } from "../smartui/chart";
@@ -25,7 +25,15 @@ import {
   SendGate,
   StreamPump,
 } from "../smartui/host";
-import { buildPage, buildStreamPage, pageTheme, previewable, usesChart, varsCss } from "../smartui/page";
+import {
+  buildPage,
+  buildStreamPage,
+  pageTheme,
+  previewable,
+  usesChart,
+  varsCss,
+  viewFileName,
+} from "../smartui/page";
 import {
   blockProblem,
   blockTitle,
@@ -36,7 +44,7 @@ import {
   viewMessage,
 } from "../smartui/parse";
 import { sendFromView, setSmartUi, toast, useApp } from "../state/store";
-import { Check, Code, Copy, Play, Square } from "./icons";
+import { Check, Code, Copy, Download, Play, Square } from "./icons";
 import { CodeBlock } from "./Markdown";
 import { copyText, cx, Pill, Tooltip } from "./primitives";
 
@@ -550,6 +558,9 @@ export function SmartUIView({
         >
           {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
         </IconButton>
+        <IconButton label="Save as HTML" onClick={() => void saveView(source, title)}>
+          <Download size={12} />
+        </IconButton>
         <IconButton
           label={showSource ? "Hide source" : "Show source"}
           onClick={() => setShowSource(!showSource)}
@@ -573,6 +584,21 @@ export function SmartUIView({
       )}
     </div>
   );
+}
+
+/**
+ * Saves a view as a page that opens in any browser: the block with the app's look as it is now
+ * and Chart.js inlined, under the same CSP, so it still fetches nothing.
+ */
+async function saveView(source: string, title: string) {
+  try {
+    const chart = usesChart(source) ? await chartSource() : undefined;
+    const html = buildPage(source, frameToken(), currentTheme(), chart);
+    const saved = await saveText(viewFileName(title), html);
+    if (saved) toast(`Saved ${saved.split(/[\\/]/).pop()}`);
+  } catch (error) {
+    toast(`Could not save the view: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
 }
 
 function Fallback({ source, reason }: { source: string; reason: string }) {

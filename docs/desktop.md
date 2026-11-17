@@ -1670,8 +1670,11 @@ composer's keys stay outside the table.
 `rustcode-ui v1` blocks in assistant replies run as views
 ([smart-ui.md](smart-ui.md), "Runtime" holds the contract shared with the
 engine's `smart-ui` skill). The view has no chrome: no title row,
-background or border. Copy source, Show source and Stop/Run are small
-icons at its top right on hover or focus. A complete block runs by itself
+background or border. Copy source, Save as HTML, Show source and Stop/Run
+are small icons at its top right on hover or focus. Save as HTML writes the
+view as a page that opens in any browser: the block with the app's look as it
+is then, Chart.js inlined where it uses it, and the same CSP, so the file still
+fetches nothing (the save panel in the app, a download in the browser build). A complete block runs by itself
 when it comes into sight, also in a chat opened later, and shows its title
 at its reserved height until then; Run stays only for one you stopped or one
 that failed. At most six run; starting a seventh stops one out of sight, else

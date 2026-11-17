@@ -1216,3 +1216,12 @@ test("the app and the shell serve pages under the same policy", async () => {
   const rust = await Bun.file(new URL("../../src-tauri/src/smartui.rs", import.meta.url)).text();
   expect(rust).toContain(`pub const PAGE_CSP: &str = "${PAGE_CSP}";`);
 });
+
+describe("saving a view", () => {
+  test("the file is named after its title", async () => {
+    const { viewFileName } = await import("./page");
+    expect(viewFileName("Latency by region (p95)")).toBe("latency-by-region-p95.html");
+    expect(viewFileName("  ")).toBe("view.html");
+    expect(viewFileName("x".repeat(80))).toBe(`${"x".repeat(60)}.html`);
+  });
+});
