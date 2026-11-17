@@ -1803,7 +1803,7 @@ export const Composer = memo(function Composer({
           {!thread && <MachineSelector />}
           {thread && <ThreadMachineChip host={host} />}
           <FolderMenu thread={thread} cwd={cwd} host={host} />
-          {!thread && !newThreadHost && <WorktreeToggle draft={draft} compact={compact} />}
+          {!thread && <WorktreeToggle draft={draft} compact={compact} />}
           {thread?.worktree && (
             <Tooltip side="bottom" label={thread.worktree.path}>
               <span className="flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-full px-2 text-fg-muted @max-xl/composer:hidden">

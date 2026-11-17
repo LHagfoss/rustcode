@@ -636,7 +636,9 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
     if (options.worktree.title) w.title = options.worktree.title;
     // The project's setup and settle actions (state/projectActions.ts); the engine runs them in the
     // worktree, the repository's own `.rustcode/actions.json` winning a slot both fill.
-    const hooks = worktreeHooks(projectActions(actionsProjectKey(options.worktree.repo)));
+    // They are this computer's settings, keyed by a local folder: a worktree on another machine
+    // runs only that repository's own actions.
+    const hooks = host ? undefined : worktreeHooks(projectActions(actionsProjectKey(options.worktree.repo)));
     if (hooks) w.hooks = hooks as unknown as JsonObject;
     meta.worktree = w;
   }
@@ -886,14 +888,14 @@ export async function createThread(
 
 /** The worktree the new-thread composer asked for, or none. */
 function newWorktreeFor(
-  s: Pick<AppState, "newWorktree" | "features" | "newThreadHost">,
+  s: Pick<AppState, "newWorktree" | "features">,
   cwd: string,
   firstMessage: string,
 ): PendingSetup["worktree"] {
   const wt = s.newWorktree;
-  // A worktree is cut on the machine the thread runs on, by that machine's own `session/new`; the
-  // toggle is this computer's, so it is only offered for threads that start here.
-  if (s.newThreadHost || !wt.on || !s.features.worktrees || cwd === HOME_FOLDER) return undefined;
+  // A worktree is cut on the machine the thread runs on, by that machine's own `session/new`
+  // (`makeSession`), so the toggle applies to a thread on another computer too.
+  if (!wt.on || !s.features.worktrees || cwd === HOME_FOLDER) return undefined;
   return { repo: cwd, branch: wt.branch.trim() || undefined, title: titleFrom(firstMessage, 80) };
 }
 
