@@ -56,6 +56,9 @@ export function runShortcut(command: string): boolean {
     case "settings":
       openSettings(s.settings ? null : undefined);
       return true;
+    case "usage":
+      openSettings("usage");
+      return true;
     case "inbox":
       // The row toggles: the shortcut that opened the inbox takes you back to the chat.
       setView(s.view.kind === "inbox" ? { kind: "chat" } : { kind: "inbox" });
