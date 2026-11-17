@@ -139,6 +139,7 @@ import { ChatBackgroundGroup } from "./ChatBackgroundGroup";
 import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { LimitFallbackGroup } from "./LimitFallback";
+import { LiveBackgroundGroup } from "./LiveBackgroundGroup";
 import { MachineSettingsPage } from "./MachineSettingsPage";
 import { MachinesPage } from "./MachinesPage";
 
@@ -1418,6 +1419,7 @@ function AppearancePage() {
         </div>
         {creating && <NewTheme base={active} onDone={() => setCreating(false)} />}
       </Group>
+      <LiveBackgroundGroup />
       <ChatBackgroundGroup />
       <TokenList />
     </>

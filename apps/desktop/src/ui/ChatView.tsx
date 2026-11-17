@@ -53,6 +53,7 @@ import { failureHarness, turnErrorAdvice } from "../state/turnError";
 import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
+import { NewThreadLight, ThreadLight } from "./ChatLight";
 import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
 import { GitHeaderButton } from "./GitActions";
@@ -949,6 +950,10 @@ export function ChatView() {
           left 4.4:1 and 2.0:1. A picture that should show more than that is a darker one, or the
           Darken slider. */}
       {showsBanner && isNew && <div aria-hidden className="pointer-events-none absolute inset-0 bg-bg/35" />}
+      {/* The live background (Settings › Appearance › Live background): the whole pane behind a new
+          thread, kept while its first message sets the thread up so the send's wave plays out. A
+          chosen picture takes its place. */}
+      {!showsBanner && (isNew || (showsPending && !thread)) && <NewThreadLight />}
       <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />
       {/*
         The chat column and the right panel share one row, so the panel is docked beside
@@ -958,6 +963,9 @@ export function ChatView() {
       */}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {thread && !isNew && !showsPending && (
+            <ThreadLight threadId={thread.id} stack={stackRef} stackHeight={stackHeight} />
+          )}
           <div
             className="pointer-events-none absolute inset-x-3 z-20 mx-auto max-w-[var(--rc-chat-content-max-width)] sm:inset-x-12"
             style={{ top: HEADER_HEIGHT + 8 }}
