@@ -139,6 +139,18 @@ export function selectThread(id: string | null) {
  */
 export const HOME_FOLDER = "~";
 
+/** Start beside the last thread or project visited, keeping its machine. */
+export function startNewThreadFromContext() {
+  const s = get();
+  const selected = s.selectedId
+    ? (s.threads[s.selectedId] ?? s.sessions.find((thread) => thread.id === s.selectedId))
+    : undefined;
+  startNewThread(
+    selected?.cwd || s.projectCwd || undefined,
+    selected ? splitThreadKey(selected.id).host : s.newThreadHost,
+  );
+}
+
 export function startNewThread(cwd?: string, host?: string) {
   const s = get();
   // An explicit machine wins, and a folder picked on this disk still starts here.

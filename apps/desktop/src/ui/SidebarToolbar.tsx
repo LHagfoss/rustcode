@@ -17,7 +17,8 @@ import {
   useSidebarDensity,
   useSidebarSort,
 } from "../state/sidebarPrefs";
-import { startNewThread, toast, useApp, useShortcutHint } from "../state/store";
+import { toast, useApp, useShortcutHint } from "../state/store";
+import { startNewThreadFromContext } from "../state/threadOpen";
 import { Check, ListFilter, SquarePen, X } from "./icons";
 import {
   cx,
@@ -61,7 +62,7 @@ export function SidebarToolbar({
   };
   return (
     <div className="flex shrink-0 flex-col gap-1.5 px-3 pb-2">
-      <Pill size="lg" aria-label="New thread" className="w-full" onClick={() => startNewThread()}>
+      <Pill size="lg" aria-label="New thread" className="w-full" onClick={() => startNewThreadFromContext()}>
         <SquarePen size={14} />
         <span className="flex-1 text-left">New thread</span>
         {newKey && <span className="text-caption text-fg-faint">{newKey}</span>}

@@ -31,7 +31,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
-import { createSkillWithAgent } from "../state/threadOpen";
+import { createSkillWithAgent, startNewThreadFromContext } from "../state/threadOpen";
 import {
   CircleCheck,
   CircleDashed,
@@ -112,7 +112,7 @@ export function baseActions(): PaletteAction[] {
       label: "New thread",
       icon: SquarePen,
       keys: shortcutHint("new-thread"),
-      run: () => startNewThread(),
+      run: () => startNewThreadFromContext(),
     },
     ...harnesses
       .filter((h) => h.id !== (s.harnesses?.default.harness ?? "rustcode"))
