@@ -117,6 +117,7 @@ import {
   PuzzleIcon,
   QuoteDownIcon,
   RefreshIcon,
+  RepeatIcon,
   RotateClockwiseIcon,
   RotateLeft01Icon,
   Search01Icon,
@@ -418,6 +419,7 @@ export const RefreshCw = (props: IconProps) => <Rounded name="RefreshCw" icon={R
 export const RotateCcw = (props: IconProps) => (
   <Rounded name="RotateCcw" icon={RotateLeft01Icon} {...props} />
 );
+export const Repeat = (props: IconProps) => <Rounded name="Repeat" icon={RepeatIcon} {...props} />;
 export const RotateCw = (props: IconProps) => (
   <Rounded name="RotateCw" icon={RotateClockwiseIcon} {...props} />
 );

@@ -1,5 +1,6 @@
 // The sidebar's toolbar, over the thread list: a search that narrows the list as you type, the
-// sort and filter menus (what shows and how dense the rows are) and New thread. Every option in it is the
+// sort and filter menus (what shows and how dense the rows are), and over them New thread with the
+// Loops, Capabilities and Usage rows. Every option in it is the
 // same stored preference ⌘K toggles (state/sidebarPrefs.ts), so the two never disagree; the
 // toolbar itself can be turned off in Settings › Appearance or from ⌘K.
 //
@@ -7,7 +8,7 @@
 // with its own clear button, so a short list is never a mystery.
 
 import { DropdownMenu } from "radix-ui";
-import type { KeyboardEvent, Ref } from "react";
+import type { KeyboardEvent, ReactNode, Ref } from "react";
 import { projectName } from "../acp/types";
 import {
   DEFAULT_SIDEBAR_SORT,
@@ -17,14 +18,42 @@ import {
   useSidebarDensity,
   useSidebarSort,
 } from "../state/sidebarPrefs";
-import { toast, useApp, useShortcutHint } from "../state/store";
+import { openSettings, setView, toast, useApp, useShortcutHint } from "../state/store";
 import { applySidebarSort } from "../state/threadActions";
 import { startNewThreadFromContext } from "../state/threadOpen";
-import { ArrowDownUp, Check, ListFilter, SquarePen, X } from "./icons";
+import { ArrowDownUp, Blocks, Check, Gauge, ListFilter, Repeat, SquarePen, X } from "./icons";
 import { cx, MenuContent, MenuSearchField, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
 
 const TOOL_BUTTON =
   "relative inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill data-[state=open]:text-fg";
+
+/** A row in the nav block over the search: New thread and the destinations beside the threads. */
+const NAV_ROW =
+  "flex h-8 w-full shrink-0 items-center gap-2 rounded-md px-3 font-medium text-callout text-fg-muted hover:bg-fill hover:text-fg";
+
+function NavRow({
+  label,
+  current,
+  onClick,
+  children,
+}: {
+  label: string;
+  current?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-current={current ? "page" : undefined}
+      className={cx(NAV_ROW, current && "bg-fill-strong text-fg hover:bg-fill-strong")}
+      onClick={onClick}
+    >
+      {children}
+      <span className="flex-1 text-left">{label}</span>
+    </button>
+  );
+}
 
 export function SidebarToolbar({
   query,
@@ -40,6 +69,7 @@ export function SidebarToolbar({
 }) {
   const newKey = useShortcutHint("new-thread");
   const projectCwd = useApp((s) => s.projectCwd);
+  const view = useApp((s) => s.view.kind);
   const [onlyProject, setOnlyProject] = usePref(PREF.onlyProject, false);
   const filtering = onlyProject && !!projectCwd;
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -54,16 +84,27 @@ export function SidebarToolbar({
   };
   return (
     <div className="flex shrink-0 flex-col gap-1.5 px-3 pb-2">
-      <button
-        type="button"
-        aria-label="New thread"
-        className="flex h-[38px] w-full shrink-0 items-center gap-2 rounded-md px-3 font-medium text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-        onClick={() => startNewThreadFromContext()}
-      >
-        <SquarePen size={14} />
-        <span className="flex-1 text-left">New thread</span>
-        {newKey && <span className="text-caption text-fg-faint">{newKey}</span>}
-      </button>
+      <nav aria-label="Sidebar" className="flex flex-col gap-0.5 pb-1">
+        <button
+          type="button"
+          aria-label="New thread"
+          className={cx(NAV_ROW, "bg-fill text-fg hover:bg-fill-strong active:bg-fill-strong")}
+          onClick={() => startNewThreadFromContext()}
+        >
+          <SquarePen size={14} />
+          <span className="flex-1 text-left">New thread</span>
+          {newKey && <span className="text-caption text-fg-faint">{newKey}</span>}
+        </button>
+        <NavRow label="Loops" current={view === "loops"} onClick={() => setView({ kind: "loops" })}>
+          <Repeat size={14} />
+        </NavRow>
+        <NavRow label="Capabilities" onClick={() => openSettings("capabilities")}>
+          <Blocks size={14} />
+        </NavRow>
+        <NavRow label="Usage" onClick={() => openSettings("usage")}>
+          <Gauge size={14} />
+        </NavRow>
+      </nav>
       <div className="flex items-center gap-1">
         <MenuSearchField
           size="sm"
