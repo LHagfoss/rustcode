@@ -45,6 +45,8 @@ interface Press {
   /** How far a row slides to make room: the dragged row's height. */
   room: number;
   el: HTMLElement;
+  /** Keep a header button as the click target when it also serves as the drag handle. */
+  capture: Element;
   /** The list's scroll when the press began, so the row stays under the pointer as it scrolls. */
   scroll0: number;
   /** The pointer's last height, for the edge scroll that moves the list without a pointer move. */
@@ -184,14 +186,14 @@ export function useThreadDrag({
     window.removeEventListener("pointercancel", abort);
     window.removeEventListener("keydown", onKey);
     window.removeEventListener("blur", abort);
-    p.el.removeEventListener("lostpointercapture", abort);
+    p.capture.removeEventListener("lostpointercapture", abort);
     if (p.frame !== undefined) cancelAnimationFrame(p.frame);
     // The rows that slid aside go back without sliding: the drop redraws them in their new order.
     for (const row of p.others ?? []) {
       row.el.style.transition = "";
       row.el.style.transform = "";
     }
-    if (p.el.hasPointerCapture(p.pointerId)) p.el.releasePointerCapture(p.pointerId);
+    if (p.capture.hasPointerCapture(p.pointerId)) p.capture.releasePointerCapture(p.pointerId);
     const { style } = p.el;
     style.transform = "";
     style.zIndex = "";
@@ -267,17 +269,18 @@ export function useThreadDrag({
       from: Math.max(0, drawn.indexOf(id)),
       room: row.getBoundingClientRect().height,
       el: row,
+      capture: handle ?? row,
       scroll0: list.current?.scrollTop ?? 0,
       lastY: e.clientY,
     };
     // The row keeps the pointer wherever it goes, a release outside the window included: without
     // it the row can be left lifted and the list unable to start another drag.
     try {
-      row.setPointerCapture(e.pointerId);
+      (handle ?? row).setPointerCapture(e.pointerId);
     } catch {
       // A pointer the browser already dropped has no capture to take; the window still sees it.
     }
-    row.addEventListener("lostpointercapture", abort);
+    (handle ?? row).addEventListener("lostpointercapture", abort);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", abort);
