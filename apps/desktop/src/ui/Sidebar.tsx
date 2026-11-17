@@ -1341,7 +1341,7 @@ const PendingRow = memo(function PendingRow({
               </span>
             ) : (
               <>
-                <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
+                {pending.worktree && <span className="shrink-0 text-accent">Setting up</span>}
                 {branch && (
                   <>
                     <GitBranch size={12} className="ml-1 shrink-0" />
@@ -1355,7 +1355,7 @@ const PendingRow = memo(function PendingRow({
       </button>
       <div className={cx("absolute right-2 flex items-center", compact ? "top-[2px]" : "top-1.5")}>
         {failure && (
-          <RowAction label="Dismiss" onClick={dismissPendingSetup}>
+          <RowAction label="Dismiss" onClick={() => dismissPendingSetup(pending.id)}>
             <X size={12} />
           </RowAction>
         )}
@@ -1574,6 +1574,11 @@ export function Sidebar() {
   // Paired computers' threads are rows of the one list, each tagged with where it runs.
   const machines = useMachines((s) => s.machines);
   const pending = useApp((s) => s.pendingSetup);
+  const backgroundSetups = useApp((s) => s.backgroundSetups);
+  const pendingById = useMemo(
+    () => ({ ...backgroundSetups, ...(pending ? { [pending.id]: pending } : {}) }),
+    [backgroundSetups, pending],
+  );
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
   const selectedId = useApp((s) => s.selectedId);
   // Which threads need you or work, as a string so a streamed chunk does not change it.
@@ -1872,12 +1877,13 @@ export function Sidebar() {
     };
     // The thread setting up is a row of the list until the session exists: first, where its real
     // row will be, so it keeps its place when it becomes one.
-    const pendingRow =
-      pending &&
-      !searching &&
-      (!onlyProject || !projectCwd || pending.cwd === projectCwd || pending.worktree?.repo === projectCwd)
-        ? pendingSummary(pending)
-        : null;
+    const pendingRows = Object.values(pendingById)
+      .filter(
+        (setup) =>
+          !searching &&
+          (!onlyProject || !projectCwd || setup.cwd === projectCwd || setup.worktree?.repo === projectCwd),
+      )
+      .map(pendingSummary);
     for (const s of filtered) {
       // A delegated thread has no row of its own, unless the filter left the open one with no row
       // to hang under (`orphanOpen`).
@@ -1902,7 +1908,7 @@ export function Sidebar() {
       ].push(s);
     }
     const { threads: active } = placed;
-    if (pendingRow) active.unshift(pendingRow);
+    active.unshift(...pendingRows);
     // What a slot in the list reads of one thread when the user has not arranged it: the marks the
     // app already keeps, never a running clock, so no section reorders as a turn streams.
     const pinAt = new Map(pinned.map((id, at) => [id, at] as const));
@@ -1971,7 +1977,7 @@ export function Sidebar() {
     now,
     snoozed,
     layoutMode,
-    pending,
+    pendingById,
     onlyProject,
     projectCwd,
     orphanOpen,
@@ -2237,7 +2243,7 @@ export function Sidebar() {
   const markRows = (command: string, focused: string) => {
     // The pending row has no thread yet: there is nothing to pin or settle, as a click and the
     // row's own menu already know.
-    if (pending && focused === pending.id) return;
+    if (pendingById[focused]) return;
     const ids = pickedSessions.length > 1 ? pickedSessions.map((s) => s.id) : [rowIdOf(focused)];
     if (command === "pin-thread") {
       // The same rule as the selection bar's button: unpin when every row is pinned, else pin.
@@ -2346,7 +2352,7 @@ export function Sidebar() {
     // anchor stay on the row.
     const id = rowIdOf(key);
     // The pending row has no session to pin, settle or rename: it opens, and never joins a bulk pick.
-    if (pending && id === pending.id) {
+    if (pendingById[id]) {
       if (primaryModifier(e) || e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -2437,10 +2443,10 @@ export function Sidebar() {
     <div className={cx("flex flex-col", !compact && "gap-0.5")}>
       {items.map((s) => (
         <Fragment key={s.id}>
-          {pending && s.id === pending.id ? (
+          {pendingById[s.id] ? (
             <PendingRow
-              pending={pending}
-              selected={!selectedId}
+              pending={pendingById[s.id]!}
+              selected={!selectedId && pending?.id === s.id}
               navActive={s.id === currentId}
               compact={compact}
             />

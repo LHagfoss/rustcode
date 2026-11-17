@@ -80,7 +80,7 @@ describe("a thread setting up", () => {
     const row = pendingSummary(started({ worktree: undefined }));
     expect(row.worktree).toBeUndefined();
     expect(row.cwd).toBe("/Users/you/code/rustcode");
-    expect(pendingStatus(started({ worktree: undefined }))).toBe("Starting…");
+    expect(pendingStatus(started({ worktree: undefined }))).toBeNull();
     expect(pendingStatus(started())).toBe("Setting up worktree…");
   });
 

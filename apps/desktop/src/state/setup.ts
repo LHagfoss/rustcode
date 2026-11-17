@@ -125,6 +125,6 @@ export function pendingSummary(pending: PendingSetup): SessionSummary {
 }
 
 /** What the setup's row says it is doing: its worktree, or the harness it is reading in. */
-export function pendingStatus(pending: PendingSetup): string {
-  return pending.worktree ? "Setting up worktree…" : "Starting…";
+export function pendingStatus(pending: PendingSetup): string | null {
+  return pending.worktree ? "Setting up worktree…" : null;
 }

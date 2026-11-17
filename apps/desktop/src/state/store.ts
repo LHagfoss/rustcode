@@ -895,6 +895,8 @@ export interface AppState {
    * while `session/new` runs (state/setup.ts). In memory only, so a reload leaves no ghost row.
    */
   pendingSetup: PendingSetup | null;
+  /** Starts left running when the reader opens another thread or a fresh composer. */
+  backgroundSetups: Record<string, PendingSetup>;
 }
 
 /** A cached plan older than this is dropped on launch: its windows have moved on. */
@@ -1155,6 +1157,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   attempts: {},
   newWorktree: { on: false, branch: "", edited: false },
   pendingSetup: null,
+  backgroundSetups: {},
   smartUi: storedFlag(STORAGE.smartUi, SETTINGS_DEFAULTS.smartUi),
   smartUiPending: false,
   terminalOpen: false,
@@ -3594,6 +3597,7 @@ export function resetForTests() {
     attempts: {},
     newWorktree: { on: false, branch: "", edited: false },
     pendingSetup: null,
+    backgroundSetups: {},
   });
 }
 

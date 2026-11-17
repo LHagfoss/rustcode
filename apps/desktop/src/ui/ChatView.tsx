@@ -689,7 +689,7 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
                 <Pill prominent onClick={() => void retryPendingSetup()}>
                   Retry
                 </Pill>
-                <Pill onClick={dismissPendingSetup}>Dismiss</Pill>
+                <Pill onClick={() => dismissPendingSetup()}>Dismiss</Pill>
               </>
             }
           >
@@ -698,7 +698,7 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
         ) : (
           <div className="flex items-center gap-2 text-body text-fg-muted" role="status">
             <Spinner size={14} />
-            <span>{pendingStatus(pending)}</span>
+            {pendingStatus(pending) && <span>{pendingStatus(pending)}</span>}
             <span className="text-fg-faint tabular">
               <PendingClock since={pending.startedAt} />
             </span>
