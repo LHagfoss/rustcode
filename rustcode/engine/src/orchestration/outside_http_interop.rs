@@ -94,7 +94,7 @@ impl Fixture {
             stream.write_all(request.as_bytes()).await.unwrap();
             let mut bytes = Vec::new();
             stream.read_to_end(&mut bytes).await.unwrap();
-            let response = String::from_utf8(bytes).unwrap();
+            let response = String::from_utf8_lossy(&bytes).into_owned();
             let (head, body) = response.split_once("\r\n\r\n").unwrap();
             // A page or an empty redirect is not JSON; keep it as text.
             let value = serde_json::from_str(body).unwrap_or_else(|_| Value::String(body.to_owned()));
