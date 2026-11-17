@@ -8,7 +8,7 @@
 
 use serde_json::{Value, json};
 
-use crate::orchestration::outside;
+use crate::orchestration::{outside, outside_signin};
 
 /// `_rustcode/outside/list`: the grants, the calls waiting for an answer, the
 /// newest audited calls, and what the setup flow needs.
@@ -78,6 +78,63 @@ pub(crate) struct OutsideAnswerRequest {
     pub allow: bool,
 }
 
+/// `_rustcode/outside/signin`: approve or decline a sign-in waiting on the
+/// public sign-in page. `scope` overrides the level the page asked for.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/outside/signin", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutsideSignInRequest {
+    pub id: String,
+    pub allow: bool,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub ask: Option<bool>,
+}
+
+/// `_rustcode/outside/code`: a one-time sign-in code for the public sign-in
+/// page, as `rustcode outside code` makes one.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/outside/code", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutsideCodeRequest {
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub ask: Option<bool>,
+}
+
+/// `_rustcode/outside/changed`: something now waits for the owner, or no
+/// longer does; ask `_rustcode/outside/list` again.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_rustcode/outside/changed")]
+pub(crate) struct OutsideChangedNotification {}
+
+/// Tell every client that listed outside agents when something waiting for
+/// the owner changes, once per engine.
+pub(crate) fn start_publishing(clients: &super::clients::Clients) {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let notify = clients.clone();
+    let mut changes = outside::watch_changes();
+    tokio::spawn(async move {
+        while changes.changed().await.is_ok() {
+            notify.publish(
+                super::clients::Topic::Outside,
+                OutsideChangedNotification {},
+            );
+        }
+    });
+}
+
 /// How many audited calls the list carries.
 const RECENT_CALLS: u32 = 25;
 
@@ -102,6 +159,7 @@ pub(crate) async fn list(_request: OutsideListRequest) -> Result<Value, String> 
     // it is there to be found.
     outside::ensure_hub().await;
     let grants: Vec<Value> = outside::list().iter().map(outside::Grant::view).collect();
+    let public = crate::orchestration::outside_http::configured_public_base();
     Ok(json!({
         "grants": grants,
         "pending": outside::pending_view(),
@@ -109,6 +167,12 @@ pub(crate) async fn list(_request: OutsideListRequest) -> Result<Value, String> 
         "platforms": outside::PLATFORMS,
         "command": command(),
         "httpUrl": crate::orchestration::outside_http::ensure().await.ok(),
+        "signIns": outside_signin::view(),
+        "publicUrl": public.as_ref().and_then(|p| p.as_ref().ok()).map(|base| format!("{base}/mcp")),
+        "publicError": public.and_then(Result::err),
+        "machineName": crate::fleet::own_name_override()
+            .or_else(crate::remote_gateway::gateway::os_host_name),
+        "levels": levels(),
         "maxGrants": outside::MAX_GRANTS,
         "available": cfg!(unix),
     }))
@@ -164,6 +228,60 @@ pub(crate) fn revoke(request: OutsideRevokeRequest) -> Result<Value, String> {
 
 pub(crate) fn answer(request: OutsideAnswerRequest) -> Result<Value, String> {
     Ok(json!({ "answered": outside::answer_pending(&request.id, request.allow) }))
+}
+
+/// What each level allows and does not, as the sign-in page lists it.
+fn levels() -> Vec<Value> {
+    use outside::Scope;
+    [
+        Scope::ReadOnly,
+        Scope::Delegate,
+        Scope::Manage,
+        Scope::Admin,
+    ]
+    .into_iter()
+    .map(|scope| {
+        let (summary, can, cannot) = outside_signin::scope_points(scope);
+        json!({
+            "scope": scope.as_str(),
+            "label": scope.label(),
+            "summary": summary,
+            "can": can,
+            "cannot": cannot,
+        })
+    })
+    .collect()
+}
+
+pub(crate) fn sign_in(request: OutsideSignInRequest) -> Result<Value, String> {
+    let scope = match request
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(text) => Some(scope_of(text)?),
+        None => None,
+    };
+    Ok(json!({
+        "answered": outside_signin::answer(&request.id, request.allow, scope, request.ask)
+    }))
+}
+
+pub(crate) fn code(request: OutsideCodeRequest) -> Result<Value, String> {
+    let made = crate::orchestration::outside_http::sign_in_code(
+        request
+            .scope
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        request.ask,
+    )?;
+    Ok(json!({
+        "code": made.code,
+        "scope": made.scope,
+        "minutes": made.minutes,
+    }))
 }
 
 #[cfg(test)]

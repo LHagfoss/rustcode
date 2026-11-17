@@ -31,6 +31,7 @@ pub mod mcp_server;
 pub mod outside;
 pub mod outside_http;
 pub(crate) mod outside_manage;
+pub mod outside_signin;
 pub mod presets;
 pub mod secret;
 

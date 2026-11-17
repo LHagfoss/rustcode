@@ -5,10 +5,11 @@
 // harness contract in docs/harnesses.md, so the UI works before that lands.
 
 import { BUILTIN_THEMES } from "../lib/themes";
-import { arr, bool, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
+import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import { mockBrowse, mockCreate } from "./mockFolders";
 import { MockLoops } from "./mockLoops";
 import { mockRouteCommand } from "./mockMachineRoutes";
+import { MockOutside } from "./mockOutside";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
@@ -2473,42 +2474,8 @@ export class MockEngine {
    * lasts. `refused` holds the threads the host turns down and why, which the
    * machine's answer counts as `notShared` and a thread's answer names.
    */
-  /** Outside agents (Settings › Outside agents): the apps connected to RustCode's MCP tools. */
-  private outside: {
-    grants: Array<{
-      id: string;
-      name: string;
-      platform: string;
-      scope: string;
-      ask: boolean;
-      createdAt: string;
-      lastUsedAt: string | null;
-      lastTool: string | null;
-    }>;
-    pending: Array<{
-      id: string;
-      clientId: string;
-      clientName: string;
-      tool: string;
-      summary: string;
-      askedAt: string;
-    }>;
-    recent: Array<Record<string, Json>>;
-    next: number;
-  } = { grants: [], pending: [], recent: [], next: 1 };
-
-  private outsideList(): JsonObject {
-    return {
-      grants: this.outside.grants,
-      pending: this.outside.pending,
-      recent: this.outside.recent.slice(0, 25),
-      platforms: ["claude-desktop", "cursor", "codex", "other"],
-      command: "/Applications/RustCode.app/Contents/MacOS/rustcode",
-      httpUrl: "http://127.0.0.1:43871/mcp",
-      maxGrants: 20,
-      available: true,
-    } as unknown as JsonObject;
-  }
+  /** Outside agents (Settings › Outside agents), in `mockOutside.ts`. */
+  private outside = new MockOutside();
 
   private remote = {
     enabled: false,
@@ -4393,95 +4360,15 @@ export class MockEngine {
         };
       }
       case "_rustcode/outside/list":
-        return this.outsideList();
-      case "_rustcode/outside/create": {
-        const name = (str(params.name) ?? "").trim();
-        if (!name) throw Object.assign(new Error("name the app that will connect"), { code: -32602 });
-        const scope = str(params.scope) ?? "read_only";
-        const platform = str(params.platform) ?? "other";
-        const id = `mock${this.outside.next++}`;
-        const token = `rcx_${id}_${"0123456789abcdef".repeat(4)}`;
-        const grant = {
-          id,
-          name,
-          platform,
-          scope,
-          ask: bool(params.ask) ?? scope !== "read_only",
-          createdAt: new Date().toISOString(),
-          lastUsedAt: null,
-          lastTool: null,
-        };
-        this.outside.grants.push(grant);
-        const command = "/Applications/RustCode.app/Contents/MacOS/rustcode";
-        const toml = platform === "codex";
-        return {
-          grant,
-          token,
-          snippet: toml
-            ? {
-                format: "toml",
-                where: "~/.codex/config.toml",
-                text: `[mcp_servers.rustcode]\ncommand = "${command}"\nargs = ["mcp-connect"]\n\n[mcp_servers.rustcode.env]\nRUSTCODE_MCP_TOKEN = "${token}"\n`,
-              }
-            : {
-                format: "json",
-                where: "Claude Desktop › Settings › Developer › Edit Config (claude_desktop_config.json)",
-                text: JSON.stringify(
-                  {
-                    mcpServers: {
-                      rustcode: { command, args: ["mcp-connect"], env: { RUSTCODE_MCP_TOKEN: token } },
-                    },
-                  },
-                  null,
-                  2,
-                ),
-              },
-        } as unknown as JsonObject;
-      }
-      case "_rustcode/outside/update": {
-        const grant = this.outside.grants.find((entry) => entry.id === str(params.id));
-        if (!grant) throw Object.assign(new Error("no connected app has that id"), { code: -32602 });
-        if (str(params.scope)) grant.scope = str(params.scope) ?? grant.scope;
-        if (typeof params.ask === "boolean") grant.ask = params.ask;
-        return { grant } as unknown as JsonObject;
-      }
-      case "_rustcode/outside/revoke": {
-        const before = this.outside.grants.length;
-        this.outside.grants = this.outside.grants.filter((entry) => entry.id !== str(params.id));
-        this.outside.pending = this.outside.pending.filter((entry) => entry.clientId !== str(params.id));
-        return { revoked: this.outside.grants.length < before };
-      }
-      case "_rustcode/outside/answer": {
-        const item = this.outside.pending.find((entry) => entry.id === str(params.id));
-        this.outside.pending = this.outside.pending.filter((entry) => entry !== item);
-        if (item) {
-          this.outside.recent.unshift({
-            at: new Date().toISOString(),
-            clientId: item.clientId,
-            clientName: item.clientName,
-            scope: "delegate",
-            tool: item.tool,
-            outcome: params.allow === true ? "ok" : "declined",
-            durationMs: 40,
-            detail: null,
-          });
-        }
-        return { answered: !!item };
-      }
-      // Mock-window hook: a connected app asks to run a tool, as an outside agent's call would.
-      case "_mock/outside/ask": {
-        const grant = this.outside.grants[0];
-        if (!grant) return { asked: false };
-        this.outside.pending.push({
-          id: `pending${this.outside.next++}`,
-          clientId: grant.id,
-          clientName: grant.name,
-          tool: str(params.tool) ?? "start_session",
-          summary: str(params.summary) ?? "start_session in ~/code/app “Fix the failing build”",
-          askedAt: new Date().toISOString(),
-        });
-        return { asked: true };
-      }
+      case "_rustcode/outside/create":
+      case "_rustcode/outside/update":
+      case "_rustcode/outside/revoke":
+      case "_rustcode/outside/answer":
+      case "_rustcode/outside/signin":
+      case "_rustcode/outside/code":
+      case "_mock/outside/signin":
+      case "_mock/outside/ask":
+        return this.outside.handle(method, params);
       // Test and mock-window hooks: a phone asks to connect, or enters the code it was shown.
       case "_mock/remote/askToConnect":
         return {

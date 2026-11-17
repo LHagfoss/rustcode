@@ -2066,10 +2066,11 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
       else if (message.method === WorkflowMethod.changed) onWorkflowChanged(message.params, host);
       else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
       // A setting changed outside this window: the CLI, an agent's `manage_settings`, another app.
-      else if (message.method === SETTINGS_CHANGED) {
-        const params = message.params;
-        void import("./settingsScope").then((scope) => scope.onServerSettingsChanged(host, params));
-      }
+      else if (message.method === SETTINGS_CHANGED)
+        void import("./settingsScope").then((scope) => scope.onServerSettingsChanged(host, message.params));
+      // A sign-in or a call now waits for the owner on that machine, or no longer does.
+      else if (message.method === "_rustcode/outside/changed")
+        void import("./outside").then((outside) => outside.refreshOutside(host));
       return;
     case "request":
       if (message.method === Method.requestPermission) {

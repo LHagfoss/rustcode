@@ -264,6 +264,9 @@ impl Grant {
             "createdAt": self.created_at,
             "lastUsedAt": self.last_used_at,
             "lastTool": self.last_tool,
+            // A hosted agent that signed in on the public page, and until when.
+            "hosted": self.oauth_client.is_some(),
+            "signedInUntil": self.refresh_until,
         })
     }
 }
@@ -322,7 +325,7 @@ fn hash_token(token: &str) -> String {
 }
 
 /// Equal in time that does not depend on where they differ.
-fn same(left: &str, right: &str) -> bool {
+pub(super) fn same(left: &str, right: &str) -> bool {
     left.len() == right.len()
         && left
             .bytes()
@@ -619,6 +622,22 @@ pub fn deny_all_for(client_id: &str) {
 
 fn withdraw(id: &str) {
     pending().retain(|item| item.id != id);
+    changed();
+}
+
+/// Bumped whenever something waiting for the owner appears or goes (a call to
+/// allow, a sign-in to approve), so the apps connected to this engine ask
+/// again at once instead of at their next poll (`_rustcode/outside/changed`).
+static CHANGED: LazyLock<tokio::sync::watch::Sender<u64>> =
+    LazyLock::new(|| tokio::sync::watch::channel(0).0);
+
+pub fn changed() {
+    CHANGED.send_modify(|count| *count = count.wrapping_add(1));
+}
+
+/// Follow [`changed`].
+pub fn watch_changes() -> tokio::sync::watch::Receiver<u64> {
+    CHANGED.subscribe()
 }
 
 /// What the call does, in a line, from the few fields that say it. Text a
@@ -1085,6 +1104,7 @@ async fn ask_user(
         asked_at: now(),
         answer: Some(sender),
     });
+    changed();
     let outcome = tokio::select! {
         biased;
         _ = cancel.cancelled() => Approval::Cancelled,
@@ -2288,6 +2308,7 @@ pub(super) async fn approve_connection(name: &str, destination: &str, scope: Sco
         asked_at: now(),
         answer: Some(sender),
     });
+    changed();
     let allowed = matches!(
         tokio::time::timeout(APPROVAL_WAIT, receiver).await,
         Ok(Ok(true))

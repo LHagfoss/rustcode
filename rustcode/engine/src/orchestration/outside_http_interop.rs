@@ -46,6 +46,7 @@ impl Fixture {
             public: public.map(|p| public_base(p).unwrap()),
             key: load_key(&dir.join(KEY_FILE)).unwrap(),
             sign_in_codes: dir.join("outside-codes.json"),
+            machine: "test-machine".to_owned(),
             failures: Mutex::new(Vec::new()),
             settings: outside::Settings {
                 grants: dir.join("outside-agents.json"),
@@ -93,7 +94,7 @@ impl Fixture {
             stream.write_all(request.as_bytes()).await.unwrap();
             let mut bytes = Vec::new();
             stream.read_to_end(&mut bytes).await.unwrap();
-            let response = String::from_utf8(bytes).unwrap();
+            let response = String::from_utf8_lossy(&bytes).into_owned();
             let (head, body) = response.split_once("\r\n\r\n").unwrap();
             // A page or an empty redirect is not JSON; keep it as text.
             let value = serde_json::from_str(body).unwrap_or_else(|_| Value::String(body.to_owned()));
@@ -668,4 +669,153 @@ fn loopback_callbacks_match_on_any_port_and_others_exactly() {
         Some(outside::Scope::Delegate)
     );
     assert_eq!(requested_scope(""), None);
+}
+
+#[tokio::test]
+async fn a_hosted_agent_is_approved_in_the_app_after_the_words_match() {
+    let _serial = super::outside_signin::reset_for_tests();
+    let dir = tempfile::tempdir().unwrap();
+    let f = Fixture::start_with(dir.path(), Some("https://rustcode.example.com")).await;
+    let public = "rustcode.example.com";
+    let base = "https://rustcode.example.com";
+    let callback = "https://chatgpt.com/connector_platform_oauth_redirect";
+    let registered = f
+        .request_to(
+            public,
+            "POST",
+            "/register",
+            "",
+            &json!({"client_name":"ChatGPT","redirect_uris":[callback]}).to_string(),
+        )
+        .await;
+    let client = registered.2["client_id"].as_str().unwrap().to_owned();
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("response_type", "code"),
+            ("client_id", client.as_str()),
+            ("redirect_uri", callback),
+            ("scope", "read_only"),
+            ("resource", &format!("{base}/mcp")),
+            ("state", "s2"),
+            ("code_challenge_method", "S256"),
+            (
+                "code_challenge",
+                "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            ),
+        ])
+        .finish();
+    let wait_target = |head: &str| {
+        head.lines()
+            .find_map(|l| l.strip_prefix("Location: "))
+            .expect("a redirect")
+            .to_owned()
+    };
+
+    // The page offers the levels, the requested one chosen, and both ways in.
+    let page = f
+        .request_to(public, "GET", &format!("/authorize?{query}"), "", "")
+        .await;
+    let html = page.2.as_str().unwrap();
+    assert!(html.contains(r#"value="read_only" checked"#), "{html}");
+    assert!(html.contains("Approve in RustCode") && html.contains("test-machine"));
+    let logo = f.request_to(public, "GET", "/logo.png", "", "").await;
+    assert_eq!(logo.0, 200);
+    assert!(logo.1.contains("image/png"));
+
+    // Approving in the app: the page waits with the words the app shows.
+    let started = f
+        .request_to(
+            public,
+            "POST",
+            "/authorize",
+            "",
+            &format!("{query}&access=manage&decision=app"),
+        )
+        .await;
+    assert_eq!(started.0, 303, "{:?}", started.2);
+    let wait = wait_target(&started.1);
+    assert!(wait.starts_with("/authorize/wait?id="), "{wait}");
+    let listed = super::outside_signin::view();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["clientName"], "ChatGPT");
+    assert_eq!(listed[0]["destination"], "chatgpt.com");
+    assert_eq!(listed[0]["scope"], "manage", "the level picked on the page");
+    let waiting = f.request_to(public, "GET", &wait, "", "").await;
+    assert_eq!(waiting.0, 200);
+    let words = listed[0]["words"].as_str().unwrap();
+    assert!(waiting.2.as_str().unwrap().contains(words));
+    assert_eq!(
+        f.request("GET", &wait, "", "").await.0,
+        404,
+        "the waiting page is only on the public address"
+    );
+    let forged = wait.replace("key=", "key=0");
+    assert_eq!(f.request_to(public, "GET", &forged, "", "").await.0, 410);
+
+    // The owner lowers the level and approves; the page hands the agent its code.
+    let id = listed[0]["id"].as_str().unwrap();
+    assert!(super::outside_signin::answer(
+        id,
+        true,
+        Some(outside::Scope::Delegate),
+        Some(false)
+    ));
+    let approved = f.request_to(public, "GET", &wait, "", "").await;
+    assert_eq!(approved.0, 303);
+    let pairs = location(&approved.1);
+    assert_eq!(pairs["state"], "s2");
+    let exchange = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("grant_type", "authorization_code"),
+            ("code", &pairs["code"]),
+            ("client_id", &client),
+            ("redirect_uri", callback),
+            (
+                "code_verifier",
+                "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+            ),
+        ])
+        .finish();
+    let tokens = f.request_to(public, "POST", "/token", "", &exchange).await;
+    assert_eq!(tokens.0, 200, "{:?}", tokens.2);
+    assert_eq!(tokens.2["scope"], "delegate", "the owner's level wins");
+    assert_eq!(
+        f.request_to(public, "GET", &wait, "", "").await.0,
+        410,
+        "an answered sign-in is spent"
+    );
+
+    // Declined in the app, or cancelled on the page: the agent hears no.
+    let declined = f
+        .request_to(
+            public,
+            "POST",
+            "/authorize",
+            "",
+            &format!("{query}&decision=app"),
+        )
+        .await;
+    let wait = wait_target(&declined.1);
+    let id = super::outside_signin::view()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(super::outside_signin::answer(&id, false, None, None));
+    let answer = f.request_to(public, "GET", &wait, "", "").await;
+    assert_eq!(location(&answer.1)["error"], "access_denied");
+    let cancelled = f
+        .request_to(
+            public,
+            "POST",
+            "/authorize",
+            "",
+            &format!("{query}&decision=app"),
+        )
+        .await;
+    let wait = wait_target(&cancelled.1);
+    let answer = f
+        .request_to(public, "GET", &format!("{wait}&cancel=1"), "", "")
+        .await;
+    assert_eq!(location(&answer.1)["error"], "access_denied");
+    assert!(super::outside_signin::view().is_empty());
 }

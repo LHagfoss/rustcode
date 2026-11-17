@@ -215,30 +215,48 @@ loopback one. Run it on a machine that stays on, such as a VPS running
    Run it as a service (`cloudflared service install`). The tunnel must keep
    the request's `Host`; a proxy that rewrites it to `127.0.0.1` is refused
    (set `httpHostHeader` back to the public host if it does).
-3. In the hosted app, add a custom MCP server (a connector, app or plugin)
-   with the URL `https://rustcode.example.com/mcp` and OAuth authentication.
+3. In Settings › Outside agents, pick the machine (the page shows every
+   connected machine, and starts on one with a public address). Under
+   **Connect ChatGPT, Claude and other hosted agents**:
+   - **Claude**: *Open in Claude* opens Claude's Add custom connector form
+     with RustCode filled in.
+   - **ChatGPT**: *Copy URL and open ChatGPT* copies
+     `https://rustcode.example.com/mcp`; in ChatGPT's connector settings
+     (Developer mode), create a connector with that URL and OAuth.
+   - **Another agent**: add a remote MCP server (Streamable HTTP) with the URL
+     and OAuth.
+
    No client ID or secret is needed: the app registers itself.
 4. The app opens RustCode's sign-in page. It names the app (the name it gave
-   itself), where access goes (for example `chatgpt.com`: whoever runs that
-   service gets the access) and the level it asks for. On the machine, run
+   itself), the machine, and where access goes (for example `chatgpt.com`:
+   whoever runs that service gets the access). Pick what it may do (each
+   level lists what it can and cannot), then either:
+   - **Approve in RustCode.** The page waits and shows two words. A card
+     with the same words appears in every RustCode app connected to that
+     machine, in the window's corner and on Settings › Outside agents. Check
+     the words, choose the level (the page's pick is only where it starts)
+     and Approve. The page moves on by itself; it gives up after five minutes.
+   - **Use a sign-in code.** Settings › Outside agents › *Get a sign-in
+     code*, or on the machine
 
-   ```sh
-   rustcode outside code --access delegate
-   ```
+     ```sh
+     rustcode outside code --access delegate
+     ```
 
-   and type the `XXXX-XXXX` code it prints. The code works once, for 10
-   minutes, and sets the most the app may do: the connection gets the lower
-   of what the app asked for and what the code allows. `--ask false` makes the
-   app's changes run without waiting for approval in the app, which a
-   headless machine with no app open needs; leave it on otherwise.
+     Type the `XXXX-XXXX` code under *Have a sign-in code?*. It works once,
+     for 10 minutes, and sets the most the app may do: the connection gets
+     the lower of the page's pick and what the code allows. `--ask false`
+     makes the app's changes run without waiting for approval in the app.
 5. Ask the agent to call `whoami`.
 
-The page is the only way to approve a sign-in through the public address: the
-approval card in the app is offered only to apps signing in over loopback, so
-nobody on the internet can put a card in front of you. After ten wrong codes in
-ten minutes the page stops checking codes for a while. Connections from the
-public address show and revoke in Settings › Outside agents and
-`rustcode outside list` like any other.
+A sign-in only reaches the app after somebody chose *Approve in RustCode* on
+the page, at most two wait at once and ten can start in ten minutes, and the
+two words tell your sign-in from one somebody else started at the same time:
+decline a card whose words you did not see. After ten wrong codes in ten
+minutes the page stops checking codes for a while. Hosted agents show in
+Settings › Outside agents as signed in from the web, with the date their
+sign-in lasts until, and revoke like any other connection
+(`rustcode outside list`).
 
 **What the tunnel sees.** TLS ends at the tunnel's edge, so the tunnel
 provider can read the traffic between the hosted agent and RustCode: prompts,
