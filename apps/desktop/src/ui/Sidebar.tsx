@@ -9,14 +9,9 @@ import { HiddenDot, ProjectHeader, RowAction } from "./ProjectHeader";
 // the Snoozed and Settled shelves at the foot, each folding on its own header.
 // ⌘K searches threads too, and holds the actions (add project, pull requests,
 // usage). A section header never folds.
-// Every thread row is one fixed grid of 3 lines, each a left and a right part, so
-// each row is the same height and each thing has one place (`ROW_GRID`). The left
-// parts hold the title, then what the thread is doing (what it asks, its plan, what
-// it waits on), then its folder and branch; the right ones hold the state (`Needs
-// you`, `Working 2m`, `Waiting`, `Failed`, `Done`, `Review`, the time it wakes, or
-// its age — state/sidebarRows.ts `rowStatus`), then the model and harness mark,
-// then the computer, running delegates and pull request. Hovering swaps the state
-// for the row's actions.
+// Thread rows keep two lines: folder mark and title with state, then path and model.
+// Delegates follow the model; the machine uses only its glyph. Branch and activity
+// details stay in the hover card. Hovering swaps the state for row actions.
 
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import {
@@ -34,7 +29,6 @@ import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { middleEllipsis } from "../lib/folderList";
-import { rowBranch } from "../lib/gitRef";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { onFileDrop, openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
@@ -229,7 +223,6 @@ import {
   Tooltip,
 } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
-import { StepBar, useRowProgress } from "./RowProgress";
 import { SidebarToolbar } from "./SidebarToolbar";
 import { useThreadDrag } from "./sidebarDrag";
 import { ThreadHoverCard } from "./ThreadHoverCard";
@@ -609,13 +602,13 @@ const SWAPPED_ON_HOVER = cx(
 );
 
 /**
- * A thread row's grid: three lines at one height whatever the row holds, so a column of rows reads
+ * A thread row's grid: two lines at one height whatever the row holds, so a column of rows reads
  * as a table. Each line is a left part that truncates and a right part against the row's edge that
  * takes what it needs (a running turn's "Working 12:07", the model), so the right side is never
  * cut and one line's right part never narrows another line's left one.
  */
-const ROW_HEIGHT = 72;
-const ROW_GRID = "grid h-[72px] grid-rows-[22px_18px_18px] content-center rounded-xl px-3";
+const ROW_HEIGHT = 54;
+const ROW_GRID = "grid h-[54px] grid-rows-[22px_18px] content-center rounded-xl px-3";
 /** One line of the row: its left part and its right part. */
 const ROW_LINE = "flex min-w-0 items-center gap-2";
 /** A line's left part: truncated. */
@@ -736,8 +729,8 @@ function MiddlePath({ path }: { path: string }) {
 }
 
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
-// Compact: a title and state, then a quiet line for the branch and other details.
-// Comfortable: the title first, the project's mark and the branch under it. Hovering swaps the
+// Compact: a title and state.
+// Comfortable: the project mark and title, then folder and model. Hovering swaps the
 // slot for the row's actions in both, so nothing shifts.
 const ThreadRow = memo(function ThreadRow({
   session,
@@ -822,8 +815,6 @@ const ThreadRow = memo(function ThreadRow({
     () => delegateCount(stack, (id) => harnesses?.harnesses.find((h) => h.id === id)?.name ?? id),
     [stack, harnesses],
   );
-  // Where a working thread is in its plan, or why one not working has not finished (ui/RowProgress.tsx).
-  const { progress, waitReason } = useRowProgress(session.id, running, !!request || status === "done", wait);
   // Done or Failed while you were elsewhere, until you open it.
   const fresh = !!finishedAt && !selected;
   const failed = !!failedAt && !selected;
@@ -906,16 +897,7 @@ const ThreadRow = memo(function ThreadRow({
     "min-w-0 flex-1 truncate text-body",
     wantsYou ? "font-medium text-fg" : recedes ? "font-normal text-fg" : "font-medium text-fg",
   );
-  // What the third line says in place of the branch: the request it waits on, else the thread it
-  // came from (a search result, or a delegate whose parent's row is in another project).
-  const ask = request ? (request.question ? request.question.text : request.title) : undefined;
   const fromText = from ? originText(from) : undefined;
-  // The line opens the thread it came from; the row itself still opens this one.
-  const openFrom = (e: React.MouseEvent) => {
-    if (!from?.listed || !from.id || e.shiftKey || primaryModifier(e)) return;
-    e.stopPropagation();
-    selectThread(from.id);
-  };
   // Remote rows always name their computer; local rows do so only in a mixed list.
   const place =
     host && machine
@@ -1046,9 +1028,10 @@ const ThreadRow = memo(function ThreadRow({
                 </>
               ) : (
                 <>
-                  {/* Line 1: the title, and what the thread is doing (the hover actions take its place). */}
+                  {/* Line 1: the project mark, title and state (hover actions take the state’s place). */}
                   <span className={ROW_LINE}>
                     <span className={ROW_LEFT}>
+                      <ProjectMark name={project} size={14} className={markTint} />
                       {pinned && <Pin size={12} className="shrink-0 rotate-45 text-fg-faint" />}
                       {branch && (
                         <span
@@ -1070,57 +1053,16 @@ const ThreadRow = memo(function ThreadRow({
                       <span className="flex min-w-0 items-center justify-end">{state}</span>
                     </span>
                   </span>
-                  {/* Line 2: what the thread is doing: what it asks, its plan, what it waits on, where it came from. */}
+                  {/* Line 2: folder path, model, delegates and machine glyph. */}
                   <span className={ROW_LINE}>
-                    <span
-                      className={cx(
-                        ROW_LEFT,
-                        "gap-1 text-sub",
-                        ask ? (request ? "text-warning" : "text-fg-muted") : "text-fg-muted",
-                      )}
-                    >
-                      {ask ? (
-                        <span className="min-w-0 truncate" title={ask}>
-                          {ask}
-                        </span>
-                      ) : progress ? (
-                        <>
-                          <StepBar marks={progress.marks} />
-                          <span className="min-w-0 truncate" title={progress.label}>
-                            {progress.label}
-                          </span>
-                        </>
-                      ) : waitReason ? (
-                        <>
-                          <Clock size={12} className="shrink-0" />
-                          <span className="min-w-0 truncate" title={waitReason}>
-                            {waitReason}
-                          </span>
-                        </>
-                      ) : from && fromText ? (
-                        <Tooltip
-                          label={
-                            from.listed ? `Open ${from.title}` : `${from.title} is no longer in the list`
-                          }
-                        >
-                          <span
-                            className={cx(
-                              "flex min-w-0 items-center gap-1",
-                              from.listed && "rounded-sm hover:text-fg hover:underline",
-                            )}
-                            onClick={openFrom}
-                          >
-                            <CornerUpLeft size={12} className="shrink-0" />
-                            {/* The title gives way first: the project says where to look. */}
-                            <span className="min-w-0 truncate">from {from.title}</span>
-                            {from.project && <span className="shrink-0">· {from.project}</span>}
-                          </span>
-                        </Tooltip>
-                      ) : null}
+                    <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+                      <span className="min-w-0 flex-1" title={folderPath}>
+                        <MiddlePath path={folder} />
+                      </span>
                     </span>
                     {/* The harness mark always accompanies the model. */}
                     <span className={cx(ROW_RIGHT, "text-sub text-fg-muted")}>
-                      {model && (
+                      {(model || harnessName) && (
                         <HarnessIcon
                           id={session.harness || "rustcode"}
                           name={harness?.name}
@@ -1129,45 +1071,12 @@ const ThreadRow = memo(function ThreadRow({
                         />
                       )}
                       {/* Normal figures: a tabular face (Inter) gives a model name's hyphens a digit's width. */}
-                      {model && (
-                        <span className="min-w-0 max-w-[96px] truncate normal-nums" title={model}>
-                          {model}
-                        </span>
-                      )}
-                    </span>
-                  </span>
-                  {/* Line 3: the working folder and its branch, then the computer and pull request. */}
-                  <span className={ROW_LINE}>
-                    <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-                      <ProjectMark name={project} size={14} className={markTint} />
-                      <span className="min-w-0 flex-1" title={folderPath}>
-                        <MiddlePath path={folder} />
-                      </span>
-                      {gitBranch && (
+                      {(model || harnessName) && (
                         <span
-                          className="flex min-w-0 max-w-[55%] shrink-0 items-center gap-1"
-                          title={gitBranch}
+                          className="min-w-0 max-w-[96px] truncate normal-nums"
+                          title={model || harnessName}
                         >
-                          <GitBranch size={12} className="shrink-0" />
-                          <span className="min-w-0 truncate">{rowBranch(gitBranch)}</span>
-                        </span>
-                      )}
-                    </span>
-                    <span className={cx(ROW_RIGHT, "gap-1.5")}>
-                      {place && (
-                        <span
-                          className="flex min-w-0 max-w-[104px] shrink items-center gap-1 text-sub text-fg-muted"
-                          title={
-                            unsynced
-                              ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
-                              : `Runs on ${place.name}`
-                          }
-                        >
-                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
-                          <span className="min-w-0 truncate">{place.name}</span>
-                          {unsynced && (
-                            <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />
-                          )}
+                          {model || harnessName}
                         </span>
                       )}
                       {delegates && (
@@ -1183,6 +1092,21 @@ const ThreadRow = memo(function ThreadRow({
                         </Tooltip>
                       )}
                       {pull && <PullMark pull={pull} />}
+                      {place && (
+                        <span
+                          className="flex min-w-0 max-w-[104px] shrink items-center gap-1 text-sub text-fg-muted"
+                          title={
+                            unsynced
+                              ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
+                              : `Runs on ${place.name}`
+                          }
+                        >
+                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
+                          {unsynced && (
+                            <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />
+                          )}
+                        </span>
+                      )}
                     </span>
                   </span>
                 </>
@@ -1276,7 +1200,6 @@ const PendingRow = memo(function PendingRow({
   compact?: boolean;
 }) {
   const project = projectName(pending.worktree?.repo || pending.cwd);
-  const branch = pending.worktree?.branch;
   const failure = pending.failure;
   return (
     <div className="group relative">
@@ -1293,6 +1216,7 @@ const PendingRow = memo(function PendingRow({
         {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
         <span className={cx(ROW_LINE, compact && "col-span-full")}>
           <span className={ROW_LEFT}>
+            <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
             <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
           </span>
           {/* Dismiss sits over the slot's end when the setup failed, so the words keep its room. */}
@@ -1312,27 +1236,9 @@ const PendingRow = memo(function PendingRow({
         </span>
         {!compact && (
           <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-            <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
-            <span className="min-w-0 truncate">{project}</span>
-          </span>
-        )}
-        {!compact && (
-          <span className={cx(ROW_LEFT, "gap-1 text-sub text-fg-muted")}>
-            {failure ? (
-              <span className="min-w-0 truncate text-danger" title={failure.text}>
-                {failure.text}
-              </span>
-            ) : (
-              <>
-                {pending.worktree && <span className="shrink-0 text-accent">Setting up</span>}
-                {branch && (
-                  <>
-                    <GitBranch size={12} className="ml-1 shrink-0" />
-                    <span className="min-w-0 truncate">{branch}</span>
-                  </>
-                )}
-              </>
-            )}
+            <span className="min-w-0 truncate" title={failure?.text}>
+              {failure ? failure.text : displayPath(pending.cwd)}
+            </span>
           </span>
         )}
       </button>
@@ -1619,7 +1525,7 @@ export function Sidebar() {
   // off: the layout the sidebar had before it put running work first (state/sidebarRows.ts
   // `SidebarLayout`).
   const [showWorking] = usePref(PREF.workingSection, true);
-  // One line per thread, or the three-line row (Settings › Appearance, ⌘K).
+  // One line per thread, or the two-line row (Settings › Appearance, ⌘K).
   const compact = useSidebarDensity()[0] === "compact";
   const layoutMode: SidebarLayout = showWorking ? "top" : "shelf";
   const snoozed = useApp((s) => s.snoozed);
