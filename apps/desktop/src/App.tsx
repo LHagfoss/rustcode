@@ -28,6 +28,7 @@ import { WindowControls } from "./ui/WindowControls";
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 const Board = lazy(() => import("./ui/Board").then((m) => ({ default: m.Board })));
+const Loops = lazy(() => import("./ui/Loops").then((m) => ({ default: m.Loops })));
 const Review = lazy(() => import("./ui/Review").then((m) => ({ default: m.Review })));
 const Compare = lazy(() => import("./ui/Compare").then((m) => ({ default: m.Compare })));
 
@@ -201,6 +202,7 @@ export function App() {
               ) : (
                 <Suspense fallback={<div className="flex-1 bg-bg" />}>
                   {view.kind === "board" && <Board />}
+                  {view.kind === "loops" && <Loops />}
                   {view.kind === "review" && <Review key={view.threadId} threadId={view.threadId} />}
                   {view.kind === "compare" && <Compare fanOut={view.fanOut} />}
                 </Suspense>
