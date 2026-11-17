@@ -162,6 +162,7 @@ pub(crate) async fn start(
     // The app lists its threads from the store, which has no row for a thread
     // before its first turn: this is what puts it in the sidebar now.
     server.announce_thread_created(super::ThreadCreatedNotification {
+        meta: None,
         session_id: info.session_id.clone(),
         cwd: cwd.clone(),
         title: (!info.title.trim().is_empty()).then(|| info.title.clone()),

@@ -1639,7 +1639,13 @@ impl AcpServer {
     /// machine's server owns its threads, so the app on it and every other
     /// connected app list the new row at once, whichever client asked for
     /// `session/new` (docs/desktop.md › Several machines).
-    fn announce_thread_created(&self, notification: ThreadCreatedNotification) {
+    fn announce_thread_created(&self, mut notification: ThreadCreatedNotification) {
+        if let Some(parent) = crate::config::load_session_parent(&notification.session_id) {
+            notification.meta = Some(serde_json::json!({"rustcode": {"parent": {
+                "sessionId": parent.id, "title": parent.title,
+                "relationship": parent.relationship.unwrap_or(rustcode_session::SessionRelationship::Delegate).as_str()
+            }}}));
+        }
         self.clients
             .broadcast_to(clients::Capability::Threads, notification);
     }
@@ -1814,6 +1820,8 @@ pub(crate) struct PullWatchesRequest {
 #[notification(method = "_rustcode/threads/created")]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ThreadCreatedNotification {
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
     pub session_id: String,
     pub cwd: std::path::PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2426,6 +2434,7 @@ async fn serve_connection(
                             {
                                 Ok(response) => {
                                     announced.announce_thread_created(ThreadCreatedNotification {
+                                        meta: None,
                                         session_id: response.session_id.to_string(),
                                         cwd: cwd.clone(),
                                         title: None,
@@ -2447,6 +2456,7 @@ async fn serve_connection(
                     }
                     let response = create_builtin_session(&server, &peer, request).await?;
                     server.announce_thread_created(ThreadCreatedNotification {
+                                        meta: None,
                         session_id: response.session_id.to_string(),
                         cwd,
                         title: None,

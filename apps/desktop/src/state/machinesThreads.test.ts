@@ -637,3 +637,65 @@ describe("a remote thread's operations", () => {
     expect(useApp.getState().threads[LINUX_THREAD]?.permissions).toHaveLength(1);
   });
 });
+
+test("remote announcements subscribe without selecting the thread and reconnect follows background work", async () => {
+  asListed();
+  const { conn, sent } = recordingConnection();
+  watchMachineConnection(LINUX, conn);
+  conn.receive(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "_rustcode/threads/created",
+      params: {
+        sessionId: "background-thread",
+        _meta: { rustcode: { parent: { sessionId: "parent-thread", relationship: "delegate" } } },
+        cwd: LINUX_CWD,
+        title: "Background work",
+        harness: "codex",
+      },
+    }),
+  );
+  await sleep(10);
+  const key = threadKey(LINUX, "background-thread");
+  expect(useApp.getState().sessions.find((row) => row.id === key)?.host).toBe(LINUX);
+  expect(useApp.getState().sessions.find((row) => row.id === key)?.parent).toEqual({
+    id: threadKey(LINUX, "parent-thread"),
+    title: undefined,
+    relationship: "delegate",
+  });
+  expect(
+    sent().some(
+      (frame) =>
+        frame.method === "session/load" && (frame.params as JsonObject)?.sessionId === "background-thread",
+    ),
+  ).toBe(true);
+  expect(useApp.getState().selectedId).toBeNull();
+  useApp.setState((state) => ({
+    sessions: state.sessions.map((row) => (row.id === key ? { ...row, status: "running" } : row)),
+  }));
+  watchMachineConnection(LINUX, null);
+  const again = recordingConnection();
+  watchMachineConnection(LINUX, again.conn);
+  await sleep(10);
+  expect(
+    again
+      .sent()
+      .some(
+        (frame) =>
+          frame.method === "session/load" && (frame.params as JsonObject)?.sessionId === "background-thread",
+      ),
+  ).toBe(true);
+  expect(useApp.getState().selectedId).toBeNull();
+  watchMachineConnection(LINUX, null);
+});
+
+test("an unopened remote thread reports its owner's running and needs-input states", () => {
+  asListed();
+  const { conn } = recordingConnection();
+  watchMachineConnection(LINUX, conn);
+  for (const status of ["running", "needs_input", "idle"] as const) {
+    useApp.setState((state) => ({ sessions: state.sessions.map((row) => ({ ...row, status })) }));
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe(status);
+  }
+  watchMachineConnection(LINUX, null);
+});

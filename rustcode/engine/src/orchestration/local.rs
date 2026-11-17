@@ -57,6 +57,17 @@ pub(crate) async fn answer_json(
     name: &str,
     args: &Value,
 ) -> Value {
+    answer_json_with_asker(session_id, cancel, name, args, None).await
+}
+
+/// The hub supplies the harness's permission channel for engine-owned merges.
+pub(crate) async fn answer_json_with_asker(
+    session_id: &str,
+    cancel: &CancellationToken,
+    name: &str,
+    args: &Value,
+    asker: Option<super::ask_user::Asker>,
+) -> Value {
     if !super::is_tool(name) {
         return error("invalid", format!("{name} is not an orchestration tool"));
     }
@@ -95,6 +106,9 @@ pub(crate) async fn answer_json(
         super::MESSAGE_SESSION => super::local_threads::message(session_id, args).await,
         super::FAN_OUT => super::local_threads::fan_out(session_id, args).await,
         super::UPDATE_SESSION => update_own_session(session_id, args),
+        super::MERGE_WHEN_GREEN => {
+            super::local_merge::answer(session_id, args, asker, cancel).await
+        }
         _ => app_required(name),
     };
     if let Some(key) = key
@@ -1494,16 +1508,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_tools_that_need_the_app_say_so_by_name() {
-        let cases = [
-            (
-                super::super::UPDATE_SESSION,
-                json!({"session_id": "thread-b", "title": "renamed"}),
-            ),
-            (
-                super::super::MERGE_WHEN_GREEN,
-                json!({"session_id": "thread-b"}),
-            ),
-        ];
+        let cases = [(
+            super::super::UPDATE_SESSION,
+            json!({"session_id": "thread-b", "title": "renamed"}),
+        )];
         for (tool, args) in cases {
             let answer = answer_json("thread-a", &CancellationToken::new(), tool, &args).await;
             let message = answer["error"]["message"].as_str().unwrap_or("");

@@ -25,6 +25,7 @@ use crate::tools::{ToolErrorKind, ToolExecutionOutput};
 pub mod ask_user;
 pub mod hub;
 pub mod local;
+mod local_merge;
 pub(crate) mod local_threads;
 pub mod mcp_server;
 pub mod outside;

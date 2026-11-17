@@ -1073,7 +1073,6 @@ function rememberCreated(machine: string, params: JsonObject): void {
   if (isTombstoned(threadKey(machine, id))) return;
   useMachines.setState((state) => {
     const listed = state.sessions[machine] ?? [];
-    // The client that asked for it may have listed it already, through its own `session/new`.
     if (listed.some((session) => session.id === id)) return {};
     const summary: SessionSummary = {
       id,
@@ -1082,6 +1081,7 @@ function rememberCreated(machine: string, params: JsonObject): void {
       title: str(params.title) || undefined,
       harness: str(params.harness) || undefined,
       model: str(params.model) || undefined,
+      parent: parseSessionList({ sessions: [params] }).sessions[0]?.parent,
     };
     return {
       sessions: { ...state.sessions, [machine]: [summary, ...listed] },

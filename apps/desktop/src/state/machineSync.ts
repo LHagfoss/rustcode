@@ -11,6 +11,7 @@ import {
   connectionForThread,
   errorText,
   machineOfThread,
+  openThread,
   STORAGE,
   store,
   threadIsRemote,
@@ -48,6 +49,9 @@ export function mergeMachineLists(lists: Record<string, readonly SessionSummary[
             ...session,
             id,
             host,
+            parent: session.parent
+              ? { ...session.parent, id: session.parent.id ? threadKey(host, session.parent.id) : undefined }
+              : undefined,
             title,
             // A change made while the machine was away shows until the machine has it.
             status: remoteStatusPending.get(id)?.status ?? pendingStatus(id) ?? session.status,
@@ -79,6 +83,9 @@ export function mergeMachineLists(lists: Record<string, readonly SessionSummary[
       },
     };
   });
+  for (const row of get().sessions) {
+    if (row.host && (row.status === "running" || row.status === "needs_input")) void openThread(row.id);
+  }
 }
 
 /**

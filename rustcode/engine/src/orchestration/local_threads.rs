@@ -848,6 +848,51 @@ fn deliver(engine: Engine, session_id: String, text: String, link: Option<String
     });
 }
 
+/// Deliver a background merge outcome after the originating turn releases the thread.
+pub(super) async fn merge_notice(caller: &str, number: u64, result: Value) {
+    // Keep the outcome even if the thread cannot be resumed (a removed
+    // harness or an engine shutdown must not erase what GitHub reported).
+    let receipt = crate::config::get_active_session_dir(caller)
+        .map(|dir| dir.join(format!("merge-{number}.json")));
+    if let Some(path) = &receipt
+        && let Err(why) = crate::worktrees::write_atomic(path, result.to_string().as_bytes())
+    {
+        crate::dbg_log!("merge outcome for {caller} could not be saved: {why}");
+    }
+    let summary = result
+        .get("detail")
+        .and_then(Value::as_str)
+        .or_else(|| result.pointer("/error/message").and_then(Value::as_str))
+        .unwrap_or("Merge finished");
+    let text = format!("Pull request #{number}: {summary}\n\n{result}\n\n<!-- rustcode:pull -->");
+    // The engine waits, not the model. Never interrupt the turn that requested it.
+    while crate::thread_status::is_active(caller) {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let delivered = async {
+        let engine = Engine::open(access_of(caller))
+            .await
+            .map_err(|why| why.to_string())?;
+        let meta = crate::config::session_meta_by_id(caller).ok_or("thread no longer exists")?;
+        let cwd = meta
+            .workspace_cwd
+            .clone()
+            .unwrap_or_else(|| project_of(caller, &meta).into());
+        engine
+            .request(
+                LoadSessionRequest::new(caller.to_owned(), cwd),
+                LOAD_TIMEOUT,
+            )
+            .await?;
+        engine.prompt(caller, &text).await?;
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(why) = delivered {
+        crate::dbg_log!("merge outcome for {caller} could not be delivered: {why}; {result}");
+    }
+}
+
 /// What a turn's end writes into its link.
 fn settle(link: &str, target: &str, outcome: Result<StopReason, String>) {
     let at = now();

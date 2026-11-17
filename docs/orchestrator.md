@@ -353,6 +353,7 @@ is on) and that machine's engine attaches its own tools:
 | `thread_status` with a `session_id` | The same reach a read needs: a thread in the caller's project, one the caller started, or any thread when "Let agents read threads in other projects" is on (the app's `checkManage`); otherwise `not_allowed`. |
 | `start_session`, `fan_out` | The engine starts the thread itself (below), only when the caller runs at Full access. |
 | `update_session` on the caller's own thread | Its `status` (settling it) and `pinned`, stored and told to every client. A title, a read mark, a snooze or another thread needs the app, and then nothing changes. |
+| `merge_when_green` | An engine-hosted harness validates the PR against the target thread’s branch and asks through its permission channel. A numbered own-PR merge returns `watching` after approval; the engine waits for CI and delivers the outcome as a follow-up turn. The outcome is also saved as `merge-<number>.json` in the thread folder. With no permission channel, nothing is merged. |
 | `message_session` (incl. `steer`) | The engine opens the target thread and runs the message as its next turn (below), only at Full access, and only for a thread the caller reaches (same rule as `thread_status`). |
 
 `start_session`, `message_session` and `fan_out` open a loopback ACP connection
