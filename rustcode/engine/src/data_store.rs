@@ -697,7 +697,8 @@ pub fn usage_at(
     let (key, group) = match group_by {
         GroupBy::Harness => ("COALESCE(t.harness, 'unknown') AS harness", "1"),
         GroupBy::Model => (
-            "COALESCE(t.harness, 'unknown') AS harness, COALESCE(t.model, '') AS model",
+            "COALESCE(t.harness, 'unknown') AS harness, names.model AS model, \
+             json_group_array(DISTINCT t.model) AS raw_models",
             "1, 2",
         ),
         GroupBy::Day => ("date(t.started_at) AS day", "1"),
@@ -718,8 +719,18 @@ pub fn usage_at(
             "1",
         ),
     };
+    // Resolve provider namespaces only for grouping; turns keep the harness's
+    // exact reported model. Never guess what an old `default` alias meant.
+    let model_names = if group_by == GroupBy::Model {
+        "WITH RECURSIVE names(raw, model) AS (
+         SELECT DISTINCT COALESCE(model, ''), COALESCE(model, '') FROM turns
+         UNION ALL SELECT raw, substr(model, instr(model, '/') + 1) FROM names
+         WHERE instr(model, '/') > 0) "
+    } else {
+        ""
+    };
     let mut sql = format!(
-        "SELECT {key}, \
+        "{model_names}SELECT {key}, \
                 SUM(t.input_tokens) AS input_tokens, SUM(t.output_tokens) AS output_tokens, \
                 SUM(t.cached_tokens) AS cached_tokens, \
                 SUM(t.cache_write_tokens) AS cache_write_tokens, SUM(t.cost_usd) AS cost_usd, \
@@ -740,6 +751,11 @@ pub fn usage_at(
                 SUM(CASE WHEN t.cost_usd IS NULL THEN 1 ELSE 0 END) AS turns_without_cost \
          FROM turns t LEFT JOIN threads th ON th.id = t.thread_id"
     );
+    if group_by == GroupBy::Model {
+        sql.push_str(
+            " JOIN names ON names.raw = COALESCE(t.model, '') AND instr(names.model, '/') = 0",
+        );
+    }
     let mut filters: Vec<String> = Vec::new();
     if let Some(since) = since.filter(|since| !since.trim().is_empty()) {
         // RFC 3339 in UTC sorts by string, so a day or a month both work and
@@ -4558,6 +4574,42 @@ mod tests {
 
     fn rows(answer: &Value) -> Vec<Value> {
         answer["rows"].as_array().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn model_groups_strip_provider_namespaces_and_keep_raw_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = usage_store(dir.path());
+        let connection = open(&path).unwrap();
+        connection.execute("DELETE FROM turns", []).unwrap();
+        for (index, model) in [
+            "gpt-6-luna",
+            "opencode/gpt-6-luna",
+            "openrouter/openai/gpt-6-luna",
+            "vercel-ai-gateway/openai/gpt-6-luna",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut row = turn(
+                "a",
+                &format!("2026-11-01T10:00:0{index}Z"),
+                (10, 1),
+                "completed",
+            );
+            row.model = Some((*model).to_owned());
+            write_turn(&connection, &row).unwrap();
+        }
+        let result = usage_at(&path, None, GroupBy::Model, None).unwrap();
+        assert_eq!(result["rows"].as_array().unwrap().len(), 1);
+        assert_eq!(result["rows"][0]["model"], "gpt-6-luna");
+        assert_eq!(result["rows"][0]["turns"], 4);
+        assert!(
+            result["rows"][0]["raw_models"]
+                .as_str()
+                .unwrap()
+                .contains("openrouter/openai/gpt-6-luna")
+        );
     }
 
     #[test]
