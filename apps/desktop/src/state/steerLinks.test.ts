@@ -54,7 +54,7 @@ beforeEach(() => {
       [TARGET]: {
         ...emptyThread(TARGET, CWD, "Run the tests"),
         load: { phase: "loaded" as const },
-        running: true,
+        turn: { kind: "user" as const, startedAt: 0 },
       },
     },
   }));
@@ -64,7 +64,7 @@ afterAll(() => resetForTests());
 
 const turnEnds = (outcome: "completed" | "cancelled" | "failed", failed?: string) => {
   useApp.setState((s) => ({
-    threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: false } },
+    threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, turn: undefined } },
   }));
   threadTurnEnded(TARGET, false, outcome, failed, [
     { kind: "assistant", id: "a1", text: "All 12 tests pass" },
@@ -89,7 +89,10 @@ describe("a delegate steered mid-turn", () => {
     turnEnds("cancelled");
     expect(state("steer-1")?.state).toBe("cancelled");
     useApp.setState((s) => ({
-      threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: true } },
+      threads: {
+        ...s.threads,
+        [TARGET]: { ...s.threads[TARGET]!, turn: { kind: "user" as const, startedAt: 0 } },
+      },
     }));
     linkSteered(TARGET, "steer-2", "second change");
     turnEnds("failed", "the provider refused");
@@ -132,7 +135,7 @@ describe("a delegate steered mid-turn", () => {
 
   test("a steer that lands after the turn ended is answered by the queued copy or by the turn that read it", () => {
     useApp.setState((st) => ({
-      threads: { ...st.threads, [TARGET]: { ...st.threads[TARGET]!, running: false } },
+      threads: { ...st.threads, [TARGET]: { ...st.threads[TARGET]!, turn: undefined } },
     }));
     // The engine handed it back already: the queued copy carries the link, behind a failed turn's fate.
     updateThread(TARGET, (t) => ({ ...t, queue: [{ id: "q1", text: "wrap up now" }] }));
@@ -151,7 +154,10 @@ describe("a delegate steered mid-turn", () => {
     linkSteered(TARGET, "steer-1", "first change");
     turnEnds("completed");
     useApp.setState((s) => ({
-      threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: true } },
+      threads: {
+        ...s.threads,
+        [TARGET]: { ...s.threads[TARGET]!, turn: { kind: "user" as const, startedAt: 0 } },
+      },
     }));
     linkSteered(TARGET, "steer-2", "second change");
     expect(state("steer-2")?.state).toBe("working");
@@ -164,7 +170,7 @@ describe("a link whose thread stopped (issue 3541)", () => {
   const idle = () =>
     useApp.setState((s) => ({
       sessionsLoaded: true,
-      threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: false } },
+      threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, turn: undefined } },
     }));
 
   test("Stop settles a working link whose thread runs nothing, and the banner and spinner go", async () => {

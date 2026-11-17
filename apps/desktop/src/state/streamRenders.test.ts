@@ -18,6 +18,7 @@ import {
   beginTurn,
   emptyThread,
   finishTurn,
+  isRunning,
   type ThreadState,
   type TranscriptItem,
 } from "./thread";
@@ -65,7 +66,7 @@ function stream(keep: boolean, mountedOnly: boolean): Counts {
   const counts: Counts = { folds: 0, groups: 0, footers: 0, rail: 0, reply: 0 };
   for (let chunk = 0; chunk <= CHUNKS; chunk++) {
     if (chunk > 0) t = applyUpdate(t, { kind: "agent", text: `word ${chunk} ` }, 5_000 + chunk);
-    const built = groupTools(foldTurns(t.items, t.running, NOTHING_OPEN), NOTHING_OPEN);
+    const built = groupTools(foldTurns(t.items, isRunning(t), NOTHING_OPEN), NOTHING_OPEN);
     const next = keep ? keepUnchangedRows(rows, built) : built;
     const nextTraces = keep ? turnItemsByEnd(t.items, traces) : sliceTurns(t.items);
     // The timeline rail (memoised) is handed the checkpoints of the turns' messages: none here.

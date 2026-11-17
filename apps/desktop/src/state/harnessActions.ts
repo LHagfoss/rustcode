@@ -35,6 +35,7 @@ import {
   updateThread,
   useApp,
 } from "./store";
+import { isRunning } from "./thread";
 import { LOCAL_HOST, splitThreadKey } from "./threadKeys";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
@@ -475,7 +476,7 @@ export function switchNewThreadHarness(harness: string) {
  */
 export async function switchThreadAccount(id: string, account: string | null): Promise<boolean> {
   const thread = get().threads[id];
-  if (!thread || thread.running) return false;
+  if (!thread || isRunning(thread)) return false;
   const harness = thread.harness?.id;
   if (!harness) return false;
   const host = splitThreadKey(id).host;
@@ -528,7 +529,7 @@ export async function switchThreadHarness(
   choice: { model?: string; effort?: string; reason?: "limit"; quiet?: boolean } = {},
 ): Promise<boolean> {
   const thread = get().threads[id];
-  if (!thread || thread.running) return false;
+  if (!thread || isRunning(thread)) return false;
   const host = splitThreadKey(id).host;
   const last = harnessesOn(get(), host)?.harnesses.find((h) => h.id === harness)?.last;
   try {

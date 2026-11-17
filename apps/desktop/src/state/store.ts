@@ -353,10 +353,13 @@ import {
   applyUpdate,
   beginQuietTurn,
   beginTurn,
+  endTurn,
   finishTurn,
   foldingBatch,
   isContinueMessage,
+  isRunning,
   isWakeMessage,
+  isWoken,
   localId,
   requeueSteers,
   settleEveryWait,
@@ -364,6 +367,7 @@ import {
   type ThreadState,
   waitingOn,
   wakeTurn,
+  withChildActivity,
   withContinueMark,
 } from "./thread";
 import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
@@ -1537,7 +1541,7 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
       threads: Object.fromEntries(
         Object.entries(s.threads).map(([key, t]) => {
           if (splitThreadKey(key).host !== id) return [key, t];
-          if (t.running) return [key, finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN)];
+          if (isRunning(t)) return [key, finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN)];
           return [key, t.permissions.length ? { ...t, permissions: [] } : t];
         }),
       ),
@@ -1563,7 +1567,7 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
     threads: Object.fromEntries(
       Object.entries(s.threads).map(([key, t]) =>
         splitThreadKey(key).host === id
-          ? [key, { ...t, load: { phase: "idle" as const }, running: false }]
+          ? [key, { ...endTurn(t), load: { phase: "idle" as const } }]
           : [key, t],
       ),
     ),
@@ -1765,7 +1769,7 @@ async function handshake(): Promise<void> {
       threads: Object.fromEntries(
         Object.entries(s.threads).map(([id, t]) => [
           id,
-          { ...t, load: { phase: "idle" as const }, running: false, permissions: [] },
+          { ...endTurn(t), load: { phase: "idle" as const }, permissions: [] },
         ]),
       ),
     }));
@@ -1970,10 +1974,10 @@ function onSessionActivity(params: unknown) {
   if (!id || !get().threads[id]) return;
   const background = typeof p?.background === "number" ? p.background : 0;
   const before = get().threads[id];
-  const wokenEnd = state !== "running" && !!before?.running && !!before.woken;
+  const wokenEnd = state !== "running" && isRunning(before) && isWoken(before);
   updateThread(id, (t) => {
     if (state === "running") return wakeTurn(t);
-    const ended = t.running && t.woken ? finishTurn(t, "completed") : t;
+    const ended = isRunning(t) && isWoken(t) ? finishTurn(t, "completed") : t;
     if (state === "waiting") return { ...ended, waiting: background || undefined };
     return { ...ended, waiting: undefined };
   });
@@ -1998,17 +2002,17 @@ function onChildActivity(params: unknown) {
   const activeAgo = typeof p?.activeAgoMs === "number" ? p.activeAgoMs : undefined;
   const now = Date.now();
   updateThread(id, (t) =>
-    processes > 0
-      ? {
-          ...t,
-          children: {
+    withChildActivity(
+      t,
+      processes > 0
+        ? {
             processes,
             cpuMs,
             ...(busiest ? { busiest } : {}),
             ...(activeAgo !== undefined ? { activeAt: now - activeAgo } : {}),
-          },
-        }
-      : { ...t, children: undefined },
+          }
+        : undefined,
+    ),
   );
 }
 
@@ -2029,7 +2033,7 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
         threads: Object.fromEntries(
           Object.entries(s.threads).map(([id, t]) => [
             id,
-            t.running ? finishTurn(t, "failed", Date.now(), "The server stopped during this turn.") : t,
+            isRunning(t) ? finishTurn(t, "failed", Date.now(), "The server stopped during this turn.") : t,
           ]),
         ),
       }));
@@ -2455,11 +2459,11 @@ export async function runPrompt(
   // sent, and neither is the turn that continues after a wait.
   if (userTypedPrompt(options, text)) markMessaged(id);
   // Whoever starts a turn now moots the wait, and if this one stops the same way it waits again.
-  if (!options.autoResume && !options.autoCompact && !thread?.running) dropWaits(id);
+  if (!options.autoResume && !options.autoCompact && !isRunning(thread)) dropWaits(id);
   // Never a second prompt into a running turn: an external harness takes it as the next turn and can
   // interrupt the tools it is still running (a parent's wait_session). It waits in the queue, like a
   // message typed meanwhile, and starts when this turn ends.
-  if (thread?.running) {
+  if (isRunning(thread)) {
     // An automatic compaction never waits in the queue: the next turn may run
     // before it, and the guards will offer another one in a later idle period.
     if (options.autoCompact) return "skipped";
@@ -2595,7 +2599,7 @@ export async function runPrompt(
     if (error instanceof ConnectionClosedError && threadIsRemote(id)) {
       // The channel's close usually ended the turn already (`watchMachineConnection`); when a
       // closed channel is what refused the request, this is what ends it.
-      if (get().threads[id]?.running)
+      if (isRunning(get().threads[id]))
         updateThread(id, (t) => finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN));
       lostTurn(id, [options.link, ...(options.resumeLinks ?? []), ...takeSteeredLinks(id)]);
       return "skipped";
@@ -2715,7 +2719,7 @@ export async function cancel(id = get().selectedId): Promise<void> {
   // still stops it.
   const engineRuns =
     !!get().engineRunning[id] || (!isLoaded(thread) && engineBusy(sessionById(get(), id)?.status));
-  if (!thread?.running && !engineRuns) return;
+  if (!isRunning(thread) && !engineRuns) return;
   // Recorded first: a quit inside the harness's cancel grace would otherwise leave the thread
   // listed as running, and the restart would resume a turn the user stopped.
   noteStopped(id);
@@ -2731,7 +2735,7 @@ export async function cancel(id = get().selectedId): Promise<void> {
     toast(errorText(error), "error");
     return;
   }
-  void forceStopIfStuck(id, thread?.turnStartedAt);
+  void forceStopIfStuck(id, thread?.turn?.startedAt);
 }
 
 /**
@@ -2741,12 +2745,12 @@ export async function cancel(id = get().selectedId): Promise<void> {
 export async function stopNow(id: string, waitMs = 3_000): Promise<boolean> {
   await cancel(id);
   const until = Date.now() + waitMs;
-  while (get().threads[id]?.running && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
-  if (get().threads[id]?.running) {
+  while (isRunning(get().threads[id]) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+  if (isRunning(get().threads[id])) {
     await closeThread(id);
-    updateThread(id, (t) => (t.running ? finishTurn(t, "cancelled", Date.now()) : t));
+    updateThread(id, (t) => (isRunning(t) ? finishTurn(t, "cancelled", Date.now()) : t));
   }
-  return !get().threads[id]?.running;
+  return !isRunning(get().threads[id]);
 }
 
 /** The stops waiting to be forced: one per thread, however many times Stop is pressed. */
@@ -2766,12 +2770,12 @@ async function forceStopIfStuck(id: string, turnStartedAt: number | undefined): 
     const now = get();
     const thread = now.threads[id];
     // Ended, or a new turn began since: nothing is stuck.
-    const sameTurn = !!thread?.running && thread.turnStartedAt === turnStartedAt;
-    const engineStill = !thread?.running && !!now.engineRunning[id];
+    const sameTurn = isRunning(thread) && thread.turn?.startedAt === turnStartedAt;
+    const engineStill = !isRunning(thread) && !!now.engineRunning[id];
     if (!sameTurn && !engineStill) return;
     toast("The turn did not stop, so it was ended.", "info");
     await closeThread(id);
-    updateThread(id, (t) => (t.running ? finishTurn(t, "cancelled", Date.now()) : t));
+    updateThread(id, (t) => (isRunning(t) ? finishTurn(t, "cancelled", Date.now()) : t));
     set((s) => {
       const { [id]: _gone, ...rest } = s.engineRunning;
       return _gone ? { engineRunning: rest } : {};
@@ -3168,7 +3172,7 @@ export function worktreeOf(s: AppState, id: string): Worktree | undefined {
 export async function removeWorktree(id: string): Promise<void> {
   const wt = worktreeOf(get(), id);
   if (!wt || !connection) return;
-  if (get().threads[id]?.running) {
+  if (isRunning(get().threads[id])) {
     toast("Stop the running turn before removing its worktree.", "info");
     return;
   }
@@ -3235,7 +3239,7 @@ export function setSmartUi(on: boolean) {
 export function sendFromView(id: string, text: string) {
   const thread = get().threads[id];
   if (!thread || !connection) return;
-  if (thread.running) {
+  if (isRunning(thread)) {
     updateThread(id, (t) => ({ ...t, queue: [...t.queue, { id: localId("queued"), text, fromView: true }] }));
     toast("Queued: the view's message goes when this turn ends");
     return;

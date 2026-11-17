@@ -25,7 +25,7 @@ import {
   updateThread,
   useApp,
 } from "./store";
-import { localId, type ThreadState, type TranscriptItem } from "./thread";
+import { isRunning, localId, type ThreadState, type TranscriptItem } from "./thread";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
 // while this one loads.
@@ -99,7 +99,7 @@ function keepsAbandonedState(): boolean {
  */
 export async function rewindCheckpoint(id: string, checkpoint: Checkpoint): Promise<void> {
   const thread = get().threads[id];
-  if (!thread || thread.running) return;
+  if (!thread || isRunning(thread)) return;
   const rewind = canRewind(thread);
   const keep = rewind && keepsAbandonedState();
   const go = () => void runRewind(id, checkpoint.turn, { rewind, keep });
@@ -178,7 +178,7 @@ function abandonsAt(thread: ThreadState, turn: number): TranscriptItem[] | undef
 export function returnToAttempt(threadId: string, attemptId: string): void {
   const attempt = get().attempts[threadId]?.find((a) => a.id === attemptId);
   const thread = get().threads[threadId];
-  if (!attempt || attempt.head === undefined || !thread || thread.running) return;
+  if (!attempt || attempt.head === undefined || !thread || isRunning(thread)) return;
   const head = attempt.head;
   askConfirm({
     title: "Go back to this attempt?",

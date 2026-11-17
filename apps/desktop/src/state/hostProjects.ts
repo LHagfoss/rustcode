@@ -32,6 +32,7 @@ import {
 } from "./projectBook";
 import { remoteRepository } from "./projects";
 import { errorText, request, useApp } from "./store";
+import { isRunning } from "./thread";
 import { LOCAL_HOST } from "./threadKeys";
 /** A folder as the project book files it, the same rule `projectOf` reads. */
 export const projectPath = (path: string) => cleanProjectPath(path);
@@ -44,7 +45,7 @@ function projectThreads(path: string): { threads: number; working: boolean } {
   for (const x of s.sessions) {
     if (projectOf({ folder: x.cwd, worktree: x.worktree }) !== path) continue;
     threads += 1;
-    working ||= !!s.threads[x.id]?.running || x.status === "running";
+    working ||= isRunning(s.threads[x.id]) || x.status === "running";
   }
   return { threads, working };
 }
@@ -136,7 +137,7 @@ export async function readProjectOn(machine: MachineRef, path: string): Promise<
       path: at,
       name: projectName(at),
       threads: threads.length,
-      working: threads.some((x) => !!useApp.getState().threads[x.id]?.running || x.status === "running"),
+      working: threads.some((x) => isRunning(useApp.getState().threads[x.id]) || x.status === "running"),
     },
   };
 }

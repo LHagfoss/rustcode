@@ -20,6 +20,7 @@ import {
   type UpdateInfo,
   updateChannels,
 } from "../lib/updater";
+import { isRunning, type ThreadTurn } from "./thread";
 
 /** How often the app checks while its window is in front: a HEAD request to the release page. */
 export const UPDATE_CHECK_MS = 30_000;
@@ -360,9 +361,9 @@ export function autoInstallDecision(facts: AutoInstallFacts): "install" | "wait"
 
 /** Whether any thread is working: a running turn, background commands it waits on, an approval or a question. */
 export function anyThreadBusy(
-  threads: Record<string, { running: boolean; waiting?: number; permissions: unknown[] }>,
+  threads: Record<string, { turn?: ThreadTurn; waiting?: number; permissions: unknown[] }>,
 ): boolean {
-  return Object.values(threads).some((t) => t.running || (t.waiting ?? 0) > 0 || t.permissions.length > 0);
+  return Object.values(threads).some((t) => isRunning(t) || (t.waiting ?? 0) > 0 || t.permissions.length > 0);
 }
 
 /** How long to wait before the next automatic try after `failures` failures, or null to stop and leave it to the sidebar row. */

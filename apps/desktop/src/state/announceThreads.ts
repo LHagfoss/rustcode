@@ -7,6 +7,7 @@ import { isLoading, openError } from "./thread";
 
 import { isTauri } from "../acp/transport";
 import type { ThreadState } from "./thread";
+import { isQuiet, isRunning } from "./thread";
 
 /** The part of a thread an announcement is read from. */
 export interface ThreadMoment {
@@ -36,10 +37,10 @@ export function momentOf(thread: ThreadState | undefined, failedAt: number | und
     undefined,
   );
   return {
-    running: thread?.running ?? false,
-    quiet: thread?.quiet,
+    running: isRunning(thread),
+    quiet: isQuiet(thread),
     request: request ? { key: String(request.rpcId), question: !!request.question } : undefined,
-    failed: !thread?.running && (!!(openError(thread) ?? thread?.error) || failedAt !== undefined),
+    failed: !isRunning(thread) && (!!(openError(thread) ?? thread?.error) || failedAt !== undefined),
     continues: (thread?.waiting ?? 0) > 0 || (thread?.queue.length ?? 0) > 0,
     loading: isLoading(thread) ?? false,
   };

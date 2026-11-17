@@ -68,7 +68,7 @@ import {
   useApp,
   viewingThread,
 } from "./store";
-import { emptyThread, finishLoad, localId, type ThreadState } from "./thread";
+import { emptyThread, finishLoad, isRunning, localId, type ThreadState } from "./thread";
 import { renameThread } from "./threadActions";
 import { LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 import { clearFinished } from "./threadNotices";
@@ -353,7 +353,7 @@ export function setDefaultCwd(cwd: string) {
  */
 export async function moveThread(id: string, cwd: string): Promise<boolean> {
   const thread = get().threads[id];
-  if (thread?.running) {
+  if (isRunning(thread)) {
     toast("Stop the running turn before moving this thread to another folder.");
     return false;
   }
@@ -529,7 +529,7 @@ export async function repairThread(id: string): Promise<void> {
     toast("This server cannot repair threads. Update RustCode.", "error");
     return;
   }
-  if (get().threads[id]?.running) {
+  if (isRunning(get().threads[id])) {
     toast("Stop the running turn before repairing this thread.");
     return;
   }

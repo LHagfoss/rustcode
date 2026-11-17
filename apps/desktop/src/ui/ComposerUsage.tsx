@@ -27,7 +27,7 @@ import {
   submit,
   useApp,
 } from "../state/store";
-import { formatTokens, relativeAge } from "../state/thread";
+import { formatTokens, isRunning, relativeAge } from "../state/thread";
 import { usagePressTarget } from "../state/usagePage";
 import { cx, Pill, Segments, surfaceCollisionPadding, Tooltip, tipSurface } from "./primitives";
 
@@ -125,7 +125,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
     return s.planCache[key] ?? (threadId ? undefined : onlyCachedPlan(s.planCache));
   });
   const usage = useApp((s) => (threadId ? s.threads[threadId]?.usage : undefined));
-  const running = useApp((s) => (threadId ? (s.threads[threadId]?.running ?? false) : false));
+  const running = useApp((s) => (threadId ? isRunning(s.threads[threadId]) : false));
   const { plan, cached: fromCache } = shownPlan(own, cached);
   // The card's numbers are read when it opens, not while it is closed.
   // biome-ignore lint/correctness/useExhaustiveDependencies: once per opening

@@ -46,7 +46,7 @@ import {
   useThreadOffline,
   worktreeOf,
 } from "../state/store";
-import { formatClock, type ThreadState } from "../state/thread";
+import { formatClock, isRunning, type ThreadState } from "../state/thread";
 import { retryThread } from "../state/threadActions";
 import { splitThreadKey } from "../state/threadKeys";
 import { failureHarness, turnErrorAdvice } from "../state/turnError";
@@ -566,7 +566,7 @@ function signedOutText(thread: ThreadState): string | undefined {
  * while a turn runs.
  */
 function ErrorFixes({ thread }: { thread: ThreadState }) {
-  if (thread.running) return null;
+  if (isRunning(thread)) return null;
   const { fixes } = turnErrorAdvice(
     thread.errorDetail ?? openError(thread) ?? thread.error,
     contextPercent(thread.usage),

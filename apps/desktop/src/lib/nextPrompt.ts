@@ -5,6 +5,7 @@ import { openError } from "../state/thread";
 // reply that offers nothing suggests nothing. Tab puts it in the field to edit; it is never sent.
 
 import type { ThreadState, TranscriptItem } from "../state/thread";
+import { isRunning } from "../state/thread";
 import { readFlag, writeFlag } from "./storage";
 
 const KEY = "rustcode.nextPrompt";
@@ -163,7 +164,13 @@ function isAside(item: TranscriptItem): boolean {
  * turn has no `turnEnd` row until the next message; its timing (`pendingTurn`) stands in for it.
  */
 export function completedReply(thread: ThreadState): { id: string; text: string } | null {
-  if (thread.running || thread.permissions.length || thread.queue.length || openError(thread) || thread.error)
+  if (
+    isRunning(thread) ||
+    thread.permissions.length ||
+    thread.queue.length ||
+    openError(thread) ||
+    thread.error
+  )
     return null;
   let ended = false;
   for (let i = thread.items.length - 1; i >= 0; i--) {

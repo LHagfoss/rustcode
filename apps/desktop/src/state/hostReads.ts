@@ -31,6 +31,7 @@ import {
   searchThreads,
   useApp,
 } from "./store";
+import { isRunning } from "./thread";
 import { splitThreadKey, threadKey } from "./threadKeys";
 /** Models listed per harness: an agent's context pays for each one. */
 export const LISTED_MODELS = 12;
@@ -301,7 +302,7 @@ export function listProjects(s: AppState): JsonObject {
     if (!path || isRootFolder(path) || isDataFolder(path)) continue;
     const entry = byPath.get(path) ?? { path, threads: 0, working: false, updatedAt: 0 };
     entry.threads += 1;
-    entry.working ||= !!s.threads[x.id]?.running || x.status === "running";
+    entry.working ||= isRunning(s.threads[x.id]) || x.status === "running";
     entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
     byPath.set(path, entry);
   }

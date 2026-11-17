@@ -4,6 +4,7 @@
 
 import type { SessionSummary } from "../acp/types";
 import { useApp } from "./store";
+import { isRunning } from "./thread";
 import { LOCAL_HOST, splitThreadKey } from "./threadKeys";
 import { sessionById } from "./threadStatus";
 
@@ -34,7 +35,7 @@ function keepDue(key: string, kept: { at: number }): boolean {
   const now = Date.now();
   if (now - kept.at <= KEEP_UNLISTED_MS) return true;
   const s = get();
-  if (!s.threads[key]?.running && sessionById(s, key)?.status !== "running") return false;
+  if (!isRunning(s.threads[key]) && sessionById(s, key)?.status !== "running") return false;
   kept.at = now;
   return true;
 }

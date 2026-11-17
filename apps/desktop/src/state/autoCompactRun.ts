@@ -34,7 +34,7 @@ import {
   updateThread,
   useApp,
 } from "./store";
-import { localId, settleCompaction, type ThreadState } from "./thread";
+import { isRunning, localId, settleCompaction, type ThreadState } from "./thread";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
 // while this one loads.
@@ -176,7 +176,7 @@ function autoCompactInput(s: AppState, id: string, now: number) {
     now,
     idleSince: lastTurnEndedAt(thread),
     status: statusOf(s, id),
-    running: thread?.running ?? false,
+    running: isRunning(thread),
     queued: thread?.queue.length ?? 0,
     approvals: thread?.permissions.length ?? 0,
     waiting: (thread?.waiting ?? 0) > 0,
@@ -275,7 +275,7 @@ function runAutoCompact(id: string): void {
           // Read before the compaction, and again now: the work it held up must still be owed. A
           // delegate that settled while it ran is carried by its wake, not by a second turn.
           workInFlight: wasWorking && workInFlightOn(after, id),
-          running: thread?.running ?? false,
+          running: isRunning(thread),
           queued: thread?.queue.length ?? 0,
           // What the user is composing counts as having the thread back, text or attachments.
           typing: !!(after.drafts[id] ?? "").trim() || hasExtras(after.extras[id]),

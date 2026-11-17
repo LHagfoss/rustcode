@@ -118,7 +118,7 @@ import {
   useMachineOfThread,
   useThreadOffline,
 } from "../state/store";
-import { localId, shortAge, type ThreadState } from "../state/thread";
+import { isRunning, localId, shortAge, type ThreadState } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./Attachments";
 import { UsageMeter } from "./ComposerUsage";
@@ -385,7 +385,7 @@ export const Composer = memo(function Composer({
   // The send-later dialog: opened from the + menu, with the draft it is scheduling.
   const [sendLater, setSendLater] = useState(false);
 
-  const running = thread?.running ?? false;
+  const running = isRunning(thread);
   // A thread on a paired computer that is not connected now is read-only: its turns run there,
   // and the header and a note over the field say which computer it is (state/store.ts `threadOffline`).
   const offline = useThreadOffline(thread?.id);
@@ -444,7 +444,7 @@ export const Composer = memo(function Composer({
   // The threads that work or ask right now, as their rows say it: read as lists so a streamed chunk
   // somewhere else does not redraw the composer.
   const working = useApp(
-    useShallow((s) => Object.values(s.threads).flatMap((t) => (t.running ? [t.id] : []))),
+    useShallow((s) => Object.values(s.threads).flatMap((t) => (isRunning(t) ? [t.id] : []))),
   );
   const asking = useApp(
     useShallow((s) => Object.values(s.threads).flatMap((t) => (t.permissions.length ? [t.id] : []))),
@@ -1842,7 +1842,7 @@ function LimitWaitRow({ threadId }: { threadId: string }) {
   const wait = useApp((s) => s.limitWaits[threadId]);
   const offline = useApp((s) => s.internetWaits[threadId]);
   // Once it is continuing, the turn says so; the wait is settled when it ends.
-  const running = useApp((s) => s.threads[threadId]?.running);
+  const running = useApp((s) => isRunning(s.threads[threadId]));
   if ((!wait && !offline) || running) return null;
   const text = offline
     ? "Waiting for the internet, then it continues"

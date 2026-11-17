@@ -18,6 +18,18 @@ import { type ComposeExtras, type SentAttachment, splitImageMarkers } from "./co
 import type { Link } from "./orchestration";
 import { activeStep, advancePlanClocks, type PlanClocks, type SteerNote } from "./steer";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "./toolNames";
+import { type ChildActivity, isQuiet, isRunning, type ThreadTurn, type TurnKind } from "./turn";
+
+// The running turn lives in `turn.ts`; callers read it from here with the rest of the thread.
+export {
+  type ChildActivity,
+  isQuiet,
+  isRunning,
+  isWoken,
+  queueHeld,
+  type ThreadTurn,
+  type TurnKind,
+} from "./turn";
 
 export type TranscriptItem =
   | {
@@ -370,18 +382,6 @@ export const toolInFlight = (status: ToolStatus | undefined, turnRunning: boolea
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
 
-/** What the engine last saw of the processes a harness started, from `_rustcode/session/childActivity`. */
-export interface ChildActivity {
-  /** How many are running. */
-  processes: number;
-  /** CPU time they have used in total, in milliseconds. */
-  cpuMs: number;
-  /** The one that used the most (`rustc`). */
-  busiest?: string;
-  /** When they last added CPU, in this app's clock; absent while they have not. */
-  activeAt?: number;
-}
-
 export interface ThreadState {
   id: string;
   cwd: string;
@@ -405,26 +405,18 @@ export interface ThreadState {
    * toward the transcript, then they are dropped (`ui/QueuedMessages.tsx` `LeavingQueuedRow`).
    */
   departing?: QueuedPrompt[];
-  running: boolean;
-  turnStartedAt?: number;
-  /** The running turn's usage samples, handed to its footer when it ends. */
-  turnUsage?: TurnUsage;
-  /** Background commands the last turn parked on; it resumes when they finish. */
+  /**
+   * The turn that runs, or none while the thread is idle. Everything that lives only as long as a
+   * turn is in it, so ending one ({@link endTurn}) leaves nothing behind. Read it through
+   * {@link isRunning}, {@link isWoken} and {@link isQuiet}.
+   */
+  turn?: ThreadTurn;
+  /**
+   * Background commands the turn parked on; it resumes when they finish. Not part of {@link turn}:
+   * the engine reports it while a turn of the app still runs and after it ended, and a turn that
+   * starts clears it.
+   */
   waiting?: number;
-  /**
-   * The processes the running turn's harness started (a build, a test run), as the engine last
-   * sampled them. A tool that prints nothing for minutes still counts as progress while they use
-   * CPU (`orchestration.ts` `stallNotice`). Gone when the turn ends.
-   */
-  children?: ChildActivity;
-  /** The running turn is one the engine resumed itself, not a prompt the app sent. */
-  woken?: boolean;
-  /**
-   * The running turn is the app's own (an automatic compaction): it writes no
-   * rows, so the answer the user has not read stays the last thing in the
-   * transcript and one notice below it says what the app did (`applyUpdate`).
-   */
-  quiet?: boolean;
   /** Lifecycle of the thread history replay, separate from turn failures. */
   load: ThreadLoad;
   harness?: SessionHarness;
@@ -469,7 +461,6 @@ export function emptyThread(id: string, cwd: string, title?: string): ThreadStat
     configOptions: [],
     permissions: [],
     queue: [],
-    running: false,
     load: { phase: "idle" },
   };
 }
@@ -481,16 +472,17 @@ export function emptyThread(id: string, cwd: string, title?: string): ThreadStat
  */
 function closePendingTurn(state: ThreadState, now = Date.now()): ThreadState {
   const turn = state.pendingTurn;
-  const started = state.turnStartedAt;
+  const started = state.turn?.startedAt;
   // Nothing to close: no timing came back and no turn of this app runs.
-  if (!turn && !(state.running && started !== undefined)) return state;
+  if (!turn && started === undefined) return state;
   const outcome = turn?.outcome === "cancelled" || turn?.outcome === "failed" ? turn.outcome : "completed";
   const elapsedMs = turn?.elapsedMs ?? (started !== undefined ? Math.max(0, now - started) : undefined);
   const settled = settleEveryWait(state, now);
   return {
     ...settled,
     pendingTurn: undefined,
-    turnUsage: undefined,
+    // The footer below takes the samples; the turn, if it still runs, starts a new count.
+    turn: settled.turn && { ...settled.turn, usage: undefined },
     items: [
       ...settled.items,
       {
@@ -500,7 +492,7 @@ function closePendingTurn(state: ThreadState, now = Date.now()): ThreadState {
         at: turn?.at ?? now,
         // The app watched this turn run only if it started it: a replay has no start.
         startedAt: turn ? undefined : started,
-        usage: turn ? undefined : state.turnUsage,
+        usage: turn ? undefined : state.turn?.usage,
         outcome,
       },
     ],
@@ -604,7 +596,7 @@ function quietHides(state: ThreadState, update: SessionUpdate): boolean {
 /** Fold one update into the thread. Pure: returns the same object when nothing changed. */
 export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Date.now()): ThreadState {
   // A quiet turn leaves the transcript where it was, above a notice row.
-  if (state.quiet && quietHides(state, update)) return state;
+  if (isQuiet(state) && quietHides(state, update)) return state;
   const last = state.items[state.items.length - 1];
   switch (update.kind) {
     case "user": {
@@ -674,7 +666,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           startedAt: now,
           durationMs: update.durationMs,
           // A replayed thought carries its duration and is already over.
-          done: update.durationMs !== undefined && !state.running,
+          done: update.durationMs !== undefined && !isRunning(state),
         }),
       };
     }
@@ -729,7 +721,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       const output =
         update.output ??
         (update.outputDelta !== undefined ? (item.output ?? "") + update.outputDelta : item.output);
-      const background = backgroundOf(item, update, output, state.running);
+      const background = backgroundOf(item, update, output, isRunning(state));
       const ended = !background && (update.status === "completed" || update.status === "failed");
       next[index] = {
         ...item,
@@ -753,7 +745,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
     case "plan": {
       // Each step's clock runs while the turn is on it, so the card can say how long it has taken
       // and how long it took (`state/steer.ts`).
-      const planClocks = advancePlanClocks(state.planClocks, update.entries, now, state.running);
+      const planClocks = advancePlanClocks(state.planClocks, update.entries, now, isRunning(state));
       return { ...state, plan: update.entries, planClocks };
     }
     case "title":
@@ -763,11 +755,10 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
     case "usage": {
       // A usage update while the turn runs is one round's totals: the Trace
       // chip under the turn prices its model calls from them.
-      const turnUsage =
-        state.running && state.turnUsage
-          ? { ...state.turnUsage, samples: [...state.turnUsage.samples, { at: now, usage: update.usage }] }
-          : state.turnUsage;
-      return { ...state, usage: update.usage, turnUsage };
+      const turn = state.turn;
+      if (!turn?.usage) return { ...state, usage: update.usage };
+      const samples = [...turn.usage.samples, { at: now, usage: update.usage }];
+      return { ...state, usage: update.usage, turn: { ...turn, usage: { ...turn.usage, samples } } };
     }
     case "compaction": {
       // One quiet row, whichever harness compacted: "Compacting context…" while it runs, which the
@@ -827,6 +818,40 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
   }
 }
 
+/**
+ * The one way into a running turn: a fresh {@link ThreadTurn} replaces whatever an earlier one
+ * left, and what only an idle thread has (a held queue, the background commands it waited on, the
+ * last turn's error) goes with it.
+ */
+function startTurn(state: ThreadState, kind: TurnKind, now: number, usage: TurnUsage): ThreadState {
+  return {
+    ...state,
+    turn: { kind, startedAt: now, usage },
+    // A turn starts the queue: what a stopped turn held is running again.
+    queueHeld: undefined,
+    waiting: undefined,
+    error: undefined,
+    errorDetail: undefined,
+  };
+}
+
+/**
+ * The one way out of a turn without its footer (the connection that ran it went away): the thread
+ * is idle, with nothing of the turn left. {@link finishTurn} is the way out that writes one.
+ */
+export function endTurn(state: ThreadState): ThreadState {
+  return state.turn === undefined ? state : { ...state, turn: undefined };
+}
+
+/**
+ * What the engine last sampled of the processes the running turn's harness started, or none when
+ * they all exited. A sample that arrives after the turn ended belongs to no turn and is dropped.
+ */
+export function withChildActivity(state: ThreadState, children: ChildActivity | undefined): ThreadState {
+  if (!state.turn) return state;
+  return { ...state, turn: { ...state.turn, children } };
+}
+
 export function beginTurn(
   state: ThreadState,
   text: string,
@@ -839,16 +864,7 @@ export function beginTurn(
 ): ThreadState {
   const closed = closePendingTurn(state);
   return {
-    ...closed,
-    running: true,
-    // A turn starts the queue: what a stopped turn held is running again.
-    queueHeld: undefined,
-    turnStartedAt: now,
-    turnUsage: usageBaseline(state),
-    waiting: undefined,
-    woken: undefined,
-    error: undefined,
-    errorDetail: undefined,
+    ...startTurn(closed, "user", now, usageBaseline(state)),
     items: [
       ...closed.items,
       {
@@ -881,31 +897,16 @@ export function beginTurn(
 export function beginQuietTurn(state: ThreadState, now = Date.now()): ThreadState {
   // The answer above it ends here, whatever the turn's own timing left open.
   const closed = closePendingTurn(state);
-  return {
-    ...closed,
-    running: true,
-    quiet: true,
-    queueHeld: undefined,
-    turnStartedAt: now,
-    turnUsage: usageBaseline(state),
-    waiting: undefined,
-    woken: undefined,
-    error: undefined,
-    errorDetail: undefined,
-  };
+  return startTurn(closed, "quiet", now, usageBaseline(state));
 }
 
 export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
-  if (state.running) return { ...state, waiting: undefined };
+  if (isRunning(state)) return { ...state, waiting: undefined };
+  // The engine's own turn leaves a hold the user's stop put on the queue as it was.
+  const { queueHeld } = state;
   return {
-    ...state,
-    running: true,
-    woken: true,
-    waiting: undefined,
-    turnStartedAt: now,
-    turnUsage: usageBaseline(state),
-    error: undefined,
-    errorDetail: undefined,
+    ...startTurn(state, "woken", now, usageBaseline(state)),
+    queueHeld,
     items: [
       ...state.items,
       { kind: "notice", id: localId("wake"), text: "Background task finished", tone: "info" },
@@ -958,7 +959,8 @@ export function finishTurn(
       ? { ...item, status: (outcome === "completed" ? "completed" : "failed") as ToolStatus, endedAt: now }
       : item,
   );
-  const elapsedMs = state.turnStartedAt !== undefined ? now - state.turnStartedAt : undefined;
+  const startedAt = state.turn?.startedAt;
+  const elapsedMs = startedAt !== undefined ? now - startedAt : undefined;
   // A compaction still "running" when its turn ends did not finish. A failed turn says why; a
   // stopped one leaves nothing; the app's own (quiet) turn leaves it to the store, which waits for
   // the usage that proves the context moved before it says "Compacted automatically".
@@ -979,21 +981,15 @@ export function finishTurn(
         ? settleCompaction({ ...state, items }, null).items
         : items;
   return {
-    ...state,
-    running: false,
-    quiet: undefined,
+    ...endTurn(state),
     // A turn that completed runs the queue on (store.ts `runPrompt`); one the user stopped, or that
     // failed, leaves its messages in order for Resume. A message that stopped the turn (`restart`)
     // starts as soon as the stop lands.
     queueHeld: holdsQueue(outcome) && state.queue.length && !state.queue[0]?.restart ? true : undefined,
-    turnStartedAt: undefined,
-    woken: undefined,
-    children: undefined,
     pendingTurn: undefined,
     permissions: [],
     error,
     errorDetail: undefined,
-    turnUsage: undefined,
     items: quiet
       ? compacting
       : [
@@ -1003,8 +999,8 @@ export function finishTurn(
             id: localId("turn"),
             elapsedMs,
             at: now,
-            startedAt: state.turnStartedAt,
-            usage: state.turnUsage,
+            startedAt,
+            usage: state.turn?.usage,
             outcome,
           },
         ],

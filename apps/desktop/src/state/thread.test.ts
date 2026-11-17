@@ -17,6 +17,7 @@ import {
   diffLines,
   dropDeparted,
   emptyThread,
+  endTurn,
   finishLoad,
   finishTurn,
   foldingBatch,
@@ -25,10 +26,14 @@ import {
   idleSettled,
   isLoaded,
   isLoading,
+  isQuiet,
+  isRunning,
+  isWoken,
   lastWords,
   messageTime,
   newDayMessages,
   openError,
+  queueHeld,
   requeueSteers,
   settledWait,
   settleEveryWait,
@@ -45,6 +50,7 @@ import {
   waitingOn,
   wakeLine,
   wakeTurn,
+  withChildActivity,
   withContinueMark,
   withWakeMark,
   workingLabel,
@@ -213,7 +219,7 @@ describe("thread reducer", () => {
     let s = beginTurn(emptyThread("s", "/p"), "go", 0);
     s = applyUpdate(s, { kind: "toolCall", id: "c", title: "bash", status: "in_progress", diffs: [] }, 10);
     s = finishTurn(s, "cancelled", 4000);
-    expect(s.running).toBe(false);
+    expect(isRunning(s)).toBe(false);
     expect(s.items[1]).toMatchObject({ status: "failed" });
     expect(s.items.at(-1)).toMatchObject({ kind: "turnEnd", outcome: "cancelled", elapsedMs: 4000 });
   });
@@ -407,7 +413,7 @@ describe("a turn's usage samples", () => {
   test("a usage update outside a turn is the session's, not a turn's", () => {
     let s = emptyThread("s", "/p");
     s = applyUpdate(s, usage(1_000, 100, 0.01), 1_500);
-    expect(s.turnUsage).toBeUndefined();
+    expect(isRunning(s)).toBe(false);
     expect(s.usage?.inputTokens).toBe(1_000);
   });
 });
@@ -676,7 +682,7 @@ describe("compaction", () => {
 
   test("a running compaction does not outlive its turn", () => {
     const during = applyUpdate(
-      { ...emptyThread("s", "/p"), running: true },
+      { ...emptyThread("s", "/p"), turn: { kind: "user" as const, startedAt: 0 } },
       phase("started", "Compacting context…"),
     );
     const stopped = finishTurn(during, "cancelled", 2_000);
@@ -694,9 +700,12 @@ describe("compaction", () => {
     });
     // No compaction, no row: a failed turn adds nothing about one.
     expect(
-      finishTurn({ ...emptyThread("s", "/p"), running: true }, "failed", 2_000, "x").items.some(
-        (i) => i.kind === "notice",
-      ),
+      finishTurn(
+        { ...emptyThread("s", "/p"), turn: { kind: "user" as const, startedAt: 0 } },
+        "failed",
+        2_000,
+        "x",
+      ).items.some((i) => i.kind === "notice"),
     ).toBe(false);
   });
 
@@ -717,7 +726,7 @@ describe("compaction", () => {
   test("a quiet turn writes no rows, so the answer above it stays the last one", () => {
     const before = answered();
     const quiet = beginQuietTurn(before, 1_300);
-    expect(quiet.quiet).toBe(true);
+    expect(isQuiet(quiet)).toBe(true);
     expect(quiet.items).toEqual(before.items);
 
     const during = [
@@ -740,7 +749,7 @@ describe("compaction", () => {
 
     // Its end is quiet too: no second footer, and the flag is gone.
     const ended = finishTurn(notice, "completed", 1_500, undefined, true);
-    expect(ended.quiet).toBeUndefined();
+    expect(isQuiet(ended)).toBe(false);
     expect(ended.items.at(-1)).toMatchObject({ kind: "notice", text: "Compacted automatically." });
   });
 
@@ -795,7 +804,7 @@ describe("a turn the engine wakes", () => {
   test("runs again with a quiet line, and a parked count clears", () => {
     const parked = { ...finishTurn(beginTurn(emptyThread("s", "/p"), "go", 0), "completed", 5), waiting: 2 };
     const woken = wakeTurn(parked, 10);
-    expect(woken).toMatchObject({ running: true, woken: true, waiting: undefined, turnStartedAt: 10 });
+    expect(woken).toMatchObject({ turn: { kind: "woken", startedAt: 10 }, waiting: undefined });
     expect(woken.items.at(-1)).toMatchObject({
       kind: "notice",
       tone: "info",
@@ -805,7 +814,7 @@ describe("a turn the engine wakes", () => {
     // Already running (the prompt has not answered yet): nothing to add.
     const running = beginTurn(emptyThread("s", "/p"), "go", 0);
     expect(wakeTurn(running, 10).items).toHaveLength(running.items.length);
-    expect(finishTurn(woken, "completed", 20).woken).toBeUndefined();
+    expect(isWoken(finishTurn(woken, "completed", 20))).toBe(false);
   });
 });
 
@@ -1316,18 +1325,22 @@ describe("wake turns and the queue they hold", () => {
     expect(sentMessages([{ kind: "user", text, continued: true }])).toEqual([]);
     // And it starts a turn like any other, with the thread working again.
     const started = beginTurn(emptyThread("s", "/p"), text);
-    expect(started.running).toBe(true);
+    expect(isRunning(started)).toBe(true);
     expect(started.items.at(-1)).toMatchObject({ kind: "user", continued: true });
   });
 
   test("a turn that completed runs the queue on; a stopped or failed one holds it", () => {
     const queued = { id: "q1", text: "next" };
-    const running = { ...emptyThread("s", "/p"), running: true, queue: [queued] };
+    const running = {
+      ...emptyThread("s", "/p"),
+      turn: { kind: "user" as const, startedAt: 0 },
+      queue: [queued],
+    };
     expect(finishTurn(running, "completed").queueHeld).toBeUndefined();
     expect(finishTurn(running, "cancelled").queueHeld).toBe(true);
     expect(finishTurn(running, "failed").queueHeld).toBe(true);
     // Nothing queued: nothing to hold.
-    const empty = { ...emptyThread("s", "/p"), running: true };
+    const empty = { ...emptyThread("s", "/p"), turn: { kind: "user" as const, startedAt: 0 } };
     expect(finishTurn(empty, "cancelled").queueHeld).toBeUndefined();
     // A turn starting clears it: the held queue runs again.
     const held = { ...emptyThread("s", "/p"), queueHeld: true, queue: [queued] };
@@ -1366,5 +1379,108 @@ describe("thread load lifecycle", () => {
     expect(isLoaded(undefined)).toBe(false);
     expect(isLoading(undefined)).toBe(false);
     expect(openError(undefined)).toBeUndefined();
+  });
+});
+
+describe("the turn state machine", () => {
+  const usage = (used: number) => ({
+    kind: "usage" as const,
+    usage: { used, size: 200_000, estimated: false },
+  });
+  const busy = { processes: 2, cpuMs: 4_000, busiest: "rustc", activeAt: 1_500 };
+
+  test("idle is no turn at all", () => {
+    const idle = emptyThread("s", "/p");
+    expect(idle.turn).toBeUndefined();
+    expect(isRunning(idle)).toBe(false);
+    expect(isRunning(undefined)).toBe(false);
+  });
+
+  test("each way in names who started the turn and when", () => {
+    const idle = emptyThread("s", "/p");
+    expect(beginTurn(idle, "go", 10).turn).toMatchObject({ kind: "user", startedAt: 10 });
+    expect(beginQuietTurn(idle, 20).turn).toMatchObject({ kind: "quiet", startedAt: 20 });
+    expect(wakeTurn(idle, 30).turn).toMatchObject({ kind: "woken", startedAt: 30 });
+    expect([isRunning, isQuiet, isWoken].map((is) => is(beginQuietTurn(idle, 20)))).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect([isRunning, isQuiet, isWoken].map((is) => is(wakeTurn(idle, 30)))).toEqual([true, false, true]);
+  });
+
+  test("starting a turn clears what only an idle thread has", () => {
+    const left: ThreadState = {
+      ...emptyThread("s", "/p"),
+      queue: [{ id: "q", text: "later" }],
+      queueHeld: true,
+      waiting: 2,
+      error: "boom",
+      errorDetail: "HTTP 500",
+    };
+    for (const started of [beginTurn(left, "go", 10), beginQuietTurn(left, 10)]) {
+      expect(started).toMatchObject({ queueHeld: undefined, waiting: undefined, error: undefined });
+      expect(started.errorDetail).toBeUndefined();
+    }
+    // The engine's own turn keeps the hold a stop left, as it always did; the queue does not run
+    // under a turn either way.
+    const woken = wakeTurn(left, 10);
+    expect(woken).toMatchObject({ queueHeld: true, waiting: undefined, error: undefined });
+    expect(queueHeld(woken)).toBe(false);
+  });
+
+  test("a turn that starts over a quiet one is the user's, with nothing of the old one", () => {
+    const quiet = withChildActivity(beginQuietTurn(emptyThread("s", "/p"), 10), busy);
+    const next = beginTurn(quiet, "go", 50);
+    expect(next.turn).toEqual({ kind: "user", startedAt: 50, usage: expect.anything() });
+    expect(isQuiet(next)).toBe(false);
+  });
+
+  test("a wake while a turn runs leaves that turn as it is", () => {
+    const running = { ...beginTurn(emptyThread("s", "/p"), "go", 10), waiting: 1 };
+    const woken = wakeTurn(running, 40);
+    expect(woken.turn).toBe(running.turn);
+    expect(woken.waiting).toBeUndefined();
+  });
+
+  test("finishing clears the whole turn in one step and hands its clock and usage to the footer", () => {
+    let s = wakeTurn(emptyThread("s", "/p"), 1_000);
+    s = applyUpdate(s, usage(5), 1_200);
+    s = withChildActivity(s, busy);
+    expect(s.turn?.usage?.samples).toHaveLength(1);
+    expect(s.turn?.children).toEqual(busy);
+    const done = finishTurn(s, "completed", 3_000);
+    expect(done.turn).toBeUndefined();
+    expect(done.items.at(-1)).toMatchObject({ kind: "turnEnd", startedAt: 1_000, elapsedMs: 2_000 });
+    expect(done.items.at(-1)).toMatchObject({ usage: { samples: [{ at: 1_200 }] } });
+  });
+
+  test("a turn that ends without a footer leaves nothing behind either", () => {
+    const s = withChildActivity(beginQuietTurn(emptyThread("s", "/p"), 10), busy);
+    const ended = endTurn(s);
+    expect(ended.turn).toBeUndefined();
+    expect(ended.items).toBe(s.items);
+    const idle = emptyThread("s", "/p");
+    expect(endTurn(idle)).toBe(idle);
+  });
+
+  test("usage and child activity belong to a running turn only", () => {
+    const idle = emptyThread("s", "/p");
+    expect(withChildActivity(idle, busy)).toBe(idle);
+    const reported = applyUpdate(idle, usage(7), 100);
+    expect(reported.usage?.used).toBe(7);
+    expect(reported.turn).toBeUndefined();
+    const running = withChildActivity(beginTurn(idle, "go", 10), busy);
+    expect(withChildActivity(running, undefined).turn?.children).toBeUndefined();
+  });
+
+  test("a held queue only holds while no turn runs", () => {
+    const held = finishTurn(
+      { ...beginTurn(emptyThread("s", "/p"), "go", 0), queue: [{ id: "q", text: "next" }] },
+      "cancelled",
+      10,
+    );
+    expect(queueHeld(held)).toBe(true);
+    expect(queueHeld({ ...held, turn: { kind: "woken", startedAt: 20 } })).toBe(false);
   });
 });

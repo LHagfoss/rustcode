@@ -128,7 +128,10 @@ describe("send later", () => {
     await withStorage(null, async () => {
       await openMockThread("mock-thread-1");
       // A turn runs: the message goes behind it instead of starting one of its own.
-      updateThread("mock-thread-1", (t) => ({ ...t, running: true }));
+      updateThread("mock-thread-1", (t) => ({
+        ...t,
+        turn: { kind: "user" as const, startedAt: Date.now() },
+      }));
       scheduleMessage("mock-thread-1", "after this turn", emptyExtras, Date.now() + 5);
       await sleep(10);
       await continueDueScheduled();
@@ -144,7 +147,7 @@ describe("send later", () => {
     await withStorage(null, async () => {
       await openMockThread("mock-thread-1");
       // The user stopped a turn: its queue waits for Resume, and a due message joins it, not starts it.
-      updateThread("mock-thread-1", (t) => ({ ...t, running: false, queueHeld: true }));
+      updateThread("mock-thread-1", (t) => ({ ...t, turn: undefined, queueHeld: true }));
       scheduleMessage("mock-thread-1", "wait for resume", emptyExtras, Date.now() + 5);
       await sleep(10);
       await continueDueScheduled();

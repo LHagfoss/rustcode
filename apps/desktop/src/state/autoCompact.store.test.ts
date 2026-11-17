@@ -31,6 +31,7 @@ import {
   useApp,
 } from "./store";
 import type { TranscriptItem } from "./thread";
+import { isRunning } from "./thread";
 
 const until = async (check: () => boolean, ms = 2000) => {
   const start = Date.now();
@@ -127,7 +128,7 @@ describe("auto-compaction in the store", () => {
     expect(compactPrompt(id)).toBe(false);
 
     const running = runPrompt(id, "keep working");
-    await until(() => useApp.getState().threads[id]?.running === true);
+    await until(() => isRunning(useApp.getState().threads[id]) === true);
     await cancel(id);
     await running;
     await settle(80);
@@ -270,7 +271,7 @@ describe("quiet automatic compaction", () => {
     expect(compactPrompt(id)).toBe(false);
     expect(after.items.slice(before).some((item) => item.kind === "user")).toBe(false);
     expect(after.items.slice(before).some((item) => item.kind === "turnEnd")).toBe(false);
-    expect(after.running).toBe(false);
+    expect(isRunning(after)).toBe(false);
   });
 
   test("the answer above it stays the last answer, not folded away", async () => {
@@ -312,7 +313,7 @@ describe("quiet automatic compaction", () => {
     const stop = useApp.subscribe((state) => {
       const items = state.threads[id]?.items ?? [];
       if (items.some((item) => item.kind === "notice" && item.progress)) {
-        shown = state.threads[id]?.running === true;
+        shown = isRunning(state.threads[id]) === true;
       }
     });
     scheduleAutoCompact(id);
@@ -345,7 +346,7 @@ describe("quiet automatic compaction", () => {
     await cancel(id);
     await running;
     expect(compactionRows(id)).toHaveLength(0);
-    expect(useApp.getState().threads[id]!.running).toBe(false);
+    expect(isRunning(useApp.getState().threads[id]!)).toBe(false);
   });
 });
 
@@ -382,7 +383,7 @@ describe("carrying on after an automatic compaction", () => {
     // A normal prompt asks the mock for approval; stopping ends the test's turn.
     await cancel(id);
     await settle(40);
-    expect(useApp.getState().threads[id]!.running).toBe(false);
+    expect(isRunning(useApp.getState().threads[id]!)).toBe(false);
   });
 
   test("a thread that finished everything it was doing stays stopped", async () => {
@@ -394,7 +395,7 @@ describe("carrying on after an automatic compaction", () => {
     await until(() => compacted(id));
     await settle(80);
     expect(continuedRow(id)).toBeUndefined();
-    expect(useApp.getState().threads[id]!.running).toBe(false);
+    expect(isRunning(useApp.getState().threads[id]!)).toBe(false);
   });
 
   test("a turn the user stopped is not carried on", async () => {
@@ -475,7 +476,7 @@ describe("carrying on after an automatic compaction", () => {
 
     expect(continuedRow(id)).toBeUndefined();
     expect(id in useApp.getState().snoozed).toBe(true);
-    expect(useApp.getState().threads[id]!.running).toBe(false);
+    expect(isRunning(useApp.getState().threads[id]!)).toBe(false);
   });
 
   test("the continue's own turn does not start another automatic compaction", async () => {
@@ -489,7 +490,7 @@ describe("carrying on after an automatic compaction", () => {
     // the size rule here would compact, continue, compact… for ever on a harness whose compaction
     // left the context where it was.
     await allowEdit(id);
-    await until(() => useApp.getState().threads[id]!.running === false);
+    await until(() => isRunning(useApp.getState().threads[id]!) === false);
     updateThread(id, (t) => ({ ...t, usage: usage(160_000) }));
     clearFinished(id);
     scheduleAutoCompact(id);

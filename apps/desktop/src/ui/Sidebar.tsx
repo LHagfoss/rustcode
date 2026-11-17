@@ -157,7 +157,7 @@ import {
   wakeSnoozed,
   worktreeOf,
 } from "../state/store";
-import { formatClock, idleSettled, shortAge } from "../state/thread";
+import { formatClock, idleSettled, isRunning, shortAge } from "../state/thread";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { CustomSnooze } from "./CustomSnooze";
@@ -806,8 +806,8 @@ const ThreadRow = memo(function ThreadRow({
   const local = useLocalIdentity();
   const platform = appPlatform();
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
-  const running = useApp((s) => s.threads[session.id]?.running ?? false);
-  const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
+  const running = useApp((s) => isRunning(s.threads[session.id]));
+  const startedAt = useApp((s) => s.threads[session.id]?.turn?.startedAt);
   // No turn runs, but the threads it started or messaged still work (state/waiting.ts).
   const wait = useWaiting(session.id);
   const wake = useApp((s) => s.snoozed[session.id]);
@@ -1584,7 +1584,7 @@ export function Sidebar() {
   // Which threads need you or work, as a string so a streamed chunk does not change it.
   const flags = useApp((s) =>
     Object.values(s.threads)
-      .map((t) => (t.permissions.length ? `${t.id}:n` : t.running ? `${t.id}:w` : ""))
+      .map((t) => (t.permissions.length ? `${t.id}:n` : isRunning(t) ? `${t.id}:w` : ""))
       .join(" "),
   );
   // When each request reached the app and each running turn started, as one string for the same
@@ -1593,7 +1593,7 @@ export function Sidebar() {
     Object.values(s.threads)
       .flatMap((t) => {
         const asked = t.permissions[0]?.at;
-        const sent = t.turnStartedAt;
+        const sent = t.turn?.startedAt;
         return asked === undefined && sent === undefined ? [] : [`${t.id}:${asked ?? ""}:${sent ?? ""}`];
       })
       .join(" "),

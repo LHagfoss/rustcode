@@ -30,7 +30,7 @@ import {
   toggleSidebar,
   useApp,
 } from "../state/store";
-import { relativeAge } from "../state/thread";
+import { isRunning, relativeAge } from "../state/thread";
 import { createSkillWithAgent, startNewThreadFromContext } from "../state/threadOpen";
 import {
   CircleCheck,
@@ -274,7 +274,7 @@ export function baseActions(): PaletteAction[] {
       label: "Restart server",
       icon: RefreshCw,
       words: "engine",
-      disabled: Object.values(s.threads).some((t) => t.running) ? "A turn is running" : undefined,
+      disabled: Object.values(s.threads).some((t) => isRunning(t)) ? "A turn is running" : undefined,
       run: () => void restartEngine(),
     },
   ];

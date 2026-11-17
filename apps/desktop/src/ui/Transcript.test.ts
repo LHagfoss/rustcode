@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { Provider as TooltipProvider } from "@radix-ui/react-tooltip";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { appendSteer, emptyThread, stripMarks, withPullMark, withWorkflowMark } from "../state/thread";
+import {
+  appendSteer,
+  emptyThread,
+  stripMarks,
+  type ThreadState,
+  withPullMark,
+  withWorkflowMark,
+} from "../state/thread";
 import { UserRow } from "./Rows";
 import { estimatedRowHeight, queueRows, type Row, rowGap } from "./Transcript";
 
@@ -105,7 +112,7 @@ describe("the height a row is reserved at", () => {
 describe("a notice queued behind a running turn (issue 3709)", () => {
   const thread = (queue: { id: string; text: string }[]) => ({
     ...emptyThread("s", "/p"),
-    running: true,
+    turn: { kind: "user" as const, startedAt: 0 },
     queue,
   });
 
@@ -131,7 +138,7 @@ describe("a notice queued behind a running turn (issue 3709)", () => {
   test("a held queue of notices is resumable but counts no messages", () => {
     const held = {
       ...thread([{ id: "q1", text: withPullMark("Pull request #1: Merged") }]),
-      running: false,
+      turn: undefined,
       queueHeld: true,
     };
     const rows = queueRows(held, []);
@@ -157,7 +164,7 @@ describe("a notice queued behind a running turn (issue 3709)", () => {
 
 describe("a steered message (issue 3711)", () => {
   test("is drawn once: its bubble says Steered, and no divider repeats it", () => {
-    let state = { ...emptyThread("s", "/p"), running: true };
+    let state: ThreadState = { ...emptyThread("s", "/p"), turn: { kind: "user", startedAt: 0 } };
     state = appendSteer(state, "dont cut new release", 1000);
     // The note stays on the thread for the plan card, and none of it is a transcript row of its own.
     expect(state.steers).toHaveLength(1);

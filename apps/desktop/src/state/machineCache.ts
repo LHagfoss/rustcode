@@ -274,7 +274,6 @@ export function threadFromTranscript(cached: CachedTranscript): ThreadState {
     configOptions: [],
     permissions: [],
     queue: [],
-    running: false,
     load: { phase: "loaded" },
     harness: cached.harness,
   };

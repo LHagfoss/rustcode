@@ -366,7 +366,7 @@ describe("answer_request", () => {
 describe("update_session settles a thread (issue 3529)", () => {
   test("a thread settled in the middle of its turn reports settled, and is settled once the turn ends", async () => {
     const { parent } = await staged();
-    updateThread(parent, (t) => ({ ...t, running: true }));
+    updateThread(parent, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: 0 } }));
     const answer = await answerOrchestration({
       sessionId: parent,
       tool: "update_session",
@@ -378,7 +378,7 @@ describe("update_session settles a thread (issue 3529)", () => {
     expect(answer.running).toBe(true);
     expect(useApp.getState().sessions.find((x) => x.id === parent)?.status).toBe("done");
     // The turn ends unseen (the user is elsewhere): the thread is settled, not "just finished".
-    updateThread(parent, (t) => ({ ...t, running: false }));
+    updateThread(parent, (t) => ({ ...t, turn: undefined }));
     markFinished(parent);
     expect(statusOf(useApp.getState(), parent)).toBe("done");
     // Settling an unread thread reads it: no unseen finish keeps it in the active list.
@@ -558,7 +558,7 @@ describe("message_session attachments", () => {
     const { parent, child } = await staged();
     fullAccess(parent);
     // A busy thread takes the message into its queue: the files have to go with it.
-    updateThread(child, (t) => ({ ...t, running: true }));
+    updateThread(child, (t) => ({ ...t, turn: { kind: "user" as const, startedAt: 0 } }));
     const file = "/Users/you/code/rustcode/docs/orchestrator.md";
     const answer = await answerOrchestration({
       sessionId: parent,

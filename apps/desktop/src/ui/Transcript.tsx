@@ -53,6 +53,8 @@ import {
   useApp,
 } from "../state/store";
 import {
+  isQuiet,
+  isRunning,
   newDayMessages,
   noticeLine,
   type QueuedPrompt,
@@ -426,9 +428,10 @@ export function Transcript({
   const innerRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
-  const now = useNow(thread.running);
+  const running = isRunning(thread);
+  const now = useNow(running);
   const latestEndId = thread.items.findLast((item) => item.kind === "turnEnd")?.id;
-  const settlingId = useTurnSettle(thread.id, thread.running, latestEndId);
+  const settlingId = useTurnSettle(thread.id, running, latestEndId);
 
   // Finished turns fold into one summary row each (state/fold.ts); find opens them all so it can reach every step.
   const [open, setOpen] = useState<ReadonlySet<string>>(() => openFolds.get(thread.id) ?? NO_FOLDS);
@@ -446,11 +449,11 @@ export function Transcript({
   // The turn that just ended, while its finished header can still hold its check: the latest end
   // is a completed turn and its fold is closed (an open fold already shows the steps).
   const settleEnd = useMemo(() => {
-    if (!settlingId || thread.running) return undefined;
+    if (!settlingId || running) return undefined;
     const end = thread.items.find((item) => item.id === settlingId);
     if (end?.kind !== "turnEnd" || end.outcome !== "completed") return undefined;
     return (searching ? ALL_OPEN : open).has(turnFoldKey(end.id)) ? undefined : end;
-  }, [settlingId, thread.running, thread.items, searching, open]);
+  }, [settlingId, running, thread.items, searching, open]);
   // A subagent's steps fold into its own row instead of filling the thread.
   const { items: visible, steps: subagentSteps } = useMemo(
     () => splitSubagentSteps(thread.items),
@@ -485,7 +488,7 @@ export function Transcript({
     // and the same quiet notice said back to back reads as one row with its count.
     const shown = searching ? ALL_OPEN : open;
     const grouped: Row[] = collapseRepeats(
-      collapseNotices(groupTools(foldTurns(visible, thread.running, shown, { showTools }), shown)),
+      collapseNotices(groupTools(foldTurns(visible, running, shown, { showTools }), shown)),
       (item) => item.kind === "user" && item.text === RESUME_TEXT,
     ).filter(
       // The turn that just finished keeps its live header for a moment instead of its fold
@@ -561,7 +564,7 @@ export function Transcript({
     out.push(...loose);
     // A quiet turn is the app's own (an automatic compaction): it draws no working line, so the
     // transcript the reader is on does not move for it, and the notice it leaves is the record.
-    if ((thread.running && !thread.quiet) || settleEnd) {
+    if ((running && !isQuiet(thread)) || settleEnd) {
       // `Working for 12s` heads the turn, under the message that started it; when the turn just
       // ended, the same row holds a green check for a moment instead of vanishing.
       let at = out.length;
@@ -573,7 +576,7 @@ export function Transcript({
       }
       out.splice(at, 0, {
         key: "working",
-        working: { done: !thread.running, elapsedMs: settleEnd?.elapsedMs },
+        working: { done: !running, elapsedMs: settleEnd?.elapsedMs },
       });
       // The foot says what it does now unless the last row already does (a call
       // or thought still running, a reply streaming).
@@ -610,7 +613,7 @@ export function Transcript({
         plan: {
           threadId: thread.id,
           entries: thread.plan,
-          running: thread.running,
+          running,
           steers: thread.steers,
           clocks: thread.planClocks,
         },
@@ -629,6 +632,7 @@ export function Transcript({
     started,
     links,
     thread,
+    running,
     open,
     searching,
     wait,
@@ -1021,7 +1025,7 @@ export function Transcript({
     if (!showLatest) return undefined;
     const approvals = thread.permissions.filter((p) => !p.question).length;
     if (approvals) return approvals === 1 ? "Approval" : `${approvals} approvals`;
-    if (thread.running) return workingLabel(visible);
+    if (running) return workingLabel(visible);
     if (wait) return waitingLabel(wait);
     // The last turn's subagents, once they have all stopped: what the reader scrolled away from.
     let agents = 0;
@@ -1041,7 +1045,7 @@ export function Transcript({
     }
     if (!ended || !agents || finished !== agents) return undefined;
     return `${agents} ${agents === 1 ? "agent" : "agents"} finished`;
-  }, [thread.permissions, thread.running, showLatest, visible, wait]);
+  }, [thread.permissions, running, showLatest, visible, wait]);
 
   const onWheel = (e: React.WheelEvent) => {
     // Scrolling up during a stream unpins at once, before the next chunk pulls the view down.
@@ -1191,7 +1195,7 @@ export function Transcript({
         // each (`state/announceThreads.ts`), never every token or tool call a log would read out.
         aria-label={spokenTitle}
         aria-live="off"
-        aria-busy={thread.running}
+        aria-busy={running}
       >
         <div ref={innerRef} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
           {/* The rendered rows sit in normal flow under one offset: a row that grows pushes the
@@ -1300,7 +1304,7 @@ export function Transcript({
                       <ResumeQueueRow threadId={row.resume.threadId} count={row.resume.count} />
                     ) : row.working ? (
                       <WorkingRow
-                        startedAt={thread.turnStartedAt}
+                        startedAt={thread.turn?.startedAt}
                         now={now}
                         done={row.working.done}
                         elapsedMs={row.working.elapsedMs}
@@ -1319,7 +1323,7 @@ export function Transcript({
                       <UserRow
                         item={item}
                         threadId={peek ? undefined : thread.id}
-                        busy={thread.running}
+                        busy={running}
                         rewind={rewind}
                         // Consecutive messages from the same side soften the corners they share.
                         after={rows[v.index - 1]?.item?.kind === "user"}
@@ -1330,10 +1334,10 @@ export function Transcript({
                       <AssistantRow
                         item={item}
                         threadId={thread.id}
-                        streaming={thread.running && v.index === lastIndex}
+                        streaming={running && v.index === lastIndex}
                       />
                     ) : item?.kind === "thought" ? (
-                      <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
+                      <ThoughtRow item={item} live={running && !item.done && v.index === lastIndex} />
                     ) : item?.kind === "tool" && (subagentOf(item) || subagentSteps.has(item.id)) ? (
                       <SubagentRow
                         item={item}
@@ -1404,7 +1408,7 @@ export function Transcript({
         nodes={checkpointNodes}
         onRewind={rewind ? railRewind : undefined}
         keepsAttempts={keepsAttempts}
-        busy={thread.running}
+        busy={running}
       />
       <button
         type="button"

@@ -39,7 +39,7 @@ import {
   useApp,
   watchMachineConnection,
 } from "./store";
-import { emptyThread, type ThreadState, type TranscriptItem } from "./thread";
+import { emptyThread, isRunning, type ThreadState, type TranscriptItem } from "./thread";
 
 const STUDIO = "gw-8e1f4b7a5c2d4e6f";
 const LINUX = "gw-7c1d9e4f2a8b6d30";
@@ -122,7 +122,7 @@ describe("the transcripts kept", () => {
     expect(back?.cwd).toBe("/Users/lars/code/studio");
     const restored = threadFromTranscript(back!);
     expect(isLoaded(restored)).toBe(true);
-    expect(restored.running).toBe(false);
+    expect(isRunning(restored)).toBe(false);
     expect(restored.id).toBe(KEY);
   });
 
@@ -292,7 +292,7 @@ describe("a machine that is away", () => {
     expect(await openThread(KEY)).toBeNull();
     const opened = useApp.getState().threads[KEY]!;
     expect(opened.items.map((i) => i.id)).toEqual(["u1", "a1"]);
-    expect(opened.running).toBe(false);
+    expect(isRunning(opened)).toBe(false);
     expect(isLoading(opened)).toBe(false);
     expect(threadOffline(KEY)).toBe(true);
 

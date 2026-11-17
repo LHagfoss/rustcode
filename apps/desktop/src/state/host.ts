@@ -208,6 +208,7 @@ import {
   appendNotice,
   attachAutoAllowed,
   autoAllowedNoticeNeeded,
+  isRunning,
   localId,
   type QueuedPrompt,
   type TranscriptItem,
@@ -516,7 +517,7 @@ export function ruleThread(s: AppState, id: string): RuleThread | undefined {
     // Only a thread an agent started is the orchestration's to reach; a fork or side chat is not.
     parent: delegateParent(summary?.parent)?.id,
     updatedAt: summary?.updatedAt,
-    running: thread?.running ?? false,
+    running: isRunning(thread),
     harness: thread?.harness?.id ?? summary?.harness,
     status: statusOf(s, id),
   };
@@ -966,7 +967,7 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
   const version = machine.host ? (saved?.version ?? null) : await localAppVersion();
   const st = useApp.getState();
   const threads = st.sessions.filter((x) => (x.host ?? LOCAL_HOST) === machine.host);
-  const running = threads.filter((x) => !!st.threads[x.id]?.running || x.status === "running").length;
+  const running = threads.filter((x) => isRunning(st.threads[x.id]) || x.status === "running").length;
   const waiting = threads.reduce((n, x) => n + (st.threads[x.id]?.permissions.length ?? 0), 0);
   return {
     id: machine.id,
@@ -1228,7 +1229,7 @@ async function projectsOnMachine(machine: MachineRef): Promise<JsonObject> {
       updatedAt: 0,
     };
     entry.threads += 1;
-    entry.working ||= !!useApp.getState().threads[x.id]?.running || x.status === "running";
+    entry.working ||= isRunning(useApp.getState().threads[x.id]) || x.status === "running";
     entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
     rows.set(path, entry);
   }
@@ -2218,7 +2219,7 @@ function queuesChanged(state: AppState): void {
 /** The head of a restored queue starts a turn, once the thread is idle. */
 function drainQueue(id: string): void {
   const thread = useApp.getState().threads[id];
-  if (thread && !thread.running && !thread.queueHeld) void resumeQueue(id);
+  if (thread && !isRunning(thread) && !thread.queueHeld) void resumeQueue(id);
 }
 
 /**
@@ -2263,7 +2264,7 @@ function wakeContext(now: number): WakeContext {
   const remember = (id: string) => {
     if (threads[id]) return;
     const thread = ruleThread(s, id);
-    if (thread) threads[id] = { title: thread.title, running: !!s.threads[id]?.running };
+    if (thread) threads[id] = { title: thread.title, running: isRunning(s.threads[id]) };
   };
   for (const link of s.links.links) {
     const target = s.threads[link.target];
@@ -2273,7 +2274,8 @@ function wakeContext(now: number): WakeContext {
     remember(link.orchestrator);
     remember(link.target);
     if (!answers[link.target]) answers[link.target] = latestReply(target?.items ?? []);
-    if (!activity[link.target]) activity[link.target] = activityOf(target?.items ?? [], target?.children);
+    if (!activity[link.target])
+      activity[link.target] = activityOf(target?.items ?? [], target?.turn?.children);
   }
   for (const [id, ids] of waiting) said[id] = [...ids];
   // What each parent's queued wake rows already report: their turn delivers it, marked when it starts.
@@ -2409,7 +2411,7 @@ function sendWake(wake: Wake, ctx: WakeContext, now: number): void {
   }
   const wakeLinks = wakeIds(wake);
   const wakeAsking = askingIds(wake);
-  if (parent.running) {
+  if (isRunning(parent)) {
     // A child that needs the user is read by the running turn when the harness takes a live steer
     // that leaves its tools running (queue.ts `wakeDelivery`); otherwise it waits in the queue.
     if (wakeDelivery(steeringOf(parent), turnState(parent), wake.asking.length) === "steer") {
@@ -2549,7 +2551,7 @@ export function linkSteered(thread: string, link: string | undefined, text: stri
   linkStarted(link);
   const said = steerText(thread, text);
   const current = useApp.getState().threads[thread];
-  if (!current?.running) {
+  if (!isRunning(current)) {
     const queued = current?.queue.find((q) => !q.link && q.text.trim() === said.trim());
     if (queued) {
       updateThread(thread, (t) => ({

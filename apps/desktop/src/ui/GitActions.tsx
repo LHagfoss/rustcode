@@ -26,6 +26,7 @@ import {
 import { readPullList, usePullList } from "../state/pullQueries";
 import { request, toast } from "../state/store";
 import type { ThreadState } from "../state/thread";
+import { isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, RefreshCw } from "./icons";
 import {
@@ -90,7 +91,7 @@ export function GitHeaderButton({ thread }: { thread?: ThreadState }) {
 
 function GitButton({ thread }: { thread?: ThreadState }) {
   const cwd = thread?.cwd;
-  const [read, refresh] = useGitState(cwd, !!thread?.running);
+  const [read, refresh] = useGitState(cwd, isRunning(thread));
   const [busy, setBusy] = useState<GitAction | null>(null);
   const [sheet, setSheet] = useState<GitAction | null>(null);
   const state = read.state;

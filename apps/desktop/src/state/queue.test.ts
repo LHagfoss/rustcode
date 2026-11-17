@@ -16,7 +16,7 @@ import {
   type TurnState,
   wakeDelivery,
 } from "./queue";
-import { PULL_MARK, type QueuedPrompt, withPullMark, withWorkflowMark } from "./thread";
+import { PULL_MARK, type QueuedPrompt, type ThreadTurn, withPullMark, withWorkflowMark } from "./thread";
 
 const item = (id: string, extra: Partial<QueuedPrompt> = {}): QueuedPrompt => ({
   id,
@@ -24,9 +24,11 @@ const item = (id: string, extra: Partial<QueuedPrompt> = {}): QueuedPrompt => ({
   ...extra,
 });
 
+const RUNNING: ThreadTurn = { kind: "user", startedAt: 0 };
+
 const thread = (queue: QueuedPrompt[], over: { running?: boolean; queueHeld?: boolean } = {}) => ({
   queue,
-  running: over.running ?? false,
+  turn: over.running ? RUNNING : undefined,
   queueHeld: over.queueHeld,
 });
 
@@ -71,18 +73,18 @@ describe("when the next queued message starts", () => {
   const queue = [item("a"), item("b")];
 
   test("the head of the queue starts when the thread is idle", () => {
-    expect(nextQueued(queue, { running: false })?.id).toBe("a");
-    expect(nextQueued([], { running: false })).toBeUndefined();
+    expect(nextQueued(queue, {})?.id).toBe("a");
+    expect(nextQueued([], {})).toBeUndefined();
   });
 
   test("nothing starts while a turn runs", () => {
-    expect(nextQueued(queue, { running: true })).toBeUndefined();
+    expect(nextQueued(queue, { turn: RUNNING })).toBeUndefined();
   });
 
   test("nothing starts while the queue is held, however idle the thread is", () => {
-    expect(nextQueued(queue, { running: false, queueHeld: true })).toBeUndefined();
+    expect(nextQueued(queue, { queueHeld: true })).toBeUndefined();
     // Resume lets it go: the same queue starts at its head.
-    expect(nextQueued(queue, { running: false, queueHeld: undefined })?.id).toBe("a");
+    expect(nextQueued(queue, { queueHeld: undefined })?.id).toBe("a");
   });
 });
 
@@ -388,7 +390,7 @@ describe("a queued app notice (issue 3709)", () => {
   test("the queue view lists notices apart from the messages and keeps their order", () => {
     const view = queueView({
       queue: [item("m1"), pull("n1"), item("m2"), pull("n2")],
-      running: true,
+      turn: RUNNING,
     });
     expect(view.messages.map((q) => q.id)).toEqual(["m1", "m2"]);
     expect(view.notices.map((q) => q.id)).toEqual(["n1", "n2"]);

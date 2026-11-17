@@ -195,10 +195,12 @@ describe("automatic install", () => {
   });
 
   test("a running turn, background commands, an approval or a question count as work", () => {
-    const idle = { running: false, permissions: [] };
+    const idle = { permissions: [] };
     expect(anyThreadBusy({})).toBe(false);
     expect(anyThreadBusy({ a: idle })).toBe(false);
-    expect(anyThreadBusy({ a: idle, b: { ...idle, running: true } })).toBe(true);
+    expect(anyThreadBusy({ a: idle, b: { ...idle, turn: { kind: "user" as const, startedAt: 0 } } })).toBe(
+      true,
+    );
     expect(anyThreadBusy({ a: { ...idle, waiting: 2 } })).toBe(true);
     expect(anyThreadBusy({ a: { ...idle, permissions: [{}] } })).toBe(true);
   });
