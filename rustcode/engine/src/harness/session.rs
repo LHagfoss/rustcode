@@ -509,6 +509,40 @@ pub(crate) fn prompt_text(prompt: &[ContentBlock]) -> String {
 /// again after a restart or on a paired computer, like a built-in thread's.
 /// One the engine could not keep is `[image]`, which a client draws as an
 /// image that is no longer there.
+/// The `error_kind` of a compaction the harness reported as failed: a short
+/// code, never the raw text. `nothing_to_compact` for Claude's "Not enough
+/// messages to compact", a slug of the error for anything else, and
+/// `harness_failed` when the harness gave no reason.
+fn compaction_error_kind(error: Option<&str>) -> String {
+    const MAX: usize = 48;
+    let error = error.unwrap_or_default().trim();
+    let error = error
+        .strip_prefix("Compaction failed:")
+        .unwrap_or(error)
+        .trim();
+    if error.to_ascii_lowercase().contains("not enough messages") {
+        return "nothing_to_compact".to_owned();
+    }
+    let mut slug = String::new();
+    for word in error
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+    {
+        if slug.len() + word.len() + 1 > MAX {
+            break;
+        }
+        if !slug.is_empty() {
+            slug.push('_');
+        }
+        slug.push_str(&word.to_ascii_lowercase());
+    }
+    if slug.is_empty() {
+        "harness_failed".to_owned()
+    } else {
+        slug
+    }
+}
+
 pub(crate) fn recorded_prompt_text(prompt: &[ContentBlock]) -> String {
     prompt_text_with(prompt, |image| {
         // A prompt that did not come through `session/prompt` (steering) may
@@ -971,13 +1005,18 @@ impl ExternalSession {
                     note_output(&progress, &output);
                     match output {
                         Output::Update(update) => {
-                            transcript
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .observe(&update);
-                            if let Some(row) =
-                                Self::harness_compaction(&update, &thread_id, &harness_id)
-                            {
+                            let compact_command = {
+                                let mut transcript =
+                                    transcript.lock().unwrap_or_else(|error| error.into_inner());
+                                transcript.observe(&update);
+                                transcript.turn_is_compact_command()
+                            };
+                            if let Some(row) = Self::harness_compaction(
+                                &update,
+                                &thread_id,
+                                &harness_id,
+                                compact_command,
+                            ) {
                                 crate::data_store::record_compaction(&row);
                             }
                             sink.update(update);
@@ -1661,18 +1700,24 @@ impl ExternalSession {
     /// capability, so this is the shape a Claude Code thread sends. `None` for any
     /// other update, and for a compaction still running: only the terminal state
     /// is a row.
+    ///
+    /// `compact_command` is whether the turn is the user's `/compact`: a report
+    /// that carries no trigger (a failed one never does) is then `manual`
+    /// rather than Claude's automatic pass.
     fn harness_compaction(
         update: &SessionUpdate,
         thread_id: &str,
         harness: &str,
+        compact_command: bool,
     ) -> Option<crate::data_store::CompactionRow> {
-        let (id, status, facts, meta, title) = match update {
+        let (id, status, facts, meta, title, content) = match update {
             SessionUpdate::ToolCall(call) => (
                 call.tool_call_id.0.as_ref(),
                 Some(call.status),
                 call.raw_output.as_ref(),
                 call.meta.as_ref(),
                 Some(call.title.as_str()),
+                Some(call.content.as_slice()),
             ),
             SessionUpdate::ToolCallUpdate(update) => (
                 update.tool_call_id.0.as_ref(),
@@ -1680,6 +1725,7 @@ impl ExternalSession {
                 update.fields.raw_output.as_ref(),
                 update.meta.as_ref(),
                 update.fields.title.as_deref(),
+                update.fields.content.as_deref(),
             ),
             _ => return None,
         };
@@ -1720,9 +1766,31 @@ impl ExternalSession {
         {
             Some("manual") => "manual",
             Some("idle") => "cache_expiry",
+            None if compact_command => "manual",
             // Claude Code's own automatic compaction.
             _ => "harness_auto",
         };
+        let failed = status == Some(ToolCallStatus::Failed);
+        // The adapter puts the error in the facts and, once, in the content
+        // as `Compaction failed: <error>`.
+        let error = failed.then(|| {
+            let from_facts = facts
+                .and_then(|facts| facts.get("error"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            let from_content = || {
+                content?.iter().find_map(|item| match item {
+                    agent_client_protocol::schema::v1::ToolCallContent::Content(content) => {
+                        match &content.content {
+                            ContentBlock::Text(text) => Some(text.text.clone()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+            };
+            compaction_error_kind(from_facts.or_else(from_content).as_deref())
+        });
         Some(crate::data_store::CompactionRow {
             thread_id: thread_id.to_owned(),
             turn_id: None,
@@ -1738,9 +1806,8 @@ impl ExternalSession {
             messages_after: None,
             idle_secs_before: None,
             count: None,
-            success: status != Some(ToolCallStatus::Failed),
-            error_kind: (status == Some(ToolCallStatus::Failed))
-                .then(|| "harness_failed".to_owned()),
+            success: !failed,
+            error_kind: error,
             external_id: Some(id.to_owned()),
             source: Some(harness.to_owned()),
         })
@@ -2169,7 +2236,7 @@ mod launch_tests {
             },
             "_meta": {"claudeCode": {"toolName": "compact"}},
         }));
-        let row = ExternalSession::harness_compaction(&update, "thread-1", "claude-code")
+        let row = ExternalSession::harness_compaction(&update, "thread-1", "claude-code", false)
             .expect("a terminal compaction is recorded");
         assert_eq!(row.thread_id, "thread-1");
         assert_eq!(row.harness.as_deref(), Some("claude-code"));
@@ -2190,7 +2257,7 @@ mod launch_tests {
             "status": "completed",
             "rawOutput": {"trigger": "automatic"},
         }));
-        let row = ExternalSession::harness_compaction(&automatic, "thread-1", "claude-code")
+        let row = ExternalSession::harness_compaction(&automatic, "thread-1", "claude-code", false)
             .expect("the title is enough");
         assert_eq!(row.trigger, "harness_auto");
         let idle = session_update(serde_json::json!({
@@ -2201,7 +2268,7 @@ mod launch_tests {
             "_meta": {"claudeCode": {"toolName": "compact"}},
         }));
         assert_eq!(
-            ExternalSession::harness_compaction(&idle, "thread-1", "claude-code")
+            ExternalSession::harness_compaction(&idle, "thread-1", "claude-code", false)
                 .unwrap()
                 .trigger,
             "cache_expiry"
@@ -2220,7 +2287,10 @@ mod launch_tests {
             "status": "in_progress",
             "_meta": {"jetbrains": {"air": {"version": 1, "contextCompaction": {"version": 1}}}},
         }));
-        assert!(ExternalSession::harness_compaction(&started, "thread-1", "claude-code").is_none());
+        assert!(
+            ExternalSession::harness_compaction(&started, "thread-1", "claude-code", false)
+                .is_none()
+        );
         let facts = session_update(serde_json::json!({
             "sessionUpdate": "tool_call_update",
             "toolCallId": "compact-9",
@@ -2232,7 +2302,7 @@ mod launch_tests {
                 "durationMs": 36_972,
             }}}},
         }));
-        let row = ExternalSession::harness_compaction(&facts, "thread-1", "claude-code")
+        let row = ExternalSession::harness_compaction(&facts, "thread-1", "claude-code", false)
             .expect("the facts update is the row");
         assert_eq!(row.trigger, "manual");
         assert_eq!(row.tokens_before, Some(213_555));
@@ -2250,19 +2320,80 @@ mod launch_tests {
             "title": "Compact conversation",
             "status": "in_progress",
         }));
-        assert!(ExternalSession::harness_compaction(&running, "thread-1", "claude-code").is_none());
+        assert!(
+            ExternalSession::harness_compaction(&running, "thread-1", "claude-code", false)
+                .is_none()
+        );
         let other = session_update(serde_json::json!({
             "sessionUpdate": "tool_call",
             "toolCallId": "call-1",
             "title": "Read file",
             "status": "completed",
         }));
-        assert!(ExternalSession::harness_compaction(&other, "thread-1", "claude-code").is_none());
+        assert!(
+            ExternalSession::harness_compaction(&other, "thread-1", "claude-code", false).is_none()
+        );
         let text = session_update(serde_json::json!({
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": "done"},
         }));
-        assert!(ExternalSession::harness_compaction(&text, "thread-1", "claude-code").is_none());
+        assert!(
+            ExternalSession::harness_compaction(&text, "thread-1", "claude-code", false).is_none()
+        );
+    }
+
+    #[test]
+    fn a_failed_manual_compact_without_a_trigger_is_manual_with_its_reason() {
+        // What the adapter sends when `/compact` has nothing to compact: a
+        // failed call with the error and no trigger, tokens or duration.
+        let failed = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "compact-4",
+            "status": "failed",
+            "content": [{"type": "content", "content": {
+                "type": "text",
+                "text": "Compaction failed: Not enough messages to compact.",
+            }}],
+            "rawOutput": {"error": "Not enough messages to compact."},
+            "_meta": {"claudeCode": {"toolName": "compact"}},
+        }));
+        let row = ExternalSession::harness_compaction(&failed, "thread-1", "claude-code", true)
+            .expect("a failed compaction is recorded");
+        assert_eq!(row.trigger, "manual");
+        assert!(!row.success);
+        assert_eq!(row.error_kind.as_deref(), Some("nothing_to_compact"));
+        assert_eq!(row.tokens_before, None);
+
+        // Outside a `/compact` turn the same report stays automatic, and the
+        // error read from the content alone is a short code.
+        let content_only = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "compact-5",
+            "title": "Compact conversation",
+            "status": "failed",
+            "content": [{"type": "content", "content": {
+                "type": "text",
+                "text": "Compaction failed: API Error: 529 Overloaded",
+            }}],
+        }));
+        let row =
+            ExternalSession::harness_compaction(&content_only, "thread-1", "claude-code", false)
+                .unwrap();
+        assert_eq!(row.trigger, "harness_auto");
+        assert_eq!(row.error_kind.as_deref(), Some("api_error_529_overloaded"));
+
+        // A trigger the harness did report wins over the prompt.
+        let automatic = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "compact-6",
+            "status": "failed",
+            "rawOutput": {"trigger": "automatic"},
+            "_meta": {"claudeCode": {"toolName": "compact"}},
+        }));
+        let row = ExternalSession::harness_compaction(&automatic, "thread-1", "claude-code", true)
+            .unwrap();
+        assert_eq!(row.trigger, "harness_auto");
+        assert_eq!(row.error_kind.as_deref(), Some("harness_failed"));
     }
 
     #[test]
