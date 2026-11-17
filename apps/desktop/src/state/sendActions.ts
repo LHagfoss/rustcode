@@ -161,11 +161,17 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   const madeHere = !id;
   try {
     if (!id) {
-      const started = await createThread(text, extras);
+      const creating = createThread(text, extras);
+      const setupId = get().pendingSetup?.id;
+      const started = await creating;
       // A setup that failed keeps the message and its attachments on the thread's own bubble, with
       // Retry: the field stays clear rather than holding a second copy. One that could not start at
       // all (another is still going) leaves the draft in the composer, as it was.
-      if (!started) return !!get().pendingSetup?.failure;
+      if (!started) {
+        const s = get();
+        return !!(s.pendingSetup?.id === setupId ? s.pendingSetup : s.backgroundSetups[setupId ?? ""])
+          ?.failure;
+      }
       id = started;
     }
   } catch (error) {

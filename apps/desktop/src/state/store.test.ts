@@ -5072,6 +5072,75 @@ describe("a message sent from the new-thread screen", () => {
     ).toHaveLength(1);
   });
 
+  test("overlapping starts finish out of order with their own messages and access levels", async () => {
+    const transport = new MockTransport({ delayMs: 0 });
+    const send = transport.send.bind(transport);
+    const held: string[] = [];
+    transport.send = (line: string) => {
+      if (JSON.parse(line).method === "session/new") held.push(line);
+      else send(line);
+    };
+    await ready(transport);
+    setPermissionMode(undefined, "full");
+    const first = submit("first message", { ...emptyExtras, attachments: [picture] });
+    const firstId = useApp.getState().pendingSetup!.id;
+    startNewThread();
+    expect(useApp.getState().pendingSetup).toBeNull();
+    expect(useApp.getState().backgroundSetups[firstId]?.text).toBe("first message");
+    setPermissionMode(undefined, "edits");
+    const second = submit("second message");
+    await until(() => held.length === 2);
+    send(held[1]!);
+    expect(await second).toBe(true);
+    const selected = useApp.getState().selectedId!;
+    send(held[0]!);
+    expect(await first).toBe(true);
+    const s = useApp.getState();
+    expect(s.selectedId).toBe(selected);
+    expect(s.pendingSetup).toBeNull();
+    expect(s.backgroundSetups).toEqual({});
+    const firstThread = Object.values(s.threads).find((t) =>
+      t.items.some((i) => i.kind === "user" && i.text === "first message"),
+    )!;
+    expect(firstThread.id).not.toBe(selected);
+    expect(firstThread.items.filter((i) => i.kind === "user")).toHaveLength(1);
+    const message = firstThread.items.find((i) => i.kind === "user");
+    expect(message?.kind === "user" && message.attachments).toHaveLength(1);
+    expect(s.threads[selected]!.items.filter((i) => i.kind === "user").map((i) => i.text)).toEqual([
+      "second message",
+    ]);
+    expect(permissionModeOf(s, firstThread.id)).toBe("full");
+    expect(permissionModeOf(s, selected)).toBe("edits");
+  });
+
+  test("a completed background start leaves a newer draft and worktree choice alone", async () => {
+    await ready();
+    const first = submit("one");
+    startNewThread();
+    setDraft("new", "next draft");
+    useApp.setState({ newWorktree: { on: true, branch: "next-branch", edited: true } });
+    expect(await first).toBe(true);
+    expect(useApp.getState().selectedId).toBeNull();
+    expect(useApp.getState().drafts.new).toBe("next draft");
+    expect(useApp.getState().newWorktree.branch).toBe("next-branch");
+    expect(useApp.getState().backgroundSetups).toEqual({});
+  });
+
+  test("a background failure stays available to open and retry", async () => {
+    await ready(refusesOnce());
+    const first = submit("retry me");
+    const id = useApp.getState().pendingSetup!.id;
+    startNewThread();
+    expect(await first).toBe(true);
+    expect(useApp.getState().pendingSetup).toBeNull();
+    expect(useApp.getState().backgroundSetups[id]?.failure?.text).toContain("no-such-harness");
+    selectThread(id);
+    expect(useApp.getState().pendingSetup?.id).toBe(id);
+    switchNewThreadHarness("rustcode");
+    expect(await retryPendingSetup()).toBe(true);
+    expect(useApp.getState().pendingSetup).toBeNull();
+  });
+
   test("a failure keeps the message and its pictures, and Retry sends them again", async () => {
     await ready(refusesOnce());
     const before = useApp.getState().sessions.length;

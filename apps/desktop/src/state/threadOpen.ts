@@ -78,6 +78,22 @@ import { sessionById } from "./threadStatus";
 const get = () => useApp.getState();
 const set = (patch: Partial<AppState> | ((s: AppState) => Partial<AppState>)) => useApp.setState(patch);
 
+/** Moving away keeps the start and its message in the sidebar without owning the new composer. */
+function setupSelection(s: AppState, id: string | null = null) {
+  const backgroundSetups = { ...s.backgroundSetups };
+  if (s.pendingSetup) backgroundSetups[s.pendingSetup.id] = s.pendingSetup;
+  const pendingSetup = id ? (backgroundSetups[id] ?? null) : null;
+  if (pendingSetup) delete backgroundSetups[pendingSetup.id];
+  return { pendingSetup, backgroundSetups };
+}
+
+/** Finish only this start; another pending thread keeps its message and selection. */
+function finishedSetup(s: AppState, id: string | undefined) {
+  const backgroundSetups = { ...s.backgroundSetups };
+  if (id) delete backgroundSetups[id];
+  return { pendingSetup: setupSucceeded(s.pendingSetup, id), backgroundSetups };
+}
+
 /** Sessions whose `session/load` replay is arriving. */
 export const loading = new Set<string>();
 /** The shared `session/load` for each thread; callers must not prompt before its replay finishes. */
@@ -115,11 +131,13 @@ if (typeof window !== "undefined") {
 export function selectThread(id: string | null) {
   // The pending row is not a session: opening it shows the new thread it will become, and sends
   // nothing to the engine with its client id.
-  if (id && id === get().pendingSetup?.id) id = null;
+  const selection = setupSelection(get(), id);
+  if (selection.pendingSetup) id = null;
   clearFinished(id);
   dismissOverlays();
   set((s) => ({
     ...viewingThread(s, id),
+    ...selection,
     switcherOpen: false,
     settings: null,
     view: { kind: "chat" },
@@ -181,6 +199,7 @@ export function startNewThread(cwd?: string, host?: string) {
   dismissOverlays();
   set({
     selectedId: null,
+    ...setupSelection(s),
     projectCwd,
     newThreadHost: target,
     // The panel belongs to a thread: the new-thread screen has none, and a
@@ -677,7 +696,7 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
   // A pending setup keeps its row and its message until the thread is listed below, so nothing it
   // shows goes away and comes back between the session and its model. Any other session is listed
   // at once.
-  const pending = !!options.pendingId && get().pendingSetup?.id === options.pendingId;
+  const pending = !!options.pendingId;
   // No list has this thread yet: it is kept here, so a snapshot from before it cannot take it
   // away mid-turn (`mergeMachineLists`, `refreshSessions`, issue 3523).
   keepUnlisted(summary);
@@ -692,7 +711,7 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
           // The engine announces the thread to every client (`threads/created`) while this
           // request is still out: the row it added is replaced by this one, never doubled.
           sessions: [summary, ...st.sessions.filter((x) => x.id !== id)],
-          pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
+          ...finishedSetup(st, options.pendingId),
         }),
   }));
   // Saved, not only shown: otherwise the thread's first message replaces it at the next list.
@@ -734,8 +753,10 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
         },
         ...st.sessions.filter((x) => x.id !== id),
       ],
-      ...(options.select && !st.selectedId ? viewingThread(st, id) : {}),
-      pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
+      ...(options.select && st.pendingSetup?.id === options.pendingId && !st.selectedId
+        ? viewingThread(st, id)
+        : {}),
+      ...finishedSetup(st, options.pendingId),
     }));
   }
   return id;
@@ -850,13 +871,17 @@ export async function createThread(
     return null;
   }
   // One update switches the screen and shows the message: nothing waits for the engine.
-  set({ pendingSetup: setup });
+  set({
+    pendingSetup: setup,
+    newThreadPermissionMode: null,
+    newWorktree: { on: s.newWorktree.on, branch: "", edited: false },
+  });
   // That update gets its own painted frame before `session/new` is asked for. An in-process harness
   // answers in a microtask, so both updates would otherwise land in one task and one frame: the
   // pending screen's message would be drawn for the first time by the thread's own transcript, and
   // its entry (`rc-send-in`) would never get a frame to play in.
   await afterPaint();
-  return await startSetup(setup);
+  return await startSetup(setup, s);
 }
 
 /** The worktree the new-thread composer asked for, or none. */
@@ -877,8 +902,7 @@ function newWorktreeFor(
  * row already shows, so nothing blinks back to "New thread" when the row becomes real. On failure
  * the setup keeps the message, its attachments and the reason, for a retry.
  */
-async function startSetup(setup: PendingSetup): Promise<string | null> {
-  const s = get();
+async function startSetup(setup: PendingSetup, s = get()): Promise<string | null> {
   const host = setup.host ?? LOCAL_HOST;
   // The harness choice belongs to the machine the setup runs on, which may not be the one the
   // composer shows now (the user moved **Run on** after sending). A project's own default harness
@@ -911,18 +935,20 @@ async function startSetup(setup: PendingSetup): Promise<string | null> {
     });
   } catch (error) {
     const text = errorText(error);
-    set((st) =>
-      st.pendingSetup?.id === setup.id ? { pendingSetup: setupFailed(st.pendingSetup, text) } : {},
-    );
+    set((st) => {
+      if (st.pendingSetup?.id === setup.id) return { pendingSetup: setupFailed(st.pendingSetup, text) };
+      const background = st.backgroundSetups[setup.id];
+      return background
+        ? { backgroundSetups: { ...st.backgroundSetups, [setup.id]: setupFailed(background, text) } }
+        : {};
+    });
     return null;
   }
   // The access level chosen on the new-thread composer belongs to the thread it started.
-  const pendingMode = get().newThreadPermissionMode;
+  const pendingMode = s.newThreadPermissionMode;
   if (pendingMode) {
     setPermissionMode(id, pendingMode);
-    set({ newThreadPermissionMode: null });
   }
-  set({ newWorktree: { on: get().newWorktree.on, branch: "", edited: false } });
   return id;
 }
 
@@ -931,7 +957,8 @@ async function startSetup(setup: PendingSetup): Promise<string | null> {
  * prompt goes out the moment the session exists. Its own row stays where it is while it runs.
  */
 export async function retryPendingSetup(): Promise<boolean> {
-  const failed = get().pendingSetup;
+  const s = get();
+  const failed = s.pendingSetup;
   if (!failed?.failure) return false;
   const setup = beginSetup(failed, {
     id: localId("setup"),
@@ -943,8 +970,8 @@ export async function retryPendingSetup(): Promise<boolean> {
     worktree: failed.worktree,
   });
   if (!setup) return false;
-  set({ pendingSetup: setup });
-  const id = await startSetup(setup);
+  set({ pendingSetup: setup, newThreadPermissionMode: null });
+  const id = await startSetup(setup, s);
   if (!id) return false;
   // Its bubble is already on screen, from the setup it keeps through the retry: it does not fly in.
   void runPrompt(id, setup.text, setup.extras ?? emptyExtras, { alreadyShown: true });
@@ -955,8 +982,13 @@ export async function retryPendingSetup(): Promise<boolean> {
  * Gives up a failed setup: its row and its error leave, and its message goes back to the field it
  * was typed in, with the pictures and files that went with it, so nothing that was written is lost.
  */
-export function dismissPendingSetup() {
-  const pending = get().pendingSetup;
+export function dismissPendingSetup(id?: string) {
+  const s = get();
+  if (id && s.pendingSetup?.id !== id) {
+    set(finishedSetup(s, id));
+    return;
+  }
+  const pending = s.pendingSetup;
   set({ pendingSetup: dismissSetup() });
   if (!pending?.failure) return;
   if (pending.text.trim()) setDraft("new", pending.text);
