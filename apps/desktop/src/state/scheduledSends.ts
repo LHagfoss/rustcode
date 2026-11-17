@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Sending later: messages scheduled for a time, kept across restarts, and the timer that sends them
 // when due. Split out of state/store.ts; the state these write still lives in the app store.
 
@@ -116,13 +117,13 @@ async function deliverScheduled(threadId: string, item: ScheduledMessage): Promi
   // A thread on a paired computer that is away, or an engine that is not up: the message waits for
   // it rather than being lost, and the timer tries again.
   if (!connectionForThread(threadId)) return "wait";
-  if (!get().threads[threadId]?.loaded) {
+  if (!isLoaded(get().threads[threadId])) {
     await openThread(threadId);
-    for (let i = 0; i < 100 && !get().threads[threadId]?.loaded; i++) {
+    for (let i = 0; i < 100 && !isLoaded(get().threads[threadId]); i++) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
-  if (!get().threads[threadId]?.loaded) return "wait";
+  if (!isLoaded(get().threads[threadId])) return "wait";
   // Deleted while the thread was opening: nothing goes out.
   if (!get().scheduled[threadId]?.some((row) => row.id === item.id)) return "gone";
   const extras = item.extras;

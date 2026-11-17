@@ -1,3 +1,4 @@
+import { isLoaded } from "../state/thread";
 // Settings › Machines: where this app's threads can run (a machine is a computer running
 // RustCode; docs/terminology.md › Machine).
 //
@@ -172,7 +173,7 @@ export function MachinesPage() {
  */
 function ThisComputer() {
   const status = useApp((s) => s.status);
-  const open = useApp((s) => Object.values(s.threads).filter((thread) => thread.loaded).length);
+  const open = useApp((s) => Object.values(s.threads).filter((thread) => isLoaded(thread)).length);
   const server = useMachines((s) => s.server);
   const installing = useMachines((s) => s.serverInstalling);
   const local = useLocalIdentity();

@@ -1,3 +1,4 @@
+import { openError as threadOpenError } from "./thread";
 // Orchestration calls that manage threads: renaming, settling, organizing, interrupting,
 // configuring and moving them, and answering a request one of them waits on. Split out of
 // state/host.ts.
@@ -861,7 +862,7 @@ export async function messageNow(
   const noLongerAvailable = messageTargetRefusal(afterOpen, targetId);
   if (noLongerAvailable) return failureJson(noLongerAvailable);
   const thread = afterOpen.threads[target.id];
-  if (openError || !thread || thread.openFailed) {
+  if (openError || !thread || threadOpenError(thread)) {
     return failureJson(failure("target_unavailable", openError ?? "that thread could not be opened"));
   }
   const busy = thread.running;

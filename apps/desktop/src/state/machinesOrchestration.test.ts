@@ -149,8 +149,7 @@ function listed(): void {
         queue: [],
         permissions: [],
         running: true,
-        loaded: true,
-        loading: false,
+        load: { phase: "loaded" },
       },
     } as never,
     links: {
@@ -189,8 +188,7 @@ function withRemoteThread(): void {
         queue: [],
         permissions: [],
         running: false,
-        loaded: true,
-        loading: false,
+        load: { phase: "loaded" },
       },
     } as never,
     links: {

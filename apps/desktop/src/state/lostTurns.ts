@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // Lost turns: a turn on another machine whose prompt request died with that machine's connection,
 // followed until the machine says how it ended or stays silent too long (issue 3440). Split out of
 // state/store.ts; the state these write still lives in the app store.
@@ -219,8 +220,8 @@ function giveUpLostTurn(record: LostTurn): void {
  */
 export async function reloadThread(thread: string): Promise<boolean> {
   if (!connectionForThread(thread)) return false;
-  updateThread(thread, (t) => ({ ...t, loaded: false, openFailed: false }));
+  updateThread(thread, (t) => ({ ...t, load: { phase: "idle" } }));
   await openThread(thread);
   const after = get().threads[thread];
-  return !!after?.loaded && !after.openFailed;
+  return isLoaded(after);
 }

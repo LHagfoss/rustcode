@@ -117,7 +117,10 @@ beforeEach(() => {
   useApp.setState((s) => ({
     links: { ...emptyBook(), links: [working] },
     sessions: [{ id: THREAD, host: LINUX, cwd: CWD, title: "Run the tests", updatedAt: 1_000 }],
-    threads: { ...s.threads, [THREAD]: { ...emptyThread(THREAD, CWD, "Run the tests"), loaded: true } },
+    threads: {
+      ...s.threads,
+      [THREAD]: { ...emptyThread(THREAD, CWD, "Run the tests"), load: { phase: "loaded" as const } },
+    },
   }));
 });
 

@@ -71,7 +71,7 @@ async function restoreCheckpoint(
     const answer = parseRestoreAnswer(result);
     if (answer.conversation === "rewound") {
       // The conversation changed under the app: load it again.
-      updateThread(id, (t) => ({ ...t, loaded: false }));
+      updateThread(id, (t) => ({ ...t, load: { phase: "idle" as const } }));
       set((s) => {
         const { [id]: _gone, ...threads } = s.threads;
         return { threads };

@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // The v10 tools: answering what a thread waits on (`answer_request`) and
 // organizing several at once (`organize_threads`), plus the files
 // `message_session` carries. The rules they share with `update_session` —
@@ -58,7 +59,7 @@ async function staged() {
   const same = useApp.getState().sessions.filter((x) => x.cwd === "/Users/you/code/rustcode");
   const [parent, child] = same.map((x) => x.id) as [string, string];
   selectThread(parent);
-  await until(() => useApp.getState().threads[parent]?.loaded === true);
+  await until(() => isLoaded(useApp.getState().threads[parent]) === true);
   // A thread that asks has to be open for its request to be the app's to see.
   await openThread(child);
   await until(() => !!useApp.getState().threads[child]);

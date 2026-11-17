@@ -164,7 +164,7 @@ import {
   wakeSnoozed,
   windowNow,
 } from "./store";
-import { emptyThread, turnCompletion } from "./thread";
+import { emptyThread, isLoaded, openError, turnCompletion } from "./thread";
 import { type DelegatedThread, topLevel } from "./topLevel";
 
 const until = async (check: () => boolean, ms = 2000) => {
@@ -367,7 +367,7 @@ describe("engine controller with the mock engine", () => {
     expect(s.projectCwd).toBe("/Users/you/code/rustcode");
     expect(s.harnesses?.onboarded).toBe(true);
     selectThread(s.sessions[0]!.id);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     const kinds = selected()!.items.map((i) => i.kind);
     expect(kinds).toEqual([
       "user",
@@ -389,7 +389,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     const first = useApp.getState().sessions[0]!;
     selectThread(first.id);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     await until(() => !!useApp.getState().sessionCommands[first.id]);
     const items = selected()!.items.length;
 
@@ -504,7 +504,7 @@ describe("engine controller with the mock engine", () => {
     // Full access answered it; loading the thread first did not turn it into a card.
     expect(answer).toMatchObject({ outcome: { outcome: "selected", optionId: "allow" } });
     const s = useApp.getState();
-    expect(s.threads["mock-thread-3"]?.loaded).toBe(true);
+    expect(isLoaded(s.threads["mock-thread-3"])).toBe(true);
     expect(s.threads["mock-thread-3"]?.permissions).toEqual([]);
     expect(
       pendingRequestsOn({
@@ -836,7 +836,7 @@ describe("engine controller with the mock engine", () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     selectThread(useApp.getState().sessions[0]!.id);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     await until(() => !!useApp.getState().sessionCommands[useApp.getState().sessions[0]!.id]);
     const items = selected()!.items.length;
     await submit("/status");
@@ -853,7 +853,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 2);
     const [caller, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
     selectThread(caller);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     // Full access answers the approval itself, so both calls reach the book without a user.
     setPermissionMode(caller, "full");
     setThreadLimit(2);
@@ -1141,10 +1141,10 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     const id = useApp.getState().sessions[0]!.id;
     selectThread(id);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     expect(await moveThread(id, "/tmp/elsewhere")).toBe(true);
     expect(useApp.getState().sessions.find((x) => x.id === id)?.cwd).toBe("/tmp/elsewhere");
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     expect(selected()!.cwd).toBe("/tmp/elsewhere");
 
     // With no default chosen, a new thread from an open one starts in that thread's folder.
@@ -1437,7 +1437,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     const id = "mock-thread-attempts";
     selectThread(id);
-    await until(() => useApp.getState().threads[id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[id]) === true);
     await until(() => (useApp.getState().checkpoints[id]?.length ?? 0) === 3);
     const second = useApp.getState().checkpoints[id]!.find((c) => c.turn === 2)!;
 
@@ -1445,7 +1445,7 @@ describe("engine controller with the mock engine", () => {
     await rewindCheckpoint(id, second);
     expect(useApp.getState().confirm).toBeNull();
     await until(() => (useApp.getState().attempts[id]?.length ?? 0) === 1);
-    await until(() => useApp.getState().threads[id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[id]) === true);
 
     // The live transcript is the turn above the cut; the two it left read as the attempt.
     const live = useApp.getState().threads[id]!;
@@ -1639,7 +1639,7 @@ describe("engine controller with the mock engine", () => {
     setProjectCwd("/Users/you/code/rustcode");
     const parent = useApp.getState().sessions[0]!.id;
     selectThread(parent);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     // The turn that asks: it runs, so the wait it opens belongs to one.
     updateThread(parent, (t) => ({ ...t, running: true }));
     const starting = answerOrchestration({
@@ -1678,7 +1678,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
     selectThread(parent);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     // The turn that asks: it runs, so the wait belongs to one.
     updateThread(parent, (t) => ({ ...t, running: true }));
     const link: Link = {
@@ -1800,7 +1800,7 @@ describe("engine controller with the mock engine", () => {
       sessions: st.sessions.map((x) => ({ ...x, cwd: "/Users/you/code/rustcode" })),
     }));
     selectThread(parent);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     updateThread(parent, (t) => ({ ...t, running: true, cwd: "/Users/you/code/rustcode" }));
     updateThread(target, (t) => ({ ...t, cwd: "/Users/you/code/rustcode" }));
     const link: Link = {
@@ -2072,7 +2072,7 @@ describe("engine controller with the mock engine", () => {
       sessions: st.sessions.map((x) => ({ ...x, cwd: "/Users/you/code/rustcode" })),
     }));
     selectThread(parent);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     updateThread(parent, (t) => ({ ...t, running: true, cwd: "/Users/you/code/rustcode" }));
     // The mock's login-form thread has uncommitted changes in its worktree.
     const dirty = useApp.getState().sessions.find((x) => x.worktree?.branch === "feat/login-form");
@@ -2384,7 +2384,7 @@ describe("engine controller with the mock engine", () => {
     setOrchestration(true);
     for (const id of open) {
       selectThread(id);
-      await until(() => selected()?.loaded === true, 5000);
+      await until(() => isLoaded(selected()) === true, 5000);
     }
     useApp.setState((s) => ({ links: { ...emptyBook(), links, counters: s.links.counters } }));
     const linkOf = (id: string) => useApp.getState().links.links.find((l) => l.id === id);
@@ -2719,7 +2719,7 @@ describe("engine controller with the mock engine", () => {
     const id = useApp.getState().sessions[0]!.id;
     await setThreadStatus(id, "idle");
     selectThread(id);
-    await until(() => !!useApp.getState().threads[id]?.loaded);
+    await until(() => isLoaded(useApp.getState().threads[id]));
     // The window missed the turn's end: it still says running, the engine's list says idle.
     useApp.setState((s) => ({
       threads: {
@@ -2749,7 +2749,10 @@ describe("engine controller with the mock engine", () => {
     };
     expect(statusOf(listed, id)).toBe("running");
     // Opened and idle, the window's own state wins over a list that is a few seconds old.
-    const opened = { ...listed, threads: { [id]: { ...emptyThread(id, ""), loaded: true } } };
+    const opened = {
+      ...listed,
+      threads: { [id]: { ...emptyThread(id, ""), load: { phase: "loaded" as const } } },
+    };
     expect(statusOf(opened, id)).toBe("idle");
   });
 
@@ -2759,7 +2762,7 @@ describe("engine controller with the mock engine", () => {
     const id = useApp.getState().sessions[0]!.id;
     await setThreadStatus(id, "done");
     selectThread(id);
-    await until(() => !!useApp.getState().threads[id]?.loaded);
+    await until(() => isLoaded(useApp.getState().threads[id]));
     expect(statusOf(useApp.getState(), id)).toBe("done");
     await submit("yolo hello");
     // Writing to it puts it back on the active list, and that is all the send has to say.
@@ -3052,7 +3055,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 2);
     const [a, b, c] = useApp.getState().sessions;
     selectThread(a!.id);
-    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
     setPanel("changes");
     expect(useApp.getState().panel).toBe("changes");
 
@@ -3098,7 +3101,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     selectThread(a!.id);
-    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
 
     // Another thread settled stays off screen: the one on screen is kept.
     await setThreadStatus(b!.id, "done");
@@ -3118,7 +3121,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     selectThread(a!.id);
-    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
     setView({ kind: "board" });
     expect(useApp.getState().view.kind).toBe("board");
 
@@ -3142,7 +3145,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     const a = useApp.getState().sessions[0]!;
     selectThread(a.id);
-    await until(() => useApp.getState().threads[a.id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[a.id]) === true);
     setDraft(a.id, "half-written reply");
     setDraft("new", "the next idea");
     updateThread(a.id, (t) => ({ ...t, running: true }));
@@ -3160,7 +3163,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     selectThread(a!.id);
-    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
     setPanel("changes");
 
     await snoozeThread(a!.id, Date.now() + 3_600_000);
@@ -3184,7 +3187,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     selectThread(b!.id);
-    await until(() => useApp.getState().threads[b!.id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[b!.id]) === true);
     setPanel("changes");
 
     await snoozeThread(a!.id, Date.now() + 3_600_000);
@@ -3233,7 +3236,7 @@ describe("a thread that sleeps through its work", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const [a, b] = useApp.getState().sessions;
     await openThread(a!.id);
-    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[a!.id]) === true);
     return { a: a!, b: b! };
   };
   const toastIds = () => new Set(useApp.getState().toasts.map((t) => t.id));
@@ -3371,7 +3374,7 @@ describe("a thread that sleeps through its work", () => {
     selectThread(a.id);
     const s = useApp.getState();
     expect(s.selectedId).toBe(a.id);
-    expect(s.threads[a.id]?.loaded).toBe(true);
+    expect(isLoaded(s.threads[a.id])).toBe(true);
     expect(a.id in s.snoozed).toBe(true);
   });
 });
@@ -3638,7 +3641,7 @@ describe("model picker", () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     selectThread(useApp.getState().sessions[0]!.id);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     const picked = pickerModels(
       selected(),
       undefined,
@@ -3682,7 +3685,7 @@ describe("model memory per harness (#2797, #2798)", () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     selectThread("mock-thread-2");
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     expect(selected()!.harness?.id).toBe("codex");
     expect(selected()!.configOptions.find((o) => o.id === "model")?.choices).toHaveLength(1);
     const codex = () => useApp.getState().harnesses!.harnesses.find((h) => h.id === "codex")!;
@@ -3801,7 +3804,7 @@ describe("effort memory per model", () => {
     pickNewThreadAccountOn("codex", "paral");
     // Open an existing thread, then come back to the new-thread screen.
     selectThread(useApp.getState().sessions[0]!.id);
-    await until(() => selected()?.loaded === true);
+    await until(() => isLoaded(selected()) === true);
     startNewThread();
     let s = useApp.getState();
     expect(s.selectedId).toBeNull();
@@ -3884,7 +3887,7 @@ describe("the choice a new thread starts on", () => {
       // An agent reconfigures an open Codex thread's effort (the mock's second thread).
       const id = "mock-thread-2";
       selectThread(id);
-      await until(() => selected()?.loaded === true && !!selected()?.configOptions.length);
+      await until(() => isLoaded(selected()) === true && !!selected()?.configOptions.length);
       const answer = await answerOrchestration({
         sessionId: id,
         tool: "configure_session",
@@ -3952,7 +3955,7 @@ describe("toasts", () => {
 describe("which thread endings are announced", () => {
   const live = (id: string, over: Partial<ReturnType<typeof emptyThread>> = {}) => ({
     ...emptyThread(id, "/p", id),
-    loaded: true,
+    load: { phase: "loaded" as const },
     ...over,
   });
   const delegate = (parent: string, target: string) => ({
@@ -4063,7 +4066,10 @@ describe("finished threads", () => {
     const { deriveInbox } = await import("./inbox");
     const failedAt = Date.now() - 5_000;
     const thread = (at: number) =>
-      ({ permissions: [], queue: [], items: [{ kind: "turnEnd", id: "e", outcome: "failed", at }] }) as never;
+      ({
+        ...emptyThread("t1", "/tmp"),
+        items: [{ kind: "turnEnd", id: "e", outcome: "failed", at }],
+      }) as never;
     useApp.setState({
       selectedId: "other",
       sessions: [{ id: "t1", title: "T1", cwd: "/tmp" }] as never,
@@ -5976,12 +5982,11 @@ describe("a delegate whose turn failed", () => {
     const { caller, target } = await ready();
     updateThread(target, (t) => ({
       ...t,
-      openFailed: true,
-      error: "Could not open this thread: engine restarting",
+      load: { phase: "failed", error: "Could not open this thread: engine restarting" },
     }));
     const answer = await send(caller, target, "are you there");
     expect(answer.error).toBeUndefined();
-    expect(useApp.getState().threads[target]?.openFailed).toBeUndefined();
+    expect(openError(useApp.getState().threads[target])).toBeUndefined();
   });
 
   test("a message waits for one in-flight open and is delivered once", async () => {
@@ -5997,6 +6002,7 @@ describe("a delegate whose turn failed", () => {
 
     const opening = openThread(target);
     await until(() => transport.heldLoad !== undefined);
+    expect(useApp.getState().threads[target]?.load).toEqual({ phase: "loading" });
     expect(openThread(target)).toBe(opening);
     let messageSettled = false;
     const message = send(caller, target, "deliver once after load").then((answer) => {
@@ -6015,6 +6021,7 @@ describe("a delegate whose turn failed", () => {
       expect(matching(Method.sessionPrompt)).toHaveLength(0);
       transport.releaseLoad();
       await opening;
+      expect(useApp.getState().threads[target]?.load).toEqual({ phase: "loaded" });
       const answer = await message;
       expect(answer.error).toBeUndefined();
       await until(() => matching(Method.sessionPrompt).length === 1);
@@ -6380,8 +6387,8 @@ describe("a thread whose record names another folder", () => {
     const { transport, target } = await ready((t) => (t.loadFailures = 1));
     expect(await openThread(target)).toBeNull();
     const thread = useApp.getState().threads[target];
-    expect(thread?.loaded).toBe(true);
-    expect(thread?.openFailed).toBeUndefined();
+    expect(isLoaded(thread)).toBe(true);
+    expect(openError(thread)).toBeUndefined();
     expect(thread?.error).toBeUndefined();
     expect(transport.count(Method.sessionRepair)).toBe(1);
     expect(transport.count(Method.sessionLoad)).toBe(2);
@@ -6394,7 +6401,9 @@ describe("a thread whose record names another folder", () => {
     });
     const message = await openThread(target);
     expect(message).toContain("Could not open this thread");
-    expect(useApp.getState().threads[target]?.openFailed).toBe(true);
+    expect(useApp.getState().threads[target]?.load).toEqual({ phase: "failed", error: message! });
+    expect(useApp.getState().threads[target]?.error).toBeUndefined();
+    expect(openError(useApp.getState().threads[target])).toBeTruthy();
     expect(transport.count(Method.sessionLoad)).toBe(1);
   });
 
@@ -6410,7 +6419,7 @@ describe("a thread whose record names another folder", () => {
   test("shows the banner when the open fails again after the repair, and tries no second repair", async () => {
     const { transport, target } = await ready((t) => (t.loadFailures = 3));
     expect(await openThread(target)).toContain("Could not open this thread");
-    expect(useApp.getState().threads[target]?.openFailed).toBe(true);
+    expect(openError(useApp.getState().threads[target])).toBeTruthy();
     expect(transport.count(Method.sessionRepair)).toBe(1);
     expect(transport.count(Method.sessionLoad)).toBe(2);
     // Opening it again (the user picks the thread once more) fails without another automatic repair.

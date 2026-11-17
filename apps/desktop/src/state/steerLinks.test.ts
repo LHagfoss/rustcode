@@ -51,7 +51,11 @@ beforeEach(() => {
     ],
     threads: {
       ...s.threads,
-      [TARGET]: { ...emptyThread(TARGET, CWD, "Run the tests"), loaded: true, running: true },
+      [TARGET]: {
+        ...emptyThread(TARGET, CWD, "Run the tests"),
+        load: { phase: "loaded" as const },
+        running: true,
+      },
     },
   }));
 });

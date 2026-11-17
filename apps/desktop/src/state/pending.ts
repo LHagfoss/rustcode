@@ -1,3 +1,4 @@
+import { isLoaded, isLoading } from "./thread";
 // What the threads below a thread wait on: an approval or a question in a child,
 // a grandchild or a thread further down is shown in the parent's transcript too,
 // so the user does not have to find the child first. The decision is pure, so
@@ -109,7 +110,7 @@ export function useChildRequests(threadId: string): ChildRequest[] {
     for (const thread of Object.values(s.threads)) {
       if (!thread.permissions.length) continue;
       const requests = thread.permissions.map((p) => `${p.rpcId}@${p.at ?? 0}`).join(",");
-      parts.push(`${thread.id}|${thread.loaded ? 1 : 0}|${thread.title ?? ""}|${requests}`);
+      parts.push(`${thread.id}|${isLoaded(thread) ? 1 : 0}|${thread.title ?? ""}|${requests}`);
     }
     return parts.join("\u0000");
   });
@@ -126,7 +127,7 @@ export function useChildRequests(threadId: string): ChildRequest[] {
   useEffect(() => {
     for (const entry of requests) {
       const thread = useApp.getState().threads[entry.thread];
-      if (thread && !thread.loaded && !thread.loading) void openThread(entry.thread);
+      if (thread && !isLoaded(thread) && !isLoading(thread)) void openThread(entry.thread);
     }
   }, [requests]);
   return requests;

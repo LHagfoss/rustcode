@@ -1,3 +1,4 @@
+import { isLoaded } from "./thread";
 // The access level (Ask, Auto-edit, Full access) is the app's, not the harness's. Every prompt
 // carries it in `_meta.rustcode.access`, so an engine on this machine or another one can run a
 // harness that sandboxes its own shell (Codex) without the sandbox under Full access (#3438).
@@ -37,7 +38,7 @@ describe("a prompt names the thread's access level", () => {
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
     const id = useApp.getState().sessions[0]!.id;
     selectThread(id);
-    await until(() => useApp.getState().threads[id]?.loaded === true);
+    await until(() => isLoaded(useApp.getState().threads[id]) === true);
 
     const access = (index: number) => {
       const params = (transport.prompts()[index]?.params ?? {}) as JsonObject;

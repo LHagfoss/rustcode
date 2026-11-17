@@ -425,24 +425,33 @@ export interface ThreadState {
    * transcript and one notice below it says what the app did (`applyUpdate`).
    */
   quiet?: boolean;
-  /** The replay of `session/load` is still arriving. */
-  loading: boolean;
-  loaded: boolean;
+  /** Lifecycle of the thread history replay, separate from turn failures. */
+  load: ThreadLoad;
   harness?: SessionHarness;
   /** The worktree the thread runs in, from `session/new` or the list. */
   worktree?: import("../acp/v2").Worktree;
-  /** What went wrong, as the thread shows it: a failed open or a failed turn. */
+  /** What went wrong, as the thread shows it: a failed turn. */
   error?: string;
   /** The failure as the harness or engine sent it, when {@link error} says it in other words. */
   errorDetail?: string;
-  /**
-   * Opening it failed (`store.ts` `openThread`), as opposed to a turn that failed: the next open
-   * tries again instead of keeping the failed copy.
-   */
-  openFailed?: boolean;
   /** Turn timing seen on replayed replies, closed into a `turnEnd` row at the next user message. */
   pendingTurn?: { id?: string; elapsedMs?: number; at?: number; outcome?: string };
 }
+
+export type ThreadLoad =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "loaded" }
+  | { phase: "failed"; error: string };
+
+export const isLoaded = (
+  thread: ThreadState | undefined,
+): thread is ThreadState & { load: { phase: "loaded" } } => thread?.load.phase === "loaded";
+export const isLoading = (
+  thread: ThreadState | undefined,
+): thread is ThreadState & { load: { phase: "loading" } } => thread?.load.phase === "loading";
+export const openError = (thread: ThreadState | undefined): string | undefined =>
+  thread?.load.phase === "failed" ? thread.load.error : undefined;
 
 let counter = 0;
 export const localId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(++counter).toString(36)}`;
@@ -461,8 +470,7 @@ export function emptyThread(id: string, cwd: string, title?: string): ThreadStat
     permissions: [],
     queue: [],
     running: false,
-    loading: false,
-    loaded: false,
+    load: { phase: "idle" },
   };
 }
 
@@ -1006,7 +1014,7 @@ export function finishTurn(
 /** The replay of `session/load` finished. */
 export function finishLoad(state: ThreadState): ThreadState {
   const closed = closePendingTurn(state);
-  return { ...closed, loading: false, loaded: true, items: finishAllThoughts(closed.items, Date.now()) };
+  return { ...closed, load: { phase: "loaded" }, items: finishAllThoughts(closed.items, Date.now()) };
 }
 
 /** The id of the one row a running compaction owns, so its card can take its place. */
