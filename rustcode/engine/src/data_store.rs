@@ -407,6 +407,25 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
                 OR json_extract(m.payload_json, '$.params.update._meta.jetbrains.air.contextCompaction.preTokens') IS NOT NULL)
          ON CONFLICT(thread_id, external_id) DO NOTHING;",
     ),
+    // Equal usage is only evidence of a possible duplicate, not proof. Keep
+    // the original rows intact and expose candidates for review.
+    (
+        14,
+        "flag_repeated_claude_turn_usage",
+        "CREATE VIEW suspected_repeated_claude_turn_usage AS
+         SELECT current.id AS turn_id, previous.id AS previous_turn_id,
+                current.thread_id, current.started_at
+         FROM turns current JOIN turns previous ON previous.id = (
+             SELECT p.id FROM turns p
+             WHERE p.thread_id = current.thread_id AND p.started_at < current.started_at
+             ORDER BY p.started_at DESC LIMIT 1
+         )
+         WHERE current.harness = 'claude-code' AND previous.harness = 'claude-code'
+           AND current.status <> 'backfill' AND previous.status <> 'backfill'
+           AND current.tool_calls = 0 AND current.output_tokens > 0
+           AND current.output_tokens = previous.output_tokens
+           AND current.cost_usd IS NOT NULL AND current.cost_usd = previous.cost_usd;",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -5777,6 +5796,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(switched, (Some(3.0), Some(30)));
+    }
+
+    #[test]
+    fn repeated_claude_usage_view_flags_candidates_without_changing_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open(&dir.path().join(DATA_FILE)).unwrap();
+        db.execute_batch("INSERT INTO turns (thread_id, started_at, harness, output_tokens, cost_usd, tool_calls, status) VALUES
+            ('t', '1', 'claude-code', 100, 2.0, 3, 'completed'),
+            ('t', '2', 'claude-code', 100, 2.0, 0, 'failed'),
+            ('t', '3', 'claude-code', 100, 2.0, 1, 'completed'),
+            ('t', '4', 'claude-code', 101, 2.0, 0, 'cancelled');").unwrap();
+        let flagged: Vec<String> = db
+            .prepare("SELECT started_at FROM suspected_repeated_claude_turn_usage")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(flagged, ["2"]);
+        let cost: f64 = db
+            .query_row(
+                "SELECT cost_usd FROM turns WHERE started_at = '2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cost, 2.0);
     }
 
     #[test]

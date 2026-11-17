@@ -1600,12 +1600,13 @@ impl ExternalSession {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&cancel));
         let started_at = chrono::Utc::now();
-        let history_from = self
-            .transcript
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .history
-            .len();
+        let (history_from, usage_revision) = {
+            let transcript = self
+                .transcript
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            (transcript.history.len(), transcript.usage_revision)
+        };
         // A harness that keeps its token counts in its own log says nothing
         // about them until the turn ends, so the gauge is fed from the log.
         // Dropped when this function returns, whichever way the turn leaves.
@@ -1621,7 +1622,7 @@ impl ExternalSession {
             .unwrap_or_else(|error| error.into_inner())
             .end_reply();
         self.save_history();
-        self.record_turn_in_data_store(started_at, history_from, &result)
+        self.record_turn_in_data_store(started_at, history_from, usage_revision, &result)
             .await;
         result
     }
@@ -1825,6 +1826,7 @@ impl ExternalSession {
         &self,
         started_at: chrono::DateTime<chrono::Utc>,
         history_from: usize,
+        usage_revision: u64,
         result: &Result<StopReason, String>,
     ) {
         if !self.persist {
@@ -1835,7 +1837,7 @@ impl ExternalSession {
                 .transcript
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            let usage = transcript.usage.clone();
+            let usage = transcript.usage_since(usage_revision);
             let calls = transcript
                 .history
                 .get(history_from.min(transcript.history.len())..)

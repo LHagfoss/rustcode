@@ -40,6 +40,7 @@ payload only when the user turns payload capture on ("Captured payloads").
 | `tool_calls` | one row per finished tool call: `thread_id`, `turn_id`, `tool_name`, `success`, `exit_code`, `at`, `started_at`, `duration_ms`, `output_bytes`, `truncated`, `mcp_server`, `command_name`, `error_kind`, and (migration 12) `harness_tool` |
 | `compactions` | one row per history compaction, from any harness: `thread_id`, `turn_id`, `harness`, `model`, `at`, `duration_ms`, `trigger`, `mode`, `tokens_before`, `tokens_after`, `messages_before`, `messages_after`, `idle_secs_before`, `count`, `success`, `error_kind`, `external_id`, `source` |
 | `daily_usage` | a view over `turns`: `day`, `harness`, `model`, summed tokens, `cost_usd` and turn count |
+| `suspected_repeated_claude_turn_usage` | candidate Claude turns with no tools and the same output tokens and cost as the preceding turn; equal values can be legitimate, so the original rows remain intact |
 | `daily_compactions` | a view over `compactions`: compactions, failures, tokens before and after, reclaimed tokens and mean duration per day, harness and trigger |
 | `tool_command_time_daily` | calls, timed calls, total and mean duration per day, tool and command name |
 | `tool_failure_rates` | a view over `tool_calls`: calls, failures, failure rate, mean duration and truncated results per day and tool |
