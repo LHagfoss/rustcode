@@ -7,6 +7,7 @@ import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { modelName, projectName } from "../acp/types";
 import { copyPromptLink, copyThreadLink } from "../state/deepLinks";
+import { PREF, usePref, useSidebarSort } from "../state/sidebarPrefs";
 import {
   featureMissing,
   openSettings,
@@ -65,6 +66,7 @@ import {
   threadHaystack,
 } from "./paletteActions";
 import { cx, Kbd, noTextHelpers } from "./primitives";
+import { FilterMenu, SortMenu } from "./SidebarToolbar";
 
 export type { PaletteAction };
 
@@ -300,11 +302,19 @@ type Result =
 export function CommandPalette() {
   const open = useApp((s) => s.switcherOpen);
   const sessions = useApp((s) => s.sessions);
+  const liveThreads = useApp((s) => s.threads);
   const selectedId = useApp((s) => s.selectedId);
   const projectCwd = useApp((s) => s.projectCwd);
   const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<"all" | "project">("all");
+  const [onlyProject, setOnlyProject] = usePref(PREF.onlyProject, false);
+  const [sort] = useSidebarSort();
+  const scope = onlyProject && projectCwd ? "project" : "all";
   const [index, setIndex] = useState(0);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a changed result order resets keyboard selection
+  useEffect(() => {
+    setIndex(0);
+  }, [sort, scope]);
 
   const actionsOnly = query.startsWith(">");
   const q = (actionsOnly ? query.slice(1) : query).trim();
@@ -335,9 +345,17 @@ export function CommandPalette() {
     ).map((action): Result => ({ kind: "action", action }));
     if (actionsOnly) return actions;
     const threads = sessions
-      .filter((s) => scope === "all" || s.cwd === projectCwd)
+      .filter((s) => scope === "all" || s.cwd === projectCwd || s.worktree?.repo === projectCwd)
       // By title, project, branch and pull request, or by what was said in it.
       .filter((s) => !q || matches(threadHaystack(s), q) || s.id in contentHits)
+      .sort((a, b) =>
+        sort === "title"
+          ? (a.title || "New thread").localeCompare(b.title || "New thread")
+          : sort === "activity"
+            ? Number(isRunning(liveThreads[b.id])) - Number(isRunning(liveThreads[a.id])) ||
+              (b.updatedAt ?? 0) - (a.updatedAt ?? 0)
+            : (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+      )
       .slice(0, q ? 40 : 8)
       .map(
         (s): Result => ({
@@ -361,7 +379,7 @@ export function CommandPalette() {
       );
     // With a query, threads lead; without one, the recent threads and then every action.
     return q ? [...threads, ...actions.slice(0, 12)] : [...threads, ...actions];
-  }, [sessions, q, scope, projectCwd, selectedId, actionsOnly, open, contentHits]);
+  }, [sessions, q, scope, projectCwd, selectedId, actionsOnly, open, contentHits, sort, liveThreads]);
 
   const choose = (i: number) => {
     const r = results[i];
@@ -392,6 +410,12 @@ export function CommandPalette() {
           aria-describedby={undefined}
           className="elevated fixed top-[max(72px,14vh)] left-1/2 z-50 flex w-[min(620px,calc(100vw-56px))] -translate-x-1/2 flex-col overflow-hidden rc-in"
           onKeyDown={(e) => {
+            if (
+              !(e.target instanceof HTMLElement) ||
+              e.target.closest("[role=menu]") ||
+              (e.target.tagName !== "INPUT" && e.target.getAttribute("role") !== "option")
+            )
+              return;
             if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault();
               setIndex((i) =>
@@ -400,9 +424,9 @@ export function CommandPalette() {
             } else if (e.key === "Enter") {
               e.preventDefault();
               choose(index);
-            } else if (e.key === "Tab") {
+            } else if (e.key === "Tab" && !e.shiftKey) {
               e.preventDefault();
-              setScope(scope === "all" ? "project" : "all");
+              setOnlyProject(!onlyProject);
             }
           }}
         >
@@ -419,8 +443,12 @@ export function CommandPalette() {
               placeholder="Search threads, branches and pull requests, or > for actions…"
               aria-label="Search threads and actions"
               {...noTextHelpers}
-              className="flex-1 bg-transparent text-title3 outline-none placeholder:text-fg-faint"
+              className="min-w-0 flex-1 bg-transparent text-title3 outline-none placeholder:text-fg-faint"
             />
+          </div>
+          <div className="flex items-center justify-end gap-1 px-3 pb-2">
+            <SortMenu />
+            <FilterMenu filtering={scope === "project"} />
           </div>
           <div className="max-h-[440px] overflow-y-auto p-2" role="listbox" aria-label="Results">
             {!results.length && (
@@ -433,7 +461,7 @@ export function CommandPalette() {
                 )}
                 {i === 0 && r.kind === "thread" && (
                   <div className="px-3 pt-1 pb-1 font-semibold text-caption text-fg-muted">
-                    {q ? "Threads" : "Recent threads"}
+                    {q || sort !== "recent" ? "Threads" : "Recent threads"}
                   </div>
                 )}
                 <button
