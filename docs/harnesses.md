@@ -145,6 +145,7 @@ latter, and groups those apart. Detection is cached for a minute; `set` and
 | `cursor` | `acp` | `agent acp` | `agent --version` | `unknown` |
 | `pi` | `acp` | `npx -y pi-acp` (pi's RPC mode adapted to ACP) | `pi --version` | `unknown` |
 | `perch` | `acp` | `perch acp` | `perch status` | `perch status` (`Not signed in.` is signed out) |
+| `antigravity` | `acp` | `agy acp` | `agy --version` | `unknown` |
 
 Commands are looked up on the engine's `PATH` and then the login shell's, so
 an app started from the Dock finds what the terminal finds. On Windows a bare
@@ -534,7 +535,13 @@ What each part does for an external thread:
   fields or a URL are declined, since RustCode draws no form; dynamic tool
   calls are refused.
 - **ACP events.** The agent's `session/update`s (its `usage_update`s too)
-  are relayed under the thread's id. RustCode advertises no `fs` or `terminal` client capability,
+  are relayed under the thread's id. The standard `usage_update` only gives
+  the context window; an agent that puts the turn's token counts on its
+  `session/prompt` answer (`usage`: `inputTokens`, `outputTokens`,
+  `cachedReadTokens`, `cachedWriteTokens`; Antigravity does) has them summed
+  into session totals and sent as a `usage_update` with `_meta.rustcode`, which
+  the usage page and `data.sqlite` read. Claude Code and Pi keep their own
+  logs as the source (`harness_usage::log_based`). RustCode advertises no `fs` or `terminal` client capability,
   and refuses those requests, so the agent uses its own tools.
 - **Steer.** `_rustcode/steer` on a Codex thread sends `turn/steer` while a
   turn runs, with the message's images too. On an ACP thread it uses the
