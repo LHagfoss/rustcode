@@ -613,8 +613,8 @@ const SWAPPED_ON_HOVER = cx(
  * takes what it needs (a running turn's "Working 12:07", the model), so the right side is never
  * cut and one line's right part never narrows another line's left one.
  */
-const ROW_HEIGHT = 64;
-const ROW_GRID = "grid h-16 grid-rows-[20px_16px_16px] content-center rounded-xl px-3";
+const ROW_HEIGHT = 72;
+const ROW_GRID = "grid h-[72px] grid-rows-[22px_18px_18px] content-center rounded-xl px-3";
 /** One line of the row: its left part and its right part. */
 const ROW_LINE = "flex min-w-0 items-center gap-2";
 /** A line's left part: truncated. */
@@ -917,11 +917,7 @@ const ThreadRow = memo(function ThreadRow({
   // recedes to regular at 75% until hovered.
   const titleTint = cx(
     "min-w-0 flex-1 truncate text-body",
-    wantsYou
-      ? "font-medium text-fg"
-      : recedes
-        ? "font-normal text-fg/75 group-hover:text-fg"
-        : "font-medium text-fg",
+    wantsYou ? "font-medium text-fg" : recedes ? "font-normal text-fg" : "font-medium text-fg",
   );
   // What the third line says in place of the branch: the request it waits on, else the thread it
   // came from (a search result, or a delegate whose parent's row is in another project).
@@ -1094,16 +1090,17 @@ const ThreadRow = memo(function ThreadRow({
                       <span className="min-w-0 flex-1" title={folderPath}>
                         <MiddlePath path={folder} />
                       </span>
+                    </span>
+                    <span className={cx(ROW_RIGHT, "gap-1.5")}>
                       {place && (
                         <span
-                          className="flex min-w-0 shrink items-center gap-1 text-fg-faint"
+                          className="flex min-w-0 max-w-[104px] shrink items-center gap-1 text-sub text-fg-muted"
                           title={
                             unsynced
                               ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
                               : `Runs on ${place.name}`
                           }
                         >
-                          <span aria-hidden>·</span>
                           <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
                           <span className="min-w-0 truncate">{place.name}</span>
                           {unsynced && (
@@ -1111,8 +1108,6 @@ const ThreadRow = memo(function ThreadRow({
                           )}
                         </span>
                       )}
-                    </span>
-                    <span className={cx(ROW_RIGHT, "gap-1.5")}>
                       {delegates && (
                         <Tooltip label={delegates.title}>
                           <span
@@ -1185,7 +1180,7 @@ const ThreadRow = memo(function ThreadRow({
                       ) : null}
                     </span>
                     {/* The harness mark always accompanies the model. */}
-                    <span className={cx(ROW_RIGHT, "text-sub text-fg-faint")}>
+                    <span className={cx(ROW_RIGHT, "text-sub text-fg-muted")}>
                       {model && (
                         <HarnessIcon
                           id={session.harness || "rustcode"}
