@@ -438,6 +438,21 @@ impl Hub {
             }
         };
         let args = expanded.as_ref().unwrap_or(&request.args);
+        if client.is_none() && request.tool == super::MERGE_WHEN_GREEN {
+            let answer = super::local::answer_json_with_asker(
+                &request.session_id,
+                cancel,
+                &request.tool,
+                args,
+                self.questions_for(&request),
+            )
+            .await;
+            let output = super::output(&request.tool, answer);
+            return CallAnswer {
+                success: output.success,
+                content: output.content,
+            };
+        }
         let output = match client {
             Some(client) => {
                 super::execute_versioned(Some(client), version, cancel, &request.tool, args).await

@@ -1582,8 +1582,14 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
       ),
     ),
   }));
-  const selected = get().selectedId;
-  if (selected && splitThreadKey(selected).host === id) void openThread(selected);
+  // Reload background transcripts too: they may have finished while disconnected.
+  for (const key of Object.keys(get().threads)) {
+    if (splitThreadKey(key).host === id) void openThread(key);
+  }
+  for (const row of get().sessions) {
+    if (row.host === id && (row.status === "running" || row.status === "needs_input"))
+      void openThread(row.id);
+  }
 }
 
 /** A machine's ids reach the store as keys: `‹host›/‹sessionId›`. */
@@ -2183,6 +2189,8 @@ function onSessionUpdate(params: JsonObject) {
   }
   const status = statusInUpdate(params);
   if (status) {
+    if (isRemoteThread(sessionId) && (status === "running" || status === "needs_input"))
+      void openThread(sessionId);
     if (status === "done") clearSettledNotifications([sessionId]);
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, status } : x)) }));
     clearStatusMark(sessionId);
@@ -2225,8 +2233,7 @@ function onSessionUpdate(params: JsonObject) {
 /**
  * A thread the engine started, or another client made on this machine or on a paired one
  * (`_rustcode/threads/created`, docs/remote.md and docs/desktop.md › Several machines): a
- * thread has no row in the store before its first turn, so this is what lists it now.
- * Nothing is opened: the client that asked for it is using it.
+ * thread has no row in the store before its first turn. Remote threads are followed in background.
  */
 export function threadCreated(params: unknown) {
   const p = obj(params);
@@ -2237,7 +2244,11 @@ export function threadCreated(params: unknown) {
   // A thread trashed a moment ago is not made again by a late announcement.
   if (isTombstoned(key)) return;
   const { host } = splitThreadKey(key);
+  const parent = parseSessionList({ sessions: [p ?? {}] }).sessions[0]?.parent;
   const summary: SessionSummary = {
+    parent: parent
+      ? { ...parent, id: parent.id && host ? threadKey(host, parent.id) : parent.id }
+      : undefined,
     id: key,
     // A machine's own id reaches the store as `‹host›/‹id›` (state/threadKeys.ts).
     host: host || undefined,
@@ -2255,6 +2266,7 @@ export function threadCreated(params: unknown) {
     if (s.sessions.some((x) => x.id === key)) return {};
     return { sessions: [summary, ...s.sessions] };
   });
+  if (host) void openThread(key);
 }
 
 /**

@@ -315,7 +315,7 @@ fn shown(value: &Value) -> String {
     }
 }
 
-async fn approved(
+pub(crate) async fn approved(
     asker: &Asker,
     session_id: &str,
     title: &str,
