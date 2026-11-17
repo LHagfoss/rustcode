@@ -85,7 +85,11 @@ export function MachinesPage() {
   const counts = useMachines((s) => s.counts);
   const addOpen = useMachines((s) => s.addOpen);
   const adding = useMachines(
-    (s) => s.pairing !== null || s.ssh?.running === true || s.connectBusy || s.connectOffer !== null,
+    (s) =>
+      s.pairing.status === "running" ||
+      s.ssh.status === "running" ||
+      s.connect.status === "running" ||
+      s.connectOffer !== null,
   );
   const [now, setNow] = useState(() => Date.now());
   const [local, setLocal] = useState<string | null>(null);
@@ -174,7 +178,7 @@ function ThisComputer() {
   const status = useApp((s) => s.status);
   const open = useApp((s) => Object.values(s.threads).filter((thread) => thread.loaded).length);
   const server = useMachines((s) => s.server);
-  const installing = useMachines((s) => s.serverInstalling);
+  const installing = useMachines((s) => s.serverInstall.status === "running");
   const local = useLocalIdentity();
   const platform = currentPlatform();
   const reported = platform === "mac" ? "macos" : platform;

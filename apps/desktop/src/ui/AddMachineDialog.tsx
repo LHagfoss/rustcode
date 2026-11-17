@@ -87,8 +87,8 @@ export function AddMachineDialog({
     // Reopened on a request already running (or Pair again): land where it is.
     const state = useMachines.getState();
     if (state.incomingConnectCode) setMethod("code");
-    else if (state.pairing) setMethod("address");
-    else if (state.ssh?.running) setMethod("ssh");
+    else if (state.pairing.data) setMethod("address");
+    else if (state.ssh.status === "running") setMethod("ssh");
   }, [open]);
 
   useEffect(() => {
@@ -254,8 +254,8 @@ function Field({ title, hint, children }: { title: string; hint?: string; childr
  */
 function CodePane() {
   const offer = useMachines((s) => s.connectOffer);
-  const busy = useMachines((s) => s.connectBusy);
-  const error = useMachines((s) => s.connectError);
+  const busy = useMachines((s) => s.connect.status === "running");
+  const error = useMachines((s) => (s.connect.status === "failed" ? s.connect.error : null));
   const incoming = useMachines((s) => s.incomingConnectCode);
   const [code, setCode] = useState(incoming ?? "");
   useEffect(() => {
@@ -432,14 +432,14 @@ function OfferView({ offer, now }: { offer: ConnectOffer; now: number }) {
  * `rustcode up` there and pairs with the code it printed, which never leaves SSH.
  */
 function SshPane() {
-  const run = useMachines((s) => s.ssh);
-  const error = useMachines((s) => s.sshError);
-  const notice = useMachines((s) => s.sshNotice);
+  const run = useMachines((s) => s.ssh.data);
+  const error = useMachines((s) => (s.ssh.status === "failed" ? s.ssh.error : null));
+  const notice = useMachines((s) => s.ssh.data?.notice);
   const [target, setTarget] = useState("");
   const [allowInstall, setAllowInstall] = useState(true);
   const [mutual, setMutual] = useState(false);
   const [via, setVia] = useState<SshVia>("auto");
-  const running = run?.running === true;
+  const running = useMachines((s) => s.ssh.status === "running");
   const connect = () => {
     if (running || !target.trim()) return;
     void connectOverSsh(target, allowInstall, mutual, via).then((paired) => {
@@ -582,11 +582,11 @@ export function AccessChoice({
  * owner accepts and the code it then shows is typed here.
  */
 function AddressPane({ local }: { local: string | null }) {
-  const pairing = useMachines((s) => s.pairing);
-  const pairingError = useMachines((s) => s.pairingError);
+  const pairing = useMachines((s) => s.pairing.data ?? null);
+  const pairingError = useMachines((s) => (s.pairing.status === "failed" ? s.pairing.error : null));
   const discovered = useMachines((s) => s.discovered);
-  const discovering = useMachines((s) => s.discovering);
-  const discoverError = useMachines((s) => s.discoverError);
+  const discovering = useMachines((s) => s.discovery.status === "running");
+  const discoverError = useMachines((s) => (s.discovery.status === "failed" ? s.discovery.error : null));
   const [address, setAddress] = useState("");
   // What was asked last, so Try again repeats it after the field was cleared.
   const [asked, setAsked] = useState<{ address: string; name?: string } | null>(null);
