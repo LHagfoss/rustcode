@@ -71,6 +71,8 @@ pub(crate) struct Transcript {
     plan: Option<usize>,
     /// The latest `usage_update`, as JSON.
     pub usage: Option<serde_json::Value>,
+    /// Number of usage updates observed, including repeated identical values.
+    pub usage_revision: u64,
 }
 
 /// Whether a message chunk is a compaction that is running or failed, shown
@@ -83,6 +85,12 @@ fn live_compaction_line(meta: Option<&Meta>) -> bool {
 }
 
 impl Transcript {
+    pub(crate) fn usage_since(&self, revision: u64) -> Option<serde_json::Value> {
+        (self.usage_revision != revision)
+            .then(|| self.usage.clone())
+            .flatten()
+    }
+
     pub(crate) fn new(history: Vec<ChatMessage>) -> Self {
         Self {
             history,
@@ -123,6 +131,7 @@ impl Transcript {
             SessionUpdate::Plan(plan) => self.plan(plan),
             SessionUpdate::UsageUpdate(_) => {
                 self.usage = serde_json::to_value(update).ok();
+                self.usage_revision = self.usage_revision.saturating_add(1);
             }
             _ => {}
         }
@@ -1337,6 +1346,23 @@ mod tests {
         let saved = std::fs::read_to_string(artifact).unwrap();
         assert_eq!(saved.len(), 8 * 30 * 1024, "the whole flood was saved");
         assert!(message.content.contains("Full output saved to"));
+    }
+
+    #[test]
+    fn usage_is_only_available_to_the_turn_that_observed_it() {
+        let mut transcript = Transcript::default();
+        let update: SessionUpdate = serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "usage_update", "used": 900, "size": 200000
+        }))
+        .unwrap();
+        let first = transcript.usage_revision;
+        transcript.observe(&update);
+        assert!(transcript.usage_since(first).is_some());
+        let next = transcript.usage_revision;
+        assert!(transcript.usage_since(next).is_none());
+        // Identical updates are still new reports.
+        transcript.observe(&update);
+        assert!(transcript.usage_since(next).is_some());
     }
 
     #[test]
