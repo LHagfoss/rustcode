@@ -695,20 +695,39 @@ pub fn shell_quote(word: &str) -> String {
 
 /// The first program in a shell command, peeling wrappers, assignments and shells.
 /// Only the program name is retained for tool-call telemetry.
-/// A leading `cd dir &&` (or another builtin that only sets up the shell) is
-/// skipped, so `cd repo && cargo check` records `cargo`; a command that is only
-/// such builtins records the first of them.
+/// A leading `cd dir &&` (or another builtin or keyword that only sets up or
+/// steers the shell, such as `for` or `read`) is skipped, so
+/// `cd repo && cargo check` records `cargo`; a command that is only such
+/// builtins records the first of them. After a `source`, a bare name that is
+/// not on `PATH` is a function the sourced script defined, and is skipped too.
 pub(crate) fn command_name(command: &str) -> Option<String> {
+    command_name_on(command, &Host::current())
+}
+
+fn command_name_on(command: &str, host: &Host) -> Option<String> {
     const SETUP: &[&str] = &[
-        "cd", "pushd", "popd", "export", "set", "source", ".", "true", ":",
+        "cd", "pushd", "popd", "export", "set", "unset", "local", "declare", "source", ".", "true",
+        ":", "for", "select", "case", "esac", "done", "fi", "read", "shopt", "trap", "umask",
+        "ulimit", "alias", "wait", "exit", "return",
     ];
     let mut found = Vec::new();
     scan(command, None, 0, &Context::default(), &mut found);
     let first = found.first().map(|invocation| invocation.program.clone());
+    let mut sourced = false;
     found
         .into_iter()
         .map(|invocation| invocation.program)
-        .find(|program| !SETUP.contains(&program.as_str()))
+        .find(|program| {
+            if matches!(program.as_str(), "source" | ".") {
+                sourced = true;
+            }
+            if SETUP.contains(&program.as_str()) {
+                return false;
+            }
+            // A script name (`release.sh`) is a program; a bare name the
+            // sourced script defined is not on `PATH`.
+            !sourced || program.contains('.') || (host.has_program)(program)
+        })
         .or(first)
 }
 
