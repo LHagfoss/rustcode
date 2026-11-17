@@ -330,8 +330,8 @@ export async function loadScopeSettings(machines: ScopeMachine[]): Promise<void>
 }
 
 /** Apply a server's values to the local app, so its behaviour follows them. */
-function applyLocalSettings(values: Record<string, Json | undefined>): void {
-  void Promise.all([import("./store"), import("./autoCompactRun")]).then(([store, autoCompact]) => {
+function applyLocalSettings(values: Record<string, Json | undefined>): Promise<void> {
+  return Promise.all([import("./store"), import("./autoCompactRun")]).then(([store, autoCompact]) => {
     const text = (key: ServerSettingKey) => {
       const value = values[key];
       return typeof value === "string" ? value : undefined;
@@ -393,7 +393,7 @@ export function onServerSettingsChanged(host: string, params: JsonObject): void 
   }
   settingsRevision.set(host, (settingsRevision.get(host) ?? 0) + 1);
   remember(host, settled);
-  if (host === LOCAL_HOST) applyLocalSettings(settled);
+  if (host === LOCAL_HOST) void applyLocalSettings(settled);
 }
 
 let hydration: Promise<void> | null = null;
@@ -413,7 +413,8 @@ export function hydrateLocalServerSettings(): Promise<void> {
       const values = obj(obj(answer)?.values);
       if (!values) return;
       remember(LOCAL_HOST, values);
-      applyLocalSettings(values);
+      // Applied before hydration counts as done, so nothing set after it is overwritten late.
+      await applyLocalSettings(values);
       await seedLocalProjectOverrides(useApp.getState().projectPermissionModes).catch(() => undefined);
     } catch {
       // An older server: nothing to apply.
@@ -448,7 +449,7 @@ export async function writeServerSetting(host: string, key: ServerSettingKey, va
       await machineRequest(host, "_rustcode/settings/set", { values: { [key]: value } }, 10_000);
       // A full response can contain old values for other writes; commit only this key.
       confirmedValues.set(cacheKey, value);
-      if (host === LOCAL_HOST) applyLocalSettings({ [key]: value });
+      if (host === LOCAL_HOST) void applyLocalSettings({ [key]: value });
       useSettingsSave.setState({ saved: true });
     } catch (error) {
       if (writeVersions.get(cacheKey) === version) {
@@ -751,7 +752,7 @@ export function useScopedSetting(
   const set = async (value: Json) => {
     const before = useSettingValues.getState().values;
     for (const machine of writes) remember(machine.host, { [key]: value });
-    if (writes.some((machine) => machine.host === LOCAL_HOST)) applyLocalSettings({ [key]: value });
+    if (writes.some((machine) => machine.host === LOCAL_HOST)) void applyLocalSettings({ [key]: value });
     const result = await runOnMachines(writes, (machine) => writeServerSetting(machine.host, key, value));
     if (!result.failures.length) return;
     for (const failed of result.failures) {
@@ -760,7 +761,7 @@ export function useScopedSetting(
       const now = useSettingValues.getState().values[valueKey(failed.host, key)];
       if (previous === undefined || JSON.stringify(now) !== JSON.stringify(value)) continue;
       remember(failed.host, { [key]: previous });
-      if (failed.host === LOCAL_HOST) applyLocalSettings({ [key]: previous });
+      if (failed.host === LOCAL_HOST) void applyLocalSettings({ [key]: previous });
     }
     toast(failureSummary(result), "error");
   };
