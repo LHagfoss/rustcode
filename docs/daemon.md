@@ -96,7 +96,8 @@ and the other calls refuse with that instruction.
 ## Loops
 
 A Loop is a job whose action is `loop`: a prompt run on a schedule, each run
-in a fresh top-level thread on any harness. The desktop app's Loops page
+in a fresh top-level thread on any harness, or every run in one thread the
+Loop names. The desktop app's Loops page
 creates, edits, pauses, resumes, runs and deletes them through
 `_rustcode/loops/*` (`engine/src/acp/loops.rs`) and the scheduled run/delete
 methods, so `rustcode cron list` shows the same jobs.
@@ -109,7 +110,8 @@ methods, so `rustcode cron list` shows the same jobs.
   "harness": "codex",
   "model": null,
   "effort": "medium",
-  "read_only": true
+  "read_only": true,
+  "thread_id": null
 }
 ```
 
@@ -119,12 +121,26 @@ methods, so `rustcode cron list` shows the same jobs.
   (`orchestration/local_threads.rs` › `run_loop_thread`). The thread is titled
   with the Loop's name and runs in the project's own folder, no worktree. The
   run's output records `{"thread_id": …}`, which the page links to.
+- **Or one thread every time.** With `thread_id` set, each run loads that
+  thread (`session/load`) and sends the prompt as its next message; harness,
+  model and effort are the thread's own. A run while the thread works on a
+  turn, or while it is open in another RustCode process, is skipped like a
+  run with the app closed; a deleted thread fails the run.
+- **Quiet by default.** The prompt asks the agent to start with “Nothing to
+  report” when nothing needs the user. A fresh run's thread whose last reply
+  starts that way is archived (status `done`) and its output adds
+  `"quiet": true`; the page says "Nothing to report" and the review list
+  leaves it out. A Loop's own thread is never archived.
+- **Once.** A Loop saved with `{ "kind": "at", "at": <RFC 3339> }` runs one
+  time; the dialog reads "in 2h", "in 30 min" or "at 09:00".
 - **Read-only by default.** A read-only run is prompted at Ask access and
   every permission request is declined, so edits, commands that ask, commits
   and pushes do not happen. Turned off, the run is at Full access, as a
   delegate is.
 - **The app must be open.** With no engine to reach, the run is recorded as
-  cancelled with `{"skipped": …}` and does not count as a failure.
+  cancelled with `{"skipped": …}` and does not count as a failure. (A
+  headless engine the daemon starts itself would lift this; not built yet,
+  issue 3937.)
 - **A missed run fires once.** A Loop's cron uses the `run_once` misfire
   policy: runs missed while the computer slept coalesce into one.
 - **No overlapping runs.** The scheduler never claims a job with a run still

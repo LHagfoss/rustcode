@@ -60,6 +60,9 @@ pub(crate) struct LoopsSaveRequest {
     pub effort: Option<String>,
     #[serde(default = "read_only_default")]
     pub read_only: bool,
+    /// Send every run to this thread instead of starting a fresh one.
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 fn read_only_default() -> bool {
@@ -124,6 +127,7 @@ fn run_json(run: &JobRunRecord) -> Value {
         "error": run.result_summary.as_ref().filter(|_| run.error_class.is_some()),
         "errorClass": run.error_class,
         "threadId": output.get("thread_id"),
+        "quiet": output.get("quiet").and_then(Value::as_bool).unwrap_or(false),
         "skipped": output.get("skipped"),
     })
 }
@@ -137,6 +141,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         model,
         effort,
         read_only,
+        thread_id,
     } = &job.action
     else {
         return None;
@@ -152,6 +157,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         "model": model,
         "effort": effort,
         "readOnly": read_only,
+        "threadId": thread_id,
         "nextDueAt": job.next_due_at,
         "createdAt": job.created_at,
         "runs": runs.iter().map(run_json).collect::<Vec<_>>(),
@@ -227,6 +233,7 @@ pub(crate) fn job_from(request: LoopsSaveRequest, id: &str) -> Result<JobRecord,
         model: trimmed(request.model),
         effort: trimmed(request.effort),
         read_only: request.read_only,
+        thread_id: trimmed(request.thread_id),
     };
     let schedule_json =
         serde_json::to_string(&schedule).map_err(|error| format!("schedule: {error}"))?;
@@ -323,6 +330,7 @@ mod tests {
             model: Some("  ".into()),
             effort: None,
             read_only: true,
+            thread_id: None,
         }
     }
 
@@ -360,6 +368,21 @@ mod tests {
         let shown = loop_json(&job, &[]).unwrap();
         assert_eq!(shown["readOnly"], true);
         assert_eq!(shown["prompt"], "Check CI on main");
+        assert_eq!(shown["threadId"], Value::Null);
+    }
+
+    #[test]
+    fn a_loop_can_send_every_run_to_one_thread() {
+        let folder = tempfile::tempdir().unwrap();
+        let workspace = folder.path().to_string_lossy().into_owned();
+        let mut saved = request(&workspace);
+        saved.thread_id = Some(" thread-7 ".into());
+        let job = job_from(saved, "loop-1").unwrap();
+        assert!(matches!(
+            &job.action,
+            JobAction::Loop { thread_id: Some(id), .. } if id == "thread-7"
+        ));
+        assert_eq!(loop_json(&job, &[]).unwrap()["threadId"], "thread-7");
     }
 
     #[test]

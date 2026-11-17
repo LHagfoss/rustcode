@@ -5,6 +5,7 @@ import { applyTheme, resolveTheme } from "./lib/themes";
 import { setUserReduceTransparency } from "./lib/transparency";
 import { restoreZoom } from "./lib/zoom";
 import { startDeepLinks } from "./state/deepLinks";
+import { sessionsListed } from "./state/engine";
 import { runShortcut } from "./state/shortcuts";
 import { closeConfirm, openSettings, setOnboarding, setView, shortcutFor, useApp } from "./state/store";
 import { startUpdateChecks } from "./state/updates";
@@ -14,6 +15,7 @@ import { ConnectRequests } from "./ui/ConnectRequests";
 import { Inbox } from "./ui/Inbox";
 import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
+import { useLoopBadges } from "./ui/LoopBadge";
 import { OutsideApprovals } from "./ui/OutsideApprovals";
 import { ProjectActionsEditor } from "./ui/ProjectActions";
 import { Pill } from "./ui/primitives";
@@ -165,6 +167,8 @@ export function App() {
   useAwayWatch();
   useEffect(() => restoreZoom(), []);
   useEffect(() => startUpdateChecks(), []);
+  // The sidebar's Loop badges: which threads loops ran in (issue 3937).
+  useLoopBadges(useApp((s) => sessionsListed(s.engine)));
   const settings = useApp((s) => s.settings !== null);
   const onboarding = useApp((s) => s.onboardingOpen);
   const view = useApp((s) => s.view);

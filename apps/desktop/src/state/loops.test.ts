@@ -1,4 +1,4 @@
-// Loops (issue 3892): a schedule in words, a loop's state and last result, and the review list.
+// Loops (issues 3892, 3937): a schedule in words, a loop's state and last result, and the review list.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -9,8 +9,10 @@ import {
   type LoopRun,
   lastResult,
   loopState,
+  loopThreadNames,
   nextRunText,
   parseLoops,
+  parseOnce,
   pauseReason,
   presetOf,
   reviewItems,
@@ -219,5 +221,61 @@ describe("parseLoops", () => {
     expect(first?.nextDueAt).toBe(Date.parse("2026-11-17T14:00:00Z"));
     expect(first?.runs[0]?.threadId).toBe("t-1");
     expect(parseLoops(null)).toEqual({ daemonRunning: false, loops: [] });
+  });
+});
+
+describe("loop follow-ups (issue 3937)", () => {
+  test("a one-time run reads “in 2h” and “at 09:00”", () => {
+    const now = new Date(2026, 10, 17, 12, 0).getTime();
+    expect(parseOnce("in 2h", now)?.getTime()).toBe(now + 2 * HOUR);
+    expect(parseOnce(" In 30 min ", now)?.getTime()).toBe(now + 30 * 60_000);
+    expect(parseOnce("in 1 day", now)?.getTime()).toBe(now + 24 * HOUR);
+    const later = parseOnce("at 14:30", now);
+    expect([later?.getDate(), later?.getHours(), later?.getMinutes()]).toEqual([17, 14, 30]);
+    // A clock time already past today is tomorrow's.
+    const tomorrow = parseOnce("09:00", now);
+    expect([tomorrow?.getDate(), tomorrow?.getHours()]).toEqual([18, 9]);
+    expect(parseOnce("at 9", now)?.getHours()).toBe(9);
+    for (const bad of ["", "soon", "in 0h", "at 25:00", "9", "in two hours"])
+      expect(parseOnce(bad, now)).toBeNull();
+  });
+
+  test("a one-time loop saves an `at` schedule, and a loop's own thread is sent along", () => {
+    const once = new Date("2026-11-17T14:00:00Z");
+    const params = saveParams(
+      {
+        name: "Once",
+        workspace: "/code/app",
+        prompt: "Check",
+        cron: "0 9 * * *",
+        once,
+        readOnly: true,
+        threadId: "t-9",
+      },
+      "Europe/Oslo",
+    );
+    expect(params.schedule).toEqual({ kind: "at", at: "2026-11-17T14:00:00.000Z" });
+    expect(params.threadId).toBe("t-9");
+  });
+
+  test("a quiet run says it found nothing, and is parsed from the list", () => {
+    const quiet = loop({ runs: [run("r1", "succeeded", 1, { threadId: "t-1", quiet: true })] });
+    expect(lastResult(quiet, NOW)).toEqual({ text: "Nothing to report 1 h ago", tone: "ok" });
+    const parsed = parseLoops({
+      daemonRunning: true,
+      loops: [
+        { id: "l", name: "L", threadId: "t-own", runs: [{ id: "r", state: "succeeded", quiet: true }] },
+      ],
+    });
+    expect(parsed.loops[0]?.threadId).toBe("t-own");
+    expect(parsed.loops[0]?.runs[0]?.quiet).toBe(true);
+  });
+
+  test("every thread a loop ran in carries its name for the sidebar badge", () => {
+    const loops = [
+      loop({ name: "CI", runs: [run("r1", "succeeded", 1, { threadId: "t-1" }), run("r2", "cancelled", 2)] }),
+      loop({ id: "loop-2", name: "Triage", threadId: "t-own", runs: [] }),
+    ];
+    expect(loopThreadNames(loops)).toEqual({ "t-1": "CI", "t-own": "Triage" });
   });
 });

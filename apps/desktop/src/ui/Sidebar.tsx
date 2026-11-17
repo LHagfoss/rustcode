@@ -200,7 +200,7 @@ import {
   Wrench,
   X,
 } from "./icons";
-import { LinkBadge } from "./Links";
+import { RowBadges } from "./LoopBadge";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { SettingsButton } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
@@ -999,7 +999,7 @@ const ThreadRow = memo(function ThreadRow({
                         {branch === "fork" ? <GitFork size={12} /> : <MessageSquareQuote size={12} />}
                       </span>
                     )}
-                    <LinkBadge threadId={session.id} />
+                    <RowBadges threadId={session.id} />
                     {fromText && (
                       <Tooltip label={`Started ${fromText}`}>
                         <CornerUpLeft
@@ -1042,7 +1042,7 @@ const ThreadRow = memo(function ThreadRow({
                           {branch === "fork" ? <GitFork size={12} /> : <MessageSquareQuote size={12} />}
                         </span>
                       )}
-                      <LinkBadge threadId={session.id} />
+                      <RowBadges threadId={session.id} />
                       <span className={cx(titleTint, renaming && "invisible")}>
                         {session.title || "New thread"}
                       </span>

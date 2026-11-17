@@ -2,6 +2,7 @@
 // (docs/daemon.md › Loops, issue 3892). What the engine's `_rustcode/loops/*` answers mean on the
 // page: a schedule in words, a loop's state and last result, and what its runs left for the user.
 
+import { create } from "zustand";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { request } from "./store";
@@ -29,9 +30,11 @@ export interface LoopRun {
   startedAt?: number;
   finishedAt?: number;
   error?: string;
-  /** The thread the run started. */
+  /** The thread the run started, or the loop's own thread it ran in. */
   threadId?: string;
-  /** Why the run started nothing: the app was closed. */
+  /** The run found nothing for the user, and its thread was archived. */
+  quiet?: boolean;
+  /** Why the run started nothing: the app was closed, or the loop's thread was busy. */
   skipped?: string;
 }
 
@@ -46,6 +49,8 @@ export interface Loop {
   model?: string;
   effort?: string;
   readOnly: boolean;
+  /** The thread every run goes to; absent starts a fresh thread per run. */
+  threadId?: string;
   nextDueAt?: number;
   /** Newest first. */
   runs: LoopRun[];
@@ -108,6 +113,7 @@ function runOf(value: Json): LoopRun | null {
     finishedAt: time(raw.finishedAt),
     error: str(raw.error),
     threadId: str(raw.threadId),
+    quiet: bool(raw.quiet) ?? false,
     skipped: str(raw.skipped),
   };
 }
@@ -127,6 +133,7 @@ function loopOf(value: Json): Loop | null {
     model: str(raw.model),
     effort: str(raw.effort),
     readOnly: bool(raw.readOnly) ?? true,
+    threadId: str(raw.threadId),
     nextDueAt: time(raw.nextDueAt),
     runs: arr(raw.runs).flatMap((run) => runOf(run) ?? []),
   };
@@ -219,11 +226,38 @@ export const SCHEDULE_PRESETS = [
   { id: "weekdays", label: "Weekdays", cron: "0 9 * * 1-5" },
   { id: "weekly", label: "Mondays", cron: "0 9 * * 1" },
   { id: "custom", label: "Custom", cron: "" },
+  { id: "once", label: "Once", cron: "" },
 ] as const;
 
 export type SchedulePreset = (typeof SCHEDULE_PRESETS)[number]["id"];
 /** What a new loop runs on unless the user picks another: every 4 hours. */
 export const DEFAULT_PRESET: SchedulePreset = "4h";
+
+/**
+ * A one-shot time the user typed: "in 2h", "in 30 min", "in 1 day", "at 09:00" or "9:30" (the next
+ * time the clock reads that, today or tomorrow). Null when it is none of those.
+ */
+export function parseOnce(text: string, now = Date.now()): Date | null {
+  const input = text.trim().toLowerCase();
+  const after = /^in\s+(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hrs?|hours?|d|days?)$/.exec(input);
+  if (after) {
+    const n = Number(after[1]);
+    const unit = after[2] ?? "";
+    const step = unit.startsWith("m") ? MINUTE : unit.startsWith("h") ? HOUR : DAY;
+    return n > 0 ? new Date(now + Math.round(n * step)) : null;
+  }
+  const at = /^(?:at\s+)?(\d{1,2})(?::(\d{2}))?$/.exec(input);
+  if (at && (input.startsWith("at") || at[2] !== undefined)) {
+    const hour = Number(at[1]);
+    const minute = Number(at[2] ?? 0);
+    if (hour > 23 || minute > 59) return null;
+    const next = new Date(now);
+    next.setHours(hour, minute, 0, 0);
+    if (next.getTime() <= now) next.setDate(next.getDate() + 1);
+    return next;
+  }
+  return null;
+}
 
 /** The preset a cron is, so editing a loop opens on its own choice; anything else is custom. */
 export function presetOf(expression: string): SchedulePreset {
@@ -283,7 +317,9 @@ export function lastResult(loop: Loop, now = Date.now()): { text: string; tone: 
   const when = agoText(run.finishedAt ?? run.startedAt ?? run.scheduledAt, now);
   switch (run.state) {
     case "succeeded":
-      return { text: `Finished ${when}`, tone: "ok" };
+      return run.quiet
+        ? { text: `Nothing to report ${when}`, tone: "ok" }
+        : { text: `Finished ${when}`, tone: "ok" };
     case "cancelled":
       return { text: run.skipped ? `Skipped ${when}: ${run.skipped}` : `Stopped ${when}`, tone: "muted" };
     default:
@@ -305,7 +341,10 @@ export function nextRunText(loop: Loop, now = Date.now()): string {
 export interface ReviewItem {
   loop: Loop;
   run: LoopRun;
-  /** "failed": the run's error; "open": its thread is still in the list, waiting for the user. */
+  /**
+   * "failed": the run's error; "open": its thread is still in the list, waiting for the user. A quiet
+   * run archived its thread, so it is never "open".
+   */
   kind: "failed" | "open";
 }
 
@@ -365,10 +404,14 @@ export interface LoopDraft {
   workspace: string;
   prompt: string;
   cron: string;
+  /** A one-shot run at this time instead of the cron. */
+  once?: Date;
   harness?: string;
   model?: string;
   effort?: string;
   readOnly: boolean;
+  /** Send every run to this thread instead of starting a fresh one. */
+  threadId?: string;
 }
 
 /** The user's IANA zone, which a loop's cron is read in. */
@@ -386,15 +429,17 @@ export function saveParams(draft: LoopDraft, timezone = userTimeZone()): JsonObj
     name: draft.name.trim(),
     workspace: draft.workspace,
     prompt: draft.prompt.trim(),
-    schedule: {
-      kind: "cron",
-      expression: draft.cron.trim().split(/\s+/).join(" "),
-      ...(timezone ? { timezone } : {}),
-    },
+    schedule: draft.once
+      ? { kind: "at", at: draft.once.toISOString() }
+      : {
+          kind: "cron",
+          expression: draft.cron.trim().split(/\s+/).join(" "),
+          ...(timezone ? { timezone } : {}),
+        },
     readOnly: draft.readOnly,
   };
   if (draft.id) params.id = draft.id;
-  for (const key of ["harness", "model", "effort"] as const) {
+  for (const key of ["harness", "model", "effort", "threadId"] as const) {
     const value = draft[key]?.trim();
     if (value) params[key] = value;
   }
@@ -419,4 +464,33 @@ export async function deleteLoop(id: string): Promise<void> {
 
 export async function startScheduler(): Promise<void> {
   await request(Method.loopsStartDaemon, {}, 30_000);
+}
+
+// ---------------------------------------------------------------- loop threads in the sidebar
+
+/** Which loop each thread a run started or ran in belongs to, by thread id: the sidebar's Loop badge. */
+export const useLoopThreads = create<{ byThread: Record<string, string> }>(() => ({ byThread: {} }));
+
+/** Every thread the loops' recorded runs went to, and the loop's name. */
+export function loopThreadNames(loops: readonly Loop[]): Record<string, string> {
+  const byThread: Record<string, string> = {};
+  for (const loop of loops) {
+    if (loop.threadId) byThread[loop.threadId] = loop.name;
+    for (const run of loop.runs) if (run.threadId) byThread[run.threadId] = loop.name;
+  }
+  return byThread;
+}
+
+/** Keep the sidebar's Loop badges in step with a list the page or a refresh read. */
+export function rememberLoops(snapshot: LoopsSnapshot): void {
+  useLoopThreads.setState({ byThread: loopThreadNames(snapshot.loops) });
+}
+
+/** Read the loops once for the badges; a scheduler that is not running leaves them empty. */
+export async function refreshLoopThreads(): Promise<void> {
+  try {
+    rememberLoops(parseLoops(await request(Method.loopsList, {}, 20_000)));
+  } catch {
+    // No engine yet or no scheduler: no badges, and the next refresh tries again.
+  }
 }

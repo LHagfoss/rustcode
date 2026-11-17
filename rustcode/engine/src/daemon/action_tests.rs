@@ -862,6 +862,7 @@ fn loop_action() -> JobAction {
         model: None,
         effort: Some("medium".into()),
         read_only: true,
+        thread_id: None,
     }
 }
 
@@ -900,9 +901,21 @@ fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
     use crate::orchestration::local_threads::LoopRunEnd;
     match loop_outcome(LoopRunEnd::Finished {
         thread_id: "t-1".into(),
+        quiet: false,
     }) {
         RunOutcome::Succeeded { output, .. } => {
             assert_eq!(output.as_deref(), Some(r#"{"thread_id":"t-1"}"#));
+        }
+        other => panic!("{other:?}"),
+    }
+    match loop_outcome(LoopRunEnd::Finished {
+        thread_id: "t-3".into(),
+        quiet: true,
+    }) {
+        RunOutcome::Succeeded { summary, output } => {
+            assert!(summary.contains("nothing"));
+            let output: serde_json::Value = serde_json::from_str(&output.unwrap()).unwrap();
+            assert_eq!(output, json!({"thread_id": "t-3", "quiet": true}));
         }
         other => panic!("{other:?}"),
     }
@@ -917,9 +930,24 @@ fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
         other => panic!("{other:?}"),
     }
     assert!(matches!(
-        loop_outcome(LoopRunEnd::NoEngine("RustCode was not open".into())),
+        loop_outcome(LoopRunEnd::Skipped("RustCode was not open".into())),
         RunOutcome::Cancelled { output: Some(output) } if output.contains("not open")
     ));
+}
+
+#[test]
+fn a_quiet_loop_reply_starts_with_the_marker() {
+    use crate::orchestration::local_threads::{loop_prompt, loop_reply_is_quiet};
+    assert!(loop_prompt("CI", "Check CI", false).contains("“Nothing to report”"));
+    assert!(loop_reply_is_quiet(
+        "Nothing to report: CI on main is green."
+    ));
+    assert!(loop_reply_is_quiet("  **nothing to report.** All good"));
+    assert!(!loop_reply_is_quiet("CI broke on main: test_x fails."));
+    assert!(!loop_reply_is_quiet(
+        "There is nothing to report except one failure."
+    ));
+    assert!(!loop_reply_is_quiet(""));
 }
 
 #[test]

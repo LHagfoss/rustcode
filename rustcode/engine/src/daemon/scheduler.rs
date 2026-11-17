@@ -724,6 +724,7 @@ mod tests {
             model: None,
             effort: None,
             read_only: true,
+            thread_id: None,
         };
         store.create(record).unwrap();
         let scheduler = Scheduler::new(

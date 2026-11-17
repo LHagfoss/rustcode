@@ -84,6 +84,9 @@ pub enum JobAction {
         /// Edits, commands and anything else that would ask are declined.
         #[serde(default = "read_only_default")]
         read_only: bool,
+        /// Send every run to this thread instead of starting a fresh one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
     },
     Poll {
         action: Box<JobAction>,

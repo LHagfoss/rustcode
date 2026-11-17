@@ -1,5 +1,6 @@
-// New loop / Edit loop (issue 3892): a name, the project it runs in, the prompt, a schedule from the
-// presets or a cron of the user's own, and the agent each run starts. Saved through
+// New loop / Edit loop (issues 3892, 3937): a name, the project it runs in, the prompt, a schedule
+// from the presets, a cron of the user's own or one time ("in 2h", "at 09:00"), where each run goes
+// (a fresh thread, or one thread every time) and the agent a fresh run starts. Saved through
 // `_rustcode/loops/save` into the scheduler daemon's store.
 
 import { Dialog } from "radix-ui";
@@ -10,6 +11,7 @@ import {
   DEFAULT_PRESET,
   type Loop,
   type LoopDraft,
+  parseOnce,
   presetOf,
   SCHEDULE_PRESETS,
   type SchedulePreset,
@@ -46,8 +48,34 @@ function draftOf(loop: Loop | null, project: string): LoopDraft {
     model: loop.model,
     effort: loop.effort,
     readOnly: loop.readOnly,
+    threadId: loop.threadId,
   };
 }
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** What the Once field shows for a loop saved with one time: the clock time it runs at. */
+function onceTextOf(loop: Loop | null): string {
+  if (loop?.schedule.kind !== "once") return "in 2h";
+  const at = new Date(Date.parse(loop.schedule.at));
+  return Number.isFinite(at.getTime()) ? `at ${pad(at.getHours())}:${pad(at.getMinutes())}` : "in 2h";
+}
+
+/** "Today at 14:30" or "2026-11-18 at 09:00": when a one-time run will happen. */
+function onceInWords(at: Date, now = new Date()): string {
+  const clock = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  const sameDay = at.toDateString() === now.toDateString();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  if (sameDay) return `Once, today at ${clock}`;
+  if (at.toDateString() === tomorrow.toDateString()) return `Once, tomorrow at ${clock}`;
+  return `Once, ${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} at ${clock}`;
+}
+
+const TARGETS = [
+  { value: "fresh", label: "A new thread each run" },
+  { value: "one", label: "One thread" },
+] as const;
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -76,6 +104,8 @@ export function LoopDialog({
   const projects = useMemo(() => projectsOn(sessions), [sessions]);
   const [draft, setDraft] = useState<LoopDraft>(() => draftOf(loop, projectCwd));
   const [preset, setPreset] = useState<SchedulePreset>(DEFAULT_PRESET);
+  const [onceText, setOnceText] = useState("in 2h");
+  const [target, setTarget] = useState<"fresh" | "one">("fresh");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -84,14 +114,30 @@ export function LoopDialog({
     if (!open) return;
     const next = draftOf(loop, projectCwd || projects[0]?.path || "");
     setDraft(next);
-    setPreset(loop ? presetOf(next.cron) : DEFAULT_PRESET);
+    setPreset(loop?.schedule.kind === "once" ? "once" : loop ? presetOf(next.cron) : DEFAULT_PRESET);
+    setOnceText(onceTextOf(loop));
+    setTarget(loop?.threadId ? "one" : "fresh");
     setError(null);
     setSaving(false);
   }, [open, loop, projectCwd, projects]);
 
   const patch = (change: Partial<LoopDraft>) => setDraft((d) => ({ ...d, ...change }));
-  const cronError = cronProblem(draft.cron);
-  const words = cronError ? null : cronInWords(draft.cron);
+  const once = preset === "once" ? parseOnce(onceText) : null;
+  const cronError =
+    preset === "once"
+      ? once
+        ? null
+        : "Write a time like “in 2h”, “in 30 min” or “at 09:00”"
+      : cronProblem(draft.cron);
+  const words = cronError ? null : once ? onceInWords(once) : cronInWords(draft.cron);
+  // The threads a loop can send every run to: this computer's threads in the loop's project.
+  const threadOptions = sessions
+    .filter((session) => !session.host && session.cwd === draft.workspace)
+    .map((session) => ({ value: session.id, label: session.title || "New thread" }));
+  if (draft.threadId && !threadOptions.some((option) => option.value === draft.threadId)) {
+    threadOptions.unshift({ value: draft.threadId, label: "The loop's thread" });
+  }
+  const threadId = target === "one" ? draft.threadId || threadOptions[0]?.value : undefined;
   const projectOptions = projects.map((project) => ({ value: project.path, label: project.name }));
   if (draft.workspace && !projectOptions.some((option) => option.value === draft.workspace)) {
     projectOptions.unshift({ value: draft.workspace, label: draft.workspace });
@@ -102,14 +148,19 @@ export function LoopDialog({
       .filter((harness) => harness.enabled || harness.id === draft.harness)
       .map((harness) => ({ value: harness.id, label: harness.name })),
   ];
-  const ready = draft.name.trim() && draft.prompt.trim() && draft.workspace && !cronError;
+  const ready =
+    draft.name.trim() &&
+    draft.prompt.trim() &&
+    draft.workspace &&
+    !cronError &&
+    (target === "fresh" || threadId);
 
   const save = async () => {
     if (!ready || saving) return;
     setSaving(true);
     setError(null);
     try {
-      await saveLoop(draft);
+      await saveLoop({ ...draft, once: once ?? undefined, threadId });
       onSaved();
       onOpenChange(false);
     } catch (e) {
@@ -170,6 +221,16 @@ export function LoopDialog({
                   if (cron) patch({ cron });
                 }}
               />
+              {preset === "once" && (
+                <input
+                  value={onceText}
+                  onChange={(e) => setOnceText(e.target.value)}
+                  placeholder="in 2h, at 09:00"
+                  aria-label="When"
+                  {...noTextHelpers}
+                  className={inputClass}
+                />
+              )}
               {preset === "custom" && (
                 <input
                   value={draft.cron}
@@ -185,33 +246,60 @@ export function LoopDialog({
                 className={cx("text-caption", cronError ? "text-danger" : "text-fg-muted")}
               >
                 {cronError ?? words ?? `Cron ${draft.cron.trim()}`}
-                {!cronError && " · a run missed while the computer slept runs once when it wakes"}
+                {!cronError && !once && " · a run missed while the computer slept runs once when it wakes"}
               </p>
             </Field>
-            <Field label="Agent">
-              <div className="flex flex-wrap items-center gap-2">
-                <Select
-                  label="Harness"
-                  value={draft.harness ?? ""}
-                  options={harnessOptions}
-                  onChange={(harness) => patch({ harness })}
-                />
-                <input
-                  value={draft.model ?? ""}
-                  onChange={(e) => patch({ model: e.target.value })}
-                  placeholder="Model (default)"
-                  aria-label="Model"
-                  {...noTextHelpers}
-                  className={cx(inputClass, "min-w-0 flex-1")}
-                />
-              </div>
+            <Field label="Each run">
               <Segments
-                label="Effort"
-                value={draft.effort ?? ""}
-                options={EFFORTS}
-                onChange={(effort) => patch({ effort })}
+                label="Each run"
+                value={target}
+                options={TARGETS.map((t) => ({ value: t.value, label: t.label }))}
+                onChange={setTarget}
               />
+              {target === "one" &&
+                (threadOptions.length ? (
+                  <Select
+                    label="Thread"
+                    value={threadId ?? ""}
+                    options={threadOptions}
+                    onChange={(id) => patch({ threadId: id })}
+                    className="max-w-full self-start"
+                  />
+                ) : (
+                  <p className="text-caption text-danger">This project has no threads yet.</p>
+                ))}
+              <p className="text-caption text-fg-muted">
+                {target === "one"
+                  ? "Every run is a new message in this thread; a run while it is busy is skipped."
+                  : "A run that finds nothing to report archives its thread."}
+              </p>
             </Field>
+            {target === "fresh" && (
+              <Field label="Agent">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select
+                    label="Harness"
+                    value={draft.harness ?? ""}
+                    options={harnessOptions}
+                    onChange={(harness) => patch({ harness })}
+                  />
+                  <input
+                    value={draft.model ?? ""}
+                    onChange={(e) => patch({ model: e.target.value })}
+                    placeholder="Model (default)"
+                    aria-label="Model"
+                    {...noTextHelpers}
+                    className={cx(inputClass, "min-w-0 flex-1")}
+                  />
+                </div>
+                <Segments
+                  label="Effort"
+                  value={draft.effort ?? ""}
+                  options={EFFORTS}
+                  onChange={(effort) => patch({ effort })}
+                />
+              </Field>
+            )}
             <div className="flex items-start justify-between gap-4">
               <div className="flex flex-col">
                 <span className="text-callout text-fg">Read-only</span>
