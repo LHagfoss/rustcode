@@ -340,7 +340,7 @@ import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from 
 import { nextQueued } from "./queue";
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { resetRemoteStatusReads } from "./remoteAccess";
-import type { PairingChallenge } from "./remotePairing";
+import type { PhonePairing } from "./remotePairing";
 import { engineBusy, FORCE_STOP_MS } from "./runState";
 import { forgetRunDrift, reconcileRunState, resetRunStatePoll, startRunStatePoll } from "./runStatePoll";
 import { parseScheduleBook, SCHEDULED_KEY, type ScheduleBook } from "./schedule";
@@ -874,8 +874,7 @@ export interface AppState {
    * is on screen. Read from `_rustcode/remote`.
    */
   remote: RemoteStatus | null;
-  remoteChallenge: PairingChallenge | null;
-  remotePaired: { name: string } | null;
+  pairing: PhonePairing;
   /** Each open thread's own share, so its header can say a device is attached. */
   remoteByThread: Record<string, RemoteStatus>;
   /**
@@ -1164,8 +1163,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   grants: [],
   resolvedApprovals: {},
   remote: null,
-  remoteChallenge: null,
-  remotePaired: null,
+  pairing: { phase: "idle" },
   remoteByThread: {},
   remoteError: null,
   connectCode: null,
@@ -3549,8 +3547,7 @@ export function resetForTests() {
   set({
     status: "connecting",
     remote: null,
-    remoteChallenge: null,
-    remotePaired: null,
+    pairing: { phase: "idle" },
     remoteByThread: {},
     remoteError: null,
     engineLog: [],
