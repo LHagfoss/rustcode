@@ -3,17 +3,23 @@
 // - `![alt](path)`: a web or `data:` picture shows as is; a file path
 //   (absolute, `~/…`, `file://…` or relative to the thread's folder) is read
 //   by the shell's `thread_image`, which refuses anything outside the
-//   thread, project, worktree and OS scratch folders. A click opens the lightbox.
+//   thread, project, worktree and OS scratch folders. A thread on a paired
+//   machine names paths on that machine's disk, so its engine reads them
+//   instead, in chunks over the connection (`_rustcode/attachments/read` with
+//   the thread's id), within the same folders there. A click opens the lightbox.
 // - ```mermaid blocks: mermaid is loaded only when the first such block
 //   appears, themed from the tokens, rendered strictly (no scripts, no
 //   links out), capped in size, and shown as code when it does not parse.
 
 import { useEffect, useState } from "react";
+import { RpcError } from "../acp/jsonrpc";
 import { openPath, revealPath, threadImage } from "../lib/native";
 import { isAbsolute, join } from "../lib/paths";
 import { appPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
-import { useApp } from "../state/store";
+import { readImage } from "../state/attachmentTransfer";
+import { connectionForThread, useApp } from "../state/store";
+import { isRemoteThread, splitThreadKey } from "../state/threadKeys";
 import { CircleAlert, ImageOff } from "./icons";
 import { openLightbox } from "./Lightbox";
 import { cx, Pill } from "./primitives";
@@ -37,8 +43,47 @@ function threadRoots(): string[] {
   );
 }
 
+/** The open thread's key when it runs on a paired machine, whose disk holds its pictures. */
+function remoteThread(): string | null {
+  const id = useApp.getState().selectedId;
+  return id && isRemoteThread(id) ? id : null;
+}
+
 function pictureKey(path: string, roots: string[]): string {
-  return `${roots.join("\0")}\0${path}`;
+  return `${remoteThread() ?? ""}\0${roots.join("\0")}\0${path}`;
+}
+
+function bytesUrl(mimeType: string, bytes: Uint8Array): string {
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return `data:${mimeType};base64,${btoa(text)}`;
+}
+
+/** A picture on the paired machine a thread runs on, read by that machine's engine. */
+async function remotePicture(thread: string, path: string): Promise<string> {
+  const conn = connectionForThread(thread);
+  if (!conn) throw new Error("The computer this thread runs on is not connected.");
+  const { mimeType, bytes } = await readImage(
+    (method, params, timeout) => conn.request(method, params, timeout),
+    path,
+    splitThreadKey(thread).id,
+  ).catch((e: unknown) => {
+    // The engine says why in the error's data ("No such picture.", "outside the thread's folders…").
+    const reason =
+      e instanceof RpcError && typeof e.data === "string"
+        ? e.data
+        : e instanceof Error
+          ? e.message
+          : String(e);
+    // An engine from before thread pictures were served answers only for stored attachments.
+    if (/not kept on this computer/.test(reason)) {
+      throw new Error("Update RustCode on the computer this thread runs on to see its pictures.");
+    }
+    throw new Error(reason.charAt(0).toUpperCase() + reason.slice(1));
+  });
+  return bytesUrl(mimeType, bytes);
 }
 
 async function decode(url: string): Promise<Picture> {
@@ -53,12 +98,14 @@ function loadPicture(path: string, roots: string[]): Promise<Picture> {
   const key = pictureKey(path, roots);
   let hit = pictures.get(key);
   if (!hit) {
-    hit = threadImage(path, roots)
-      .then((f) => decode(`data:${f.mimeType};base64,${f.data}`))
-      .then((picture) => {
-        decoded.set(key, picture);
-        return picture;
-      });
+    const remote = remoteThread();
+    const url = remote
+      ? remotePicture(remote, path)
+      : threadImage(path, roots).then((f) => `data:${f.mimeType};base64,${f.data}`);
+    hit = url.then(decode).then((picture) => {
+      decoded.set(key, picture);
+      return picture;
+    });
     // A failure is not kept: the file may appear later.
     hit.catch(() => pictures.delete(key));
     pictures.set(key, hit);
@@ -95,7 +142,7 @@ export function picturePath(src: string): string | null {
 }
 
 /** A failed picture remains actionable, including when its file has disappeared. */
-export function BlockedImage({ path, reason }: { path: string; reason: string }) {
+export function BlockedImage({ path, reason, remote }: { path: string; reason: string; remote?: boolean }) {
   const reveal =
     appPlatform() === "windows"
       ? "Reveal in Explorer"
@@ -109,8 +156,13 @@ export function BlockedImage({ path, reason }: { path: string; reason: string })
       <span className="basis-full truncate" title={reason}>
         {reason.split("\n")[0]}
       </span>
-      <Pill onClick={() => openPath(path)}>Open</Pill>
-      <Pill onClick={() => revealPath(path)}>{reveal}</Pill>
+      {/* A paired machine's file is not on this computer to open or reveal. */}
+      {!remote && (
+        <>
+          <Pill onClick={() => openPath(path)}>Open</Pill>
+          <Pill onClick={() => revealPath(path)}>{reveal}</Pill>
+        </>
+      )}
     </span>
   );
 }
@@ -123,7 +175,7 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   }));
   useEffect(() => {
     if (!path) return;
-    if (!hasShell()) {
+    if (!hasShell() && !remoteThread()) {
       setState({ error: "Pictures from files show in the desktop app." });
       return;
     }
@@ -147,7 +199,7 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const url = direct ?? picture?.url;
   if (state.error && path) {
     const actionPath = isAbsolute(path) || path.startsWith("~/") ? path : join(threadRoots()[0] ?? "", path);
-    return <BlockedImage path={actionPath} reason={state.error} />;
+    return <BlockedImage path={actionPath} reason={state.error} remote={!!remoteThread()} />;
   }
   if (!url) {
     if (!state.error && !src) return null;

@@ -637,6 +637,13 @@ never travels whole over it:
   computer with `_rustcode/attachments/read` (`path`, `offset`), about
   512 KiB per answer, and draws the thumbnail. Only image files under
   `attachments/` or a thread's `remote-images/` are served.
+- **Pictures in a reply:** an agent's `![alt](/tmp/shot.png)` names a file on
+  the thread's computer, not the app's. For a remote thread the app reads it
+  with the same method plus the thread's `sessionId`; the engine then also
+  serves an image file (checked by its first bytes) inside that thread's
+  working directory, added directories, thread folder or the OS temporary
+  folders, as the desktop shell does for a local thread. A computer on an
+  older RustCode refuses, and the app asks to update it.
 - **Sending:** for a thread on another computer the app first uploads each
   image with `_rustcode/attachments/upload` (`uploadId`, `mimeType`, `offset`,
   `data`, `done`) and the prompt then carries an `image` block with empty

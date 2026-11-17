@@ -76,12 +76,18 @@ export async function uploadPromptImages(request: Requester, blocks: Json[]): Pr
 export async function readImage(
   request: Requester,
   path: string,
+  /** The thread whose reply names the picture: the engine then serves one in its folders too. */
+  sessionId?: string,
 ): Promise<{ mimeType: string; bytes: Uint8Array }> {
   const parts: Uint8Array[] = [];
   let offset = 0;
   let mimeType = "application/octet-stream";
   for (let guard = 0; guard < 64; guard += 1) {
-    const answer = await request(ATTACHMENT_READ, { path, offset }, 30_000);
+    const answer = await request(
+      ATTACHMENT_READ,
+      { path, offset, ...(sessionId ? { sessionId } : {}) },
+      30_000,
+    );
     const data = field(answer, "data");
     const mime = field(answer, "mimeType");
     if (typeof data !== "string") throw new Error("The image could not be read.");
