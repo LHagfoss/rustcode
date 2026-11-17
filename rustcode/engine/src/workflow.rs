@@ -55,6 +55,9 @@ const WORKFLOW_FOLDER: [&str; 2] = [".rustcode", "workflows"];
 const MAX_INLINE_RESULT_BYTES: usize = 96 * 1024;
 /// How many runs a listing names.
 const LISTED_RUNS: usize = 20;
+/// How many settled runs a thread keeps: older ones are removed when a new
+/// run starts. As many as a listing names, so nothing listed disappears.
+const KEPT_RUNS: usize = LISTED_RUNS;
 /// How many log lines a status carries.
 const STATUS_LOG_LINES: usize = 20;
 /// How often `workflow_status` re-reads a run it waits on.
@@ -315,6 +318,7 @@ fn launch(
 ) -> Result<String, String> {
     let record = new_record(thread, name, args, limits);
     store.create(&record, &source)?;
+    store.prune(KEPT_RUNS);
     let id = record.id.clone();
     spawn(store, runner, record, source);
     Ok(id)
