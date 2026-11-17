@@ -490,6 +490,80 @@ fn run_storage_command(
 
 /// `rustcode usage`: tokens per harness and model from the local data store.
 /// Disk usage is `storage usage`; this never prices requests.
+/// `rustcode usage --pull-requests`: the `pr_outcomes_by_model` view (#3907).
+fn run_pull_request_usage_command(json: bool) -> Result<(), String> {
+    rustcode::data_store::ensure_ready()?;
+    let answer = rustcode::data_store::pull_request_outcomes()?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "rows": answer.rows }))
+                .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if answer.rows.is_empty() {
+        println!(
+            "No linked pull requests recorded yet. A thread's pull request is recorded once it is linked (manage_pull_links or merge_when_green) and the watch reads it."
+        );
+        return Ok(());
+    }
+    let dash = || "—".to_owned();
+    let text = |row: &serde_json::Value, key: &str| {
+        row.get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map_or_else(dash, str::to_owned)
+    };
+    let count = |row: &serde_json::Value, key: &str| {
+        row.get(key)
+            .and_then(serde_json::Value::as_i64)
+            .map_or_else(dash, thousands)
+    };
+    let real = |row: &serde_json::Value, key: &str| row.get(key).and_then(serde_json::Value::as_f64);
+    let table: Vec<Vec<String>> = answer
+        .rows
+        .iter()
+        .map(|row| {
+            vec![
+                text(row, "harness"),
+                text(row, "model"),
+                count(row, "pull_requests"),
+                count(row, "merged"),
+                count(row, "closed_unmerged"),
+                real(row, "merge_share")
+                    .map_or_else(dash, |share| format!("{:.0}%", share * 100.0)),
+                real(row, "avg_ci_failures").map_or_else(dash, |value| format!("{value:.1}")),
+                real(row, "avg_fix_rounds").map_or_else(dash, |value| format!("{value:.1}")),
+                count(row, "reverted"),
+                real(row, "cost_per_merged_pr").map_or_else(dash, |cost| format!("${cost:.2}")),
+                count(row, "tokens_per_merged_pr"),
+            ]
+        })
+        .collect();
+    println!("RustCode usage · linked pull requests per harness and model");
+    println!(
+        "Cost is reported by the harness, blank when it reports none; RustCode does not price requests.\n"
+    );
+    print_rows(
+        &[
+            "harness",
+            "model",
+            "PRs",
+            "merged",
+            "closed",
+            "merge share",
+            "CI fails",
+            "fix rounds",
+            "reverted",
+            "cost/merged",
+            "tokens/merged",
+        ],
+        &table,
+    );
+    Ok(())
+}
+
 fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
     let since = match since {
         Some(value) => Some(rustcode::data_store::parse_since(value)?),
@@ -916,8 +990,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // retried next start; it never stops startup.
     rustcode::storage_migrations::run_at_startup();
 
-    if let Some(crate::cli::Commands::Usage { since, json }) = cli_args.command.as_ref() {
-        if let Err(error) = run_usage_command(since.as_deref(), *json) {
+    if let Some(crate::cli::Commands::Usage {
+        since,
+        json,
+        pull_requests,
+    }) = cli_args.command.as_ref()
+    {
+        let result = if *pull_requests {
+            run_pull_request_usage_command(*json)
+        } else {
+            run_usage_command(since.as_deref(), *json)
+        };
+        if let Err(error) = result {
             eprintln!("rustcode usage: {error}");
             std::process::exit(1);
         }

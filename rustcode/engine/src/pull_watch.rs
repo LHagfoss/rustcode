@@ -963,11 +963,13 @@ where
                 }
             }
             if let Some(snapshot) = watch.snapshot.as_ref() {
-                crate::data_store::record_thread_pull_request(
+                let read = match &answer {
+                    Some(Ok(value)) => Some(value),
+                    _ => None,
+                };
+                crate::data_store::record_pull_request(
                     &watch.session_id,
-                    &watch.url,
-                    &snapshot.state,
-                    &snapshot.head,
+                    &outcome(&watch, snapshot, read),
                 );
             }
             if store.put(&watch).unwrap_or(false) {
@@ -975,6 +977,64 @@ where
             }
         }
     }
+}
+
+/// What the data store keeps of one read of a linked pull request (#3907).
+/// `value` is the answer this round read, when it could; without one only
+/// the last snapshot is recorded again.
+pub fn outcome(
+    watch: &Watch,
+    snapshot: &Snapshot,
+    value: Option<&Value>,
+) -> crate::data_store::PullRequestOutcome {
+    let text = |key: &str| {
+        value
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    let repository = crate::data_store::pull_request_repository(&watch.url).unwrap_or_default();
+    let (reverts_number, reverts_title) = match value {
+        Some(value) if snapshot.state == "merged" => reverts(value, &repository),
+        _ => (None, None),
+    };
+    crate::data_store::PullRequestOutcome {
+        url: watch.url.clone(),
+        number: watch.number,
+        title: watch.title.clone(),
+        state: snapshot.state.clone(),
+        head: snapshot.head.clone(),
+        checks_failed: !snapshot.failing.is_empty(),
+        merged_at: text("mergedAt"),
+        closed_at: text("closedAt"),
+        reverts_number,
+        reverts_title,
+    }
+}
+
+/// What a pull request reverts: the number in GitHub's `Reverts owner/name#N`
+/// body (or `Reverts #N`), and the title inside a `Revert "<title>"` title.
+pub fn reverts(value: &Value, repository: &str) -> (Option<u64>, Option<String>) {
+    let body = value.get("body").and_then(Value::as_str).unwrap_or_default();
+    let number = body.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("Reverts ")?;
+        let (repo, number) = rest.split_once('#')?;
+        let repo = repo.trim();
+        if !repo.is_empty() && !repository.is_empty() && !repo.eq_ignore_ascii_case(repository) {
+            return None;
+        }
+        let digits: String = number.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    });
+    let title = value
+        .get("title")
+        .and_then(Value::as_str)
+        .and_then(|title| title.trim().strip_prefix("Revert \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .map(str::to_owned);
+    (number, title)
 }
 
 /// One `gh` read for a pull request, through the first folder of the group
