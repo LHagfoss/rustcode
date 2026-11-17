@@ -62,7 +62,11 @@ export function useThreadDrag({
   homeOf,
   enabled,
   drop,
+  rowAttribute = "data-row-id",
+  handleSelector,
 }: {
+  rowAttribute?: "data-row-id" | "data-project-id";
+  handleSelector?: string;
   /** The list's scrolling element: row boxes and the drop rule are read against it. */
   list: React.RefObject<HTMLElement | null>;
   /** The section a row is drawn in, for the row a press landed on. */
@@ -87,7 +91,9 @@ export function useThreadDrag({
   };
 
   const rowOf = (id: string) =>
-    list.current?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`) ?? null;
+    Array.from(list.current?.querySelectorAll<HTMLElement>(`[${rowAttribute}]`) ?? []).find(
+      (row) => row.getAttribute(rowAttribute) === id,
+    ) ?? null;
 
   /** The other rows of the section as the pointer sees them, in the list's scrolling coordinates. */
   const othersOf = (p: Press, listEl: HTMLElement) => {
@@ -239,12 +245,14 @@ export function useThreadDrag({
     // A modified press is the list's own: ⌘-click picks, ⇧-click takes a range.
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const target = e.target as HTMLElement | null;
-    const row = target?.closest<HTMLElement>("[data-row-id]");
+    const row = target?.closest<HTMLElement>(`[${rowAttribute}]`);
     if (!row || !target) return;
+    const handle = handleSelector ? target.closest(handleSelector) : null;
+    if (handleSelector && !handle) return;
     // A control inside the row (its own actions, a linked thread) answers its press itself.
     const control = target.closest("button, a, input, textarea, select");
-    if (control && control !== row) return;
-    const id = row.dataset.rowId;
+    if (control && control !== row && control !== handle) return;
+    const id = row.getAttribute(rowAttribute);
     if (!id) return;
     const home = homeOf(id);
     if (!home || home.ids.length < 2) return;

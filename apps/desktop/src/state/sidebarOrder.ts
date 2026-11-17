@@ -29,10 +29,10 @@ export function sectionOrderKey(section: string, project?: string): string {
 }
 
 /** The items in their arranged order: the ones the order names, then the rest as they came. */
-export function applyOrder(
-  items: readonly SessionSummary[],
+export function applyOrder<T extends Pick<SessionSummary, "id">>(
+  items: readonly T[],
   stored: readonly string[] | undefined,
-): SessionSummary[] {
+): T[] {
   if (!stored?.length) return [...items];
   const rank = new Map<string, number>();
   for (const id of stored) if (!rank.has(id)) rank.set(id, rank.size);
@@ -146,7 +146,7 @@ export function keepThreads(order: SidebarOrder, keep: (id: string) => boolean):
   let changed = false;
   const next: SidebarOrder = {};
   for (const [key, list] of Object.entries(order)) {
-    const kept = list.filter(keep);
+    const kept = key === "projects" ? list : list.filter(keep);
     if (kept.length !== list.length) changed = true;
     if (kept.length) next[key] = kept;
   }

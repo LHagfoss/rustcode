@@ -159,3 +159,28 @@ describe("an arrangement that forgets a thread", () => {
     expect(keepThreads(order, () => false)).toEqual({});
   });
 });
+
+describe("project arrangements", () => {
+  test("projects use the same persisted ordering as threads", () => {
+    const projects = [{ id: "/a" }, { id: "/b" }, { id: "/c" }];
+    const order = reorder(
+      [],
+      projects.map((p) => p.id),
+      "/c",
+      0,
+    );
+    expect(applyOrder(projects, order).map((p) => p.id)).toEqual(["/c", "/a", "/b"]);
+  });
+
+  test("thread cleanup preserves projects temporarily absent from the list", () => {
+    const order = { projects: ["/b", "/a"], threads: ["gone", "kept"] };
+    expect(keepThreads(order, (id) => id === "kept")).toEqual({
+      projects: ["/b", "/a"],
+      threads: ["kept"],
+    });
+    expect(withoutThreads(order, ["gone"])).toEqual({
+      projects: ["/b", "/a"],
+      threads: ["kept"],
+    });
+  });
+});
