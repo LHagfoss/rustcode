@@ -1058,3 +1058,14 @@ export function buildPage(source: string, token: string, theme: PageTheme, chart
   });
   return pageAt(stripEmptyTags(body), token, theme);
 }
+
+/** The file a saved view is offered as: its title in lowercase words, or `view`. */
+export function viewFileName(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/, "");
+  return `${slug || "view"}.html`;
+}
