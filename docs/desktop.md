@@ -559,8 +559,9 @@ value or a binding equal to the default is dropped, and the rest of the table
 stays the default it ships with. `state/shortcuts.ts` runs a matched command;
 the transcript matches "find in thread" against the same table. ⌘W (Ctrl+W elsewhere) settles the current thread with Undo and keeps the window
 open, including from the terminal; with no selected thread it does nothing.
-The native menu (`src-tauri/src/lib.rs`) keeps the default editing and app
-items but removes Close so its accelerator cannot hide the window; ⌘R (reload the view, `ui/Recover.tsx`) and the
+On macOS the native menu (`src-tauri/src/lib.rs`) keeps the default editing
+and app items but removes Close so its accelerator cannot hide the window; Linux and Windows
+get no menu bar at all; ⌘R (reload the view, `ui/Recover.tsx`) and the
 composer's keys stay outside the table.
 
 ## Features
