@@ -5,8 +5,9 @@
 // Open to start the next thread in (or move the open one to) the folder shown.
 
 import { Dialog } from "radix-ui";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { projectName } from "../acp/types";
+import { opError, opRunning, useOp } from "../lib/op";
 import {
   browseFolders,
   createProjectFolder,
@@ -35,57 +36,48 @@ export function MachineFolderBrowser({
   action: string;
   onPick: (path: string) => void;
 }) {
-  const [listing, setListing] = useState<FolderListing | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  // A slow answer for a folder already left is dropped, not shown over the one asked after it.
+  const [browse, runBrowse, resetBrowse] = useOp<FolderListing>();
+  const listing = browse.data ?? null;
+  const loading = opRunning(browse);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
-  const [creating, setCreating] = useState(false);
-  // A slow answer for a folder already left is dropped, not shown over the one asked after it.
-  const asked = useRef(0);
+  const [createOp, runCreate, resetCreate] = useOp<string>();
+  const creating = opRunning(createOp);
+  // Whichever was asked last speaks: a new folder clears a failed create, a create clears a failed listing.
+  const error = (createOp.status === "idle" ? opError(browse) : opError(createOp)) ?? "";
 
   // `orHome`: a thread's folder that is gone (a deleted worktree) opens home instead of nothing.
   const go = useCallback(
-    async (path?: string, orHome = false) => {
-      const ask = ++asked.current;
-      setLoading(true);
-      setError("");
-      try {
-        const next = await browseFolders(host, machine, path);
-        if (ask === asked.current) setListing(next);
-      } catch (failure) {
-        if (ask !== asked.current) return;
-        if (path && orHome) return void go(undefined);
-        setError(failure instanceof Error ? failure.message : String(failure));
-      } finally {
-        if (ask === asked.current) setLoading(false);
-      }
+    (path?: string, orHome = false) => {
+      resetCreate();
+      void runBrowse(async () => {
+        try {
+          return await browseFolders(host, machine, path);
+        } catch (failure) {
+          if (path && orHome) return browseFolders(host, machine, undefined);
+          throw failure;
+        }
+      });
     },
-    [host, machine],
+    [host, machine, runBrowse, resetCreate],
   );
 
   useEffect(() => {
     if (!open) return;
-    setListing(null);
+    resetBrowse();
     setNaming(false);
     setName("");
-    void go(start && start !== "~" ? start : undefined, true);
-  }, [open, start, go]);
+    go(start && start !== "~" ? start : undefined, true);
+  }, [open, start, go, resetBrowse]);
 
   const problem = naming ? folderNameProblem(name) : null;
   const create = async () => {
     if (!listing || problem) return;
-    setCreating(true);
-    setError("");
-    try {
-      const made = await createProjectFolder(host, machine, listing.path, name);
-      onPick(made);
-      onOpenChange(false);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-    } finally {
-      setCreating(false);
-    }
+    const made = await runCreate(() => createProjectFolder(host, machine, listing.path, name));
+    if (made.status !== "done") return;
+    onPick(made.value);
+    onOpenChange(false);
   };
 
   const here = listing?.path ?? "";

@@ -5,6 +5,7 @@
 import { Dialog, DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openExternal } from "../lib/native";
+import { opError, opRunning, useOp } from "../lib/op";
 import {
   acceptsGeneratedDraft,
   draftCommitMessage,
@@ -255,8 +256,9 @@ function CommitSheet({
   const [generationNote, setGenerationNote] = useState("");
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set(state.files.map((f) => f.path)));
   const [newBranch, setNewBranch] = useState("");
-  const [running, setRunning] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [committing, runCommit] = useOp();
+  const running = opRunning(committing);
+  const failure = opError(committing);
   const files = state.files.filter((f) => picked.has(f.path)).map((f) => f.path);
   const fileKey = JSON.stringify(files);
   useEffect(() => {
@@ -281,30 +283,28 @@ function CommitSheet({
   const verb = push ? "Commit & Push" : "Commit";
 
   const commit = async (toDefault: boolean) => {
-    setRunning(true);
-    setFailure(null);
-    try {
-      await request(
-        GitMethod.run,
-        {
-          path: cwd,
-          action: push ? "commit_push" : "commit",
-          message: message.trim(),
-          files,
-          newBranch: toDefault ? null : newBranch.trim() || null,
-          allowDefaultBranch: toDefault,
-        },
-        650_000,
-      );
+    const done = await runCommit(
+      async () => {
+        await request(
+          GitMethod.run,
+          {
+            path: cwd,
+            action: push ? "commit_push" : "commit",
+            message: message.trim(),
+            files,
+            newBranch: toDefault ? null : newBranch.trim() || null,
+            allowDefaultBranch: toDefault,
+          },
+          650_000,
+        );
+      },
+      { describe: (error) => gitErrorOf(error).message },
+    );
+    if (done.status === "done") {
       toast(push ? "Committed and pushed" : "Committed", "success");
       onDone();
       onClose();
-    } catch (error) {
-      setFailure(gitErrorOf(error).message);
-      onDone();
-    } finally {
-      setRunning(false);
-    }
+    } else if (done.status === "failed") onDone();
   };
   const toggle = (file: GitFile, on: boolean) =>
     setPicked((set) => {
@@ -430,7 +430,8 @@ function PullSheet({
   const [draft, setDraft] = useState(() => draftPull(fallback));
   const edited = useRef(false);
   const [note, setNote] = useState("");
-  const [running, setRunning] = useState(false);
+  const [creating, runCreate] = useOp();
+  const running = opRunning(creating);
   useEffect(() => {
     let cancelled = false;
     void request("_rustcode/textGeneration/generate", { kind: "pull_request", path: cwd }, 50_000)
@@ -446,21 +447,21 @@ function PullSheet({
     };
   }, [cwd]);
   async function create() {
-    setRunning(true);
-    try {
-      const answer = (await request(
-        GitMethod.run,
-        { action: "create_pr", path: cwd, ...draft },
-        330_000,
-      )) as { url?: string };
-      if (answer.url) void openExternal(answer.url);
+    const done = await runCreate(
+      async () => {
+        const answer = (await request(
+          GitMethod.run,
+          { action: "create_pr", path: cwd, ...draft },
+          330_000,
+        )) as { url?: string };
+        if (answer.url) void openExternal(answer.url);
+      },
+      { describe: (error) => gitErrorOf(error).message },
+    );
+    if (done.status === "done") {
       onDone();
       onClose();
-    } catch (error) {
-      setNote(gitErrorOf(error).message);
-    } finally {
-      setRunning(false);
-    }
+    } else if (done.status === "failed") setNote(done.error);
   }
   return (
     <Dialog.Root open onOpenChange={(open) => !open && !running && onClose()}>

@@ -17,6 +17,7 @@ import { clip } from "../lib/clip";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
 import { comparisonBase, shortRef } from "../lib/gitRef";
 import { gitChanges } from "../lib/native";
+import { opError, opRunning, useOp } from "../lib/op";
 import { type Piece, runWordMarks } from "../lib/wordDiff";
 import {
   fileTree,
@@ -328,14 +329,17 @@ export function Review({ threadId }: { threadId: string }) {
   const [diffRef, diffWidth] = useDiffWidth<HTMLElement>();
   const { mode, wide } = useDiffLayout(diffWidth);
   const [collapsed, setCollapsed] = useState(false);
-  const [files, setFiles] = useState<ReviewFile[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  // A diff for a source already left is dropped, not drawn over the one chosen after it.
+  const [diff, runLoad] = useOp<ReviewFile[]>();
+  const files = diff.status === "failed" ? null : (diff.data ?? null);
+  const error = opError(diff);
+  const loading = opRunning(diff);
   const [selected, setSelected] = useState<string | null>(null);
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [note, setNote] = useState("");
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
-  const [posting, setPosting] = useState(false);
+  const [post, runPost] = useOp();
+  const posting = opRunning(post);
 
   useEffect(() => {
     void refreshCheckpoints(threadId);
@@ -356,9 +360,7 @@ export function Review({ threadId }: { threadId: string }) {
   );
   const load = useCallback(
     async (force = false) => {
-      setLoading(true);
-      setError(null);
-      try {
+      const loaded = await runLoad(async () => {
         let out: ReviewFile[] = [];
         if (source.kind === "turn") {
           out = (await turnDiff(threadId, source.turn)).map((f) => ({
@@ -400,16 +402,13 @@ export function Review({ threadId }: { threadId: string }) {
             lines: parsePatch(chunks[f.path] ?? []),
           }));
         }
-        setFiles(out);
-        setSelected((cur) => (cur && out.some((f) => f.path === cur) ? cur : (out[0]?.path ?? null)));
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setFiles(null);
-      } finally {
-        setLoading(false);
-      }
+        return out;
+      });
+      if (loaded.status !== "done") return;
+      const out = loaded.value;
+      setSelected((cur) => (cur && out.some((f) => f.path === cur) ? cur : (out[0]?.path ?? null)));
     },
-    [source, threadId, cwd, wt],
+    [source, threadId, cwd, wt, runLoad],
   );
 
   useEffect(() => {
@@ -443,33 +442,32 @@ export function Review({ threadId }: { threadId: string }) {
     if (source.kind !== "pull") return;
     const repository = repositoryOf(source.pull.url);
     if (!repository) return;
-    setPosting(true);
-    try {
-      const r = (await request(
-        Method.pullReview,
-        {
-          cwd,
-          repository,
-          number: source.pull.number,
-          commitId: source.pull.headSha,
-          event,
-          body: note,
-          comments: comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
-        },
-        60_000,
-      )) as JsonObject;
-      const err = parsePullError(r);
-      if (err) toast(`${pullErrorTitle(err.code)}: ${err.message}`, "error");
-      else {
-        toast("Review posted", "success");
-        setComments([]);
-        setNote("");
+    await runPost(async () => {
+      try {
+        const r = (await request(
+          Method.pullReview,
+          {
+            cwd,
+            repository,
+            number: source.pull.number,
+            commitId: source.pull.headSha,
+            event,
+            body: note,
+            comments: comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+          },
+          60_000,
+        )) as JsonObject;
+        const err = parsePullError(r);
+        if (err) toast(`${pullErrorTitle(err.code)}: ${err.message}`, "error");
+        else {
+          toast("Review posted", "success");
+          setComments([]);
+          setNote("");
+        }
+      } catch (e) {
+        toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "error");
       }
-    } catch (e) {
-      toast(`Could not post the review: ${e instanceof Error ? e.message : String(e)}`, "error");
-    } finally {
-      setPosting(false);
-    }
+    });
   };
 
   return (

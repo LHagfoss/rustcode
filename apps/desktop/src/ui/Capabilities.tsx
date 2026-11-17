@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
+import { opError, opRunning, useOp } from "../lib/op";
 import { hasShell } from "../lib/shell";
 import { failureSummary, mcpCopy, runOnMachines, secretTargetReason } from "../state/settingsRegistry";
 import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
@@ -154,16 +155,17 @@ const sourceOf = (s: string) => SOURCE[s] ?? { label: s || "Other", order: 9 };
 
 /** One machine's skills and MCP servers, read over its own connection. */
 function useCapabilities(host: string, version: number) {
-  const [data, setData] = useState<Capabilities | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    try {
-      setData(parseCapabilities(await machineRequest(host, Method.capabilities, {}, 30_000)));
-      setError(null);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }, [host]);
+  // A read that a newer read or a change overtook is dropped, not drawn over it.
+  const [read, runRead] = useOp<Capabilities>();
+  const data = read.data ?? null;
+  const error = opError(read);
+  const load = useCallback(
+    () =>
+      runRead(async () => parseCapabilities(await machineRequest(host, Method.capabilities, {}, 30_000)), {
+        describe: errorText,
+      }),
+    [host, runRead],
+  );
   // `version` re-reads the machine after an add-to-all reached it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `version` is the read trigger
   useEffect(() => {
@@ -176,7 +178,8 @@ function useCapabilities(host: string, version: number) {
   }, [data, load]);
   const run = async (method: string, params: JsonObject, timeout = 30_000) => {
     try {
-      setData(parseCapabilities(await machineRequest(host, method, params, timeout)));
+      const next = parseCapabilities(await machineRequest(host, method, params, timeout));
+      void runRead(async () => next);
       return true;
     } catch (e) {
       toast(errorText(e), "error");
@@ -753,22 +756,23 @@ function AddServer({
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
   const [env, setEnv] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [adding, runAdd] = useOp<boolean>();
+  const busy = opRunning(adding);
   const isHttp = /^https?:\/\//.test(target.trim());
   const add = async () => {
-    setBusy(true);
     const lines = env
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean);
-    const ok = await run(Method.mcpAdd, {
-      name: name.trim(),
-      target: isHttp ? [target.trim()] : target.trim().split(/\s+/),
-      transport: isHttp ? "http" : "stdio",
-      ...(isHttp ? { headers: lines } : { env: lines }),
-    });
-    setBusy(false);
-    if (ok) onDone();
+    const added = await runAdd(() =>
+      run(Method.mcpAdd, {
+        name: name.trim(),
+        target: isHttp ? [target.trim()] : target.trim().split(/\s+/),
+        transport: isHttp ? "http" : "stdio",
+        ...(isHttp ? { headers: lines } : { env: lines }),
+      }),
+    );
+    if (added.status === "done" && added.value) onDone();
   };
   return (
     <div className="rc-expand flex flex-col gap-2 px-4 py-3">
@@ -900,42 +904,42 @@ function SkillRow({
   run: (method: string, params: JsonObject, timeout?: number) => Promise<boolean>;
   onChanged: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [copying, runCopy] = useOp();
+  const busy = opRunning(copying);
   const files = Boolean(s.path) && hasShell();
   const copyTo = async (target: string) => {
     const nodes = target === "all" ? others : others.filter((machine) => machine.host === target);
     if (!nodes.length) return;
-    setBusy(true);
-    try {
-      // The page lists skills without their text; read it only for a copy.
-      const answer = await machineRequest(
-        host,
-        "_rustcode/skills/get",
-        { name: s.name, path: s.path },
-        15_000,
-      );
-      const content = str(obj(answer)?.content);
-      if (!content) {
-        toast(`Could not read ${s.name}'s SKILL.md.`, "error");
-        return;
-      }
-      const result = await runOnMachines(nodes, (machine) =>
-        machineRequest(machine.host, "_rustcode/skills/add", { name: s.name, content }, 30_000),
-      );
-      if (result.succeeded.length) {
-        const where = result.succeeded.map((machine) => machine.name).join(", ");
-        toast(
-          `Copied ${s.name}'s SKILL.md to ${where}. Other files in the skill stay on the source machine.`,
-          "success",
+    await runCopy(async () => {
+      try {
+        // The page lists skills without their text; read it only for a copy.
+        const answer = await machineRequest(
+          host,
+          "_rustcode/skills/get",
+          { name: s.name, path: s.path },
+          15_000,
         );
-        onChanged();
+        const content = str(obj(answer)?.content);
+        if (!content) {
+          toast(`Could not read ${s.name}'s SKILL.md.`, "error");
+          return;
+        }
+        const result = await runOnMachines(nodes, (machine) =>
+          machineRequest(machine.host, "_rustcode/skills/add", { name: s.name, content }, 30_000),
+        );
+        if (result.succeeded.length) {
+          const where = result.succeeded.map((machine) => machine.name).join(", ");
+          toast(
+            `Copied ${s.name}'s SKILL.md to ${where}. Other files in the skill stay on the source machine.`,
+            "success",
+          );
+          onChanged();
+        }
+        if (result.failures.length) toast(failureSummary(result), "error");
+      } catch (e) {
+        toast(errorText(e), "error");
       }
-      if (result.failures.length) toast(failureSummary(result), "error");
-    } catch (e) {
-      toast(errorText(e), "error");
-    } finally {
-      setBusy(false);
-    }
+    });
   };
   const tip =
     s.description || s.path ? (
@@ -1010,20 +1014,20 @@ function NewSkill({ onDone }: { onDone: () => void }) {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
   const [name, setName] = useState("");
   const [scope, setScope] = useState<"user" | "project">("user");
-  const [busy, setBusy] = useState(false);
+  const [creating, runCreate] = useOp();
+  const busy = opRunning(creating);
   const valid = /^[a-z0-9][a-z0-9-]{0,63}$/.test(name);
   const create = async () => {
-    setBusy(true);
-    try {
-      const path = await createSkill(name, scope, cwd);
-      openPath(path);
-      toast("Skill created. The agent finds it on the next turn.", "success");
-      onDone();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "error");
-    } finally {
-      setBusy(false);
-    }
+    await runCreate(async () => {
+      try {
+        const path = await createSkill(name, scope, cwd);
+        openPath(path);
+        toast("Skill created. The agent finds it on the next turn.", "success");
+        onDone();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : String(e), "error");
+      }
+    });
   };
   return (
     <div className={cx("rc-expand mb-6 flex flex-col gap-2 rounded-xl bg-surface", cardInset)}>
