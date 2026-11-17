@@ -249,6 +249,64 @@ impl JobStore {
         tx.commit().map_err(storage)
     }
 
+    /// Replace a job's name, schedule, action and workspace, keeping its id,
+    /// creation time, paused state and run history. A new schedule revision
+    /// moves its next run to what the new schedule says after `now`.
+    pub fn update(&mut self, edit: JobRecord, now: DateTime<Utc>) -> Result<JobRecord> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let mut job = get_job(&tx, &edit.id)?;
+        // A run settles against the revision it was claimed under, so an edit
+        // waits for the run that is going to end.
+        let active: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM job_runs WHERE job_id=?1 AND active=1)",
+                [&edit.id],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if active {
+            return Err(DaemonError::Conflict(
+                "a run is going; edit once it ends".into(),
+            ));
+        }
+        job.name = edit.name;
+        job.schedule = edit.schedule;
+        job.action = edit.action;
+        job.workspace = edit.workspace;
+        job.retry_policy = edit.retry_policy;
+        job.validate()?;
+        job.schedule_revision = job
+            .schedule_revision
+            .checked_add(1)
+            .ok_or_else(|| storage("schedule revision exhausted"))?;
+        job.next_due_at = match &job.schedule {
+            ScheduleSpec::Once { at } => *at,
+            schedule => schedule.next_after(now)?,
+        };
+        job.updated_at = now;
+        save_job(&tx, &job)?;
+        tx.commit().map_err(storage)?;
+        Ok(job)
+    }
+
+    /// Whether the last `limit` settled runs of a job all failed: what pauses
+    /// a Loop. A run that is still going, or one that will retry, breaks the
+    /// run of failures.
+    pub fn failed_in_a_row(&self, id: &str, limit: usize) -> Result<bool> {
+        if limit == 0 {
+            return Ok(false);
+        }
+        let runs = self.history(id, limit)?;
+        Ok(runs.len() == limit
+            && runs.iter().all(|run| {
+                run.finished_at.is_some()
+                    && matches!(run.state, JobRunState::Failed | JobRunState::Ambiguous)
+            }))
+    }
+
     /// Explicit deletion also removes this job's history and invalidates its leases.
     pub fn delete(&mut self, id: &str) -> Result<()> {
         let changed = self
@@ -788,6 +846,37 @@ mod tests {
         assert!(!store.get("job-1").unwrap().paused);
         store.delete("job-1").unwrap();
         assert!(matches!(store.get("job-1"), Err(DaemonError::NotFound(_))));
+    }
+
+    #[test]
+    fn an_update_keeps_the_jobs_identity_and_waits_for_an_active_run() {
+        let mut store = JobStore::in_memory().unwrap();
+        let original = job("edit", at(10));
+        store.create(original.clone()).unwrap();
+        let mut edit = original.clone();
+        edit.name = "Renamed".into();
+        edit.schedule = ScheduleSpec::daily(6, 30, "UTC", MisfirePolicy::RunOnce).unwrap();
+        // What the caller sends for these is ignored: the store keeps its own.
+        edit.created_at = at(500);
+        edit.schedule_revision = 99;
+        let updated = store.update(edit, at(0)).unwrap();
+        assert_eq!(updated.name, "Renamed");
+        assert_eq!(updated.created_at, original.created_at);
+        assert_eq!(updated.schedule_revision, original.schedule_revision + 1);
+        assert_eq!(updated.next_due_at.hour(), 6);
+        assert_eq!(updated.next_due_at.minute(), 30);
+        assert_eq!(store.get("edit").unwrap(), updated);
+
+        store.create(job("busy", at(0))).unwrap();
+        store
+            .claim_due(at(0), "daemon-a", Duration::minutes(5), 10)
+            .unwrap();
+        let mut busy = store.get("busy").unwrap();
+        busy.name = "Changed".into();
+        assert!(matches!(
+            store.update(busy, at(1)),
+            Err(DaemonError::Conflict(_))
+        ));
     }
 
     #[test]

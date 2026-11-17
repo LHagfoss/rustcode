@@ -853,3 +853,81 @@ async fn shell_output_capture_overflow_is_bounded_and_not_polled_again() {
         matches!(result, RunOutcome::Permanent { output: Some(output), .. } if output.len() <= MAX_RUN_OUTPUT_BYTES)
     );
 }
+
+fn loop_action() -> JobAction {
+    JobAction::Loop {
+        prompt: "Check CI on main".into(),
+        workspace: "/recorded/project".into(),
+        harness: Some("codex".into()),
+        model: None,
+        effort: Some("medium".into()),
+        read_only: true,
+    }
+}
+
+#[test]
+fn a_loop_action_is_read_only_unless_it_says_otherwise() {
+    let action: JobAction = serde_json::from_value(json!({
+        "type": "loop", "prompt": "Check CI", "workspace": "/tmp"
+    }))
+    .unwrap();
+    assert!(matches!(
+        action,
+        JobAction::Loop {
+            read_only: true,
+            harness: None,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn a_loop_run_reaches_the_backend_titled_with_the_loops_name() {
+    let (executor, backend) = executor(vec![success(json!({"thread_id": "t-1"}))]);
+    let mut run = context(loop_action());
+    run.job.name = "CI watch".into();
+    assert!(matches!(
+        executor.execute(run).await,
+        RunOutcome::Succeeded { .. }
+    ));
+    let calls = backend.calls.lock().unwrap();
+    assert_eq!(calls[0].0, loop_action());
+    assert_eq!(calls[0].1, "CI watch");
+}
+
+#[test]
+fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
+    use crate::orchestration::local_threads::LoopRunEnd;
+    match loop_outcome(LoopRunEnd::Finished {
+        thread_id: "t-1".into(),
+    }) {
+        RunOutcome::Succeeded { output, .. } => {
+            assert_eq!(output.as_deref(), Some(r#"{"thread_id":"t-1"}"#));
+        }
+        other => panic!("{other:?}"),
+    }
+    match loop_outcome(LoopRunEnd::Failed {
+        thread_id: Some("t-2".into()),
+        error: "the turn stopped: Refusal".into(),
+    }) {
+        RunOutcome::Permanent { error, output } => {
+            assert!(error.contains("Refusal"));
+            assert_eq!(output.as_deref(), Some(r#"{"thread_id":"t-2"}"#));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        loop_outcome(LoopRunEnd::NoEngine("RustCode was not open".into())),
+        RunOutcome::Cancelled { output: Some(output) } if output.contains("not open")
+    ));
+}
+
+#[test]
+fn a_loop_prompt_says_when_it_is_read_only() {
+    let text = crate::orchestration::local_threads::loop_prompt("CI", "Check CI", true);
+    assert!(text.contains("“CI”"));
+    assert!(text.contains("read-only"));
+    assert!(text.ends_with("Check CI"));
+    let open = crate::orchestration::local_threads::loop_prompt("CI", "Check CI", false);
+    assert!(!open.contains("read-only"));
+}

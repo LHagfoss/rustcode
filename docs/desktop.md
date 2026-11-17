@@ -1174,6 +1174,21 @@ composer's keys stay outside the table.
   the internet`, `Waits for ‹thread›`, or `Waits for 2 threads and a
   background command` (`rowProgress`, `rowWaitReason` in
   `state/sidebarRows.ts`). What it asks of you still comes first.
+- **Loops.** The sidebar's *Loops* row opens `ui/Loops.tsx`: prompts the
+  scheduler daemon runs on a schedule, each run in a fresh thread
+  (`docs/daemon.md` › Loops). Each row says the schedule in words
+  ("Every 4 hours", "Weekdays at 09:00"), the project, the next run and the
+  last result, with pause/resume, run now, edit and delete; a row opens its
+  prompt, agent and run history, each run linking to its thread. A loop the
+  daemon paused after three failed runs says why under its row. *Review*
+  lists the last seven days' failed runs and runs whose thread is still open
+  (not archived); *Mark reviewed* clears one (kept in app storage).
+  *New loop* (`ui/LoopDialog.tsx`) takes a name, project, prompt, a
+  schedule preset or a cron, and the agent (harness, model, effort), read-only
+  by default. With the daemon not running, the page says so and offers
+  *Start scheduler* (`_rustcode/loops/start_daemon`). The words, states and
+  review list are `state/loops.ts`; the mock serves three loops
+  (`acp/mockLoops.ts`).
 - **Sidebar.** A *Needs you* row above the list opens the inbox
   (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits
   on the user: an approval, a question, a failed turn, or a delegate asking.

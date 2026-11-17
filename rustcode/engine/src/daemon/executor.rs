@@ -44,6 +44,35 @@ pub enum RunOutcome {
 
 pub const MAX_RUN_OUTPUT_BYTES: usize = 16 * 1024;
 
+/// How long one Loop run's agent turn may take.
+pub const LOOP_TIMEOUT: Duration = Duration::from_secs(25 * 60);
+
+/// A Loop run's outcome as the scheduler records it. The thread a run started
+/// is the run's output (`{"thread_id": …}`), so the app links each run to it.
+/// A run the closed app could not take is cancelled, not failed: it says why
+/// and does not count toward pausing the Loop.
+pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd) -> RunOutcome {
+    use crate::orchestration::local_threads::LoopRunEnd;
+    let thread =
+        |id: Option<String>| id.map(|id| serde_json::json!({ "thread_id": id }).to_string());
+    match end {
+        LoopRunEnd::Finished { thread_id } => RunOutcome::Succeeded {
+            summary: "The run's thread finished".into(),
+            output: thread(Some(thread_id)),
+        },
+        LoopRunEnd::Failed { thread_id, error } => RunOutcome::Permanent {
+            error,
+            output: thread(thread_id),
+        },
+        LoopRunEnd::NoEngine(reason) => RunOutcome::Cancelled {
+            output: Some(serde_json::json!({ "skipped": reason }).to_string()),
+        },
+        LoopRunEnd::Cancelled { thread_id } => RunOutcome::Cancelled {
+            output: thread(thread_id),
+        },
+    }
+}
+
 /// The only injected boundary: one direct action, never a polling loop.
 pub trait ActionBackend: Send + Sync {
     fn run(
@@ -81,6 +110,9 @@ impl JobExecutor for ActionExecutor {
                     session_id: Some(id),
                     ..
                 } => id.clone(),
+                // A Loop has no session to serialize on; the backend gets its
+                // name instead, which titles the thread each run starts.
+                JobAction::Loop { .. } => context.job.name.clone(),
                 _ => context
                     .job
                     .target_session
@@ -116,6 +148,9 @@ impl JobExecutor for ActionExecutor {
                         stop_on_change,
                     )
                 }
+                // An agent turn takes longer than a tool call; the scheduler's
+                // own 30-minute bound still applies above this one.
+                action @ JobAction::Loop { .. } => (action, Duration::ZERO, 1, LOOP_TIMEOUT, false),
                 action => (action, Duration::ZERO, 1, timeout, false),
             };
             let Some(deadline) = tokio::time::Instant::now().checked_add(deadline) else {
@@ -493,6 +528,28 @@ impl ActionBackend for ProductionActions {
                         Ok(Err(error)) => ambiguous(error, output),
                         Err(error) => ambiguous(error.to_string(), output),
                     }
+                }
+                JobAction::Loop {
+                    prompt,
+                    workspace,
+                    harness,
+                    model,
+                    effort,
+                    read_only,
+                } => {
+                    let run = crate::orchestration::local_threads::LoopThread {
+                        name: session,
+                        prompt,
+                        workspace,
+                        harness,
+                        model,
+                        effort,
+                        read_only,
+                    };
+                    loop_outcome(
+                        crate::orchestration::local_threads::run_loop_thread(run, cancellation)
+                            .await,
+                    )
                 }
                 JobAction::Poll { .. } => permanent("nested polling is not supported"),
             }

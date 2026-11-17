@@ -7,6 +7,7 @@
 import { BUILTIN_THEMES } from "../lib/themes";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import { mockBrowse, mockCreate } from "./mockFolders";
+import { MockLoops } from "./mockLoops";
 import { mockRouteCommand } from "./mockMachineRoutes";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
@@ -2431,6 +2432,7 @@ export class MockEngine {
   private nextRpcId = 1000;
   private waiting = new Map<number, (result: JsonObject) => void>();
   private counter = 0;
+  private loops = new MockLoops();
   private agents = new Map<string, JsonObject[]>();
   /** The inbox seed runs once, after the list the app first reads. */
   private needsYouSeeded = false;
@@ -3228,6 +3230,7 @@ export class MockEngine {
   }
 
   private async handle(method: string, params: JsonObject): Promise<Json> {
+    if (method.startsWith("_rustcode/loops/")) return this.loops.answer(method, obj(params) ?? {});
     switch (method) {
       case "initialize": {
         const rc = obj(obj(obj(params.clientCapabilities)?._meta)?.rustcode);
@@ -3815,9 +3818,9 @@ export class MockEngine {
         };
       }
       case "_rustcode/scheduled/delete":
-        return { id: str(obj(params)?.id) ?? "", deleted: true };
+        return this.loops.forget(str(obj(params)?.id) ?? "");
       case "_rustcode/scheduled/run":
-        return { id: str(obj(params)?.id) ?? "", state: "claimed" };
+        return this.loops.run(str(obj(params)?.id) ?? "");
       case "_rustcode/pulls/state": {
         // A project whose remote is on another forge: `gh` knows no pull requests there.
         if (str(obj(params)?.cwd)?.includes("/gitlab-")) {

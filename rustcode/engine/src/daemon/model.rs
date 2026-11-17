@@ -33,6 +33,13 @@ impl Default for RetryPolicy {
     }
 }
 
+fn read_only_default() -> bool {
+    true
+}
+
+/// Failed runs in a row that pause a Loop.
+pub const LOOP_FAILURE_LIMIT: usize = 3;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JobAction {
@@ -62,6 +69,21 @@ pub enum JobAction {
         timeout_seconds: u64,
         #[serde(default)]
         authorized: bool,
+    },
+    /// A Loop (`docs/daemon.md` › Loops): each run starts a fresh thread on
+    /// any harness through the app's engine, in the project's own folder.
+    Loop {
+        prompt: String,
+        workspace: String,
+        #[serde(default)]
+        harness: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        effort: Option<String>,
+        /// Edits, commands and anything else that would ask are declined.
+        #[serde(default = "read_only_default")]
+        read_only: bool,
     },
     Poll {
         action: Box<JobAction>,

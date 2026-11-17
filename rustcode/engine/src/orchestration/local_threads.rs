@@ -1466,6 +1466,156 @@ fn account_for(
     Ok(Some(account.id))
 }
 
+// ------------------------------------------------------------------ loops
+
+/// What one run of a Loop (`docs/daemon.md` › Loops) starts: a fresh
+/// top-level thread in the project's own folder.
+#[derive(Debug, Clone)]
+pub(crate) struct LoopThread {
+    pub name: String,
+    pub prompt: String,
+    pub workspace: String,
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub read_only: bool,
+}
+
+/// How a Loop's run ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LoopRunEnd {
+    /// The turn ended on its own.
+    Finished { thread_id: String },
+    /// The thread could not start, or its turn did not end well.
+    Failed {
+        thread_id: Option<String>,
+        error: String,
+    },
+    /// No engine was there to run it: the app is closed. Nothing started.
+    NoEngine(String),
+    /// The daemon stopped the run.
+    Cancelled { thread_id: Option<String> },
+}
+
+/// The engine a Loop runs on: the one the app started (`run/engine.json`),
+/// else a shared server. Only connecting tells either still runs.
+fn loop_endpoint() -> Option<String> {
+    let run_dir = crate::server::run_dir().ok()?;
+    crate::server::engine_endpoint::published(&run_dir)
+        .map(|info| info.endpoint)
+        .or_else(|| crate::server::running().map(|info| info.endpoint))
+}
+
+/// The first message of a Loop's thread: the user's prompt, with what a
+/// scheduled run is for and, read-only, what it may not do.
+pub(crate) fn loop_prompt(name: &str, prompt: &str, read_only: bool) -> String {
+    let mut text = format!(
+        "This is a scheduled run of the Loop “{name}”. Nobody is watching it run. \
+         When nothing needs the user, answer in one or two lines. When something does, \
+         start with a one-line verdict saying what."
+    );
+    if read_only {
+        text.push_str(
+            " This run is read-only: do not edit files, commit or push; \
+             anything that asks for approval is declined.",
+        );
+    }
+    text.push_str("\n\n");
+    text.push_str(prompt.trim());
+    text
+}
+
+fn refusal(value: Value) -> String {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string())
+}
+
+/// Start one Loop run's thread on the app's engine and wait for its turn to
+/// end. A read-only run answers every permission request with a refusal, the
+/// way an Ask thread with nobody at the keyboard would; otherwise it runs at
+/// Full access, as a delegate does.
+pub(crate) async fn run_loop_thread(
+    run: LoopThread,
+    cancellation: tokio_util::sync::CancellationToken,
+) -> LoopRunEnd {
+    let failed = |error: String| LoopRunEnd::Failed {
+        thread_id: None,
+        error,
+    };
+    if !std::path::Path::new(&run.workspace).is_dir() {
+        return failed(format!("{} is not a folder", run.workspace));
+    }
+    let harness = match harness_for(run.harness.as_deref()) {
+        Ok(harness) => harness,
+        Err(value) => return failed(refusal(value)),
+    };
+    let model = match model_for(&harness, run.model.as_deref()) {
+        Ok(model) => model,
+        Err(value) => return failed(refusal(value)),
+    };
+    let Some(endpoint) = loop_endpoint() else {
+        return LoopRunEnd::NoEngine("RustCode was not open, so the run was skipped".to_owned());
+    };
+    let access = if run.read_only {
+        Access::Ask
+    } else {
+        Access::Full
+    };
+    let engine = match Engine::open_at(endpoint, access).await {
+        Ok(engine) => engine,
+        Err(value) => return LoopRunEnd::NoEngine(refusal(value)),
+    };
+    let mut meta = Map::new();
+    meta.insert("harness".to_owned(), json!(harness.id));
+    meta.insert("title".to_owned(), json!(run.name));
+    if let Some(model) = model.as_ref() {
+        meta.insert("model".to_owned(), json!(model));
+    }
+    if let Some(effort) = run
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+    {
+        meta.insert("effort".to_owned(), json!(effort));
+    }
+    let mut request = NewSessionRequest::new(PathBuf::from(&run.workspace));
+    request.meta = Some(Map::from_iter([(
+        "rustcode".to_owned(),
+        Value::Object(meta),
+    )]));
+    let created = tokio::select! {
+        _ = cancellation.cancelled() => return LoopRunEnd::Cancelled { thread_id: None },
+        created = engine.request(request, CREATE_TIMEOUT) => created,
+    };
+    let thread_id = match created {
+        Ok(response) => response.session_id.to_string(),
+        Err(message) => return failed(format!("the thread could not start: {message}")),
+    };
+    let text = loop_prompt(&run.name, &run.prompt, run.read_only);
+    let ended = tokio::select! {
+        _ = cancellation.cancelled() => {
+            let _ = engine.cancel(&thread_id);
+            return LoopRunEnd::Cancelled { thread_id: Some(thread_id) };
+        }
+        ended = engine.prompt(&thread_id, &text) => ended,
+    };
+    match ended {
+        Ok(StopReason::EndTurn) => LoopRunEnd::Finished { thread_id },
+        Ok(other) => LoopRunEnd::Failed {
+            thread_id: Some(thread_id),
+            error: format!("the turn stopped: {other:?}"),
+        },
+        Err(message) => LoopRunEnd::Failed {
+            thread_id: Some(thread_id),
+            error: message,
+        },
+    }
+}
+
 // ------------------------------------------------------------- the endpoint
 
 /// The local endpoint this very process published: the engine that runs the
@@ -1510,7 +1660,12 @@ impl Drop for Engine {
 
 impl Engine {
     async fn open(access: Access) -> Result<Self, Value> {
-        let endpoint = endpoint()?;
+        Self::open_at(endpoint()?, access).await
+    }
+
+    /// Open `endpoint`, which may belong to another local process: the daemon
+    /// reaches the app's engine this way to run a Loop.
+    async fn open_at(endpoint: String, access: Access) -> Result<Self, Value> {
         let stream =
             tokio::time::timeout(CONNECT_TIMEOUT, crate::server::listen::connect(&endpoint))
                 .await

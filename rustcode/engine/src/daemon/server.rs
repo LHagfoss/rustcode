@@ -120,6 +120,11 @@ impl RequestHandler {
                 changed = true;
                 DaemonResponse::Job { job }
             }
+            DaemonRequest::Update { job } => {
+                let job = store.update(job, chrono::Utc::now())?;
+                changed = true;
+                DaemonResponse::Job { job }
+            }
             DaemonRequest::List => DaemonResponse::Jobs {
                 jobs: store.list()?,
             },
