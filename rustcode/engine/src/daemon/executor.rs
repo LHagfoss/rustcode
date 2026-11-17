@@ -56,15 +56,24 @@ pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd)
     let thread =
         |id: Option<String>| id.map(|id| serde_json::json!({ "thread_id": id }).to_string());
     match end {
-        LoopRunEnd::Finished { thread_id } => RunOutcome::Succeeded {
-            summary: "The run's thread finished".into(),
-            output: thread(Some(thread_id)),
+        // A quiet run found nothing for the user and its thread was archived.
+        LoopRunEnd::Finished { thread_id, quiet } => RunOutcome::Succeeded {
+            summary: if quiet {
+                "The run found nothing to report".into()
+            } else {
+                "The run's thread finished".into()
+            },
+            output: Some(if quiet {
+                serde_json::json!({ "thread_id": thread_id, "quiet": true }).to_string()
+            } else {
+                serde_json::json!({ "thread_id": thread_id }).to_string()
+            }),
         },
         LoopRunEnd::Failed { thread_id, error } => RunOutcome::Permanent {
             error,
             output: thread(thread_id),
         },
-        LoopRunEnd::NoEngine(reason) => RunOutcome::Cancelled {
+        LoopRunEnd::Skipped(reason) => RunOutcome::Cancelled {
             output: Some(serde_json::json!({ "skipped": reason }).to_string()),
         },
         LoopRunEnd::Cancelled { thread_id } => RunOutcome::Cancelled {
@@ -536,6 +545,7 @@ impl ActionBackend for ProductionActions {
                     model,
                     effort,
                     read_only,
+                    thread_id,
                 } => {
                     let run = crate::orchestration::local_threads::LoopThread {
                         name: session,
@@ -545,6 +555,7 @@ impl ActionBackend for ProductionActions {
                         model,
                         effort,
                         read_only,
+                        thread_id,
                     };
                     loop_outcome(
                         crate::orchestration::local_threads::run_loop_thread(run, cancellation)

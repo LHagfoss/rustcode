@@ -1469,7 +1469,8 @@ fn account_for(
 // ------------------------------------------------------------------ loops
 
 /// What one run of a Loop (`docs/daemon.md` › Loops) starts: a fresh
-/// top-level thread in the project's own folder.
+/// top-level thread in the project's own folder, or a turn on the one thread
+/// the Loop sends every run to.
 #[derive(Debug, Clone)]
 pub(crate) struct LoopThread {
     pub name: String,
@@ -1479,20 +1480,23 @@ pub(crate) struct LoopThread {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub read_only: bool,
+    /// The thread every run goes to; `None` starts a fresh one per run.
+    pub thread_id: Option<String>,
 }
 
 /// How a Loop's run ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LoopRunEnd {
-    /// The turn ended on its own.
-    Finished { thread_id: String },
+    /// The turn ended on its own. `quiet`: it found nothing for the user, so
+    /// its fresh thread was archived.
+    Finished { thread_id: String, quiet: bool },
     /// The thread could not start, or its turn did not end well.
     Failed {
         thread_id: Option<String>,
         error: String,
     },
-    /// No engine was there to run it: the app is closed. Nothing started.
-    NoEngine(String),
+    /// Nothing ran, and why: the app is closed, or the Loop's thread was busy.
+    Skipped(String),
     /// The daemon stopped the run.
     Cancelled { thread_id: Option<String> },
 }
@@ -1506,13 +1510,25 @@ fn loop_endpoint() -> Option<String> {
         .or_else(|| crate::server::running().map(|info| info.endpoint))
 }
 
+/// How a Loop run's answer starts when it found nothing for the user; the
+/// run's fresh thread is then archived.
+pub(crate) const LOOP_QUIET_MARKER: &str = "Nothing to report";
+
+/// Whether a Loop run's answer says it found nothing for the user.
+pub(crate) fn loop_reply_is_quiet(reply: &str) -> bool {
+    let reply = reply.trim_start().trim_start_matches(['*', '_', '`']);
+    reply
+        .get(..LOOP_QUIET_MARKER.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(LOOP_QUIET_MARKER))
+}
+
 /// The first message of a Loop's thread: the user's prompt, with what a
 /// scheduled run is for and, read-only, what it may not do.
 pub(crate) fn loop_prompt(name: &str, prompt: &str, read_only: bool) -> String {
     let mut text = format!(
         "This is a scheduled run of the Loop “{name}”. Nobody is watching it run. \
-         When nothing needs the user, answer in one or two lines. When something does, \
-         start with a one-line verdict saying what."
+         When nothing needs the user, answer in one or two lines starting with \
+         “{LOOP_QUIET_MARKER}”. When something does, start with a one-line verdict saying what."
     );
     if read_only {
         text.push_str(
@@ -1557,7 +1573,7 @@ pub(crate) async fn run_loop_thread(
         Err(value) => return failed(refusal(value)),
     };
     let Some(endpoint) = loop_endpoint() else {
-        return LoopRunEnd::NoEngine("RustCode was not open, so the run was skipped".to_owned());
+        return LoopRunEnd::Skipped("RustCode was not open, so the run was skipped".to_owned());
     };
     let access = if run.read_only {
         Access::Ask
@@ -1566,34 +1582,45 @@ pub(crate) async fn run_loop_thread(
     };
     let engine = match Engine::open_at(endpoint, access).await {
         Ok(engine) => engine,
-        Err(value) => return LoopRunEnd::NoEngine(refusal(value)),
+        Err(value) => return LoopRunEnd::Skipped(refusal(value)),
     };
-    let mut meta = Map::new();
-    meta.insert("harness".to_owned(), json!(harness.id));
-    meta.insert("title".to_owned(), json!(run.name));
-    if let Some(model) = model.as_ref() {
-        meta.insert("model".to_owned(), json!(model));
-    }
-    if let Some(effort) = run
-        .effort
-        .as_deref()
-        .map(str::trim)
-        .filter(|effort| !effort.is_empty())
-    {
-        meta.insert("effort".to_owned(), json!(effort));
-    }
-    let mut request = NewSessionRequest::new(PathBuf::from(&run.workspace));
-    request.meta = Some(Map::from_iter([(
-        "rustcode".to_owned(),
-        Value::Object(meta),
-    )]));
-    let created = tokio::select! {
-        _ = cancellation.cancelled() => return LoopRunEnd::Cancelled { thread_id: None },
-        created = engine.request(request, CREATE_TIMEOUT) => created,
-    };
-    let thread_id = match created {
-        Ok(response) => response.session_id.to_string(),
-        Err(message) => return failed(format!("the thread could not start: {message}")),
+    let fresh = run.thread_id.is_none();
+    let thread_id = match run.thread_id.as_deref() {
+        Some(thread_id) => {
+            match open_loop_thread(&engine, thread_id, &run.workspace, &cancellation).await {
+                Ok(()) => thread_id.to_owned(),
+                Err(end) => return end,
+            }
+        }
+        None => {
+            let mut meta = Map::new();
+            meta.insert("harness".to_owned(), json!(harness.id));
+            meta.insert("title".to_owned(), json!(run.name));
+            if let Some(model) = model.as_ref() {
+                meta.insert("model".to_owned(), json!(model));
+            }
+            if let Some(effort) = run
+                .effort
+                .as_deref()
+                .map(str::trim)
+                .filter(|effort| !effort.is_empty())
+            {
+                meta.insert("effort".to_owned(), json!(effort));
+            }
+            let mut request = NewSessionRequest::new(PathBuf::from(&run.workspace));
+            request.meta = Some(Map::from_iter([(
+                "rustcode".to_owned(),
+                Value::Object(meta),
+            )]));
+            let created = tokio::select! {
+                _ = cancellation.cancelled() => return LoopRunEnd::Cancelled { thread_id: None },
+                created = engine.request(request, CREATE_TIMEOUT) => created,
+            };
+            match created {
+                Ok(response) => response.session_id.to_string(),
+                Err(message) => return failed(format!("the thread could not start: {message}")),
+            }
+        }
     };
     let text = loop_prompt(&run.name, &run.prompt, run.read_only);
     let ended = tokio::select! {
@@ -1604,7 +1631,15 @@ pub(crate) async fn run_loop_thread(
         ended = engine.prompt(&thread_id, &text) => ended,
     };
     match ended {
-        Ok(StopReason::EndTurn) => LoopRunEnd::Finished { thread_id },
+        Ok(StopReason::EndTurn) => {
+            // A fresh thread that found nothing leaves the list; the Loop's own
+            // thread stays where the user put it.
+            let quiet = fresh
+                && super::local::last_reply_cut(&thread_id)
+                    .is_some_and(|(reply, _)| loop_reply_is_quiet(&reply))
+                && crate::thread_status::set(&thread_id, "done").is_ok();
+            LoopRunEnd::Finished { thread_id, quiet }
+        }
         Ok(other) => LoopRunEnd::Failed {
             thread_id: Some(thread_id),
             error: format!("the turn stopped: {other:?}"),
@@ -1614,6 +1649,53 @@ pub(crate) async fn run_loop_thread(
             error: message,
         },
     }
+}
+
+/// Open the thread a Loop sends every run to, in this engine. A thread that
+/// is gone fails the run; one that is busy, or open in another RustCode
+/// process, skips it.
+async fn open_loop_thread(
+    engine: &Engine,
+    thread_id: &str,
+    workspace: &str,
+    cancellation: &tokio_util::sync::CancellationToken,
+) -> Result<(), LoopRunEnd> {
+    let failed = |error: String| LoopRunEnd::Failed {
+        thread_id: Some(thread_id.to_owned()),
+        error,
+    };
+    let Some(meta) = crate::config::session_meta_by_id(thread_id) else {
+        return Err(failed(format!(
+            "the Loop's thread {thread_id} no longer exists; edit the Loop to pick another"
+        )));
+    };
+    if crate::thread_status::is_running(thread_id) {
+        return Err(LoopRunEnd::Skipped(
+            "the Loop's thread was working on a turn, so the run was skipped".to_owned(),
+        ));
+    }
+    if !crate::acp::is_acp_session(thread_id)
+        && let Some(config_dir) = crate::config::get_config_dir()
+        && crate::config::session_open_by(&config_dir, thread_id).is_some()
+    {
+        return Err(LoopRunEnd::Skipped(
+            "the Loop's thread is open in another RustCode process, so the run was skipped"
+                .to_owned(),
+        ));
+    }
+    let cwd = meta
+        .workspace_cwd
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(workspace));
+    let loaded = tokio::select! {
+        _ = cancellation.cancelled() => {
+            return Err(LoopRunEnd::Cancelled { thread_id: Some(thread_id.to_owned()) });
+        }
+        loaded = engine.request(LoadSessionRequest::new(thread_id.to_owned(), cwd), LOAD_TIMEOUT) => loaded,
+    };
+    loaded
+        .map(|_| ())
+        .map_err(|message| failed(format!("the Loop's thread could not be opened: {message}")))
 }
 
 // ------------------------------------------------------------- the endpoint

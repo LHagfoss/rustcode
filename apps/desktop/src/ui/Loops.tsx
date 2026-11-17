@@ -17,6 +17,7 @@ import {
   pauseReason,
   REVIEW_DAYS,
   type ReviewItem,
+  rememberLoops,
   reviewItems,
   runLoopNow,
   saveReviewed,
@@ -26,6 +27,7 @@ import {
 } from "../state/loops";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { selectThread } from "../state/threadOpen";
+import { statusOf } from "../state/threadStatus";
 import { ViewHeader } from "./Board";
 import { ChevronRight, Pause, Play, Plus, Repeat, RotateCw, SquarePen, Trash2 } from "./icons";
 import { LoopDialog } from "./LoopDialog";
@@ -281,7 +283,7 @@ function ReviewList({
 export function Loops() {
   const { data, error, reload } = useEngineData(Method.loopsList, parseLoops);
   const sessions = useApp((s) => s.sessions);
-  const archived = useApp((s) => s.archived);
+  const statusMarks = useApp((s) => s.statusMarks);
   const [tab, setTab] = useState<Tab>("loops");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [editing, setEditing] = useState<Loop | null>(null);
@@ -312,11 +314,18 @@ export function Loops() {
     [reload],
   );
 
+  useEffect(() => {
+    if (data) rememberLoops(data);
+  }, [data]);
+
   const loops = data?.loops ?? [];
+  // Open: still in the list and not archived. `statusMarks` changes when the user archives one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: statusMarks is what statusOf reads
   const open = useMemo(() => {
     const listed = new Set(sessions.map((session) => session.id));
-    return (id: string) => listed.has(id) && !archived[id];
-  }, [sessions, archived]);
+    const state = useApp.getState();
+    return (id: string) => listed.has(id) && statusOf(state, id) !== "done";
+  }, [sessions, statusMarks]);
   const review = useMemo(() => reviewItems(loops, open, reviewed, now), [loops, open, reviewed, now]);
 
   const markReviewed = (runId: string) => {

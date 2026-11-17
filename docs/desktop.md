@@ -1185,8 +1185,12 @@ composer's keys stay outside the table.
   lists the last seven days' failed runs and runs whose thread is still open
   (not archived); *Mark reviewed* clears one (kept in app storage).
   *New loop* (`ui/LoopDialog.tsx`) takes a name, project, prompt, a
-  schedule preset or a cron, and the agent (harness, model, effort), read-only
-  by default. With the daemon not running, the page says so and offers
+  schedule preset, a cron or one time (*Once*: "in 2h", "at 09:00"), where
+  each run goes (a new thread each run, or one thread of the project) and the
+  agent (harness, model, effort), read-only by default. A run that found
+  nothing archives its thread and reads "Nothing to report". Threads a loop
+  ran in carry a Loop badge in the sidebar (`ui/LoopBadge.tsx`, read from the
+  loops list at startup and every five minutes). With the daemon not running, the page says so and offers
   *Start scheduler* (`_rustcode/loops/start_daemon`). The words, states and
   review list are `state/loops.ts`; the mock serves three loops
   (`acp/mockLoops.ts`).
