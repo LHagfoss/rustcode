@@ -313,6 +313,20 @@ impl Transcript {
         self.history.push(ChatMessage::new("user", text.to_owned()));
     }
 
+    /// Whether the turn in flight is the user's `/compact` command (with or
+    /// without instructions after it). A harness's compaction report does not
+    /// always say what started it, and a failed one never does.
+    pub(crate) fn turn_is_compact_command(&self) -> bool {
+        self.live
+            && self
+                .history
+                .iter()
+                .rev()
+                .find(|message| message.role == "user")
+                .and_then(|message| message.content.trim_start().strip_prefix("/compact"))
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+    }
+
     /// The turn ended: record its text, and a call that never finished as
     /// failed, so a replay shows no card still running.
     pub(crate) fn end_reply(&mut self) {
@@ -733,6 +747,22 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::ToolCallUpdate;
+
+    #[test]
+    fn a_compact_command_turn_is_recognised_while_it_runs() {
+        let mut transcript = Transcript::default();
+        assert!(!transcript.turn_is_compact_command());
+        transcript.push_user("/compact");
+        assert!(transcript.turn_is_compact_command());
+        transcript.push_user("  /compact keep the API notes");
+        assert!(transcript.turn_is_compact_command());
+        transcript.end_reply();
+        assert!(!transcript.turn_is_compact_command(), "the turn ended");
+        transcript.push_user("/compactor");
+        assert!(!transcript.turn_is_compact_command());
+        transcript.push_user("please /compact");
+        assert!(!transcript.turn_is_compact_command());
+    }
 
     #[test]
     fn a_failed_claude_bash_call_keeps_its_name_exit_code_and_kind() {
