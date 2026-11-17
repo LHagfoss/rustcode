@@ -1462,10 +1462,11 @@ function TokenList() {
 function AppVersion() {
   const info = useUpdates((s) => s.info);
   const channel = useUpdates((s) => s.channel);
-  const installing = useUpdates((s) => s.installing);
-  const progress = useUpdates((s) => s.progress);
+  const installState = useUpdates((s) => s.install);
+  const installing = installState.phase === "installing";
+  const progress = installState.phase === "installing" ? installState.progress : null;
   const background = useUpdates((s) => s.error);
-  const waiting = useUpdates((s) => s.waiting);
+  const waiting = installState.phase === "waiting";
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const shellVersion = useUpdates((s) => s.version);
