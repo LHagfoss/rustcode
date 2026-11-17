@@ -114,17 +114,31 @@ jobs:
             - name: Install dependencies
               run: bun install --frozen-lockfile
 
-            - name: Typecheck
-              run: bun run typecheck
-
-            - name: Lint
-              run: bun run lint
-
-            - name: Unit tests
-              run: bun run test
-
-            - name: Build the UI
-              run: bun run build
+            - name: Typecheck, lint, test and build in parallel
+              shell: bash
+              run: |
+                  # Share checkout/install overhead. Wait for every check even
+                  # after a failure, and keep each command's output together.
+                  checks=(typecheck lint test build)
+                  pids=()
+                  for check in "${checks[@]}"; do
+                      bun run "$check" > "$RUNNER_TEMP/ui-$check.log" 2>&1 &
+                      pids+=("$!")
+                  done
+                  failed=0
+                  for i in "${!checks[@]}"; do
+                      check="${checks[$i]}"
+                      status=0
+                      wait "${pids[$i]}" || status=$?
+                      echo "::group::$check (exit $status)"
+                      cat "$RUNNER_TEMP/ui-$check.log"
+                      echo "::endgroup::"
+                      if ((status != 0)); then
+                          echo "::error::$check failed with exit $status"
+                          failed=1
+                      fi
+                  done
+                  exit "$failed"
 
             # The release bundle's version comes from the root Cargo.toml
             # (scripts/bundle-version.ts); the build in build.yml relies on it.
