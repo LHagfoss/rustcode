@@ -434,6 +434,106 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
            AND current.output_tokens = previous.output_tokens
            AND current.cost_usd IS NOT NULL AND current.cost_usd = previous.cost_usd;",
     ),
+    // What each thread's pull request came to (#3907), from the pull request
+    // watch. Rows for pull requests recorded before this migration only know
+    // the state: their counters stay NULL rather than a guessed 0.
+    (
+        16,
+        "thread_pull_request_outcomes",
+        "CREATE TABLE IF NOT EXISTS thread_outcomes (
+            thread_id TEXT NOT NULL,
+            repo TEXT NOT NULL,
+            pr_number INTEGER NOT NULL,
+            url TEXT,
+            title TEXT,
+            state TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            merged_at TEXT,
+            closed_at TEXT,
+            closed_unmerged INTEGER NOT NULL DEFAULT 0,
+            ci_failures INTEGER,
+            fix_rounds INTEGER,
+            reverted INTEGER NOT NULL DEFAULT 0,
+            reverted_by INTEGER,
+            head TEXT,
+            failed_head TEXT,
+            PRIMARY KEY (thread_id, repo, pr_number)
+         );
+         CREATE INDEX IF NOT EXISTS thread_outcomes_pull ON thread_outcomes(repo, pr_number);
+         INSERT INTO thread_outcomes (thread_id, repo, pr_number, url, state, first_seen_at,
+                updated_at, closed_unmerged)
+         SELECT id,
+                substr(pull_request, instr(pull_request, '://') + 3,
+                       instr(pull_request, '/pull/') - instr(pull_request, '://') - 3),
+                CAST(substr(pull_request, instr(pull_request, '/pull/') + 6) AS INTEGER),
+                pull_request, pull_request_state,
+                COALESCE(updated_at, created_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                COALESCE(updated_at, created_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                pull_request_state = 'closed'
+         FROM threads
+         WHERE pull_request LIKE '%://%/pull/%' AND pull_request_state IS NOT NULL
+         ON CONFLICT DO NOTHING;
+         UPDATE thread_outcomes
+         SET repo = substr(repo, instr(repo, '/') + 1)
+         WHERE instr(repo, '/') > 0 AND repo LIKE '%/%/%';
+         CREATE VIEW pr_outcomes_by_model AS
+         WITH spend AS (
+            SELECT thread_id, COALESCE(harness, 'unknown') AS harness,
+                   COALESCE(model, '') AS model,
+                   SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+                   SUM(cached_tokens) AS cached_tokens,
+                   SUM(cache_write_tokens) AS cache_write_tokens,
+                   SUM(cost_usd) AS cost_usd, COUNT(*) AS turns,
+                   SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS turns_without_cost
+            FROM turns
+            WHERE thread_id IN (SELECT thread_id FROM thread_outcomes)
+            GROUP BY 1, 2, 3
+         ), pulls AS (
+            SELECT s.harness, s.model, o.repo, o.pr_number,
+                   MAX(o.state = 'merged') AS merged, MAX(o.state = 'closed') AS closed,
+                   MAX(o.state = 'open') AS open, MAX(o.ci_failures) AS ci_failures,
+                   MAX(o.fix_rounds) AS fix_rounds, MAX(o.reverted) AS reverted
+            FROM spend s JOIN thread_outcomes o ON o.thread_id = s.thread_id
+            GROUP BY 1, 2, 3, 4
+         ), outcome AS (
+            SELECT harness, model, COUNT(*) AS pull_requests, SUM(merged) AS merged,
+                   SUM(closed) - SUM(merged AND closed) AS closed_unmerged,
+                   SUM(open AND NOT merged AND NOT closed) AS still_open,
+                   SUM(reverted) AS reverted,
+                   AVG(ci_failures) AS avg_ci_failures, AVG(fix_rounds) AS avg_fix_rounds,
+                   COUNT(ci_failures) AS counted_pull_requests
+            FROM pulls GROUP BY 1, 2
+         ), cost AS (
+            SELECT harness, model, COUNT(DISTINCT thread_id) AS threads,
+                   SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+                   SUM(cached_tokens) AS cached_tokens,
+                   SUM(cache_write_tokens) AS cache_write_tokens,
+                   SUM(cost_usd) AS cost_usd, SUM(turns) AS turns,
+                   SUM(turns_without_cost) AS turns_without_cost
+            FROM spend GROUP BY 1, 2
+         )
+         SELECT c.harness, c.model, c.threads, o.pull_requests, o.merged, o.closed_unmerged,
+                o.still_open,
+                CASE WHEN o.merged + o.closed_unmerged > 0
+                     THEN CAST(o.merged AS REAL) / (o.merged + o.closed_unmerged) END
+                    AS merge_share,
+                o.avg_ci_failures, o.avg_fix_rounds, o.counted_pull_requests, o.reverted,
+                c.input_tokens, c.output_tokens, c.cached_tokens, c.cache_write_tokens,
+                c.cost_usd, c.turns, c.turns_without_cost,
+                CASE WHEN o.merged > 0 THEN c.cost_usd / o.merged END AS cost_per_merged_pr,
+                CASE WHEN o.merged > 0 THEN c.input_tokens / o.merged END
+                    AS input_tokens_per_merged_pr,
+                CASE WHEN o.merged > 0 THEN c.output_tokens / o.merged END
+                    AS output_tokens_per_merged_pr,
+                CASE WHEN o.merged > 0 AND (c.input_tokens IS NOT NULL OR c.output_tokens IS NOT NULL)
+                     THEN (COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0)
+                           + CASE WHEN c.harness = 'codex' THEN 0
+                                  ELSE COALESCE(c.cached_tokens, 0)
+                                       + COALESCE(c.cache_write_tokens, 0) END)
+                          / o.merged END AS tokens_per_merged_pr
+         FROM cost c JOIN outcome o ON o.harness = c.harness AND o.model = c.model;",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -2421,19 +2521,6 @@ pub fn record_thread_outcome_at(
 /// The pull request a thread's branch is in, as the watch last read it.
 /// `state` is `open`, `closed` or `merged`; a merged pull request's head is
 /// the thread's final commit.
-pub fn record_thread_pull_request(thread_id: &str, url: &str, state: &str, head: &str) {
-    if thread_id.trim().is_empty()
-        || url.trim().is_empty()
-        || rustcode_session::is_scratch_session_id(thread_id)
-    {
-        return;
-    }
-    let Some(path) = data_path() else { return };
-    if let Err(error) = record_thread_pull_request_at(&path, thread_id, url, state, head) {
-        crate::dbg_log!("data store: pull request of {thread_id} not recorded: {error}");
-    }
-}
-
 pub fn record_thread_pull_request_at(
     path: &Path,
     thread_id: &str,
@@ -2443,6 +2530,16 @@ pub fn record_thread_pull_request_at(
 ) -> Result<(), String> {
     let connection = open(path)?;
     ensure_thread(&connection, thread_id)?;
+    update_thread_pull_request(&connection, thread_id, url, state, head)
+}
+
+fn update_thread_pull_request(
+    connection: &Connection,
+    thread_id: &str,
+    url: &str,
+    state: &str,
+    head: &str,
+) -> Result<(), String> {
     let merged_head = if state == "merged" { head } else { "" };
     connection
         .execute(
@@ -2453,6 +2550,188 @@ pub fn record_thread_pull_request_at(
         )
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// What one read of a thread's linked pull request showed (#3907): enough to
+/// count its failed CI runs and fix rounds and to see it merge, close or be
+/// reverted. Nothing here is a guess; a field GitHub did not answer is empty.
+#[derive(Debug, Clone, Default)]
+pub struct PullRequestOutcome {
+    pub url: String,
+    pub number: u64,
+    pub title: String,
+    /// `open`, `closed` or `merged`.
+    pub state: String,
+    /// The head commit the checks ran on.
+    pub head: String,
+    /// Whether a check on `head` failed.
+    pub checks_failed: bool,
+    pub merged_at: Option<String>,
+    pub closed_at: Option<String>,
+    /// The pull request this one reverts, from a `Reverts owner/name#N` body.
+    pub reverts_number: Option<u64>,
+    /// The title this one reverts, from a `Revert "<title>"` title.
+    pub reverts_title: Option<String>,
+}
+
+/// Record a linked pull request on its thread: the `threads` columns and its
+/// `thread_outcomes` row.
+pub fn record_pull_request(thread_id: &str, outcome: &PullRequestOutcome) {
+    if thread_id.trim().is_empty()
+        || outcome.url.trim().is_empty()
+        || rustcode_session::is_scratch_session_id(thread_id)
+    {
+        return;
+    }
+    let Some(path) = data_path() else { return };
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    if let Err(error) = record_pull_request_at(&path, thread_id, outcome, &now) {
+        crate::dbg_log!("data store: pull request outcome of {thread_id} not recorded: {error}");
+    }
+}
+
+/// `owner/name` of a pull request URL such as
+/// `https://github.com/owner/name/pull/12`.
+pub fn pull_request_repository(url: &str) -> Option<String> {
+    let path = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let parts: Vec<&str> = path.split('/').collect();
+    let pull = parts.iter().position(|part| *part == "pull")?;
+    (pull >= 2 && !parts[pull - 2].is_empty() && !parts[pull - 1].is_empty())
+        .then(|| format!("{}/{}", parts[pull - 2], parts[pull - 1]))
+}
+
+/// [`record_pull_request`] against one store file, at `now`. A new head after
+/// the first one seen is a fix round; a head whose checks failed is one CI
+/// failure, however many reads see it.
+pub fn record_pull_request_at(
+    path: &Path,
+    thread_id: &str,
+    outcome: &PullRequestOutcome,
+    now: &str,
+) -> Result<(), String> {
+    let connection = open(path)?;
+    ensure_thread(&connection, thread_id)?;
+    update_thread_pull_request(
+        &connection,
+        thread_id,
+        &outcome.url,
+        &outcome.state,
+        &outcome.head,
+    )?;
+    let Some(repo) = pull_request_repository(&outcome.url) else {
+        return Ok(());
+    };
+    if outcome.number == 0 {
+        return Ok(());
+    }
+    let number = outcome.number as i64;
+    type Previous = (Option<String>, Option<String>, Option<i64>, Option<i64>);
+    let previous: Option<Previous> = connection
+        .query_row(
+            "SELECT head, failed_head, ci_failures, fix_rounds FROM thread_outcomes
+             WHERE thread_id = ?1 AND repo = ?2 AND pr_number = ?3",
+            params![thread_id, repo, number],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let head = outcome.head.trim();
+    let failed_now = outcome.checks_failed && !head.is_empty();
+    let (ci_failures, fix_rounds, failed_head) = match previous {
+        None => (
+            Some(i64::from(failed_now)),
+            Some(0),
+            failed_now.then(|| head.to_owned()),
+        ),
+        Some((old_head, old_failed, ci_failures, fix_rounds)) => {
+            let pushed = !head.is_empty()
+                && old_head
+                    .as_deref()
+                    .is_some_and(|old| !old.is_empty() && old != head);
+            let new_failure = failed_now && old_failed.as_deref() != Some(head);
+            (
+                ci_failures.map(|count| count + i64::from(new_failure)),
+                fix_rounds.map(|count| count + i64::from(pushed)),
+                if new_failure {
+                    Some(head.to_owned())
+                } else {
+                    old_failed
+                },
+            )
+        }
+    };
+    let merged_at = outcome
+        .merged_at
+        .clone()
+        .filter(|at| !at.is_empty())
+        .or_else(|| (outcome.state == "merged").then(|| now.to_owned()));
+    let closed_at = outcome
+        .closed_at
+        .clone()
+        .filter(|at| !at.is_empty())
+        .or_else(|| (outcome.state != "open").then(|| now.to_owned()));
+    connection
+        .execute(
+            "INSERT INTO thread_outcomes (thread_id, repo, pr_number, url, title, state,
+                    first_seen_at, updated_at, merged_at, closed_at, closed_unmerged,
+                    ci_failures, fix_rounds, head, failed_head)
+             VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''), ?6, ?7, ?7, ?8, ?9, ?10, ?11, ?12,
+                     NULLIF(?13, ''), ?14)
+             ON CONFLICT(thread_id, repo, pr_number) DO UPDATE SET
+                url = excluded.url,
+                title = COALESCE(excluded.title, title),
+                state = excluded.state,
+                updated_at = excluded.updated_at,
+                merged_at = COALESCE(merged_at, excluded.merged_at),
+                closed_at = COALESCE(closed_at, excluded.closed_at),
+                closed_unmerged = excluded.closed_unmerged,
+                ci_failures = excluded.ci_failures,
+                fix_rounds = excluded.fix_rounds,
+                head = COALESCE(excluded.head, head),
+                failed_head = excluded.failed_head",
+            params![
+                thread_id,
+                repo,
+                number,
+                outcome.url,
+                outcome.title,
+                outcome.state,
+                now,
+                merged_at,
+                closed_at,
+                outcome.state == "closed",
+                ci_failures,
+                fix_rounds,
+                head,
+                failed_head,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    // A merged revert marks what it reverted, in the same repository, for
+    // every thread that recorded that pull request.
+    if outcome.state == "merged" {
+        let title = outcome
+            .reverts_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty());
+        if outcome.reverts_number.is_some() || title.is_some() {
+            connection
+                .execute(
+                    "UPDATE thread_outcomes SET reverted = 1, reverted_by = ?2
+                     WHERE repo = ?1 AND pr_number <> ?2 AND state = 'merged'
+                       AND (pr_number = ?3 OR (?4 IS NOT NULL AND title = ?4))",
+                    params![
+                        repo,
+                        number,
+                        outcome.reverts_number.map(|n| n as i64),
+                        title
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 /// When a thread was settled, or cleared when it is put back to active.
@@ -4049,6 +4328,17 @@ pub fn open_readonly(path: &Path) -> Result<Connection, String> {
 pub fn query(sql: &str, limit: usize) -> Result<QueryResult, String> {
     let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
     query_path(&path, sql, limit)
+}
+
+/// What `rustcode usage --pull-requests` prints (#3907): per harness and
+/// model, the pull requests its threads linked, how many merged, their CI
+/// failures and fix rounds, and the cost and tokens per merged one, as the
+/// `pr_outcomes_by_model` view has them.
+pub const PULL_REQUEST_OUTCOMES_SQL: &str = "SELECT * FROM pr_outcomes_by_model \
+     ORDER BY merged DESC, pull_requests DESC, harness, model";
+
+pub fn pull_request_outcomes() -> Result<QueryResult, String> {
+    query(PULL_REQUEST_OUTCOMES_SQL, 1000)
 }
 
 /// Per-table row counts and sizes, so growth itself can be tracked
@@ -7130,6 +7420,140 @@ mod tests {
         assert_eq!(approval["decision"], "allow_once");
         assert_eq!(approval["wait_ms"], 4000);
         assert_eq!(approval["tool_name"], "run_command");
+    }
+
+    fn pull(number: u64, state: &str, head: &str, failed: bool) -> PullRequestOutcome {
+        PullRequestOutcome {
+            url: format!("https://github.com/acme/app/pull/{number}"),
+            number,
+            title: format!("feat: change {number}"),
+            state: state.to_owned(),
+            head: head.to_owned(),
+            checks_failed: failed,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_pull_requests_ci_failures_fix_rounds_merge_and_revert_are_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let at = "2026-11-17T10:00:00.000Z";
+        // Head a fails twice (one failure, read twice), a fix pushes b, which
+        // fails too, then c goes green and merges.
+        for read in [
+            pull(7, "open", "a", true),
+            pull(7, "open", "a", true),
+            pull(7, "open", "b", true),
+            pull(7, "open", "c", false),
+            PullRequestOutcome {
+                merged_at: Some("2026-11-17T11:00:00Z".to_owned()),
+                ..pull(7, "merged", "c", false)
+            },
+        ] {
+            record_pull_request_at(&path, "t", &read, at).unwrap();
+        }
+        let row = one_row(&path, "SELECT * FROM thread_outcomes");
+        assert_eq!(row["repo"], "acme/app");
+        assert_eq!(row["pr_number"], 7);
+        assert_eq!(row["state"], "merged");
+        assert_eq!(row["ci_failures"], 2, "{row}");
+        assert_eq!(row["fix_rounds"], 2, "{row}");
+        assert_eq!(row["merged_at"], "2026-11-17T11:00:00Z");
+        assert_eq!(row["closed_unmerged"], 0);
+        assert_eq!(row["reverted"], 0);
+        let thread = one_row(
+            &path,
+            "SELECT pull_request_state, final_commit FROM threads WHERE id = 't'",
+        );
+        assert_eq!(thread["pull_request_state"], "merged");
+        assert_eq!(thread["final_commit"], "c");
+
+        // A merged revert of #7 marks it reverted.
+        let revert = PullRequestOutcome {
+            reverts_number: Some(7),
+            ..pull(8, "merged", "r", false)
+        };
+        record_pull_request_at(&path, "u", &revert, at).unwrap();
+        let reverted = one_row(
+            &path,
+            "SELECT reverted, reverted_by FROM thread_outcomes WHERE pr_number = 7",
+        );
+        assert_eq!(reverted["reverted"], 1);
+        assert_eq!(reverted["reverted_by"], 8);
+
+        // Closed without merging.
+        record_pull_request_at(&path, "v", &pull(9, "closed", "x", false), at).unwrap();
+        let closed = one_row(
+            &path,
+            "SELECT closed_unmerged, closed_at, merged_at FROM thread_outcomes WHERE pr_number = 9",
+        );
+        assert_eq!(closed["closed_unmerged"], 1);
+        assert!(closed["closed_at"].is_string(), "{closed}");
+        assert!(closed["merged_at"].is_null(), "{closed}");
+    }
+
+    #[test]
+    fn pr_outcomes_by_model_reports_cost_and_tokens_per_merged_pull_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        {
+            let connection = open(&path).unwrap();
+            for (thread, cost) in [("m", 3.0), ("c", 1.0)] {
+                write_turn(
+                    &connection,
+                    &TurnRow {
+                        harness: Some("claude".to_owned()),
+                        model: Some("opus".to_owned()),
+                        cached_tokens: Some(100),
+                        cache_write_tokens: Some(0),
+                        cost_usd: Some(cost),
+                        ..turn(thread, "2026-11-17T10:00:00Z", (1000, 200), "completed")
+                    },
+                )
+                .unwrap();
+            }
+            // A thread without a pull request is not counted.
+            write_turn(
+                &connection,
+                &TurnRow {
+                    harness: Some("claude".to_owned()),
+                    model: Some("opus".to_owned()),
+                    cost_usd: Some(50.0),
+                    ..turn("none", "2026-11-17T10:00:00Z", (9, 9), "completed")
+                },
+            )
+            .unwrap();
+        }
+        let at = "2026-11-17T10:00:00.000Z";
+        record_pull_request_at(&path, "m", &pull(1, "open", "a", true), at).unwrap();
+        record_pull_request_at(&path, "m", &pull(1, "merged", "b", false), at).unwrap();
+        record_pull_request_at(&path, "c", &pull(2, "closed", "z", false), at).unwrap();
+        let row = one_row(
+            &path,
+            "SELECT * FROM pr_outcomes_by_model WHERE harness = 'claude'",
+        );
+        assert_eq!(row["model"], "opus");
+        assert_eq!(row["threads"], 2);
+        assert_eq!(row["pull_requests"], 2);
+        assert_eq!(row["merged"], 1);
+        assert_eq!(row["closed_unmerged"], 1);
+        assert_eq!(row["merge_share"], 0.5);
+        assert_eq!(row["avg_ci_failures"], 0.5);
+        // Every linked thread's spend, merged or not, over the merged count.
+        assert_eq!(row["cost_per_merged_pr"], 4.0);
+        assert_eq!(row["tokens_per_merged_pr"], 2600);
+        let report = query_path(&path, PULL_REQUEST_OUTCOMES_SQL, 10).unwrap();
+        assert_eq!(report.rows.len(), 1, "{:?}", report.rows);
+    }
+
+    #[test]
+    fn pull_request_repository_reads_owner_and_name() {
+        assert_eq!(
+            pull_request_repository("https://github.com/acme/app/pull/12").as_deref(),
+            Some("acme/app")
+        );
+        assert_eq!(pull_request_repository("https://example.test/pull/9"), None);
     }
 
     #[test]

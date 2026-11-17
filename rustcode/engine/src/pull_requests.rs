@@ -358,7 +358,7 @@ pub(crate) fn is_repository(text: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
 }
 
-const WATCH_FIELDS: &str = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName,headRefOid,updatedAt,url,additions,deletions,changedFiles,mergeable,reviews,comments";
+const WATCH_FIELDS: &str = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName,headRefOid,updatedAt,url,additions,deletions,changedFiles,mergeable,reviews,comments,mergedAt,closedAt,body";
 
 async fn gh_json(cwd: &Path, args: &[&str]) -> Result<Value, PullError> {
     let output = gh(cwd, args, None).await?;

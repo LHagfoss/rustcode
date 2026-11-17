@@ -171,6 +171,10 @@ pub enum Commands {
         /// Print the totals as JSON
         #[arg(long)]
         json: bool,
+        /// Report linked pull requests per harness and model instead: merged
+        /// share, CI failures, and cost and tokens per merged pull request
+        #[arg(long, conflicts_with = "since")]
+        pull_requests: bool,
     },
 
     /// Inspect the local data store: threads, turns and tool calls, metadata only
@@ -2335,14 +2339,36 @@ mod tests {
             Cli::try_parse_from(["rustcode", "usage"]).unwrap().command,
             Some(Commands::Usage {
                 since: None,
-                json: false
+                json: false,
+                pull_requests: false
             })
         ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "usage", "--pull-requests"])
+                .unwrap()
+                .command,
+            Some(Commands::Usage {
+                since: None,
+                json: false,
+                pull_requests: true
+            })
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "rustcode",
+                "usage",
+                "--pull-requests",
+                "--since",
+                "2026-11-01"
+            ])
+            .is_err(),
+            "the report covers every recorded pull request"
+        );
         assert!(matches!(
             Cli::try_parse_from(["rustcode", "usage", "--since", "2026-11-01", "--json"])
                 .unwrap()
                 .command,
-            Some(Commands::Usage { since: Some(day), json: true }) if day == "2026-11-01"
+            Some(Commands::Usage { since: Some(day), json: true, .. }) if day == "2026-11-01"
         ));
         assert!(matches!(
             Cli::try_parse_from(["rustcode", "data", "schema"])

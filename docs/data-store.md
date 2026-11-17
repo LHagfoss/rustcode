@@ -45,6 +45,8 @@ payload only when the user turns payload capture on ("Captured payloads").
 | `tool_command_time_daily` | calls, timed calls, total and mean duration per day, tool and command name |
 | `tool_failure_rates` | a view over `tool_calls`: calls, failures, failure rate, mean duration and truncated results per day and tool |
 | `turn_latency_daily` | a view over `turns`: turn count, mean wall, first-token, model, tool and context values per day, harness and model |
+| `thread_outcomes` | (migration 16) one row per thread and linked pull request: `thread_id`, `repo` (`owner/name`), `pr_number`, `url`, `title`, `state` (`open`, `closed`, `merged`), `first_seen_at`, `updated_at`, `merged_at`, `closed_at`, `closed_unmerged`, `ci_failures`, `fix_rounds`, `reverted`, `reverted_by`, `head`, `failed_head`; see "Pull request outcomes" |
+| `pr_outcomes_by_model` | a view over `thread_outcomes` and `turns`: per harness and model, pull requests, merged, closed unmerged, still open, `merge_share`, `avg_ci_failures`, `avg_fix_rounds`, reverted, summed tokens and cost, and `cost_per_merged_pr`, `tokens_per_merged_pr`, `input_tokens_per_merged_pr`, `output_tokens_per_merged_pr` |
 | `thread_links` | one row per link between two threads: `id`, `orchestrator`, `target`, `state`, `started_at`, `settled_at`, `harness`, `files_changed`, and `body`, the whole link record as JSON |
 | `orchestration_state` | `key`, `body`: the rest of the link book, under `grants`, `counters` and `fanOuts` |
 | `provider_requests` | one row per built-in provider HTTP attempt or retry: `thread_id`, `turn_id`, `round`, `provider`, `model`, `endpoint_host`, `endpoint_path`, `method`, `attempt`, `started_at`, `headers_at`, `finished_at`, `latency_ms`, `status_code`, `request_bytes`, `response_bytes`, `stream_event_count`, `input_tokens`, `output_tokens`, `cached_tokens`, `error_kind`, `request_payload_json`, `response_summary_json`, `payload_truncated`, `redaction_version` |
@@ -167,6 +169,43 @@ differently:
   cache_write_tokens`.
 - A turn's `model` is the one it ran on, so a thread that switched models
   has turns on each; group by `turns.model`, not `threads.model`.
+
+## Pull request outcomes
+
+"Completed" only says a turn ended. To compare models and harnesses on
+whether the work landed, `thread_outcomes` records what each thread's linked
+pull request came to. A pull request is linked by `manage_pull_links`,
+`merge_when_green` or a `gh pr create` the app saw; the pull request watch
+reads it on its usual schedule and writes the row on each read:
+
+- `ci_failures` counts head commits whose checks failed, once per commit
+  however many reads see it, so it is the number of red CI runs before the
+  pull request went green or was given up.
+- `fix_rounds` counts new head commits after the first one seen: every push
+  after the pull request was linked.
+- `merged_at` and `closed_at` are GitHub's; `closed_unmerged` is 1 for a pull
+  request closed without merging.
+- `reverted` is set when a merged pull request in the same repository reverts
+  this one, read from GitHub's `Reverts owner/name#N` body or a
+  `Revert "<title>"` title; `reverted_by` is the reverting number.
+
+Rows migration 16 filled from the pull requests already on `threads` only
+know the state: their `ci_failures` and `fix_rounds` stay `NULL` rather than
+a guessed 0, and `pr_outcomes_by_model.counted_pull_requests` says how many
+pull requests the averages cover.
+
+`pr_outcomes_by_model` joins those rows to `turns` per harness and model.
+`cost_per_merged_pr` and the token columns divide **all** the spend of the
+threads that linked a pull request, merged or not, by the pull requests that
+merged, so a model that needs two attempts per merge costs twice as much.
+`merge_share` is merged over merged plus closed unmerged; open ones are left
+out. `tokens_per_merged_pr` adds the cache columns for Claude Code and not
+for Codex, whose `input_tokens` already include them (see "Comparing
+harnesses"). A thread whose turns ran on two models counts its pull request
+for each.
+
+Cost is only what the harness reported. Codex reports none, so its
+`cost_per_merged_pr` is blank; RustCode does not estimate a price.
 
 ## Compactions
 
@@ -588,6 +627,7 @@ file are refused. `rustcode data schema` prints the tables and view.
 ```console
 rustcode usage                 # tokens per harness and model, all turns
 rustcode usage --since 2026-11-01 --json
+rustcode usage --pull-requests  # merged share, CI failures, cost and tokens per merged PR
 rustcode data query "SELECT * FROM daily_usage ORDER BY day DESC LIMIT 7"
 rustcode data query "SELECT * FROM daily_compactions ORDER BY day DESC LIMIT 7"
 rustcode data schema
