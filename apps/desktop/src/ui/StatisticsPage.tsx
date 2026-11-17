@@ -18,6 +18,7 @@ import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { parseUsageReport, type UsageRow, type UsageTotals, windowTitle } from "../acp/rustcode";
 import { type Harness, Method } from "../acp/types";
 import { count } from "../lib/plural";
+import { useClock } from "../lib/useNow";
 import {
   dailySeries,
   previousRows,
@@ -709,16 +710,6 @@ function MissingMark({ label }: { label: string }) {
   );
 }
 
-/** A ticking clock for the plan windows' reset countdowns, once every half minute. */
-function useNow(every = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), every);
-    return () => clearInterval(timer);
-  }, [every]);
-  return now;
-}
-
 /**
  * The plan windows this computer is signed in to, from the cache the composer's meter
  * reads (`_rustcode/usage/plans`): each window's used bar and when it resets.
@@ -726,7 +717,7 @@ function useNow(every = 30_000): number {
  */
 function PlanLimits({ names }: { names: Map<string, string> }) {
   const cache = useApp((s) => s.planCache);
-  const now = useNow();
+  const now = useClock();
   const plans = useMemo(
     () =>
       Object.values(cache)

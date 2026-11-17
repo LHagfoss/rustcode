@@ -18,7 +18,6 @@ use crate::ui::categorical::{self, CATEGORY_COUNT};
 use crate::ui::highlight::highlight_code_line;
 
 /// How strongly a panel value should stand out.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PanelEmphasis {
     /// Plain value in the panel's base style.

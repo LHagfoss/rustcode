@@ -46,6 +46,7 @@ import {
   systemInfo,
 } from "../lib/native";
 import { hasShell } from "../lib/shell";
+import { useClock } from "../lib/useNow";
 import { engineDetail } from "../state/engine";
 import { errorText, request, restartEngine, SERVER_LOG_LINES, toast, useApp } from "../state/store";
 import { Copy, Download, FileText, FolderOpen, Pause, Play, RefreshCw } from "./icons";
@@ -123,17 +124,8 @@ function Facts({ rows }: { rows: [string, ReactNode][] }) {
   );
 }
 
-function useNow(every: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), every);
-    return () => window.clearInterval(timer);
-  }, [every]);
-  return now;
-}
-
 function Uptime({ since }: { since: number }) {
-  const now = useNow(1000);
+  const now = useClock(1000);
   return <>{formatDuration(now - since)}</>;
 }
 

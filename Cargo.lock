@@ -3567,7 +3567,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
- "clap",
  "cron",
  "discord-rich-presence",
  "flate2",

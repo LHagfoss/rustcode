@@ -4,8 +4,9 @@
 // workers the same way: each is a delegate thread of the thread that started the run, so each row
 // opens it.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { WorkflowRun, WorkflowWorker } from "../acp/workflows";
+import { useNow } from "../lib/useNow";
 import { selectThread } from "../state/store";
 import { formatDuration } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
@@ -37,18 +38,6 @@ const STEP_TINT: Record<PhaseStepState, string> = {
   done: "bg-success",
   failed: "bg-danger",
 };
-
-/** The time now, ticking each second while `active`, so a running run's clock moves. */
-function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [active]);
-  return now;
-}
 
 /** The run's phases in order: a dot by how it went, the title, and `done/workers`. */
 function PhaseSteps({ run }: { run: WorkflowRun }) {

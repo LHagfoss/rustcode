@@ -857,15 +857,6 @@ export async function loadMachineHarness(host: string): Promise<void> {
   }
 }
 
-/**
- * A Check on another machine: re-detect that machine's harness installs and
- * sign-ins, read its snapshot again, and answer where one harness ended.
- * Nothing is started here; the snapshot is what its own server reports.
- */
-export async function checkMachineHarness(host: string, id: string): Promise<string> {
-  return (await checkMachineHarnesses(host, [id]))[id] ?? "That harness is not listed on the machine now.";
-}
-
 /** Where one harness ended on a machine, in words. */
 export function harnessCheckLine(harness: Pick<Harness, "installed" | "auth"> | undefined): string {
   if (!harness) return "That harness is not listed on the machine now.";

@@ -9,6 +9,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import { modelName } from "../acp/types";
+import { useNow } from "../lib/useNow";
 import type { StackAgent } from "../state/agentStack";
 import { answerPreview } from "../state/answerPreview";
 import { AGENT_WORD, type AgentState, LINK_AGENT_STATE } from "../state/delegates";
@@ -44,18 +45,6 @@ import { cx, Skeleton, Spinner, Tooltip } from "./primitives";
 
 const EMPTY: SubagentInfo[] = [];
 const NO_STEPS: ToolItem[] = [];
-
-export function useNow(active: boolean) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!active) return;
-    // The first render after work starts must not use a `now` from when the row was idle.
-    setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [active]);
-  return now;
-}
 
 type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
 

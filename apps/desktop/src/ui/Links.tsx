@@ -6,13 +6,14 @@
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
+import { useNow } from "../lib/useNow";
 import { runningAgents, runningSubagents, typicalRun } from "../state/delegates";
 import { linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import { type GrantAsk, type Link, type LinkState, linkStatusText } from "../state/orchestration";
 import { modeLabel } from "../state/permissions";
 import { openSettings, selectThread, setView, useApp } from "../state/store";
 import { formatDuration } from "../state/thread";
-import { AgentRow, SubagentRow, useNow } from "./AgentViews";
+import { AgentRow, SubagentRow } from "./AgentViews";
 import { GrantWhy } from "./GrantWhy";
 import {
   CircleCheck,

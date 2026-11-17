@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
 import { assessApproval, grantAllowed, optionScope } from "../lib/approval";
+import { useClock } from "../lib/useNow";
 import { type DecidedItem, foldDecided, groupInbox, type InboxGroup, type InboxItem } from "../state/inbox";
 import { useInboxItems } from "../state/inboxRead";
 import { filteredNeedsCount } from "../state/sidebarGroups";
@@ -39,15 +40,6 @@ import {
 import { ProjectMark } from "./ProjectMark";
 import { cx, Kbd, Pill } from "./primitives";
 import { WhileAwayCard } from "./WhileAway";
-
-function useNow(step = 30_000) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), step);
-    return () => clearInterval(t);
-  }, [step]);
-  return now;
-}
 
 /** One thing a row offers, in the order the digit keys pick it. */
 interface RowAction {
@@ -371,7 +363,7 @@ export function Inbox() {
   const items = useInboxItems();
   const recapSince = useApp((s) => s.recapSince);
   const recapDismissed = useApp((s) => s.recapDismissed);
-  const now = useNow();
+  const now = useClock();
   const groups = useMemo(() => groupInbox(items), [items]);
   // Where each group's first row sits in the flat list the keyboard moves through.
   const starts = useMemo(() => {

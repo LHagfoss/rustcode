@@ -9,7 +9,7 @@
 // a row put away by hand is the one thing that outlives the window
 // (state/inboxDismissed.ts).
 
-import { type PermissionRequest, projectName, type SessionSummary } from "../acp/types";
+import type { PermissionRequest, SessionSummary } from "../acp/types";
 import { type InboxDismissals, isDismissed } from "./inboxDismissed";
 import type { Link } from "./orchestration";
 
@@ -281,9 +281,4 @@ export function foldDecided(
  */
 export function showsNeedsYou(items: readonly InboxItem[]): boolean {
   return items.length > 0;
-}
-
-/** The project name a row's mark shows (`acp/types.ts` `projectName`). */
-export function inboxProjectName(item: InboxItem): string {
-  return projectName(item.project);
 }

@@ -75,17 +75,6 @@ export function writeFolded(folded: readonly OverviewSection[]): void {
  */
 export const FOLDED_EVENT = "rustcode:overview-folded";
 
-/**
- * Show `id` unfolded in every open overview: the strip's `+2 nested` row sends the
- * reader to the tree that holds them, and a folded section must not swallow it.
- */
-export function unfoldSection(id: OverviewSection): void {
-  const folded = readFolded();
-  if (!folded.includes(id)) return;
-  writeFolded(folded.filter((section) => section !== id));
-  window.dispatchEvent(new Event(FOLDED_EVENT));
-}
-
 // ---------------------------------------------------------------- deliverables
 
 /** How the Deliverables section draws what it has. */

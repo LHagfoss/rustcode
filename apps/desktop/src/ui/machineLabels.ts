@@ -8,7 +8,6 @@ import {
   DEV_APP_VERSION,
   lastSeen,
   type Machine,
-  type MachineState,
   machineReconnecting,
   platformName,
   reasonLabel,
@@ -291,11 +290,6 @@ export function addFailure(method: AddMethod, raw: string): AddFailure {
         hint: "Check the address and that RustCode is running there with remote access on. Away from home, use its Tailscale or VPN address.",
       };
   }
-}
-
-/** Whether a state is one the dialog may call a success when a new machine shows up. */
-export function isConnectedState(state: MachineState): boolean {
-  return state === "connected";
 }
 
 /** The ids of the saved machines, for telling a new one from the ones already there. */

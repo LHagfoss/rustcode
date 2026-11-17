@@ -4,9 +4,9 @@
 // this has a time of its own and never runs until then (state/schedule.ts).
 
 import { useShallow } from "zustand/react/shallow";
+import { useNow } from "../lib/useNow";
 import { countdown, type ScheduledMessage, scheduledSummary, whenText } from "../state/schedule";
 import { removeScheduled, sendScheduledNow, useApp } from "../state/store";
-import { useNow } from "./AgentViews";
 import { Clock, X } from "./icons";
 import { Pill, Tooltip } from "./primitives";
 

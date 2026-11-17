@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { parseUsageReport } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
+import { useNow } from "../lib/useNow";
 import {
   AGENT_WORD,
   type AgentState,
@@ -26,7 +27,7 @@ import {
 import { type CostTotals, costOf } from "../state/pricing";
 import { selectThread, useApp } from "../state/store";
 import { isRunning, stripHarnessMarkup } from "../state/thread";
-import { AgentAvatar, AgentTip, useNow } from "./AgentViews";
+import { AgentAvatar, AgentTip } from "./AgentViews";
 import { ChevronRight, ListTree, MessageSquareText } from "./icons";
 import { Markdown } from "./Markdown";
 import { cx, Tooltip } from "./primitives";
@@ -306,15 +307,6 @@ function DelegateTip({ views }: { views: readonly DelegateView[] }) {
  * Board card (`compact`). The costs are read once by the caller that draws many
  * of them, so a board of cards is one read, not one per card.
  */
-/**
- * A thread's delegates as the tree draws them, without reading their costs:
- * for a surface that needs the branch's count, state and time (the strip above
- * the composer), not its rows.
- */
-export function useDelegateBranch(threadId: string): DelegateView[] {
-  return useDelegateViews(threadId, undefined);
-}
-
 export function DelegateTree({
   threadId,
   compact = false,

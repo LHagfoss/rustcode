@@ -76,9 +76,6 @@ export function encodeQr(text: string, ecc: QrEcc = "M"): QrCode | null {
   return draw(version, ecc, addErrorCorrection(payloadCodewords(bytes, version, ecc), version, ecc));
 }
 
-/** Unused, but the pairing flow asks for level M and the caller may pass another. */
-export const QR_ECC_DEFAULT: QrEcc = "M";
-
 function charCountBits(version: number): number {
   return version <= 9 ? 8 : 16;
 }

@@ -730,15 +730,6 @@ export function machineLine(machine: Machine): string {
 }
 
 /**
- * The hint a machine carries when one kind of route answers and another does
- * not (PR 3402): e.g. the overlay address failed while the LAN works, and what
- * to check on that machine. Absent when every route behaves the same.
- */
-export function machineHint(machine: Pick<Machine, "hint">): string | null {
-  return machine.hint ?? null;
-}
-
-/**
  * This app's own version, for the rows that compare it with another machine's.
  * The app knows it without the network (`tauri getVersion`); a dev build in a
  * browser asks the mock instead, so a mismatched row still shows there.

@@ -31,8 +31,6 @@ export type EngineState =
       crashed: boolean;
     };
 
-export type EnginePhase = EngineState["phase"];
-
 /** Where a start's progress bar begins, and where the handshake puts it. */
 export const BOOT_PROGRESS = 0.15;
 export const HANDSHAKE_PROGRESS = 0.5;

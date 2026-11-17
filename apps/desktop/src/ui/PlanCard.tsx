@@ -8,10 +8,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PlanEntry } from "../acp/types";
+import { useNow } from "../lib/useNow";
 import { type PlanClocks, planClock, type SteerNote, steerMarks, stepElapsed } from "../state/steer";
 import { runPrompt } from "../state/store";
 import { formatDuration } from "../state/thread";
-import { useNow } from "./AgentViews";
 import { ChevronDown, ChevronUp, ListChecks } from "./icons";
 import { CopyButton } from "./Markdown";
 import { cx, Pill, Tooltip } from "./primitives";

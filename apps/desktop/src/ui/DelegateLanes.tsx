@@ -4,11 +4,11 @@
 // its thread.
 
 import { useMemo } from "react";
+import { useNow } from "../lib/useNow";
 import { delegateLanes, delegateTree } from "../state/delegates";
 import { isActive } from "../state/orchestration";
 import { selectThread, useApp } from "../state/store";
 import { formatDuration } from "../state/thread";
-import { useNow } from "./AgentViews";
 import { cx } from "./primitives";
 
 const STATE_WORD: Record<string, string> = {

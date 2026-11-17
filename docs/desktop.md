@@ -1185,15 +1185,6 @@ composer's keys stay outside the table.
   any harness, or in a worktree), board, review, mark for review, settle the
   open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Row progress and waits.** A detailed row's third line says, before the
-  branch, how far a working thread is through its plan: a short bar with a
-  segment per step (done, the one it is on in the accent, to do) and
-  `3/4 · Run the checks`, the count first so it survives the cut; past eight
-  steps only the words stay. A thread that is not working says why it has not
-  finished: `Limit resets 14:00`, `Provider full, retries 14:05`, `Waits for
-  the internet`, `Waits for ‹thread›`, or `Waits for 2 threads and a
-  background command` (`rowProgress`, `rowWaitReason` in
-  `state/sidebarRows.ts`). What it asks of you still comes first.
 - **Loops.** The sidebar's *Loops* row opens `ui/Loops.tsx`: prompts the
   scheduler daemon runs on a schedule, each run in a fresh thread
   (`docs/daemon.md` › Loops). Each row says the schedule in words

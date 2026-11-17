@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo } from "react";
 import type { Json } from "../acp/jsonrpc";
+import { useNow } from "../lib/useNow";
 import { activeGrants, grantRemaining } from "../state/grants";
 import { forgetThreadGrant } from "../state/host";
 import { threadGrants } from "../state/permissionGrants";
@@ -29,7 +30,6 @@ import {
   setProjectPermissionMode,
   useApp,
 } from "../state/store";
-import { useNow } from "./AgentViews";
 import { Check, Shield, ShieldCheck, ShieldOff } from "./icons";
 import { cx } from "./primitives";
 import { ScopedValue, SettingsScopeBar } from "./SettingsScope";
