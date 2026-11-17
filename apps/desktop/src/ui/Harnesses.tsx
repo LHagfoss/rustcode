@@ -3,9 +3,15 @@
 // signs in for a harness: "Sign in" shows the harness's own login command.
 
 import { Popover } from "radix-ui";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useReducer, useState } from "react";
 import { effortLabel, type Harness, type HarnessAccount, type HarnessSnapshot } from "../acp/types";
 import { canOpenTerminal, openInTerminal } from "../lib/native";
+import {
+  addRowOpen,
+  anyWaiting,
+  initialAccountsSignIn,
+  transitionAccountsSignIn,
+} from "../state/accountSignIn";
 import {
   accountLoginCommand,
   accountSignIn,
@@ -124,9 +130,6 @@ function signAccountIn(
   return openInTerminal(signIn.command, isOwnLoginDir(account) ? [] : [[signIn.env, account.config_dir]]);
 }
 
-/** How long an added account's sign-in is waited for, three seconds at a time. */
-const SIGN_IN_WAIT_MS = 5 * 60_000;
-
 /**
  * A harness's named logins: each its own config directory, added and removed
  * by hand (`docs/harnesses.md`). RustCode never reads or copies their tokens;
@@ -138,69 +141,63 @@ export function AccountsList({ harness }: { harness: Harness }) {
   // Threads the list already knows about: no request, just a count for the
   // remove dialog.
   const threads = useApp((s) => s.sessions);
-  const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  // The account whose sign-in the app is waiting for, and one it gave up on.
-  const [waiting, setWaiting] = useState<string | null>(null);
-  const [gaveUp, setGaveUp] = useState<string | null>(null);
+  // The add row and each account's sign-in (`state/accountSignIn.ts`).
+  const [state, dispatch] = useReducer(transitionAccountsSignIn, initialAccountsSignIn);
+  const busy = state.add.phase === "adding";
+  const waiting = anyWaiting(state);
   // The sign-in of each account is read when the page opens, when the window
   // regains focus and by Check (`useAutoDetect`), so a row never waits to be asked.
-  // The waiting row asks again every three seconds, for at most five minutes
-  // while this section is mounted.
+  // While any row waits, the list asks again every three seconds; each wait
+  // ends on its own five-minute deadline while this section is mounted.
   useEffect(() => {
     if (!waiting) return;
-    const deadline = Date.now() + SIGN_IN_WAIT_MS;
     // A read still on its way is not asked again: an engine that is slow would pile them up.
     let reading = false;
     const timer = setInterval(() => {
-      if (Date.now() > deadline) {
-        setWaiting(null);
-        setGaveUp(waiting);
-        return;
-      }
+      dispatch({ type: "timedOut", now: Date.now() });
       if (reading) return;
       reading = true;
       void checkHarnessAccounts(false).then((snapshot) => {
         reading = false;
-        const found = snapshot?.harnesses
-          .find((h) => h.id === harness.id)
-          ?.accounts?.find((a) => a.id === waiting);
-        if (found?.auth === "ok") {
-          setWaiting(null);
-          setGaveUp(null);
-        }
+        const ids =
+          snapshot?.harnesses
+            .find((h) => h.id === harness.id)
+            ?.accounts?.filter((a) => a.auth === "ok")
+            .map((a) => a.id) ?? [];
+        dispatch({ type: "signedIn", ids });
       });
     }, 3000);
     return () => clearInterval(timer);
   }, [waiting, harness.id]);
   const signIn = async (account: HarnessAccount) => {
-    setGaveUp(null);
     await signAccountIn(harness, account);
-    setWaiting(account.id);
+    dispatch({ type: "startSignIn", id: account.id, now: Date.now() });
   };
   const add = async () => {
     const id = accountSlug(name);
-    if (!id) return;
-    setBusy(true);
+    if (!id || busy) return;
+    dispatch({ type: "startAdd", kind: "named" });
     const snapshot = await addHarnessAccount(harness.id, id, name.trim());
-    setBusy(false);
-    if (!snapshot) return;
-    setAdding(false);
+    if (!snapshot) {
+      dispatch({ type: "addFailed" });
+      return;
+    }
+    dispatch({ type: "added" });
     setName("");
     const added = snapshot.harnesses.find((h) => h.id === harness.id)?.accounts?.find((a) => a.id === id);
     if (!added) return;
     if (canOpenTerminal()) await signIn(added);
-    else setGaveUp(id);
+    else dispatch({ type: "noTerminal", id });
   };
   const addFound = async (configDir: string, suggested: string) => {
     const id = accountSlug(suggested) || accountSlug(configDir.replace(/^.*[./]/, "")) || "account";
-    setBusy(true);
+    dispatch({ type: "startAdd", kind: "found" });
     await addHarnessAccount(harness.id, id, suggested, configDir);
     // `accounts/add` answers without probing, so its row alone reads `unknown`:
     // ask what the account's sign-in is before opening a Terminal for it.
     const checked = await checkHarnessAccounts(false);
-    setBusy(false);
+    dispatch({ type: "added" });
     const added = accountToSignIn(checked, harness.id, configDir);
     if (added && canOpenTerminal()) await signIn(added);
   };
@@ -233,31 +230,33 @@ export function AccountsList({ harness }: { harness: Harness }) {
             <li key={account.id} className="flex flex-col gap-1">
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-body">{account.name}</span>
-                {waiting === account.id ? (
+                {state.accounts[account.id]?.phase === "waiting" ? (
                   <span className="flex shrink-0 items-center gap-1 text-caption text-fg-muted">
                     <Spinner size={10} />
                     Waiting for sign-in…
                   </span>
-                ) : gaveUp === account.id || account.auth === "needs_login" ? (
+                ) : state.accounts[account.id]?.phase === "gaveUp" || account.auth === "needs_login" ? (
                   <Chip tone="warn">Not signed in</Chip>
                 ) : account.auth === "ok" ? (
                   <Chip tone="ok">Signed in</Chip>
                 ) : (
                   <Chip>{accountStatus(account)}</Chip>
                 )}
-                {account.auth !== "ok" && waiting !== account.id && accountSignIn(harness) && (
-                  <Tooltip label={canOpenTerminal() ? undefined : "Only the app can open Terminal"}>
-                    <span>
-                      <Action
-                        size="sm"
-                        disabled={!canOpenTerminal() || busy}
-                        onClick={() => void signIn(account)}
-                      >
-                        Sign in
-                      </Action>
-                    </span>
-                  </Tooltip>
-                )}
+                {account.auth !== "ok" &&
+                  state.accounts[account.id]?.phase !== "waiting" &&
+                  accountSignIn(harness) && (
+                    <Tooltip label={canOpenTerminal() ? undefined : "Only the app can open Terminal"}>
+                      <span>
+                        <Action
+                          size="sm"
+                          disabled={!canOpenTerminal() || busy}
+                          onClick={() => void signIn(account)}
+                        >
+                          Sign in
+                        </Action>
+                      </span>
+                    </Tooltip>
+                  )}
                 <Tooltip label="Remove from RustCode; the directory stays">
                   <button
                     type="button"
@@ -288,7 +287,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
           Uses {harness.name}'s own sign-in. Add an account to switch subscriptions.
         </p>
       )}
-      {adding ? (
+      {addRowOpen(state.add) ? (
         <div className="flex items-center gap-1.5">
           <input
             autoFocus
@@ -296,7 +295,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void add();
-              if (e.key === "Escape") setAdding(false);
+              if (e.key === "Escape") dispatch({ type: "closeAdd" });
             }}
             placeholder="Name, e.g. Work"
             aria-label="Account name"
@@ -306,14 +305,14 @@ export function AccountsList({ harness }: { harness: Harness }) {
           <Action size="sm" onClick={() => void add()} disabled={busy || !accountSlug(name)}>
             Add and sign in
           </Action>
-          <Action size="sm" quiet onClick={() => setAdding(false)}>
+          <Action size="sm" quiet onClick={() => dispatch({ type: "closeAdd" })}>
             Cancel
           </Action>
         </div>
       ) : (
         <button
           type="button"
-          onClick={() => setAdding(true)}
+          onClick={() => dispatch({ type: "openAdd" })}
           className="flex items-center gap-1 self-start text-caption text-accent hover:underline"
         >
           <Plus size={12} />
