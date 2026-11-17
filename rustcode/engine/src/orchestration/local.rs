@@ -126,8 +126,10 @@ fn app_required(name: &str) -> Value {
 /// `update_session` on the caller's own thread: its status and pin, stored in
 /// the thread's folder and told to every client (`thread_status`). This is
 /// how an agent settles itself on a machine whose app is not the host. A
-/// title, a read mark, a snooze or another thread (which asks the user first)
-/// still needs the app, and then nothing is changed.
+/// title, a read mark or a snooze needs the app: in a call that also sets the
+/// status or pin they are skipped and named in `not_applied` (issue 3921), and
+/// on their own the call fails naming them. Another thread (which asks the
+/// user first) still needs the app, and then nothing is changed.
 fn update_own_session(session_id: &str, args: &Value) -> Value {
     if let Err(remote) = local_machine(args) {
         return remote;
@@ -137,10 +139,21 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|target| !target.is_empty());
-    let given = |key: &str| !matches!(args.get(key), None | Some(Value::Null));
-    let app_only = given("title") || given("unread") || args.get("snoozed_until").is_some();
-    if target.is_some_and(|target| target != session_id) || app_only {
+    if target.is_some_and(|target| target != session_id) {
         return app_required(super::UPDATE_SESSION);
+    }
+    let given = |key: &str| !matches!(args.get(key), None | Some(Value::Null));
+    let not_applied: Vec<&str> = ["title", "unread"]
+        .into_iter()
+        .filter(|key| given(key))
+        .chain(
+            args.get("snoozed_until")
+                .is_some()
+                .then_some("snoozed_until"),
+        )
+        .collect();
+    if !not_applied.is_empty() && !given("status") && !given("pinned") {
+        return app_only_fields(&not_applied);
     }
     if let Some(pinned) = args.get("pinned").and_then(Value::as_bool)
         && let Err(why) = crate::thread_status::set_pinned(session_id, pinned)
@@ -170,7 +183,20 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
         "status": status.unwrap_or_else(|| crate::thread_status::current(session_id).as_str()),
         "running": crate::thread_status::is_running(session_id),
         "snoozed_until": Value::Null,
+        "not_applied": not_applied,
     })
+}
+
+/// The refusal for a call that sets only what needs the app, naming it.
+fn app_only_fields(fields: &[&str]) -> Value {
+    let name = super::UPDATE_SESSION;
+    let fields = fields.join(", ");
+    error(
+        "unavailable",
+        format!(
+            "{name} cannot set {fields} without the RustCode app attached to this machine; status and pinned work without it. Nothing was changed."
+        ),
+    )
 }
 
 /// The call's `machine` names this computer, or the tool needs the app to
@@ -1512,7 +1538,7 @@ mod tests {
         )
         .await;
         assert_eq!(answer["status"], "idle", "{answer}");
-        // A rename still needs the app, and changes nothing else in the call.
+        // A rename with a settle settles, and names the title it skipped.
         let answer = answer_json(
             &caller,
             &CancellationToken::new(),
@@ -1520,11 +1546,23 @@ mod tests {
             &json!({"title": "renamed", "status": "settled"}),
         )
         .await;
-        assert_eq!(answer["error"]["code"], "unavailable", "{answer}");
-        assert_ne!(
+        assert_eq!(answer["status"], "done", "{answer}");
+        assert_eq!(answer["not_applied"], json!(["title"]), "{answer}");
+        assert_eq!(
             crate::thread_status::current(&caller),
             crate::thread_status::Status::Done
         );
+        // A rename on its own fails, naming the field.
+        let answer = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::UPDATE_SESSION,
+            &json!({"title": "renamed"}),
+        )
+        .await;
+        assert_eq!(answer["error"]["code"], "unavailable", "{answer}");
+        let message = answer["error"]["message"].as_str().unwrap_or("");
+        assert!(message.contains("title"), "{message}");
     }
 
     #[tokio::test]
