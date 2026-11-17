@@ -97,7 +97,7 @@ and never sent back; Settings › Machines › **Thread copies** switches it off
 and lists projects to leave out. The chat says
 "‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
 updates when the machine is back.", the composer is disabled, and the
-header shows `Runs on ‹machine› · ‹harness› · ‹model›`; the controls that read
+header shows the machine glyph and name; the controls that read
 this computer (terminal, working tree, pull requests, Finder, worktrees,
 checkpoints and undo) stay disabled with "Runs on ‹machine›" where the action
 would be. Settling a thread there (or Review, Unsettle, pin and unpin) still
