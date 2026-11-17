@@ -413,8 +413,8 @@ export interface ThreadState {
   turn?: ThreadTurn;
   /**
    * Background commands the turn parked on; it resumes when they finish. Not part of {@link turn}:
-   * the engine reports it while a turn of the app still runs and after it ended, and a turn that
-   * starts clears it.
+   * the engine reports it while a turn of the app still runs and after it ended. Only a new
+   * activity report clears it: starting another turn does not finish background work.
    */
   waiting?: number;
   /** Lifecycle of the thread history replay, separate from turn failures. */
@@ -820,8 +820,8 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
 
 /**
  * The one way into a running turn: a fresh {@link ThreadTurn} replaces whatever an earlier one
- * left, and what only an idle thread has (a held queue, the background commands it waited on, the
- * last turn's error) goes with it.
+ * left, and what only an idle thread has (a held queue and the last turn's error) goes with it.
+ * Background commands belong to the thread and can outlive several turns.
  */
 function startTurn(state: ThreadState, kind: TurnKind, now: number, usage: TurnUsage): ThreadState {
   return {
@@ -829,7 +829,6 @@ function startTurn(state: ThreadState, kind: TurnKind, now: number, usage: TurnU
     turn: { kind, startedAt: now, usage },
     // A turn starts the queue: what a stopped turn held is running again.
     queueHeld: undefined,
-    waiting: undefined,
     error: undefined,
     errorDetail: undefined,
   };
@@ -901,7 +900,7 @@ export function beginQuietTurn(state: ThreadState, now = Date.now()): ThreadStat
 }
 
 export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
-  if (isRunning(state)) return { ...state, waiting: undefined };
+  if (isRunning(state)) return state;
   // The engine's own turn leaves a hold the user's stop put on the queue as it was.
   const { queueHeld } = state;
   return {

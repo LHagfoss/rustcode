@@ -1986,7 +1986,7 @@ function onSessionActivity(params: unknown) {
   const before = get().threads[id];
   const wokenEnd = state !== "running" && isRunning(before) && isWoken(before);
   updateThread(id, (t) => {
-    if (state === "running") return wakeTurn(t);
+    if (state === "running") return { ...wakeTurn(t), waiting: background || undefined };
     const ended = isRunning(t) && isWoken(t) ? finishTurn(t, "completed") : t;
     if (state === "waiting") return { ...ended, waiting: background || undefined };
     return { ...ended, waiting: undefined };
