@@ -450,8 +450,7 @@ pub(crate) async fn new_session(
     );
     let info = peer.info();
     session.set_client_display(info.display());
-    let orchestrated =
-        attach_orchestrator(&session, info.orchestration, info.smart_ui, &clients).await;
+    let orchestrated = attach_orchestrator(&session, info, &clients).await;
     if let Err(message) = session.ensure_started().await {
         crate::orchestration::hub::release(&session_id);
         peer.clients().forget_session(&session_id);
@@ -478,10 +477,10 @@ pub(crate) async fn new_session(
 /// have the harness start `rustcode mcp-orchestrator`. Whether it did.
 async fn attach_orchestrator(
     session: &ExternalSession,
-    orchestration: u8,
-    smart_ui: crate::app::SmartUi,
+    info: super::clients::ClientInfo,
     clients: &SessionClients,
 ) -> bool {
+    let (orchestration, smart_ui) = (info.orchestration, info.smart_ui);
     if !harness::capabilities(&session.harness).orchestration {
         return false;
     }
@@ -490,9 +489,10 @@ async fn attach_orchestrator(
     let ask_user = harness::needs_question_tool(&session.harness);
     // No app hosts the tools: this engine answers the reads itself and names
     // the app for the calls that need it (#3422). An app that turned them off
-    // still turns them off, so nothing is attached then.
+    // still turns them off, so nothing is attached then; an app connected to
+    // this machine from a paired one asks for them (`engineOrchestration`).
     if orchestration == 0 {
-        if clients.app_attached() {
+        if !info.engine_hosts_orchestration(clients) {
             return false;
         }
         let launch = crate::orchestration::hub::launch_local_for(
@@ -624,13 +624,8 @@ pub(crate) async fn load_session(
         return Err(agent_client_protocol::Error::internal_error().data(error));
     }
     // The orchestrator is hosted by the client that most recently attached.
-    let orchestrated = attach_orchestrator(
-        &session,
-        info.orchestration,
-        info.smart_ui,
-        &peer.clients().session(&session_id),
-    )
-    .await;
+    let orchestrated =
+        attach_orchestrator(&session, info, &peer.clients().session(&session_id)).await;
     Ok(peer.position(&session_id, reset).finish(
         LoadSessionResponse::new()
             .config_options(session.config_options().await)
@@ -703,7 +698,7 @@ pub(crate) async fn attach_open(
     let info = peer.info();
     let session_clients = peer.clients().session(&session_id);
     let orchestrated = if !session.orchestrated() {
-        attach_orchestrator(session, info.orchestration, info.smart_ui, &session_clients).await
+        attach_orchestrator(session, info, &session_clients).await
     } else if info.orchestration >= 1 {
         if let Some(client) = super::preview::orchestration_client_for(true, &session_clients) {
             let _ = crate::orchestration::hub::swap_client(&session_id, client, info.orchestration)
@@ -907,8 +902,7 @@ pub(crate) async fn switch(
     let info = peer.info();
     session.set_client_display(info.display());
     session.save_now();
-    let orchestrated =
-        attach_orchestrator(&session, info.orchestration, info.smart_ui, &clients).await;
+    let orchestrated = attach_orchestrator(&session, info, &clients).await;
     super::mark_acp_session(&session_id);
     sessions
         .lock()

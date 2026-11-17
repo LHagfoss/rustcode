@@ -64,6 +64,14 @@ describe("ACP types", () => {
     expect(meta({})).not.toHaveProperty("threads");
   });
 
+  test("asks a paired machine's engine to serve its threads' tools", () => {
+    const meta = (options: Parameters<typeof initializeParams>[1]) =>
+      (initializeParams("0.1.0", options) as { clientCapabilities: { _meta: { rustcode: Json } } })
+        .clientCapabilities._meta.rustcode;
+    expect(meta({ threads: 1, engineOrchestration: 1 })).toMatchObject({ engineOrchestration: 1 });
+    expect(meta({ threads: 1 })).not.toHaveProperty("engineOrchestration");
+  });
+
   test("parses session/list with model and harness", () => {
     const { sessions } = parseSessionList({
       sessions: [

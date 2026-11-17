@@ -53,6 +53,10 @@ pub(crate) struct ClientInfo {
     pub(crate) smart_ui_preview: bool,
     /// The orchestration version it hosts (#2637); 0 for none.
     pub(crate) orchestration: u8,
+    /// It hosts no orchestration but asks this engine to serve the tools it
+    /// can itself (`_meta.rustcode.engineOrchestration`): an app connected to
+    /// a paired machine, whose threads' tools are that machine's to answer.
+    pub(crate) engine_orchestration: bool,
     /// Discord Rich Presence (#2179).
     pub(crate) presence: bool,
     /// It lists a thread the engine starts for a paired device
@@ -70,6 +74,7 @@ impl ClientInfo {
             desktop: crate::desktop_control::supported(meta),
             smart_ui_preview: crate::smart_ui::client_meta_supports_preview(meta),
             orchestration: crate::orchestration::client_meta_version(meta),
+            engine_orchestration: crate::orchestration::client_meta_engine_hosted(meta),
             presence: super::presence::client_meta_wants_presence(meta),
             shows_threads: super::client_shows_threads(meta),
         }
@@ -83,6 +88,13 @@ impl ClientInfo {
             Capability::Orchestration => self.orchestration >= 1,
             Capability::Threads => self.shows_threads,
         }
+    }
+
+    /// Whether this engine serves a session's orchestration tools itself
+    /// (#3422): the client hosts none, and either no app is attached or the
+    /// client asked for it. An app that turned the tools off keeps them off.
+    pub(crate) fn engine_hosts_orchestration(&self, clients: &SessionClients) -> bool {
+        self.orchestration == 0 && (self.engine_orchestration || !clients.app_attached())
     }
 
     pub(crate) fn display(&self) -> crate::harness::ClientDisplay {

@@ -689,7 +689,7 @@ fn apply_client_info(
         preview::orchestration_for(info.orchestration, clients);
     // No app hosting the tools: this engine serves the reads and names the app
     // for the rest (#3422). An app that turned them off keeps them off.
-    state.local_orchestration = info.orchestration == 0 && !clients.app_attached();
+    state.local_orchestration = info.engine_hosts_orchestration(clients);
     state.smart_ui_client = preview::smart_ui_client_for(
         info.smart_ui == crate::app::SmartUi::On && info.smart_ui_preview,
         clients,

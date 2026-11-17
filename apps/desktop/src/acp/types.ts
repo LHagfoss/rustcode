@@ -184,6 +184,8 @@ export function initializeParams(
     presence?: number;
     /** 1 when the client lists threads the engine starts for a paired device. */
     threads?: number;
+    /** 1 when the engine should serve the orchestration tools itself: a paired machine's connection. */
+    engineOrchestration?: number;
   } = {},
 ): JsonObject {
   const rustcode: JsonObject = { smartUi: options.smartUi ? 1 : 0 };
@@ -196,6 +198,8 @@ export function initializeParams(
   // Remote access: a thread a paired device starts is created in the engine and named here, so
   // only a client that shows thread rows this way may host them (docs/remote.md).
   if (options.threads) rustcode.threads = options.threads;
+  // A paired machine's threads get their tools from that machine's engine (docs/orchestrator.md).
+  if (options.engineOrchestration) rustcode.engineOrchestration = options.engineOrchestration;
   return {
     protocolVersion: ACP_PROTOCOL_VERSION,
     clientCapabilities: {

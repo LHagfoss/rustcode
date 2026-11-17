@@ -337,7 +337,11 @@ call and keeps the retry receipts. A thread with no app attached — a terminal
 or `rustcode -p` run, a session owner the gateway started for a paired
 machine, or a server thread whose app has closed — still gets the tools, and
 the engine answers the ones that need no approval itself
-(`rustcode/engine/src/orchestration/local.rs`, #3422):
+(`rustcode/engine/src/orchestration/local.rs`, #3422). A thread on a paired
+machine is served the same way while the app is connected to it: the app
+refuses that machine's tool calls, so its connection's `initialize` sends
+`_meta.rustcode.engineOrchestration: 1` (while the app's orchestration setting
+is on) and that machine's engine attaches its own tools:
 
 | Tool | Without the app |
 | --- | --- |
@@ -348,6 +352,7 @@ the engine answers the ones that need no approval itself
 | `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a link the app started while the app is closed, so a wait can time out where an open app would have answered; a link the engine started itself settles when its turn ends. |
 | `thread_status` with a `session_id` | The same reach a read needs: a thread in the caller's project, one the caller started, or any thread when "Let agents read threads in other projects" is on (the app's `checkManage`); otherwise `not_allowed`. |
 | `start_session`, `fan_out` | The engine starts the thread itself (below), only when the caller runs at Full access. |
+| `update_session` on the caller's own thread | Its `status` (settling it) and `pinned`, stored and told to every client. A title, a read mark, a snooze or another thread needs the app, and then nothing changes. |
 | `message_session` (incl. `steer`) | The engine opens the target thread and runs the message as its next turn (below), only at Full access, and only for a thread the caller reaches (same rule as `thread_status`). |
 
 `start_session`, `message_session` and `fan_out` open a loopback ACP connection
