@@ -1,5 +1,5 @@
 // The sidebar's toolbar, over the thread list: a search that narrows the list as you type, the
-// view menu (sort, what shows, how dense the rows are) and New thread. Every option in it is the
+// sort and filter menus (what shows and how dense the rows are) and New thread. Every option in it is the
 // same stored preference ⌘K toggles (state/sidebarPrefs.ts), so the two never disagree; the
 // toolbar itself can be turned off in Settings › Appearance or from ⌘K.
 //
@@ -20,17 +20,8 @@ import {
 import { toast, useApp, useShortcutHint } from "../state/store";
 import { applySidebarSort } from "../state/threadActions";
 import { startNewThreadFromContext } from "../state/threadOpen";
-import { Check, ListFilter, SquarePen, X } from "./icons";
-import {
-  cx,
-  MenuContent,
-  MenuSearchField,
-  menuItem,
-  menuLabel,
-  menuSeparator,
-  Pill,
-  Tooltip,
-} from "./primitives";
+import { ArrowDownUp, Check, ListFilter, SquarePen, X } from "./icons";
+import { cx, MenuContent, MenuSearchField, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
 
 const TOOL_BUTTON =
   "relative inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill data-[state=open]:text-fg";
@@ -63,11 +54,16 @@ export function SidebarToolbar({
   };
   return (
     <div className="flex shrink-0 flex-col gap-1.5 px-3 pb-2">
-      <Pill size="lg" aria-label="New thread" className="w-full" onClick={() => startNewThreadFromContext()}>
+      <button
+        type="button"
+        aria-label="New thread"
+        className="flex h-[38px] w-full shrink-0 items-center gap-2 rounded-md px-3 font-medium text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+        onClick={() => startNewThreadFromContext()}
+      >
         <SquarePen size={14} />
         <span className="flex-1 text-left">New thread</span>
         {newKey && <span className="text-caption text-fg-faint">{newKey}</span>}
-      </Pill>
+      </button>
       <div className="flex items-center gap-1">
         <MenuSearchField
           size="sm"
@@ -80,7 +76,8 @@ export function SidebarToolbar({
           label="Search threads"
           placeholder="Search threads"
         />
-        <ViewMenu filtering={filtering} />
+        <SortMenu />
+        <FilterMenu filtering={filtering} />
       </div>
       {filtering && (
         <div className="flex min-w-0 items-center">
@@ -103,25 +100,16 @@ export function SidebarToolbar({
   );
 }
 
-/** Sort, what the list shows and how dense its rows are: the sidebar's view, in one menu. */
-function ViewMenu({ filtering }: { filtering: boolean }) {
-  const projectCwd = useApp((s) => s.projectCwd);
+/** Ordering is independent of which threads the list shows. */
+function SortMenu() {
   const [sort] = useSidebarSort();
-  const [onlyProject, setOnlyProject] = usePref(PREF.onlyProject, false);
-  const [byProject, setByProject] = usePref(PREF.groupByProject, false);
-  const [working, setWorking] = usePref(PREF.workingSection, true);
-  const [density, setDensity] = useSidebarDensity();
-  const [, setToolbar] = usePref(PREF.toolbar, true);
-  const changed = filtering || sort !== DEFAULT_SIDEBAR_SORT;
-  const check = (on: boolean) => (on ? <Check size={14} className="ms-auto shrink-0 text-accent" /> : null);
   return (
     <DropdownMenu.Root>
-      <Tooltip label="Sort and filter">
+      <Tooltip label="Sort threads">
         <DropdownMenu.Trigger asChild>
-          <button type="button" aria-label="Sort and filter" className={TOOL_BUTTON}>
-            <ListFilter size={14} />
-            {/* Something other than the default is on: the button says so. */}
-            {changed && (
+          <button type="button" aria-label="Sort threads" className={TOOL_BUTTON}>
+            <ArrowDownUp size={14} />
+            {sort !== DEFAULT_SIDEBAR_SORT && (
               <span aria-hidden className="absolute top-1 right-1 size-1.5 rounded-full bg-accent" />
             )}
           </button>
@@ -138,11 +126,38 @@ function ViewMenu({ filtering }: { filtering: boolean }) {
               onSelect={() => applySidebarSort(option.id)}
             >
               {option.label}
-              {check(sort === option.id)}
+              {sort === option.id && <Check size={14} className="ms-auto shrink-0 text-accent" />}
             </DropdownMenu.RadioItem>
           ))}
         </DropdownMenu.RadioGroup>
-        <DropdownMenu.Separator className={menuSeparator} />
+      </MenuContent>
+    </DropdownMenu.Root>
+  );
+}
+
+/** Filtering and the existing list presentation preferences. */
+function FilterMenu({ filtering }: { filtering: boolean }) {
+  const projectCwd = useApp((s) => s.projectCwd);
+  const [onlyProject, setOnlyProject] = usePref(PREF.onlyProject, false);
+  const [byProject, setByProject] = usePref(PREF.groupByProject, false);
+  const [working, setWorking] = usePref(PREF.workingSection, true);
+  const [density, setDensity] = useSidebarDensity();
+  const [, setToolbar] = usePref(PREF.toolbar, true);
+  const check = (on: boolean) => (on ? <Check size={14} className="ms-auto shrink-0 text-accent" /> : null);
+  return (
+    <DropdownMenu.Root>
+      <Tooltip label="Filter threads">
+        <DropdownMenu.Trigger asChild>
+          <button type="button" aria-label="Filter threads" className={TOOL_BUTTON}>
+            <ListFilter size={14} />
+            {/* Something other than the default is on: the button says so. */}
+            {filtering && (
+              <span aria-hidden className="absolute top-1 right-1 size-1.5 rounded-full bg-accent" />
+            )}
+          </button>
+        </DropdownMenu.Trigger>
+      </Tooltip>
+      <MenuContent align="end" className="min-w-[220px]">
         <DropdownMenu.Label className={menuLabel}>Show</DropdownMenu.Label>
         <DropdownMenu.CheckboxItem
           className={menuItem}
