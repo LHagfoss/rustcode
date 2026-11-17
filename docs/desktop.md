@@ -1213,15 +1213,14 @@ composer's keys stay outside the table.
   reached then and one notification at most (`snoozed` in the store;
   `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`).
   Needs you counts distinct threads in the active filter; its inbox opens all
-  projects. Approval and question rows keep their sort position and say what they
-  ask on line 3. Remote rows always keep their machine tag; local rows
-  show it only when the filtered list spans several machines. Every
-  thread row is the same 68px grid of three lines, each a left and a right part
-  (`docs/design.md` › Sidebar rows): the title and its state or age, then the
-  working folder (home as `~`, worktrees use their own folder, middle-truncated
-  with the full path on hover) and the computer it runs on with the diff and pull request, then the
-  branch (or what the thread asks of you; no repeated path for non-git folders) with the model and always its harness mark or
-  the stack of delegates. *Sidebar rows: Compact* (Settings › Appearance, or
+  projects. Approval and question rows keep their sort position. Detailed thread
+  rows use a 54px grid of two lines (`docs/design.md` › Sidebar rows): the project
+  mark before the title and its state or age, then the working folder (home as
+  `~`, worktrees use their own folder, middle-truncated with the full path on
+  hover) and model or harness name, followed by running delegates, the pull request
+  and machine glyph. Machine names, branches and activity details stay on hover.
+  Remote rows keep their machine glyph; local rows show it when the list spans
+  several machines. *Sidebar rows: Compact* (Settings › Appearance, or
   ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`) draws each thread on
   one 28px line instead: a status dot (needs you, working, failed, finished
   unseen; `compactMark`), the harness mark, the title and its state or age,
