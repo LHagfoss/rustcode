@@ -234,6 +234,16 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  // Stage operation lifecycles atomically without carrying errors between scenarios.
+  useMachines.setState({
+    discovery: { status: "idle" },
+    connect: { status: "idle" },
+    pairing: { status: "idle" },
+    ssh: { status: "idle" },
+    serverInstall: { status: "idle" },
+    serverLink: { status: "idle" },
+    probe: { status: "idle" },
+  });
   forgetMachineProjectsForTests();
   listed();
   useMachines.setState({

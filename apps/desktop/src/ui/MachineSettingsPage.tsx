@@ -200,7 +200,7 @@ function Access({ machine }: { machine: Machine }) {
  * address (a NetBird or Tailscale one once that network is up on both computers).
  */
 function Routes({ machine }: { machine: Machine }) {
-  const probing = useMachines((state) => state.probing);
+  const probing = useMachines((state) => state.probe.status === "running");
   const [adding, setAdding] = useState(false);
   const inUse = machine.state === "connected" ? machine.route?.address : undefined;
   const on = machine.routes.filter((route) => !route.off).length;
