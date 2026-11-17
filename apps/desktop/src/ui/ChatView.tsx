@@ -6,7 +6,7 @@ import { isLoading, openError } from "../state/thread";
 
 import { DropdownMenu, Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { displayPath, modelName, projectName } from "../acp/types";
+import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { darkenOverlay, useBanner } from "../lib/banner";
 import { observeSize } from "../lib/resize";
@@ -56,7 +56,6 @@ import { OriginChip } from "./Branches";
 import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
 import { GitHeaderButton } from "./GitActions";
-import { HarnessIcon } from "./HarnessIcon";
 import {
   ChevronDown,
   CircleCheck,
@@ -226,13 +225,9 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
 // record is typed by id, so a new button in that list does not compile without
 // its entry here, and a user's order only ever names an id.
 
-/** Stands alone as a pill, or joins the header's cluster of icon buttons. */
-type HeaderButtonKind = "pill" | "cluster";
-
 interface HeaderButtonEntry {
   label: string;
   icon: LucideIcon;
-  kind: HeaderButtonKind;
   Button: (props: { thread?: ThreadState }) => ReactNode;
 }
 
@@ -312,14 +307,14 @@ function ChangesHeaderButton() {
 }
 
 export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
-  status: { label: "Status", icon: SlidersHorizontal, kind: "pill", Button: StatusHeaderButton },
-  plan: { label: "Plan", icon: ListChecks, kind: "pill", Button: PlanHeaderButton },
-  git: { label: "Git", icon: GitBranch, kind: "pill", Button: GitHeaderButton },
-  actions: { label: "Project actions", icon: Zap, kind: "cluster", Button: ProjectActionsButton },
-  pulls: { label: "Pull requests", icon: GitPullRequest, kind: "cluster", Button: PullsHeaderButton },
-  terminal: { label: "Terminal", icon: SquareTerminal, kind: "cluster", Button: TerminalHeaderButton },
-  details: { label: "Thread details", icon: PanelRight, kind: "cluster", Button: DetailsHeaderButton },
-  changes: { label: "Changes", icon: FileDiff, kind: "cluster", Button: ChangesHeaderButton },
+  status: { label: "Status", icon: SlidersHorizontal, Button: StatusHeaderButton },
+  plan: { label: "Plan", icon: ListChecks, Button: PlanHeaderButton },
+  git: { label: "Git", icon: GitBranch, Button: GitHeaderButton },
+  actions: { label: "Project actions", icon: Zap, Button: ProjectActionsButton },
+  pulls: { label: "Pull requests", icon: GitPullRequest, Button: PullsHeaderButton },
+  terminal: { label: "Terminal", icon: SquareTerminal, Button: TerminalHeaderButton },
+  details: { label: "Thread details", icon: PanelRight, Button: DetailsHeaderButton },
+  changes: { label: "Changes", icon: FileDiff, Button: ChangesHeaderButton },
 };
 
 /**
@@ -358,17 +353,12 @@ function Header({
   const folderKey = useShortcutHint("thread-folder");
   const session = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id) : undefined));
   const listed = session?.title;
-  // A thread on a paired computer: the header says where it runs, with what harness and model, and
+  // A thread on a paired computer: the header says where it runs and
   // whether that computer is reachable now (docs/desktop.md › Several machines).
   const machine = useMachineOfThread(thread?.id);
   const machineHost = thread ? splitThreadKey(thread.id).host : "";
   const machineEntry = useMachines((s) => s.machines.find((entry) => entry.id === machineHost));
   const offline = useThreadOffline(thread?.id);
-  // The harness's name as the machine that runs it lists it, not its id: a thread on another
-  // computer runs that computer's harness (docs/desktop.md › Several machines).
-  const harnessSnapshot = useApp((s) => (thread ? harnessesOn(s, splitThreadKey(thread.id).host) : null));
-  const harnessId = thread?.harness?.id ?? session?.harness ?? "harness";
-  const harnessName = harnessSnapshot?.harnesses.find((h) => h.id === harnessId)?.name ?? harnessId;
   const lastUpdated = session?.updatedAt
     ? new Date(session.updatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : undefined;
@@ -379,15 +369,9 @@ function Header({
   // The buttons the user keeps, in their order, with the panel's toggles last:
   // the panel is the last thing beside the chat, so its controls are the last
   // controls too, and "details" is the rightmost of them whatever order the
-  // user saved. Each one decides whether this thread shows it, and the icon
-  // buttons share one cluster wherever they land.
+  // user saved. Each one decides whether this thread shows it; labelled and
+  // icon buttons share one cluster in that order.
   const right: ReactNode[] = [];
-  let cluster: ReactNode[] = [];
-  const closeCluster = () => {
-    if (!cluster.length) return;
-    right.push(<Cluster key={`cluster-${right.length}`}>{cluster}</Cluster>);
-    cluster = [];
-  };
   const kept = [
     ...shown.filter((id) => !PANEL_BUTTONS.has(id)),
     ...shown.filter((id) => PANEL_BUTTONS.has(id) && id !== "details"),
@@ -415,13 +399,8 @@ function Header({
       ) : (
         <entry.Button key={id} thread={thread} />
       );
-    if (entry.kind === "cluster") cluster.push(node);
-    else {
-      closeCluster();
-      right.push(node);
-    }
+    right.push(node);
   }
-  closeCluster();
   return (
     <MainHeader
       // Glass like every header; over a new thread's banner a lighter tint, so the picture shows.
@@ -460,9 +439,6 @@ function Header({
               /
             </span>
           )}
-          {thread?.harness && thread.harness.id !== "rustcode" && (
-            <HarnessIcon id={thread.harness.id} size={14} className="text-fg-muted" />
-          )}
           <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
           {thread && machine && (
             <Tooltip
@@ -482,9 +458,7 @@ function Header({
                 ) : (
                   <Laptop size={12} className="shrink-0" aria-hidden />
                 )}
-                <span className="truncate">
-                  Runs on {machine} · {harnessName} · {modelName(session?.model) ?? "model"}
-                </span>
+                <span className="truncate">{machine}</span>
               </span>
             </Tooltip>
           )}
@@ -494,7 +468,7 @@ function Header({
           <RemoteThreadIndicator sessionId={thread?.id} />
         </>
       }
-      right={right.length ? right : undefined}
+      right={right.length ? <Cluster>{right}</Cluster> : undefined}
     />
   );
 }
