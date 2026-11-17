@@ -6,6 +6,7 @@
 //! sign in on a page this server shows, and the owner approves with a
 //! one-time code from `rustcode outside code`. Secrets are never logged;
 //! restarting discards unexchanged authorization codes.
+use super::outside_signin::{self, Consent, Outcome, PAGE_HEADERS};
 use super::{hub::CallRequest, outside};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
@@ -43,6 +44,8 @@ struct Server {
     key: [u8; 32],
     /// Where `rustcode outside code` leaves its one-time sign-in codes.
     sign_in_codes: PathBuf,
+    /// This computer's name, as the sign-in page shows it.
+    machine: String,
     settings: outside::Settings,
     runner: Arc<dyn outside::Runner>,
     codes: Mutex<HashMap<String, Code>>,
@@ -200,6 +203,9 @@ pub async fn ensure() -> Result<String, String> {
             public,
             key: load_key(&dir.join(KEY_FILE))?,
             sign_in_codes: outside::sign_in_code_path().ok_or("configuration unavailable")?,
+            machine: crate::fleet::own_name_override()
+                .or_else(crate::remote_gateway::gateway::os_host_name)
+                .unwrap_or_else(|| "this computer".to_owned()),
             settings: outside::Settings::machine().ok_or("configuration unavailable")?,
             runner: Arc::new(outside::EngineRunner),
             codes: Mutex::new(HashMap::new()),
@@ -305,14 +311,44 @@ async fn write_response(
     stream: &mut TcpStream,
     status: u16,
     content_type: &str,
-    body: &str,
+    body: impl AsRef<[u8]>,
     extra: &str,
 ) {
-    let response = format!(
-        "HTTP/1.1 {status} Response\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n{extra}\r\n{body}",
+    let body = body.as_ref();
+    let cache = if extra.contains("Cache-Control:") {
+        ""
+    } else {
+        "Cache-Control: no-store\r\n"
+    };
+    let head = format!(
+        "HTTP/1.1 {status} Response\r\nContent-Type: {content_type}\r\n{cache}Connection: close\r\nContent-Length: {}\r\n{extra}\r\n",
         body.len()
     );
-    let _ = stream.write_all(response.as_bytes()).await;
+    let mut response = head.into_bytes();
+    response.extend_from_slice(body);
+    let _ = stream.write_all(&response).await;
+}
+
+async fn html(stream: &mut TcpStream, status: u16, page: &str) {
+    write_response(
+        stream,
+        status,
+        "text/html; charset=utf-8",
+        page,
+        PAGE_HEADERS,
+    )
+    .await;
+}
+
+async fn see_other(stream: &mut TcpStream, location: &str) {
+    write_response(
+        stream,
+        303,
+        "text/plain",
+        "",
+        &format!("Location: {location}\r\nReferrer-Policy: no-referrer\r\n"),
+    )
+    .await;
 }
 fn fields(text: &[u8]) -> HashMap<String, String> {
     url::form_urlencoded::parse(text).into_owned().collect()
@@ -569,55 +605,52 @@ impl Authorization {
     }
 }
 
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
+/// The `/authorize` parameters the consent page carries in its form.
+const AUTHORIZE_FIELDS: [&str; 8] = [
+    "response_type",
+    "client_id",
+    "redirect_uri",
+    "scope",
+    "resource",
+    "state",
+    "code_challenge",
+    "code_challenge_method",
+];
 
-/// The page a sign-in through the public address opens on. It names the app
-/// and where access goes, and takes a code from `rustcode outside code`.
-fn sign_in_page(a: &Authorization, q: &HashMap<String, String>, error: Option<&str>) -> String {
-    let destination = a.redirect.host_str().unwrap_or("this computer");
-    let goes_to = if loopback(&a.redirect) {
-        "an app on the computer that opened this page".to_owned()
-    } else {
-        format!(
-            "<b>{}</b>. Whoever runs {} gets this access.",
-            escape(destination),
-            escape(destination)
+impl Server {
+    /// The consent page for `a`, with the level `selected` and an `error`.
+    fn consent(
+        &self,
+        a: &Authorization,
+        q: &HashMap<String, String>,
+        error: Option<&str>,
+        selected: Option<outside::Scope>,
+    ) -> String {
+        let hidden: Vec<(&str, &str)> = AUTHORIZE_FIELDS
+            .iter()
+            .filter_map(|k| q.get(*k).map(|v| (*k, v.as_str())))
+            .collect();
+        let host = self
+            .public
+            .as_deref()
+            .unwrap_or(&self.base)
+            .split("://")
+            .nth(1)
+            .unwrap_or("");
+        outside_signin::consent_page(
+            &Consent {
+                client_name: &a.client.name,
+                destination: (!loopback(&a.redirect)).then(|| a.redirect.host_str().unwrap_or("")),
+                machine: &self.machine,
+                host,
+                requested: a.scope,
+                hidden: &hidden,
+            },
+            error,
+            selected,
         )
-    };
-    let asks = a
-        .scope
-        .map(|s| s.label().to_owned())
-        .unwrap_or_else(|| "the access your code allows".to_owned());
-    let hidden: String = [
-        "response_type",
-        "client_id",
-        "redirect_uri",
-        "scope",
-        "resource",
-        "state",
-        "code_challenge",
-        "code_challenge_method",
-    ]
-    .iter()
-    .filter_map(|k| q.get(*k).map(|v| (k, v)))
-    .map(|(k, v)| format!(r#"<input type="hidden" name="{k}" value="{}">"#, escape(v)))
-    .collect();
-    let error = error
-        .map(|e| format!(r#"<p class="error">{}</p>"#, escape(e)))
-        .unwrap_or_default();
-    format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in to RustCode</title><style>body{{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#222}}input[type=text]{{font:inherit;font-size:1.4rem;letter-spacing:.15em;width:100%;padding:.4rem;box-sizing:border-box}}button{{font:inherit;padding:.4rem 1rem;margin:.8rem .4rem 0 0}}.error{{color:#b00020}}code{{background:#eee;padding:0 .2rem}}</style></head><body><h1>Sign in to RustCode</h1><p><b>{name}</b> (the name it gave itself) wants to use RustCode on this machine.</p><p>Access goes to {goes_to}</p><p>It asks for: <b>{asks}</b>.</p><p>Approve only a sign-in you just started. On this machine, run <code>rustcode outside code --access delegate</code> (or another level) and enter the code it prints. The code sets the most this app may do.</p>{error}<form method="post" action="/authorize">{hidden}<label>Code<br><input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" autofocus placeholder="XXXX-XXXX"></label><br><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Decline</button></form></body></html>"#,
-        name = escape(&a.client.name),
-    )
+    }
 }
-
-const PAGE_HEADERS: &str = "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'\r\nX-Frame-Options: DENY\r\nReferrer-Policy: same-origin\r\n";
 
 fn token_answer(tokens: outside::HttpTokens) -> Value {
     let now = chrono::Utc::now().timestamp();
@@ -683,15 +716,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                     json!({"error":"invalid_request"})
                 }
                 Some(a) if public => {
-                    let page = sign_in_page(&a, &q, None);
-                    write_response(
-                        &mut stream,
-                        200,
-                        "text/html; charset=utf-8",
-                        &page,
-                        PAGE_HEADERS,
-                    )
-                    .await;
+                    html(&mut stream, 200, &server.consent(&a, &q, None, None)).await;
                     return;
                 }
                 Some(a) => {
@@ -711,66 +736,124 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                 }
             }
         }
-        // The sign-in page's form; only the public address shows that page.
+        ("GET", "/logo.png") => {
+            write_response(
+                &mut stream,
+                200,
+                "image/png",
+                outside_signin::LOGO,
+                "Cache-Control: public, max-age=86400\r\n",
+            )
+            .await;
+            return;
+        }
+        // The consent page's form; only the public address shows that page.
         ("POST", "/authorize") if public => {
             let q = fields(&req.body);
             let Some(a) = Authorization::parse(&server, &q, base, public) else {
                 respond(&mut stream, 400, json!({"error":"invalid_request"}), "").await;
                 return;
             };
-            let location = if q.get("decision").map(String::as_str) != Some("approve") {
-                a.answer(base, &[("error", "access_denied")])
-            } else {
-                let error = if server.locked() {
-                    Some(
-                        "Too many wrong codes. Wait a few minutes, then make a new code and try again.",
-                    )
-                } else {
-                    match outside::redeem_sign_in_code_at(
-                        &server.sign_in_codes,
-                        q.get("code").map(String::as_str).unwrap_or(""),
-                    ) {
-                        Some((ceiling, ask)) => {
-                            let scope = a.scope.map_or(ceiling, |s| s.min(ceiling));
-                            let code = server.issue(&a, scope, ask);
-                            let location = a.answer(base, &[("code", &code)]);
-                            write_response(
-                                &mut stream,
-                                303,
-                                "text/plain",
-                                "",
-                                &format!("Location: {location}\r\n"),
-                            )
-                            .await;
+            let selected = q
+                .get("access")
+                .and_then(|text| outside::Scope::parse(text))
+                .or(a.scope)
+                .unwrap_or(outside::Scope::ReadOnly);
+            let error = match q.get("decision").map(String::as_str) {
+                Some("app") => {
+                    let destination = if loopback(&a.redirect) {
+                        "an app on the asking computer".to_owned()
+                    } else {
+                        a.redirect.host_str().unwrap_or("").to_owned()
+                    };
+                    let kept: HashMap<String, String> = AUTHORIZE_FIELDS
+                        .iter()
+                        .filter_map(|k| q.get(*k).map(|v| ((*k).to_owned(), v.clone())))
+                        .collect();
+                    match outside_signin::start(&a.client.name, &destination, selected, kept) {
+                        Ok((id, key, _)) => {
+                            see_other(&mut stream, &format!("/authorize/wait?id={id}&key={key}"))
+                                .await;
                             return;
                         }
-                        None => {
-                            server.failed();
-                            Some(
-                                "That code is not valid. It works once, for 10 minutes; make a new one with rustcode outside code.",
-                            )
-                        }
+                        Err(error) => error,
                     }
-                };
-                let page = sign_in_page(&a, &q, error);
-                write_response(
-                    &mut stream,
-                    200,
-                    "text/html; charset=utf-8",
-                    &page,
-                    PAGE_HEADERS,
-                )
-                .await;
-                return;
+                }
+                Some("approve") if server.locked() => {
+                    "Too many wrong codes. Wait a few minutes, then make a new code and try again."
+                }
+                Some("approve") => match outside::redeem_sign_in_code_at(
+                    &server.sign_in_codes,
+                    q.get("code").map(String::as_str).unwrap_or(""),
+                ) {
+                    Some((ceiling, ask)) => {
+                        let code = server.issue(&a, selected.min(ceiling), ask);
+                        see_other(&mut stream, &a.answer(base, &[("code", &code)])).await;
+                        return;
+                    }
+                    None => {
+                        server.failed();
+                        "That sign-in code is not valid. A code works once, for 10 minutes."
+                    }
+                },
+                _ => {
+                    see_other(&mut stream, &a.answer(base, &[("error", "access_denied")])).await;
+                    return;
+                }
             };
-            write_response(
+            html(
                 &mut stream,
-                303,
-                "text/plain",
-                "",
-                &format!("Location: {location}\r\n"),
+                200,
+                &server.consent(&a, &q, Some(error), Some(selected)),
             )
             .await;
+            return;
+        }
+        // The page that waits for the owner's answer in the app; it reloads
+        // itself, and moves on to the agent once answered.
+        ("GET", "/authorize/wait") if public => {
+            let q = fields(query.as_bytes());
+            let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
+            let gone = || {
+                outside_signin::message_page(
+                    "This sign-in is no longer waiting",
+                    "It was answered, cancelled or took longer than five minutes. Start again from the app you were connecting.",
+                )
+            };
+            let Some((outcome, words, kept, name)) = outside_signin::poll(get("id"), get("key"))
+            else {
+                html(&mut stream, 410, &gone()).await;
+                return;
+            };
+            let Some(a) = Authorization::parse(&server, &kept, base, public) else {
+                outside_signin::cancel(get("id"), get("key"));
+                html(&mut stream, 410, &gone()).await;
+                return;
+            };
+            if get("cancel") == "1" {
+                outside_signin::cancel(get("id"), get("key"));
+                see_other(&mut stream, &a.answer(base, &[("error", "access_denied")])).await;
+                return;
+            }
+            match outcome {
+                Outcome::Waiting => {
+                    let cancel = format!(
+                        "/authorize/wait?id={}&key={}&cancel=1",
+                        get("id"),
+                        get("key")
+                    );
+                    let page =
+                        outside_signin::waiting_page(&name, &server.machine, &words, &cancel);
+                    html(&mut stream, 200, &page).await;
+                }
+                Outcome::Approved { scope, ask } => {
+                    let code = server.issue(&a, scope, ask);
+                    see_other(&mut stream, &a.answer(base, &[("code", &code)])).await;
+                }
+                Outcome::Declined => {
+                    see_other(&mut stream, &a.answer(base, &[("error", "access_denied")])).await;
+                }
+            }
             return;
         }
         ("POST", "/token") => {

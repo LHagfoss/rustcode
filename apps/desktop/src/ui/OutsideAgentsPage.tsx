@@ -1,39 +1,47 @@
-// Settings › Outside agents (docs/mcp-outside-agents.md): other apps — Claude
-// Desktop, Cursor, Codex, a script — that use RustCode's MCP tools with a
-// token and an access level of their own.
+// Settings › Outside agents (docs/mcp-outside-agents.md): other apps that use
+// RustCode's MCP tools with an access level of their own. Hosted agents
+// (ChatGPT, Claude) connect to a machine's public address and sign in on its
+// page; apps on this computer (Claude Desktop, Cursor, Codex) get a token.
 //
 // The engine owns the grants and checks the level on every call, so lowering
-// an app's access or revoking it applies to its next call. This page lists the
-// connected apps (with when each last called), connects a new one (name, app,
-// access, then the config to paste, shown once), and shows the calls waiting
-// for an answer and the recent ones.
+// an app's access or revoking it applies to its next call. Each machine has
+// its own: the picker at the top shows any connected machine, so a sign-in
+// on a server is approved from this window.
 
 import { useEffect, useState } from "react";
 import {
   lastUsedLabel,
   OUTSIDE_PLATFORMS,
   OUTSIDE_SCOPES,
+  type OutsideCode,
   type OutsideCreated,
   type OutsideGrant,
   type OutsidePlatform,
   type OutsideScope,
+  type OutsideStatus,
   outcomeLabel,
   PLATFORM_LABEL,
   SCOPE_HELP,
   SCOPE_LABEL,
 } from "../acp/outside";
+import { openExternal } from "../lib/native";
 import {
   answerOutsideCall,
   connectOutsideApp,
+  makeOutsideCode,
   OUTSIDE_POLL_MS,
   refreshOutside,
   revokeOutsideApp,
   updateOutsideApp,
   useOutside,
 } from "../state/outside";
+import { useScopeMachines } from "../state/settingsScope";
 import { askConfirm, useApp } from "../state/store";
-import { Plug } from "./icons";
-import { copyText, cx, Switch } from "./primitives";
+import { LOCAL_HOST } from "../state/threadKeys";
+import { HarnessIcon } from "./HarnessIcon";
+import { Copy, ExternalLink, Globe, KeyRound, Plug } from "./icons";
+import { AgentTile, LevelPoints, SignInCard } from "./OutsideSignIn";
+import { copyText, cx, Segments, Switch } from "./primitives";
 import { Action, Chip, fieldClass, Group, Loading, Row, Select } from "./settingsKit";
 
 const SCOPE_OPTIONS = OUTSIDE_SCOPES.map((scope) => ({ value: scope, label: SCOPE_LABEL[scope] }));
@@ -42,27 +50,121 @@ const PLATFORM_OPTIONS = OUTSIDE_PLATFORMS.map((platform) => ({
   label: PLATFORM_LABEL[platform],
 }));
 
+/** A hosted agent the Connect grid knows, and how its connector is added. */
+interface HostedApp {
+  id: string;
+  name: string;
+  /** The `HarnessIcon` mark, or none for a plug. */
+  mark: string;
+  /** The button: what it does with the URL. */
+  action: string;
+  run: (url: string) => void;
+  steps: string[];
+}
+
+const encoded = encodeURIComponent;
+
+export const HOSTED_APPS: HostedApp[] = [
+  {
+    id: "claude",
+    name: "Claude",
+    mark: "claude",
+    action: "Open in Claude",
+    // Claude's add-connector form, filled in.
+    run: (url) =>
+      openExternal(
+        `https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=RustCode&connectorUrl=${encoded(url)}`,
+      ),
+    steps: [
+      "Claude opens its Add custom connector form with RustCode filled in. Choose Add.",
+      "Choose Connect. The RustCode sign-in page opens.",
+      "Pick what Claude may do and choose Approve in RustCode, then approve the card that appears here.",
+    ],
+  },
+  {
+    id: "chatgpt",
+    name: "ChatGPT",
+    mark: "openai",
+    action: "Copy URL and open ChatGPT",
+    run: (url) => {
+      void copyText(url);
+      openExternal("https://chatgpt.com/#settings/Connectors");
+    },
+    steps: [
+      "In ChatGPT's Apps & Connectors settings, turn on Developer mode under Advanced if it is off.",
+      "Choose Create, name it RustCode, paste the URL and pick OAuth.",
+      "The RustCode sign-in page opens: choose Approve in RustCode, then approve the card that appears here.",
+    ],
+  },
+  {
+    id: "other",
+    name: "Another agent",
+    mark: "",
+    action: "Copy URL",
+    run: (url) => void copyText(url),
+    steps: [
+      "Add a remote MCP server (Streamable HTTP) with OAuth, and paste the URL.",
+      "When its sign-in page opens, choose Approve in RustCode, or enter a sign-in code from below.",
+    ],
+  },
+];
+
 export function OutsideAgentsPage() {
   const engine = useApp((s) => s.engine.phase);
-  const status = useOutside((s) => s.status);
-  const error = useOutside((s) => s.error);
+  const machines = useScopeMachines().filter((m) => m.online);
+  const byHost = useOutside((s) => s.byHost);
+  const errors = useOutside((s) => s.errors);
+  const [picked, setPicked] = useState<string | null>(null);
   const [created, setCreated] = useState<OutsideCreated | null>(null);
+
+  // Until the owner picks, show the first machine with a public address: that is where
+  // hosted agents connect.
+  const withPublic = machines.find((m) => byHost[m.host]?.publicUrl);
+  const host = picked ?? withPublic?.host ?? LOCAL_HOST;
+  const status = byHost[host] ?? null;
+  const error = errors[host] ?? null;
+  const remote = host !== LOCAL_HOST;
+  const machineName =
+    machines.find((m) => m.host === host && !m.local)?.name ?? (remote ? status?.machineName : null) ?? null;
 
   useEffect(() => {
     if (engine !== "ready") return;
-    void refreshOutside();
-    const timer = setInterval(() => void refreshOutside(), OUTSIDE_POLL_MS);
+    void refreshOutside(host);
+    const timer = setInterval(() => void refreshOutside(host), OUTSIDE_POLL_MS);
     return () => clearInterval(timer);
-  }, [engine]);
+  }, [engine, host]);
 
-  if (!status) return <Loading error={error} onRetry={() => void refreshOutside()} />;
+  const picker =
+    machines.length > 1 ? (
+      <div className="mb-5 px-4">
+        <Segments
+          label="Machine"
+          value={host}
+          options={machines.map((m) => ({ value: m.host, label: m.local ? "This machine" : m.name }))}
+          onChange={(next) => {
+            setPicked(next);
+            setCreated(null);
+          }}
+        />
+      </div>
+    ) : null;
 
+  if (!status)
+    return (
+      <>
+        {picker}
+        <Loading error={error} onRetry={() => void refreshOutside(host)} />
+      </>
+    );
+
+  const where = remote ? (machineName ?? "that machine") : "this computer";
   return (
     <>
-      <p className="mb-5 max-w-[70ch] px-4 text-callout text-fg-muted">
-        Let another app read, start or message RustCode threads. Each app gets its own token, only for
-        RustCode on this computer, and you can revoke it here.
+      <p className="mb-4 max-w-[70ch] px-4 text-callout text-fg-muted">
+        Let other AI apps read, start or message RustCode threads on {where}. Each gets its own access level,
+        and you can change or revoke it here.
       </p>
+      {picker}
       {!status.available && (
         <Group title="Not available here">
           <Row
@@ -71,51 +173,66 @@ export function OutsideAgentsPage() {
           />
         </Group>
       )}
-      <Group title="Connection">
-        <Row
-          title="HTTP connection URL"
-          subtitle={status.httpUrl ?? "HTTP endpoint is not running. Restart RustCode to try again."}
-          status={status.httpUrl ? "For apps using Streamable HTTP and OAuth on this computer." : undefined}
-        >
-          {status.httpUrl && <Action onClick={() => void copyText(status.httpUrl ?? "")}>Copy URL</Action>}
-        </Row>
-        <Row title="Stdio command" subtitle={status.command}>
-          <Action onClick={() => void copyText(status.command)}>Copy command</Action>
-        </Row>
-      </Group>
-      {status.pending.length > 0 && (
+      {(status.signIns.length > 0 || status.pending.length > 0) && (
         <Group title="Waiting for you">
+          {status.signIns.map((signIn) => (
+            <SignInCard
+              key={signIn.id}
+              host={host}
+              machine={remote ? machineName : null}
+              signIn={signIn}
+              levels={status.levels}
+            />
+          ))}
           {status.pending.map((item) => (
             <Row key={item.id} title={`${item.clientName} wants to run ${item.tool}`} subtitle={item.summary}>
-              <Action danger onClick={() => void answerOutsideCall(item.id, false)}>
+              <Action danger onClick={() => void answerOutsideCall(item.id, false, host)}>
                 Decline
               </Action>
-              <Action prominent onClick={() => void answerOutsideCall(item.id, true)}>
+              <Action prominent onClick={() => void answerOutsideCall(item.id, true, host)}>
                 Allow
               </Action>
             </Row>
           ))}
         </Group>
       )}
+      <HostedGroup host={host} status={status} where={where} />
       <Group
         title="Connected apps"
-        hint="Read-only apps never ask. Above that, each change is put to you here first unless you turn that off for the app."
+        hint="Read-only apps never ask. Above that, each change is put to you first unless you turn that off for the app."
       >
         {status.grants.length === 0 ? (
-          <Row
-            title="No app is connected"
-            subtitle="Connect one below, then paste the config it gives you."
-          />
+          <Row title="No app is connected" subtitle="Connect one above or below." />
         ) : (
-          status.grants.map((grant) => <GrantRow key={grant.id} grant={grant} />)
+          status.grants.map((grant) => <GrantRow key={grant.id} grant={grant} host={host} />)
         )}
       </Group>
-      <ConnectGroup
-        full={status.grants.length >= status.maxGrants}
-        disabled={!status.available}
-        created={created}
-        onCreated={setCreated}
-      />
+      {!remote && (
+        <>
+          <ConnectGroup
+            full={status.grants.length >= status.maxGrants}
+            disabled={!status.available}
+            created={created}
+            onCreated={setCreated}
+          />
+          <Group title="Connection details" hint="For an app on this computer you set up by hand.">
+            <Row
+              title="HTTP connection URL"
+              subtitle={status.httpUrl ?? "HTTP endpoint is not running. Restart RustCode to try again."}
+              status={
+                status.httpUrl ? "For apps using Streamable HTTP and OAuth on this computer." : undefined
+              }
+            >
+              {status.httpUrl && (
+                <Action onClick={() => void copyText(status.httpUrl ?? "")}>Copy URL</Action>
+              )}
+            </Row>
+            <Row title="Stdio command" subtitle={status.command}>
+              <Action onClick={() => void copyText(status.command)}>Copy command</Action>
+            </Row>
+          </Group>
+        </>
+      )}
       <Group
         title="Recent activity"
         hint="Who called which tool and how it ended. Arguments and answers are not kept."
@@ -143,13 +260,150 @@ export function OutsideAgentsPage() {
   );
 }
 
-function GrantRow({ grant }: { grant: OutsideGrant }) {
+/** ChatGPT, Claude and other hosted agents: the machine's public address and how to add it. */
+function HostedGroup({ host, status, where }: { host: string; status: OutsideStatus; where: string }) {
+  const [chosen, setChosen] = useState("claude");
+  const url = status.publicUrl;
+  if (!url) {
+    return (
+      <Group title="Connect ChatGPT, Claude and other hosted agents">
+        <Row
+          title="No public address"
+          subtitle={`Hosted agents reach RustCode over the internet, so ${where} needs an https address first.`}
+          status={
+            status.publicError ??
+            "Run a tunnel (cloudflared) to 127.0.0.1:43871 and set [outside] public_url in config.toml; docs/mcp-outside-agents.md › Hosted agents has the steps."
+          }
+        >
+          <Globe size={18} className="text-fg-faint" />
+        </Row>
+      </Group>
+    );
+  }
+  const app = HOSTED_APPS.find((a) => a.id === chosen) ?? HOSTED_APPS[0];
+  return (
+    <Group
+      title="Connect ChatGPT, Claude and other hosted agents"
+      hint="The agent signs in on this machine's page. Approve it there with RustCode, or with a sign-in code."
+    >
+      <Row title="Connector URL" subtitle={url}>
+        <Action onClick={() => void copyText(url)}>
+          <Copy size={14} />
+          Copy
+        </Action>
+      </Row>
+      <div className="grid grid-cols-3 gap-2 px-4 py-3">
+        {HOSTED_APPS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            aria-pressed={item.id === chosen}
+            onClick={() => setChosen(item.id)}
+            className={cx(
+              "flex flex-col items-center gap-2 rounded-xl border px-3 py-3 text-callout",
+              item.id === chosen ? "border-accent bg-fill" : "border-separator hover:bg-fill-subtle",
+            )}
+          >
+            <span className="flex size-10 items-center justify-center rounded-xl bg-fill text-fg-muted">
+              {item.mark ? <HarnessIcon id={item.mark} size={24} /> : <Plug size={18} />}
+            </span>
+            <span className="font-medium text-fg">{item.name}</span>
+          </button>
+        ))}
+      </div>
+      {app && (
+        <div className="flex flex-col gap-3 px-4 pb-4">
+          <ol className="flex flex-col gap-1.5 text-callout text-fg-muted">
+            {app.steps.map((step, index) => (
+              <li key={step} className="flex gap-2">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-fill font-semibold text-caption text-fg">
+                  {index + 1}
+                </span>
+                {step}
+              </li>
+            ))}
+          </ol>
+          <div>
+            <Action prominent onClick={() => app.run(url)}>
+              {app.id === "claude" ? <ExternalLink size={14} /> : <Copy size={14} />}
+              {app.action}
+            </Action>
+          </div>
+        </div>
+      )}
+      <CodeRow host={host} status={status} />
+    </Group>
+  );
+}
+
+/** A one-time code for the sign-in page, for when no RustCode window is at hand to approve. */
+function CodeRow({ host, status }: { host: string; status: OutsideStatus }) {
+  const [scope, setScope] = useState<OutsideScope>("delegate");
+  const [code, setCode] = useState<(OutsideCode & { until: number }) | null>(null);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!code) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [code]);
+  const left = code ? Math.max(0, Math.round((code.until - now) / 1000)) : 0;
+  const level = status.levels.find((l) => l.scope === scope);
+  return (
+    <Row
+      title="Sign-in code"
+      subtitle="Type it on the sign-in page instead of approving here. It works once, for 10 minutes."
+      stacked
+    >
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            label="Most it may do"
+            value={scope}
+            options={SCOPE_OPTIONS}
+            onChange={(value) => setScope(value as OutsideScope)}
+          />
+          <Action
+            onClick={async () => {
+              const made = await makeOutsideCode(host, scope, false);
+              if (made) {
+                setNow(Date.now());
+                setCode({ ...made, until: Date.now() + made.minutes * 60_000 });
+              }
+            }}
+          >
+            <KeyRound size={14} />
+            Get a sign-in code
+          </Action>
+        </div>
+        <LevelPoints level={level} />
+        {code && left > 0 && (
+          <div className="flex items-center gap-3 rounded-xl bg-fill px-4 py-3">
+            <span className="selectable font-mono font-semibold text-fg text-title2 tracking-[0.18em]">
+              {code.code}
+            </span>
+            <span className="flex-1 text-caption text-fg-faint tabular-nums">
+              {SCOPE_LABEL[code.scope]} · {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")} left
+            </span>
+            <Action onClick={() => void copyText(code.code)}>Copy</Action>
+          </div>
+        )}
+      </div>
+    </Row>
+  );
+}
+
+function GrantRow({ grant, host }: { grant: OutsideGrant; host: string }) {
   const [now] = useState(() => Date.now());
   const used = lastUsedLabel(grant.lastUsedAt, now);
   return (
     <Row
-      title={grant.name}
-      subtitle={`${PLATFORM_LABEL[grant.platform]} · ${used}${grant.lastTool ? ` (${grant.lastTool})` : ""}`}
+      title={
+        <span className="flex items-center gap-2">
+          {grant.hosted && <AgentTile name={grant.name} size={24} />}
+          {grant.name}
+        </span>
+      }
+      subtitle={`${grant.hosted ? signedInLabel(grant.signedInUntil) : PLATFORM_LABEL[grant.platform]} · ${used}${grant.lastTool ? ` (${grant.lastTool})` : ""}`}
       status={SCOPE_HELP[grant.scope]}
       stacked
     >
@@ -158,7 +412,7 @@ function GrantRow({ grant }: { grant: OutsideGrant }) {
           label={`${grant.name} access`}
           value={grant.scope}
           options={SCOPE_OPTIONS}
-          onChange={(scope) => void updateOutsideApp(grant.id, { scope: scope as OutsideScope })}
+          onChange={(scope) => void updateOutsideApp(grant.id, { scope: scope as OutsideScope }, host)}
         />
         {grant.scope !== "read_only" && (
           <span className="flex items-center gap-2 text-callout text-fg-muted">
@@ -166,7 +420,7 @@ function GrantRow({ grant }: { grant: OutsideGrant }) {
             <Switch
               label={`Ask before ${grant.name} changes anything`}
               checked={grant.ask}
-              onChange={(ask) => void updateOutsideApp(grant.id, { ask })}
+              onChange={(ask) => void updateOutsideApp(grant.id, { ask }, host)}
             />
           </span>
         )}
@@ -178,7 +432,7 @@ function GrantRow({ grant }: { grant: OutsideGrant }) {
               message: `${grant.name} loses access at once: its next call is refused, and calls waiting for you are declined. Threads it already started keep running. To use it again, connect it again with a new token.`,
               action: "Revoke",
               destructive: true,
-              run: () => void revokeOutsideApp(grant.id, grant.name),
+              run: () => void revokeOutsideApp(grant.id, grant.name, host),
             })
           }
         >
@@ -223,8 +477,8 @@ function ConnectGroup({
 
   return (
     <Group
-      title="Connect an app"
-      hint="Pick the app and what it may do. RustCode makes a token and the config to paste into that app; the token is shown once."
+      title="Connect an app on this computer"
+      hint="Claude Desktop, Cursor, Codex or a script: pick it and what it may do. RustCode makes a token and the config to paste into that app; the token is shown once."
     >
       <Row title="App" subtitle="Which app will connect.">
         <Select
@@ -299,4 +553,11 @@ function CreatedRow({ created, onDone }: { created: OutsideCreated; onDone: () =
       </div>
     </div>
   );
+}
+
+/** "Signed in from the web until 17 Dec", for a hosted agent. */
+function signedInLabel(until: number | null): string {
+  if (!until) return "Signed in from the web";
+  const date = new Date(until * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return `Signed in from the web until ${date}`;
 }

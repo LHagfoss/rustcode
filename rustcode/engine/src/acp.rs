@@ -2654,7 +2654,30 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async |request: outside::OutsideSignInRequest, responder, _connection| {
+                match outside::sign_in(request) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder
+                        .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async |request: outside::OutsideCodeRequest, responder, _connection| {
+                match outside::code(request) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder
+                        .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: outside::OutsideListRequest, responder, connection| {
+                // A client that lists outside agents hears when one waits for it.
+                server.clients.subscribe(client_id, clients::Topic::Outside);
+                outside::start_publishing(&server.clients);
                 connection.spawn(async move {
                     match outside::list(request).await {
                         Ok(answer) => responder.respond(answer),

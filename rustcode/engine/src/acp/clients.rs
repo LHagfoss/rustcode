@@ -126,6 +126,8 @@ pub(crate) enum Topic {
     Workflows,
     /// `_rustcode/settings/changed`, after `_rustcode/settings/get` or `/set`.
     Settings,
+    /// `_rustcode/outside/changed`, after `_rustcode/outside/list`.
+    Outside,
 }
 
 /// One session as one connection has it.

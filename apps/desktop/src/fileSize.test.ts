@@ -16,7 +16,7 @@ const SLACK = 100;
 /** Files over the budget, capped at their size when the budget came in, rounded up to the next hundred. */
 const OVERSIZED: Record<string, number> = {
   "state/store.ts": 3700,
-  "acp/mock.ts": 7400,
+  "acp/mock.ts": 7300,
   "state/host.ts": 3100,
   "state/orchestration.ts": 3200,
   "ui/Sidebar.tsx": 2600,

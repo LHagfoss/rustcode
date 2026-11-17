@@ -141,7 +141,16 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/attachments/read",
     "_rustcode/attachments/upload",
 ];
-const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls", "_rustcode/capabilities"];
+// Settings › Outside agents for this machine: its connected apps, the
+// sign-ins its public sign-in page waits on, and sign-in codes. A paired
+// device can already run `rustcode outside` in a thread here, so this gives
+// it nothing new; it lets the owner approve a hosted agent from any device.
+const METHOD_PREFIXES: &[&str] = &[
+    "session/",
+    "_rustcode/pulls",
+    "_rustcode/capabilities",
+    "_rustcode/outside/",
+];
 
 fn allowed(method: &str) -> bool {
     EXACT_METHODS.contains(&method)
@@ -390,7 +399,12 @@ mod tests {
         );
         assert_eq!(
             METHOD_PREFIXES,
-            &["session/", "_rustcode/pulls", "_rustcode/capabilities"]
+            &[
+                "session/",
+                "_rustcode/pulls",
+                "_rustcode/capabilities",
+                "_rustcode/outside/"
+            ]
         );
         for method in [
             "initialize",
@@ -429,6 +443,9 @@ mod tests {
             "_rustcode/session/harness",
             "_rustcode/attachments/read",
             "_rustcode/attachments/upload",
+            "_rustcode/outside/list",
+            "_rustcode/outside/signin",
+            "_rustcode/outside/code",
         ] {
             assert!(allowed(method), "{method}");
         }

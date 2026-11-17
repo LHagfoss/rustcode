@@ -11,6 +11,12 @@ export const OutsideMethod = {
   update: "_rustcode/outside/update",
   revoke: "_rustcode/outside/revoke",
   answer: "_rustcode/outside/answer",
+  /** Approve or decline a sign-in waiting on the public sign-in page. */
+  signIn: "_rustcode/outside/signin",
+  /** A one-time sign-in code for the public sign-in page. */
+  code: "_rustcode/outside/code",
+  /** Notification: something waiting for the owner appeared or went. */
+  changed: "_rustcode/outside/changed",
 } as const;
 
 export type OutsideScope = "read_only" | "delegate" | "manage" | "admin";
@@ -52,6 +58,10 @@ export interface OutsideGrant {
   createdAt: string;
   lastUsedAt: string | null;
   lastTool: string | null;
+  /** Signed in on the public sign-in page (ChatGPT, Claude), not given a token. */
+  hosted: boolean;
+  /** Unix seconds its sign-in lasts until, for a hosted agent. */
+  signedInUntil: number | null;
 }
 
 export interface OutsidePending {
@@ -61,6 +71,36 @@ export interface OutsidePending {
   tool: string;
   summary: string;
   askedAt: string;
+}
+
+/** A hosted agent's sign-in, waiting on the public page for the owner. */
+export interface OutsideSignIn {
+  id: string;
+  clientName: string;
+  /** Where access goes: the agent's callback host. */
+  destination: string;
+  /** The level picked on the page. */
+  scope: OutsideScope;
+  /** The two words the page shows too. */
+  words: string;
+  askedAt: string;
+  expiresIn: number;
+}
+
+/** What one access level allows and does not, as the sign-in page says it. */
+export interface OutsideLevel {
+  scope: OutsideScope;
+  label: string;
+  summary: string;
+  can: string[];
+  cannot: string[];
+}
+
+/** A one-time sign-in code, shown once. */
+export interface OutsideCode {
+  code: string;
+  scope: OutsideScope;
+  minutes: number;
 }
 
 export interface OutsideCall {
@@ -83,6 +123,13 @@ export interface OutsideStatus {
   maxGrants: number;
   /** False where the engine has no local socket for the bridge (Windows). */
   available: boolean;
+  signIns: OutsideSignIn[];
+  /** `https://…/mcp` when the machine has a public address. */
+  publicUrl: string | null;
+  /** Why the configured public address is not used. */
+  publicError: string | null;
+  machineName: string | null;
+  levels: OutsideLevel[];
 }
 
 export interface OutsideSnippet {
@@ -119,6 +166,8 @@ export function parseGrant(value: Json | undefined): OutsideGrant | null {
     createdAt: str(grant.createdAt) ?? "",
     lastUsedAt: str(grant.lastUsedAt) ?? null,
     lastTool: str(grant.lastTool) ?? null,
+    hosted: bool(grant.hosted) ?? false,
+    signedInUntil: num(grant.signedInUntil) ?? null,
   };
 }
 
@@ -153,7 +202,40 @@ export function parseOutsideStatus(value: Json): OutsideStatus {
       detail: str(call.detail) ?? null,
     });
   }
+  const signIns: OutsideSignIn[] = [];
+  for (const entry of arr(root.signIns)) {
+    const item = obj(entry);
+    const id = str(item?.id);
+    if (!item || !id) continue;
+    signIns.push({
+      id,
+      clientName: str(item.clientName) ?? "An app",
+      destination: str(item.destination) ?? "",
+      scope: scopeOf(item.scope),
+      words: str(item.words) ?? "",
+      askedAt: str(item.askedAt) ?? "",
+      expiresIn: num(item.expiresIn) ?? 0,
+    });
+  }
+  const levels: OutsideLevel[] = [];
+  for (const entry of arr(root.levels)) {
+    const level = obj(entry);
+    if (!level) continue;
+    const scope = scopeOf(level.scope);
+    levels.push({
+      scope,
+      label: str(level.label) ?? SCOPE_LABEL[scope],
+      summary: str(level.summary) ?? "",
+      can: arr(level.can).flatMap((t) => (typeof t === "string" ? [t] : [])),
+      cannot: arr(level.cannot).flatMap((t) => (typeof t === "string" ? [t] : [])),
+    });
+  }
   return {
+    signIns,
+    levels,
+    publicUrl: str(root.publicUrl) || null,
+    publicError: str(root.publicError) || null,
+    machineName: str(root.machineName) || null,
     grants: arr(root.grants).flatMap((entry) => {
       const grant = parseGrant(entry);
       return grant ? [grant] : [];
@@ -165,6 +247,13 @@ export function parseOutsideStatus(value: Json): OutsideStatus {
     maxGrants: num(root.maxGrants) ?? 20,
     available: bool(root.available) ?? true,
   };
+}
+
+export function parseCode(value: Json): OutsideCode | null {
+  const root = obj(value);
+  const code = str(root?.code);
+  if (!root || !code) return null;
+  return { code, scope: scopeOf(root.scope), minutes: num(root.minutes) ?? 10 };
 }
 
 export function parseCreated(value: Json): OutsideCreated | null {
