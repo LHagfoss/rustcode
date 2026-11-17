@@ -315,23 +315,29 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 
 .rc-details { border-bottom: 1px solid var(--rc-separator); }
 .rc-details:last-child { border-bottom: 0; }
-.rc-details > summary { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-weight: 500; cursor: pointer; list-style: none; }
-.rc-details > summary::-webkit-details-marker { display: none; }
-.rc-details > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px;
+/* Any fold gets the kit's summary: a bare <details> or a sources fold drew the browser's own
+   triangle with no pointer, and the count ran into its label ("Sources3"). */
+details > summary { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-weight: 500; cursor: pointer; list-style: none;
+  user-select: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px;
   border-right: 1.5px solid var(--rc-muted); border-bottom: 1.5px solid var(--rc-muted);
   transform: rotate(-45deg); transition: transform 120ms ease-out; }
-.rc-details[open] > summary::before { transform: rotate(45deg); }
-.rc-details > summary > :last-child:not(:first-child) { margin-left: auto; font-weight: 400; }
-.rc-details > :not(summary) { margin-bottom: 8px; }
+details[open] > summary::before { transform: rotate(45deg); }
+details > summary:hover::before { border-color: var(--rc-text); }
+.rc-details > summary > :last-child:not(:first-child, .rc-sources-count) { margin-left: auto; font-weight: 400; }
+:is(.rc-details, .rc-sources) > :not(summary) { margin-bottom: 8px; }
 .rc-tree .rc-details { border-bottom: 0; }
 .rc-tree .rc-details > :not(summary) { margin: 0 0 0 5px; padding-left: 12px; border-left: 1px solid var(--rc-separator); }
 .rc-sources { border-bottom: 0; font-size: var(--rc-text-size-sm); }
-.rc-sources > summary { padding: 4px 0; color: var(--rc-muted); }
+.rc-sources > summary { width: fit-content; gap: 6px; padding: 4px 0; font-weight: 400; color: var(--rc-muted); }
+.rc-sources > summary::before { width: 5px; height: 5px; }
 .rc-sources > summary:focus-visible { outline: 2px solid var(--rc-accent); outline-offset: 2px; }
 .rc-sources > summary:hover, .rc-sources[open] > summary { color: var(--rc-text); }
-.rc-details.rc-sources > summary > .rc-sources-count { margin-left: 4px; font-size: var(--rc-text-size-xs); color: var(--rc-faint); font-variant-numeric: tabular-nums; }
-.rc-sources :is(ol, ul) { display: grid; gap: 3px; margin: 0 0 4px; padding-left: 22px; color: var(--rc-muted); }
-.rc-sources li::marker { font-variant-numeric: tabular-nums; }
+.rc-sources > summary > .rc-sources-count { min-width: 18px; padding: 0 5px; font-size: var(--rc-text-size-xs); line-height: 16px; text-align: center;
+  color: var(--rc-muted); font-variant-numeric: tabular-nums; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
+.rc-sources :is(ol, ul) { display: grid; gap: 4px; margin: 2px 0 4px; padding-left: 24px; color: var(--rc-muted); }
+.rc-sources li::marker { font-variant-numeric: tabular-nums; color: var(--rc-faint); }
 .rc-sources a { text-decoration: none; overflow-wrap: anywhere; }
 .rc-sources a:hover { text-decoration: underline; }
 .rc-sources-host { margin-left: 6px; font-size: var(--rc-text-size-xs); color: var(--rc-faint); }
@@ -361,7 +367,7 @@ pre.rc-term { white-space: pre-wrap; }
   background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-sm);
   visibility: hidden; opacity: 0; transition: opacity 80ms ease-out; }
 .rc-tip:hover > span, .rc-tip:focus > span { visibility: visible; opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .rc-details > summary::before, .rc-bar[data-rc-tip]::after { transition: none; } }
+@media (prefers-reduced-motion: reduce) { details > summary::before, .rc-bar[data-rc-tip]::after { transition: none; } }
 `;
 
 /**

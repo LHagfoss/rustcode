@@ -1126,6 +1126,10 @@ describe("smart ui", () => {
   test("sources fold quietly and charts answer the pointer at once", () => {
     expect(BASE_CSS).toContain(".rc-sources { border-bottom: 0;");
     expect(BASE_CSS).toContain(".rc-sources-host {");
+    // The prompt's form is a bare `details.rc-sources`: it needs the kit's summary without `.rc-details`.
+    expect(BASE_CSS).toMatch(/\ndetails > summary \{[^}]*cursor: pointer;/);
+    expect(BASE_CSS).toContain("details > summary::-webkit-details-marker { display: none; }");
+    expect(BASE_CSS).toContain(".rc-sources > summary > .rc-sources-count {");
     expect(CHART_THEME_SCRIPT).toContain("d.animation = false;");
     expect(CHART_THEME_SCRIPT).not.toContain("duration: 180");
   });
