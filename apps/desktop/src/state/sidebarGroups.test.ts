@@ -1,5 +1,5 @@
 // The sidebar's project folders without a window: one flat list of every computer's threads, and
-// with "Group by project" on, a folder per project and computer.
+// with "Group by project" on, matching folder names share a group.
 
 import { expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
@@ -30,16 +30,14 @@ test("a thread without a host runs on this computer", () => {
   expect(hostOf(linux)).toBe(LINUX);
 });
 
-test("projects keep each computer's threads apart and group a worktree under its repository", () => {
+test("projects group matching names across computers and worktrees under their repository", () => {
   const worktree = { ...linuxOther, worktree: { repo: linux.cwd, path: "/tmp/tree", branch: "task" } };
   const groups = sidebarProjects([local, linux, worktree, studio]);
-  expect(groups).toHaveLength(3);
-  expect(groups[0]?.items).toEqual([local]);
+  expect(groups).toHaveLength(2);
+  expect(groups[0]?.items).toEqual([local, studio]);
   expect(groups[1]?.items).toEqual([linux, worktree]);
-  expect(groups[2]?.items).toEqual([studio]);
-  // Same folder name on two computers: two folders, with distinct keys.
-  expect(groups[2]?.key).not.toBe(groups[0]?.key);
-  expect(groups[0]?.key).toBe(local.cwd);
+  expect(groups[0]?.project).toBe(local.cwd);
+  expect(sidebarProjects([studio, local])[0]?.project).toBe(local.cwd);
 });
 
 test("only a folder on this computer can start a thread", () => {
