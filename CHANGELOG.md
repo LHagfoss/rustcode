@@ -1,3 +1,13 @@
+## [v1.40.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.40.0) - 2026-11-17
+
+### Features
+- Fix projects failing to collapse in the sidebar. (#3887)
+- Improve sidebar thread readability with more spacing, clearer text, and aligned machine labels. (#3889)
+- Sidebar thread rows stay in place while threads work, show what each thread is doing under its name, put the folder and branch on one line, and drop the diff count. (#3893)
+- The sidebar has Loops, Capabilities and Usage rows under New thread. (#3894)
+- Claude Code plan usage now shows for threads running on a paired machine. (#3895)
+- Threads started on another machine can run in a new worktree. (#3896)
+- Agents on a paired machine can settle their own thread and use the thread tools again. (#3897)
 ## [v1.39.4](https://github.com/LHagfoss/rustcode/releases/tag/v1.39.4) - 2026-11-17
 
 ### Features
