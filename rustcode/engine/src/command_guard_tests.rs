@@ -405,3 +405,76 @@ fn command_name_skips_a_leading_cd() {
     assert_eq!(command_name("cd /repo").as_deref(), Some("cd"));
     assert_eq!(command_name("rg -n foo").as_deref(), Some("rg"));
 }
+
+#[test]
+fn command_name_unwraps_shells_and_wrappers() {
+    let name = |command: &str| command_name_on(command, &mac());
+    assert_eq!(
+        name("/bin/zsh -lc 'cd /repo && cargo check'").as_deref(),
+        Some("cargo")
+    );
+    assert_eq!(name("bash -c \"git status\"").as_deref(), Some("git"));
+    assert_eq!(
+        name("sh -c 'timeout 120 git fetch'").as_deref(),
+        Some("git")
+    );
+    assert_eq!(
+        name("env RUST_LOG=debug cargo run").as_deref(),
+        Some("cargo")
+    );
+    assert_eq!(name("FOO=1 BAR=2 bun run check").as_deref(), Some("bun"));
+    assert_eq!(name("timeout 120 git push").as_deref(), Some("git"));
+    assert_eq!(name("timeout -k 5 60s rg foo").as_deref(), Some("rg"));
+    assert_eq!(
+        name("nice -n 10 cargo check --workspace").as_deref(),
+        Some("cargo")
+    );
+    assert_eq!(
+        name("sudo -u root apt-get install x").as_deref(),
+        Some("apt-get")
+    );
+    assert_eq!(
+        name("cd /repo && timeout 60 nice -n 10 cargo fmt").as_deref(),
+        Some("cargo")
+    );
+    assert_eq!(name("/usr/bin/git log").as_deref(), Some("git"));
+}
+
+#[test]
+fn command_name_skips_shell_keywords_and_builtins() {
+    let name = |command: &str| command_name_on(command, &mac());
+    assert_eq!(
+        name("for f in a b; do wc -l $f; done").as_deref(),
+        Some("wc")
+    );
+    assert_eq!(
+        name("while read line; do echo $line; done < x").as_deref(),
+        Some("echo")
+    );
+    assert_eq!(name("export X=1; set -e; rg foo").as_deref(), Some("rg"));
+    assert_eq!(name("for f in a; do :; done").as_deref(), Some("for"));
+}
+
+#[test]
+fn command_name_skips_functions_a_sourced_script_defines() {
+    let host = Host {
+        has_program: |name| matches!(name, "git" | "gh"),
+        ..mac()
+    };
+    let name = |command: &str| command_name_on(command, &host);
+    assert_eq!(
+        name("source scripts/lib.sh && parse_args \"$@\" && gh pr list").as_deref(),
+        Some("gh")
+    );
+    assert_eq!(
+        name(". ./lib.sh; parse_args; ./scripts/release.sh").as_deref(),
+        Some("release.sh")
+    );
+    // Before a `source`, nothing is a function.
+    assert_eq!(name("mytool --help").as_deref(), Some("mytool"));
+    // Only a sourced function: still recorded rather than nothing.
+    assert_eq!(
+        name("source lib.sh && parse_args").as_deref(),
+        Some("source")
+    );
+}

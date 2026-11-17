@@ -47,6 +47,11 @@ struct ToolSlot {
     /// The `tool` message holding its result.
     result: usize,
     started: Option<(std::time::Instant, chrono::DateTime<chrono::Utc>)>,
+    /// A terminal-backed call, whose title is the shell command it runs: Pi
+    /// sends its bash command only as the title, never as raw input.
+    title_is_command: bool,
+    /// The raw input named the command, which the title never overrides.
+    command_from_input: bool,
 }
 
 #[derive(Default)]
@@ -181,6 +186,8 @@ impl Transcript {
                 started: self
                     .live
                     .then(|| (std::time::Instant::now(), chrono::Utc::now())),
+                title_is_command: false,
+                command_from_input: false,
             },
         );
     }
@@ -253,11 +260,25 @@ impl Transcript {
             .flatten();
         let exit_code = exit_code.or_else(|| failure_text.as_deref().and_then(text_exit_code));
         let record = message.tool_result.get_or_insert_with(Default::default);
-        if let Some(command) = fields.raw_input.as_ref().and_then(|input| {
+        let title_is_command =
+            slot.title_is_command || meta.is_some_and(|meta| meta.contains_key("terminal_info"));
+        let input_command = fields.raw_input.as_ref().and_then(|input| {
             crate::command_guard::requested_command(input)
                 .or_else(|| input.get("cmd").and_then(Value::as_str).map(str::to_owned))
-        }) {
+        });
+        let command_from_input = slot.command_from_input || input_command.is_some();
+        if let Some(command) = input_command {
             record.command = Some(command);
+        } else if title_is_command
+            && !slot.command_from_input
+            && let Some(title) = fields
+                .title
+                .as_deref()
+                .map(str::trim)
+                // Pi titles the call `bash` until its arguments have streamed.
+                .filter(|title| !title.is_empty() && !title.eq_ignore_ascii_case("bash"))
+        {
+            record.command = Some(title.to_owned());
         }
         if let Some(kind) = fields.kind {
             record.tool_name = kind_name(kind);
@@ -279,6 +300,10 @@ impl Transcript {
             }
             Some(ToolCallStatus::Completed) => record.error_kind = None,
             _ => {}
+        }
+        if let Some(slot) = self.tools.get_mut(id) {
+            slot.title_is_command = title_is_command;
+            slot.command_from_input = command_from_input;
         }
         if let Some(name) = meta.and_then(native_tool_name) {
             self.tool_names.insert(slot.result, name);
@@ -1069,6 +1094,85 @@ mod tests {
             .find(|update| update["sessionUpdate"] == "tool_call")
             .expect("the call replays");
         assert_eq!(card["content"][0]["content"]["text"], "hello-from-tool\n");
+    }
+
+    /// Pi's bash call never carries raw input: the title is `bash` until the
+    /// arguments stream in, then the command. That command is recorded.
+    #[test]
+    fn pi_shell_command_comes_from_the_title() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "bash")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::Pending)
+                .meta(Meta::from_iter([(
+                    "terminal_info".to_owned(),
+                    serde_json::json!({"terminal_id": "t1", "cwd": "/tmp"}),
+                )])),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new()
+                .title("cd /repo && timeout 120 git fetch")
+                .status(ToolCallStatus::InProgress),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        ));
+        transcript.end_reply();
+        let record = transcript.history[2].tool_result.as_ref().unwrap();
+        assert_eq!(
+            record.command.as_deref(),
+            Some("cd /repo && timeout 120 git fetch")
+        );
+        assert_eq!(
+            record
+                .command
+                .as_deref()
+                .and_then(crate::command_guard::command_name)
+                .as_deref(),
+            Some("git")
+        );
+    }
+
+    /// A call whose raw input names the command keeps it, whatever the title.
+    #[test]
+    fn raw_input_command_wins_over_a_terminal_title() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "Run the checks")
+                .kind(ToolKind::Execute)
+                .raw_input(serde_json::json!({"command": "cargo check"}))
+                .meta(Meta::from_iter([(
+                    "terminal_info".to_owned(),
+                    serde_json::json!({"terminal_id": "t1"}),
+                )])),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new()
+                .title("Still running the checks")
+                .status(ToolCallStatus::Completed),
+        ));
+        transcript.end_reply();
+        let record = transcript.history[2].tool_result.as_ref().unwrap();
+        assert_eq!(record.command.as_deref(), Some("cargo check"));
+    }
+
+    /// A call that is not terminal-backed does not take its title as a command.
+    #[test]
+    fn plain_tool_title_is_not_a_command() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t1", "Read file").kind(ToolKind::Read),
+        ));
+        transcript.observe(&tool_update(
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        ));
+        transcript.end_reply();
+        let record = transcript.history[2].tool_result.as_ref().unwrap();
+        assert_eq!(record.command, None);
     }
 
     /// Pi's non-shell tools send the full output as card content each time.
