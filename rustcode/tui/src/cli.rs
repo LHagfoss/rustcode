@@ -175,6 +175,11 @@ pub enum Commands {
         /// share, CI failures, and cost and tokens per merged pull request
         #[arg(long, conflicts_with = "since")]
         pull_requests: bool,
+        /// With --pull-requests: add a cost estimate from this TOML price
+        /// file (`source`, `as_of`, USD per 1M tokens per model), printed
+        /// apart from the cost the harness reported
+        #[arg(long, value_name = "FILE", requires = "pull_requests")]
+        prices: Option<std::path::PathBuf>,
     },
 
     /// Inspect the local data store: threads, turns and tool calls, metadata only
@@ -2340,7 +2345,8 @@ mod tests {
             Some(Commands::Usage {
                 since: None,
                 json: false,
-                pull_requests: false
+                pull_requests: false,
+                prices: None
             })
         ));
         assert!(matches!(
@@ -2350,9 +2356,21 @@ mod tests {
             Some(Commands::Usage {
                 since: None,
                 json: false,
-                pull_requests: true
+                pull_requests: true,
+                prices: None
             })
         ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "usage", "--pull-requests", "--prices", "p.toml"])
+                .unwrap()
+                .command,
+            Some(Commands::Usage { pull_requests: true, prices: Some(path), .. })
+                if path == std::path::Path::new("p.toml")
+        ));
+        assert!(
+            Cli::try_parse_from(["rustcode", "usage", "--prices", "p.toml"]).is_err(),
+            "an estimate is only offered per merged pull request"
+        );
         assert!(
             Cli::try_parse_from([
                 "rustcode",

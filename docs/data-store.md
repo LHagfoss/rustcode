@@ -205,7 +205,33 @@ harnesses"). A thread whose turns ran on two models counts its pull request
 for each.
 
 Cost is only what the harness reported. Codex reports none, so its
-`cost_per_merged_pr` is blank; RustCode does not estimate a price.
+`cost_per_merged_pr` is blank; RustCode ships no prices and never writes an
+estimate into `cost_usd`.
+
+To compare harnesses anyway, opt in to an estimate with a price file you
+keep (#3934): `rustcode usage --pull-requests --prices prices.toml`. The
+file must name where its prices come from and the day they were read; rates
+are USD per million tokens, and `cached_input` and `cache_write` default to
+`input`:
+
+```toml
+source = "https://openai.com/api/pricing"
+as_of = "2026-11-17"
+
+[models."gpt-5-codex"]
+input = 1.25
+cached_input = 0.125
+output = 10.0
+```
+
+The table gains an `est. cost/merged` column printed as `~$`, under a line
+naming the file's source and date; `--json` adds `estimated_cost_usd` and
+`estimated_cost_per_merged_pr` to each priced row and an `estimate` object
+with `source`, `as_of` and `models_priced`. The estimate prices the summed
+tokens of the row (Codex's `input_tokens` include the cached ones, so those
+are priced once, at the cached rate); a model the file does not name shows
+`—`. Nothing is stored, and `cost_usd` and `cost_per_merged_pr` stay the
+harness's own.
 
 ## Compactions
 
@@ -628,6 +654,7 @@ file are refused. `rustcode data schema` prints the tables and view.
 rustcode usage                 # tokens per harness and model, all turns
 rustcode usage --since 2026-11-01 --json
 rustcode usage --pull-requests  # merged share, CI failures, cost and tokens per merged PR
+rustcode usage --pull-requests --prices prices.toml  # plus a labelled cost estimate
 rustcode data query "SELECT * FROM daily_usage ORDER BY day DESC LIMIT 7"
 rustcode data query "SELECT * FROM daily_compactions ORDER BY day DESC LIMIT 7"
 rustcode data schema

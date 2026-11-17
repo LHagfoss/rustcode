@@ -489,14 +489,33 @@ fn run_storage_command(
 }
 
 /// `rustcode usage --pull-requests`: the `pr_outcomes_by_model` view (#3907).
-fn run_pull_request_usage_command(json: bool) -> Result<(), String> {
+/// With `prices`, an opt-in estimate (#3934) is added next to, never into,
+/// the reported cost.
+fn run_pull_request_usage_command(
+    json: bool,
+    prices: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let prices = prices
+        .map(crate::price_estimate::PriceTable::load)
+        .transpose()?;
     rustcode::data_store::ensure_ready()?;
-    let answer = rustcode::data_store::pull_request_outcomes()?;
+    let mut answer = rustcode::data_store::pull_request_outcomes()?;
+    let priced = prices
+        .as_ref()
+        .map(|table| table.annotate(&mut answer.rows));
     if json {
+        let mut body = serde_json::json!({ "rows": answer.rows });
+        if let (Some(table), Some(priced)) = (&prices, priced) {
+            body["estimate"] = serde_json::json!({
+                "source": table.source,
+                "as_of": table.as_of,
+                "models_priced": priced,
+                "note": "RustCode's estimate from this price file, not a cost the harness reported",
+            });
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "rows": answer.rows }))
-                .map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&body).map_err(|error| error.to_string())?
         );
         return Ok(());
     }
@@ -524,7 +543,7 @@ fn run_pull_request_usage_command(json: bool) -> Result<(), String> {
         .rows
         .iter()
         .map(|row| {
-            vec![
+            let mut cells = vec![
                 text(row, "harness"),
                 text(row, "model"),
                 count(row, "pull_requests"),
@@ -537,29 +556,45 @@ fn run_pull_request_usage_command(json: bool) -> Result<(), String> {
                 count(row, "reverted"),
                 real(row, "cost_per_merged_pr").map_or_else(dash, |cost| format!("${cost:.2}")),
                 count(row, "tokens_per_merged_pr"),
-            ]
+            ];
+            if prices.is_some() {
+                cells.push(
+                    real(row, "estimated_cost_per_merged_pr")
+                        .map_or_else(dash, |cost| format!("~${cost:.2}")),
+                );
+            }
+            cells
         })
         .collect();
     println!("RustCode usage · linked pull requests per harness and model");
-    println!(
-        "Cost is reported by the harness, blank when it reports none; RustCode does not price requests.\n"
-    );
-    print_rows(
-        &[
-            "harness",
-            "model",
-            "PRs",
-            "merged",
-            "closed",
-            "merge share",
-            "CI fails",
-            "fix rounds",
-            "reverted",
-            "cost/merged",
-            "tokens/merged",
-        ],
-        &table,
-    );
+    println!("Cost is reported by the harness, blank when it reports none.");
+    match &prices {
+        Some(table) => println!(
+            "Estimated cost (~$) is RustCode's estimate from {}, prices as of {}; it is not what the harness reported. A model the file does not price shows —.\n",
+            table.source.trim(),
+            table.as_of.trim()
+        ),
+        None => println!(
+            "RustCode does not price requests; pass --prices <file> for a labelled estimate.\n"
+        ),
+    }
+    let mut headers = vec![
+        "harness",
+        "model",
+        "PRs",
+        "merged",
+        "closed",
+        "merge share",
+        "CI fails",
+        "fix rounds",
+        "reverted",
+        "cost/merged",
+        "tokens/merged",
+    ];
+    if prices.is_some() {
+        headers.push("est. cost/merged");
+    }
+    print_rows(&headers, &table);
     Ok(())
 }
 
@@ -995,10 +1030,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         since,
         json,
         pull_requests,
+        prices,
     }) = cli_args.command.as_ref()
     {
         let result = if *pull_requests {
-            run_pull_request_usage_command(*json)
+            run_pull_request_usage_command(*json, prices.as_deref())
         } else {
             run_usage_command(since.as_deref(), *json)
         };
