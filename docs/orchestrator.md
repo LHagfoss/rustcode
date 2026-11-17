@@ -1355,7 +1355,7 @@ call out, and a v10 app has neither the code nor the engine methods.
 | `read_project` | `{ path }` | `{ project: { path, name, is_git, remote?, branch?, default_branch?, threads, working, harness?, model?, registered } }` | None: a read, of this project or any while **Let agents read threads in other projects** is on |
 | `create_project` | `{ path, init? }` — `init` is true by default | `{ project: { …, created, initialized } }`: an existing folder is registered, a missing one is made, and a folder that is not a repository gets `git init` unless `init: false` | Asked, allowed by Full access, grant `project:<path>` |
 | `clone_project` | `{ url, parent?, name? }` | `{ project: { …, created: true } }`; a ten-minute `git clone`, then the folder is registered | Asked, allowed by Full access, grant `project:clone:<url>` |
-| `update_project` | `{ path, name?, harness?, model? }`, at least one | `{ project: { path, name, harness?, model? } }` | Asked, allowed by Full access, grant `project:<path>` |
+| `update_project` | `{ path, destination?, name?, harness?, model? }`, at least one | `{ project: { path, name, harness?, model? } }` | Asked, allowed by Full access, grant `project:<path>` |
 | `remove_project` | `{ path }` | `{ path, removed: true, known, files_deleted: false }` | Asked, allowed by Full access, grant `remove-project:<path>` |
 | `schedule_task` | `{ prompt, schedule, project?, name?, model_profile? }` — `schedule` is `{ kind: "cron", expression, timezone? }` or `{ kind: "at", at }` (ISO 8601 with its offset) | `{ daemon_running: true, task: { id, name, paused, schedule, workspace, next_due_at } }`; the prompt is never echoed back | Asked, allowed by Full access, grant `schedule:new` |
 | `list_scheduled_tasks` | none | `{ daemon_running, tasks: [{ id, name, paused, schedule, workspace, next_due_at }], omitted_tasks? }`, at most 100. `daemon_running: false` means nothing will run until `rustcode daemon start` | None |
@@ -1829,3 +1829,19 @@ again after that. Only RustCode's built-in harness runs its commands, so an
 external harness (Claude Code, Codex, …) that passes `env` is refused and told
 to use `destination`. A background command's own log file under the thread's
 task directory holds its raw output, as it did before.
+
+### Relocating a project through MCP
+
+`update_project({ path: "/code/old", destination: "/code/new" })` moves or renames
+that folder on the same filesystem. Its destination parent must exist and the
+destination must not exist. The approval names both paths; a display-name approval
+never authorizes a folder move. Project names/defaults follow the folder.
+
+Close every affected thread first, including idle threads still open in the engine.
+Ask from a thread in another project: a running thread cannot move its own folder.
+Thread IDs, transcripts and native harness session IDs stay intact; workspace,
+additional-directory, repository and harness paths follow the folder. Harnesses
+that scope native resume to a directory may start a fresh native session, as with
+changing a thread's project folder. Linked worktrees, submodules, shared Git
+objects, bare repositories and custom Git worktree paths are refused. A failed
+record write restores earlier records and the folder and reports rollback errors.

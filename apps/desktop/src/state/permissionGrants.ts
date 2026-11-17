@@ -39,6 +39,8 @@ export function describeGrantKey(key: string, titleOf: (id: string) => string | 
   switch (head) {
     case "project":
       return tail.startsWith("clone") ? "Clone a project" : `Change the project ${tail}`;
+    case "project-relocate":
+      return `Move the project ${tail}`;
     case "remove-project":
       return `Remove the project ${tail}`;
     case "schedule":

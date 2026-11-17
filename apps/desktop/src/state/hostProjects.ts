@@ -3,6 +3,7 @@
 
 import { type JsonObject, RpcError, str } from "../acp/jsonrpc";
 import { Method, projectName } from "../acp/types";
+import { writeStorage } from "../lib/storage";
 import {
   clonedOn,
   type MachineRef,
@@ -28,10 +29,11 @@ import {
   projectEntry,
   projectLabel,
   registerProject,
+  relocateProjectEntries,
   updateProjectEntry,
 } from "./projectBook";
 import { remoteRepository } from "./projects";
-import { errorText, request, useApp } from "./store";
+import { errorText, refreshSessions, request, useApp } from "./store";
 import { isRunning } from "./thread";
 import { LOCAL_HOST } from "./threadKeys";
 /** A folder as the project book files it, the same rule `projectOf` reads. */
@@ -255,9 +257,9 @@ export async function cloneProject(
 /** `update_project`: a display name, and the harness and model new threads there start on. */
 export async function updateProject(
   caller: RuleThread,
-  call: { path: string; name?: string; harness?: string; model?: string },
+  call: { path: string; destination?: string; name?: string; harness?: string; model?: string },
 ): Promise<JsonObject> {
-  const path = projectPath(call.path);
+  let path = projectPath(call.path);
   const harnesses = useApp.getState().harnesses?.harnesses ?? [];
   if (call.harness && !harnesses.some((h) => h.id === call.harness)) {
     return failureJson(
@@ -269,19 +271,50 @@ export async function updateProject(
   }
   // A model without a harness still says what it is: the folder's new threads start on it.
   const on = call.harness ?? call.model;
-  const no = await permitted(caller, `project:${path}`, {
-    kind: "project",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: path,
-    detail: `It would ${[
-      call.name && `call it “${call.name}”`,
-      on && `start new threads there on ${on}${call.harness && call.model ? ` with ${call.model}` : ""}`,
-    ]
-      .filter(Boolean)
-      .join(" and ")}. The folder itself is not touched.`,
-  });
+  const no = await permitted(
+    caller,
+    call.destination ? `project-relocate:${path}:${call.destination}` : `project:${path}`,
+    {
+      kind: "project",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: path,
+      detail: `It would ${[
+        call.destination &&
+          `move the folder to ${call.destination} and update its thread paths (affected threads must be closed)`,
+        call.name && `call it “${call.name}”`,
+        on && `start new threads there on ${on}${call.harness && call.model ? ` with ${call.model}` : ""}`,
+      ]
+        .filter(Boolean)
+        .join(
+          " and ",
+        )}. ${call.destination ? "Thread IDs and history are kept. Linked worktrees and cross-filesystem moves are refused." : "The folder itself is not touched."}`,
+    },
+  );
   if (no) return failureJson(no);
+  if (call.destination) {
+    const facts = await askProject(Method.projectRelocate, { path, destination: call.destination }, 60_000);
+    if (isFailure(facts)) return failureJson(facts);
+    const destination = projectPath(String(facts.path));
+    const source = projectPath(String(facts.previous_path ?? path));
+    relocateProjectEntries(path, destination);
+    if (source !== path) relocateProjectEntries(source, destination);
+    const movedPath = (value: string) =>
+      value === source || value === path
+        ? destination
+        : value.startsWith(`${source}/`)
+          ? destination + value.slice(source.length)
+          : value.startsWith(`${path}/`)
+            ? destination + value.slice(path.length)
+            : value;
+    useApp.setState((state) => ({
+      projectCwd: movedPath(state.projectCwd),
+      defaultCwd: movedPath(state.defaultCwd),
+    }));
+    writeStorage("rustcode.projectCwd", useApp.getState().defaultCwd);
+    path = destination;
+    await refreshSessions();
+  }
   const entry = updateProjectEntry(path, {
     name: call.name,
     harness: call.harness,

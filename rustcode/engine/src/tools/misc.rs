@@ -900,7 +900,7 @@ pub const CLONE_PROJECT: Tool = Tool {
 
 pub const UPDATE_PROJECT: Tool = Tool {
     name: crate::orchestration::UPDATE_PROJECT,
-    description: "Update one project's settings: a display name, and the harness and model new threads in that folder start on. Omitted fields are unchanged; a name is replaced, never cleared with \"\". The user approves it.",
+    description: "Set project name or new-thread harness/model. Omitted fields stay. destination moves its folder on one filesystem, keeping threads/history; close affected threads first. User approval required.",
     arguments: r#"{"path": "/abs/project", "name": "RustCode", "harness": "claude-code", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -909,8 +909,9 @@ pub const UPDATE_PROJECT: Tool = Tool {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "minLength": 1},
-                "name": {"type": "string", "minLength": 1, "maxLength": 200, "description": "display name in the sidebar; the folder's own name when unset"},
-                "harness": {"type": "string", "minLength": 1, "description": "harness id a new thread here starts on, from list_harnesses"},
+                "destination": {"type": "string", "minLength": 1, "description": "absolute new path; existing parent"},
+                "name": {"type": "string", "minLength": 1, "maxLength": 200, "description": "sidebar name"},
+                "harness": {"type": "string", "minLength": 1, "description": "id from list_harnesses"},
                 "model": {"type": "string", "minLength": 1}
             },
             "required": ["path"],
