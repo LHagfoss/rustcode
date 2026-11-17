@@ -149,19 +149,25 @@ export function BlockedImage({ path, reason, remote }: { path: string; reason: s
       : appPlatform() === "mac"
         ? "Reveal in Finder"
         : "Reveal in File Manager";
+  // Its own line, as a picture would be, and only as wide as it needs: inline it wrapped the
+  // sentence around it, and a full-width reason line stretched it across the reply.
   return (
-    <span className="inline-flex max-w-full flex-wrap items-center gap-2 rounded-md bg-fill-subtle px-2 py-1 align-middle text-callout text-fg-muted">
+    <span className="my-1 flex w-fit max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md bg-fill-subtle py-0.5 pr-1 pl-2 text-callout text-fg-muted">
       <ImageOff size={12} className="shrink-0" />
-      <span className="min-w-0 break-all font-mono">{path}</span>
-      <span className="basis-full truncate" title={reason}>
+      <span className="min-w-0 break-all font-mono text-caption">{path}</span>
+      <span className="min-w-0 truncate text-fg-faint" title={reason}>
         {reason.split("\n")[0]}
       </span>
       {/* A paired machine's file is not on this computer to open or reveal. */}
       {!remote && (
-        <>
-          <Pill onClick={() => openPath(path)}>Open</Pill>
-          <Pill onClick={() => revealPath(path)}>{reveal}</Pill>
-        </>
+        <span className="flex shrink-0 items-center">
+          <Pill quiet size="sm" onClick={() => openPath(path)}>
+            Open
+          </Pill>
+          <Pill quiet size="sm" onClick={() => revealPath(path)}>
+            {reveal}
+          </Pill>
+        </span>
       )}
     </span>
   );
