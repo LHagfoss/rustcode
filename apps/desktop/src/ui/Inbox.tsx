@@ -342,16 +342,16 @@ export function NeedsYouRow({ threadIds }: { threadIds: ReadonlySet<string> }) {
   const count = filteredNeedsCount(items, threadIds);
   if (!count) return null;
   return (
-    <div className="shrink-0 px-2 pb-1.5">
+    <div className="shrink-0 px-3 pb-1.5">
       <button
         type="button"
         onClick={() => setView({ kind: "inbox" })}
         aria-current={here ? "page" : undefined}
         title="Threads in the current filter that need you. Open the inbox for all projects."
-        className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body hover:bg-fill"
+        className="flex h-[38px] w-full items-center gap-2 rounded-md px-3 text-left text-callout text-fg-muted hover:bg-fill hover:text-fg"
       >
         <Hand size={14} className="shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
-        <span className="min-w-0 flex-1 truncate font-medium text-fg">Needs you</span>
+        <span className="min-w-0 flex-1 truncate font-medium">Needs you</span>
         <span
           key={count}
           className="rc-count-roll shrink-0 rounded-full bg-warning/14 px-1.5 font-medium text-caption text-warning tabular"
