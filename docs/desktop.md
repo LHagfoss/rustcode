@@ -2058,7 +2058,7 @@ and switching back to Stable never offers a downgrade (a beta is already newer
 than the release before it). On Beta the row reads **Update to
 1.21.0-beta.3**, with **Skip this beta** under it: that version is kept out of
 the row across restarts (`rustcode.skippedBeta`) and the next beta is offered
-as usual. **Install updates automatically** (Settings › About, on by default,
+as usual. **Install updates automatically** (Settings › About, off by default,
 `rustcode.autoInstallUpdates`) installs an offered release by itself once no
 thread is working: no running turn, no background command a turn waits on, no
 pending approval or question (`autoInstallDecision` in `state/updates.ts`).

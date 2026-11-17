@@ -33,7 +33,7 @@ const UPDATED_FROM_KEY = "rustcode.updatedFrom";
 const CHANNEL_KEY = "rustcode.updateChannel";
 /** The one beta the user skipped; the next beta is offered as usual. */
 const SKIPPED_KEY = "rustcode.skippedBeta";
-/** "Install updates automatically" (Settings › About): "0" is off, anything else (or nothing) is on. */
+/** "Install updates automatically" (Settings › About): "1" is on, anything else (or nothing) is off. */
 const AUTO_KEY = "rustcode.autoInstallUpdates";
 /** How often a found update asks again whether the app is idle yet. */
 export const AUTO_INSTALL_RETRY_MS = 10_000;
@@ -154,9 +154,9 @@ export function readChannel(value: string | null): UpdateChannel {
   return value === "beta" ? "beta" : "stable";
 }
 
-/** `autoInstall` as stored: on unless the user turned it off. */
+/** `autoInstall` as stored: off unless the user turned it on. */
 export function readAutoInstall(value: string | null): boolean {
-  return value !== "0";
+  return value === "1";
 }
 
 /** Whether a version is a prerelease: a beta, as `1.21.0-beta.2`. */
@@ -433,7 +433,7 @@ export function maybeAutoInstall() {
 /** Turn "Install updates automatically" on or off (Settings › About). Turning it on installs a waiting update. */
 export function setAutoInstall(enabled: boolean) {
   if (enabled === useUpdates.getState().autoInstall) return;
-  write(AUTO_KEY, enabled ? null : "0");
+  write(AUTO_KEY, enabled ? "1" : "0");
   useUpdates.setState({ autoInstall: enabled });
   if (enabled) {
     useUpdates.setState({ backoff: null });

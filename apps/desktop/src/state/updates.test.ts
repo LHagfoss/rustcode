@@ -205,10 +205,10 @@ describe("automatic install", () => {
     expect(anyThreadBusy({ a: { ...idle, permissions: [{}] } })).toBe(true);
   });
 
-  test("the setting is on unless it was turned off", () => {
-    expect(readAutoInstall(null)).toBe(true);
-    expect(readAutoInstall("1")).toBe(true);
+  test("the setting is off unless it was turned on", () => {
+    expect(readAutoInstall(null)).toBe(false);
     expect(readAutoInstall("0")).toBe(false);
+    expect(readAutoInstall("1")).toBe(true);
   });
 });
 

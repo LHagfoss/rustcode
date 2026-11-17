@@ -196,14 +196,15 @@ pub struct RemoteConfig {
 pub struct ServerConfig {
     /// A server running as a background service installs the newest stable
     /// release by itself once no turn is running, then restarts onto it
-    /// (`docs/server.md` › Staying up to date). On by default.
-    #[serde(default = "default_true")]
+    /// (`docs/server.md` › Staying up to date). Off by default: an install
+    /// restarts the server, so turning it on is the user's decision.
+    #[serde(default = "default_false")]
     pub auto_update: bool,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self { auto_update: true }
+        Self { auto_update: false }
     }
 }
 
