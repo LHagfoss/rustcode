@@ -17,6 +17,11 @@ function useAnyRunning() {
   });
 }
 
+/** Settings is open over the chat: the chat's light holds still under it (its own swatches move). */
+function useCovered() {
+  return useApp((s) => s.settings !== null);
+}
+
 /** Mounted after the first paint, in idle time: the light is never what the screen waits for. */
 function useIdleMount() {
   const [ready, setReady] = useState(false);
@@ -34,12 +39,13 @@ function useIdleMount() {
 export function NewThreadLight() {
   const harness = useApp((s) => newThreadChoice(s)?.harness);
   const busy = useAnyRunning();
+  const covered = useCovered();
   const ready = useIdleMount();
   const cfg = useLiveBackdrop();
   if (!ready || cfg.source === "off") return null;
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0">
-      <LiveBackdrop surface="new" harness={harness} busy={busy} />
+      <LiveBackdrop surface="new" harness={harness} busy={busy} covered={covered} />
     </div>
   );
 }
@@ -61,6 +67,7 @@ export function ThreadLight({
   const status = useApp((s) => statusOf(s, threadId));
   const harness = useApp((s) => s.threads[threadId]?.harness?.id);
   const failed = useApp((s) => !!s.threads[threadId]?.error);
+  const covered = useCovered();
   const ready = useIdleMount();
   const cfg = useLiveBackdrop();
 
@@ -79,7 +86,7 @@ export function ThreadLight({
   const height = `min(64%, ${Math.round(Math.max(0, stackHeight - 3) * 1.89)}px)`;
   return (
     <div aria-hidden className="rc-live-band rc-fade-in" style={{ height }}>
-      <LiveBackdrop surface="thread" harness={harness} status={status} />
+      <LiveBackdrop surface="thread" harness={harness} status={status} covered={covered} />
     </div>
   );
 }

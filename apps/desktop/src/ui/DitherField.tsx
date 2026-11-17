@@ -1,7 +1,7 @@
 // design-lint: allow-file (the glyph atlas is a white mask, tinted by the field)
 // Ported from Sable (https://github.com/Leonxlnx/sable, src/art/DitherField.tsx), MIT License,
-// Copyright (c) 2026 Leonxlnx. RustCode's changes: no dialog cover (Settings is a page here, and
-// the chat's field unmounts under it), no launch piece on the shared worker, no dev hooks, and
+// Copyright (c) 2026 Leonxlnx. RustCode's changes: the host says when a dialog covers the field
+// (`covered`) instead of the field reading app state, no launch piece on the shared worker, no dev hooks, and
 // the beat event is `rustcode:field`.
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
@@ -334,6 +334,8 @@ interface Props extends Partial<Omit<Look, "pointer" | "react">> {
   reactGain?: number;
   /** A turn is running: the field never rests meanwhile. */
   awake?: boolean;
+  /** Something covers the field (Settings over the chat): it holds still underneath. */
+  covered?: boolean;
   /** An image drawn in place of the pattern. */
   image?: ImageBitmap | null;
   opacity?: number;
@@ -363,6 +365,7 @@ export function DitherField({
   react = true,
   reactGain = 1,
   awake = false,
+  covered = false,
   image = null,
   opacity = 1,
   className,
@@ -375,6 +378,8 @@ export function DitherField({
   ground,
 }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
+  const coveredRef = useRef(covered);
+  coveredRef.current = covered;
   const syncRef = useRef<() => void>(() => {});
   const port = useRef<Port | null>(null);
   const tex = texture;
@@ -579,7 +584,7 @@ export function DitherField({
     let moving: boolean | null = null;
     let unwatch: (() => void) | null = null;
     const sync = () => {
-      const next = visible && !document.hidden && !parked;
+      const next = visible && !document.hidden && !parked && !coveredRef.current;
       const animate = animRef.current && !reduced.matches;
       if (next === running && animate === moving) return;
       running = next;
@@ -715,6 +720,11 @@ export function DitherField({
   useEffect(() => {
     relayout.current();
   }, [tex, cell, image != null]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: whether it is covered is read through a ref
+  useEffect(() => {
+    syncRef.current();
+  }, [covered]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: whether it moves is read through a ref
   useEffect(() => {

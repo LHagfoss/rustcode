@@ -1013,8 +1013,10 @@ composer's keys stay outside the table.
   Still, Mono, Vivid), Pattern, Texture, Colour (the harness's: Claude orange,
   Codex blue, Gemini a spectrum, OpenCode grey, the accent for RustCode and the
   rest; Mono; or a custom hue), strength on new and open threads, Speed,
-  Detail and React. A chosen chat background picture takes its place on new
-  threads. On a light theme the field is drawn as ink below the pane colour
+  Detail and React; the group's Reset also puts back what a preset sets
+  without a row (focus, reach, angle). A chosen chat background picture takes
+  its place on new threads. The chat's field holds still while Settings is open
+  over it; the swatches in Settings keep moving. On a light theme the field is drawn as ink below the pane colour
   instead of light above it.
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
   machine's switch: **Network access** turned on starts the remote gateway
