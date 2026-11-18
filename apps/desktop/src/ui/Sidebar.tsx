@@ -604,10 +604,10 @@ const SWAPPED_ON_HOVER = cx(
  * takes what it needs (a running turn's "Working 12:07", the model), so the right side is never
  * cut and one line's right part never narrows another line's left one.
  */
-const ROW_HEIGHT = 70;
-/** Three lines: the title alone; its state, time and model; where it runs and its marks. */
-const ROW_GRID = "grid h-[70px] grid-rows-[22px_18px_18px] content-center rounded-xl px-3";
-/** Lines 2 and 3 start where the title does, past the project mark (14px and its 6px gap). */
+const ROW_HEIGHT = 54;
+/** Two lines: the title with its state and time; where it runs, its marks and its model. */
+const ROW_GRID = "grid h-[54px] grid-rows-[22px_18px] content-center rounded-xl px-3";
+/** Line 2 starts where the title does, past the project mark (14px and its 6px gap). */
 const ROW_INDENT = "pl-5";
 /** One line of the row: its left part and its right part. */
 const ROW_LINE = "flex min-w-0 items-center gap-2";
@@ -893,8 +893,8 @@ const ThreadRow = memo(function ThreadRow({
       <span className="normal-nums">{model || harnessName}</span>
     </span>
   );
-  // Line 3's end: what it started, its pull request, and a remote computer's glyph when the line
-  // names its branch rather than the computer.
+  // Line 2's marks before the model: what it started, its pull request, and a remote computer's
+  // glyph when the line names its branch rather than the computer.
   const details = (
     <span className="ml-auto flex shrink-0 items-center gap-1.5">
       {delegates && (
@@ -1044,7 +1044,7 @@ const ThreadRow = memo(function ThreadRow({
                 </>
               ) : (
                 <>
-                  {/* Line 1: the title on a line of its own (hover actions take its end). */}
+                  {/* Line 1: the title, then its state and time (hover actions take their place). */}
                   <span className={ROW_LINE}>
                     <span className={ROW_LEFT}>
                       <ProjectMark name={project} size={14} className={markTint} />
@@ -1062,16 +1062,16 @@ const ThreadRow = memo(function ThreadRow({
                         {session.title || "New thread"}
                       </span>
                     </span>
-                    {/* Room for the hover actions, and none at rest: the title takes the line. */}
-                    <span aria-hidden className={cx("flex-none", ACTIONS_ROOM)} />
+                    {/* What it is doing and since when; the hover actions take its place. */}
+                    <span
+                      title={chip?.title}
+                      className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
+                    >
+                      <span className="flex min-w-0 items-center justify-end">{state}</span>
+                    </span>
                   </span>
-                  {/* Line 2: what it is doing and since when, then its model. */}
-                  <span title={chip?.title} className={cx(ROW_LINE, ROW_INDENT, "text-sub text-fg-muted")}>
-                    {state}
-                    {modelMark}
-                  </span>
-                  {/* Line 3: its worktree, branch or folder cut in the middle (else its computer), then
-                      its marks. */}
+                  {/* Line 2: its worktree, branch or folder cut in the middle (else its computer), then
+                      its marks and its model against the edge. */}
                   <span className={cx(ROW_LINE, ROW_INDENT, "gap-1.5 text-sub text-fg-muted")}>
                     {where.kind === "none" ? (
                       machineLabel
@@ -1082,6 +1082,7 @@ const ThreadRow = memo(function ThreadRow({
                       />
                     )}
                     {details}
+                    {modelMark && <span className="flex shrink-0">{modelMark}</span>}
                   </span>
                 </>
               )}

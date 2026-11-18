@@ -1246,9 +1246,9 @@ composer's keys stay outside the table.
   `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`).
   Needs you counts distinct threads in the active filter; its inbox opens all
   projects. Approval and question rows keep their sort position. Detailed thread
-  rows are three short lines (`docs/design.md` › Sidebar rows): the title alone,
-  then the state with its time and the model, then the branch, worktree or folder
-  cut in the middle (else the computer) with delegates and the pull request.
+  rows are two lines (`docs/design.md` › Sidebar rows): the title with the state
+  and its time, then the branch, worktree or folder cut in the middle (else the
+  computer), delegates, the pull request and the model.
   *Sidebar rows: Compact* (Settings › Appearance, or
   ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`) draws each thread on
   one 28px line instead: a status dot (needs you, working, failed, finished

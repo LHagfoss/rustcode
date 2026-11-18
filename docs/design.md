@@ -752,19 +752,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   the chevron.
 - **Sidebar rows:** project groups inset their threads by 32px. A full-width New thread
   button sits above search, and a hairline and the Threads label set it apart from the
-  list. A detailed thread row is a fixed grid of three short lines, 70px tall, with
-  `rounded-xl` (`ui/Sidebar.tsx` `ROW_GRID`), so every row has the same height. Line 1 is the
-  project mark and the title on its own, in one weight whatever the thread does; the hover
-  actions take its end. Lines 2 and 3 start where the title does. Line 2 is the state as an
-  icon and a word in its tone, medium weight, as T3 Code's sidebar has it (Working turns
-  slowly; Approval, Input, Waiting, Failed, Done, Review), then always a time (the running
-  turn's clock, else its age), and against the edge the harness mark with its model name.
-  Line 3 is where it runs (`state/sidebarGroups.ts` `rowWhere`: a worktree's branch, a branch
-  off the default one, or a subfolder), cut in the middle at its real width
+  list. A detailed thread row is a fixed grid of two lines, 54px tall, with `rounded-xl`
+  (`ui/Sidebar.tsx` `ROW_GRID`), so every row has the same height. Line 1 is the project
+  mark and the title, in one weight whatever the thread does, then the state as an icon and
+  a word in its tone, medium weight, as T3 Code's sidebar has it (Working turns slowly;
+  Approval, Input, Waiting, Failed, Done, Review), then always a time: the running turn's
+  clock, else its age. The hover actions take the state's place. Line 2 starts where the
+  title does: where it runs (`state/sidebarGroups.ts` `rowWhere`: a worktree's branch, a
+  branch off the default one, or a subfolder), cut in the middle at its real width
   (`ui/MiddleTruncate.tsx`, adapted from T3 Code), else the computer it runs on; then
-  delegates, the pull request and a remote computer's glyph. Nothing else on a row is cut but
-  the title and that place. The Threads label carries no count and sits close above its
-  rows. Each line
+  delegates, the pull request, a remote computer's glyph, and against the edge the harness
+  mark with its model name, never cut. The Threads label carries no count and sits close
+  above its rows. Each line
   is a left part that truncates and a right part against the row's edge that
   takes what it needs (at least 76px on line 1, room for the three 24px hover
   actions), so the right side is never cut and every right edge lines up.
