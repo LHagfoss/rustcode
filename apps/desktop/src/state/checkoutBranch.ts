@@ -4,7 +4,16 @@ import { Method, type SessionSummary } from "../acp/types";
 import { connectionForThread } from "./store";
 
 // Share reads between threads in one checkout, and bound concurrent git processes.
-const cache = new Map<string, { at: number; value?: string; pending?: Promise<string | undefined> }>();
+/** A checkout's branch and its repository's default branch (`_rustcode/project/read`). */
+export interface CheckoutBranch {
+  branch?: string;
+  defaultBranch?: string;
+}
+
+const cache = new Map<
+  string,
+  { at: number; value?: CheckoutBranch; pending?: Promise<CheckoutBranch | undefined> }
+>();
 const queue: (() => void)[] = [];
 let active = 0;
 function run<T>(task: () => Promise<T>): Promise<T> {
@@ -27,7 +36,7 @@ export function readCheckoutBranch(
   id: string,
   cwd: string,
   host: string | undefined,
-): Promise<string | undefined> {
+): Promise<CheckoutBranch | undefined> {
   const conn = connectionForThread(id);
   if (!conn || !cwd) return Promise.resolve(undefined);
   const key = JSON.stringify([host ?? "", cwd]);
@@ -36,8 +45,8 @@ export function readCheckoutBranch(
   if (previous && Date.now() - previous.at < 30_000) return Promise.resolve(previous.value);
   const pending = run(async () => {
     try {
-      const response = await conn.request(Method.projectRead, { path: cwd }, 15_000);
-      return str(obj(response)?.branch);
+      const response = obj(await conn.request(Method.projectRead, { path: cwd }, 15_000));
+      return { branch: str(response?.branch), defaultBranch: str(response?.default_branch) };
     } catch {
       return undefined;
     }
@@ -54,8 +63,8 @@ export function useCheckoutBranch(
   session: SessionSummary,
   connectionState: string | undefined,
   enabled: boolean,
-): string | undefined {
-  const [branch, setBranch] = useState<string>();
+): CheckoutBranch | undefined {
+  const [branch, setBranch] = useState<CheckoutBranch>();
   const { id, cwd, host } = session;
   useEffect(() => {
     void connectionState;
@@ -63,7 +72,11 @@ export function useCheckoutBranch(
     let live = true;
     const refresh = () =>
       void readCheckoutBranch(id, cwd, host).then((value) => {
-        if (live) setBranch(value);
+        // The same read keeps the same object, so a refresh that finds nothing new redraws no row.
+        if (live)
+          setBranch((old) =>
+            old?.branch === value?.branch && old?.defaultBranch === value?.defaultBranch ? old : value,
+          );
       });
     refresh();
     window.addEventListener("focus", refresh);

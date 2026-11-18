@@ -751,9 +751,14 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
 - **Sidebar rows:** project groups inset their threads by 32px. A full-width New thread
-  button sits above search. Every detailed thread row is one fixed grid of two lines, 54px
-  tall whatever it holds, with `rounded-xl`, so a column of rows reads as a
-  table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`). Each line
+  button sits above search, and a hairline and the Threads label set it apart from the
+  list. A detailed thread row is a fixed grid of two lines, 54px tall, with `rounded-xl`, so a
+  column of rows reads as a table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`).
+  Line 2 names where the thread runs only when that says something (`state/sidebarGroups.ts`
+  `rowWhere`): a worktree's branch, a branch off the default one, or a subfolder. A row in its
+  project's checkout on the default branch says nothing there, so it is line 1 alone at 36px
+  (`ROW_ONE_LINE`), its harness mark, delegates, pull request and machine before the state and
+  its model in the mark's tooltip. Each line
   is a left part that truncates and a right part against the row's edge that
   takes what it needs (at least 76px on line 1, room for the three 24px hover
   actions), so the right side is never cut and every right edge lines up.

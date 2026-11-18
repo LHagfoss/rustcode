@@ -67,6 +67,8 @@ export function SidebarToolbar() {
           <Repeat size={14} />
         </NavRow>
       </nav>
+      {/* A hairline sets the actions apart from the list under them. */}
+      <div aria-hidden className="mx-1 border-border border-b" />
       {filtering && (
         <div className="flex min-w-0 items-center">
           <span className="inline-flex h-6 min-w-0 items-center gap-1 rounded-full bg-accent/12 pr-1 pl-3 text-caption text-accent">
