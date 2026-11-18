@@ -1245,10 +1245,12 @@ composer's keys stay outside the table.
   Needs you counts distinct threads in the active filter; its inbox opens all
   projects. Approval and question rows keep their sort position. Detailed thread
   rows use a 54px grid of two lines (`docs/design.md` › Sidebar rows): the project
-  mark before the title and its state or age, then the working folder (home as
-  `~`, worktrees use their own folder, middle-truncated with the full path on
-  hover) and model or harness name, followed by running delegates, the pull request
-  and machine glyph. Machine names, branches and activity details stay on hover.
+  mark before the title and its state or age, then where it runs (a worktree's
+  branch, a branch off the default one, or a subfolder, with the full path on
+  hover; the project's name in the flat list) and model or harness name, followed
+  by running delegates, the pull request and machine glyph. A row on its
+  project's default branch under the project's heading has nothing to name and
+  is one 36px line. Machine names, branches and activity details stay on hover.
   Remote rows keep their machine glyph; local rows show it when the list spans
   several machines. *Sidebar rows: Compact* (Settings › Appearance, or
   ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`) draws each thread on

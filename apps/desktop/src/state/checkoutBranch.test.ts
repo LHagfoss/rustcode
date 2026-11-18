@@ -17,6 +17,6 @@ test("checkout branch reads are shared and a non-git folder has no branch", asyn
   const second = readCheckoutBranch(`${host}/b`, "/tmp/non-git", host);
   expect(frames).toHaveLength(1);
   conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frames[0]!.id, result: { branch: null } }));
-  expect(await first).toBeUndefined();
-  expect(await second).toBeUndefined();
+  expect((await first)?.branch).toBeUndefined();
+  expect((await second)?.branch).toBeUndefined();
 });

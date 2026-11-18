@@ -1,6 +1,7 @@
 import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
 import { copyThreadId } from "../state/deepLinks";
 import { HiddenDot, ProjectHeader, RowAction } from "./ProjectHeader";
+import { RowWhereLabel } from "./RowWhere";
 
 // The sidebar: a titlebar row clear of the traffic lights (the sidebar toggle and
 // Settings and search), the Needs you row, the navigation toolbar
@@ -9,7 +10,7 @@ import { HiddenDot, ProjectHeader, RowAction } from "./ProjectHeader";
 // the Snoozed and Settled shelves at the foot, each folding on its own header.
 // ⌘K searches threads too, and holds the actions (add project, pull requests,
 // usage). A section header never folds.
-// Thread rows keep two lines: folder mark and title with state, then path and model.
+// Thread rows keep two lines: folder mark and title with state, then branch or subfolder and model.
 // Delegates follow the model; the machine uses only its glyph. Branch and activity
 // details stay in the hover card. Hovering swaps the state for row actions.
 
@@ -28,7 +29,6 @@ import {
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
-import { middleEllipsis } from "../lib/folderList";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { onFileDrop, openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
@@ -74,6 +74,7 @@ import { type PendingSetup, pendingSummary } from "../state/setup";
 import {
   byProjectName,
   type ProjectGroup,
+  rowWhere,
   sidebarProjects,
   spansMachines,
   threadFolder,
@@ -611,6 +612,8 @@ const SWAPPED_ON_HOVER = cx(
  */
 const ROW_HEIGHT = 54;
 const ROW_GRID = "grid h-[54px] grid-rows-[22px_18px] content-center rounded-xl px-3";
+/** A row with no place to name: line 1 alone, at the offset it has in the two-line grid. */
+const ROW_ONE_LINE = "grid h-[36px] grid-rows-[22px] content-center rounded-xl px-3";
 /** One line of the row: its left part and its right part. */
 const ROW_LINE = "flex min-w-0 items-center gap-2";
 /** A line's left part: truncated. */
@@ -704,35 +707,9 @@ function PullMark({ pull }: { pull: PullRequest }) {
   );
 }
 
-/** Fit both ends of a folder path to the space the row actually gives it. */
-function MiddlePath({ path }: { path: string }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const [chars, setChars] = useState(32);
-  const font = useApp((s) => s.font);
-  const textSize = useApp((s) => s.textSize);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new font or text size changes the em, not the box, so measure again
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    // An average character is just under 0.6em in the app's faces (7px at Small's 12px); reading the
-    // size keeps the estimate right at every Text size and font.
-    const observer = new ResizeObserver(([entry]) => {
-      const em = Number.parseFloat(getComputedStyle(node).fontSize) || 12;
-      if (entry) setChars(Math.max(5, Math.floor(entry.contentRect.width / (em * 0.58))));
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [font, textSize]);
-  return (
-    <span ref={ref} className="block overflow-hidden text-ellipsis whitespace-nowrap">
-      {middleEllipsis(path, chars)}
-    </span>
-  );
-}
-
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
 // Compact: a title and state.
-// Comfortable: the project mark and title, then folder and model. Hovering swaps the
+// Comfortable: the project mark and title, then branch or subfolder and model. Hovering swaps the
 // slot for the row's actions in both, so nothing shifts.
 const ThreadRow = memo(function ThreadRow({
   session,
@@ -751,6 +728,7 @@ const ThreadRow = memo(function ThreadRow({
   settleKey,
   onClearSelection,
   compact,
+  grouped,
 }: {
   session: SessionSummary;
   selected: boolean;
@@ -782,6 +760,8 @@ const ThreadRow = memo(function ThreadRow({
   onClearSelection?: () => void;
   /** The sidebar's compact density: one line, the rest on the hover card. */
   compact?: boolean;
+  /** Under its project's heading, which already names where it runs. */
+  grouped?: boolean;
 }) {
   // The computer a thread runs on, when that is not this one: its row carries the glyph and name,
   // and the hover card says so. A thread from this computer carries nothing.
@@ -798,8 +778,8 @@ const ThreadRow = memo(function ThreadRow({
   const wake = useApp((s) => s.snoozed[session.id]);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
-  const checkoutBranch = useCheckoutBranch(session, host?.state, !worktree);
-  const gitBranch = worktree?.branch || checkoutBranch;
+  const checkout = useCheckoutBranch(session, host?.state, !worktree);
+  const gitBranch = worktree?.branch || checkout?.branch;
   const harnesses = useApp((s) => s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
   // A settle or pin made while its machine was away, waiting to be sent (state/machineOutbox.ts).
@@ -843,9 +823,10 @@ const ThreadRow = memo(function ThreadRow({
   // What the row cannot spell out, on its hover card (ui/ThreadHoverCard.tsx).
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
   const model = modelName(session.model);
-  // The folder it runs in, as people read it (`~/code/app`, `C:\code\app`).
-  const folderPath = threadFolder({ ...session, worktree });
-  const folder = folderPath ? displayPath(folderPath) : "No folder";
+  // Its branch or subfolder, else nothing its project's heading already says (`rowWhere`).
+  const where = rowWhere({ session: { ...session, worktree }, ...checkout, grouped: !!grouped });
+  // Nothing to say about where it runs: the row is its title line alone, its details beside the state.
+  const oneLine = where.kind === "none";
   const startRename = () => {
     // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
     // says so instead of opening an editor whose save would only be refused (store.ts).
@@ -911,6 +892,48 @@ const ThreadRow = memo(function ThreadRow({
             name: local.displayName ?? selfName(),
           }
         : undefined;
+  // The harness mark always accompanies the model, which a one-line row leaves to its tooltip.
+  const details = (
+    <>
+      {(model || harnessName) && (
+        <span title={oneLine ? model || harnessName : undefined} className="flex shrink-0">
+          <HarnessIcon id={session.harness || "rustcode"} name={harness?.name} size={12} />
+        </span>
+      )}
+      {/* Normal figures: a tabular face (Inter) gives a model name's hyphens a digit's width. */}
+      {(model || harnessName) && !oneLine && (
+        <span className="min-w-0 max-w-[96px] truncate normal-nums" title={model || harnessName}>
+          {model || harnessName}
+        </span>
+      )}
+      {delegates && (
+        <Tooltip label={delegates.title}>
+          <span
+            role="img"
+            aria-label={delegates.title}
+            className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
+          >
+            <Bot size={12} />
+            {delegates.count}
+          </span>
+        </Tooltip>
+      )}
+      {pull && <PullMark pull={pull} />}
+      {place && (
+        <span
+          className="flex min-w-0 max-w-[104px] shrink items-center gap-1 text-sub text-fg-muted"
+          title={
+            unsynced
+              ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
+              : `Runs on ${place.name}`
+          }
+        >
+          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
+          {unsynced && <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />}
+        </span>
+      )}
+    </>
+  );
   // The one thing a row says at the end of its first line: what the thread is doing, else the hour
   // a snoozed one wakes, else its age, with a settled thread's check before it.
   const age = (
@@ -981,7 +1004,10 @@ const ThreadRow = memo(function ThreadRow({
               }}
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
-              className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
+              className={cx(
+                compact ? COMPACT_ROW : oneLine ? ROW_ONE_LINE : ROW_GRID,
+                "relative w-full text-left",
+              )}
             >
               <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
               {compact ? (
@@ -1052,65 +1078,22 @@ const ThreadRow = memo(function ThreadRow({
                       title={chip?.title}
                       className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
                     >
+                      {oneLine && details}
                       <span className="flex min-w-0 items-center justify-end">{state}</span>
                     </span>
                   </span>
-                  {/* Line 2: folder path, model, delegates and machine glyph. */}
-                  <span className={ROW_LINE}>
-                    <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-                      <span className="min-w-0 flex-1" title={folderPath}>
-                        <MiddlePath path={folder} />
-                      </span>
-                    </span>
-                    {/* The harness mark always accompanies the model. */}
-                    <span className={cx(ROW_RIGHT, "text-sub text-fg-muted")}>
-                      {(model || harnessName) && (
-                        <HarnessIcon
-                          id={session.harness || "rustcode"}
-                          name={harness?.name}
-                          size={12}
-                          className="shrink-0"
+                  {/* Line 2, when it has a place to say: branch or subfolder, then the details. */}
+                  {!oneLine && (
+                    <span className={ROW_LINE}>
+                      <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+                        <RowWhereLabel
+                          where={where}
+                          title={displayPath(threadFolder({ ...session, worktree }))}
                         />
-                      )}
-                      {/* Normal figures: a tabular face (Inter) gives a model name's hyphens a digit's width. */}
-                      {(model || harnessName) && (
-                        <span
-                          className="min-w-0 max-w-[96px] truncate normal-nums"
-                          title={model || harnessName}
-                        >
-                          {model || harnessName}
-                        </span>
-                      )}
-                      {delegates && (
-                        <Tooltip label={delegates.title}>
-                          <span
-                            role="img"
-                            aria-label={delegates.title}
-                            className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
-                          >
-                            <Bot size={12} />
-                            {delegates.count}
-                          </span>
-                        </Tooltip>
-                      )}
-                      {pull && <PullMark pull={pull} />}
-                      {place && (
-                        <span
-                          className="flex min-w-0 max-w-[104px] shrink items-center gap-1 text-sub text-fg-muted"
-                          title={
-                            unsynced
-                              ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
-                              : `Runs on ${place.name}`
-                          }
-                        >
-                          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
-                          {unsynced && (
-                            <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />
-                          )}
-                        </span>
-                      )}
+                      </span>
+                      <span className={cx(ROW_RIGHT, "text-sub text-fg-muted")}>{details}</span>
                     </span>
-                  </span>
+                  )}
                 </>
               )}
             </button>
@@ -1434,7 +1417,7 @@ function SectionHeader({
 /** The heading of Pinned or Threads: it names the group and never folds. */
 function SectionLabel({ section }: { section: Section }) {
   return (
-    <div className="flex h-8 w-full items-center gap-2 px-2 font-medium text-fg-muted text-body">
+    <div className="flex h-7 w-full items-center gap-2 px-2 font-medium text-caption text-fg-faint">
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
       <span className="shrink-0 font-normal text-fg-faint">
         <RollingNumber value={section.items.length} />
@@ -1881,11 +1864,11 @@ export function Sidebar() {
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
-  // The first shelf starts the foot of the list; the sections above it name themselves only while
-  // there is more than one of them (state/sidebarRows.ts `sectionLabelled`).
+  // The first shelf starts the foot of the list; Pinned and Threads name themselves (`sectionLabelled`).
   const firstShelf = sections.find((g) => isShelf(g.id, layoutMode))?.id;
   const shownIds = sections.map((g) => g.id);
-  const labelled = (id: SectionId) => sectionLabelled(id, shownIds, layoutMode);
+  const labelled = (id: SectionId) =>
+    sectionLabelled(id, shownIds, layoutMode) || (toolbarOn && id === "threads"); // under the hairline
   // The open delegate's parent may have been settled: the shelf opens for it and its slice of the
   // shelf grows to hold the row, so the row it hangs under is reachable rather than out of sight.
   const settledAt = settledSection
@@ -2298,9 +2281,10 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  const rowFor = (s: SessionSummary, _grouped: boolean, hint = true, nested = false) => (
+  const rowFor = (s: SessionSummary, grouped: boolean, hint = true, nested = false) => (
     <ThreadRow
       session={s}
+      grouped={grouped}
       selected={!loopsOpen && s.id === selectedId}
       context={!loopsOpen && s.id === contextSelected && s.id !== selectedId}
       // A row being dragged shows no hover card and takes no pointer.

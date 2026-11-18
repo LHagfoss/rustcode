@@ -7,6 +7,7 @@ import {
   byProjectName,
   filteredNeedsCount,
   hostOf,
+  rowWhere,
   sidebarProjects,
   spansMachines,
   threadFolder,
@@ -75,4 +76,35 @@ test("needs-you count includes only filtered threads and counts each once", () =
   expect(filteredNeedsCount(items, new Set([local.id]))).toBe(1);
   expect(filteredNeedsCount(items, new Set([local.id, linux.id]))).toBe(2);
   expect(filteredNeedsCount(items, new Set())).toBe(0);
+});
+
+test("a row says where it runs by branch, then subfolder, and nothing its heading says", () => {
+  const repo = "/Users/you/code/app";
+  const at = (cwd: string, extra: Partial<SessionSummary> = {}) => ({ cwd, repo, ...extra });
+  const wt = { path: "/Users/you/.rustcode/worktrees/app-login", branch: "fix/login", repo };
+  // A worktree names its branch whatever the checkout is on.
+  expect(rowWhere({ session: at(wt.path, { worktree: wt }), grouped: true })).toEqual({
+    kind: "worktree",
+    text: "fix/login",
+  });
+  // A detached worktree names its folder.
+  expect(rowWhere({ session: at(wt.path, { worktree: { ...wt, branch: "" } }), grouped: true }).kind).toBe(
+    "worktree",
+  );
+  // The checkout off its default branch names the branch; on it, it says nothing.
+  const off = { session: at(repo), branch: "feat/x", defaultBranch: "main", grouped: true };
+  expect(rowWhere(off)).toEqual({ kind: "branch", text: "feat/x" });
+  expect(rowWhere({ ...off, branch: "main" })).toEqual({ kind: "none" });
+  // An unread branch is not guessed at.
+  expect(rowWhere({ session: at(repo), grouped: true })).toEqual({ kind: "none" });
+  // A subfolder is named from the project's root, and a sibling folder is not taken for one.
+  expect(rowWhere({ session: at(`${repo}/apps/web`), grouped: true })).toEqual({
+    kind: "folder",
+    text: "apps/web",
+  });
+  expect(rowWhere({ session: at(`${repo}-old`), grouped: true })).toEqual({ kind: "none" });
+  // The flat list has no heading, so the project leads.
+  expect(rowWhere({ ...off, grouped: false })).toEqual({ kind: "branch", text: "app · feat/x" });
+  expect(rowWhere({ session: at(repo), grouped: false })).toEqual({ kind: "folder", text: "app" });
+  expect(rowWhere({ session: { cwd: "" }, grouped: true })).toEqual({ kind: "folder", text: "No folder" });
 });

@@ -3731,7 +3731,8 @@ export class MockEngine {
           name: path.split("/").filter(Boolean).pop() ?? path,
           is_git: true,
           remote: "https://github.com/LHagfoss/rustcode.git",
-          branch: "main",
+          // The website checkout sits on a feature branch, so a row shows it in place of a path.
+          branch: path.endsWith("/website") ? "redesign/pricing-page" : "main",
           default_branch: "main",
         };
       }
