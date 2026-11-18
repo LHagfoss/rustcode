@@ -9,14 +9,12 @@ keywords: interactive, widget, component, html, chart, slider, filter, sort, tog
 
 ## When
 
-Answer visually, asked or not: data, numbers, results, a status overview, a
-comparison, a breakdown, a plan or four or more parallel items go in a view (a
-chart, bars, stats, cards or a table), never a Markdown table or a long list.
-Only a short explanation, a single fact, code and diffs stay Markdown. A report
-to another thread stays plain Markdown.
+Answer visually, asked or not: data, numbers, results, status, comparisons,
+plans or 4+ items go in a view, never a Markdown table. Only short
+explanations, one fact, code and diffs stay Markdown, as does a report to
+another thread.
 
-Be brief. Around the view: one short line before it with the finding, nothing
-after it. The view carries the detail, so the text never walks through it.
+Be brief: one short line before the view with the finding, nothing after it.
 Caveats go in the view (`.rc-callout`, `.rc-muted`); sources go last in it,
 folded (Kit › Sources), never as a Markdown list after it.
 
