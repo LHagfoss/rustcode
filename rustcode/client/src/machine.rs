@@ -66,6 +66,11 @@ pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(150);
 
 /// How long one route may take to authenticate before the next is tried.
 pub const ROUTE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a LAN route may hold the credential lock while it signs in. Its
+/// socket is open and has said who it is by then, so the sign-in is a frame
+/// or two on a local network; a route that stalls there must leave the
+/// overlay routes behind it most of the race ([`crate::routes::RACE_DEADLINE`]).
+pub const LAN_SIGN_IN_TIMEOUT: Duration = Duration::from_secs(2);
 /// An SSH route's: the sign-in comes before the socket.
 pub const SSH_ROUTE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -775,8 +780,15 @@ impl Connector {
             // upgrade and then never answers holds this lock through the
             // per-frame timeout, and every other route behind it. Ending it
             // at the route timeout keeps the race's own deadline in charge.
+            // A LAN route gets less: the routes waiting behind it joined the
+            // race a grace later and share the same deadline.
+            let sign_in_timeout = if route.kind == RouteKind::Lan && bridge.is_none() {
+                route_timeout.min(LAN_SIGN_IN_TIMEOUT)
+            } else {
+                route_timeout
+            };
             let resolved = match tokio::time::timeout(
-                route_timeout,
+                sign_in_timeout,
                 self.authenticate_with(Some(opened), address, machine, tokens),
             )
             .await
@@ -784,7 +796,7 @@ impl Connector {
                 Ok(result) => result.and_then(|session| session.check(machine).map(|()| session)),
                 Err(_) => Err(anyhow::anyhow!(
                     "the credential handshake did not finish in {:.1}s",
-                    route_timeout.as_secs_f64()
+                    sign_in_timeout.as_secs_f64()
                 )),
             };
             match resolved {
