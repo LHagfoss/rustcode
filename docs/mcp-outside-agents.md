@@ -81,6 +81,12 @@ runs it; Decline, no answer in two minutes, revoking the app, or lowering its
 access while you decide, refuse it. Turn "Ask me first" off per app to let it
 act without asking.
 
+When no RustCode app is connected to the machine to show the card (a headless
+server, or the app closed), such a call is refused at once instead of waiting
+two minutes for nobody, and the agent is told to open the app or run
+`rustcode outside update <id> --ask false` there. A paired app that has the
+machine online counts as connected.
+
 ## What the agent is told
 
 The server instructions say what RustCode is, the app's name and level, and

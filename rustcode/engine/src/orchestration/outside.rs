@@ -867,6 +867,10 @@ pub struct Settings {
     pub grants: PathBuf,
     pub data: Option<PathBuf>,
     pub approval_wait: Duration,
+    /// Refuse at once a call that would ask while no app can answer it,
+    /// instead of waiting [`APPROVAL_WAIT`] for nobody. Off in tests that
+    /// answer the pending call themselves.
+    pub needs_approver: bool,
 }
 
 impl Settings {
@@ -875,6 +879,7 @@ impl Settings {
             grants: grant_path()?,
             data: crate::data_store::data_path(),
             approval_wait: APPROVAL_WAIT,
+            needs_approver: true,
         })
     }
 }
@@ -1015,6 +1020,17 @@ pub(super) async fn answer_transport_with(
         ));
     }
     if grant.ask && changes_things(tool, &request.args) {
+        if settings.needs_approver && !approver_connected() {
+            record(
+                settings,
+                &grant,
+                tool,
+                "declined",
+                started,
+                Some("no app to ask".into()),
+            );
+            return refusal(no_approver(&grant, tool));
+        }
         match ask_user(settings, &grant, tool, &request.args, cancel).await {
             Approval::Allowed => {}
             Approval::Declined => {
@@ -1077,6 +1093,34 @@ pub(super) async fn answer_transport_with(
         None,
     );
     answer
+}
+
+/// What tells whether an app connected to this engine shows the calls that
+/// wait for the owner: one that listed outside agents. Set by the engine's
+/// ACP server; unset (no server in this process) counts as connected, so the
+/// call waits as it always did.
+type ApproverCheck = Box<dyn Fn() -> bool + Send + Sync>;
+static APPROVERS: Mutex<Option<ApproverCheck>> = Mutex::new(None);
+
+pub fn set_approvers(check: impl Fn() -> bool + Send + Sync + 'static) {
+    *APPROVERS.lock().unwrap_or_else(|error| error.into_inner()) = Some(Box::new(check));
+}
+
+fn approver_connected() -> bool {
+    APPROVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_none_or(|check| check())
+}
+
+/// The refusal for a call that would ask on a machine where no app can
+/// answer (a headless server): say how to stop asking, rather than time out.
+fn no_approver(grant: &Grant, tool: &str) -> String {
+    format!(
+        "error: {tool} needs the user's approval in the RustCode app, and no RustCode app is connected to this machine to ask. Nothing was sent. Tell the user: open the RustCode app (on this machine or one paired with it) and retry, or let “{}” act without asking by running `rustcode outside update {} --ask false` on this machine.",
+        grant.name, grant.id
+    )
 }
 
 enum Approval {
@@ -1276,6 +1320,7 @@ mod tests {
                 grants: dir.path().join("outside-agents.json"),
                 data: Some(dir.path().join("data.sqlite")),
                 approval_wait: Duration::from_millis(300),
+                needs_approver: false,
             };
             Self {
                 _dir: dir,
@@ -1657,6 +1702,44 @@ mod tests {
         assert_eq!(fixture.ran(), 4);
         let audit = fixture.audit();
         assert_eq!(audit.iter().filter(|row| row["outcome"] == "ok").count(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_call_that_asks_with_no_app_connected_fails_at_once_and_says_how_to_stop_asking() {
+        let mut fixture = Fixture::new();
+        fixture.settings.needs_approver = true;
+        fixture.settings.approval_wait = Duration::from_secs(60);
+        set_approvers(|| false);
+        let (grant, token) = create_at(
+            &fixture.settings.grants,
+            "ChatGPT",
+            "other",
+            Scope::Manage,
+            Some(true),
+        )
+        .unwrap();
+        let started = Instant::now();
+        let refused = fixture
+            .call(
+                &token,
+                super::super::CLEANUP_WORKTREE,
+                json!({ "session_id": "t" }),
+            )
+            .await;
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "it did not wait"
+        );
+        assert!(!refused.success);
+        assert!(
+            refused
+                .content
+                .contains(&format!("rustcode outside update {} --ask false", grant.id)),
+            "{}",
+            refused.content
+        );
+        assert_eq!(fixture.ran(), 0);
+        assert_eq!(fixture.audit()[0]["outcome"], "declined");
     }
 
     #[tokio::test]

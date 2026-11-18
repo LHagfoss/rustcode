@@ -52,6 +52,7 @@ impl Fixture {
                 grants: dir.join("outside-agents.json"),
                 data: None,
                 approval_wait: Duration::from_secs(1),
+                needs_approver: false,
             },
             runner: Arc::new(FakeRunner),
             codes: Mutex::new(HashMap::new()),
