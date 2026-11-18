@@ -5118,7 +5118,8 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         ".rc-num",
         ".rc-stat-label",
         "--rc-separator",
-        "Default to a view for anything structured",
+        "Answer visually, asked or not",
+        "never a Markdown table",
         "A report to another thread stays plain Markdown",
         "set no colours",
         "as little CSS as you can",
@@ -5186,9 +5187,11 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // stats, chart) and the chart marks add about 170 more, paid on every turn
     // of every external thread, so it stays under 2,198 (1,998 plus 10%). The
     // review findings class adds about 80 more (its markup is in the smart-ui
-    // skill, not here), so the cap is 2,300.
+    // skill, not here), so the cap was 2,300. Answering visually by default
+    // (data, results and 4+ items in a view, no Markdown tables, brief text)
+    // adds about 30, so it is 2,350.
     assert!(
-        SMART_UI_HARNESS_HINT.len() < 2_300,
+        SMART_UI_HARNESS_HINT.len() < 2_350,
         "{}",
         SMART_UI_HARNESS_HINT.len()
     );
@@ -5257,9 +5260,9 @@ fn smart_ui_on_teaches_views_and_not_rustcode_viz() {
     }
     // The same rule in both, in the same words.
     for rule in [
-        "Default to a view for anything structured (table, comparison, breakdown, status, plan, numbers, chart, dashboard), asked or not.",
-        "Prose, a single fact, a few bullets, code and diffs stay Markdown.",
-        "Put the finding in one short line before the view and nothing after it.",
+        "Answer visually, asked or not: data, numbers, results, status, comparisons, plans or 4+ items go in a view (chart, bars, stats, table), never a Markdown table.",
+        "Only short explanations, one fact, code and diffs stay Markdown.",
+        "Be brief: one line with the finding before the view, nothing after it.",
         "Sources go last inside the view, folded: details.rc-sources > ol > li > a[href].",
         "A report to another thread stays plain Markdown.",
     ] {

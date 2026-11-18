@@ -27,8 +27,9 @@ The root agent's prompt gets a `# Output style` section
 
 One more sentence depends on the client, and only one is ever sent:
 
-- Smart UI on (`OUTPUT_STYLE_SMART_UI_HINT`): a Markdown table only when the
-  reader will copy it; otherwise a view. It also rides in the harness text.
+- Smart UI on (`OUTPUT_STYLE_SMART_UI_HINT`): be brief, a few short lines and
+  not paragraphs, since the view carries the detail (tables go in a view). It
+  also rides in the harness text.
 - Otherwise, frontends that draw `rustcode-viz` (`OUTPUT_STYLE_VIZ_HINT`): a
   block replaces a table or list instead of repeating it, and its `summary`
   carries the takeaway.

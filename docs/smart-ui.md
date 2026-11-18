@@ -204,20 +204,22 @@ writing one. Agents used to call `list_skills` first, a wasted round. It is 116
 estimated tokens (`estimate_tokens`, capped at 150; 96 before the rule, 139
 when the format lived there, #2625).
 
-The rule, in both the root prompt and the harness text: "Default to a view for
-anything structured: a table, comparison, breakdown, status overview, plan,
-numbers, a chart or a dashboard, asked or not. Prose, a single fact, a few
-bullets, code and diffs stay Markdown. Put the finding in one short line before
-the view and nothing after it. Sources go last inside the view, folded:
+The rule, in both the root prompt and the harness text: "Answer visually, asked
+or not: data, numbers, results, status, comparisons, plans or 4+ items go in a
+view (chart, bars, stats, table), never a Markdown table. Only short
+explanations, one fact, code and diffs stay Markdown. Be brief: one line with
+the finding before the view, nothing after it. Sources go last inside the view, folded:
 details.rc-sources > ol > li > a[href]. A report to another thread
 stays plain Markdown." Replies used to wrap a view in a paragraph before and a
 recap, caveats and a Markdown source list after; the view now carries the
-caveats and the sources, and the text around it is one line.
+caveats and the sources, and the text around it is one line. "Default to a view
+for anything structured" still left agents answering in Markdown tables and
+paragraphs, so the rule names what goes in a view and rules out Markdown tables.
 
 One tool per client state, so the rules never conflict. With the setting on,
 the `# Visualizations` section and the output style's `rustcode-viz` sentence
-are not sent at all, and the output style gains "A Markdown table only when the
-reader will copy it; otherwise a view". That pays for the rule: the tail of the
+are not sent at all, and the output style gains "Be brief: a few short lines,
+not paragraphs; the view carries the detail". That pays for the rule: the tail of the
 root prompt these decide goes from 1,738 bytes / 436 tokens to 1,078 / 243.
 With it off or unsupported the text is exactly what it was;
 `smart_ui_off_and_unsupported_prompts_keep_their_exact_text` holds it byte for

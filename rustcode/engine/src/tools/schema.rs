@@ -2688,10 +2688,10 @@ No emoji, filler, or recap of what the reply already said. End with a next step 
 /// `rustcode-viz`: without it the reply repeated a chart as a table.
 pub(crate) const OUTPUT_STYLE_VIZ_HINT: &str = "A rustcode-viz block replaces a table or list, never repeats one in prose; its summary carries the takeaway.\n";
 
-/// Added to [`OUTPUT_STYLE_PROMPT_HINT`] while Smart UI is on, so "a table for
-/// comparisons" does not contradict the rule to default to a view.
+/// Added to [`OUTPUT_STYLE_PROMPT_HINT`] while Smart UI is on: the view carries the
+/// detail, so the text around it stays a line or two (its "a table" means a view's).
 pub(crate) const OUTPUT_STYLE_SMART_UI_HINT: &str =
-    "A Markdown table only when the reader will copy it; otherwise a view.\n";
+    "Be brief: a few short lines, not paragraphs; the view carries the detail.\n";
 
 /// The output-style text for a frontend. With Smart UI on the agent is taught
 /// views instead of `rustcode-viz`; otherwise it depends on the viz level.
@@ -2805,7 +2805,7 @@ pub(crate) fn skills_reminder(note: &str) -> String {
 pub(crate) const SMART_UI_HARNESS_HINT: &str = "\
 # Smart UI
 Views run in chat: a ```rustcode-ui v1 fence of one HTML fragment with a <title> (inline <style> or <script> only if needed), no imports or network, max 64 KB, 5,000 elements. \
-Default to a view for anything structured (table, comparison, breakdown, status, plan, numbers, chart, dashboard), asked or not. Prose, a single fact, a few bullets, code and diffs stay Markdown. Put the finding in one short line before the view and nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown.
+Answer visually, asked or not: data, numbers, results, status, comparisons, plans or 4+ items go in a view (chart, bars, stats, table), never a Markdown table. Only short explanations, one fact, code and diffs stay Markdown. Be brief: one line with the finding before the view, nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown.
 Pick by question: a trend → line chart; parts → stacked bar, donut; a ranking → .rc-bars; options → .rc-grid of .rc-card; many exact rows → a table (data-rc-sort past 8). Numbers → a dashboard, .rc-dash > .rc-head (title, caption); .rc-hero (.rc-label, .rc-hero-value, .rc-hero-delta, p.rc-lead with <b>); hr; .rc-stats.rc-flat (.rc-stat-note: subline); .rc-head; chart.
 Use the app's kit, not CSS: set no colours, as little CSS as you can. Classes: .rc-title .rc-lead .rc-label; .rc-stats > .rc-stat > .rc-stat-value .rc-stat-label; .rc-badge .rc-callout (tint .rc-ok|warn|bad|info); .rc-progress > span; .rc-bars > .rc-bar > span i[width%] b; table.rc-table; .rc-list > .rc-item (<b> then <p>); .rc-steps > li.rc-step.rc-done|rc-active|rc-failed|rc-todo; .rc-findings > .rc-finding[data-severity] (a review; see the smart-ui skill); .rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span (on hover); .rc-spark[data-values]; .rc-chart (sized) .rc-donut-total; .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-num .rc-scroll. Subhead h3. \
 No script: data-rc-send=\"text\" sends a follow-up (on a <form>, with its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]; .rc-bar[data-rc-tip], table.rc-table[data-rc-sort] work alone. \
@@ -2893,8 +2893,8 @@ pub(crate) fn append_visualization_hint(
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
 This app runs small views in replies: a ```rustcode-ui v1 fence of self-contained HTML that reads like chat. \
-Default to a view for anything structured (table, comparison, breakdown, status, plan, numbers, chart, dashboard), asked or not. \
-Prose, a single fact, a few bullets, code and diffs stay Markdown. Put the finding in one short line before the view and nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown. \
+Answer visually, asked or not: data, numbers, results, status, comparisons, plans or 4+ items go in a view (chart, bars, stats, table), never a Markdown table. \
+Only short explanations, one fact, code and diffs stay Markdown. Be brief: one line with the finding before the view, nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown. \
 First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
 
 /// Sent instead of [`SMART_UI_PROMPT_HINT`] when the frontend could run the
