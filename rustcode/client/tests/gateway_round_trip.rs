@@ -388,12 +388,17 @@ async fn a_machine_without_a_token_asks_for_a_new_pairing() {
     host.stop().await;
 }
 
-/// The transport refuses a TLS address with a reason rather than hanging.
+/// A `wss://` address dials the machine's public address over TLS at `/ws`
+/// (#3955); a scheme that is not a machine address is refused with a reason.
 #[test]
-fn a_wss_address_is_refused() {
-    let error = transport::websocket_url("wss://studio.local:17879").unwrap_err();
+fn a_wss_address_dials_the_public_path_and_other_schemes_are_refused() {
+    assert_eq!(
+        transport::websocket_url("wss://studio.example.com").unwrap(),
+        "wss://studio.example.com/ws"
+    );
+    let error = transport::websocket_url("ftp://studio.local").unwrap_err();
     assert!(
-        format!("{error:#}").contains("no TLS listener"),
+        format!("{error:#}").contains("not a machine address"),
         "{error:#}"
     );
 }
