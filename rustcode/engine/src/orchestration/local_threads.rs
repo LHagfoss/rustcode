@@ -256,13 +256,18 @@ fn delegation(caller: &str, what: &str) -> Result<(), Value> {
     if access == Access::Full {
         return Ok(());
     }
-    Err(error(
-        "unavailable",
-        format!(
-            "{what} needs Full access, and this thread runs at {}; no app is attached to ask, so it needs the RustCode app open to approve it. Open the app, or set this thread's access to Full, and retry. Nothing was sent.",
+    let refused = crate::permission_places::refusal(
+        &format!("{what} was not run"),
+        &format!(
+            "this thread's access level ({}): with no RustCode window attached nobody can approve a card, so only Full access starts threads",
             access.label()
         ),
-    ))
+        &format!(
+            "set the access to Full in {}, or open this thread in the RustCode app and retry, which asks with a card",
+            crate::permission_places::THREAD_ACCESS
+        ),
+    );
+    Err(error("unavailable", format!("{refused} Nothing was sent.")))
 }
 
 /// Whether the caller is already as deep as delegation goes: a top-level
@@ -389,7 +394,12 @@ fn ask_of(args: &Value) -> Ask<'_> {
 }
 
 /// `start_session`: one thread, its first turn running on its own from here.
-pub(crate) async fn start(caller: &str, args: &Value) -> Value {
+pub(crate) async fn start(
+    caller: &str,
+    args: &Value,
+    asker: Option<&super::ask_user::Asker>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Value {
     if let Err(remote) = super::local::local_machine(args) {
         return remote;
     }
@@ -407,14 +417,19 @@ pub(crate) async fn start(caller: &str, args: &Value) -> Value {
             Err(refusal) => return refusal,
         }
     };
-    match start_one(caller, &ask, reservation.as_ref()).await {
+    match start_one(caller, &ask, reservation.as_ref(), asker, cancel).await {
         Ok(answer) => answer,
         Err(refusal) => refusal,
     }
 }
 
 /// `fan_out`: the same task on two to four harnesses, one link each.
-pub(crate) async fn fan_out(caller: &str, args: &Value) -> Value {
+pub(crate) async fn fan_out(
+    caller: &str,
+    args: &Value,
+    asker: Option<&super::ask_user::Asker>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Value {
     if let Err(remote) = super::local::local_machine(args) {
         return remote;
     }
@@ -466,7 +481,7 @@ pub(crate) async fn fan_out(caller: &str, args: &Value) -> Value {
             standalone: base.standalone,
             fan_out: Some(&fan_id),
         };
-        match start_one(caller, &ask, reservation.as_ref()).await {
+        match start_one(caller, &ask, reservation.as_ref(), asker, cancel).await {
             Ok(answer) => {
                 if let Some(link) = answer.get("link_id").and_then(Value::as_str) {
                     link_ids.push(link.to_owned());
@@ -506,6 +521,8 @@ async fn start_one(
     caller: &str,
     ask: &Ask<'_>,
     reservation: Option<&Reservation>,
+    asker: Option<&super::ask_user::Asker>,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<Value, Value> {
     if chain_refusal(caller) {
         return Err(not_allowed(format!(
@@ -540,7 +557,7 @@ async fn start_one(
         && !(account.is_some()
             && crate::acp::settings::value("trust-delegate-accounts") == Some(json!(true)))
     {
-        authorize_account(&link_book(), caller, &harness.id, account.as_deref())?;
+        approve_account(caller, &harness.id, account.as_deref(), asker, cancel).await?;
     }
     let title = title_of(ask);
 
@@ -1418,17 +1435,84 @@ fn authorize_account(
     harness: &str,
     account: Option<&str>,
 ) -> Result<(), Value> {
-    let key = json!(["delegate-account", "local", harness, account]).to_string();
-    if book["grants"][caller]
-        .as_array()
-        .is_some_and(|keys| keys.iter().any(|value| value.as_str() == Some(&key)))
-    {
+    if book["grants"][caller].as_array().is_some_and(|keys| {
+        keys.iter()
+            .any(|value| value.as_str() == Some(&account_key(harness, account)))
+    }) {
         return Ok(());
     }
-    Err(not_allowed(format!(
-        "delegate account {} on {harness} needs the user's account-specific approval. Full access, usage pressure and rate limits do not authorize switching accounts. Open the RustCode app and approve this login; nothing was started.",
-        account.unwrap_or("default")
-    )))
+    Err(not_allowed(account_refusal(harness, account, false)))
+}
+
+/// The link-book key an account approval is filed under (`delegateAccountKey`
+/// in the app's `state/orchestration.ts`).
+fn account_key(harness: &str, account: Option<&str>) -> String {
+    json!(["delegate-account", "local", harness, account]).to_string()
+}
+
+/// How an account names itself in a card or a refusal.
+fn account_label(harness: &str, account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("account “{account}” on {harness}"),
+        None => format!("the default sign-in on {harness}"),
+    }
+}
+
+/// Why a delegate's account was not used, and the places that allow it. The
+/// trust switch covers named accounts only, so the default sign-in of a
+/// harness with named accounts is approved per thread.
+fn account_refusal(harness: &str, account: Option<&str>, declined: bool) -> String {
+    use crate::permission_places::{NEEDS_YOU, REMEMBERED, TRUST_ACCOUNTS, refusal};
+    let what = format!(
+        "a delegate on {} was not started{}",
+        account_label(harness, account),
+        if declined { ": the user declined" } else { "" }
+    );
+    let layer = "the delegate account check: spending a login's usage needs the user's approval for each thread, and Full access, usage pressure and rate limits do not cover switching accounts";
+    let change = if declined {
+        "do not retry unless the user asks".to_owned()
+    } else {
+        let card = format!(
+            "retry while this thread is open in the RustCode app, which asks once with a card in {NEEDS_YOU}; approvals are kept in {REMEMBERED}"
+        );
+        match account {
+            Some(_) => format!("{card}, or turn on {TRUST_ACCOUNTS}"),
+            None => card,
+        }
+    };
+    format!("{} Nothing was started.", refusal(&what, layer, &change))
+}
+
+/// [`authorize_account`], and when the thread has a RustCode window to show a
+/// card in, ask there instead of refusing. An approval is filed in the link
+/// book, so it is asked once per thread and listed in Remembered approvals,
+/// like an approval given to the app's own start card.
+async fn approve_account(
+    caller: &str,
+    harness: &str,
+    account: Option<&str>,
+    asker: Option<&super::ask_user::Asker>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(), Value> {
+    let refused = match authorize_account(&link_book(), caller, harness, account) {
+        Ok(()) => return Ok(()),
+        Err(refused) => refused,
+    };
+    let Some(asker) = asker else {
+        return Err(refused);
+    };
+    let title = format!(
+        "Start a delegate on {}: it spends that login's usage (asked even at Full access, once per thread)",
+        account_label(harness, account)
+    );
+    let args = json!({ "harness": harness, "account": account });
+    if !crate::manage::approved(asker, caller, &title, &args, cancel).await {
+        return Err(not_allowed(account_refusal(harness, account, true)));
+    }
+    if let Err(why) = crate::data_store::add_grant(caller, &account_key(harness, account)) {
+        crate::dbg_log!("could not remember the account approval for {caller}: {why}");
+    }
+    Ok(())
 }
 
 pub(super) fn account_for(
@@ -2083,7 +2167,10 @@ mod tests {
             .await;
             let message = answer["error"]["message"].as_str().unwrap_or("");
             assert!(message.contains("Full access"), "{tool}: {message}");
-            assert!(message.contains("RustCode app open"), "{tool}: {message}");
+            assert!(
+                message.contains(crate::permission_places::THREAD_ACCESS),
+                "{tool}: {message}"
+            );
             assert!(answer["session_id"].is_null(), "{tool}: {answer}");
             assert!(answer["link_id"].is_null(), "{tool}: {answer}");
         }
@@ -2269,6 +2356,8 @@ mod tests {
         let answer = start(
             &caller,
             &json!({"prompt": "go", "project": "/nowhere/at/all"}),
+            None,
+            &tokio_util::sync::CancellationToken::new(),
         )
         .await;
         assert_eq!(answer["error"]["code"], json!("not_allowed"), "{answer}");
@@ -2310,8 +2399,20 @@ mod tests {
         assert!(authorize_account(&book, "parent", "claude-code", Some("paral-2")).is_ok());
         let refused =
             authorize_account(&book, "parent", "claude-code", Some("personal-1")).unwrap_err();
-        assert!(refused.to_string().contains("account-specific approval"));
-        assert!(refused.to_string().contains("nothing was started"));
+        let refused = refused.to_string();
+        assert!(refused.contains("delegate account check"), "{refused}");
+        assert!(refused.contains("Nothing was started"), "{refused}");
+        assert!(
+            refused.contains(crate::permission_places::TRUST_ACCOUNTS),
+            "{refused}"
+        );
+        let default = authorize_account(&book, "parent", "claude-code", None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !default.contains(crate::permission_places::TRUST_ACCOUNTS),
+            "the trust switch does not cover the default sign-in: {default}"
+        );
         assert!(authorize_account(&book, "parent", "claude-code", None).is_err());
         assert!(authorize_account(&book, "child", "claude-code", Some("paral-2")).is_err());
     }

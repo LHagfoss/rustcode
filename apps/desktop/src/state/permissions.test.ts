@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { PermissionRequest } from "../acp/types";
-import { autoAnswer, delegationAllowed, effectiveMode, parsePermissionMode } from "./permissions";
+import {
+  autoAnswer,
+  delegationAllowed,
+  effectiveMode,
+  harnessDenialText,
+  NOT_ACCESS,
+  parsePermissionMode,
+} from "./permissions";
 
 const request = (toolKind: string, extra: Partial<PermissionRequest> = {}): PermissionRequest => ({
   rpcId: 1,
@@ -128,5 +135,30 @@ describe("effectiveMode", () => {
     expect(effectiveMode("full", "edits")).toBe("edits");
     expect(effectiveMode("full", "full")).toBe("full");
     expect(effectiveMode("edits", "edits")).toBe("edits");
+  });
+});
+
+describe("harness refusals", () => {
+  test("say who refused, why, and where it is changed", () => {
+    expect(
+      harnessDenialText({
+        by: "Claude Code",
+        layer: "auto mode",
+        reason: "Undermining Oversight",
+        change: "Change the mode in Claude Code's settings",
+      }),
+    ).toBe(
+      "Claude Code refused this itself (auto mode: Undermining Oversight). Change the mode in Claude Code's settings.",
+    );
+    expect(harnessDenialText({ by: "Claude Code", layer: "auto mode", change: "Change it" })).toBe(
+      "Claude Code refused this itself (auto mode). Change it.",
+    );
+  });
+
+  test("are listed with the command rules as what access does not control", () => {
+    expect(NOT_ACCESS.map((item) => item.title)).toEqual([
+      "The project's command rules",
+      "The harness's own permission check",
+    ]);
   });
 });

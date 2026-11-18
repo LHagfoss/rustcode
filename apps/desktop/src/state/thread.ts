@@ -5,6 +5,7 @@ import type { Json } from "../acp/jsonrpc";
 import type {
   ConfigOption,
   FileDiff,
+  HarnessDenial,
   PermissionRequest,
   PlanEntry,
   SessionHarness,
@@ -87,6 +88,8 @@ export type TranscriptItem =
        * instead of a notice above it splitting the run of calls.
        */
       autoAllowed?: string;
+      /** The harness refused this call itself; the row says who, why and where it is changed. */
+      denial?: HarnessDenial;
       /** The subagent call (its tool call id) this call was made under. */
       parent?: string;
       /** When the app saw it start and end; a replayed call has both at load time. */
@@ -739,6 +742,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         app: update.app ?? item.app,
         diffs: update.diffs.length ? update.diffs : item.diffs,
         exitCode: update.exitCode ?? item.exitCode,
+        denial: update.denial ?? item.denial,
       };
       return { ...state, items: next };
     }

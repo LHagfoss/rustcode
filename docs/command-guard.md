@@ -6,6 +6,8 @@ gets the same ones. This repository's own policy encodes the shell rules of
 `AGENTS.md`: no local `cargo test` (tests run in CI), `nice` for heavy
 cargo, and no `git rebase`, `git stash`, `git reset --hard` or force-push.
 
+See `docs/permissions.md` for how the guard sits beside the other permission layers.
+
 ## The policy file
 
 `.rustcode/command-policy.toml`, found by walking up from the directory a

@@ -12,6 +12,7 @@ import { threadGrants } from "../state/permissionGrants";
 import {
   ALWAYS_ASKS,
   modeLabel,
+  NOT_ACCESS,
   PERMISSION_MODES,
   type PermissionMode,
   parsePermissionMode,
@@ -57,6 +58,14 @@ export function PermissionsPage() {
         hint="Nothing else asks a Full-access thread. The card of each of these says why it appears."
       >
         {ALWAYS_ASKS.map((item) => (
+          <Row key={item.title} title={item.title} subtitle={item.why} />
+        ))}
+      </Group>
+      <Group
+        title="Not controlled by access"
+        hint="These can refuse at any access level, Full included. No card asks; the refusal names the place to change it."
+      >
+        {NOT_ACCESS.map((item) => (
           <Row key={item.title} title={item.title} subtitle={item.why} />
         ))}
       </Group>

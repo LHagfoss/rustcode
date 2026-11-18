@@ -138,6 +138,36 @@ describe("ACP types", () => {
     expect(delegateParent({ id: "p" })?.id).toBe("p");
   });
 
+  test("reads a harness's own refusal off a failed call, and ignores a partial one", () => {
+    const denied = (harnessDenial: Json) =>
+      parseSessionUpdate({
+        sessionId: "s",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "c",
+          status: "failed",
+          _meta: { rustcode: { harnessDenial } },
+        },
+      });
+    expect(
+      denied({
+        by: "Claude Code",
+        layer: "auto mode",
+        reason: "Undermining Oversight",
+        change: "Change it there",
+      }),
+    ).toMatchObject({
+      kind: "toolCallUpdate",
+      denial: {
+        by: "Claude Code",
+        layer: "auto mode",
+        reason: "Undermining Oversight",
+        change: "Change it there",
+      },
+    });
+    expect(denied({ by: "Claude Code" })).toMatchObject({ kind: "toolCallUpdate", denial: undefined });
+  });
+
   test("parses tool call updates with output delta, diff and exit code", () => {
     const update = parseSessionUpdate({
       sessionId: "s",

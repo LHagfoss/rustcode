@@ -492,6 +492,33 @@ pub fn open_link_at(
     Ok(link)
 }
 
+/// File one approval under `caller` in the link book's grants, the way the
+/// app files an "Allow for This Thread" answer, so the engine's own approval
+/// card (an account a delegate may spend) is remembered and listed in
+/// Settings › Permissions › Remembered approvals. Adding a key twice keeps one.
+pub fn add_grant(caller: &str, key: &str) -> Result<(), String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    add_grant_at(&path, caller, key)
+}
+
+/// [`add_grant`] against one store file.
+pub fn add_grant_at(path: &Path, caller: &str, key: &str) -> Result<(), String> {
+    let connection = open(path)?;
+    let transaction = immediate(&connection)?;
+    let mut grants = read_state(&transaction, "grants")?;
+    if !grants.is_object() {
+        grants = json!({});
+    }
+    let keys = grants[caller].as_array().cloned().unwrap_or_default();
+    if !keys.iter().any(|value| value.as_str() == Some(key)) {
+        let mut keys = keys;
+        keys.push(json!(key));
+        grants[caller] = Value::Array(keys);
+        write_state(&transaction, "grants", &grants)?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
 /// Change one link in place, in one transaction: `change` gets the stored link
 /// and answers the new one. False when no such link is stored.
 pub fn change_link(id: &str, change: impl FnOnce(Value) -> Value) -> Result<bool, String> {

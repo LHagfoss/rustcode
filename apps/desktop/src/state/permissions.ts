@@ -1,4 +1,4 @@
-import type { PermissionOption, PermissionRequest } from "../acp/types";
+import type { HarnessDenial, PermissionOption, PermissionRequest } from "../acp/types";
 
 /**
  * How much a thread may do without asking, chosen under the composer.
@@ -48,13 +48,34 @@ export const ALWAYS_ASKS: { title: string; why: string }[] = [
   },
   {
     title: "A delegate on a named account",
-    why: "Starting a thread on a signed-in account spends that account's usage, so each account is approved once per thread, unless you trust this computer's accounts (Settings › Orchestration).",
+    why: "Starting a thread on a signed-in account spends that account's usage, so each account is approved once per thread, unless you trust this computer's named accounts (Settings › Orchestration › Let delegates use my named accounts without asking). A thread with no RustCode window open is refused instead, and its refusal says where to allow it.",
   },
   {
     title: "Outside apps",
     why: "An app connected under Outside agents is not one of your threads, so a thread's access does not cover it.",
   },
 ];
+
+/**
+ * What a thread's access level does not control at all, so it can refuse even at Full access: no
+ * card asks, and the refusal names the place to change it (`docs/permissions.md`).
+ */
+export const NOT_ACCESS: { title: string; why: string }[] = [
+  {
+    title: "The project's command rules",
+    why: "A command `.rustcode/command-policy.toml` refuses is refused at every access level; the refusal names the rule. Change the rule in that file.",
+  },
+  {
+    title: "The harness's own permission check",
+    why: "Claude Code's auto mode, and other harnesses' own modes, can refuse a call without asking RustCode. The call's row says who refused it and where that is changed, such as Claude Code's settings.",
+  },
+];
+
+/** The line under a tool row the harness itself refused. */
+export function harnessDenialText(denial: HarnessDenial): string {
+  const why = denial.reason ? `${denial.layer}: ${denial.reason}` : denial.layer;
+  return `${denial.by} refused this itself (${why}). ${denial.change}.`;
+}
 
 /** Why a card asks although the thread's access would cover the work: an account to spend on. */
 export const ACCOUNT_PROMPT_WHY =

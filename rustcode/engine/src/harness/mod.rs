@@ -15,6 +15,7 @@ pub(crate) mod cache;
 pub(crate) mod child_activity;
 pub(crate) mod codex;
 pub mod config;
+pub(crate) mod denial;
 pub(crate) mod detect;
 pub(crate) mod handoff;
 pub(crate) mod pi_mcp;

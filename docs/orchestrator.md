@@ -376,7 +376,7 @@ What it does not do, and says so by name:
 
 - **Access.** With no app there is no card to ask on, so these three proceed
   only when the caller runs at Full access; anything less answers
-  `unavailable`: "needs Full access … the RustCode app is not attached to ask".
+  `unavailable`: "… was not run. Refused by this thread's access level … To allow it: set the access to Full in the thread's Permissions menu …".
   The new thread runs at Full access too, and any permission request it makes
   is allowed by the engine; a question to the user (`ask_question`) is
   cancelled, not answered in the user's place.

@@ -56,6 +56,8 @@ not only the workspace and a task worktree. Shell approval/deny policy still
 applies separately when YOLO is off. The background scheduler's scheduled `run_command` path honors the same
 mode.
 
+See `docs/permissions.md` for every permission layer and what Full access covers.
+
 ### Default mode
 
 `trusted` is the default: tools run with the RustCode process's native filesystem
