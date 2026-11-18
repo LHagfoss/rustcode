@@ -15,6 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::sync::mpsc;
 
 use super::hub::{CallAnswer, CallRequest};
+use super::mcp_names;
 
 /// The MCP revisions this server speaks; it answers with the client's when
 /// it is one of these.
@@ -335,7 +336,7 @@ where
                             "title": "RustCode threads",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
-                        "instructions": super::prompt_hint(orchestration).trim(),
+                        "instructions": mcp_names::public_text(super::prompt_hint(orchestration).trim()),
                     }),
                 ));
             }
@@ -429,17 +430,35 @@ async fn call(
     version: u8,
     offered: Offered,
 ) -> CallAnswer {
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    let mut args = params
+        .get("arguments")
+        .cloned()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let names = match mcp_names::call_args(name, &mut args) {
+        Ok(names) => names,
+        Err(answer) => return answer,
+    };
+    let tool = mcp_names::internal_tool(name);
+    let answer = if identity.outside {
+        call_outside(forward, identity, tool, args).await
+    } else {
+        call_inside(forward, identity, tool, args, version, offered).await
+    };
+    names.answer(tool, answer)
+}
+
+async fn call_inside(
+    forward: &dyn Forward,
+    identity: &Identity,
+    tool: &str,
+    args: Value,
+    version: u8,
+    offered: Offered,
+) -> CallAnswer {
     let Offered { smart_ui, ask_user } = offered;
-    let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
-    if identity.outside {
-        return call_outside(forward, identity, tool, params).await;
-    }
     if crate::manage::is_tool(tool) {
-        let args = params
-            .get("arguments")
-            .cloned()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
         if let Err(reason) = crate::manage::validate(tool, &args) {
             return CallAnswer::failure(format!(
                 "error: invalid {tool} call: {reason}. Nothing was changed."
@@ -461,10 +480,7 @@ async fn call(
                 session_id: identity.session_id.clone(),
                 token: identity.token.clone(),
                 tool: tool.to_owned(),
-                args: params
-                    .get("arguments")
-                    .cloned()
-                    .unwrap_or_else(|| json!({})),
+                args,
                 outside: false,
             })
             .await;
@@ -475,11 +491,6 @@ async fn call(
         if !ask_user {
             return CallAnswer::failure(format!("error: unknown tool '{tool}'"));
         }
-        let args = params
-            .get("arguments")
-            .cloned()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
         if let Err(reason) = super::ask_user::validate(&args) {
             return CallAnswer::failure(format!(
                 "error: invalid {tool} call: {reason}. Nothing was asked."
@@ -501,11 +512,6 @@ async fn call(
         if version < 2 {
             return CallAnswer::failure(format!("error: unknown tool '{tool}'"));
         }
-        let args = params
-            .get("arguments")
-            .cloned()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
         if let Err(reason) = crate::workflow::validate(tool, &args) {
             return CallAnswer::failure(format!(
                 "error: invalid {tool} call: {reason}. Nothing was started."
@@ -527,10 +533,7 @@ async fn call(
                 session_id: identity.session_id.clone(),
                 token: identity.token.clone(),
                 tool: tool.to_owned(),
-                args: params
-                    .get("arguments")
-                    .cloned()
-                    .unwrap_or_else(|| json!({})),
+                args,
                 outside: false,
             })
             .await;
@@ -541,11 +544,6 @@ async fn call(
         if !smart_ui {
             return CallAnswer::failure(format!("error: unknown tool '{tool}'"));
         }
-        let args = params
-            .get("arguments")
-            .cloned()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
         let output = crate::smart_ui::check(&args);
         return CallAnswer {
             success: output.success,
@@ -557,11 +555,6 @@ async fn call(
     // no approval is needed to watch a pull request, and an engine that is not
     // running the app's window still links one.
     if tool == crate::pull_watch::LINK_TOOL_NAME {
-        let args = params
-            .get("arguments")
-            .cloned()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
         let cwd = crate::checkpoints::thread_cwd(&identity.session_id)
             .filter(|cwd| cwd.is_dir())
             .or_else(|| std::env::current_dir().ok());
@@ -582,11 +575,6 @@ async fn call(
             content: format!("error: unknown tool '{tool}'"),
         };
     }
-    let args = params
-        .get("arguments")
-        .cloned()
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
     // Checked here too, so a bad call never leaves the harness's machine
     // without a clear answer.
     if let Err(reason) = super::validate(tool, &args) {
@@ -713,13 +701,8 @@ async fn call_outside(
     forward: &dyn Forward,
     identity: &Identity,
     tool: &str,
-    params: &Value,
+    args: Value,
 ) -> CallAnswer {
-    let args = params
-        .get("arguments")
-        .cloned()
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
     let limit = super::requested_wait(tool, &args).map(|wait| wait + super::WAIT_SERVER_GRACE);
     let waiting = forward.call(CallRequest {
         session_id: String::new(),
@@ -838,7 +821,7 @@ fn progress_token(params: &Value) -> Option<Value> {
 /// when it named them, else that it is still waiting.
 fn progress_message(tool: &str, params: &Value) -> String {
     let args = params.get("arguments");
-    match tool {
+    match mcp_names::internal_tool(tool) {
         super::WAIT_SESSION => {
             let links = args
                 .and_then(|args| args.get("link_ids"))
@@ -855,7 +838,7 @@ fn progress_message(tool: &str, params: &Value) -> String {
             }
         }
         super::MERGE_WHEN_GREEN => args
-            .and_then(|args| args.get("session_id"))
+            .and_then(|args| args.get("thread_id").or_else(|| args.get("session_id")))
             .and_then(Value::as_str)
             .map_or_else(
                 || "still waiting for the checks".to_owned(),
@@ -1255,7 +1238,7 @@ mod tests {
                 json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
                 json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
                 json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                       "params": {"name": "start_session", "arguments": {"prompt": "fix the login"}}}),
+                       "params": {"name": "start_thread", "arguments": {"prompt": "fix the login"}}}),
                 json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
                        "params": {"name": "fan_out", "arguments": {"prompt": "x", "harnesses": []}}}),
                 json!({"jsonrpc": "2.0", "id": 5, "method": "resources/list"}),
@@ -1265,6 +1248,10 @@ mod tests {
         assert_eq!(answers.len(), 5, "{answers:?}");
         assert_eq!(answers[0]["result"]["protocolVersion"], "2025-03-26");
         assert!(answers[0]["result"]["capabilities"]["tools"].is_object());
+        let instructions = answers[0]["result"]["instructions"].as_str().unwrap();
+        assert!(
+            instructions.contains("`list_threads`") && !instructions.contains("`list_sessions`")
+        );
         let listed = answers[1]["result"]["tools"]
             .as_array()
             .unwrap()
@@ -1273,6 +1260,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut expected = super::super::tool_names(super::super::VERSION)
             .into_iter()
+            .map(mcp_names::public_tool)
             .map(str::to_owned)
             .collect::<Vec<_>>();
         // The link tool needs no orchestration version, so it is listed last
@@ -1283,7 +1271,22 @@ mod tests {
         // The workflow tools follow it for a client that can start threads.
         expected.extend(crate::workflow::TOOL_NAMES.map(str::to_owned));
         assert_eq!(listed, expected);
-        assert!(answers[1]["result"]["tools"][0]["inputSchema"]["type"] == "object");
+        let read = answers[1]["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "read_thread")
+            .unwrap();
+        assert_eq!(read["inputSchema"]["required"], json!(["thread_id"]));
+        assert_eq!(
+            read["inputSchema"]["properties"]["thread_id"]["type"],
+            "string"
+        );
+        assert!(
+            read["inputSchema"]["properties"]
+                .get("session_id")
+                .is_none()
+        );
 
         let called = &answers[2]["result"];
         assert_eq!(called["isError"], false, "{called}");
@@ -1424,9 +1427,9 @@ mod tests {
         for version in [13, 14] {
             let (_dir, hub) = hub().await;
             let token = hub.register("thread-1", Arc::new(EchoApp), version);
-            let args = json!({"session_id": "other-project-thread", "message": "change course", "steer": true});
+            let args = json!({"thread_id": "other-project-thread", "message": "change course", "steer": true});
             let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": {"name": "message_session", "arguments": args}});
+                "params": {"name": "message_thread", "arguments": args}});
             let answers = exchange_versioned(
                 Identity {
                     session_id: "thread-1".into(),
@@ -1446,6 +1449,7 @@ mod tests {
                 assert!(content.contains("newer RustCode app"));
             } else {
                 let echoed: Value = serde_json::from_str(content).unwrap();
+                assert_eq!(echoed["asked"]["tool"], "message_session");
                 assert_eq!(echoed["asked"]["args"], args);
             }
         }
@@ -1796,7 +1800,10 @@ mod tests {
 }
 
 fn all_tools(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
-    let mut listed = tools_with(version, smart_ui, ask_user);
+    let mut listed: Vec<_> = tools_with(version, smart_ui, ask_user)
+        .into_iter()
+        .map(mcp_names::public_entry)
+        .collect();
     listed.extend(crate::computer_use::tools(
         &crate::computer_use::Settings::load(),
     ));

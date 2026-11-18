@@ -7,7 +7,7 @@
 //! one-time code from `rustcode outside code`. Secrets are never logged;
 //! restarting discards unexchanged authorization codes.
 use super::outside_signin::{self, Consent, Outcome, PAGE_HEADERS};
-use super::{hub::CallRequest, outside};
+use super::{hub::CallRequest, mcp_names, outside};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
@@ -965,21 +965,29 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                             } else if tool.is_empty() {
                                 json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}})
                             } else {
-                                let request = CallRequest {
-                                    session_id: String::new(),
-                                    token: token.into(),
-                                    tool: tool.into(),
-                                    args: v["params"]["arguments"].clone(),
-                                    outside: true,
+                                let mut args = v["params"]["arguments"].clone();
+                                let answer = match mcp_names::call_args(tool, &mut args) {
+                                    Ok(names) => {
+                                        let tool = mcp_names::internal_tool(tool);
+                                        let request = CallRequest {
+                                            session_id: String::new(),
+                                            token: token.into(),
+                                            tool: tool.into(),
+                                            args,
+                                            outside: true,
+                                        };
+                                        let answer = outside::answer_transport_with(
+                                            &server.settings,
+                                            server.runner.as_ref(),
+                                            request,
+                                            &CancellationToken::new(),
+                                            true,
+                                        )
+                                        .await;
+                                        names.answer(tool, answer)
+                                    }
+                                    Err(answer) => answer,
                                 };
-                                let answer = outside::answer_transport_with(
-                                    &server.settings,
-                                    server.runner.as_ref(),
-                                    request,
-                                    &CancellationToken::new(),
-                                    true,
-                                )
-                                .await;
                                 let result = match method {
                                     "initialize" => {
                                         json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"rustcode","version":env!("CARGO_PKG_VERSION")},"instructions":answer.content})

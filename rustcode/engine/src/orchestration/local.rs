@@ -613,7 +613,7 @@ fn render_read(
 ) -> String {
     let mut lines = vec![
         format!("Thread: {title}"),
-        format!("Session: {session_id}"),
+        format!("Thread ID: {session_id}"),
         format!("Status: {status}"),
         format!("Project: {project}"),
         format!("Turns: {}", turns.len()),
