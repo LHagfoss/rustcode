@@ -903,7 +903,8 @@ mod tests {
         .await;
         assert!(!sent.success);
         assert!(
-            sent.content.contains("RustCode app open"),
+            sent.content
+                .contains("open this thread in the RustCode app"),
             "{}",
             sent.content
         );

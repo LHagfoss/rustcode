@@ -2167,7 +2167,10 @@ mod tests {
             .await;
             let message = answer["error"]["message"].as_str().unwrap_or("");
             assert!(message.contains("Full access"), "{tool}: {message}");
-            assert!(message.contains("RustCode app open"), "{tool}: {message}");
+            assert!(
+                message.contains(crate::permission_places::THREAD_ACCESS),
+                "{tool}: {message}"
+            );
             assert!(answer["session_id"].is_null(), "{tool}: {answer}");
             assert!(answer["link_id"].is_null(), "{tool}: {answer}");
         }
