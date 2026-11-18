@@ -205,14 +205,6 @@ pub(crate) fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
                 .unwrap_or_else(|| format!("local:{}", call.name)),
             name: call.name,
         }),
-        AgentEvent::ToolResult(result) => Some(AgentUiEvent::ToolFinished {
-            id: result
-                .metadata
-                .call_id
-                .clone()
-                .unwrap_or_else(|| format!("local_{}", result.metadata.arguments_hash)),
-            result,
-        }),
         AgentEvent::Finished(FinishReason::Stop | FinishReason::Length) => {
             Some(AgentUiEvent::TurnFinished {
                 content: String::new(),
@@ -221,22 +213,6 @@ pub(crate) fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
             })
         }
         AgentEvent::Finished(FinishReason::ToolCalls | FinishReason::Unknown(_)) => None,
-        AgentEvent::Finished(FinishReason::Cancelled) | AgentEvent::Cancelled => {
-            Some(AgentUiEvent::Cancelled {
-                completed_tool_ids: Vec::new(),
-                timing: None,
-            })
-        }
-        AgentEvent::Finished(FinishReason::Error(message)) | AgentEvent::Error(message) => {
-            Some(AgentUiEvent::Error {
-                message,
-                retryable: false,
-            })
-        }
-        AgentEvent::ContextLimit => Some(AgentUiEvent::Error {
-            message: "context limit reached".to_owned(),
-            retryable: true,
-        }),
     }
 }
 
@@ -834,7 +810,7 @@ fn flush_final_response_delta(
 mod tests {
     use super::{AgentUiEvent, AgentUiEventSender, map_agent_event, publish_snapshot};
     use crate::app::{AppState, ChatMessage};
-    use crate::network::events::{AgentEvent, FinishReason, ToolResult, ToolResultMetadata};
+    use crate::network::events::{AgentEvent, FinishReason};
     use rustcode_tool_protocol::ToolCall;
     use serde_json::json;
     use std::sync::Arc;
@@ -1254,37 +1230,12 @@ mod tests {
             Some(AgentUiEvent::ToolStarted { id, name, .. }) if id == "call-1" && name == "view_file"
         ));
 
-        let result = ToolResult {
-            tool_name: "view_file".to_owned(),
-            content: "ok".to_owned(),
-            diff: None,
-            file_preview: None,
-            metadata: ToolResultMetadata {
-                execution_us: 0,
-                workspace_generation: None,
-                call_id: Some("call-1".to_owned()),
-                success: true,
-                ..ToolResultMetadata::default()
-            },
-        };
-        assert!(matches!(
-            map_agent_event(AgentEvent::ToolResult(result)),
-            Some(AgentUiEvent::ToolFinished { id, .. }) if id == "call-1"
-        ));
         assert!(matches!(
             map_agent_event(AgentEvent::Finished(FinishReason::Stop)),
             Some(AgentUiEvent::TurnFinished {
                 completed: true,
                 ..
             })
-        ));
-        assert!(matches!(
-            map_agent_event(AgentEvent::Cancelled),
-            Some(AgentUiEvent::Cancelled { .. })
-        ));
-        assert!(matches!(
-            map_agent_event(AgentEvent::Error("retry".to_owned())),
-            Some(AgentUiEvent::Error { message, retryable: false }) if message == "retry"
         ));
     }
 

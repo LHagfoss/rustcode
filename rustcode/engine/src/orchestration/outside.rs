@@ -435,6 +435,7 @@ pub fn revoke_at(path: &Path, id: &str) -> Result<bool, String> {
 
 /// The grant `token` belongs to. Read from the file on every call, so a
 /// revocation or a change of scope applies to the very next call.
+#[cfg(test)]
 pub fn authenticate_at(path: &Path, token: &str) -> Option<Grant> {
     authenticate_transport_at(path, token, false)
 }

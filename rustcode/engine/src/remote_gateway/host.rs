@@ -87,6 +87,7 @@ enum Step {
 /// the one to replace. A plist left behind while its job is not loaded proves
 /// nothing: the gateway that happens to be running is the app's or a
 /// terminal's, and the server adopts it (`docs/remote.md`).
+#[cfg(any(target_os = "macos", test))]
 fn handover_required(agent_pid: Option<u32>, running_pid: Option<u32>) -> bool {
     matches!((agent_pid, running_pid), (Some(agent), Some(running)) if agent == running)
 }

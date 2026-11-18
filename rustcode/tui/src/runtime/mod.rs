@@ -109,7 +109,6 @@ impl fmt::Display for AppError {
 impl Error for AppError {}
 
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) enum AppRunControl {
     Continue,
     Exit(crate::run::ExitSummary),
@@ -473,7 +472,7 @@ mod tests {
 
         assert!(matches!(
             runtime.handle_event(AppEvent::Exit).await,
-            Ok(AppRunControl::Exit(_))
+            Ok(AppRunControl::Exit(summary)) if summary.prompt_tokens == 0
         ));
     }
 

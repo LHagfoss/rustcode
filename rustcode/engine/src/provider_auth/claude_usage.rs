@@ -39,7 +39,7 @@
 use super::rate_limits::RateLimitWindow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -165,7 +165,8 @@ static READS: Mutex<Option<HashMap<Option<PathBuf>, Arc<tokio::sync::Mutex<()>>>
 /// does not ask again — that is what would prompt the user again — and uses the
 /// credentials file alone until an explicit look asks macOS once more. In
 /// memory only, like the cache: a restart asks once at the most.
-static DENIED: Mutex<Option<HashSet<Option<PathBuf>>>> = Mutex::new(None);
+#[cfg(any(target_os = "macos", test))]
+static DENIED: Mutex<Option<std::collections::HashSet<Option<PathBuf>>>> = Mutex::new(None);
 
 /// A remembered answer and when the read that gave it started.
 struct Entry {
@@ -224,11 +225,13 @@ pub(crate) async fn usage(config_dir: Option<&Path>, freshness: Freshness) -> Cl
 
 /// Whether a background read may skip the Keychain because macOS already
 /// refused it. An explicit read always asks, so the user can allow it again.
+#[cfg(any(target_os = "macos", test))]
 fn skip_keychain(freshness: Freshness, blocked: bool) -> bool {
     freshness == Freshness::Cached && blocked
 }
 
 /// Whether macOS refused this directory's Keychain item on an earlier read.
+#[cfg(any(target_os = "macos", test))]
 fn keychain_blocked(key: &Option<PathBuf>) -> bool {
     DENIED
         .lock()
@@ -237,11 +240,12 @@ fn keychain_blocked(key: &Option<PathBuf>) -> bool {
 }
 
 /// Records, or clears, that macOS refused this directory's Keychain item.
+#[cfg(any(target_os = "macos", test))]
 fn remember_keychain_denial(key: &Option<PathBuf>, denied: bool) {
     let Ok(mut blocked) = DENIED.lock() else {
         return;
     };
-    let blocked = blocked.get_or_insert_with(HashSet::new);
+    let blocked = blocked.get_or_insert_with(std::collections::HashSet::new);
     if denied {
         blocked.insert(key.clone());
     } else {
@@ -251,6 +255,7 @@ fn remember_keychain_denial(key: &Option<PathBuf>, denied: bool) {
 
 /// Whether a failed lookup was macOS refusing the item, as opposed to there
 /// being none or the item being unusable.
+#[cfg(any(target_os = "macos", test))]
 fn is_denial(miss: &NoCredentials) -> bool {
     matches!(miss, NoCredentials::Unavailable(NoUsage::Denied, _))
 }
@@ -702,6 +707,7 @@ enum NoCredentials {
     /// explicit retry can help, and the text says what happened. Never
     /// reported as signed out: a denied Keychain prompt or a locked Keychain is
     /// not the user signing out.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     Unavailable(NoUsage, &'static str),
 }
 
@@ -711,6 +717,7 @@ const KEYCHAIN_REFUSED: &str =
     "macOS did not allow reading Claude Code's sign-in from the Keychain.";
 
 /// The item was printed but held no sign-in.
+#[cfg(any(target_os = "macos", test))]
 const KEYCHAIN_UNREADABLE: &str = "Claude Code's sign-in in the Keychain could not be read.";
 
 /// Why a login has no numbers when its stored access token has lapsed: Claude
@@ -728,6 +735,7 @@ const EXPIRED_DEFAULT: &str = "Run a Claude Code thread to refresh its usage.";
 /// 36 (`errSecInteractionNotAllowed`), a refused one 51 (`errSecAuthFailed`);
 /// none of them says the user is signed out. Neither does `security` failing to
 /// run at all (no status).
+#[cfg(any(target_os = "macos", test))]
 fn keychain_miss(code: Option<i32>) -> NoCredentials {
     match code {
         Some(44) => NoCredentials::None,
@@ -738,6 +746,7 @@ fn keychain_miss(code: Option<i32>) -> NoCredentials {
 /// What one `security find-generic-password -w` run left: the stored sign-in, or
 /// why there is none. A run that succeeded but printed something else reads as
 /// signed in but unreadable, never as signed out.
+#[cfg(any(target_os = "macos", test))]
 fn keychain_outcome(
     success: bool,
     code: Option<i32>,

@@ -68,13 +68,10 @@ pub struct ToolResultMetadata {
 
 /// Provider-independent reason that a model response stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum FinishReason {
     Stop,
     ToolCalls,
     Length,
-    Cancelled,
-    Error(String),
     Unknown(String),
 }
 
@@ -313,15 +310,10 @@ pub(crate) fn classify_response(
 /// state machine. The current loop still consumes some legacy return values;
 /// this type is the migration seam for the event-driven loop.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum AgentEvent {
     TextDelta(String),
     ToolCall(ToolCall),
-    ToolResult(ToolResult),
     Finished(FinishReason),
-    ContextLimit,
-    Cancelled,
-    Error(String),
 }
 
 /// Decision returned by the turn state machine after a response is classified.

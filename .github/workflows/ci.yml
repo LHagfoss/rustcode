@@ -282,12 +282,14 @@ jobs:
 
             - name: Clippy correctness gate
               if: env.AFFECTED_PACKAGES != ''
-              # The codebase has an established warning baseline. Keep those
-              # warnings visible locally while denying only correctness lints.
+              # The codebase has an established clippy warning baseline. Keep
+              # those visible locally while denying correctness lints and dead
+              # code: platform- and test-only items are gated with `cfg`, so a
+              # dead-code warning on Linux is real (#3950).
               shell: bash
               run: |
                   read -ra packages <<< "$AFFECTED_PACKAGES"
-                  cargo clippy --locked "${packages[@]}" -- -A warnings -D clippy::correctness
+                  cargo clippy --locked "${packages[@]}" -- -A warnings -D clippy::correctness -D dead_code
 
             - name: Check the TUI stays behind the frontend seam
               if: needs.changes.outputs.code == 'true'

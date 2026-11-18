@@ -73,7 +73,6 @@ use rustcode_tool_protocol::text::is_cut_off;
 pub(crate) mod stream;
 pub(crate) use stream::StreamBuffer;
 
-#[path = "network/stream_request.rs"]
 pub(crate) mod stream_request;
 mod thinking_router;
 pub(crate) use stream_request::is_chatgpt_credential;

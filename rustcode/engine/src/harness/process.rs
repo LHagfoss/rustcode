@@ -124,6 +124,7 @@ const NON_INTERACTIVE_ENV: [(&str, &str); 6] = [
 /// Start `command` in `cwd`. `log_session` names the thread whose debug log
 /// receives the child's stderr. `env` adds variables; `remove` drops ones the
 /// login shell brought in, so a chosen harness account is not overridden.
+#[cfg(all(test, unix))]
 pub(crate) fn spawn(
     harness_id: &str,
     command: &[String],

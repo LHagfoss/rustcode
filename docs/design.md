@@ -1098,17 +1098,17 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   (`Started in background` in `text-caption text-fg-faint`): its task is the
   thread's own waiting line, not a spinner on a call that already answered.
 - **Subagent row:** a subagent (Claude Code's `Agent`/`Task` call,
-  RustCode's `spawn_agent`) is one row in the tool rows' grammar: the `Orb`
-  (a 3×3 dot ring whose light travels clockwise) while it works, else a
-  `CircleCheck`/`CircleX`, in the 18px column; its type in `font-medium`,
+  RustCode's `spawn_agent`) is one row in the tool rows' grammar: its
+  avatar (the harness logo, or `Bot`) with a corner badge, a `Spinner` in
+  accent while it works, else `Check`, `X` or `Minus`; its type in `font-medium`,
   the task in `text-fg-muted`, and while it works its current step in
   `text-accent`, done `3 steps · 42s`. Its own steps never become
   transcript rows; the chevron opens a card (`rounded-xl bg-surface-2`) of
   one-line steps and its answer. Two or more subagents in a row are one row:
   `3 subagents`, then `2 working · 42s` in accent (or `1 failed`,
   `done`), opening to a card with each agent's row. Over the composer,
-  `● 2 agents working` (accent pill with the `Orb`) opens on hover a card
-  of each working agent and its step.
+  the turn's working line reads `2 agents working`, or the one agent's name
+  and task.
 - **Turn fold:** while a turn runs, `Working for 12s` heads it under the
   message that started it (`text-body text-fg-muted` over a
   `border-border/60` hairline), its replies and the call it makes now
