@@ -894,6 +894,22 @@ pub(crate) async fn snapshot_in_with(dir: &std::path::Path, probe: bool) -> Resu
     // Each account's sign-in is read the same way: off the runtime, every one
     // of them at once, since a probe runs a status command that can sleep.
     let accounts = account_rows(&harnesses, &accounts, probe).await;
+    // A cached model list is only checked for staleness when `models` is
+    // asked, and a client that already holds one never asks: after a harness
+    // update its new models would never show. Reading the snapshot checks
+    // each one it shows, and lists it again in the background when it is old,
+    // from another version or unprobed; the client's next read has the result.
+    // Unit tests read snapshots of fake harnesses and must not start them.
+    for (harness, detection) in harnesses.iter().zip(detections.iter()) {
+        if !cfg!(test)
+            && harness.kind != HarnessKind::Builtin
+            && harness.enabled
+            && detection.installed
+            && learned_for(&harness.id).models.is_some()
+        {
+            refresh_if_stale(harness.clone());
+        }
+    }
     let rows = harnesses
         .iter()
         .zip(detections.iter())
