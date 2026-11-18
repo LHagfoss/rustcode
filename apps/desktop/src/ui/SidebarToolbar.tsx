@@ -9,10 +9,10 @@ import {
   useSidebarDensity,
   useSidebarSort,
 } from "../state/sidebarPrefs";
-import { openSettings, setView, toast, useApp } from "../state/store";
+import { setView, toast, useApp } from "../state/store";
 import { applySidebarSort } from "../state/threadActions";
 import { startNewThreadFromContext } from "../state/threadOpen";
-import { ArrowDownUp, Blocks, Check, Gauge, ListFilter, Repeat, SquarePen, X } from "./icons";
+import { ArrowDownUp, Check, ListFilter, Repeat, SquarePen, X } from "./icons";
 import { cx, MenuContent, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
 
 const TOOL_BUTTON =
@@ -65,12 +65,6 @@ export function SidebarToolbar() {
         </button>
         <NavRow label="Loops" current={view === "loops"} onClick={() => setView({ kind: "loops" })}>
           <Repeat size={14} />
-        </NavRow>
-        <NavRow label="Capabilities" onClick={() => openSettings("capabilities")}>
-          <Blocks size={14} />
-        </NavRow>
-        <NavRow label="Usage" onClick={() => openSettings("usage")}>
-          <Gauge size={14} />
         </NavRow>
       </nav>
       {filtering && (
