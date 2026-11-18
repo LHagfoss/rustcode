@@ -222,6 +222,29 @@ struct Registry {
     generations: HashMap<String, u64>,
     /// The recent updates of each session, numbered.
     logs: HashMap<String, UpdateLog>,
+    /// The last `_rustcode/session/activity` of each session that reported
+    /// one, sent again to a client that loads or resumes it: it goes out only
+    /// when it changes, so a client that attached later, or was away when it
+    /// changed, would otherwise show a working thread as finished.
+    activities: HashMap<String, Activity>,
+}
+
+/// What `_rustcode/session/activity` last said of a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Activity {
+    state: String,
+    background: usize,
+}
+
+fn activity_notification(
+    session_id: &str,
+    activity: &Activity,
+) -> super::prompt::SessionActivityNotification {
+    super::prompt::SessionActivityNotification {
+        session_id: session_id.to_owned(),
+        state: activity.state.clone(),
+        background: activity.background,
+    }
 }
 
 /// `update` as a notification carrying `cursor`: a logged update, one a
@@ -411,6 +434,7 @@ impl Clients {
         registry.turns.remove(session_id);
         registry.generations.remove(session_id);
         registry.logs.remove(session_id);
+        registry.activities.remove(session_id);
     }
 
     /// The history of `session_id` changed without an update saying so (a
@@ -720,6 +744,10 @@ impl Peer {
             self.connection
                 .send_notification(notification(session_id, update, cursor))?;
         }
+        if let Some(activity) = registry.activities.get(session_id) {
+            self.connection
+                .send_notification(activity_notification(session_id, activity))?;
+        }
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
             entry
@@ -763,6 +791,10 @@ impl Peer {
                 logged.update.clone(),
                 logged.cursor,
             ))?;
+        }
+        if let Some(activity) = registry.activities.get(session_id) {
+            self.connection
+                .send_notification(activity_notification(session_id, activity))?;
         }
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
@@ -835,6 +867,30 @@ impl SessionClients {
         notification: N,
     ) -> Result<(), agent_client_protocol::Error> {
         send_all(self.clients.audience(&self.session_id), notification)
+    }
+
+    /// `_rustcode/session/activity`: what the session does outside a prompt
+    /// (`waiting` on background commands, `running` a turn it woke for,
+    /// `idle`). Kept, so a client that loads or resumes the session later is
+    /// told too, then sent to every connection that has it now.
+    pub(crate) fn activity(
+        &self,
+        state: &str,
+        background: usize,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let activity = Activity {
+            state: state.to_owned(),
+            background,
+        };
+        // Recorded and addressed under one lock, as an update is: a client
+        // attaching meanwhile gets it either in its load or here, never
+        // neither. Sending only queues the message.
+        let registry = &mut *self.clients.registry();
+        let notification = activity_notification(&self.session_id, &activity);
+        registry
+            .activities
+            .insert(self.session_id.clone(), activity);
+        send_all(audience_of(registry, &self.session_id), notification)
     }
 
     /// A `session/update` of this session. A running turn keeps it for a
@@ -1056,6 +1112,20 @@ mod tests {
         tokio::sync::mpsc::UnboundedReceiver<SessionNotification>,
         tokio::sync::oneshot::Sender<()>,
     ) {
+        let (peer, notes, _activities, close) = connected_with_activity(clients).await;
+        (peer, notes, close)
+    }
+
+    /// [`connected`], and every `_rustcode/session/activity` it is sent.
+    async fn connected_with_activity(
+        clients: &Clients,
+    ) -> (
+        Peer,
+        tokio::sync::mpsc::UnboundedReceiver<SessionNotification>,
+        tokio::sync::mpsc::UnboundedReceiver<super::super::prompt::SessionActivityNotification>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (activities_tx, activities) = tokio::sync::mpsc::unbounded_channel();
         let id = clients.new_id();
         let (engine, transport) = Channel::duplex();
         let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
@@ -1098,6 +1168,14 @@ mod tests {
                     },
                     agent_client_protocol::on_receive_notification!(),
                 )
+                .on_receive_notification(
+                    async move |notification: super::super::prompt::SessionActivityNotification,
+                                _connection| {
+                        let _ = activities_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
                 .connect_with(transport, async move |connection| {
                     connection
                         .send_request(InitializeRequest::new(
@@ -1110,7 +1188,65 @@ mod tests {
                 })
                 .await
         });
-        (peer_rx.await.expect("initialized"), notes, close_tx)
+        (
+            peer_rx.await.expect("initialized"),
+            notes,
+            activities,
+            close_tx,
+        )
+    }
+
+    /// A client that loads or resumes a session after its activity changed is
+    /// told it too: the activity goes out only on a change, and a thread the
+    /// agent woke for showed as finished in an app that attached later.
+    #[tokio::test]
+    async fn a_late_load_or_resume_is_told_the_last_activity() {
+        let clients = Clients::default();
+        let sender = clients.session("woken");
+        sender.update(text("before")).expect("send");
+        let seen = clients.head("woken");
+        sender.activity("waiting", 2).expect("recorded");
+        sender.activity("running", 1).expect("recorded");
+
+        let (loader, _notes, mut loaded, _close) = connected_with_activity(&clients).await;
+        loader
+            .attach_open("woken", None, vec![text("history")], false)
+            .expect("sends")
+            .expect("current");
+        let (resumer, _notes, mut resumed, _close) = connected_with_activity(&clients).await;
+        resumer
+            .resume_open("woken", seen)
+            .expect("sends")
+            .expect("the cursor is recent");
+        for activities in [&mut loaded, &mut resumed] {
+            let got = tokio::time::timeout(std::time::Duration::from_secs(10), activities.recv())
+                .await
+                .expect("arrives")
+                .expect("an activity");
+            assert_eq!((got.state.as_str(), got.background), ("running", 1));
+        }
+
+        // Live changes reach both; a forgotten session tells a new client nothing.
+        sender.activity("idle", 0).expect("sent");
+        for activities in [&mut loaded, &mut resumed] {
+            let got = activities.recv().await.expect("live");
+            assert_eq!(got.state, "idle");
+        }
+        clients.forget_session("woken");
+        let (late, _notes, mut late_activities, _close) = connected_with_activity(&clients).await;
+        late.attach_open("woken", None, vec![], false)
+            .expect("sends")
+            .expect("current");
+        late.send_snapshot("woken", text("marker")).expect("sends");
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                late_activities.recv()
+            )
+            .await
+            .is_err(),
+            "nothing recorded after the session closed"
+        );
     }
 
     fn text(text: &str) -> SessionUpdate {

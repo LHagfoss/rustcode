@@ -292,13 +292,7 @@ impl ClientSink for AcpClientSink {
     }
 
     fn activity(&self, activity: harness::background::Activity) {
-        let _ = self
-            .clients
-            .notify(super::prompt::SessionActivityNotification {
-                session_id: self.clients.session_id().to_owned(),
-                state: activity.state.to_owned(),
-                background: activity.background,
-            });
+        let _ = self.clients.activity(activity.state, activity.background);
     }
 
     fn child_activity(&self, activity: harness::child_activity::ChildActivity) {

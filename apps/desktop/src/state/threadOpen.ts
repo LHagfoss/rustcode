@@ -54,6 +54,7 @@ import {
   keepUnlisted,
   keptUnlistedThreads,
   type NewThreadChoice,
+  onSessionActivity,
   refreshSessions,
   releaseAnnouncements,
   runPrompt,
@@ -477,6 +478,10 @@ export function openThread(id: string): Promise<string | null> {
     } finally {
       loading.delete(id);
       if (opening.get(id) === pending) opening.delete(id);
+      // What the thread does now, sent with the load: applied once its replay is in, or dropped.
+      const activity = activityDuringLoad.get(id);
+      activityDuringLoad.delete(id);
+      if (activity !== undefined && isLoaded(get().threads[id])) onSessionActivity(activity);
     }
   });
   opening.set(id, pending);
@@ -485,6 +490,20 @@ export function openThread(id: string): Promise<string | null> {
     threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), load: { phase: "loading" } } },
   }));
   return pending;
+}
+
+/** The last `_rustcode/session/activity` of each thread whose load replay is arriving. */
+const activityDuringLoad = new Map<string, unknown>();
+
+/**
+ * `_rustcode/session/activity`, held while its thread loads: the engine says what the thread does
+ * now ahead of the load's answer, and applied before it, the load's own end (`finishLoad`) would
+ * close the turn the agent woke for and show the thread as finished.
+ */
+export function receiveActivity(params: unknown): void {
+  const id = str((params as JsonObject | null)?.sessionId);
+  if (id && isLoading(get().threads[id])) activityDuringLoad.set(id, params);
+  else onSessionActivity(params);
 }
 
 /** Threads whose open was repaired automatically in this app session: once each, never a loop. */

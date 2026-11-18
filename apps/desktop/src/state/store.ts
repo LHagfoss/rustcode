@@ -405,6 +405,7 @@ import {
   loadMachineHarnesses,
   opening,
   openThread,
+  receiveActivity,
   resetFocusList,
   selectThread,
 } from "./threadOpen";
@@ -1979,12 +1980,11 @@ export async function restartEngine(): Promise<void> {
 }
 
 /**
- * `_rustcode/session/activity`: a turn parked on background commands
- * (`waiting`), woken when they finish (`running`), and that woken turn ending
- * (`idle`). Only a woken turn is finished here; a prompt the app sent ends
- * with its own response.
+ * `_rustcode/session/activity`: a turn parked on background commands (`waiting`), woken when they
+ * finish (`running`), and that woken turn ending (`idle`). Only a woken turn is finished here; a
+ * prompt the app sent ends with its own response. A loading thread's waits (`receiveActivity`).
  */
-function onSessionActivity(params: unknown) {
+export function onSessionActivity(params: unknown) {
   const p = obj(params);
   const id = str(p?.sessionId);
   const state = str(p?.state);
@@ -2056,7 +2056,7 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
       return;
     case "notification":
       if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
-      else if (message.method === Method.sessionActivity) onSessionActivity(message.params);
+      else if (message.method === Method.sessionActivity) receiveActivity(message.params);
       else if (message.method === Method.sessionChildActivity) onChildActivity(message.params);
       else if (message.method === Method.threadCreated) threadCreated(message.params);
       else if (message.method === Method.threadDeleted) threadDeleted(message.params);
