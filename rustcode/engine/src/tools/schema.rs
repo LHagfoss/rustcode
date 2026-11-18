@@ -2673,6 +2673,7 @@ pub(crate) const OUTPUT_STYLE_PROMPT_HINT: &str = "# Output style\n\
 Replies render as Markdown. Lead with the answer or result; never restate the question or narrate what you are about to say. \
 Keep paragraphs short. Use headings only for long, multi-part answers; bullets for parallel items, numbered steps for sequences, \
 a table for comparisons. Fence code with its language and show changes as ```diff; put `path:line` citations in inline code. \
+Link issues and pull requests by their full URL (https://github.com/owner/repo/pull/12), never a bare #12. \
 No emoji, filler, or recap of what the reply already said. End with a next step only when the user has one to take.\n";
 
 /// Added to [`OUTPUT_STYLE_PROMPT_HINT`] for frontends that draw

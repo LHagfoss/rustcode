@@ -4991,7 +4991,13 @@ fn output_style_reaches_root_prompts_within_budget() {
     let compact =
         ToolSchemaPolicy::root_for_mode_with_compact_prompt(false, AgentMode::Build, true);
     assert_eq!(with(compact, 2), "");
-    for rule in ["```diff", "`path:line`", "headings only", "No emoji"] {
+    for rule in [
+        "```diff",
+        "`path:line`",
+        "headings only",
+        "No emoji",
+        "full URL",
+    ] {
         assert!(STYLE.contains(rule), "{rule}");
     }
     // Frontends that cannot draw the blocks never hear of them.
@@ -4999,8 +5005,8 @@ fn output_style_reaches_root_prompts_within_budget() {
     assert!(VIZ.contains("rustcode-viz"));
     // Budget (docs/output-style.md): under 250 extra tokens for the desktop
     // app with Smart UI off or a viz client, less for plain ACP clients.
-    assert!(tokens(&with(ToolSchemaPolicy::root(false), 0)) < 120);
-    assert!(tokens(&with(ToolSchemaPolicy::root(false), 2)) < 140);
+    assert!(tokens(&with(ToolSchemaPolicy::root(false), 0)) < 150);
+    assert!(tokens(&with(ToolSchemaPolicy::root(false), 2)) < 170);
     let viz_client = format!(
         "{}{}{SMART_UI_OFF_PROMPT_HINT}",
         with(ToolSchemaPolicy::root(false), 2),
@@ -5031,7 +5037,7 @@ fn output_style_reaches_root_prompts_within_budget() {
     let harness = harness_output_style(crate::app::SmartUi::Unsupported);
     assert!(harness.starts_with(STYLE) && harness.contains("`path:line`"));
     assert!(!harness.contains("rustcode-viz"));
-    assert!(tokens(&harness) < 140);
+    assert!(tokens(&harness) < 170);
 }
 
 #[test]
