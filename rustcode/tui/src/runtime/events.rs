@@ -100,17 +100,22 @@ impl AppRuntime {
 pub enum AppEvent {
     /// Terminal input produced and consumed by the interactive frontend.
     Tui(TuiEvent),
+    #[cfg_attr(not(test), allow(dead_code))]
     SubmitPrompt(String),
+    #[cfg_attr(not(test), allow(dead_code))]
     CancelActiveTurn,
     ApprovalDecision(ApprovalDecision),
     AnswerQuestion(QuestionAnswer),
     UpdateDecision(UpdateDecision),
     DeleteSession(SessionAction),
     OpenOverlay(Overlay),
+    #[cfg_attr(not(test), allow(dead_code))]
     NewSession,
     ResumeSession(SessionAction),
     SelectSubagent(u32),
+    #[cfg_attr(not(test), allow(dead_code))]
     RequestDraw,
+    #[cfg_attr(not(test), allow(dead_code))]
     Exit,
 }
 
