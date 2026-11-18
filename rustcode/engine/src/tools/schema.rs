@@ -793,8 +793,10 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
 /// `delete_scheduled_task` and `run_scheduled_task_now`, as at 41 KiB a v9 menu
 /// lost its three v9 tools. Raising it keeps every version- and
 /// setting-gated tool advertised (`schema_budget_tests` loops every version);
-/// the 25 KiB budget below still keeps a plain root prompt lean.
-pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 57 * 1024;
+/// the 25 KiB budget below still keeps a plain root prompt lean. It rose to
+/// 62 KiB when the workflow tools (`run_workflow`, `workflow_status`,
+/// `stop_workflow`) joined every version 2 menu (#3943).
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 62 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
@@ -1010,8 +1012,9 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         // The same for the question tool of a harness without one (#3393):
         // a RustCode turn asks with `ask_question`.
         || tool.name == crate::orchestration::ask_user::TOOL_NAME
-        // Workflow runs are started through the `rustcode` MCP server too (#3394).
-        || crate::workflow::is_tool(tool.name)
+        // Workflow runs start delegate threads, so they follow the version 2
+        // orchestration tools that do (#3943); the engine runs them.
+        || (crate::workflow::is_tool(tool.name) && !policy.include_orchestration_v2_tools)
         // Managing RustCode's settings (#3821) is a tool of the `rustcode`
         // MCP server too: the built-in schema has no room under its budget.
         || crate::manage::is_tool(tool.name)

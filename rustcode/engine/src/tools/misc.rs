@@ -1298,8 +1298,9 @@ pub const ASK_USER_QUESTION: Tool = Tool {
 };
 
 /// Start a durable workflow run (#3394). Offered through the `rustcode` MCP
-/// server only; the engine's hub runs it (`workflow.rs`). A RustCode thread
-/// has no workflow runner.
+/// server, where the engine's hub runs it, and to a built-in turn with the
+/// version 2 orchestration tools, where `network/tool_exec.rs` routes it to
+/// the same runner (#3943); the handler is never reached.
 pub const RUN_WORKFLOW: Tool = Tool {
     name: crate::workflow::RUN_TOOL_NAME,
     description: "Start a workflow run: a JavaScript script that fans work out to worker threads and keeps its place on disk, so it survives a restart. Give `script` (the body of an async function: use await, return a JSON value) or `name` (a file in .rustcode/workflows/). The script has agent(prompt, {schema?, harness?, model?, effort?, title?}) which starts a normal delegate thread under this one and returns its reply (parsed and checked against `schema` when one is given), parallel([() => agent(...), ...]) which runs calls together, phase(title) which names the step the next calls belong to, log(...), and `args` (your `args` argument). The script runs in a sandbox with no files, shell, network, Date or Math.random, so it runs the same way every time and a restarted run replays its finished calls. Returns a run_id at once; read it with workflow_status. Limits (workers at once, total agent calls, run time) come from the user's settings and `concurrency`, `call_budget` and `timeout_minutes` can only lower them.",

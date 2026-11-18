@@ -1411,6 +1411,44 @@ fn next_call_id() -> String {
     format!("call-{}", CALLS.fetch_add(1, Ordering::Relaxed))
 }
 
+/// A built-in turn's `run_workflow`, `workflow_status` or `stop_workflow`
+/// (#3943): the engine runs it, as the hub does for a harness's MCP server,
+/// and the run's workers start through the same host as this thread's other
+/// orchestration calls.
+pub async fn execute_workflow(
+    state: &Arc<Mutex<crate::app::AppState>>,
+    cancel: &tokio_util::sync::CancellationToken,
+    name: &str,
+    args: &Value,
+) -> ToolExecutionOutput {
+    let (client, version, session_id) = {
+        let state = state.lock().await;
+        // With no app the engine answers for itself at its own version, as
+        // the tool menu does (`network.rs`).
+        let version = if state.orchestration_client.is_some() {
+            state.orchestration_version
+        } else {
+            VERSION
+        };
+        (
+            state.orchestration_client.clone(),
+            version,
+            state.active_session_id.clone(),
+        )
+    };
+    if let Err(reason) = crate::workflow::validate(name, args) {
+        return ToolExecutionOutput::failure_with_kind(
+            format!("error: invalid {name} call: {reason}. Nothing was started."),
+            ToolErrorKind::InvalidArguments,
+            false,
+        );
+    }
+    match crate::workflow::answer(&session_id, client, version, cancel, name, args).await {
+        Ok(content) => ToolExecutionOutput::success(content),
+        Err(reason) => ToolExecutionOutput::failure(format!("error: {name} failed: {reason}")),
+    }
+}
+
 /// Run one call through the session's host.
 pub async fn execute(
     state: &Arc<Mutex<crate::app::AppState>>,
