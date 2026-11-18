@@ -1,3 +1,19 @@
+## [v1.42.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.42.0) - 2026-11-18
+
+### Features
+- Settings › Appearance: the live background presets no longer touch the top of their card. (#3964)
+- Sidebar: Capabilities and Usage are no longer in the nav block; open them from Settings or ⌘K. (#3966)
+- The thread header's buttons now read as one group: the git button is an icon with its actions in its menu, and the status button has no separate background. (#3968)
+- Fix the model picker not showing new or newly installed harnesses' models, and its list not scrolling to the last model (#3965)
+- Plan usage now shows for threads running on a paired machine (the gateway no longer refuses the request). (#3967)
+- Loops: pick days, a time or a date and time from pickers, choose the model from a list, and the dialog no longer resets while you type; weekday schedules now run on the right days. (#3969)
+- Threads whose agent is still working on its own (a background command finished and woke it) now show as working when you open them or reconnect, including threads on a paired machine. (#3970)
+- A background RustCode server now restarts onto a newer version as soon as one is installed, once no turn is running, so paired apps no longer talk to an outdated engine. (#3971)
+- Cmd+W closes a thread that is already settled, the command palette's sort and filter sit beside the search field, and the Settled shelf folds while a settled delegate is open. (#3972)
+- `/rename` now names the thread on every harness: alone, the agent picks a title; with a name, the thread takes that name. (#3974)
+- Thread names in the sidebar stay put instead of following what a Claude Code agent is doing. (#3975)
+- Agents link issues and pull requests by URL, and the chat shows them as chips with their number and title. (#3978)
+- Outside agents can be approved from Chromium browsers (Aside, Chrome, Edge), and the sign-in page matches the app's design. (#3977)
 ## [v1.41.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.41.0) - 2026-11-18
 
 ### Features
