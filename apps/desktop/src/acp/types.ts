@@ -518,6 +518,30 @@ export function parseToolStatus(value: unknown): ToolStatus | undefined {
 }
 
 /** One ACP `diff` item: a file's text before and after an edit. */
+/**
+ * A refusal by the harness's own permission layer, which RustCode's access level does not control
+ * (Claude Code's auto mode, for one): the engine marks it on the failed call (`harness/denial.rs`).
+ */
+export interface HarnessDenial {
+  /** Who refused: "Claude Code". */
+  by: string;
+  /** Which of its layers: "auto mode". */
+  layer: string;
+  reason?: string;
+  /** Where the user changes it, in words. */
+  change: string;
+}
+
+/** `_meta.rustcode.harnessDenial`, when it is whole. */
+function parseHarnessDenial(value: Json | undefined): HarnessDenial | undefined {
+  const denial = obj(value);
+  const by = str(denial?.by);
+  const layer = str(denial?.layer);
+  const change = str(denial?.change);
+  if (!by || !layer || !change) return undefined;
+  return { by, layer, change, reason: str(denial?.reason) };
+}
+
 export interface FileDiff {
   path: string;
   /** Undefined for a file the edit created. */
@@ -620,6 +644,8 @@ export type SessionUpdate =
       parent?: string;
       /** The call's work went on in the background (Claude Code's async task marker). */
       backgrounded?: boolean;
+      /** The harness refused it itself, outside RustCode's access level. */
+      denial?: HarnessDenial;
     }
   | { kind: "plan"; entries: PlanEntry[] }
   | { kind: "title"; title: string }
@@ -781,6 +807,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         parent: str(claudeMeta(update)?.parentToolUseId),
         backgrounded:
           bool(obj(obj(obj(obj(update._meta)?.jetbrains)?.air)?.asyncTasks)?.backgrounded) || undefined,
+        denial: parseHarnessDenial(meta?.harnessDenial),
       };
     case "plan":
       return {

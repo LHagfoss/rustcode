@@ -4,7 +4,7 @@
 
 import { Fragment, memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../acp/jsonrpc";
-import { effortLabel, modelName } from "../acp/types";
+import { effortLabel, type HarnessDenial, modelName } from "../acp/types";
 import { type AnsiLine, ansiClass } from "../lib/ansi";
 import { displayCommand } from "../lib/command";
 import { observeSize } from "../lib/resize";
@@ -16,6 +16,7 @@ import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { stateOf } from "../state/host";
 import { LINK_LABEL, parseDelivered } from "../state/orchestration";
+import { harnessDenialText } from "../state/permissions";
 import {
   editMessage,
   forkThread,
@@ -803,7 +804,12 @@ export const ToolRow = memo(function ToolRow({
   // A command whose title already is the command line shows it once.
   const shownDetail = trimmed && !title.includes(trimmed) ? trimmed : undefined;
   // Why it failed, on the row itself: the first line of what it printed, when no exit code says it.
-  const reason = failed && item.exitCode === undefined ? failureReason(item.output) : "";
+  const reason =
+    failed && item.denial
+      ? `Denied by ${item.denial.by}`
+      : failed && item.exitCode === undefined
+        ? failureReason(item.output)
+        : "";
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   return (
     <div>
@@ -890,6 +896,7 @@ export const ToolRow = memo(function ToolRow({
           </Tooltip>
         )}
       </div>
+      {failed && item.denial && <HarnessDenialLine denial={item.denial} />}
       <McpAppSlot item={item} threadId={threadId} />
       {startedRun && threadId && <WorkflowCard threadId={threadId} runId={startedRun} />}
       {open && (
@@ -900,6 +907,18 @@ export const ToolRow = memo(function ToolRow({
     </div>
   );
 });
+
+/**
+ * A refusal by the harness's own permission layer, under its row: who said no and why, that
+ * RustCode's access level does not control it, and where it is changed (`docs/permissions.md`).
+ */
+function HarnessDenialLine({ denial }: { denial: HarnessDenial }) {
+  return (
+    <p className="mt-0.5 ml-[26px] max-w-[72ch] text-caption text-fg-muted" role="note">
+      {harnessDenialText(denial)}
+    </p>
+  );
+}
 
 /** Where the thread's model or effort changed: a quiet divider, `gpt-6-luna → gpt-6 · Low → High`. */
 export function SwitchRow({ item }: { item: Item<"switch"> }) {

@@ -55,6 +55,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "why prompt approval full access account outside question plan",
   },
   {
+    section: "permissions",
+    title: "Not controlled by access",
+    keywords: "refused denied command guard policy rule claude code auto mode classifier harness",
+  },
+  {
     section: "general",
     title: "Continue threads after a restart",
     keywords: "resume quit update server engine restart cut short",

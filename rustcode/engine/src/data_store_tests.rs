@@ -489,6 +489,20 @@ fn account_grant_survives_store_reopen_without_links() {
 }
 
 #[test]
+fn an_engine_grant_is_added_once_beside_the_apps() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DATA_FILE);
+    let app = json!(["delegate-account", "local", "codex", "work"]).to_string();
+    let book = json!({"links": [], "grants": {"parent": [app]}, "counters": {}, "fanOuts": []});
+    save_link_book_at(&path, &book).unwrap();
+    let engine = json!(["delegate-account", "local", "claude-code", "personal-1"]).to_string();
+    add_grant_at(&path, "parent", &engine).unwrap();
+    add_grant_at(&path, "parent", &engine).unwrap();
+    let loaded = load_link_book_at(&path).unwrap();
+    assert_eq!(loaded["book"]["grants"]["parent"], json!([app, engine]));
+}
+
+#[test]
 fn the_apps_save_cannot_undo_a_link_the_engine_runs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(DATA_FILE);

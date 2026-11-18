@@ -438,7 +438,15 @@ impl Hub {
             }
         };
         let args = expanded.as_ref().unwrap_or(&request.args);
-        if client.is_none() && request.tool == super::MERGE_WHEN_GREEN {
+        // With no client hosting the tools the engine answers these itself, and
+        // the thread's own approval card is how it asks: a merge, or a delegate
+        // on a login that needs the user's account approval.
+        if client.is_none()
+            && matches!(
+                request.tool.as_str(),
+                super::MERGE_WHEN_GREEN | super::START_SESSION | super::FAN_OUT
+            )
+        {
             let answer = super::local::answer_json_with_asker(
                 &request.session_id,
                 cancel,

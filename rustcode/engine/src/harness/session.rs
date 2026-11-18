@@ -1005,6 +1005,10 @@ impl ExternalSession {
                     note_output(&progress, &output);
                     match output {
                         Output::Update(update) => {
+                            // A refusal by the harness's own permission layer
+                            // is marked on its row instead of passing as a
+                            // plain failure (`harness::denial`).
+                            let update = super::denial::mark(update, &thread_id, &harness_id);
                             let compact_command = {
                                 let mut transcript =
                                     transcript.lock().unwrap_or_else(|error| error.into_inner());
