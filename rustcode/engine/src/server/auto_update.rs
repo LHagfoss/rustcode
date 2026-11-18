@@ -18,6 +18,13 @@
 //! for a prerelease build, and `[server] auto_update = false` turns it off
 //! without a restart. A failure is logged and retried after a longer pause
 //! each time, never in a loop.
+//!
+//! Separately, and whatever `auto_update` says, the server follows its own
+//! binary ([`watch_binary`]): when `rustcode --update`, Homebrew, the app or
+//! an install script replaces it with another version, the server restarts
+//! onto that copy once no turn runs. A server left on the binary it started
+//! from kept serving 1.40.0 for a day after 1.41.0 was installed, and paired
+//! apps talked to the old engine.
 
 use crate::service::server_service as service;
 use crate::update::{current_version, latest_available_version, run_update};
@@ -33,6 +40,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(6 * 60 * 60);
 const FIRST_LOOK: Duration = Duration::from_secs(2 * 60);
 /// How often a found release waits to see whether the server is idle.
 const IDLE_POLL: Duration = Duration::from_secs(10);
+/// How often the server checks whether its binary was replaced.
+const BINARY_POLL: Duration = Duration::from_secs(60);
 
 /// What the server knows when it looks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,9 +166,65 @@ enum Outcome {
     Failed,
 }
 
-/// Start looking for releases for as long as the server lives. Called by a
-/// server that a service manager started; a server an app or a terminal
-/// started is that app's or terminal's to update.
+/// The version to restart onto, when the binary on disk answers `on_disk`
+/// and this server runs `running`: a newer one. An older copy is someone's
+/// choice to make with a restart, not this one's.
+pub(crate) fn replaced_by(running: &str, on_disk: Option<&str>) -> Option<Version> {
+    let on_disk = on_disk?;
+    if on_disk == running {
+        return None;
+    }
+    let disk = rustcode_core::update::parse_semver(on_disk)?;
+    let current = rustcode_core::update::parse_semver(running)?;
+    // `1.41.0` replaces `1.41.0-beta.2`; one beta of a release does not
+    // replace another, since the digits cannot tell which is newer.
+    let released = disk == current && running.contains('-') && !on_disk.contains('-');
+    (disk > current || released).then_some(disk)
+}
+
+/// The binary's modification time, which changes when it is replaced.
+fn modified(program: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(program)
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
+/// Follow the binary this server started from: once another version replaces
+/// it, restart onto it when no turn runs (`server restart --when-idle`). Only
+/// a replaced file is asked its version, so the check costs a `stat` a minute.
+async fn watch_binary(program: PathBuf) {
+    let running = env!("CARGO_PKG_VERSION");
+    let mut seen = modified(&program);
+    let mut target: Option<Version> = None;
+    loop {
+        tokio::time::sleep(BINARY_POLL).await;
+        let now = modified(&program);
+        if now.is_some() && now != seen {
+            seen = now;
+            let on_disk = crate::service::path_binary::ask_version(&program).await;
+            target = replaced_by(running, on_disk.as_deref());
+            if let Some(version) = target {
+                crate::dbg_log!(
+                    "RustCode server: {} was replaced by {}; running {running}",
+                    program.display(),
+                    format_version(version)
+                );
+            }
+        }
+        // A restart already waiting for idle is not started twice; one that
+        // could not start is tried again next time.
+        if let Some(version) = target
+            && !service::restart_waiting()
+        {
+            let _ = restart(&program, version);
+        }
+    }
+}
+
+/// Start looking for releases for as long as the server lives, and follow the
+/// binary for a replacement. Called by a server that a service manager
+/// started; a server an app or a terminal started is that app's or
+/// terminal's to update.
 pub fn spawn() {
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
         return;
@@ -170,6 +235,11 @@ pub fn spawn() {
         return;
     };
     let build = build_kind(&program);
+    // A development build is rebuilt all the time; restarting onto every one
+    // would cut off whatever it runs.
+    if build != Build::Development {
+        runtime.spawn(watch_binary(program.clone()));
+    }
     if build != Build::Release {
         crate::dbg_log!(
             "RustCode server auto-update: off for {} build",
@@ -341,6 +411,20 @@ mod tests {
             restart_pending: false,
             running_turns: Some(0),
         }
+    }
+
+    #[test]
+    fn a_replaced_binary_is_followed_only_to_a_newer_version() {
+        assert_eq!(replaced_by("1.40.0", Some("1.41.0")), Some((1, 41, 0)));
+        assert_eq!(
+            replaced_by("1.41.0-beta.2", Some("1.41.0")),
+            Some((1, 41, 0))
+        );
+        assert_eq!(replaced_by("1.41.0", Some("1.41.0")), None);
+        assert_eq!(replaced_by("1.41.0-beta.2", Some("1.41.0-beta.1")), None);
+        assert_eq!(replaced_by("1.41.0", Some("1.40.2")), None);
+        assert_eq!(replaced_by("1.41.0", None), None);
+        assert_eq!(replaced_by("1.41.0", Some("not a version")), None);
     }
 
     #[test]

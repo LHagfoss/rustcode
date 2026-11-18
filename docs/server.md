@@ -444,6 +444,16 @@ The server reads it at each look, so no restart is needed. The app does not show
 this setting for a paired machine yet: it is not part of what a machine reports
 to the app today.
 
+Whatever `auto_update` says, a server a service manager runs also follows its
+own binary. When something else replaces it with a newer version
+(`rustcode --update`, `brew upgrade`, the install script, the app), the server
+notices within about a minute. It then restarts onto that copy with
+`rustcode server restart --when-idle`, so a running turn is not cut off. It
+logs `was replaced by <version>` and then `restarting onto <version>`. Without
+this, a server kept running the binary it started from until someone restarted
+it, and paired apps talked to the old engine. An older copy put in its place
+does not restart it, and a development build does not watch its binary.
+
 ### Logs
 
 The server writes its log to `<config dir>/logs/server.log` (everything the

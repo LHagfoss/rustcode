@@ -163,7 +163,7 @@ pub async fn observe() -> Option<PathRustcode> {
     })
 }
 
-async fn ask_version(binary: &Path) -> Option<String> {
+pub(crate) async fn ask_version(binary: &Path) -> Option<String> {
     let mut command = crate::platform::tokio_command(binary);
     command
         .arg("--version")
