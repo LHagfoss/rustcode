@@ -209,7 +209,8 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   {
     section: "orchestration",
     title: "Workflows",
-    keywords: "workflow run workers concurrency agent calls budget time limit timeout minutes durable script",
+    keywords:
+      "workflow run workers concurrency agent calls budget time limit timeout minutes durable script kept runs retention history",
   },
   {
     section: "orchestration",

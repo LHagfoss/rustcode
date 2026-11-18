@@ -68,10 +68,12 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("limit-fallback", SettingType::Boolean, json!(false)),
             ("limit-fallback-map", SettingType::List, json!([])),
             ("wake-batch-seconds", SettingType::Number, json!(60)),
-            // Workflow runs (#3394): workers at once, agent() calls in all, minutes.
+            // Workflow runs (#3394): workers at once, agent() calls in all, minutes,
+            // and how many settled runs a thread keeps.
             ("workflow-concurrency", SettingType::Number, json!(3)),
             ("workflow-call-budget", SettingType::Number, json!(40)),
             ("workflow-timeout-minutes", SettingType::Number, json!(60)),
+            ("workflow-kept-runs", SettingType::Number, json!(20)),
         ]
     })
 }
@@ -415,6 +417,7 @@ fn about(key: &str) -> (&'static str, Option<&'static [&'static str]>) {
         "workflow-concurrency" => ("Workflow workers at once", None),
         "workflow-call-budget" => ("Workflow agent calls per run", None),
         "workflow-timeout-minutes" => ("Workflow run time limit, in minutes", None),
+        "workflow-kept-runs" => ("Finished workflow runs kept per thread", None),
         _ => ("", None),
     }
 }

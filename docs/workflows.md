@@ -171,9 +171,9 @@ branches on which of several calls settled first, a resumed run can order later
 calls differently; keying by hash and occurrence (not by position) keeps those
 calls matched to their answers anyway.
 
-**Retention.** A thread keeps its 20 newest settled runs (`done`, `failed`,
-`timed_out`, `cancelled`); when a run starts, older settled runs' folders are
-removed. A run still `running` is never removed, since it may be resumed.
+**Retention.** A thread keeps its newest settled runs (`done`, `failed`,
+`timed_out`, `cancelled`), 20 unless `workflow-kept-runs` says otherwise; when
+a run starts, older settled runs' folders are removed. A run still `running` is never removed, since it may be resumed.
 
 **When a run resumes.** The engine resumes the runs a thread left `running`
 when that thread registers with the engine's orchestrator hub (the thread is
@@ -184,7 +184,7 @@ Replay reads finished calls from disk and continues with the unfinished work.
 
 ## Limits
 
-Three settings, read when a run starts (server settings, `settings.json`, with
+Four settings, read when a run starts (server settings, `settings.json`, with
 the usual defaults when unset):
 
 | Setting | Default | Most | What it limits |
@@ -192,6 +192,7 @@ the usual defaults when unset):
 | `workflow-concurrency` | 3 | 8 | Workers running at once. More calls wait for a permit. |
 | `workflow-call-budget` | 40 | 500 | Distinct `agent()` calls in a run's whole life. A replayed call is not charged again. The call that goes over rejects in the script. |
 | `workflow-timeout-minutes` | 60 | 1440 | How long a run may take, counted from each (re)start. When it passes, the run is `timed_out`, its waits stop and its unfinished workers are interrupted. |
+| `workflow-kept-runs` | 20 | 200 | Settled runs a thread keeps. When a run starts, older settled runs past this count are deleted; running runs are always kept. A listing names the newest 20. |
 
 `run_workflow`'s `concurrency`, `call_budget` and `timeout_minutes` can lower a
 run's limits, never raise them past the settings.
@@ -222,11 +223,10 @@ wake it for a run from last week; the agent can always read the run with
 the run with `workflow_status` and `wait_ms`.
 
 **Limits in Settings.** A Workflows group under Orchestration in Settings has
-the three settings in *Limits*, per machine like the delegate limits. A run
+the four settings in *Limits*, per machine like the delegate limits. A run
 reads them when it starts.
 
 ## Not yet
 
 - The built-in RustCode harness and outside agents (`mcp-connect`) as callers.
 - A workflow list that can resume runs across threads.
-- A setting for how many runs a thread keeps.

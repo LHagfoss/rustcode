@@ -55,9 +55,6 @@ const WORKFLOW_FOLDER: [&str; 2] = [".rustcode", "workflows"];
 const MAX_INLINE_RESULT_BYTES: usize = 96 * 1024;
 /// How many runs a listing names.
 const LISTED_RUNS: usize = 20;
-/// How many settled runs a thread keeps: older ones are removed when a new
-/// run starts. As many as a listing names, so nothing listed disappears.
-const KEPT_RUNS: usize = LISTED_RUNS;
 /// How many log lines a status carries.
 const STATUS_LOG_LINES: usize = 20;
 /// How often `workflow_status` re-reads a run it waits on.
@@ -75,6 +72,11 @@ pub(crate) const DEFAULT_CALL_BUDGET: u64 = 40;
 pub(crate) const MAX_CALL_BUDGET: u64 = 500;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 60;
 pub(crate) const MAX_TIMEOUT_MINUTES: u64 = 24 * 60;
+/// How many settled runs a thread keeps (`workflow-kept-runs`): older ones are
+/// removed when a new run starts. By default as many as a listing names, so
+/// nothing listed disappears.
+pub(crate) const DEFAULT_KEPT_RUNS: u64 = LISTED_RUNS as u64;
+pub(crate) const MAX_KEPT_RUNS: u64 = 200;
 
 /// The limits a run gets: what the user's settings say, read through `read`.
 fn configured_limits(read: impl Fn(&str) -> Option<u64>) -> Limits {
@@ -91,7 +93,18 @@ fn configured_limits(read: impl Fn(&str) -> Option<u64>) -> Limits {
 }
 
 fn settings_limits() -> Limits {
-    configured_limits(|key| crate::acp::settings::value(key).and_then(|value| value.as_u64()))
+    configured_limits(setting_u64)
+}
+
+/// How many settled runs a thread keeps, read through `read`.
+fn configured_kept_runs(read: impl Fn(&str) -> Option<u64>) -> usize {
+    read("workflow-kept-runs")
+        .unwrap_or(DEFAULT_KEPT_RUNS)
+        .clamp(1, MAX_KEPT_RUNS) as usize
+}
+
+fn setting_u64(key: &str) -> Option<u64> {
+    crate::acp::settings::value(key).and_then(|value| value.as_u64())
 }
 
 /// `configured` lowered by what the call asked for. A call can ask for less
@@ -318,7 +331,7 @@ fn launch(
 ) -> Result<String, String> {
     let record = new_record(thread, name, args, limits);
     store.create(&record, &source)?;
-    store.prune(KEPT_RUNS);
+    store.prune(configured_kept_runs(setting_u64));
     let id = record.id.clone();
     spawn(store, runner, record, source);
     Ok(id)
@@ -823,6 +836,17 @@ mod tests {
             &json!({"concurrency": 8, "call_budget": 500, "timeout_minutes": 999}),
         );
         assert_eq!(higher, none);
+    }
+
+    #[test]
+    fn the_kept_run_count_comes_from_the_setting_within_its_bounds() {
+        assert_eq!(configured_kept_runs(|_| None), DEFAULT_KEPT_RUNS as usize);
+        assert_eq!(configured_kept_runs(|_| Some(5)), 5);
+        assert_eq!(configured_kept_runs(|_| Some(0)), 1);
+        assert_eq!(
+            configured_kept_runs(|_| Some(10_000)),
+            MAX_KEPT_RUNS as usize
+        );
     }
 
     #[test]

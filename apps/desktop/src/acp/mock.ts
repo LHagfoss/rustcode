@@ -2461,6 +2461,7 @@ export class MockEngine {
     "workflow-concurrency": 3,
     "workflow-call-budget": 40,
     "workflow-timeout-minutes": 60,
+    "workflow-kept-runs": 20,
   };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
@@ -6291,6 +6292,7 @@ export class MockMachine {
       "workflow-concurrency": 3,
       "workflow-call-budget": 40,
       "workflow-timeout-minutes": 60,
+      "workflow-kept-runs": 20,
     };
     this.skills = [
       {
