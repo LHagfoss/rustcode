@@ -179,7 +179,8 @@ removed. A run still `running` is never removed, since it may be resumed.
 when that thread registers with the engine's orchestrator hub (the thread is
 opened or started on a harness with the orchestration tools). Until then
 `workflow_status` reports the run as `running` with a note that it is not being
-driven. Replay needs no worker to be alive: the finished calls are on disk.
+driven. The workflow card and status row offer **Resume** while the run is undriven.
+Replay reads finished calls from disk and continues with the unfinished work.
 
 ## Limits
 
@@ -197,7 +198,7 @@ run's limits, never raise them past the settings.
 
 ## The app
 
-The desktop app reads a run from the same record through four ACP methods
+The desktop app reads a run from the same record through these ACP messages
 (`acp/workflows.rs`; the app side is `state/workflows.ts`):
 
 | Method | What it does |
@@ -205,6 +206,7 @@ The desktop app reads a run from the same record through four ACP methods
 | `_rustcode/workflows/list` | `{sessionId}`: that thread's newest 20 runs. Asking, with or without a thread, subscribes the connection to changes. Each run is `workflow_status`'s answer without `result` (it can be large), with `thread`, `has_result`, `woken` and `driven` (whether this engine is driving it). |
 | `_rustcode/workflows/changed` | A notification, `{sessionId, run}`, each time a run's record moves (a phase, a worker starting or ending, a log line, the end). The engine gathers changes for 300 ms and sends one summary per run. |
 | `_rustcode/workflows/stop` | `{sessionId, runId}`: `stop_workflow` for the Stop button. |
+| `_rustcode/workflows/resume` | `{sessionId, runId}`: resume one undriven run from its saved script and progress. |
 | `_rustcode/workflows/wake` | `{sessionId, runId}`: claim the wake of a run that ended. Answers `{claimed}`, true once. |
 
 **Waking the starting thread.** When a run ends the app tells the thread that
@@ -226,5 +228,5 @@ reads them when it starts.
 ## Not yet
 
 - The built-in RustCode harness and outside agents (`mcp-connect`) as callers.
-- A button to resume a run a restart left undriven without opening its thread.
+- A workflow list that can resume runs across threads.
 - A setting for how many runs a thread keeps.

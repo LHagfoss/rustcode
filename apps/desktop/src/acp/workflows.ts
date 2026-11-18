@@ -8,6 +8,7 @@ import { arr, type Json, num, obj, str } from "./jsonrpc";
 export const WorkflowMethod = {
   list: "_rustcode/workflows/list",
   stop: "_rustcode/workflows/stop",
+  resume: "_rustcode/workflows/resume",
   wake: "_rustcode/workflows/wake",
   changed: "_rustcode/workflows/changed",
 } as const;
