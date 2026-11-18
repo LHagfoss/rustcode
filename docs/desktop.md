@@ -1246,16 +1246,10 @@ composer's keys stay outside the table.
   `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`).
   Needs you counts distinct threads in the active filter; its inbox opens all
   projects. Approval and question rows keep their sort position. Detailed thread
-  rows use a 54px grid of two lines (`docs/design.md` › Sidebar rows): the project
-  mark before the title and its state and time, then where it runs (a worktree's
-  branch, a branch off the default one, or a subfolder, with the full path on
-  hover; the project's name in the flat list), else the computer it runs on;
-  then on the right the computer, the model or harness name, running delegates
-  and the pull request, none of them cut. Every
-  row is two lines, and its first line always ends with a time after the state's
-  icon and word.
-  Remote rows keep their machine glyph; local rows show it when the list spans
-  several machines. *Sidebar rows: Compact* (Settings › Appearance, or
+  rows are T3 Code's three-line card (`docs/design.md` › Sidebar rows): project and
+  state with its time, the title, then the branch, worktree or folder cut in the
+  middle (else the computer) with delegates, the pull request and the harness mark.
+  *Sidebar rows: Compact* (Settings › Appearance, or
   ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`) draws each thread on
   one 28px line instead: a status dot (needs you, working, failed, finished
   unseen; `compactMark`), the harness mark, the title and its state or age,
