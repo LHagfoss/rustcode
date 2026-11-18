@@ -134,6 +134,7 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
         effort: field("effort"),
         read_only: args["read_only"].as_bool().unwrap_or(true),
         thread_id,
+        script: None,
     };
     match crate::acp::loops::save(request).await {
         Ok(value) => {

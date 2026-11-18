@@ -425,119 +425,25 @@ impl ActionBackend for ProductionActions {
                     environment_allowlist,
                     timeout_seconds,
                     authorized,
-                } => {
-                    if timeout_seconds == 0 {
-                        return permanent("shell timeout must be positive");
-                    }
-                    if !matches!(
-                        crate::tools::authorize_tool_with_args(
-                            "run_command",
-                            &serde_json::json!({"command": command}),
-                            crate::config::AgentMode::Build,
-                            false,
-                            authorized,
-                        ),
-                        crate::tools::AuthorizationDecision::Allow
-                    ) {
-                        return permanent(
-                            "scheduled command requires confirmation; no stored command authorization is available",
-                        );
-                    }
-                    let cwd = std::path::PathBuf::from(working_directory);
-                    if !cwd.is_absolute() || !cwd.is_dir() {
-                        return permanent(
-                            "shell working directory must be an existing absolute directory",
-                        );
-                    }
-                    let writable_roots = vec![cwd.clone()];
-                    let sandbox_mode = crate::config::load_config_for_workspace(&cwd)
-                        .2
-                        .sandbox_mode;
-                    // Trusted mode means the same thing on the scheduler path
-                    // as in a session: no OS sandbox wrapping, RustCode process
-                    // permissions. Approval above already refused a scheduled
-                    // command without stored authorization.
-                    let sandboxed_command = if sandbox_mode.is_trusted() {
-                        crate::tools::exec::sandbox::passthrough_command(&command)
-                    } else {
-                        match crate::tools::exec::sandbox::command(
-                            &command,
-                            crate::tools::exec::sandbox::SandboxPolicy {
-                                command_cwd: Some(&cwd),
-                                workspace_root: Some(&cwd),
-                                writable_roots: &writable_roots,
-                                session_scratch_roots: &[],
-                                one_shot_writable_roots: &[],
-                                write_access: sandbox_mode.allows_workspace_write(),
-                                network_access: sandbox_mode.allows_network(),
-                            },
-                        ) {
-                            Ok(command) => command,
-                            Err(error) => return permanent(error),
-                        }
-                    };
-                    let output = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-                    let captured = output.clone();
-                    let progress: rustcode_command::ProgressCallback = Arc::new(move |bytes, _| {
-                        let mut captured = captured.lock().unwrap();
-                        let count = bytes
-                            .len()
-                            .min(MAX_RUN_OUTPUT_BYTES.saturating_sub(captured.len()));
-                        captured.extend_from_slice(&bytes[..count]);
-                    });
-                    let result = tokio::task::spawn_blocking(move || {
-                        if cancellation.is_cancelled() {
-                            return Err("cancelled before shell dispatch".to_owned());
-                        }
-                        let request = rustcode_command::CommandRequest {
-                            command: sandboxed_command.command,
-                            status_command: None,
-                            sandboxed_shell: true,
-                            cwd: Some(cwd),
-                            env: vec![],
-                            timeout: Duration::from_secs(timeout_seconds),
-                            process_group: true,
-                            inherited_fds: sandboxed_command.inherited_fds,
-                        };
-                        rustcode_command::run_with_timeout_cancellable_env(
-                            &request,
-                            Some(progress),
-                            Some(Arc::new(move || cancellation.is_cancelled())),
-                            &environment_allowlist,
-                        )
-                    })
-                    .await;
-                    let output =
-                        Some(String::from_utf8_lossy(&output.lock().unwrap()).into_owned());
-                    match result {
-                        Ok(Ok(result)) if !result.success && result.signal.is_some() => ambiguous("command process was lost", output),
-                        Ok(Ok(result)) if result.stdout.is_truncated() || result.stderr.is_truncated() => {
-                            RunOutcome::Permanent {
-                                error: "command output exceeded the capture limit; cannot compare an incomplete polling result".into(),
-                                output,
-                            }
-                        }
-                        Ok(Ok(result)) if result.success => RunOutcome::Succeeded {
-                            summary: "Command completed".into(),
-                            // Keep complete bounded streams until the executor hashes
-                            // them; callback capture is only for interrupted commands.
-                            output: Some(format!("{}{}", String::from_utf8_lossy(result.stdout.bytes()), String::from_utf8_lossy(result.stderr.bytes()))),
-                        },
-                        Ok(Ok(result)) if result.signal.is_none() => RunOutcome::Permanent {
-                            error: format!("Command exited with {:?}", result.exit_code),
-                            output,
-                        },
-                        Ok(Ok(_)) => ambiguous("command process was lost", output),
-                        Ok(Err(error)) if error == "cancelled before shell dispatch" => {
-                            RunOutcome::Cancelled { output }
-                        }
-                        Ok(Err(error)) if error.starts_with("failed to spawn process:") => {
-                            transient(error)
-                        }
-                        Ok(Err(error)) => ambiguous(error, output),
-                        Err(error) => ambiguous(error.to_string(), output),
-                    }
-                }
+                } => match run_shell(
+                    ShellRun {
+                        command,
+                        working_directory,
+                        environment_allowlist,
+                        timeout_seconds,
+                        authorized,
+                        read_only: false,
+                    },
+                    cancellation,
+                )
+                .await
+                {
+                    ShellEnd::Finished { stdout, stderr } => RunOutcome::Succeeded {
+                        summary: "Command completed".into(),
+                        output: Some(format!("{stdout}{stderr}")),
+                    },
+                    ShellEnd::Outcome(outcome) => outcome,
+                },
                 JobAction::Loop {
                     prompt,
                     workspace,
@@ -547,7 +453,42 @@ impl ActionBackend for ProductionActions {
                     effort,
                     read_only,
                     thread_id,
+                    script,
                 } => {
+                    // Script mode: the script runs first, and only what it
+                    // prints wakes the agent.
+                    let prompt = match script.filter(|script| !script.trim().is_empty()) {
+                        None => prompt,
+                        Some(script) => match run_shell(
+                            ShellRun {
+                                command: script,
+                                working_directory: workspace.clone(),
+                                environment_allowlist: Vec::new(),
+                                timeout_seconds: SCRIPT_TIMEOUT_SECONDS,
+                                // The user wrote the script in the app; agents
+                                // cannot set one.
+                                authorized: true,
+                                read_only,
+                            },
+                            cancellation.clone(),
+                        )
+                        .await
+                        {
+                            ShellEnd::Finished { stdout, .. } => {
+                                match script_prompt(&prompt, &stdout) {
+                                    Some(prompt) => prompt,
+                                    None => return silent_run(),
+                                }
+                            }
+                            ShellEnd::Outcome(RunOutcome::Permanent { error, output }) => {
+                                return bounded(RunOutcome::Permanent {
+                                    error: format!("The script failed: {error}"),
+                                    output,
+                                });
+                            }
+                            ShellEnd::Outcome(outcome) => return outcome,
+                        },
+                    };
                     let run = crate::orchestration::local_threads::LoopThread {
                         name: session,
                         prompt,
@@ -567,5 +508,164 @@ impl ActionBackend for ProductionActions {
                 JobAction::Poll { .. } => permanent("nested polling is not supported"),
             }
         })
+    }
+}
+
+/// A shell run on the scheduler path: a `shell_command` job, or a scheduled
+/// job's script (script mode, issue 3937).
+struct ShellRun {
+    command: String,
+    working_directory: String,
+    environment_allowlist: Vec<String>,
+    timeout_seconds: u64,
+    authorized: bool,
+    /// Keep the workspace read-only even when the sandbox mode allows writes.
+    read_only: bool,
+}
+
+/// How a shell run ended: its complete output on success, else the run's outcome.
+enum ShellEnd {
+    Finished { stdout: String, stderr: String },
+    Outcome(RunOutcome),
+}
+
+/// How long a scheduled job's script may run before its agent turn.
+const SCRIPT_TIMEOUT_SECONDS: u64 = 5 * 60;
+
+async fn run_shell(run: ShellRun, cancellation: CancellationToken) -> ShellEnd {
+    let ShellRun {
+        command,
+        working_directory,
+        environment_allowlist,
+        timeout_seconds,
+        authorized,
+        read_only,
+    } = run;
+    if timeout_seconds == 0 {
+        return ShellEnd::Outcome(permanent("shell timeout must be positive"));
+    }
+    if !matches!(
+        crate::tools::authorize_tool_with_args(
+            "run_command",
+            &serde_json::json!({"command": command}),
+            crate::config::AgentMode::Build,
+            false,
+            authorized,
+        ),
+        crate::tools::AuthorizationDecision::Allow
+    ) {
+        return ShellEnd::Outcome(permanent(
+            "scheduled command requires confirmation; no stored command authorization is available",
+        ));
+    }
+    let cwd = std::path::PathBuf::from(working_directory);
+    if !cwd.is_absolute() || !cwd.is_dir() {
+        return ShellEnd::Outcome(permanent(
+            "shell working directory must be an existing absolute directory",
+        ));
+    }
+    let writable_roots = vec![cwd.clone()];
+    let sandbox_mode = crate::config::load_config_for_workspace(&cwd)
+        .2
+        .sandbox_mode;
+    // Trusted mode means the same thing on the scheduler path as in a session:
+    // no OS sandbox wrapping, RustCode process permissions. Approval above
+    // already refused a scheduled command without stored authorization.
+    let sandboxed_command = if sandbox_mode.is_trusted() {
+        crate::tools::exec::sandbox::passthrough_command(&command)
+    } else {
+        match crate::tools::exec::sandbox::command(
+            &command,
+            crate::tools::exec::sandbox::SandboxPolicy {
+                command_cwd: Some(&cwd),
+                workspace_root: Some(&cwd),
+                writable_roots: &writable_roots,
+                session_scratch_roots: &[],
+                one_shot_writable_roots: &[],
+                write_access: !read_only && sandbox_mode.allows_workspace_write(),
+                network_access: sandbox_mode.allows_network(),
+            },
+        ) {
+            Ok(command) => command,
+            Err(error) => return ShellEnd::Outcome(permanent(error)),
+        }
+    };
+    let output = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let captured = output.clone();
+    let progress: rustcode_command::ProgressCallback = Arc::new(move |bytes, _| {
+        let mut captured = captured.lock().unwrap();
+        let count = bytes
+            .len()
+            .min(MAX_RUN_OUTPUT_BYTES.saturating_sub(captured.len()));
+        captured.extend_from_slice(&bytes[..count]);
+    });
+    let result = tokio::task::spawn_blocking(move || {
+        if cancellation.is_cancelled() {
+            return Err("cancelled before shell dispatch".to_owned());
+        }
+        let request = rustcode_command::CommandRequest {
+            command: sandboxed_command.command,
+            status_command: None,
+            sandboxed_shell: true,
+            cwd: Some(cwd),
+            env: vec![],
+            timeout: Duration::from_secs(timeout_seconds),
+            process_group: true,
+            inherited_fds: sandboxed_command.inherited_fds,
+        };
+        rustcode_command::run_with_timeout_cancellable_env(
+            &request,
+            Some(progress),
+            Some(Arc::new(move || cancellation.is_cancelled())),
+            &environment_allowlist,
+        )
+    })
+    .await;
+    let output = Some(String::from_utf8_lossy(&output.lock().unwrap()).into_owned());
+    ShellEnd::Outcome(match result {
+        Ok(Ok(result)) if !result.success && result.signal.is_some() => {
+            ambiguous("command process was lost", output)
+        }
+        Ok(Ok(result)) if result.stdout.is_truncated() || result.stderr.is_truncated() => {
+            RunOutcome::Permanent {
+                error: "command output exceeded the capture limit; cannot compare an incomplete polling result".into(),
+                output,
+            }
+        }
+        // Keep complete bounded streams until the executor hashes them;
+        // callback capture is only for interrupted commands.
+        Ok(Ok(result)) if result.success => {
+            return ShellEnd::Finished {
+                stdout: String::from_utf8_lossy(result.stdout.bytes()).into_owned(),
+                stderr: String::from_utf8_lossy(result.stderr.bytes()).into_owned(),
+            };
+        }
+        Ok(Ok(result)) if result.signal.is_none() => RunOutcome::Permanent {
+            error: format!("Command exited with {:?}", result.exit_code),
+            output,
+        },
+        Ok(Ok(_)) => ambiguous("command process was lost", output),
+        Ok(Err(error)) if error == "cancelled before shell dispatch" => {
+            RunOutcome::Cancelled { output }
+        }
+        Ok(Err(error)) if error.starts_with("failed to spawn process:") => transient(error),
+        Ok(Err(error)) => ambiguous(error, output),
+        Err(error) => ambiguous(error.to_string(), output),
+    })
+}
+
+/// What a scheduled job's agent is asked after its script printed `stdout`,
+/// or `None` when the script printed nothing and no turn should start.
+pub(crate) fn script_prompt(prompt: &str, stdout: &str) -> Option<String> {
+    let printed = stdout.trim();
+    (!printed.is_empty())
+        .then(|| format!("{prompt}\n\nThe job's script printed:\n\n```\n{printed}\n```"))
+}
+
+/// A run whose script printed nothing: recorded as quiet, with no thread.
+pub(crate) fn silent_run() -> RunOutcome {
+    RunOutcome::Succeeded {
+        summary: "The script printed nothing".into(),
+        output: Some(serde_json::json!({ "quiet": true, "silent": true }).to_string()),
     }
 }

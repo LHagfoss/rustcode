@@ -1,5 +1,6 @@
-// Loops (issue 3892): prompts the scheduler daemon runs on a schedule, each run in a fresh thread
-// (docs/daemon.md › Loops). Reached from the sidebar's Loops row. The list says when each loop runs,
+// Scheduled Jobs (issues 3892, 3990; "Loops" in code): prompts the scheduler daemon runs once or on
+// a schedule, each run in a fresh thread (docs/daemon.md › Scheduled Jobs). Reached from the
+// sidebar's Scheduled Jobs row. The list says when each loop runs,
 // when next and how its last run went, with pause/resume, run now, edit and delete; a row opens its
 // prompt and run history. Review lists what loops did on their own that is still worth a look.
 
@@ -228,6 +229,14 @@ function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: stri
       <p className="selectable whitespace-pre-wrap break-words rounded-md bg-fill-subtle px-3 py-2 text-callout text-fg">
         {loop.prompt}
       </p>
+      {loop.script && (
+        <div className="flex flex-col gap-1">
+          <span className="font-medium text-caption text-fg-muted">Script, run first</span>
+          <pre className="selectable overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-fill-subtle px-3 py-2 font-mono text-caption text-fg">
+            {loop.script}
+          </pre>
+        </div>
+      )}
       <p className="text-caption text-fg-muted">
         {agent} · {loop.readOnly ? "Read-only" : "Can edit, commit and push"}
         {loop.schedule.kind === "cron" && loop.schedule.timezone ? ` · ${loop.schedule.timezone}` : ""}
@@ -238,9 +247,11 @@ function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: stri
             const at = run.finishedAt ?? run.startedAt ?? run.scheduledAt;
             const text =
               run.state === "succeeded"
-                ? run.quiet
-                  ? "Nothing to report"
-                  : "Finished"
+                ? run.silent
+                  ? "The script printed nothing"
+                  : run.quiet
+                    ? "Nothing to report"
+                    : "Finished"
                 : run.state === "running" || run.state === "claimed"
                   ? "Running"
                   : run.state === "cancelled"
@@ -286,7 +297,8 @@ function ReviewList({
   if (!items.length) {
     return (
       <p className="py-8 text-center text-callout text-fg-muted">
-        Nothing to review. Failed runs and threads loops left open in the last {REVIEW_DAYS} days show here.
+        Nothing to review. Failed runs and threads scheduled jobs left open in the last {REVIEW_DAYS} days
+        show here.
       </p>
     );
   }
@@ -406,14 +418,14 @@ export function Loops() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-bg">
-      <ViewHeader title="Loops">
+      <ViewHeader title="Scheduled Jobs">
         <div className="flex items-center gap-2">
           {loops.length > 0 && (
             <Segments
               label="Show"
               value={tab}
               options={[
-                { value: "loops", label: "Loops" },
+                { value: "loops", label: "Jobs" },
                 { value: "review", label: review.length ? `Review ${review.length}` : "Review" },
               ]}
               onChange={setTab}
@@ -422,7 +434,7 @@ export function Loops() {
           {data?.daemonRunning && loops.length > 0 && (
             <Pill prominent onClick={openNew}>
               <Plus size={13} />
-              New loop
+              New job
             </Pill>
           )}
         </div>
@@ -441,21 +453,21 @@ export function Loops() {
                 </Pill>
               }
             >
-              The scheduler is not running, so loops cannot be listed or run. It runs in the background, apart
-              from the app, as <span className="font-mono">rustcode daemon start</span> does.
+              The scheduler is stopped, so scheduled jobs cannot be listed or run. It runs in the background,
+              apart from the app, as <span className="font-mono">rustcode daemon start</span> does.
             </Callout>
           ) : loops.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-16 text-center">
               <span className="inline-flex size-10 items-center justify-center rounded-full bg-fill text-fg-muted">
                 <Repeat size={18} />
               </span>
-              <h2 className="font-semibold text-title3 text-fg">No loops yet</h2>
+              <h2 className="font-semibold text-title3 text-fg">No scheduled jobs yet</h2>
               <p className="max-w-sm text-callout text-fg-muted">
-                A loop runs a prompt on a schedule, like “every 4 hours, check CI on main”, each run in a
-                fresh thread. Runs are read-only unless you say otherwise.
+                A scheduled job runs a prompt once or on a schedule, like “every 4 hours, check CI on main”,
+                each run in a fresh thread. Runs are read-only unless you say otherwise.
               </p>
               <Pill prominent onClick={openNew}>
-                New loop
+                New job
               </Pill>
             </div>
           ) : tab === "review" ? (
@@ -497,7 +509,7 @@ export function Loops() {
         loop={editing}
         onOpenChange={setDialogOpen}
         onSaved={() => {
-          toast(editing ? "Loop saved" : "Loop created", "success");
+          toast(editing ? "Job saved" : "Job scheduled", "success");
           void reload();
         }}
       />

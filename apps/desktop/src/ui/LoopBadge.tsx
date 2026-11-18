@@ -14,8 +14,12 @@ export function LoopBadge({ threadId }: { threadId: string }) {
   const loop = useLoopThreads((s) => s.byThread[threadId]);
   if (!loop) return null;
   return (
-    <Tooltip label={`Run by the loop “${loop}”`}>
-      <Repeat size={12} className="shrink-0 text-fg-faint" aria-label={`Run by the loop “${loop}”`} />
+    <Tooltip label={`Run by the scheduled job “${loop}”`}>
+      <Repeat
+        size={12}
+        className="shrink-0 text-fg-faint"
+        aria-label={`Run by the scheduled job “${loop}”`}
+      />
     </Tooltip>
   );
 }

@@ -1,6 +1,7 @@
-// The mock engine's Loops (issue 3892), as `_rustcode/loops/*` and the scheduled run/delete calls
-// answer them: three loops, one healthy with a thread left open for review, one whose last run was
-// skipped while the app was closed, and one the daemon paused after three failed runs.
+// The mock engine's Scheduled Jobs (issues 3892, 3937), as `_rustcode/loops/*` and the scheduled
+// run/delete calls answer them: one healthy with a thread left open for review, one whose last run
+// was skipped while the app was closed, one the daemon paused after three failed runs, and one in
+// script mode whose last run printed nothing.
 
 import { type JsonObject, str } from "./jsonrpc";
 
@@ -51,6 +52,24 @@ function seed(): JsonObject[] {
       readOnly: true,
       nextDueAt: ahead(1.5),
       runs: [done("run-ci-3", 2.5, "mock-loop-ci-3"), done("run-ci-2", 6.5), done("run-ci-1", 10.5)],
+    },
+    {
+      id: "loop-red-main",
+      name: "Red main alert",
+      paused: false,
+      schedule: cron("*/30 * * * *"),
+      workspace: "/Users/me/code/rustcode",
+      prompt: "Main is red. Find the failing job and its first error, and say who should look.",
+      script: "gh run list --branch main --status failure --limit 3",
+      harness: null,
+      model: null,
+      effort: null,
+      readOnly: true,
+      nextDueAt: ahead(0.3),
+      runs: [
+        { ...done("run-red-2", 0.2), quiet: true, silent: true },
+        done("run-red-1", 0.7, "mock-loop-ci-3"),
+      ],
     },
     {
       id: "loop-issues",
@@ -153,13 +172,14 @@ export class MockLoops {
       runs: [],
       ...existing,
       id,
-      name: str(params.name) ?? "Loop",
+      name: str(params.name) ?? "Job",
       workspace: str(params.workspace) ?? "",
       prompt: str(params.prompt) ?? "",
       schedule: { ...(schedule as JsonObject), misfire_policy: "run_once" },
       harness: str(params.harness) ?? null,
       account: str(params.account) ?? null,
       threadId: str(params.threadId) ?? null,
+      script: str(params.script) ?? null,
       model: str(params.model) ?? null,
       effort: str(params.effort) ?? null,
       readOnly: params.readOnly !== false,

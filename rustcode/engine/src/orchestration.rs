@@ -350,7 +350,7 @@ pub fn prompt_hint(version: u8) -> &'static str {
         _ => {
             static HINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
             HINT.get_or_init(|| {
-                format!("{PROMPT_HINT_V16} To create a Loop shown in the desktop Loops page, use `create_loop` when the user asks. The user approves the schedule and prompt in the app.")
+                format!("{PROMPT_HINT_V16} To schedule a job (a prompt run once at a time or on a recurring schedule, shown in the app's Scheduled Jobs), use `create_loop` when the user asks; `list_scheduled_tasks`, `run_scheduled_task_now` and `delete_scheduled_task` list, run and delete jobs. The user approves the schedule and prompt in the app.")
             })
         }
     }

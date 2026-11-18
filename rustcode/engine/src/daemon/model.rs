@@ -89,6 +89,10 @@ pub enum JobAction {
         /// Send every run to this thread instead of starting a fresh one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
+        /// Script mode (issue 3937): a shell script run first in the
+        /// workspace; the agent turn starts only when it prints something.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        script: Option<String>,
     },
     Poll {
         action: Box<JobAction>,

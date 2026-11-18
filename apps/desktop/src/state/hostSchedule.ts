@@ -117,7 +117,7 @@ export async function createLoop(
     ? state.sessions.find((session) => session.id === threadId && !session.host)
     : undefined;
   if (threadId && (!target || projectPath(target.cwd) !== workspace)) {
-    return failureJson(failure("invalid", "thread_id must name a local thread in the loop's project"));
+    return failureJson(failure("invalid", "thread_id must name a local thread in the job's project"));
   }
   const runHarness = state.harnesses?.harnesses.find((entry) => entry.id === harness);
   const account = runHarness?.accounts?.find((entry) => entry.id === call.account);

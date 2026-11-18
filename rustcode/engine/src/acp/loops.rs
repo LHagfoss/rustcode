@@ -65,6 +65,10 @@ pub(crate) struct LoopsSaveRequest {
     /// Send every run to this thread instead of starting a fresh one.
     #[serde(default)]
     pub thread_id: Option<String>,
+    /// Script mode: run this first; the agent wakes only when it prints.
+    /// Set from the app's editor only, never by an agent's `create_loop`.
+    #[serde(default)]
+    pub script: Option<String>,
 }
 
 fn read_only_default() -> bool {
@@ -107,9 +111,10 @@ fn client() -> Result<DaemonClient, String> {
 }
 
 async fn ask(client: &DaemonClient, request: DaemonRequest) -> Result<DaemonResponse, String> {
-    client.request(request).await.map_err(|error| {
-        format!("the scheduler is not running ({error}); start it from the Loops page")
-    })
+    client
+        .request(request)
+        .await
+        .map_err(|error| format!("{} ({error})", super::scheduled::DAEMON_STOPPED))
 }
 
 /// What a run's output says about it: the thread it started, or why it was
@@ -130,6 +135,7 @@ fn run_json(run: &JobRunRecord) -> Value {
         "errorClass": run.error_class,
         "threadId": output.get("thread_id"),
         "quiet": output.get("quiet").and_then(Value::as_bool).unwrap_or(false),
+        "silent": output.get("silent").and_then(Value::as_bool).unwrap_or(false),
         "skipped": output.get("skipped"),
     })
 }
@@ -145,6 +151,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         effort,
         read_only,
         thread_id,
+        script,
     } = &job.action
     else {
         return None;
@@ -162,6 +169,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         "effort": effort,
         "readOnly": read_only,
         "threadId": thread_id,
+        "script": script,
         "nextDueAt": job.next_due_at,
         "createdAt": job.created_at,
         "runs": runs.iter().map(run_json).collect::<Vec<_>>(),
@@ -219,11 +227,11 @@ fn trimmed(value: Option<String>) -> Option<String> {
 pub(crate) fn job_from(request: LoopsSaveRequest, id: &str) -> Result<JobRecord, String> {
     let prompt = request.prompt.trim().to_owned();
     if prompt.is_empty() {
-        return Err("a Loop needs a prompt".to_owned());
+        return Err("a scheduled job needs a prompt".to_owned());
     }
     let name = request.name.trim().to_owned();
     if name.is_empty() {
-        return Err("a Loop needs a name".to_owned());
+        return Err("a scheduled job needs a name".to_owned());
     }
     let workspace = std::path::Path::new(&request.workspace);
     if !workspace.is_absolute() || !workspace.is_dir() {
@@ -239,6 +247,10 @@ pub(crate) fn job_from(request: LoopsSaveRequest, id: &str) -> Result<JobRecord,
         effort: trimmed(request.effort),
         read_only: request.read_only,
         thread_id: trimmed(request.thread_id),
+        script: request
+            .script
+            .map(|script| script.trim().to_owned())
+            .filter(|script| !script.is_empty()),
     };
     let schedule_json =
         serde_json::to_string(&schedule).map_err(|error| format!("schedule: {error}"))?;
@@ -337,6 +349,7 @@ mod tests {
             effort: None,
             read_only: true,
             thread_id: None,
+            script: None,
         }
     }
 
@@ -390,6 +403,23 @@ mod tests {
             JobAction::Loop { thread_id: Some(id), .. } if id == "thread-7"
         ));
         assert_eq!(loop_json(&job, &[]).unwrap()["threadId"], "thread-7");
+    }
+
+    #[test]
+    fn a_saved_script_is_trimmed_and_a_blank_one_is_none() {
+        let folder = tempfile::tempdir().unwrap();
+        let workspace = folder.path().to_string_lossy().into_owned();
+        let mut saved = request(&workspace);
+        saved.script = Some("  gh run list --status failure  ".into());
+        let job = job_from(saved, "loop-1").unwrap();
+        assert_eq!(
+            loop_json(&job, &[]).unwrap()["script"],
+            "gh run list --status failure"
+        );
+        let mut blank = request(&workspace);
+        blank.script = Some("   ".into());
+        let job = job_from(blank, "loop-2").unwrap();
+        assert!(matches!(&job.action, JobAction::Loop { script: None, .. }));
     }
 
     #[test]

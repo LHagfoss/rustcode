@@ -575,7 +575,7 @@ export function verb(q: GrantAsk): string {
     case "project":
       return `change the project “${q.target}”`;
     case "schedule":
-      return q.onceOnly ? `create the loop “${q.target}”` : `schedule “${q.target}”`;
+      return q.onceOnly ? `schedule the job “${q.target}”` : `schedule “${q.target}”`;
   }
 }
 

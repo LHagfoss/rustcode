@@ -89,15 +89,22 @@ They go through `_rustcode/scheduled/*` (`engine/src/acp/scheduled.rs`), the
 same socket and protocol `rustcode cron` uses — one scheduler, one store — and
 each changing call asks the user first. A scheduled prompt runs on the
 built-in harness in a recorded session, so it takes `model_profile` rather
-than a harness or account. Nothing starts the daemon for them: without
-`rustcode daemon start`, `list_scheduled_tasks` says `daemon_running: false`
-and the other calls refuse with that instruction.
+than a harness or account. Nothing starts the daemon for them: when it is
+stopped, `list_scheduled_tasks` says `daemon_running: false` with a `hint`
+(start it from Scheduled Jobs in the app, or `rustcode daemon start`), and the
+other calls refuse with the same reason.
 
-## Loops
+The user-facing name for all of this is **Scheduled Jobs** (issue 3990): the
+app's page, its dialog and every tool description use "scheduled job", once or
+recurring. The tool names (`schedule_task`, `create_loop`,
+`list_scheduled_tasks`, `run_scheduled_task_now`, `delete_scheduled_task`)
+and the `_rustcode/loops/*` methods keep their names for existing callers.
 
-A Loop is a job whose action is `loop`: a prompt run on a schedule, each run
-in a fresh top-level thread on any harness, or every run in one thread the
-Loop names. The desktop app's Loops page
+## Scheduled Jobs (the `loop` action)
+
+A scheduled job in the app is a job whose action is `loop`: a prompt run once
+or on a schedule, each run in a fresh top-level thread on any harness, or every
+run in one thread the job names. The desktop app's Scheduled Jobs page
 creates, edits, pauses, resumes, runs and deletes them through
 `_rustcode/loops/*` (`engine/src/acp/loops.rs`) and the scheduled run/delete
 methods, so `rustcode cron list` shows the same jobs. Agents running in a
@@ -142,6 +149,15 @@ thread's account.
   starts that way is archived (status `done`) and its output adds
   `"quiet": true`; the page says "Nothing to report" and the review list
   leaves it out. A Loop's own thread is never archived.
+- **Script mode.** A job may carry a `script` (set in the app's editor; an
+  agent's `create_loop` cannot). Each run executes it first in the project
+  folder through the same sandbox as `shell_command`, read-only when the job
+  is, for at most five minutes. Empty standard output records a succeeded run
+  with `{"quiet": true, "silent": true}` and starts no agent turn, so it costs
+  no tokens; the page says "The script printed nothing". Anything printed is
+  appended to the prompt and the run continues as above. A script that exits
+  non-zero fails the run ("The script failed: …"), which counts toward the
+  three-failure pause.
 - **Once.** A Loop saved with `{ "kind": "at", "at": <RFC 3339> }` runs one
   time; the dialog reads "in 2h", "in 30 min" or "at 09:00".
 - **Read-only by default.** A read-only run is prompted at Ask access and
@@ -151,7 +167,8 @@ thread's account.
 - **The app must be open.** With no engine to reach, the run is recorded as
   cancelled with `{"skipped": …}` and does not count as a failure. (A
   headless engine the daemon starts itself would lift this; not built yet,
-  issue 3937.)
+  issue 3937.) Webhook triggers are not built either: they need a listener
+  reachable from outside, which the hub work (issue 3955) provides.
 - **A missed run fires once.** A Loop's cron uses the `run_once` misfire
   policy: runs missed while the computer slept coalesce into one.
 - **No overlapping runs.** The scheduler never claims a job with a run still
