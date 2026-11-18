@@ -386,7 +386,7 @@ function TraitsColumn({
       }}
       className="ms-1 flex w-[208px] shrink-0 flex-col rounded-lg bg-fill-subtle max-sm:w-[160px]"
     >
-      <div className="scroll-stable min-h-0 flex-1 p-1">
+      <div className="scroll-stable min-h-0 flex-1 overscroll-contain p-1">
         {(showLevels || effortReason) && (
           <div className={cx(menuLabel, "flex items-baseline gap-1.5")}>
             <span>Effort</span>
@@ -650,7 +650,7 @@ function ModelPanel({
           role="toolbar"
           aria-orientation="vertical"
           aria-label="Providers"
-          className="flex w-11 shrink-0 flex-col gap-1 overflow-y-auto p-1 [scrollbar-width:none]"
+          className="flex w-11 shrink-0 flex-col gap-1 overflow-y-auto overscroll-contain p-1 [scrollbar-width:none]"
           onKeyDown={(e) => {
             if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault();
@@ -744,7 +744,7 @@ function ModelPanel({
             id="model-list"
             role="listbox"
             aria-label="Models"
-            className="scroll-stable min-h-0 min-w-0 flex-1 p-1"
+            className="scroll-stable min-h-0 min-w-0 flex-1 overscroll-contain p-1"
           >
             {rows.map((item, i) => {
               const name = modelDisplayName(item.model);
@@ -1218,7 +1218,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       // The card is as wide as its three parts need, and never wider than the window allows; only
       // the lists scroll. Its own ceiling is the full card, note included: the list gives the note
       // its room (`cardMax`), so the two together never pass it.
-      className="flex flex-col overflow-hidden! p-0"
+      className="flex flex-col overflow-clip! p-0!"
       style={{ maxHeight: CARD_MAX }}
       trigger={
         <button
