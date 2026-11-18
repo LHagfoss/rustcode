@@ -140,6 +140,10 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/session/harness",
     "_rustcode/attachments/read",
     "_rustcode/attachments/upload",
+    // A thread's plan usage windows (percent used and reset time) for the
+    // account it runs on here, which the composer's meter shows. Numbers
+    // only: no sign-in, and the data store's usage stays denied.
+    "_rustcode/usage/limits",
 ];
 // Settings › Outside agents for this machine: its connected apps, the
 // sign-ins its public sign-in page waits on, and sign-in codes. A paired
@@ -395,6 +399,7 @@ mod tests {
                 "_rustcode/session/harness",
                 "_rustcode/attachments/read",
                 "_rustcode/attachments/upload",
+                "_rustcode/usage/limits",
             ]
         );
         assert_eq!(
@@ -443,6 +448,7 @@ mod tests {
             "_rustcode/session/harness",
             "_rustcode/attachments/read",
             "_rustcode/attachments/upload",
+            "_rustcode/usage/limits",
             "_rustcode/outside/list",
             "_rustcode/outside/signin",
             "_rustcode/outside/code",
@@ -479,6 +485,7 @@ mod tests {
             "_rustcode/mcp/set",
             "_rustcode/data/query",
             "_rustcode/data/usage",
+            "_rustcode/usage/plans",
             "_rustcode/worktrees/handoff",
             "_rustcode/unknown",
             "unknown",
