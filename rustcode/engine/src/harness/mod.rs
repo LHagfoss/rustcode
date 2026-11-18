@@ -358,6 +358,28 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
     },
 ];
 
+/// The folder a harness keeps one session's own output in, when it has one:
+/// Antigravity saves the screenshots and files a turn makes in
+/// `~/.gemini/antigravity-cli/brain/<session>`, and its replies name them
+/// there. RustCode serves a reply's pictures from it (`controller/attachments.rs`).
+pub(crate) fn native_artifact_dir(
+    harness: &str,
+    native_session_id: &str,
+    home: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let plain = !native_session_id.is_empty()
+        && native_session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    match harness {
+        "antigravity" if plain => Some(
+            home.join(".gemini/antigravity-cli/brain")
+                .join(native_session_id),
+        ),
+        _ => None,
+    }
+}
+
 pub(crate) fn known(id: &str) -> Option<&'static KnownHarness> {
     KNOWN.iter().find(|harness| harness.id == id)
 }
@@ -1328,6 +1350,20 @@ pub(crate) fn requested_full_access(meta: Option<&serde_json::Map<String, Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antigravity_keeps_a_sessions_output_in_its_brain_folder() {
+        let home = std::path::Path::new("/home/u");
+        assert_eq!(
+            native_artifact_dir("antigravity", "659eac29-4b6d", home),
+            Some(home.join(".gemini/antigravity-cli/brain/659eac29-4b6d"))
+        );
+        // An id that could leave the folder, an empty one, or another harness: none.
+        assert_eq!(native_artifact_dir("antigravity", "../x", home), None);
+        assert_eq!(native_artifact_dir("antigravity", "a/b", home), None);
+        assert_eq!(native_artifact_dir("antigravity", "", home), None);
+        assert_eq!(native_artifact_dir("codex", "659eac29", home), None);
+    }
 
     #[test]
     fn a_prompts_access_level_says_whether_it_is_full() {

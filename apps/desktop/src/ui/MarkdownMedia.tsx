@@ -3,7 +3,9 @@
 // - `![alt](path)`: a web or `data:` picture shows as is; a file path
 //   (absolute, `~/…`, `file://…` or relative to the thread's folder) is read
 //   by the shell's `thread_image`, which refuses anything outside the
-//   thread, project, worktree and OS scratch folders. A thread on a paired
+//   thread, project, worktree and OS scratch folders; a path outside them is
+//   then asked of the engine, which also serves the folder the thread's
+//   harness keeps its own output in. A thread on a paired
 //   machine names paths on that machine's disk, so its engine reads them
 //   instead, in chunks over the connection (`_rustcode/attachments/read` with
 //   the thread's id), within the same folders there. A click opens the lightbox.
@@ -99,9 +101,18 @@ function loadPicture(path: string, roots: string[]): Promise<Picture> {
   let hit = pictures.get(key);
   if (!hit) {
     const remote = remoteThread();
+    const local = useApp.getState().selectedId;
     const url = remote
       ? remotePicture(remote, path)
-      : threadImage(path, roots).then((f) => `data:${f.mimeType};base64,${f.data}`);
+      : threadImage(path, roots)
+          .then((f) => `data:${f.mimeType};base64,${f.data}`)
+          .catch((e: unknown) => {
+            // The engine also knows the folder the thread's harness keeps its own output in
+            // (Antigravity's session folder), which the shell's folders do not cover.
+            const reason = e instanceof Error ? e.message : String(e);
+            if (!local || !/^Outside the thread/.test(reason)) throw e;
+            return remotePicture(local, path);
+          });
     hit = url.then(decode).then((picture) => {
       decoded.set(key, picture);
       return picture;

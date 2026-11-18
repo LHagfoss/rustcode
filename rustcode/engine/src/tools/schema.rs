@@ -2740,7 +2740,8 @@ pub(crate) fn harness_instructions(
     format!(
         "<runtime_info>In case you're asked: you are running in RustCode through the {harness} harness. \
          No need to mention this otherwise. You can embed images in your reply with Markdown image syntax \
-         and an absolute file path. Link any other file you produce by its absolute path so the user can \
+         and an absolute file path; save screenshots in the working directory or `$TMPDIR`, where RustCode \
+         can show them. Link any other file you produce by its absolute path so the user can \
          open it from RustCode. RustCode is the app that owns this machine's threads, its projects and its \
          settings: when the `rustcode` tools (or `mcp__rustcode__*`) are listed, they answer what the user \
          asks about them; without them, `rustcode threads list --all` and `rustcode threads path <id>` do \
