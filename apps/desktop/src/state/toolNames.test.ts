@@ -46,6 +46,8 @@ describe("tool names", () => {
     expect(orchestrationTool("start_session")).toBe("start_session");
     expect(orchestrationTool("rustcode.start_session")).toBe("start_session");
     expect(orchestrationTool("mcp__rustcode__wait_session")).toBe("wait_session");
+    expect(orchestrationTool("mcp__rustcode__wait_thread")).toBe("wait_session");
+    expect(orchestrationTool("mcp__other__wait_thread")).toBeUndefined();
     // Another server's tool of the same name is not ours.
     expect(orchestrationTool("mcp__github__list_sessions")).toBeUndefined();
     expect(orchestrationTool("github.start_session")).toBeUndefined();
@@ -147,6 +149,7 @@ describe("displayTool", () => {
 
 describe("sessionIdOf", () => {
   test("finds the thread a call started, however the output is wrapped", () => {
+    expect(sessionIdOf('{"thread_id":"abc","title":"x"}')).toBe("abc");
     expect(sessionIdOf('{"session_id":"abc","title":"x"}')).toBe("abc");
     expect(sessionIdOf('Started.\n{"status":"ok","session_id": "def"}')).toBe("def");
     expect(sessionIdOf("no thread here")).toBeUndefined();

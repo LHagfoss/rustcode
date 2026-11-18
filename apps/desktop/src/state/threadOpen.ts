@@ -763,6 +763,8 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
     });
     throw error;
   }
+  // The composer needs this login's windows during the first turn as well as after it ends.
+  if (options.select) void refreshPlanUsage(id);
   if (pending) {
     // Listed now, with the setup gone in the same update: the row the message was sent to becomes
     // the thread, in place, and the chat goes on from the message it already shows.

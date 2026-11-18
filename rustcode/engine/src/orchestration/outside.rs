@@ -590,7 +590,7 @@ pub fn pending_view() -> Vec<Value> {
                 "id": item.id,
                 "clientId": item.client_id,
                 "clientName": item.client_name,
-                "tool": item.tool,
+                "tool": super::mcp_names::public_tool(&item.tool),
                 "summary": item.summary,
                 "askedAt": item.asked_at,
             })
@@ -1202,7 +1202,7 @@ pub fn instructions(grant: &Grant) -> String {
         ""
     };
     format!(
-        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_session` sends an existing thread a message, `interrupt_session` stops a running turn, and `wait_session` returns an answer. With Manage access `create_loop` adds a scheduled Loop in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` act on a thread you name with `session_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Threads started by `start_session` and `fan_out` run at Auto-edit: they can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
+        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_threads` finds threads and `read_thread` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_thread` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_thread` sends an existing thread a message, `interrupt_thread` stops a running turn, and `wait_thread` returns an answer. With Manage access `create_loop` adds a scheduled loop in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` act on a thread you name with `thread_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Threads started by `start_thread` and `fan_out` run at Auto-edit. They can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
         grant.name,
         grant.scope.label(),
         grant.scope.meaning(),
@@ -1262,7 +1262,7 @@ pub fn tools_for(scope: Scope) -> Vec<Value> {
                 entry["description"] = json!(format!("{description}{note}"));
             }
         }
-        entries.push(entry);
+        entries.push(super::mcp_names::public_entry(entry));
     }
     entries
 }
@@ -1280,12 +1280,13 @@ async fn whoami(
         let Some(needed) = required_scope(name) else {
             continue;
         };
+        let public = super::mcp_names::public_tool(name);
         if !implemented(name) {
-            not_yet.push(name);
+            not_yet.push(public);
         } else if needed <= grant.scope {
-            can.push(name);
+            can.push(public);
         } else {
-            needs_more.push(json!({ "tool": name, "needs": needed.as_str() }));
+            needs_more.push(json!({ "tool": public, "needs": needed.as_str() }));
         }
     }
     can.insert(0, WHOAMI);
@@ -1460,7 +1461,9 @@ mod tests {
             assert!(!changes_things(name, &json!({})), "{name}");
             let listed = tools_for(Scope::ReadOnly);
             assert!(
-                listed.iter().any(|tool| tool["name"] == json!(name)),
+                listed
+                    .iter()
+                    .any(|tool| tool["name"] == super::super::mcp_names::public_tool(name)),
                 "{name} is listed to Read-only"
             );
         }
@@ -1852,15 +1855,15 @@ mod tests {
                 .collect()
         };
         let delegate = names(Scope::Delegate);
-        for tool in ["fan_out", "interrupt_session"] {
+        for tool in ["fan_out", "interrupt_thread"] {
             assert!(delegate.contains(&tool.to_owned()), "{tool}");
         }
         let manage = names(Scope::Manage);
         for tool in [
             "merge_when_green",
             "cleanup_worktree",
-            "update_session",
-            "configure_session",
+            "update_thread",
+            "configure_thread",
         ] {
             assert!(!delegate.contains(&tool.to_owned()), "{tool}");
             assert!(manage.contains(&tool.to_owned()), "{tool}");
@@ -2034,7 +2037,7 @@ mod tests {
             .into_iter()
             .find(|item| item["id"] == json!(id))
             .unwrap();
-        assert_eq!(shown["tool"], "start_session");
+        assert_eq!(shown["tool"], "start_thread");
         assert!(shown["summary"].as_str().unwrap().contains("fix the build"));
         assert_eq!(fixture.ran(), 0, "nothing runs while the user decides");
         assert!(answer_pending(&id, true));
@@ -2156,15 +2159,15 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect();
-        assert!(can.contains(&"list_sessions") && can.contains(&"whoami"));
-        assert!(!can.contains(&"start_session"));
+        assert!(can.contains(&"list_threads") && can.contains(&"whoami"));
+        assert!(!can.contains(&"start_thread"));
         let lacks: Vec<&str> = value["access"]["needsMoreAccess"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(|row| row["tool"].as_str())
             .collect();
-        assert!(lacks.contains(&"start_session"));
+        assert!(lacks.contains(&"start_thread"));
         assert_eq!(value["projects"][0], "/work/app");
         assert!(value.get("tokenHash").is_none() && !answer.content.contains(&token));
         assert_eq!(fixture.ran(), 0, "whoami is answered by the gate");
@@ -2179,15 +2182,15 @@ mod tests {
                 .collect()
         };
         let read = names(Scope::ReadOnly);
-        assert!(read.contains(&"whoami".to_owned()) && read.contains(&"list_sessions".to_owned()));
-        assert!(!read.contains(&"start_session".to_owned()));
+        assert!(read.contains(&"whoami".to_owned()) && read.contains(&"list_threads".to_owned()));
+        assert!(!read.contains(&"start_thread".to_owned()));
         assert!(!read.contains(&"merge_when_green".to_owned()));
         let delegate = names(Scope::Delegate);
-        assert!(delegate.contains(&"start_session".to_owned()));
+        assert!(delegate.contains(&"start_thread".to_owned()));
         assert!(!delegate.contains(&"merge_when_green".to_owned()));
         let start = tools_for(Scope::Delegate)
             .into_iter()
-            .find(|tool| tool["name"] == "start_session")
+            .find(|tool| tool["name"] == "start_thread")
             .unwrap();
         assert!(
             start["description"]

@@ -1464,6 +1464,7 @@ export function Sidebar() {
   // Loading until this computer's list is in; a restart keeps the rows it already shows.
   const listing = useApp((s) => !sessionsListed(s.engine) && !s.sessions.length);
   const selectedId = useApp((s) => s.selectedId);
+  const loopsOpen = useApp((s) => s.view.kind === "loops");
   // Which threads need you or work, as a string so a streamed chunk does not change it.
   const flags = useApp((s) =>
     Object.values(s.threads)
@@ -2300,8 +2301,8 @@ export function Sidebar() {
   const rowFor = (s: SessionSummary, _grouped: boolean, hint = true, nested = false) => (
     <ThreadRow
       session={s}
-      selected={s.id === selectedId}
-      context={s.id === contextSelected && s.id !== selectedId}
+      selected={!loopsOpen && s.id === selectedId}
+      context={!loopsOpen && s.id === contextSelected && s.id !== selectedId}
       // A row being dragged shows no hover card and takes no pointer.
       dragging={drag.draggedId === s.id}
       mixedMachines={mixedMachines}
@@ -2343,7 +2344,7 @@ export function Sidebar() {
           {pendingById[s.id] ? (
             <PendingRow
               pending={pendingById[s.id]!}
-              selected={!selectedId && pending?.id === s.id}
+              selected={!loopsOpen && !selectedId && pending?.id === s.id}
               navActive={s.id === currentId}
               compact={compact}
             />

@@ -8,13 +8,13 @@ impl outside::Runner for FakeRunner {
         &'a self,
         _: &'a str,
         _: &'a CancellationToken,
-        _: &'a str,
-        _: &'a Value,
+        tool: &'a str,
+        args: &'a Value,
     ) -> outside::BoxFuture<'a, CallAnswer> {
-        Box::pin(async {
+        Box::pin(async move {
             CallAnswer {
                 success: true,
-                content: "fixture result".into(),
+                content: json!({"tool": tool, "session_id": args["session_id"]}).to_string(),
             }
         })
     }
@@ -257,7 +257,8 @@ async fn outside_http_interop() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|t| t["name"] == "whoami")
+            .any(|t| t["name"] == "read_thread"
+                && t["inputSchema"]["required"] == json!(["thread_id"]))
     );
     let call = f
         .rpc(
@@ -268,12 +269,29 @@ async fn outside_http_interop() {
         )
         .await;
     assert_eq!(call.2["result"]["isError"], false);
+    for (tool, field) in [("read_thread", "thread_id"), ("read_session", "session_id")] {
+        let reply = f
+            .rpc(
+                &token,
+                12,
+                "tools/call",
+                json!({
+                    "name": tool, "arguments": { (field): "thread-1" }
+                }),
+            )
+            .await;
+        assert_eq!(reply.2["result"]["isError"], false);
+        let body: Value =
+            serde_json::from_str(reply.2["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(body, json!({"tool": "read_session", (field): "thread-1"}));
+    }
     let denied = f
         .rpc(
             &token,
             5,
             "tools/call",
-            json!({"name":"start_session","arguments":{}}),
+            json!({"name":"start_thread","arguments":{}}),
         )
         .await;
     assert_eq!(denied.2["result"]["isError"], true);
@@ -281,7 +299,7 @@ async fn outside_http_interop() {
         denied.2["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("needs Delegate")
+            .contains("start_thread needs Delegate")
     );
     let (a, b) = tokio::join!(
         f.rpc(&token, 6, "tools/call", json!({"name":"whoami"})),

@@ -27,6 +27,7 @@ pub mod hub;
 pub mod local;
 mod local_merge;
 pub(crate) mod local_threads;
+mod mcp_names;
 pub mod mcp_server;
 pub mod outside;
 pub mod outside_http;
@@ -1172,6 +1173,9 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             if name == CREATE_LOOP {
                 required_name(args, "name")?;
                 optional_request_id(args)?;
+                if args.get("session_id").is_some() {
+                    return Err("use thread_id to reuse an existing thread".to_owned());
+                }
                 for field in ["harness", "account", "model", "effort", "thread_id"] {
                     optional_name(args, field)?;
                 }

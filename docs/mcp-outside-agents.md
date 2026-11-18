@@ -31,9 +31,9 @@ keeps only the token's SHA-256, in `<config>/outside-agents.json` (mode 0600).
 
 | Level | May |
 | --- | --- |
-| Read-only (default) | `whoami`, `list_sessions`, `search_sessions`, `list_projects`, `read_session`, `wait_session`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines`, and the lists and reads of `manage_settings` and `manage_capabilities` |
-| Delegate | Read-only, plus `start_session`, `fan_out`, `message_session` and `interrupt_session` |
-| Manage | Delegate, plus `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` |
+| Read-only (default) | `whoami`, `list_threads`, `search_threads`, `list_projects`, `read_thread`, `wait_thread`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines`, and the lists and reads of `manage_settings` and `manage_capabilities` |
+| Delegate | Read-only, plus `start_thread`, `fan_out`, `message_thread` and `interrupt_thread` |
+| Manage | Delegate, plus `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` |
 | Admin | Manage, plus the changes of `manage_settings` (`set`, `reset`) and `manage_capabilities` (skills, MCP servers, the default harness and the theme) |
 
 A tool's level can depend on what the call does: `manage_settings` and
@@ -46,23 +46,23 @@ revoking it applies to its next call. A tool that is not classified in
 `orchestration/outside.rs` (`required_scope`) is refused to every level, so a
 new internal tool is never exposed by accident. A tool that is allowed by level
 but that the engine cannot run without a thread behind it (`manage_queue`,
-`handoff_worktree`, `transfer_session`, projects and scheduled tasks) is not
+`handoff_worktree`, `transfer_thread`, projects and scheduled tasks) is not
 listed, and a call says so. `whoami` lists the projects the app can start
 threads in.
 
 An outside agent has no thread, so the tools that change another thread run in
 the engine (`orchestration/outside_manage.rs`) on the operations the app uses
-for its own threads, and each one takes the thread's `session_id` (there is no
+for its own threads, and each one takes the thread's `thread_id` (there is no
 "own thread" to default to):
 
 | Tool | What it does for an outside agent |
 | --- | --- |
-| `fan_out` | The same task on two to four harnesses, as standalone threads of yours. Nothing is linked or delivered back; use `wait_session` or `read_session` |
-| `interrupt_session` | Stops the turn running on a thread, as its stop button does. `{ session_id, interrupted, status }`; `interrupted` is false when no turn was running |
-| `merge_when_green` | Waits for the checks of the pull request on the thread's worktree branch and squash-merges it, as `scripts/pr-merge.sh` does. Takes `session_id`, not a bare PR `number` |
+| `fan_out` | The same task on two to four harnesses, as standalone threads of yours. Nothing is linked or delivered back; use `wait_thread` or `read_thread` |
+| `interrupt_thread` | Stops the turn running on a thread, as its stop button does. `{ thread_id, interrupted, status }`; `interrupted` is false when no turn was running |
+| `merge_when_green` | Waits for the checks of the pull request on the thread's worktree branch and squash-merges it, as `scripts/pr-merge.sh` does. Takes `thread_id`, not a bare PR `number` |
 | `cleanup_worktree` | Removes a merged thread's worktree and branch with the same checks the app makes (clean, merged, nothing unique), and settles the thread unless `settle` is false |
-| `update_session` | `title`, `pinned` and `status` (`active`, `review`, `settled`). `unread` and `snoozed_until` need the app and are refused |
-| `configure_session` | Reports the thread's harness, access, model and effort. Changing `model` or `effort` needs the app and is refused |
+| `update_thread` | `title`, `pinned` and `status` (`active`, `review`, `settled`). `unread` and `snoozed_until` need the app and are refused |
+| `configure_thread` | Reports the thread's harness, access, model and effort. Changing `model` or `effort` needs the app and is refused |
 
 Work an outside agent starts is the ceiling of its level: threads are
 standalone threads of yours (not delegates of a thread), and run at Auto-edit
@@ -73,8 +73,8 @@ projects, `thread_usage` or `query_data`.
 
 ## Approval
 
-Above Read-only, each call that changes something (`start_session`,
-`fan_out`, `message_session`, `interrupt_session` and the Manage tools) waits for you by default. A card appears anywhere in the app
+Above Read-only, each call that changes something (`start_thread`,
+`fan_out`, `message_thread`, `interrupt_thread` and the Manage tools) waits for you by default. A card appears anywhere in the app
 and in Settings › Outside agents › Waiting for you, with the app, the tool and a
 short description (a project, a thread, the first words of a prompt). Allow
 runs it; Decline, no answer in two minutes, revoking the app, or lowering its
@@ -116,11 +116,11 @@ reads them.
 ## Not in this release
 
 - Reaching another paired computer (`machine`) from an outside agent, `unread`
-  and `snoozed_until` in `update_session`, and changing a thread's model or
-  effort with `configure_session`: they need the app.
+  and `snoozed_until` in `update_thread`, and changing a thread's model or
+  effort with `configure_thread`: they need the app.
 
-`search_sessions` matches titles and what was said; across projects it follows
-the "Let agents read threads in other projects" setting, as `list_sessions`
+`search_threads` matches titles and what was said; across projects it follows
+the "Let agents read threads in other projects" setting, as `list_threads`
 does. `list_projects` lists the projects that have a thread on this computer;
 a folder registered in the app but with no thread yet shows only in the app's
 own answer.
