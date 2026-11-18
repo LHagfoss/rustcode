@@ -4,7 +4,11 @@ import { describe, expect, test } from "bun:test";
 import {
   agoText,
   cronInWords,
+  cronOfForm,
   cronProblem,
+  defaultForm,
+  formOfCron,
+  formProblem,
   type Loop,
   type LoopRun,
   lastResult,
@@ -12,9 +16,7 @@ import {
   loopThreadNames,
   nextRunText,
   parseLoops,
-  parseOnce,
   pauseReason,
-  presetOf,
   reviewItems,
   saveParams,
   scheduleInWords,
@@ -55,6 +57,10 @@ describe("cronInWords", () => {
     expect(cronInWords("0 9 * * 1")).toBe("Every Monday at 09:00");
     expect(cronInWords("0 9 1 * *")).toBe("Monthly on the 1st at 09:00");
     expect(cronInWords("0 9 22 * *")).toBe("Monthly on the 22nd at 09:00");
+    expect(cronInWords("0 9 * * MON-FRI")).toBe("Weekdays at 09:00");
+    expect(cronInWords("0 9 * * MON,WED,FRI")).toBe("Mon, Wed and Fri at 09:00");
+    expect(cronInWords("0 9 * * 0")).toBe("Every Sunday at 09:00");
+    expect(cronInWords("0 9 * * 7")).toBe("Every Sunday at 09:00");
   });
 
   test("leaves what it cannot say to the cron itself", () => {
@@ -73,10 +79,47 @@ describe("cronInWords", () => {
 });
 
 describe("the schedule field", () => {
-  test("opens an edit on the loop's own preset", () => {
-    expect(presetOf("0 */4 * * *")).toBe("4h");
-    expect(presetOf(" 0  9 * * 1-5 ")).toBe("weekdays");
-    expect(presetOf("15 3 * * *")).toBe("custom");
+  test("opens an edit on the loop's own schedule", () => {
+    expect(formOfCron("0 */4 * * *")).toMatchObject({ repeat: "hours", everyHours: 4 });
+    expect(formOfCron(" 0  9 * * 1-5 ")).toMatchObject({
+      repeat: "days",
+      days: [1, 2, 3, 4, 5],
+      time: "09:00",
+    });
+    expect(formOfCron("15 3 * * *")).toMatchObject({
+      repeat: "days",
+      days: [0, 1, 2, 3, 4, 5, 6],
+      time: "03:15",
+    });
+    expect(formOfCron("0 9 * * MON,WED")).toMatchObject({ repeat: "days", days: [1, 3] });
+    expect(formOfCron("30 8 15 * *")).toMatchObject({ repeat: "monthly", monthDay: 15, time: "08:30" });
+    expect(formOfCron("0 9-17 * * *")).toMatchObject({ repeat: "cron", cron: "0 9-17 * * *" });
+    expect(formOfCron("0 */5 * * *")).toMatchObject({ repeat: "cron" });
+  });
+
+  test("builds a cron with weekday names, which every cron reads alike", () => {
+    const base = defaultForm();
+    expect(cronOfForm(base)).toBe("0 */4 * * *");
+    expect(cronOfForm({ ...base, everyHours: 1 })).toBe("0 * * * *");
+    expect(cronOfForm({ ...base, repeat: "days", time: "08:30", days: [1, 2, 3, 4, 5] })).toBe(
+      "30 8 * * MON-FRI",
+    );
+    expect(cronOfForm({ ...base, repeat: "days", days: [5, 1, 3] })).toBe("0 9 * * MON,WED,FRI");
+    expect(cronOfForm({ ...base, repeat: "days", days: [0, 1, 2, 3, 4, 5, 6] })).toBe("0 9 * * *");
+    expect(cronOfForm({ ...base, repeat: "monthly", monthDay: 3, time: "07:05" })).toBe("5 7 3 * *");
+    for (const cron of ["30 8 * * MON-FRI", "0 9 * * MON,WED,FRI", "5 7 3 * *", "15 */6 * * *"])
+      expect(cronOfForm(formOfCron(cron))).toBe(cron);
+  });
+
+  test("says what the form still needs", () => {
+    const now = new Date(2026, 10, 17, 12, 0).getTime();
+    const base = defaultForm(now);
+    expect(formProblem(base, now)).toBeNull();
+    expect(formProblem({ ...base, repeat: "days", days: [] }, now)).toContain("day");
+    expect(formProblem({ ...base, repeat: "once", onceAt: "" }, now)).toContain("date");
+    expect(formProblem({ ...base, repeat: "once", onceAt: "2026-11-17T11:00" }, now)).toContain("passed");
+    expect(formProblem({ ...base, repeat: "once", onceAt: "2026-11-18T09:00" }, now)).toBeNull();
+    expect(formProblem({ ...base, repeat: "cron", cron: "0 9 * *" }, now)).toContain("five fields");
   });
 
   test("checks a cron before the engine sees it", () => {
@@ -225,21 +268,6 @@ describe("parseLoops", () => {
 });
 
 describe("loop follow-ups (issue 3937)", () => {
-  test("a one-time run reads “in 2h” and “at 09:00”", () => {
-    const now = new Date(2026, 10, 17, 12, 0).getTime();
-    expect(parseOnce("in 2h", now)?.getTime()).toBe(now + 2 * HOUR);
-    expect(parseOnce(" In 30 min ", now)?.getTime()).toBe(now + 30 * 60_000);
-    expect(parseOnce("in 1 day", now)?.getTime()).toBe(now + 24 * HOUR);
-    const later = parseOnce("at 14:30", now);
-    expect([later?.getDate(), later?.getHours(), later?.getMinutes()]).toEqual([17, 14, 30]);
-    // A clock time already past today is tomorrow's.
-    const tomorrow = parseOnce("09:00", now);
-    expect([tomorrow?.getDate(), tomorrow?.getHours()]).toEqual([18, 9]);
-    expect(parseOnce("at 9", now)?.getHours()).toBe(9);
-    for (const bad of ["", "soon", "in 0h", "at 25:00", "9", "in two hours"])
-      expect(parseOnce(bad, now)).toBeNull();
-  });
-
   test("a one-time loop saves an `at` schedule, and a loop's own thread is sent along", () => {
     const once = new Date("2026-11-17T14:00:00Z");
     const params = saveParams(

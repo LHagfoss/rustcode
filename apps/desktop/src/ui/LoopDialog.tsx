@@ -1,42 +1,71 @@
 // New loop / Edit loop (issues 3892, 3937): a name, the project it runs in, the prompt, a schedule
-// from the presets, a cron of the user's own or one time ("in 2h", "at 09:00"), where each run goes
-// (a fresh thread, or one thread every time) and the agent a fresh run starts. Saved through
+// (every few hours, on chosen weekdays at a time, monthly, once at a date and time, or a cron of
+// the user's own), where each run goes (a fresh thread, or one thread every time) and the agent a
+// fresh run starts: a harness, one of its models and an effort. Saved through
 // `_rustcode/loops/save` into the scheduler daemon's store.
 
 import { Dialog } from "radix-ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   cronInWords,
-  cronProblem,
-  DEFAULT_PRESET,
+  cronOfForm,
+  defaultForm,
+  EVERY_DAY,
+  formOfCron,
+  formProblem,
+  HOUR_STEPS,
   type Loop,
   type LoopDraft,
-  parseOnce,
-  presetOf,
-  SCHEDULE_PRESETS,
-  type SchedulePreset,
+  localDateTime,
+  onceOfForm,
+  type Repeat,
+  type ScheduleForm,
   saveLoop,
+  WEEKDAYS,
+  WEEKENDS,
 } from "../state/loops";
 import { projectsOn } from "../state/projects";
 import { errorText, useApp } from "../state/store";
 import { cx, inputClass, noTextHelpers, Pill, Segments, Select, Switch } from "./primitives";
 
-const EFFORTS = [
-  { value: "", label: "Default" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
+const EFFORTS = ["low", "medium", "high"];
+
+const REPEATS: { value: Repeat; label: string }[] = [
+  { value: "hours", label: "Hourly" },
+  { value: "days", label: "Daily" },
+  { value: "monthly", label: "Monthly" },
+  { value: "once", label: "Once" },
+  { value: "cron", label: "Cron" },
 ];
+
+/** The day toggles, Monday first. */
+const DAY_TOGGLES = [
+  { day: 1, label: "Mon" },
+  { day: 2, label: "Tue" },
+  { day: 3, label: "Wed" },
+  { day: 4, label: "Thu" },
+  { day: 5, label: "Fri" },
+  { day: 6, label: "Sat" },
+  { day: 0, label: "Sun" },
+];
+
+const DAY_SHORTCUTS = [
+  { label: "Every day", days: EVERY_DAY },
+  { label: "Weekdays", days: WEEKDAYS },
+  { label: "Weekends", days: WEEKENDS },
+];
+
+function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${{ 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th"}`;
+}
+
+const MONTH_DAYS = Array.from({ length: 28 }, (_, i) => ({ value: String(i + 1), label: ordinal(i + 1) }));
 
 function draftOf(loop: Loop | null, project: string): LoopDraft {
   if (!loop) {
-    return {
-      name: "",
-      workspace: project,
-      prompt: "",
-      cron: SCHEDULE_PRESETS.find((preset) => preset.id === DEFAULT_PRESET)?.cron ?? "0 */4 * * *",
-      readOnly: true,
-    };
+    return { name: "", workspace: project, prompt: "", cron: "0 */4 * * *", readOnly: true };
   }
   return {
     id: loop.id,
@@ -54,11 +83,39 @@ function draftOf(loop: Loop | null, project: string): LoopDraft {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** What the Once field shows for a loop saved with one time: the clock time it runs at. */
-function onceTextOf(loop: Loop | null): string {
-  if (loop?.schedule.kind !== "once") return "in 2h";
-  const at = new Date(Date.parse(loop.schedule.at));
-  return Number.isFinite(at.getTime()) ? `at ${pad(at.getHours())}:${pad(at.getMinutes())}` : "in 2h";
+/** The schedule form a loop opens on: its own schedule, or every 4 hours for a new one. */
+function formOf(loop: Loop | null): ScheduleForm {
+  const base = defaultForm();
+  if (!loop) return base;
+  const schedule = loop.schedule;
+  switch (schedule.kind) {
+    case "once": {
+      const at = new Date(Date.parse(schedule.at));
+      return {
+        ...base,
+        repeat: "once",
+        onceAt: Number.isFinite(at.getTime()) ? localDateTime(at) : base.onceAt,
+      };
+    }
+    case "daily":
+      return { ...base, repeat: "days", time: `${pad(schedule.hour)}:${pad(schedule.minute)}` };
+    case "monthly":
+      return formOfCron(`${schedule.minute} ${schedule.hour} ${schedule.day} * *`, base);
+    case "cron":
+      return formOfCron(schedule.expression, base);
+  }
+}
+
+/** A shortcut for the Once field: in an hour, or tomorrow morning. */
+function onceShortcuts(now = new Date()): { label: string; at: string }[] {
+  const inHour = new Date(now.getTime() + 3_600_000);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  return [
+    { label: "In 1 hour", at: localDateTime(inHour) },
+    { label: "Tomorrow 09:00", at: localDateTime(tomorrow) },
+  ];
 }
 
 /** "Today at 14:30" or "2026-11-18 at 09:00": when a one-time run will happen. */
@@ -76,6 +133,18 @@ const TARGETS = [
   { value: "fresh", label: "A new thread each run" },
   { value: "one", label: "One thread" },
 ] as const;
+
+function TimeInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <input
+      type="time"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="Time"
+      className={cx(inputClass, "w-auto")}
+    />
+  );
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -103,33 +172,42 @@ export function LoopDialog({
   const harnesses = useApp((s) => s.harnesses);
   const projects = useMemo(() => projectsOn(sessions), [sessions]);
   const [draft, setDraft] = useState<LoopDraft>(() => draftOf(loop, projectCwd));
-  const [preset, setPreset] = useState<SchedulePreset>(DEFAULT_PRESET);
-  const [onceText, setOnceText] = useState("in 2h");
+  const [form, setForm] = useState<ScheduleForm>(() => formOf(loop));
   const [target, setTarget] = useState<"fresh" | "one">("fresh");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fallbackProject = projectCwd || projects[0]?.path || "";
 
-  // Each opening starts from the loop being edited, or a fresh draft in the current project.
+  // Each opening starts from the loop being edited, or a fresh draft in the current project, once:
+  // the thread list and the loops page refresh while the dialog is open, and must not wipe what
+  // the user is typing.
+  const openedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!open) return;
-    const next = draftOf(loop, projectCwd || projects[0]?.path || "");
-    setDraft(next);
-    setPreset(loop?.schedule.kind === "once" ? "once" : loop ? presetOf(next.cron) : DEFAULT_PRESET);
-    setOnceText(onceTextOf(loop));
+    if (!open) {
+      openedFor.current = null;
+      return;
+    }
+    const key = loop?.id ?? "";
+    if (openedFor.current === key) return;
+    openedFor.current = key;
+    setDraft(draftOf(loop, fallbackProject));
+    setForm(formOf(loop));
     setTarget(loop?.threadId ? "one" : "fresh");
     setError(null);
     setSaving(false);
-  }, [open, loop, projectCwd, projects]);
+  }, [open, loop, fallbackProject]);
+
+  // A new loop opened before the projects were read takes the first one when they arrive.
+  useEffect(() => {
+    if (open && fallbackProject) setDraft((d) => (d.workspace ? d : { ...d, workspace: fallbackProject }));
+  }, [open, fallbackProject]);
 
   const patch = (change: Partial<LoopDraft>) => setDraft((d) => ({ ...d, ...change }));
-  const once = preset === "once" ? parseOnce(onceText) : null;
-  const cronError =
-    preset === "once"
-      ? once
-        ? null
-        : "Write a time like “in 2h”, “in 30 min” or “at 09:00”"
-      : cronProblem(draft.cron);
-  const words = cronError ? null : once ? onceInWords(once) : cronInWords(draft.cron);
+  const patchForm = (change: Partial<ScheduleForm>) => setForm((f) => ({ ...f, ...change }));
+  const cron = cronOfForm(form);
+  const once = form.repeat === "once" ? onceOfForm(form) : null;
+  const cronError = formProblem(form);
+  const words = cronError ? null : once ? onceInWords(once) : cronInWords(cron);
   // The threads a loop can send every run to: this computer's threads in the loop's project.
   const threadOptions = sessions
     .filter((session) => !session.host && session.cwd === draft.workspace)
@@ -148,6 +226,27 @@ export function LoopDialog({
       .filter((harness) => harness.enabled || harness.id === draft.harness)
       .map((harness) => ({ value: harness.id, label: harness.name })),
   ];
+  // The models of the harness a run starts on: the chosen one, else the default harness.
+  const runHarness = harnesses?.harnesses.find(
+    (harness) => harness.id === (draft.harness || harnesses.default.harness),
+  );
+  const models = runHarness?.models ?? [];
+  const modelOptions = [
+    { value: "", label: "Default model" },
+    ...models.map((model) => ({ value: model.id, label: model.name || model.id })),
+  ];
+  if (draft.model && !models.some((model) => model.id === draft.model)) {
+    modelOptions.push({ value: draft.model, label: draft.model });
+  }
+  const chosenModel = models.find((model) => model.id === draft.model);
+  const effortValues = chosenModel?.efforts.length ? chosenModel.efforts : EFFORTS;
+  const effortOptions = [
+    { value: "", label: "Default" },
+    ...effortValues.map((effort) => ({ value: effort, label: effort[0]?.toUpperCase() + effort.slice(1) })),
+  ];
+  if (draft.effort && !effortValues.includes(draft.effort)) {
+    effortOptions.push({ value: draft.effort, label: draft.effort });
+  }
   const ready =
     draft.name.trim() &&
     draft.prompt.trim() &&
@@ -160,7 +259,7 @@ export function LoopDialog({
     setSaving(true);
     setError(null);
     try {
-      await saveLoop({ ...draft, once: once ?? undefined, threadId });
+      await saveLoop({ ...draft, cron, once: once ?? undefined, threadId });
       onSaved();
       onOpenChange(false);
     } catch (e) {
@@ -212,30 +311,108 @@ export function LoopDialog({
             </Field>
             <Field label="Schedule">
               <Segments
-                label="Schedule"
-                value={preset}
-                options={SCHEDULE_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
-                onChange={(next) => {
-                  setPreset(next);
-                  const cron = SCHEDULE_PRESETS.find((p) => p.id === next)?.cron;
-                  if (cron) patch({ cron });
-                }}
+                label="Repeat"
+                value={form.repeat}
+                options={REPEATS}
+                onChange={(repeat) =>
+                  // Switching to Cron starts from what the other choices made, to edit by hand.
+                  patchForm(repeat === "cron" && form.repeat !== "once" ? { repeat, cron } : { repeat })
+                }
               />
-              {preset === "once" && (
-                <input
-                  value={onceText}
-                  onChange={(e) => setOnceText(e.target.value)}
-                  placeholder="in 2h, at 09:00"
-                  aria-label="When"
-                  {...noTextHelpers}
-                  className={inputClass}
-                />
+              {form.repeat === "hours" && (
+                <div className="flex items-center gap-2 text-callout text-fg-muted">
+                  <span>Every</span>
+                  <Select
+                    label="Hours between runs"
+                    value={String(form.everyHours)}
+                    options={HOUR_STEPS.map((n) => ({
+                      value: String(n),
+                      label: n === 1 ? "hour" : `${n} hours`,
+                    }))}
+                    onChange={(n) => patchForm({ everyHours: Number(n) })}
+                  />
+                </div>
               )}
-              {preset === "custom" && (
+              {form.repeat === "days" && (
+                <>
+                  <div role="group" aria-label="Days" className="flex flex-wrap gap-1">
+                    {DAY_TOGGLES.map(({ day, label }) => {
+                      const on = form.days.includes(day);
+                      return (
+                        <Pill
+                          key={day}
+                          size="sm"
+                          prominent={on}
+                          aria-pressed={on}
+                          className="w-11"
+                          onClick={() =>
+                            setForm((f) => ({
+                              ...f,
+                              days: f.days.includes(day) ? f.days.filter((d) => d !== day) : [...f.days, day],
+                            }))
+                          }
+                        >
+                          {label}
+                        </Pill>
+                      );
+                    })}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {DAY_SHORTCUTS.map((shortcut) => (
+                      <Pill
+                        key={shortcut.label}
+                        quiet
+                        size="sm"
+                        onClick={() => patchForm({ days: [...shortcut.days] })}
+                      >
+                        {shortcut.label}
+                      </Pill>
+                    ))}
+                    <span className="ml-auto text-callout text-fg-muted">at</span>
+                    <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
+                  </div>
+                </>
+              )}
+              {form.repeat === "monthly" && (
+                <div className="flex items-center gap-2 text-callout text-fg-muted">
+                  <span>On the</span>
+                  <Select
+                    label="Day of the month"
+                    value={String(form.monthDay)}
+                    options={MONTH_DAYS}
+                    onChange={(day) => patchForm({ monthDay: Number(day) })}
+                  />
+                  <span>at</span>
+                  <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
+                </div>
+              )}
+              {form.repeat === "once" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="datetime-local"
+                    value={form.onceAt}
+                    min={localDateTime(new Date())}
+                    onChange={(e) => patchForm({ onceAt: e.target.value })}
+                    aria-label="Date and time"
+                    className={cx(inputClass, "w-auto")}
+                  />
+                  {onceShortcuts().map((shortcut) => (
+                    <Pill
+                      key={shortcut.label}
+                      quiet
+                      size="sm"
+                      onClick={() => patchForm({ onceAt: shortcut.at })}
+                    >
+                      {shortcut.label}
+                    </Pill>
+                  ))}
+                </div>
+              )}
+              {form.repeat === "cron" && (
                 <input
-                  value={draft.cron}
-                  onChange={(e) => patch({ cron: e.target.value })}
-                  placeholder="0 9 * * 1-5"
+                  value={form.cron}
+                  onChange={(e) => patchForm({ cron: e.target.value })}
+                  placeholder="0 9 * * MON-FRI"
                   aria-label="Cron expression"
                   {...noTextHelpers}
                   className={cx(inputClass, "font-mono")}
@@ -245,7 +422,7 @@ export function LoopDialog({
                 aria-live="polite"
                 className={cx("text-caption", cronError ? "text-danger" : "text-fg-muted")}
               >
-                {cronError ?? words ?? `Cron ${draft.cron.trim()}`}
+                {cronError ?? words ?? `Cron ${cron}`}
                 {!cronError && !once && " · a run missed while the computer slept runs once when it wakes"}
               </p>
             </Field>
@@ -281,21 +458,31 @@ export function LoopDialog({
                     label="Harness"
                     value={draft.harness ?? ""}
                     options={harnessOptions}
-                    onChange={(harness) => patch({ harness })}
+                    // Another harness lists other models and efforts: start from its defaults.
+                    onChange={(harness) => patch({ harness, model: "", effort: "" })}
                   />
-                  <input
-                    value={draft.model ?? ""}
-                    onChange={(e) => patch({ model: e.target.value })}
-                    placeholder="Model (default)"
-                    aria-label="Model"
-                    {...noTextHelpers}
-                    className={cx(inputClass, "min-w-0 flex-1")}
-                  />
+                  {models.length ? (
+                    <Select
+                      label="Model"
+                      value={draft.model ?? ""}
+                      options={modelOptions}
+                      onChange={(model) => patch({ model })}
+                    />
+                  ) : (
+                    <input
+                      value={draft.model ?? ""}
+                      onChange={(e) => patch({ model: e.target.value })}
+                      placeholder="Model (default)"
+                      aria-label="Model"
+                      {...noTextHelpers}
+                      className={cx(inputClass, "min-w-0 flex-1")}
+                    />
+                  )}
                 </div>
                 <Segments
                   label="Effort"
                   value={draft.effort ?? ""}
-                  options={EFFORTS}
+                  options={effortOptions}
                   onChange={(effort) => patch({ effort })}
                 />
               </Field>
