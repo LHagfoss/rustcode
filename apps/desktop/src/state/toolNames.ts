@@ -49,6 +49,20 @@ export const ORCHESTRATION_TOOLS = [
   "stop_workflow",
 ] as const;
 
+// Normalize MCP names to the keys used by the transcript and ACP handlers.
+const THREAD_TOOLS = new Map([
+  ["list_threads", "list_sessions"],
+  ["search_threads", "search_sessions"],
+  ["read_thread", "read_session"],
+  ["start_thread", "start_session"],
+  ["message_thread", "message_session"],
+  ["wait_thread", "wait_session"],
+  ["update_thread", "update_session"],
+  ["configure_thread", "configure_session"],
+  ["transfer_thread", "transfer_session"],
+  ["interrupt_thread", "interrupt_session"],
+]);
+
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
 const MCP_PREFIX = /^mcp__/;
 const IDENT = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -108,7 +122,8 @@ export function splitToolName(name: string): { server?: string; tool: string } {
 export function orchestrationTool(name: string): string | undefined {
   const { server, tool } = splitToolName(name);
   if (server && server !== "rustcode") return undefined;
-  return (ORCHESTRATION_TOOLS as readonly string[]).includes(tool) ? tool : undefined;
+  const internal = THREAD_TOOLS.get(tool) ?? tool;
+  return (ORCHESTRATION_TOOLS as readonly string[]).includes(internal) ? internal : undefined;
 }
 
 /** `start_session` reads `Start session`: underscores become spaces, the first letter goes up. */
@@ -222,7 +237,8 @@ function orchestrationLabel(
     case "answer_request":
       return { title: "Answered a request", summary: text(args.choice) || text(args.answer) || undefined };
     case "organize_threads": {
-      const ids = Array.isArray(args.session_ids) ? args.session_ids.length : 0;
+      const targets = args.thread_ids ?? args.session_ids;
+      const ids = Array.isArray(targets) ? targets.length : 0;
       return {
         title: `Organized ${ids || 1} thread${ids === 1 ? "" : "s"}`,
         summary: text(args.title) || undefined,
@@ -292,10 +308,10 @@ function orchestrationLabel(
   }
 }
 
-/** The `session_id` a call answered with, for the row that opens the thread it started. */
+/** The thread ID a call answered with, for the row that opens the thread it started. */
 export function sessionIdOf(output: string | undefined): string | undefined {
   if (!output) return undefined;
-  const match = /"session_id"\s*:\s*"([^"]+)"/.exec(output);
+  const match = /"(?:thread_id|session_id)"\s*:\s*"([^"]+)"/.exec(output);
   return match?.[1];
 }
 

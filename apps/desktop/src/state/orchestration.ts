@@ -1534,7 +1534,7 @@ export interface ReadAnswer {
 export function renderRead(answer: ReadAnswer): string {
   const lines = [
     `Thread: ${answer.title}`,
-    `Session: ${answer.session_id}`,
+    `Thread ID: ${answer.session_id}`,
     `Status: ${answer.status}`,
     `Project: ${answer.project}`,
     `Turns: ${answer.turns.length}`,

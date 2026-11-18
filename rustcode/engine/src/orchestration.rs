@@ -27,6 +27,7 @@ pub mod hub;
 pub mod local;
 mod local_merge;
 pub(crate) mod local_threads;
+mod mcp_names;
 pub mod mcp_server;
 pub mod outside;
 pub mod outside_http;

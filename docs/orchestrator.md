@@ -1664,7 +1664,7 @@ Apps that are not threads of RustCode (Claude Desktop, Cursor, Codex) use the to
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
 client advertises orchestration `>= 2`, an external harness thread gets the
-same tools through an MCP server the engine injects into its session:
+same tools through an MCP server the engine injects into the harness:
 
 ```
 RUSTCODE_ORCHESTRATOR_TOKEN=<t> rustcode mcp-orchestrator --session <thread id> --socket <path>
@@ -1673,6 +1673,14 @@ RUSTCODE_ORCHESTRATOR_TOKEN=<t> rustcode mcp-orchestrator --session <thread id> 
 The per-thread token travels in the server's environment (ACP `env`, Codex
 `env`), never in its arguments, so other local users cannot read it from the
 process list. `--token` still works for manual testing.
+
+MCP discovery and instructions use thread names, such as `list_threads`,
+`read_thread` and `start_thread`, with `thread_id` or `thread_ids` for targets.
+The server accepts the earlier tool names and ID fields as aliases. Calling
+an older tool name still returns its legacy fields. Tools whose names
+stayed the same can include both field names for calls without an ID argument.
+Built-in tools and the engine-to-app ACP route use the legacy names documented
+above.
 
 The same environment carries `RUSTCODE_ORCHESTRATION_VERSION` (the client's
 version), so the server lists exactly that version's tools and prompt hint — a

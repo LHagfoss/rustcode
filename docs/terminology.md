@@ -67,6 +67,7 @@ Where both words appear today they mean the same:
 | Thread, thread id | Session, session id (`sessionId`) | ACP (`session/new`, `session/load`) |
 | `~/.config/rustcode/threads/` | `~/.config/rustcode/sessions/` (a link to it) | Storage |
 | `rustcode threads …` | `rustcode sessions …` (alias) | CLI |
+| `thread_id`, `list_threads`, `read_thread` | `session_id`, `list_sessions`, `read_session` (aliases) | RustCode MCP |
 | `thread_id`, `list_threads`, `kind: "threads"` | `session_id`, `list_sessions`, `kind: "sessions"` | Remote protocol, when the device asks for thread names ([details](remote-protocol/README.md#thread-names)) |
 | "Thread status", "Resume thread" | "Session status", "Resume session" | Terminal UI; old transcripts still say session and render the same |
 | `/session` | (unchanged command name) | Slash commands keep their names |
