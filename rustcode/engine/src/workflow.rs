@@ -374,22 +374,50 @@ pub(crate) fn resume(thread: &str, runner: Arc<dyn AgentRunner>) -> usize {
 }
 
 fn resume_in(store: &Store, runner: &Arc<dyn AgentRunner>) -> usize {
-    let mut resumed = 0;
-    for mut record in store.list() {
-        if record.status != RunStatus::Running || active(&record.id) {
-            continue;
-        }
-        let Some(source) = store.script(&record.id) else {
-            continue;
-        };
-        record.resumes += 1;
-        if store.save(&record).is_err() {
-            continue;
-        }
-        spawn(store.clone(), Arc::clone(runner), record, source);
-        resumed += 1;
+    store
+        .list()
+        .into_iter()
+        .filter(|record| resume_one(store, &record.id, runner.clone()).unwrap_or(false))
+        .count()
+}
+
+// Serialize the transition between a saved run and a live driver.
+static DRIVER_TRANSITION: Mutex<()> = Mutex::new(());
+
+pub(crate) fn resume_run(thread: &str, run_id: &str) -> Result<Value, String> {
+    validate(STOP_TOOL_NAME, &json!({ "run_id": run_id }))?;
+    let store = Store::for_thread(thread)
+        .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
+    resume_one(
+        &store,
+        run_id,
+        ThreadRunner::new(thread, None, crate::orchestration::VERSION),
+    )?;
+    store
+        .load(run_id)
+        .map(|record| summary(&store, &record))
+        .ok_or_else(|| format!("no run {run_id} in this thread"))
+}
+
+fn resume_one(store: &Store, run_id: &str, runner: Arc<dyn AgentRunner>) -> Result<bool, String> {
+    let _transition = DRIVER_TRANSITION
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut record = store
+        .load(run_id)
+        .ok_or_else(|| format!("no run {run_id} in this thread"))?;
+    if record.status != RunStatus::Running || active(run_id) {
+        return Ok(false);
     }
-    resumed
+    let source = store
+        .script(run_id)
+        .ok_or_else(|| format!("no saved script for run {run_id}"))?;
+    record.resumes += 1;
+    store.save(&record)?;
+    let thread = record.thread.clone();
+    spawn(store.clone(), runner, record, source);
+    announce(&thread, run_id);
+    Ok(true)
 }
 
 /// `workflow_status`: one run in full, or this thread's runs in brief.
@@ -476,30 +504,36 @@ pub(crate) async fn stop(thread: &str, run_id: &str, told: bool) -> Result<Value
 }
 
 async fn stop_in(store: &Store, run_id: &str) -> Result<Value, String> {
-    let Some(mut record) = store.load(run_id) else {
-        return Err(format!("no run {run_id} in this thread"));
+    let record = {
+        let _transition = DRIVER_TRANSITION
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(mut record) = store.load(run_id) else {
+            return Err(format!("no run {run_id} in this thread"));
+        };
+        if record.status.settled() {
+            return Ok(summary(store, &record));
+        }
+        let token = ACTIVE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(run_id)
+            .cloned();
+        let Some(token) = token else {
+            // A restart left it running and nothing drives it: end it on its
+            // record, so it is not picked up again. Its workers, if any are still
+            // alive, are threads the user can stop like any other.
+            record.status = RunStatus::Cancelled;
+            record.finished_at = Some(now_ms());
+            record.updated_at = now_ms();
+            record.error = Some("the run was stopped".to_owned());
+            store.save(&record)?;
+            announce(&record.thread, &record.id);
+            return Ok(summary(store, &record));
+        };
+        token.cancel();
+        record
     };
-    if record.status.settled() {
-        return Ok(summary(store, &record));
-    }
-    let token = ACTIVE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .get(run_id)
-        .cloned();
-    let Some(token) = token else {
-        // A restart left it running and nothing drives it: end it on its
-        // record, so it is not picked up again. Its workers, if any are still
-        // alive, are threads the user can stop like any other.
-        record.status = RunStatus::Cancelled;
-        record.finished_at = Some(now_ms());
-        record.updated_at = now_ms();
-        record.error = Some("the run was stopped".to_owned());
-        store.save(&record)?;
-        announce(&record.thread, &record.id);
-        return Ok(summary(store, &record));
-    };
-    token.cancel();
     let deadline = tokio::time::Instant::now() + STOP_WAIT;
     loop {
         if let Some(now) = store.load(run_id)
@@ -912,7 +946,8 @@ mod tests {
         let before = report(&store, &store.load(&record.id).unwrap());
         assert!(before["note"].as_str().unwrap().contains("restarted"));
 
-        assert_eq!(resume_in(&store, &runner), 1);
+        assert!(resume_one(&store, &record.id, runner.clone()).unwrap());
+        assert_eq!(resume_in(&store, &runner), 0);
         let finished = settled(&store, &record.id).await;
         assert_eq!(finished.status, RunStatus::Done, "{:?}", finished.error);
         assert_eq!(

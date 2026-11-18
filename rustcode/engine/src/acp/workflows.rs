@@ -43,6 +43,24 @@ pub(crate) struct WorkflowStopRequest {
     pub run_id: String,
 }
 
+/// Resume one saved workflow from its first unfinished call.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/workflows/resume", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkflowResumeRequest {
+    pub session_id: String,
+    pub run_id: String,
+}
+
+pub(crate) fn resume(request: WorkflowResumeRequest) -> Value {
+    match crate::workflow::resume_run(&request.session_id, &request.run_id) {
+        Ok(run) => json!({ "run": run }),
+        Err(message) => json!({ "error": { "code": "failed", "message": message } }),
+    }
+}
+
 /// `_rustcode/workflows/wake`: claim the wake of an ended run. Answers
 /// `{claimed}`: true once, for the client that should tell the thread.
 #[derive(

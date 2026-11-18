@@ -258,3 +258,23 @@ export async function stopWorkflow(key: string, runId: string): Promise<void> {
     toast(`Could not stop the workflow: ${errorText(error)}`, "error");
   }
 }
+
+/** Resume one saved run on the machine that owns it. */
+export async function resumeWorkflow(key: string, runId: string): Promise<void> {
+  try {
+    const { host, id } = splitThreadKey(key);
+    const conn = connectionFor(host);
+    if (!conn) throw new Error("That machine is not connected.");
+    const answer = obj(await conn.request(WorkflowMethod.resume, { sessionId: id, runId }, 30_000));
+    const error = obj(answer?.error);
+    if (error) throw new Error(str(error.message) ?? "The engine rejected the request.");
+    const run = parseWorkflowRun(answer?.run);
+    if (!run) throw new Error("The engine did not return the workflow.");
+    const known = useWorkflows.getState().runs[key]?.find((candidate) => candidate.id === runId);
+    if (known && isLive(known) && !known.driven) {
+      upsertRun(key, isLive(run) ? { ...known, driven: run.driven } : run);
+    }
+  } catch (error) {
+    toast(`Could not resume the workflow: ${errorText(error)}`, "error");
+  }
+}

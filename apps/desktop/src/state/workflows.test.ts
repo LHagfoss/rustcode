@@ -14,6 +14,7 @@ import {
   phaseSteps,
   progressText,
   resetWorkflows,
+  resumeWorkflow,
   runLine,
   runTitle,
   shouldWake,
@@ -305,4 +306,24 @@ test("Stop asks the engine and marks the run ended; a refusal is told", async ()
   expect(useWorkflows.getState().stopping["wf-1-aaaaaaaa"]).toBeUndefined();
   expect(useApp.getState().toasts.some((t) => t.text.includes("Could not stop the workflow"))).toBe(true);
   refused.conn.close("test finished");
+});
+
+test("Resume targets the owning machine and keeps the saved progress", async () => {
+  const { conn, calls } = engine(
+    (method): JsonObject =>
+      method === WorkflowMethod.resume
+        ? { run: { run_id: "wf-1-aaaaaaaa", status: "running", driven: true } }
+        : {},
+  );
+  watchMachineConnection("machine", conn);
+  const key = "machine/t1";
+  upsertRun(key, { ...run(), driven: false });
+  await resumeWorkflow(key, "wf-1-aaaaaaaa");
+  expect(calls.find((c) => c.method === WorkflowMethod.resume)?.params).toEqual({
+    sessionId: "t1",
+    runId: "wf-1-aaaaaaaa",
+  });
+  expect(useWorkflows.getState().runs[key]?.[0]?.driven).toBe(true);
+  expect(useWorkflows.getState().runs[key]?.[0]?.workers).toHaveLength(3);
+  conn.close("test finished");
 });

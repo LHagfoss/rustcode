@@ -4227,6 +4227,12 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: workflows::WorkflowResumeRequest, responder, _connection| {
+                responder.respond(workflows::resume(request))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: workflows::WorkflowWakeRequest, responder, _connection| {
                 responder.respond(workflows::wake(&request))
             },

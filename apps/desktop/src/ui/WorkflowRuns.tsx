@@ -16,6 +16,7 @@ import {
   type PhaseStepState,
   phaseSteps,
   progressText,
+  resumeWorkflow,
   runLine,
   runTitle,
   statusWord,
@@ -126,6 +127,27 @@ export function WorkflowWorkers({ run, threadId }: { run: WorkflowRun; threadId:
   );
 }
 
+function ResumeButton({ run, threadId }: { run: WorkflowRun; threadId: string }) {
+  const [pending, setPending] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      className="shrink-0 rounded-sm px-1.5 py-0.5 text-accent hover:bg-fill disabled:opacity-50"
+      onClick={async () => {
+        setPending(true);
+        try {
+          await resumeWorkflow(threadId, run.id);
+        } finally {
+          setPending(false);
+        }
+      }}
+    >
+      {pending ? "Resuming…" : "Resume"}
+    </button>
+  );
+}
+
 function StopButton({ run, threadId }: { run: WorkflowRun; threadId: string }) {
   const stopping = useWorkflows((s) => s.stopping[run.id] === true);
   return (
@@ -168,9 +190,13 @@ export function WorkflowStatusRow({ run, threadId }: { run: WorkflowRun; threadI
           />
           <Workflow size={12} aria-hidden className="shrink-0 text-fg-faint" />
           <span className="min-w-0 truncate">{runLine(run, now)}</span>
-          {!run.driven && <span className="shrink-0 text-fg-faint">· resumes when this thread is open</span>}
-          <Spinner size={10} className="shrink-0 text-accent" />
+          {run.driven ? (
+            <Spinner size={10} className="shrink-0 text-accent" />
+          ) : (
+            <span className="shrink-0 text-fg-faint">· Awaiting resume</span>
+          )}
         </button>
+        {!run.driven && <ResumeButton run={run} threadId={threadId} />}
         <StopButton run={run} threadId={threadId} />
       </div>
       {open && (
@@ -219,9 +245,10 @@ export function WorkflowCard({ threadId, runId }: { threadId: string; runId: str
             (run.status === "failed" || run.status === "timed_out") && "text-danger",
           )}
         >
-          · {statusWord(run.status)}
+          · {live && !run.driven ? "Awaiting resume" : statusWord(run.status)}
         </span>
         <span className="ml-auto shrink-0 text-fg-faint">{formatDuration(elapsedMs(run, now))}</span>
+        {live && !run.driven && <ResumeButton run={run} threadId={threadId} />}
         {live && <StopButton run={run} threadId={threadId} />}
       </div>
       <div className="px-2">
