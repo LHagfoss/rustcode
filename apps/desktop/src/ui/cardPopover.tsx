@@ -254,6 +254,7 @@ export function CardMenuItem({
   close = true,
   className,
   children,
+  onClick,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { onSelect: () => void; close?: boolean }) {
   const onClose = useCardPopoverClose();
@@ -262,12 +263,15 @@ export function CardMenuItem({
       type="button"
       role="menuitem"
       data-menu-row=""
-      onClick={() => {
+      {...rest}
+      // After the spread: a `Tooltip` wrapping a row hands it a Slot `onClick` that dismisses
+      // the tip, and a spread placed after a handler would replace the row's own.
+      onClick={(event) => {
         onSelect();
         if (close) onClose();
+        onClick?.(event);
       }}
       className={cx(menuItem, "hover:bg-fill focus-visible:bg-fill", className)}
-      {...rest}
     >
       {children}
     </button>
