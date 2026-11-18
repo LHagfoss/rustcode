@@ -41,12 +41,6 @@ impl AppRuntime {
                     &state,
                 )))
             }
-            AppEvent::CloseOverlay => {
-                let mut state = self.app_state.lock().await;
-                state.overlays().close_all();
-                state.request_redraw();
-                Ok(AppRunControl::Continue)
-            }
             AppEvent::ApprovalDecision(decision) => {
                 super::remote::apply_terminal_approval(
                     &self.app_state,
@@ -80,9 +74,6 @@ impl AppRuntime {
             }
             event @ (AppEvent::NewSession
             | AppEvent::ResumeSession(_)
-            | AppEvent::ForkSession(_)
-            | AppEvent::ClearSession
-            | AppEvent::ArchiveSession
             | AppEvent::DeleteSession(_)) => {
                 let mut state = self.app_state.lock().await;
                 super::sessions::apply_session_event(
@@ -106,25 +97,25 @@ impl AppRuntime {
 /// production builds (prompt submit bypasses the queue via direct
 /// `handle_enter` calls); they remain for protocol stability and are
 /// constructed in tests.
-#[allow(dead_code)]
 pub enum AppEvent {
     /// Terminal input produced and consumed by the interactive frontend.
     Tui(TuiEvent),
+    #[cfg_attr(not(test), allow(dead_code))]
     SubmitPrompt(String),
+    #[cfg_attr(not(test), allow(dead_code))]
     CancelActiveTurn,
     ApprovalDecision(ApprovalDecision),
     AnswerQuestion(QuestionAnswer),
     UpdateDecision(UpdateDecision),
-    ClearSession,
-    ArchiveSession,
     DeleteSession(SessionAction),
     OpenOverlay(Overlay),
-    CloseOverlay,
+    #[cfg_attr(not(test), allow(dead_code))]
     NewSession,
     ResumeSession(SessionAction),
-    ForkSession(SessionAction),
     SelectSubagent(u32),
+    #[cfg_attr(not(test), allow(dead_code))]
     RequestDraw,
+    #[cfg_attr(not(test), allow(dead_code))]
     Exit,
 }
 

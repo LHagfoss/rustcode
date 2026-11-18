@@ -28,6 +28,7 @@ pub enum PanelEmphasis {
     /// Bold value in the theme tip color, marking an over-threshold category.
     OverThreshold,
     /// Inline code rendered through the highlight path.
+    #[cfg(test)]
     Code,
 }
 
@@ -95,6 +96,7 @@ pub fn panel_value_spans(value: &str, emphasis: PanelEmphasis, base: Style) -> V
                 .fg(COLOR_TIP())
                 .add_modifier(Modifier::BOLD),
         )],
+        #[cfg(test)]
         PanelEmphasis::Code => code_spans(value),
         PanelEmphasis::Normal => inline_markup_spans(value, base),
     }

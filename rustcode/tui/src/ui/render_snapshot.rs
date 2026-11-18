@@ -32,7 +32,9 @@ pub(crate) struct RenderSnapshot {
     provider_rate_limits: Option<rustcode::controller::ProviderRateLimits>,
     pending_queue: Vec<String>,
     pending_steers: Vec<String>,
+    #[cfg(test)]
     draft_submit_mode: rustcode::controller::DraftSubmitMode,
+    #[cfg(test)]
     steering_interruptible: bool,
     status: AppStatus,
     active_suggestion_index: Option<usize>,
@@ -57,6 +59,7 @@ pub(crate) struct RenderSnapshot {
     running_tools: Vec<String>,
     background_tasks: Vec<rustcode::controller::TaskDisplay>,
     pending_background_results: Vec<rustcode::controller::BackgroundResultDisplay>,
+    #[cfg(test)]
     waiting_for_background_terminal: bool,
     live_tool_calls: Arc<Vec<LiveToolCall>>,
     stream_tracker: Option<StreamTracker>,
@@ -196,6 +199,7 @@ impl RenderSnapshot {
                     history: Arc::clone(&agent.history),
                     status: agent.status,
                     active_turn: agent.active_turn,
+                    #[cfg(test)]
                     parent_id: agent.parent_id,
                 });
 
@@ -225,7 +229,9 @@ impl RenderSnapshot {
             provider_rate_limits: view.provider_rate_limits.clone(),
             pending_queue: view.pending_queue.clone(),
             pending_steers: view.pending_steers.clone(),
+            #[cfg(test)]
             draft_submit_mode: view.draft_submit_mode,
+            #[cfg(test)]
             steering_interruptible: view.steering_interruptible,
             status: view.status.clone(),
             active_suggestion_index: view.active_suggestion_index,
@@ -248,6 +254,7 @@ impl RenderSnapshot {
             running_tools: view.running_tools.clone(),
             background_tasks: view.background_tasks.clone(),
             pending_background_results: view.pending_background_results.clone(),
+            #[cfg(test)]
             waiting_for_background_terminal: view.waiting_for_background_terminal,
             live_tool_calls: Arc::clone(&view.live_tool_calls),
             stream_tracker: view.stream_tracker.clone(),
@@ -726,6 +733,7 @@ pub(crate) struct SelectedSubagentSnapshot {
     history: Arc<Vec<ChatMessage>>,
     status: SubAgentStatus,
     active_turn: bool,
+    #[cfg(test)]
     parent_id: Option<u32>,
 }
 

@@ -62,7 +62,6 @@ pub(crate) struct TranscriptModel {
     live: Option<HistoryCell>,
     #[cfg(test)]
     cursor: TranscriptCursor,
-    replay_revision: u64,
 }
 
 impl TranscriptModel {
@@ -192,7 +191,6 @@ impl TranscriptModel {
     #[cfg(test)]
     pub(crate) fn reset_for_resize(&mut self) {
         self.cursor.reset();
-        self.replay_revision = self.replay_revision.saturating_add(1);
     }
 }
 

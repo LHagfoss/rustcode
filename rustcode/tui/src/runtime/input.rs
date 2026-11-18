@@ -668,23 +668,13 @@ pub(super) async fn handle_app_event(
             state.request_redraw();
             *needs_redraw = true;
         }
-        event @ (AppEvent::NewSession
-        | AppEvent::ResumeSession(_)
-        | AppEvent::ForkSession(_)
-        | AppEvent::ClearSession
-        | AppEvent::ArchiveSession
-        | AppEvent::DeleteSession(_)) => {
+        event
+        @ (AppEvent::NewSession | AppEvent::ResumeSession(_) | AppEvent::DeleteSession(_)) => {
             let mut state = app_state.lock().await;
             if let Err(error) = apply_session_event(&mut state, current_cancel_token, event) {
                 state.set_notice(error.to_string());
                 state.request_redraw();
             }
-            *needs_redraw = true;
-        }
-        AppEvent::CloseOverlay => {
-            let mut state = app_state.lock().await;
-            state.overlays().close_all();
-            state.request_redraw();
             *needs_redraw = true;
         }
         AppEvent::RequestDraw => {

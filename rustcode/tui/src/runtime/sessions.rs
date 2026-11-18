@@ -9,28 +9,20 @@ pub(super) fn apply_session_event(
     event: AppEvent,
 ) -> Result<(), AppError> {
     let controller = rustcode::app::session_controller::SessionController::default();
-    let archive_only = matches!(&event, AppEvent::ArchiveSession);
-    if !archive_only {
-        cancel_token.cancel();
-        *cancel_token = CancellationToken::new();
-    }
+    cancel_token.cancel();
+    *cancel_token = CancellationToken::new();
 
     let transition = match event {
         AppEvent::NewSession => controller.start_fresh(state),
         AppEvent::ResumeSession(action) => controller.resume(state, action),
-        AppEvent::ForkSession(action) => controller.fork(state, action),
-        AppEvent::ClearSession => controller.clear(state),
-        AppEvent::ArchiveSession => controller.archive(state),
         AppEvent::DeleteSession(action) => controller.delete(state, action),
         _ => return Err(AppError("not a session event".to_owned())),
     }
     .map_err(|error| AppError(error.to_string()))?;
 
-    if !archive_only {
-        state.show_history_picker = false;
-        state.pending_delete_session_idx = None;
-        state.history_picker_sessions.clear();
-    }
+    state.show_history_picker = false;
+    state.pending_delete_session_idx = None;
+    state.history_picker_sessions.clear();
     // Starting, resuming and forking announce themselves where they happen.
     if let Some(notice) = format_session_transition(&transition) {
         state.set_transient_notice(notice);
