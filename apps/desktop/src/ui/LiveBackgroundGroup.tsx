@@ -49,7 +49,7 @@ function applyPreset(current: LiveBackdrop, preset: LiveBackdrop): LiveBackdrop 
 
 function Swatches({ cfg, harness }: { cfg: LiveBackdrop; harness?: string }) {
   return (
-    <div className="grid grid-cols-3 gap-2 px-4 pb-4 sm:grid-cols-5">
+    <div className="grid grid-cols-3 gap-2 p-4 sm:grid-cols-5">
       {LIVE_PRESETS.map((p) => {
         const config = applyPreset(cfg, p.config);
         const on = cfg.source === "pattern" && sameLiveBackdrop(cfg, config);
