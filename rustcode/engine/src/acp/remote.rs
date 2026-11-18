@@ -2337,6 +2337,12 @@ impl ClientSink for TeeSink {
     fn child_activity(&self, activity: crate::harness::child_activity::ChildActivity) {
         self.inner.child_activity(activity);
     }
+
+    // The trait's default drops it: without this, a Claude Code thread's
+    // `waiting` on a background command never reached any client (#3913).
+    fn activity(&self, activity: crate::harness::background::Activity) {
+        self.inner.activity(activity);
+    }
 }
 
 /// Offer a harness's permission request to paired devices while the app is
@@ -2373,6 +2379,55 @@ pub(crate) fn bridge_permission(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every thread on an external harness talks to its clients through
+    /// [`RemoteManager::wrap_sink`]: what the harness reports outside a prompt
+    /// (a background command it waits on, a turn it woke for) must come out
+    /// the other side, or the app shows the thread idle while it waits (#3913).
+    #[test]
+    fn the_wrapped_sink_passes_on_background_activity() {
+        use crate::harness::background::Activity;
+        use crate::harness::session::{ClientSink, PermissionFuture};
+
+        #[derive(Default)]
+        struct Recorder(std::sync::Mutex<Vec<Activity>>);
+
+        impl ClientSink for Recorder {
+            fn update(&self, _update: SessionUpdate) {}
+
+            fn request_permission(&self, _request: RequestPermissionRequest) -> PermissionFuture {
+                unreachable!("no permission is asked")
+            }
+
+            fn activity(&self, activity: Activity) {
+                self.0.lock().unwrap().push(activity);
+            }
+        }
+
+        let inner = Arc::new(Recorder::default());
+        let sink = RemoteManager::default().wrap_sink(inner.clone(), "a-thread");
+        sink.activity(Activity {
+            state: "waiting",
+            background: 1,
+        });
+        sink.activity(Activity {
+            state: "idle",
+            background: 0,
+        });
+        assert_eq!(
+            *inner.0.lock().unwrap(),
+            vec![
+                Activity {
+                    state: "waiting",
+                    background: 1,
+                },
+                Activity {
+                    state: "idle",
+                    background: 0,
+                },
+            ]
+        );
+    }
 
     #[test]
     fn paired_devices_reach_the_apps_with_kind_platform_and_last_seen() {
