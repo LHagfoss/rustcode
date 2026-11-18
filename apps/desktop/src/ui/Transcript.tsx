@@ -42,13 +42,16 @@ import { selectOption } from "../state/harness";
 import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { isQueuedNotice, queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
+import { engineBusy } from "../state/runState";
 import { type PlanClocks, planCardShown, type SteerNote } from "../state/steer";
 import {
   RESUME_TEXT,
   rewindCheckpoint,
   shortcutFor,
   spokenTitleOf,
+  statusOf,
   steeringOf,
+  threadIsRemote,
   turnState,
   useApp,
 } from "../state/store";
@@ -428,8 +431,11 @@ export function Transcript({
   const innerRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
-  const running = isRunning(thread);
-  const now = useNow(running);
+  // A paired engine can keep running a prompt this window did not send.
+  const remoteBusy = useApp((s) => threadIsRemote(thread.id) && engineBusy(statusOf(s, thread.id)));
+  const runningHere = isRunning(thread);
+  const running = runningHere || remoteBusy;
+  const now = useNow(runningHere);
   const latestEndId = thread.items.findLast((item) => item.kind === "turnEnd")?.id;
   const settlingId = useTurnSettle(thread.id, running, latestEndId);
 
