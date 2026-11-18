@@ -1,3 +1,23 @@
+## [v1.43.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.43.0) - 2026-11-18
+
+### Features
+- Highlight only Loops in the sidebar while the Loops page is open. (#3982)
+- Keep the composer’s remaining plan usage visible while a turn runs. (#3984)
+- Show live work in the transcript when a paired thread is running on another client. (#3985)
+- Keep the thread name visible in the sidebar while an agent runs commands on a paired machine. (#3988)
+- RustCode's MCP now advertises thread names such as `list_threads` and `read_thread`, with compatibility for existing callers. (#3987)
+- Choose a harness account for each loop, scan upcoming runs at a glance, and create loops through the RustCode MCP. (#3986)
+- Give the model picker's Effort panel more room and show logos for all supported harnesses. (#3989)
+- Shorten the docked right sidebar. (#3991)
+- Resume an interrupted workflow from its run card and pick up from saved progress. (#3992)
+- Threads on a paired machine can answer with Smart UI views and charts when Smart UI is on. (#3993)
+- With Smart UI on, agents answer with charts, stats and tables in views instead of Markdown tables, and keep the text around them short. (#3994)
+- Sidebar thread rows show their branch or worktree instead of repeating the project path, and rows on the default branch take one line. (#3998)
+- Loops are now **Scheduled Jobs**, and a job can run a script first so the agent only wakes when it prints something. (#3995)
+- Paired devices and machines can connect through the machine's public address (`wss://`, the same tunnel as hosted agents' `/mcp`). (#3996)
+- Show screenshots that Antigravity saves in its own session folder in the chat. (#4000)
+- Permission refusals now say which layer refused and where to change it; a delegate on a named account asks with a card instead of refusing, and Claude Code auto-mode denials are marked on the tool row. (#4003)
+- Fix Claude Code threads looking finished while a background command they wait on still runs. (#4002)
 ## [v1.42.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.42.0) - 2026-11-18
 
 ### Features
