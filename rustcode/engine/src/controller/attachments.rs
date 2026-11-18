@@ -150,7 +150,8 @@ fn read_image_chunk_in(
 
 /// One chunk of a picture a thread's reply names (`![alt](path)`): a stored
 /// image as [`read_image_chunk`] serves it, or else an image file inside the
-/// thread's own folders (its working directory and added directories) or this
+/// thread's own folders (its working directory, added directories and the
+/// folder its harness keeps the session's output in) or this
 /// computer's scratch folders, where an agent saves its screenshots. A paired
 /// computer's app cannot read this disk, so it asks for them here.
 pub fn read_thread_image_chunk(
@@ -175,12 +176,14 @@ pub fn read_thread_image_chunk(
         roots.extend(workspace.additional_directories);
     }
     roots.extend(crate::config::get_active_session_dir(session_id));
-    let path = thread_image_in(
-        path_or_uri,
-        &roots,
-        &scratch_roots(),
-        crate::home::home_dir().as_deref(),
-    )?;
+    let home = crate::home::home_dir();
+    // Where the thread's harness saves its own output (Antigravity's session folder).
+    if let (Some(record), Some(home)) = (crate::harness::store::load(session_id), &home) {
+        roots.extend(record.native_session_id.and_then(|native| {
+            crate::harness::native_artifact_dir(&record.harness, &native, home)
+        }));
+    }
+    let path = thread_image_in(path_or_uri, &roots, &scratch_roots(), home.as_deref())?;
     read_chunk(&path, offset, true)
 }
 
