@@ -276,7 +276,7 @@ function orchestrationLabel(
     case "remove_project":
       return { title: "Removed project", summary: text(args.path) || undefined };
     case "create_loop":
-      return { title: "Created a loop", summary: text(args.name) || undefined };
+      return { title: "Scheduled a job", summary: text(args.name) || undefined };
     case "schedule_task":
       return { title: "Scheduled a task", summary: text(args.name) || text(args.prompt) || undefined };
     case "list_scheduled_tasks":

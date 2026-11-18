@@ -864,7 +864,40 @@ fn loop_action() -> JobAction {
         effort: Some("medium".into()),
         read_only: true,
         thread_id: None,
+        script: None,
     }
+}
+
+#[test]
+fn a_script_that_prints_nothing_starts_no_turn() {
+    assert_eq!(script_prompt("Check CI", " \n\t"), None);
+    let prompt = script_prompt("Check CI", "build 42 failed\n").unwrap();
+    assert!(prompt.starts_with("Check CI\n\n"), "{prompt}");
+    assert!(prompt.contains("```\nbuild 42 failed\n```"), "{prompt}");
+    let RunOutcome::Succeeded {
+        output: Some(output),
+        ..
+    } = silent_run()
+    else {
+        panic!("a silent run succeeds");
+    };
+    let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(output["quiet"], true);
+    assert_eq!(output["silent"], true);
+    assert!(output.get("thread_id").is_none());
+}
+
+#[test]
+fn a_loop_without_a_script_does_not_serialize_one() {
+    let value = serde_json::to_value(loop_action()).unwrap();
+    assert!(value.get("script").is_none(), "{value}");
+    let with_script: JobAction = serde_json::from_value(json!({
+        "type": "loop", "prompt": "Check CI", "workspace": "/tmp", "script": "gh run list"
+    }))
+    .unwrap();
+    assert!(
+        matches!(with_script, JobAction::Loop { script: Some(ref s), .. } if s == "gh run list")
+    );
 }
 
 #[test]

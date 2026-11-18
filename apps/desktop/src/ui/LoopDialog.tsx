@@ -1,4 +1,4 @@
-// New loop / Edit loop (issues 3892, 3937): a name, the project it runs in, the prompt, a schedule
+// New / Edit scheduled job (issues 3892, 3937, 3990): a name, the project it runs in, the prompt, a schedule
 // (every few hours, on chosen weekdays at a time, monthly, once at a date and time, or a cron of
 // the user's own), where each run goes (a fresh thread, or one thread every time) and the agent a
 // fresh run starts: a harness, one of its models and an effort. Saved through
@@ -81,6 +81,7 @@ function draftOf(loop: Loop | null, project: string): LoopDraft {
     effort: loop.effort?.toLowerCase() === "default" ? undefined : loop.effort,
     readOnly: loop.readOnly,
     threadId: loop.threadId,
+    script: loop.script,
   };
 }
 
@@ -218,7 +219,7 @@ export function LoopDialog({
     .filter((session) => !session.host && session.cwd === draft.workspace)
     .map((session) => ({ value: session.id, label: session.title || "New thread" }));
   if (draft.threadId && !threadOptions.some((option) => option.value === draft.threadId)) {
-    threadOptions.unshift({ value: draft.threadId, label: "The loop's thread" });
+    threadOptions.unshift({ value: draft.threadId, label: "The job's thread" });
   }
   const threadId = target === "one" ? draft.threadId || threadOptions[0]?.value : undefined;
   const timezone = draft.timezone ?? userTimeZone();
@@ -302,7 +303,7 @@ export function LoopDialog({
           >
             <div className="flex shrink-0 flex-col gap-1 px-5 pt-5 pb-3">
               <Dialog.Title className="font-semibold text-title3">
-                {loop ? "Edit loop" : "New loop"}
+                {loop ? "Edit scheduled job" : "New scheduled job"}
               </Dialog.Title>
               <p className="text-caption text-fg-muted">Runs while RustCode is open.</p>
             </div>
@@ -340,6 +341,21 @@ export function LoopDialog({
                   {...noTextHelpers}
                   className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
                 />
+              </Field>
+              <Field label="Script (optional)">
+                <textarea
+                  value={draft.script ?? ""}
+                  onChange={(e) => patch({ script: e.target.value })}
+                  placeholder="gh run list --branch main --status failure --limit 5"
+                  aria-label="Script"
+                  rows={2}
+                  {...noTextHelpers}
+                  className="max-h-40 min-h-12 resize-y rounded-lg bg-fill-subtle px-3 py-2 font-mono text-caption text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+                />
+                <p className="text-caption text-fg-muted">
+                  Runs first in the project folder. The agent starts only when it prints something, with that
+                  output added to the prompt; no output costs no tokens.
+                </p>
               </Field>
               <Field label="Schedule">
                 <Segments
@@ -570,7 +586,7 @@ export function LoopDialog({
             <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3">
               <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
               <Pill prominent disabled={!ready || saving} onClick={() => void save()}>
-                {saving ? "Saving…" : loop ? "Save changes" : "Create loop"}
+                {saving ? "Saving…" : loop ? "Save changes" : "Schedule job"}
               </Pill>
             </div>
           </Dialog.Content>

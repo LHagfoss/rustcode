@@ -286,6 +286,22 @@ describe("loop follow-ups (issue 3937)", () => {
     expect(params.threadId).toBe("t-9");
   });
 
+  test("a script is saved trimmed, a blank one is left out, and a silent run says so", () => {
+    const base = { name: "CI", workspace: "/code/app", prompt: "Check", cron: "0 9 * * *", readOnly: true };
+    expect(saveParams({ ...base, script: "  gh run list  " }, "Europe/Oslo").script).toBe("gh run list");
+    expect("script" in saveParams({ ...base, script: "   " }, "Europe/Oslo")).toBe(false);
+    const silent = loop({ runs: [run("r1", "succeeded", 1, { quiet: true, silent: true })] });
+    expect(lastResult(silent, NOW)).toEqual({ text: "Script printed nothing 1 h ago", tone: "ok" });
+    const parsed = parseLoops({
+      daemonRunning: true,
+      loops: [
+        { id: "l", name: "L", script: "gh run list", runs: [{ id: "r", state: "succeeded", silent: true }] },
+      ],
+    });
+    expect(parsed.loops[0]?.script).toBe("gh run list");
+    expect(parsed.loops[0]?.runs[0]?.silent).toBe(true);
+  });
+
   test("a quiet run says it found nothing, and is parsed from the list", () => {
     const quiet = loop({ runs: [run("r1", "succeeded", 1, { threadId: "t-1", quiet: true })] });
     expect(lastResult(quiet, NOW)).toEqual({ text: "Nothing to report 1 h ago", tone: "ok" });

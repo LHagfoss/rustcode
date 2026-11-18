@@ -36,6 +36,8 @@ export interface LoopRun {
   quiet?: boolean;
   /** Why the run started nothing: the app was closed, or the loop's thread was busy. */
   skipped?: string;
+  /** The job's script printed nothing, so no agent turn started. */
+  silent?: boolean;
 }
 
 export interface Loop {
@@ -52,6 +54,8 @@ export interface Loop {
   readOnly: boolean;
   /** The thread every run goes to; absent starts a fresh thread per run. */
   threadId?: string;
+  /** Script mode: run first; the agent wakes only when it prints something. */
+  script?: string;
   nextDueAt?: number;
   /** Newest first. */
   runs: LoopRun[];
@@ -116,6 +120,7 @@ function runOf(value: Json): LoopRun | null {
     threadId: str(raw.threadId),
     quiet: bool(raw.quiet) ?? false,
     skipped: str(raw.skipped),
+    silent: bool(raw.silent) ?? false,
   };
 }
 
@@ -136,6 +141,7 @@ function loopOf(value: Json): Loop | null {
     effort: str(raw.effort),
     readOnly: bool(raw.readOnly) ?? true,
     threadId: str(raw.threadId),
+    script: str(raw.script),
     nextDueAt: time(raw.nextDueAt),
     runs: arr(raw.runs).flatMap((run) => runOf(run) ?? []),
   };
@@ -443,6 +449,7 @@ export function lastResult(loop: Loop, now = Date.now()): { text: string; tone: 
   const when = agoText(run.finishedAt ?? run.startedAt ?? run.scheduledAt, now);
   switch (run.state) {
     case "succeeded":
+      if (run.silent) return { text: `Script printed nothing ${when}`, tone: "ok" };
       return run.quiet
         ? { text: `Nothing to report ${when}`, tone: "ok" }
         : { text: `Finished ${when}`, tone: "ok" };
@@ -540,6 +547,8 @@ export interface LoopDraft {
   readOnly: boolean;
   /** Send every run to this thread instead of starting a fresh one. */
   threadId?: string;
+  /** Script mode: run first; the agent wakes only when it prints something. */
+  script?: string;
 }
 
 /** The user's IANA zone, which a loop's cron is read in. */
@@ -567,6 +576,8 @@ export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTi
     readOnly: draft.readOnly,
   };
   if (draft.id) params.id = draft.id;
+  const script = draft.script?.trim();
+  if (script) params.script = script;
   for (const key of draft.threadId
     ? (["threadId"] as const)
     : (["harness", "account", "model", "effort"] as const)) {

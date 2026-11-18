@@ -944,7 +944,7 @@ pub const REMOVE_PROJECT: Tool = Tool {
 
 pub const CREATE_LOOP: Tool = Tool {
     name: crate::orchestration::CREATE_LOOP,
-    description: "Create a scheduled loop shown in Loops. Runs while RustCode is open, read-only in a fresh thread by default. Use list_harnesses for agent IDs. A RustCode thread asks for approval.",
+    description: "Create a scheduled job (once or recurring) on any harness, shown in Scheduled Jobs. Each run is a fresh read-only thread by default; runs while RustCode is open. Agent IDs: list_harnesses. The user approves it.",
     arguments: r#"{"name":"Morning check","prompt":"Check the build","schedule":{"kind":"cron","expression":"0 9 * * 1-5"}}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -961,7 +961,7 @@ pub const CREATE_LOOP: Tool = Tool {
             ("read_only".into(), serde_json::json!({"type":"boolean","default":true,"description":"Decline approvals during unattended runs"})),
             ("client_request_id".into(), serde_json::json!({"type":"string","description":"Reuse the same ID when retrying this exact request"})),
         ]));
-        properties["name"]["description"] = serde_json::json!("Name shown in Loops");
+        properties["name"]["description"] = serde_json::json!("Name shown in Scheduled Jobs");
         schema["required"] = serde_json::json!(["name", "prompt", "schedule"]);
         schema
     },
@@ -971,7 +971,7 @@ pub const CREATE_LOOP: Tool = Tool {
 
 pub const SCHEDULE_TASK: Tool = Tool {
     name: crate::orchestration::SCHEDULE_TASK,
-    description: "Schedule work that runs with no thread open: a prompt the scheduler daemon runs on a cron expression or once at an ISO 8601 time. `schedule` is {kind: cron, expression, timezone?} or {kind: at, at}; the timezone defaults to the user's. The daemon must be running (`rustcode daemon start`); report the next run it answers. The user approves it.",
+    description: "Schedule a built-in-harness job: a prompt run once at an ISO 8601 time or on a cron. `schedule` is {kind: cron, expression, timezone?} or {kind: at, at}; timezone defaults to the user's. For another harness or Scheduled Jobs, use create_loop. Needs the scheduler running; report its next run. The user approves it.",
     arguments: r#"{"prompt": "Check the build", "schedule": {"kind": "cron", "expression": "0 9 * * 1-5", "timezone": "Europe/Oslo"}, "project": "/abs/project", "name": "Morning check"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -1000,7 +1000,7 @@ pub const SCHEDULE_TASK: Tool = Tool {
 
 pub const LIST_SCHEDULED_TASKS: Tool = Tool {
     name: crate::orchestration::LIST_SCHEDULED_TASKS,
-    description: "List the scheduler daemon's tasks: id, name, paused, schedule, workspace and next run time, at most 100. `daemon_running: false` means nothing runs until `rustcode daemon start`.",
+    description: "List scheduled jobs (once and recurring): id, name, paused, schedule, workspace and next run, at most 100. `daemon_running: false` means the scheduler is stopped; `hint` says how to start it.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -1018,7 +1018,7 @@ pub const LIST_SCHEDULED_TASKS: Tool = Tool {
 
 pub const DELETE_SCHEDULED_TASK: Tool = Tool {
     name: crate::orchestration::DELETE_SCHEDULED_TASK,
-    description: "Delete one scheduled task by id. It stops at once; its run history goes with it. The user approves it.",
+    description: "Delete a scheduled job by id. It stops at once with its run history. The user approves it.",
     arguments: r#"{"id": "task-1750000000000-1a2b"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -1038,7 +1038,7 @@ pub const DELETE_SCHEDULED_TASK: Tool = Tool {
 
 pub const RUN_SCHEDULED_TASK_NOW: Tool = Tool {
     name: crate::orchestration::RUN_SCHEDULED_TASK_NOW,
-    description: "Run one scheduled task now, keeping its schedule. The scheduler daemon must be running. The user approves it.",
+    description: "Run a scheduled job now by id, keeping its schedule. Needs the scheduler. The user approves it.",
     arguments: r#"{"id": "task-1750000000000-1a2b"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

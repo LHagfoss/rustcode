@@ -262,7 +262,7 @@ export function GrantDialog() {
           <div className="flex flex-wrap justify-end gap-2">
             <Pill onClick={() => resolveGrant("deny")}>{starts ? "Don’t Start" : "Don’t Allow"}</Pill>
             <Pill prominent={grant.onceOnly} onClick={() => resolveGrant("once")}>
-              {grant.onceOnly ? "Create loop" : starts ? "Start" : "Allow Once"}
+              {grant.onceOnly ? "Schedule job" : starts ? "Start" : "Allow Once"}
             </Pill>
             {!grant.onceOnly && (
               <Pill prominent autoFocus onClick={() => resolveGrant("always")}>
