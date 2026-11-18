@@ -1019,7 +1019,9 @@ impl ExternalSession {
                             ) {
                                 crate::data_store::record_compaction(&row);
                             }
-                            sink.update(update);
+                            if let Some(update) = without_harness_title(update) {
+                                sink.update(update);
+                            }
                         }
                         Output::Marker(update) => sink.update(update),
                         Output::Permission { request, reply } => {
@@ -2190,6 +2192,50 @@ impl ExternalSession {
         {
             adapter.kill();
         }
+    }
+}
+
+/// A harness's update without a title it gave the thread. RustCode owns the
+/// thread's name (the first prompt, its generated title, a rename by the user
+/// or by `update_session`), but Claude Code renames its session as it works
+/// and sends each name on: the sidebar row then changed with what the agent
+/// was doing, and went back to the saved title on the next list. The rest of
+/// the update goes on; one that held only a title is dropped.
+fn without_harness_title(update: SessionUpdate) -> Option<SessionUpdate> {
+    let SessionUpdate::SessionInfoUpdate(mut info) = update else {
+        return Some(update);
+    };
+    if !info.title.is_undefined() {
+        info.title = agent_client_protocol::schema::MaybeUndefined::Undefined;
+        if info.updated_at.is_undefined() && info.meta.as_ref().is_none_or(|meta| meta.is_empty()) {
+            return None;
+        }
+    }
+    Some(SessionUpdate::SessionInfoUpdate(info))
+}
+
+#[cfg(test)]
+mod harness_title_tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::SessionInfoUpdate;
+
+    #[test]
+    fn a_harness_title_does_not_rename_the_thread() {
+        let titled = SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title("Fixing CI"));
+        assert!(without_harness_title(titled).is_none());
+
+        let with_meta =
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title("Reading files").meta(
+                serde_json::Map::from_iter([("k".to_owned(), serde_json::json!(1))]),
+            ));
+        let Some(SessionUpdate::SessionInfoUpdate(kept)) = without_harness_title(with_meta) else {
+            panic!("the meta goes on");
+        };
+        assert!(kept.title.is_undefined());
+        assert!(kept.meta.is_some());
+
+        let other = SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new());
+        assert!(without_harness_title(other).is_some());
     }
 }
 
