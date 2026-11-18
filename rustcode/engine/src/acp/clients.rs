@@ -492,6 +492,14 @@ impl Clients {
         }
     }
 
+    /// Whether a connected client asked for `topic`.
+    pub(crate) fn has_topic(&self, topic: Topic) -> bool {
+        self.registry()
+            .entries
+            .values()
+            .any(|entry| entry.topics.contains(&topic))
+    }
+
     /// Tell every connected client.
     pub(crate) fn broadcast<N: JsonRpcNotification>(&self, notification: N) {
         self.send_where(notification, |_| true);

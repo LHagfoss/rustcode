@@ -1585,12 +1585,19 @@ impl AcpServer {
             .map_err(|error| {
                 agent_client_protocol::Error::internal_error().data(error.to_string())
             })?;
+        let clients = clients::Clients::default();
+        // A call that waits for the owner is shown by an app that listed
+        // outside agents; with none connected, nobody can answer it.
+        let approvers = clients.clone();
+        crate::orchestration::outside::set_approvers(move || {
+            approvers.has_topic(clients::Topic::Outside)
+        });
         Ok(Self {
             sessions: new_registry(),
             client: Arc::new(client),
             auto_approve,
             task_routes,
-            clients: clients::Clients::default(),
+            clients,
             client_capability_updates: Arc::new(std::sync::Mutex::new(())),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
