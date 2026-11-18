@@ -232,6 +232,7 @@ function localValues(): Record<ServerSettingKey, Json> {
     "workflow-concurrency": serverSetting("workflow-concurrency").default,
     "workflow-call-budget": serverSetting("workflow-call-budget").default,
     "workflow-timeout-minutes": serverSetting("workflow-timeout-minutes").default,
+    "workflow-kept-runs": serverSetting("workflow-kept-runs").default,
   };
 }
 

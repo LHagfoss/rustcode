@@ -126,7 +126,8 @@ export type ServerSettingKey =
   | "wake-batch-seconds"
   | "workflow-concurrency"
   | "workflow-call-budget"
-  | "workflow-timeout-minutes";
+  | "workflow-timeout-minutes"
+  | "workflow-kept-runs";
 
 export interface ServerSettingSpec {
   key: ServerSettingKey;
@@ -188,6 +189,7 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
   { key: "workflow-concurrency", label: "Workflow workers at once", type: "number", default: 3 },
   { key: "workflow-call-budget", label: "Workflow agent calls per run", type: "number", default: 40 },
   { key: "workflow-timeout-minutes", label: "Workflow run time limit", type: "number", default: 60 },
+  { key: "workflow-kept-runs", label: "Finished workflow runs kept", type: "number", default: 20 },
 ];
 
 /** The most each workflow limit may be set to (`rustcode/engine/src/workflow.rs`): the engine clamps to these. */
@@ -195,6 +197,7 @@ export const WORKFLOW_LIMITS = {
   "workflow-concurrency": { min: 1, max: 8 },
   "workflow-call-budget": { min: 1, max: 500 },
   "workflow-timeout-minutes": { min: 1, max: 1440 },
+  "workflow-kept-runs": { min: 1, max: 200 },
 } as const;
 
 export const SERVER_SETTING_KEYS: readonly ServerSettingKey[] = SERVER_SETTINGS.map((s) => s.key);

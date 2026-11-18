@@ -848,6 +848,13 @@ function WorkflowsGroup() {
         hint="Counted from each start. When it passes, the run ends as timed out and its running workers are stopped."
         unit="minutes"
       />
+      <WorkflowLimitRow
+        setting="workflow-kept-runs"
+        title="Finished workflow runs kept"
+        subtitle="Per thread. Running runs are always kept."
+        hint="When a new run starts, older finished runs past this count are deleted with their logs and results. The run list shows the newest 20."
+        unit="runs"
+      />
     </Group>
   );
 }
