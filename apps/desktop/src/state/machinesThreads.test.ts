@@ -212,6 +212,42 @@ describe("a machine's threads", () => {
     expect(linux.some((s) => s.id === "mock-linux-1")).toBe(false);
   });
 
+  test("only session info can rename a paired machine's thread", () => {
+    const conn = machineConnection(LINUX);
+    if (!conn) throw new Error("the machine is not connected");
+    const sessionId = "mock-linux-1";
+    const cachedTitle = () => useMachines.getState().sessions[LINUX]?.find((s) => s.id === sessionId)?.title;
+    const sidebarTitle = () => useApp.getState().sessions.find((s) => s.id === LINUX_THREAD)?.title;
+    const emit = (update: JsonObject) =>
+      conn.receive(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId, update },
+        }),
+      );
+
+    try {
+      for (const sessionUpdate of ["tool_call", "tool_call_update"]) {
+        emit({
+          sessionUpdate,
+          toolCallId: "shell",
+          title: "/usr/bin/zsh -lc 'sed -n 1,175p src/index.ts'",
+          status: "in_progress",
+          _meta: { rustcode: { toolName: "commandExecution" } },
+        });
+        expect(cachedTitle()).toBe("Run the tests");
+        expect(sidebarTitle()).toBe("Run the tests");
+      }
+
+      emit({ sessionUpdate: "session_info_update", title: "Check the sidebar" });
+      expect(cachedTitle()).toBe("Check the sidebar");
+      expect(sidebarTitle()).toBe("Check the sidebar");
+    } finally {
+      emit({ sessionUpdate: "session_info_update", title: "Run the tests" });
+    }
+  });
+
   test("a rebuilt list replaces that machine's threads and leaves the others alone", () => {
     const before = useMachines.getState().sessions[LINUX] ?? [];
     expect(before).toHaveLength(3);

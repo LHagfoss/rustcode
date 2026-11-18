@@ -1120,13 +1120,15 @@ async function attach(machine: Machine): Promise<void> {
             forgetCreated(machine.id, str(message.params.sessionId));
             return;
           }
-          if (message.method !== "session/update") return;
+          if (message.method !== Method.sessionUpdate) return;
           const id = str(message.params.sessionId);
           const update = obj(message.params.update);
-          // A title carries no `_meta`; a status and a snooze do.
-          const title = str(update?.title);
-          const meta = obj(obj(update?._meta)?.rustcode);
-          if (!id || (!title && !meta)) return;
+          // Session info carries the thread's title and status. Tool calls also
+          // have titles, which belong to the transcript.
+          if (!id || update?.sessionUpdate !== "session_info_update") return;
+          const title = str(update.title);
+          const meta = obj(obj(update._meta)?.rustcode);
+          if (!title && !meta) return;
           const parsed = meta
             ? parseSessionList({ sessions: [{ sessionId: id, _meta: { rustcode: meta } }] }).sessions[0]
             : undefined;
