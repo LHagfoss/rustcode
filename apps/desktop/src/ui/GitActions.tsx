@@ -29,8 +29,9 @@ import { request, toast } from "../state/store";
 import type { ThreadState } from "../state/thread";
 import { isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
-import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, RefreshCw } from "./icons";
+import { GitBranch, GitCommitHorizontal, GitPullRequest, RefreshCw } from "./icons";
 import {
+  ClusterButton,
   cx,
   inputClass,
   MenuContent,
@@ -105,9 +106,14 @@ function GitButton({ thread }: { thread?: ThreadState }) {
     return (
       <Tooltip label={read.error ? "Not a git repository" : "Reading git…"}>
         <span className="inline-flex">
-          <Pill size="sm" quiet disabled aria-label="Git">
-            <GitBranch size={13} />
-          </Pill>
+          <button
+            type="button"
+            aria-label="Git"
+            disabled
+            className="inline-flex h-6 w-8 items-center justify-center rounded-full text-fg-muted opacity-40"
+          >
+            <GitBranch size={14} />
+          </button>
         </span>
       </Tooltip>
     );
@@ -148,69 +154,60 @@ function GitButton({ thread }: { thread?: ThreadState }) {
   const PrimaryIcon = primary ? ICON[primary] : GitBranch;
   return (
     <>
-      <span className="inline-flex items-center rounded-full bg-fill">
-        <Tooltip label={primary ? `${label} on ${branch}` : plan.note}>
-          <span className="inline-flex">
-            <Pill
-              size="sm"
-              className="rounded-r-none bg-transparent"
-              disabled={!primary || !!busy}
-              onClick={() => primary && void run(primary)}
-              aria-label={label}
-            >
-              {busy ? <Spinner size={12} /> : <PrimaryIcon size={13} />}
-              <span className="max-w-[160px] truncate">{primary ? label : (branch ?? "Git")}</span>
-              {primary === "commit" && <span className="text-fg-faint">{state.files.length}</span>}
-              {primary === "push" && state.ahead > 0 && <span className="text-fg-faint">↑{state.ahead}</span>}
-              {primary === "pull" && <span className="text-fg-faint">↓{state.behind}</span>}
-            </Pill>
-          </span>
-        </Tooltip>
-        <DropdownMenu.Root modal={false} onOpenChange={(open) => open && void refresh()}>
-          <DropdownMenu.Trigger asChild>
-            <Pill size="sm" className="rounded-l-none bg-transparent px-1.5" aria-label="Git actions">
-              <ChevronDown size={12} />
-            </Pill>
-          </DropdownMenu.Trigger>
-          <MenuContent side="bottom" align="end" className="min-w-[220px]">
-            <DropdownMenu.Label className={menuLabel}>
-              {branch}
-              {state.upstream ? ` → ${state.upstream}` : state.hasRemote ? " · not pushed" : " · no remote"}
-            </DropdownMenu.Label>
-            {[primary, ...plan.others].flatMap((action) =>
-              action ? (
-                <DropdownMenu.Item
-                  key={action}
-                  className={menuItem}
-                  disabled={!!busy}
-                  onSelect={() => void run(action)}
-                >
-                  {(() => {
-                    const Icon = ICON[action];
-                    return <Icon size={13} className="text-fg-muted" />;
-                  })()}
-                  {GIT_ACTION_LABEL[action]}
-                  {action === "commit" || action === "commit_push" ? "…" : ""}
-                </DropdownMenu.Item>
-              ) : (
-                []
-              ),
+      <DropdownMenu.Root modal={false} onOpenChange={(open) => open && void refresh()}>
+        <DropdownMenu.Trigger asChild>
+          <ClusterButton
+            label="Git actions"
+            tooltip={primary ? `${branch}: ${label}` : `${branch ?? "Git"}: ${plan.note}`}
+            className="relative data-[state=open]:bg-fill-strong data-[state=open]:text-fg"
+          >
+            {busy ? <Spinner size={12} /> : <PrimaryIcon size={14} />}
+            {primary && !busy && (
+              <span
+                aria-hidden
+                className="absolute top-[3px] right-[7px] size-[5px] rounded-full bg-accent"
+              />
             )}
-            {openPull && (
+          </ClusterButton>
+        </DropdownMenu.Trigger>
+        <MenuContent side="bottom" align="end" className="min-w-[220px]">
+          <DropdownMenu.Label className={menuLabel}>
+            {branch}
+            {state.upstream ? ` → ${state.upstream}` : state.hasRemote ? " · not pushed" : " · no remote"}
+          </DropdownMenu.Label>
+          {[primary, ...plan.others].flatMap((action) =>
+            action ? (
               <DropdownMenu.Item
+                key={action}
                 className={menuItem}
-                onSelect={() => openPull.url && openExternal(openPull.url)}
+                disabled={!!busy}
+                onSelect={() => void run(action)}
               >
-                <GitPullRequest size={13} className="text-fg-muted" /> Pull request #{openPull.number}
+                {(() => {
+                  const Icon = ICON[action];
+                  return <Icon size={13} className="text-fg-muted" />;
+                })()}
+                {GIT_ACTION_LABEL[action]}
+                {action === "commit" || action === "commit_push" ? "…" : ""}
               </DropdownMenu.Item>
-            )}
-            <DropdownMenu.Separator className={menuSeparator} />
-            <DropdownMenu.Item className={menuItem} onSelect={() => void refresh()}>
-              <RefreshCw size={13} className="text-fg-muted" /> Refresh
+            ) : (
+              []
+            ),
+          )}
+          {openPull && (
+            <DropdownMenu.Item
+              className={menuItem}
+              onSelect={() => openPull.url && openExternal(openPull.url)}
+            >
+              <GitPullRequest size={13} className="text-fg-muted" /> Pull request #{openPull.number}
             </DropdownMenu.Item>
-          </MenuContent>
-        </DropdownMenu.Root>
-      </span>
+          )}
+          <DropdownMenu.Separator className={menuSeparator} />
+          <DropdownMenu.Item className={menuItem} onSelect={() => void refresh()}>
+            <RefreshCw size={13} className="text-fg-muted" /> Refresh
+          </DropdownMenu.Item>
+        </MenuContent>
+      </DropdownMenu.Root>
       {sheet === "create_pr" && (
         <PullSheet
           cwd={cwd}
