@@ -529,13 +529,12 @@ export type { Toast, ToastTone } from "./toasts";
 
 export const APP_VERSION = "0.1.0";
 
-/**
- * The `initialize` this app sends a paired machine. It lists the threads that machine's engine
- * starts, and answers none of their tool calls (it refuses a machine's delegations), so while the
- * setting is on that engine serves its threads' tools itself, settling included.
- */
+/** The `initialize` sent a paired machine: its threads drawn with this app's Smart UI and viz, their
+ * tool calls unanswered (it refuses a machine's delegations), so that engine serves them itself. */
 export const machineInitializeParams = (): JsonObject =>
   initializeParams(APP_VERSION, {
+    smartUi: useApp.getState().smartUi,
+    visualizations: 2,
     threads: 1,
     engineOrchestration: useApp.getState().orchestration ? 1 : undefined,
   });
