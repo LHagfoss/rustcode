@@ -348,7 +348,11 @@ pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(
         },
         Arc::new(SocketForward { socket }),
         orchestration,
-        Offered { smart_ui, ask_user },
+        Offered {
+            smart_ui,
+            ask_user,
+            core_only: !super::lists_all_tools(),
+        },
         PROGRESS_INTERVAL,
     )
     .await
@@ -361,6 +365,9 @@ struct Offered {
     smart_ui: bool,
     /// `ask_user_question`, for a harness without a question tool (#3393).
     ask_user: bool,
+    /// Leave `EXTRA_TOOL_NAMES` out of the list: the user has not asked for
+    /// every tool (`orchestration-all-tools`).
+    core_only: bool,
 }
 
 /// Run `rustcode mcp-connect` on stdin/stdout: the orchestration tools for an
@@ -417,6 +424,7 @@ where
         Offered {
             smart_ui,
             ask_user: false,
+            core_only: false,
         },
         PROGRESS_INTERVAL,
     )
@@ -453,6 +461,9 @@ where
     // Each call in flight, by its request id, so `notifications/cancelled` ends it.
     let mut in_flight: HashMap<String, tokio::task::AbortHandle> = HashMap::new();
     while let Some(line) = lines.next_line().await.map_err(|error| error.to_string())? {
+        // A finished call's result stays in the set until it is taken: over a
+        // long thread that is one entry per call ever made.
+        while calls.try_join_next().is_some() {}
         if line.trim().is_empty() {
             continue;
         }
@@ -548,7 +559,7 @@ where
                             "title": "RustCode threads",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
-                        "instructions": mcp_names::public_text(super::mcp_instructions(orchestration)),
+                        "instructions": instructions(orchestration, offered),
                     }),
                 ));
             }
@@ -558,7 +569,7 @@ where
             "tools/list" => {
                 let _ = sender.send(result(
                     id,
-                    json!({ "tools": (all_tools(orchestration, offered.smart_ui, offered.ask_user)) }),
+                    json!({ "tools": all_tools(orchestration, offered) }),
                 ));
             }
             "tools/call" => {
@@ -661,6 +672,17 @@ async fn call(
     names.answer(tool, answer)
 }
 
+/// A thread's call, as the engine's hub takes it.
+fn inside_request(identity: &Identity, tool: &str, args: Value) -> CallRequest {
+    CallRequest {
+        session_id: identity.session_id.clone(),
+        token: identity.token.clone(),
+        tool: tool.to_owned(),
+        args,
+        outside: false,
+    }
+}
+
 async fn call_inside(
     forward: &dyn Forward,
     identity: &Identity,
@@ -669,33 +691,19 @@ async fn call_inside(
     version: u8,
     offered: Offered,
 ) -> CallAnswer {
-    let Offered { smart_ui, ask_user } = offered;
+    let Offered {
+        smart_ui, ask_user, ..
+    } = offered;
     if crate::manage::is_tool(tool) {
         if let Err(reason) = crate::manage::validate(tool, &args) {
             return CallAnswer::failure(format!(
                 "error: invalid {tool} call: {reason}. Nothing was changed."
             ));
         }
-        return forward
-            .call(CallRequest {
-                session_id: identity.session_id.clone(),
-                token: identity.token.clone(),
-                tool: tool.to_owned(),
-                args,
-                outside: false,
-            })
-            .await;
+        return forward.call(inside_request(identity, tool, args)).await;
     }
     if tool == super::secret::TOOL_NAME {
-        return forward
-            .call(CallRequest {
-                session_id: identity.session_id.clone(),
-                token: identity.token.clone(),
-                tool: tool.to_owned(),
-                args,
-                outside: false,
-            })
-            .await;
+        return forward.call(inside_request(identity, tool, args)).await;
     }
     // The engine asks the user through the thread's own channel; checked
     // here first so a bad call is refused without leaving the harness.
@@ -708,15 +716,7 @@ async fn call_inside(
                 "error: invalid {tool} call: {reason}. Nothing was asked."
             ));
         }
-        return forward
-            .call(CallRequest {
-                session_id: identity.session_id.clone(),
-                token: identity.token.clone(),
-                tool: tool.to_owned(),
-                args,
-                outside: false,
-            })
-            .await;
+        return forward.call(inside_request(identity, tool, args)).await;
     }
     // A workflow run (#3394) is started and read by the engine's hub, which
     // runs its workers as this thread's delegates.
@@ -729,26 +729,10 @@ async fn call_inside(
                 "error: invalid {tool} call: {reason}. Nothing was started."
             ));
         }
-        return forward
-            .call(CallRequest {
-                session_id: identity.session_id.clone(),
-                token: identity.token.clone(),
-                tool: tool.to_owned(),
-                args,
-                outside: false,
-            })
-            .await;
+        return forward.call(inside_request(identity, tool, args)).await;
     }
     if crate::computer_use::is_tool(tool) {
-        return forward
-            .call(CallRequest {
-                session_id: identity.session_id.clone(),
-                token: identity.token.clone(),
-                tool: tool.to_owned(),
-                args,
-                outside: false,
-            })
-            .await;
+        return forward.call(inside_request(identity, tool, args)).await;
     }
     // The block check is answered here: it needs no client and no thread, only
     // the user's Smart UI setting, and it forwards nothing.
@@ -867,13 +851,7 @@ async fn call_inside(
             super::MERGE_ANSWER_GRACE
         }
     });
-    let waiting = forward.call(CallRequest {
-        session_id: identity.session_id.clone(),
-        token: identity.token.clone(),
-        tool: tool.to_owned(),
-        args,
-        outside: false,
-    });
+    let waiting = forward.call(inside_request(identity, tool, args));
     let Some(limit) = limit else {
         return waiting.await;
     };
@@ -1099,6 +1077,57 @@ fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
+/// What `tools/list` answers a thread: its orchestration version's tools
+/// under their public names, without the ones few threads call unless the
+/// user asked for every tool, and the computer-use tools the user turned on.
+fn all_tools(version: u8, offered: Offered) -> Vec<Value> {
+    let mut listed: Vec<_> = tools_with(version, offered.smart_ui, offered.ask_user)
+        .into_iter()
+        .filter(|entry| {
+            !offered.core_only
+                || !entry["name"]
+                    .as_str()
+                    .is_some_and(|name| super::EXTRA_TOOL_NAMES.contains(&name))
+        })
+        .map(mcp_names::public_entry)
+        .collect();
+    listed.extend(crate::computer_use::tools(
+        &crate::computer_use::Settings::load(),
+    ));
+    listed
+}
+
+/// The first version that has any of the tools the core list leaves out.
+const EXTRA_VERSION: u8 = 2;
+
+/// The `instructions` a thread's harness is given.
+fn instructions(version: u8, offered: Offered) -> String {
+    let text = mcp_names::public_text(super::mcp_instructions(version));
+    if offered.core_only && version >= EXTRA_VERSION {
+        format!("{text}\n\n{}", super::CORE_TOOLS_NOTE)
+    } else {
+        text
+    }
+}
+
+fn response_content(tool: &str, answer: &CallAnswer) -> Value {
+    if tool == "browser_screenshot" && answer.success {
+        if let Ok(body) = serde_json::from_str::<Value>(&answer.content) {
+            if let Some(data) = body.get("data").and_then(Value::as_str) {
+                return json!([{"type":"image","mimeType":"image/png","data":data}]);
+            }
+        }
+    }
+    // A failure with no text would reach the harness as `Error calling tool (name): ` and nothing
+    // after it; it always says why (issue 3711).
+    if !answer.success && answer.content.trim().is_empty() {
+        return json!([{"type":"text","text":format!(
+            "error: {tool} failed and RustCode gave no reason; the thread's debug log may say more"
+        )}]);
+    }
+    json!([{"type":"text","text":answer.content}])
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::super::hub::Hub;
@@ -1148,6 +1177,7 @@ mod tests {
         let offered = Offered {
             smart_ui,
             ask_user: false,
+            core_only: false,
         };
         exchange_offered(identity, socket, messages, orchestration, offered).await
     }
@@ -1254,6 +1284,7 @@ mod tests {
         let offered = Offered {
             smart_ui: false,
             ask_user: true,
+            core_only: false,
         };
         let answers = exchange_offered(
             identity.clone(),
@@ -2056,33 +2087,67 @@ mod tests {
             );
         }
     }
-}
 
-fn all_tools(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
-    let mut listed: Vec<_> = tools_with(version, smart_ui, ask_user)
-        .into_iter()
-        .map(mcp_names::public_entry)
-        .collect();
-    listed.extend(crate::computer_use::tools(
-        &crate::computer_use::Settings::load(),
-    ));
-    listed
-}
-
-fn response_content(tool: &str, answer: &CallAnswer) -> Value {
-    if tool == "browser_screenshot" && answer.success {
-        if let Ok(body) = serde_json::from_str::<Value>(&answer.content) {
-            if let Some(data) = body.get("data").and_then(Value::as_str) {
-                return json!([{"type":"image","mimeType":"image/png","data":data}]);
-            }
+    #[test]
+    fn the_core_list_leaves_out_the_tools_few_threads_call() {
+        let list = |core_only| {
+            all_tools(
+                super::super::VERSION,
+                Offered {
+                    core_only,
+                    ..Offered::default()
+                },
+            )
+        };
+        let names = |tools: &[Value]| -> Vec<String> {
+            tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                .collect()
+        };
+        let (core, all) = (list(true), list(false));
+        // Every name the core list leaves out is a tool the full list has.
+        assert_eq!(all.len() - core.len(), super::super::EXTRA_TOOL_NAMES.len());
+        let (core_names, all_names) = (names(&core), names(&all));
+        for kept in ["start_session", "wait_session", "manage_settings"] {
+            assert!(core_names.contains(&kept.to_owned()), "{kept}");
         }
+        for left_out in ["run_workflow", "schedule_task", "handoff_worktree"] {
+            assert!(!core_names.contains(&left_out.to_owned()), "{left_out}");
+            assert!(all_names.contains(&left_out.to_owned()), "{left_out}");
+        }
+        let bytes = |tools: &[Value]| serde_json::to_vec(tools).unwrap().len();
+        assert!(
+            bytes(&core) * 4 <= bytes(&all) * 3,
+            "the core list is {} of {} bytes",
+            bytes(&core),
+            bytes(&all)
+        );
     }
-    // A failure with no text would reach the harness as `Error calling tool (name): ` and nothing
-    // after it; it always says why (issue 3711).
-    if !answer.success && answer.content.trim().is_empty() {
-        return json!([{"type":"text","text":format!(
-            "error: {tool} failed and RustCode gave no reason; the thread's debug log may say more"
-        )}]);
+
+    #[test]
+    fn the_instructions_say_where_the_other_tools_went() {
+        let told = |core_only| {
+            instructions(
+                super::super::VERSION,
+                Offered {
+                    core_only,
+                    ..Offered::default()
+                },
+            )
+        };
+        assert!(told(true).ends_with(super::super::CORE_TOOLS_NOTE));
+        assert!(!told(false).contains(super::super::ALL_TOOLS_SETTING));
+        // A version 1 client has none of them to miss.
+        assert!(
+            !instructions(
+                1,
+                Offered {
+                    core_only: true,
+                    ..Offered::default()
+                }
+            )
+            .contains(super::super::ALL_TOOLS_SETTING)
+        );
     }
-    json!([{"type":"text","text":answer.content}])
 }
