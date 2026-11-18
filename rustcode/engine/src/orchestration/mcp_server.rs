@@ -109,13 +109,185 @@ pub fn tools_with(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
     names
         .filter_map(|name| crate::tools::TOOLS.iter().find(|tool| tool.name == name))
         .map(|tool| {
-            json!({
+            let mut entry = json!({
                 "name": tool.name,
                 "description": tool.description,
                 "inputSchema": super::schema_for(tool.name, version, (tool.schema)()),
-            })
+            });
+            if let Some((title, effect)) = listing(tool.name) {
+                entry["title"] = Value::from(title);
+                entry["annotations"] = effect.annotations();
+            }
+            entry
         })
         .collect()
+}
+
+/// What a tool does to the user's data, as MCP's annotation hints. A client
+/// with none of them has to treat every tool as one that may destroy
+/// something, a read included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Effect {
+    /// Reads and changes nothing.
+    Reads,
+    /// Adds something each time it is called: a thread, a message, a job.
+    Adds,
+    /// Sets something to the value given, so a second call changes nothing
+    /// more, and the user can set it back.
+    Sets,
+    /// Removes, stops or merges something: not undone by another call.
+    Removes,
+}
+
+impl Effect {
+    fn annotations(self) -> Value {
+        match self {
+            Self::Reads => json!({ "readOnlyHint": true }),
+            Self::Adds => json!({
+                "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false,
+            }),
+            Self::Sets => json!({
+                "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true,
+            }),
+            Self::Removes => json!({
+                "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true,
+            }),
+        }
+    }
+}
+
+/// The title a client shows for each tool and its [`Effect`], by the tool's
+/// internal name. A tool with several actions has the effect of the strongest.
+const LISTING: &[(&str, &str, Effect)] = &[
+    (super::LIST_SESSIONS, "List threads", Effect::Reads),
+    (super::SEARCH_SESSIONS, "Search threads", Effect::Reads),
+    (super::READ_SESSION, "Read a thread", Effect::Reads),
+    (
+        super::WAIT_SESSION,
+        "Wait for a thread's answer",
+        Effect::Reads,
+    ),
+    (
+        super::READ_ACTIVITY,
+        "Read a thread's activity",
+        Effect::Reads,
+    ),
+    (super::THREAD_STATUS, "Delegate status", Effect::Reads),
+    (super::THREAD_USAGE, "Token usage", Effect::Reads),
+    (super::QUERY_DATA, "Query the data store", Effect::Reads),
+    (super::LIST_HARNESSES, "List harnesses", Effect::Reads),
+    (super::LIST_MACHINES, "List machines", Effect::Reads),
+    (super::LIST_PROJECTS, "List projects", Effect::Reads),
+    (super::READ_PROJECT, "Read a project", Effect::Reads),
+    (super::LIST_WORKTREES, "List worktrees", Effect::Reads),
+    (super::WORKTREE_STATUS, "Worktree status", Effect::Reads),
+    (
+        super::LIST_PULL_REQUESTS,
+        "List pull requests",
+        Effect::Reads,
+    ),
+    (
+        super::LIST_PENDING_REQUESTS,
+        "List pending requests",
+        Effect::Reads,
+    ),
+    (
+        super::LIST_SCHEDULED_TASKS,
+        "List scheduled tasks",
+        Effect::Reads,
+    ),
+    (
+        crate::workflow::STATUS_TOOL_NAME,
+        "Workflow status",
+        Effect::Reads,
+    ),
+    (
+        crate::smart_ui::CHECK_TOOL_NAME,
+        "Check a Smart UI view",
+        Effect::Reads,
+    ),
+    (super::START_SESSION, "Start a thread", Effect::Adds),
+    (super::FAN_OUT, "Fan a task out", Effect::Adds),
+    (super::MESSAGE_SESSION, "Message a thread", Effect::Adds),
+    (
+        super::ANSWER_REQUEST,
+        "Answer a pending request",
+        Effect::Adds,
+    ),
+    (super::TRANSFER_SESSION, "Transfer a thread", Effect::Adds),
+    (super::HANDOFF_WORKTREE, "Hand off a worktree", Effect::Adds),
+    (super::CREATE_PROJECT, "Create a project", Effect::Adds),
+    (super::CLONE_PROJECT, "Clone a project", Effect::Adds),
+    (super::CREATE_LOOP, "Schedule a job", Effect::Adds),
+    (super::SCHEDULE_TASK, "Schedule a task", Effect::Adds),
+    (
+        super::RUN_SCHEDULED_TASK_NOW,
+        "Run a scheduled task now",
+        Effect::Adds,
+    ),
+    (
+        crate::workflow::RUN_TOOL_NAME,
+        "Run a workflow",
+        Effect::Adds,
+    ),
+    (
+        super::secret::TOOL_NAME,
+        "Ask for a credential",
+        Effect::Adds,
+    ),
+    (super::ask_user::TOOL_NAME, "Ask the user", Effect::Adds),
+    (super::UPDATE_SESSION, "Update a thread", Effect::Sets),
+    (super::CONFIGURE_SESSION, "Configure a thread", Effect::Sets),
+    (super::ORGANIZE_THREADS, "Organize threads", Effect::Sets),
+    (super::UPDATE_PROJECT, "Update a project", Effect::Sets),
+    (
+        crate::manage::MANAGE_SETTINGS,
+        "Manage settings",
+        Effect::Sets,
+    ),
+    (
+        crate::manage::MANAGE_CAPABILITIES,
+        "Manage skills, MCP servers and harness",
+        Effect::Sets,
+    ),
+    (
+        crate::pull_watch::LINK_TOOL_NAME,
+        "Manage pull request links",
+        Effect::Sets,
+    ),
+    (
+        super::MANAGE_QUEUE,
+        "Manage queued messages",
+        Effect::Removes,
+    ),
+    (
+        super::INTERRUPT_SESSION,
+        "Interrupt a thread",
+        Effect::Removes,
+    ),
+    (super::MERGE_WHEN_GREEN, "Merge when green", Effect::Removes),
+    (
+        super::CLEANUP_WORKTREE,
+        "Clean up a worktree",
+        Effect::Removes,
+    ),
+    (super::REMOVE_PROJECT, "Remove a project", Effect::Removes),
+    (
+        super::DELETE_SCHEDULED_TASK,
+        "Delete a scheduled task",
+        Effect::Removes,
+    ),
+    (
+        crate::workflow::STOP_TOOL_NAME,
+        "Stop a workflow",
+        Effect::Removes,
+    ),
+];
+
+fn listing(name: &str) -> Option<(&'static str, Effect)> {
+    LISTING
+        .iter()
+        .find_map(|&(listed, title, effect)| (listed == name).then_some((title, effect)))
 }
 
 /// Run on stdin/stdout until the harness closes stdin.
@@ -336,7 +508,7 @@ where
                             "title": "RustCode threads",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
-                        "instructions": mcp_names::public_text(super::prompt_hint(orchestration).trim()),
+                        "instructions": mcp_names::public_text(super::mcp_instructions(orchestration)),
                     }),
                 ));
             }
@@ -1796,6 +1968,40 @@ mod tests {
                 .unwrap()
                 .contains("not reachable")
         );
+    }
+
+    /// A tool added without a row in the table would be listed with no
+    /// annotations, which a client reads as "may destroy something".
+    #[test]
+    fn every_listed_tool_has_a_title_and_says_what_it_changes() {
+        let listed = tools_with(super::super::VERSION, true, true);
+        assert!(listed.len() > 40, "{}", listed.len());
+        for tool in &listed {
+            let name = tool["name"].as_str().unwrap();
+            assert!(
+                tool["title"].as_str().is_some_and(|t| !t.is_empty()),
+                "{name}"
+            );
+            assert!(tool["annotations"]["readOnlyHint"].is_boolean(), "{name}");
+        }
+        let annotations = |name: &str| {
+            listed.iter().find(|tool| tool["name"] == name).unwrap()["annotations"].clone()
+        };
+        assert_eq!(annotations("list_sessions"), json!({"readOnlyHint": true}));
+        assert_eq!(annotations("cleanup_worktree")["destructiveHint"], true);
+        assert_eq!(annotations("start_session")["destructiveHint"], false);
+        assert_eq!(annotations("update_session")["idempotentHint"], true);
+        // The engine's own reading of the hints agrees with the table.
+        for (name, _, effect) in LISTING {
+            assert_eq!(
+                crate::tools::schema::mcp_annotations_mark_read_only(
+                    "tool",
+                    Some(&effect.annotations())
+                ),
+                *effect == Effect::Reads,
+                "{name}"
+            );
+        }
     }
 }
 

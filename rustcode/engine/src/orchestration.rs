@@ -356,6 +356,34 @@ pub fn prompt_hint(version: u8) -> &'static str {
     }
 }
 
+/// The longest `instructions` an MCP client keeps. Claude Code cuts the text
+/// off a little past 4,000 characters, and [`PROMPT_HINT_V16`] is over 5,000:
+/// the rules at its end (credentials, settings files, scheduling) never
+/// reached the model.
+#[cfg(test)]
+pub const MCP_INSTRUCTIONS_LIMIT: usize = 4000;
+
+/// What the MCP server tells a version 16 client: the rules that span tools,
+/// with the ones that protect the user first. What a single tool does is in
+/// that tool's description, which a client does not cut.
+pub const MCP_INSTRUCTIONS_V16: &str = "RustCode's threads, projects, settings and usage. Rules first. Use `request_secret` for credentials instead of asking for them in chat; never read or print the destination file. Change RustCode's settings, skills and MCP servers with `manage_settings` and `manage_capabilities`; never edit `settings.json` or `config.toml` by hand. Tools that change another thread (`update_session`, `organize_threads`, `configure_session`, `transfer_session`, `interrupt_session`, `answer_request`, `merge_when_green`, `cleanup_worktree`, `handoff_worktree`), a project or a schedule run only when the user asks; the user approves, and a card for another machine names it. `machine` takes another paired computer's id or name from `list_machines`: omitted, a tool acts on this computer. Name one only when the user did, and never fall back to this computer when it is offline. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path.\n\nQuestions about the user's threads, projects, past work and usage: ask `list_sessions`, `search_sessions`, `read_session`, `list_worktrees`, `list_projects`, `thread_usage` and `query_data` instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it.\n\nDelegating: `start_session` and `fan_out` start a delegate, shown nested under this thread: give it a whole task; a Claude Code thread has no subagent tool, so delegate through them. `message_session` gives an existing thread work. For a thread the user will follow up themselves, pass `standalone: true` and name its session id to them: nothing is delivered back. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates and check their pull requests with `thread_status`. Wait on a whole wave in one `wait_session` with `link_ids` and `all: true`, or end the turn: the app wakes this thread when children finish. Call `list_harnesses` once.\n\nThis thread: when its title is still automatic, call `update_session` once with a short title (6 words or fewer); a title the user chose stays. When the user says to settle (\"settle\", \"settle this\", \"settle it\"), call `update_session` with `status: \"settled\"` on this thread or the one they name. Settling only marks it done; it does not merge, push or clean anything up.";
+
+/// The `instructions` the MCP server gives a client of `version`. Up to
+/// version 15 the prompt hint fits what a client keeps (4,000 characters); from 16
+/// it does not, so those clients get the cross-tool rules alone.
+pub fn mcp_instructions(version: u8) -> &'static str {
+    match version {
+        0..=15 => prompt_hint(version).trim(),
+        16..=18 => MCP_INSTRUCTIONS_V16,
+        _ => {
+            static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            TEXT.get_or_init(|| {
+                format!("{MCP_INSTRUCTIONS_V16}\n\nScheduling: `create_loop` adds a job to the app's Scheduled Jobs, when the user asks; the user approves the schedule and prompt in the app.")
+            })
+        }
+    }
+}
+
 /// Every orchestration tool of any version.
 pub fn is_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
@@ -2074,6 +2102,34 @@ mod tests {
         // v13 adds the worktree pair, and the seconds each call saves.
         let v13 = crate::network::compaction::estimate_tokens(PROMPT_HINT_V13);
         assert!(v13 < 1200, "{v13}");
+    }
+
+    /// A client cuts instructions past its limit, and what it cut was the
+    /// rules that protect the user. Every version stays under it, and the
+    /// current one still carries those rules.
+    #[test]
+    fn the_mcp_instructions_fit_what_a_client_keeps() {
+        for version in 0..=VERSION {
+            let text = mcp_instructions(version);
+            assert!(
+                text.chars().count() <= MCP_INSTRUCTIONS_LIMIT,
+                "version {version} is {} characters",
+                text.chars().count()
+            );
+            assert_eq!(text, text.trim(), "version {version}");
+        }
+        let text = mcp_instructions(VERSION);
+        for said in [
+            "never read or print the destination file",
+            "never edit `settings.json` or `config.toml` by hand",
+            "only when the user asks",
+            "never fall back to this computer when it is offline",
+            "`link_ids` and `all: true`",
+            "it does not merge, push or clean anything up",
+            CREATE_LOOP,
+        ] {
+            assert!(text.contains(said), "{said}");
+        }
     }
 
     #[test]

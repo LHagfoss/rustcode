@@ -3757,7 +3757,7 @@ fn browser_unavailable(_: &Value) -> Result<String, String> {
 
 pub const MANAGE_SETTINGS: Tool = Tool {
     name: crate::manage::MANAGE_SETTINGS,
-    description: "Read and change RustCode's own settings (settings.json): list them with values, defaults, types and accepted values; get one; set or reset one for this machine or a project. Reads answer at once; set and reset show the user the value before and after, and change nothing unless they allow it. Only change a setting when the user asks.",
+    description: "Read and change RustCode's own settings (settings.json): list them with values, defaults, types and accepted values; get one; set or reset one for this machine or a project. Reads answer at once; set and reset show the user the value before and after, and change nothing unless they allow it. Only change a setting when the user asks; never hand-edit it.",
     arguments: r#"{"action":"list|get|set|reset","key":"optional auto-compact-threshold","value":"optional 200000","project":"optional absolute folder"}"#,
     handler: ask_user_question_unavailable,
     requires_confirmation: false,
@@ -3768,7 +3768,7 @@ pub const MANAGE_SETTINGS: Tool = Tool {
 
 pub const MANAGE_CAPABILITIES: Tool = Tool {
     name: crate::manage::MANAGE_CAPABILITIES,
-    description: "List and change what RustCode threads can use: turn a skill or MCP server on or off, restart an MCP server, pick the default harness (and model) for new threads, or switch the theme. Lists answer at once; every change asks the user first. Only change one when the user asks.",
+    description: "List and change what RustCode threads can use: turn a skill or MCP server on or off, restart an MCP server, pick the default harness (and model) for new threads, or switch the theme. Lists answer at once; every change asks the user first. Only change one when the user asks; never hand-edit config files.",
     arguments: r#"{"kind":"skill|mcp|harness|theme","action":"list|enable|disable|restart|default|set","name":"optional","model":"optional","effort":"optional"}"#,
     handler: ask_user_question_unavailable,
     requires_confirmation: false,
