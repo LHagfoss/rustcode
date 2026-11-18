@@ -210,10 +210,10 @@ fn machines_add_needs_an_address_or_discovery() {
         stderr(&output)
     );
     // A refused scheme fails before anything is dialled or saved.
-    let output = sandbox.run(&["machines", "add", "wss://studio.local:17879"]);
+    let output = sandbox.run(&["machines", "add", "ftp://studio.local:17879"]);
     assert!(!output.status.success());
     assert!(
-        stderr(&output).contains("no TLS listener"),
+        stderr(&output).contains("not a machine address"),
         "{}",
         stderr(&output)
     );

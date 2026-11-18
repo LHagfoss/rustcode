@@ -46,6 +46,8 @@ struct Server {
     sign_in_codes: PathBuf,
     /// This computer's name, as the sign-in page shows it.
     machine: String,
+    /// The configuration root whose remote gateway `/ws` is relayed to.
+    config: PathBuf,
     settings: outside::Settings,
     runner: Arc<dyn outside::Runner>,
     codes: Mutex<HashMap<String, Code>>,
@@ -233,6 +235,7 @@ pub async fn ensure() -> Result<String, String> {
             public,
             key: load_key(&dir.join(KEY_FILE))?,
             sign_in_codes: outside::sign_in_code_path().ok_or("configuration unavailable")?,
+            config: dir.clone(),
             machine: crate::fleet::own_name_override()
                 .or_else(crate::remote_gateway::gateway::os_host_name)
                 .unwrap_or_else(|| "this computer".to_owned()),
@@ -246,12 +249,7 @@ pub async fn ensure() -> Result<String, String> {
             while let Ok((stream, _)) = listener.accept().await {
                 let server = server.clone();
                 if let Ok(permit) = server.slots.clone().try_acquire_owned() {
-                    tokio::spawn(async move {
-                        let _permit = permit;
-                        let _ =
-                            tokio::time::timeout(Duration::from_secs(600), serve(stream, server))
-                                .await;
-                    });
+                    tokio::spawn(handle(stream, server, Some(permit)));
                 }
             }
         });
@@ -265,6 +263,8 @@ struct Request {
     target: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
+    /// Every byte read, head included, for a `/ws` upgrade relayed as is.
+    raw: Vec<u8>,
 }
 async fn read(stream: &mut TcpStream) -> Option<Request> {
     let mut bytes = Vec::new();
@@ -325,6 +325,7 @@ async fn read(stream: &mut TcpStream) -> Option<Request> {
         target,
         headers,
         body: bytes[end..end + length].to_vec(),
+        raw: bytes,
     })
 }
 async fn respond(stream: &mut TcpStream, status: u16, value: Value, extra: &str) {
@@ -693,13 +694,69 @@ fn token_answer(tokens: outside::HttpTokens) -> Value {
     })
 }
 
-async fn serve(mut stream: TcpStream, server: Arc<Server>) {
+/// Where the remote gateway's WebSocket is served on this listener.
+pub const WS_PATH: &str = "/ws";
+
+/// Serve one accepted connection. A `/ws` connection lives as long as the
+/// device stays connected, so it holds neither the request slot nor the
+/// request deadline once it is relayed; the gateway bounds its own.
+async fn handle(
+    stream: TcpStream,
+    server: Arc<Server>,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+) {
+    let config = server.config.clone();
+    let upgrade = {
+        let _permit = permit;
+        tokio::time::timeout(Duration::from_secs(600), serve(stream, server))
+            .await
+            .ok()
+            .flatten()
+    };
+    if let Some((stream, head)) = upgrade {
+        relay_to_gateway(stream, head, &config).await;
+    }
+}
+
+/// Hand a `/ws` upgrade to the remote gateway's loopback ingress and copy
+/// bytes both ways until either side closes. The gateway answers the upgrade
+/// itself, so the bytes already read go first. Without a running gateway the
+/// device is told so instead of left waiting.
+async fn relay_to_gateway(mut stream: TcpStream, head: Vec<u8>, config: &Path) {
+    let ingress = crate::remote_gateway::lifecycle::RemoteLifecycle::new(config)
+        .running_registration()
+        .and_then(|registration| registration.ingress_address);
+    let gateway = match ingress {
+        Some(address) => TcpStream::connect(address).await.ok(),
+        None => None,
+    };
+    let Some(mut gateway) = gateway else {
+        respond(
+            &mut stream,
+            503,
+            json!({"error":"remote_access_off","error_description":"remote access is not running on this machine"}),
+            "",
+        )
+        .await;
+        return;
+    };
+    let _ = stream.set_nodelay(true);
+    let _ = gateway.set_nodelay(true);
+    if gateway.write_all(&head).await.is_err() {
+        return;
+    }
+    let _ = tokio::io::copy_bidirectional(&mut stream, &mut gateway).await;
+}
+
+/// Answer one request. A WebSocket upgrade at `/ws` is not answered here:
+/// the socket and the bytes read from it come back for [`relay_to_gateway`].
+async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream, Vec<u8>)> {
     let Some(req) = tokio::time::timeout(Duration::from_secs(10), read(&mut stream))
         .await
         .ok()
         .flatten()
     else {
-        return;
+        return None;
     };
     // Host validation prevents DNS rebinding: only this computer's loopback
     // address and the configured public host are answered. Browser requests
@@ -715,11 +772,32 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
         (public, true)
     } else {
         respond(&mut stream, 403, json!({"error":"forbidden"}), "").await;
-        return;
+        return None;
     };
+    // The remote protocol for paired devices and machines, so one tunnel
+    // serves both. Its `Origin` rule is the gateway's (only the native app's
+    // or none), applied to the relayed upgrade itself.
+    if req.target == WS_PATH || req.target.starts_with(&format!("{WS_PATH}?")) {
+        let upgrade = req.method == "GET"
+            && req
+                .headers
+                .get("upgrade")
+                .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+        if !upgrade {
+            respond(
+                &mut stream,
+                426,
+                json!({"error":"upgrade_required"}),
+                "Upgrade: websocket\r\n",
+            )
+            .await;
+            return None;
+        }
+        return Some((stream, req.raw));
+    }
     if req.headers.get("origin").is_some_and(|o| o != base) {
         respond(&mut stream, 403, json!({"error":"forbidden"}), "").await;
-        return;
+        return None;
     }
     let (path, query) = req.target.split_once('?').unwrap_or((&req.target, ""));
     let resource = format!("{base}/mcp");
@@ -747,7 +825,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                 }
                 Some(a) if public => {
                     html(&mut stream, 200, &server.consent(&a, &q, None, None)).await;
-                    return;
+                    return None;
                 }
                 Some(a) => {
                     let scope = a.scope.unwrap_or(outside::Scope::ReadOnly);
@@ -775,14 +853,14 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                 "Cache-Control: public, max-age=86400\r\n",
             )
             .await;
-            return;
+            return None;
         }
         // The consent page's form; only the public address shows that page.
         ("POST", "/authorize") if public => {
             let q = fields(&req.body);
             let Some(a) = Authorization::parse(&server, &q, base, public) else {
                 respond(&mut stream, 400, json!({"error":"invalid_request"}), "").await;
-                return;
+                return None;
             };
             let selected = q
                 .get("access")
@@ -804,7 +882,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                         Ok((id, key, _)) => {
                             see_other(&mut stream, &format!("/authorize/wait?id={id}&key={key}"))
                                 .await;
-                            return;
+                            return None;
                         }
                         Err(error) => error,
                     }
@@ -819,7 +897,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                     Some((ceiling, ask)) => {
                         let code = server.issue(&a, selected.min(ceiling), ask);
                         see_other(&mut stream, &a.answer(base, &[("code", &code)])).await;
-                        return;
+                        return None;
                     }
                     None => {
                         server.failed();
@@ -828,7 +906,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                 },
                 _ => {
                     see_other(&mut stream, &a.answer(base, &[("error", "access_denied")])).await;
-                    return;
+                    return None;
                 }
             };
             html(
@@ -837,7 +915,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                 &server.consent(&a, &q, Some(error), Some(selected)),
             )
             .await;
-            return;
+            return None;
         }
         // The page that waits for the owner's answer in the app; it reloads
         // itself, and moves on to the agent once answered.
@@ -853,17 +931,17 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
             let Some((outcome, words, kept, name)) = outside_signin::poll(get("id"), get("key"))
             else {
                 html(&mut stream, 410, &gone()).await;
-                return;
+                return None;
             };
             let Some(a) = Authorization::parse(&server, &kept, base, public) else {
                 outside_signin::cancel(get("id"), get("key"));
                 html(&mut stream, 410, &gone()).await;
-                return;
+                return None;
             };
             if get("cancel") == "1" {
                 outside_signin::cancel(get("id"), get("key"));
                 see_other(&mut stream, &a.answer(base, &[("error", "access_denied")])).await;
-                return;
+                return None;
             }
             match outcome {
                 Outcome::Waiting => {
@@ -884,7 +962,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
                     see_other(&mut stream, &a.answer(base, &[("error", "access_denied")])).await;
                 }
             }
-            return;
+            return None;
         }
         ("POST", "/token") => {
             let q = fields(&req.body);
@@ -1016,6 +1094,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
         }
     };
     respond(&mut stream, status, result, &extra).await;
+    None
 }
 
 #[cfg(test)]

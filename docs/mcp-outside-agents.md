@@ -224,6 +224,12 @@ loopback one. Run it on a machine that stays on, such as a VPS running
    Run it as a service (`cloudflared service install`). The tunnel must keep
    the request's `Host`; a proxy that rewrites it to `127.0.0.1` is refused
    (set `httpHostHeader` back to the public host if it does).
+
+   The same hostname also serves `/ws`, the remote gateway's WebSocket, so
+   paired phones and machines can use `wss://rustcode.example.com` away from
+   home without a VPN. It needs remote access on (`rustcode remote start`);
+   without it `/ws` answers 503. What the tunnel provider can see is in
+   [remote-security.md › The public address](remote-security.md#the-public-address).
 3. In Settings › Outside agents, pick the machine (the page shows every
    connected machine, and starts on one with a public address). Under
    **Connect ChatGPT, Claude and other hosted agents**:

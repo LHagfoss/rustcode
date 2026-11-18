@@ -489,7 +489,7 @@ address and app counted rather than listed again.
 | `unauthorized` | A pairing this host does not accept: unknown, revoked or expired. | Pair the device again. |
 | `token_replayed` | A retired refresh token was presented, so the whole pairing was removed. | Pair the device again. |
 | `unexpected_origin` | The WebSocket upgrade carried an `Origin` no native app sends, so it was refused before a frame arrived. | That is a RustCode app from before it sent the native app origin, or a web page trying the port: update the app. Nothing was shared either way. |
-| `secure_connection` | The device opened a TLS connection (`wss://`, `https://`) to the gateway, which speaks plain WebSocket, so its first bytes could not be read. | Update the app on the device, or enter the address without `https://` or `wss://`. |
+| `secure_connection` | The device opened a TLS connection (`wss://`, `https://`) to the gateway, which speaks plain WebSocket, so its first bytes could not be read. | Update the app on the device, or enter the address without `https://` or `wss://`. A `wss://` address works only at the machine's public address, through its tunnel ([remote-security.md › The public address](remote-security.md#the-public-address)). |
 | `unrecognized_request` | The device reached the gateway and sent JSON text, but its first frame is not a `pair`, `authenticate` or `connect_request` this host reads: an app build whose handshake differs. | Update RustCode on the device and on this computer so both are the latest. |
 
 Settings › Remote access lists them under *Refused connections*, with the
@@ -520,15 +520,19 @@ fills in the same saved machines.
 | `rustcode machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
 
 An address is `host`, `host:port`, `[v6]:port` or `ws://host:port`; the port
-defaults to `17879`. `wss://` is refused: the gateway has no TLS listener.
+defaults to `17879`. `wss://host` is the machine's public address, a tunnel
+to its engine's HTTP listener ([The public address](remote-security.md#the-public-address)):
+the port defaults to `443` and the path to `/ws`, and the certificate must
+verify against this computer's trust store.
 
 **A machine token travels unencrypted on the LAN**, exactly like the phone
 app's: the gateway has no TLS, so anything on that network can read a prompt,
 a thread and — during pairing — the code. Use a network you trust, or put both
 machines on Tailscale or NetBird, whose tunnel encrypts the traffic. Because a
 *public* address has no trusted network around it, this client refuses to pair
-over one, or to send a saved machine's token to one, and says so instead; that
-holds until encrypted transport (#2651) lands.
+over a plain `ws://` one, or to send a saved machine's token to one, and says
+so instead. A `wss://` public address is allowed: TLS protects it as far as
+the tunnel's edge, and the tunnel provider can read it.
 
 - The command line pairs as a **desktop** client, because that is the pairing
   the machine's owner grants ACP access to when accepting the request. A

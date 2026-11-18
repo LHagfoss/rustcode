@@ -789,11 +789,16 @@ pub enum ConnectionPath {
     /// Any other address, or one that is no longer on an interface: treated
     /// as unencrypted, because nothing says otherwise.
     Other,
+    /// The machine's public address, through a tunnel (`cloudflared`) to the
+    /// engine's HTTP listener and on to the gateway (`/ws`): TLS from the
+    /// device to the tunnel's edge, which can read the traffic.
+    Tunnel,
 }
 
 /// How one connected device reached this host and whether that path is
-/// encrypted. `encrypted` is the network's doing (a tunnel); the gateway
-/// itself has no TLS, so it is never true for `lan`, `loopback` or `other`.
+/// encrypted. `encrypted` is the network's doing (a VPN, or TLS to a public
+/// tunnel's edge); the gateway itself has no TLS, so it is never true for
+/// `lan`, `loopback` or `other`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ConnectionRoute {
     pub path: ConnectionPath,
@@ -815,11 +820,12 @@ impl ConnectionRoute {
             (ConnectionPath::Overlay, Some(provider)) => provider.display_name(),
             (ConnectionPath::Overlay, None) => "VPN",
             (ConnectionPath::Other, _) => "an unrecognised network",
+            (ConnectionPath::Tunnel, _) => "the public address",
         };
-        let state = if self.encrypted {
-            "encrypted by the tunnel"
-        } else {
-            "not encrypted"
+        let state = match (self.encrypted, self.path) {
+            (true, ConnectionPath::Tunnel) => "encrypted to the tunnel's edge",
+            (true, _) => "encrypted by the tunnel",
+            (false, _) => "not encrypted",
         };
         format!("{network} ({state})")
     }
@@ -853,6 +859,18 @@ pub fn connection_route(local: SocketAddr, candidates: &[Candidate]) -> Connecti
         provider,
         local_address: SocketAddr::new(address, local.port()).to_string(),
         encrypted: path == ConnectionPath::Overlay,
+    }
+}
+
+/// The route of a connection the engine's HTTP listener relayed from the
+/// public address (`[outside] public_url`): it arrived over TLS to the
+/// tunnel's edge, whatever loopback socket carried its last hop.
+pub fn tunnel_route(local: SocketAddr) -> ConnectionRoute {
+    ConnectionRoute {
+        path: ConnectionPath::Tunnel,
+        provider: None,
+        local_address: local.to_string(),
+        encrypted: true,
     }
 }
 

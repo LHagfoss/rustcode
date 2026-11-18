@@ -50,7 +50,7 @@ machine, and in which order it is built.
 | --- | --- | --- |
 | 1 | Public MCP on one machine: `[outside] public_url`, Host validation for it, client registration, `https` callbacks, refresh tokens (30-day sign-in), sign-in page approved with `rustcode outside code` | this PR |
 | 2 | Approve sign-ins with the owner's passkey | #3954 |
-| 3 | One listener for the gateway (`/ws`) and `/mcp`, so one tunnel serves both; `wss://` routes | #3955 |
+| 3 | One listener for the gateway (`/ws`) and `/mcp`, so one tunnel serves both; `wss://` routes | #3955 (built) |
 | 4 | Machines and devices authenticate with key pairs instead of bearer tokens | #3956 |
 | 5 | The hub role: outbound connections from other machines, `machine` for outside agents, a mailbox for offline machines | #3957 |
 | 6 | The app served from a hub, with passkey login | #3958 |
@@ -58,6 +58,22 @@ machine, and in which order it is built.
 Phase 1 alone makes `https://rustcode.example.com/mcp` work for hosted agents
 against the machine that runs the tunnel. Phases 3–5 extend that to the rest
 of the fleet; 2 and 6 replace the terminal code with a login.
+
+## Phase 3 in practice
+
+The engine's HTTP listener (the `/mcp` one, `43871`) relays a WebSocket
+upgrade at `/ws` to the remote gateway, which may run in another process
+(`rustcode remote`, the server). The gateway binds a loopback-only *ingress*
+listener on an ephemeral port, records it as `ingress_address` in its
+registration, and serves every socket from it as a `tunnel` connection
+(encrypted to the tunnel's edge). The relay checks `Host` exactly as `/mcp`
+does and leaves the `Origin` rule to the gateway. The gateway's own port
+(`17879`) is unchanged, so LAN and VPN routes keep working as before.
+
+Clients dial `wss://host` with TLS verified by the operating system's trust
+store (`rustls-platform-verifier`), port `443` and path `/ws` by default, and
+may send credentials over it. The phone app (`rustcode-mobile`) still needs
+the same change.
 
 ## Phase 1 in practice
 

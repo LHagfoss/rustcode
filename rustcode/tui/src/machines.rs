@@ -305,7 +305,7 @@ fn print_rows(rows: &[Row]) {
 
 /// A route this computer dialled as the gateway describes a connection it
 /// accepted (#3701), so both ends use the same words and the same rule: only
-/// a tunnel encrypts. A client cannot see the interface it used, so the kind
+/// a tunnel encrypts (a VPN, or TLS to a public tunnel's edge). A client cannot see the interface it used, so the kind
 /// of address it dialled stands in; a public or unknown address is `other`.
 fn connection_route(route: &Route) -> ConnectionRoute {
     let loopback = route.address.parse::<std::net::SocketAddr>().map_or_else(
@@ -327,6 +327,8 @@ fn connection_route(route: &Route) -> ConnectionRoute {
                 rustcode_client::OverlayProvider::Zerotier => GatewayProvider::Zerotier,
             }),
         ),
+        // `wss://` reaches the machine's public address through its tunnel.
+        RouteKind::Public if route.is_tls() => (ConnectionPath::Tunnel, None),
         RouteKind::Public => (ConnectionPath::Other, None),
         // `ssh -W` connects from the machine itself: its gateway sees its own
         // loopback, and SSH encrypts the way there.
@@ -336,7 +338,8 @@ fn connection_route(route: &Route) -> ConnectionRoute {
         path,
         provider,
         local_address: route.address.clone(),
-        encrypted: path == ConnectionPath::Overlay || route.kind == RouteKind::Ssh,
+        encrypted: matches!(path, ConnectionPath::Overlay | ConnectionPath::Tunnel)
+            || route.kind == RouteKind::Ssh,
     }
 }
 
