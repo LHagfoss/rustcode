@@ -1602,6 +1602,17 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().planUsage[id]?.windows).toHaveLength(2);
   });
 
+  test("the composer has the new thread's own plan limits while its first turn runs", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().engine.phase === "ready");
+    setProjectCwd("/tmp/project");
+    await submit("keep working");
+    const id = selected()!.id;
+    await until(() => useApp.getState().planUsage[id]?.windows[0]?.usedPercent === 42);
+    expect(isRunning(selected())).toBe(true);
+    await cancel(id);
+  });
+
   test("the plan poll re-reads the open thread's own limits without a message", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().engine.phase === "ready");

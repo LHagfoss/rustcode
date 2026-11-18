@@ -122,7 +122,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   // A thread on a paired machine runs on that machine's login: this computer's
   // cache holds another sign-in's numbers, so only the thread's own are shown.
   const cached = useApp((s) => {
-    if (threadId && isRemoteThread(threadId)) return undefined;
+    if (threadId ? isRemoteThread(threadId) : s.newThreadHost) return undefined;
     const key = planKeyFor(s, threadId);
     if (!key) return onlyCachedPlan(s.planCache);
     if (key.includes("#")) return s.planCache[key];
@@ -180,15 +180,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
                   style={{ width: `max(${left > 0 ? 3 : 0}px, ${left}%)` }}
                 />
               </span>
-              <span
-                className={cx(
-                  "font-medium text-caption text-fg-muted tabular",
-                  // Live while the turn runs, then settles on the number it ended with.
-                  running && "rc-shimmer",
-                )}
-              >
-                {left}% left
-              </span>
+              <span className="font-medium text-caption text-fg-muted tabular">{left}% left</span>
             </span>
           )}
           {fraction !== null && <ContextGauge fraction={fraction} />}
