@@ -108,15 +108,76 @@ pub const SERVER_NAME: &str = "rustcode";
 /// In `<config>/run/`: which socket the running engine's hub listens on.
 pub const PUBLISHED_FILE: &str = "orchestrator.json";
 
-/// The socket the running engine published, when there is one.
+/// How long the bridge waits for the hub to take a connection, and for the
+/// call to be written to it. Both are local and take microseconds; an engine
+/// that is suspended or wedged must not hold a harness's tool call open.
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long the hub waits for a connection's call to arrive. The bridge
+/// writes it straight after connecting, so a connection that says nothing is
+/// not one of ours and must not keep a task and a socket forever.
+pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The socket of an engine that is running, when there is one: the one the
+/// last engine published, or, when that engine has exited (the file is not
+/// removed on every way out), another engine's that is still alive. Read on
+/// every call, so a bridge that outlives the app finds the next one.
 pub fn published_socket() -> Option<PathBuf> {
-    let path = crate::config::get_config_dir()?
-        .join("run")
-        .join(PUBLISHED_FILE);
-    let body: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    body.get("socket")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
+    let run = crate::config::get_config_dir()?.join("run");
+    let published = std::fs::read(run.join(PUBLISHED_FILE))
+        .ok()
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .and_then(|body| {
+            let socket = PathBuf::from(body.get("socket")?.as_str()?);
+            let pid = body.get("pid").and_then(Value::as_i64);
+            Some((socket, pid))
+        });
+    #[cfg(unix)]
+    {
+        if let Some((socket, pid)) = &published {
+            // A file from before the pid was written is taken at its word.
+            if pid.is_none_or(|pid| i32::try_from(pid).is_ok_and(process_alive)) {
+                return Some(socket.clone());
+            }
+        }
+        live_socket(&run).or(published.map(|(socket, _)| socket))
+    }
+    #[cfg(not(unix))]
+    {
+        published.map(|(socket, _)| socket)
+    }
+}
+
+/// The pid in a hub socket's file name, `orchestrator-<pid>.sock`.
+#[cfg(unix)]
+fn socket_pid(name: &std::ffi::OsStr) -> Option<i32> {
+    name.to_str()?
+        .strip_prefix("orchestrator-")?
+        .strip_suffix(".sock")?
+        .parse::<i32>()
+        .ok()
+        .filter(|pid| *pid > 0)
+}
+
+#[cfg(unix)]
+fn process_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks whether the process exists.
+    let answered = unsafe { libc::kill(pid, 0) } == 0;
+    answered || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// The newest hub socket in `run` whose engine is still running.
+#[cfg(unix)]
+fn live_socket(run: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(run)
+        .ok()?
+        .flatten()
+        .filter(|entry| socket_pid(&entry.file_name()).is_some_and(process_alive))
+        .max_by_key(|entry| entry.metadata().and_then(|meta| meta.modified()).ok())
+        .map(|entry| entry.path())
 }
 
 impl Launch {
@@ -589,10 +650,17 @@ mod listen {
             let (read, mut write) = stream.into_split();
             let mut reader = BufReader::new(read);
             let mut line = Vec::new();
-            let read_line = (&mut reader)
-                .take(MAX_REQUEST_BYTES as u64 + 1)
-                .read_until(b'\n', &mut line)
-                .await;
+            let read_line = tokio::time::timeout(
+                super::REQUEST_TIMEOUT,
+                (&mut reader)
+                    .take(MAX_REQUEST_BYTES as u64 + 1)
+                    .read_until(b'\n', &mut line),
+            )
+            .await;
+            // Nothing asked in time: nobody is waiting for an answer.
+            let Ok(read_line) = read_line else {
+                return;
+            };
             let answer = match read_line {
                 Ok(_) if line.len() > MAX_REQUEST_BYTES => {
                     CallAnswer::failure("error: the orchestration call is too large")
@@ -650,21 +718,13 @@ mod listen {
             return;
         };
         for entry in entries.flatten() {
-            let name = entry.file_name();
-            let Some(pid) = name
-                .to_str()
-                .and_then(|name| name.strip_prefix("orchestrator-"))
-                .and_then(|name| name.strip_suffix(".sock"))
-                .and_then(|pid| pid.parse::<i32>().ok())
-            else {
+            let Some(pid) = super::socket_pid(&entry.file_name()) else {
                 continue;
             };
-            if pid <= 0 || pid as u32 == std::process::id() {
+            if pid as u32 == std::process::id() {
                 continue;
             }
-            // SAFETY: signal 0 only checks whether the process exists.
-            let alive = unsafe { libc::kill(pid, 0) } == 0
-                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+            let alive = super::process_alive(pid);
             if !alive {
                 let _ = std::fs::remove_file(entry.path());
             }
@@ -673,34 +733,61 @@ mod listen {
 
     /// Send one call to the hub at `socket` and read its answer.
     pub async fn call(socket: &Path, request: &CallRequest) -> CallAnswer {
-        let mut stream = match UnixStream::connect(socket).await {
-            Ok(stream) => stream,
-            Err(error) => {
-                return CallAnswer::failure(format!(
-                    "error: RustCode is not reachable ({error}); the thread that started this harness may have closed. Nothing was sent."
-                ));
-            }
+        match try_call(socket, request).await {
+            Ok(answer) => answer,
+            Err(error) => CallAnswer::failure(format!(
+                "error: RustCode is not reachable ({error}); the thread that started this harness may have closed. Nothing was sent."
+            )),
+        }
+    }
+
+    /// [`call`], with `Err` when no hub took the connection, so nothing was
+    /// sent and the caller may say why in its own words. Connecting and
+    /// writing the call are bounded by [`CONNECT_TIMEOUT`]; the answer is not,
+    /// since a call may wait on the user, and it ends when the engine does.
+    pub async fn try_call(socket: &Path, request: &CallRequest) -> std::io::Result<CallAnswer> {
+        let timed_out = || {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("no answer in {} s", super::CONNECT_TIMEOUT.as_secs()),
+            )
         };
+        let mut stream = tokio::time::timeout(super::CONNECT_TIMEOUT, UnixStream::connect(socket))
+            .await
+            .map_err(|_| timed_out())??;
         let mut line = serde_json::to_vec(request).unwrap_or_default();
         line.push(b'\n');
-        if let Err(error) = stream.write_all(&line).await {
-            return CallAnswer::failure(format!("error: could not reach RustCode: {error}"));
+        match tokio::time::timeout(super::CONNECT_TIMEOUT, stream.write_all(&line)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Ok(CallAnswer::failure(format!(
+                    "error: could not reach RustCode: {error}"
+                )));
+            }
+            Err(_) => {
+                return Ok(CallAnswer::failure(format!(
+                    "error: could not reach RustCode: {}",
+                    timed_out()
+                )));
+            }
         }
         let mut answer = Vec::new();
         if let Err(error) = BufReader::new(stream).read_until(b'\n', &mut answer).await {
-            return CallAnswer::failure(format!("error: RustCode did not answer: {error}"));
+            return Ok(CallAnswer::failure(format!(
+                "error: RustCode did not answer: {error}"
+            )));
         }
-        serde_json::from_slice(&answer).unwrap_or_else(|_| {
+        Ok(serde_json::from_slice(&answer).unwrap_or_else(|_| {
             CallAnswer::failure(format!(
                 "error: RustCode closed the call without an answer; if it was a message, it may have been delivered{}",
                 super::super::retry_hint(&request.tool, &request.args)
             ))
-        })
+        }))
     }
 }
 
 #[cfg(unix)]
-pub use listen::call;
+pub use listen::{call, try_call};
 
 #[cfg(unix)]
 static HUB: tokio::sync::OnceCell<Arc<Hub>> = tokio::sync::OnceCell::const_new();
@@ -837,6 +924,58 @@ mod tests {
             self.0.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move { Ok(json!({ "session_id": "child" })) })
         }
+    }
+
+    /// A connection that never sends its call is closed, not kept: the hub
+    /// used to hold its task and its socket until the process exited.
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_that_asks_nothing_is_closed() {
+        use tokio::io::AsyncReadExt;
+        let dir = tempfile::tempdir().unwrap();
+        let hub = Hub::bind(dir.path().join("run").join("orchestrator-quiet.sock"))
+            .await
+            .unwrap();
+        let mut silent = tokio::net::UnixStream::connect(hub.path()).await.unwrap();
+        let mut rest = Vec::new();
+        let closed =
+            tokio::time::timeout(super::REQUEST_TIMEOUT * 3, silent.read_to_end(&mut rest)).await;
+        assert!(matches!(closed, Ok(Ok(0))), "{closed:?}");
+    }
+
+    /// With no hub at the socket nothing was sent, and the caller hears it
+    /// as an error of its own to word, not as an answer.
+    #[tokio::test]
+    async fn a_call_to_no_hub_says_nothing_was_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = CallRequest {
+            session_id: String::new(),
+            token: String::new(),
+            tool: super::super::LIST_SESSIONS.to_owned(),
+            args: json!({}),
+            outside: true,
+        };
+        let gone = dir.path().join("orchestrator-1.sock");
+        assert!(super::try_call(&gone, &request).await.is_err());
+        let answer = super::call(&gone, &request).await;
+        assert!(!answer.success);
+        assert!(answer.content.contains("Nothing was sent"));
+    }
+
+    /// The published file can name an engine that has exited; the socket of
+    /// one that is still running is the one a bridge should use.
+    #[test]
+    fn a_live_engines_socket_is_found_among_stale_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir
+            .path()
+            .join(format!("orchestrator-{}.sock", std::process::id()));
+        std::fs::write(&live, b"").unwrap();
+        // No process has the largest pid.
+        std::fs::write(dir.path().join("orchestrator-2147483646.sock"), b"").unwrap();
+        std::fs::write(dir.path().join("orchestrator.json"), b"{}").unwrap();
+        assert_eq!(super::live_socket(dir.path()), Some(live.clone()));
+        std::fs::remove_file(&live).unwrap();
+        assert_eq!(super::live_socket(dir.path()), None);
     }
 
     /// A call for a version 4 thread that names a login: the hub, not the
