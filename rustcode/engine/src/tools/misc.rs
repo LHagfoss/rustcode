@@ -348,7 +348,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
 
 pub const WAIT_SESSION: Tool = Tool {
     name: crate::orchestration::WAIT_SESSION,
-    description: "Wait up to 25 minutes on delegate link IDs. Returns the first result, or with all: true every result or a request for the user. Use read_session for truncated answers. RustCode wakes the parent when a delegate finishes or needs approval. Wait only when you need the result now. Timeouts report child activity.",
+    description: "Wait up to 25 minutes on delegate link IDs. Returns the first result, or with all: true every result or a request for the user. Use read_session if answer_truncated is true. RustCode wakes the parent when a delegate finishes or needs approval. Wait only when you need the result now. Timeouts report child activity.",
     arguments: r#"{"link_ids": ["from start_session or message_session"], "all": true, "timeout_ms": 1200000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -396,7 +396,7 @@ pub const READ_SESSION: Tool = Tool {
 
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
-    description: "Start a delegate in its own worktree by default. Give the full task, repo rules, acceptance criteria and timeouts. Returns link_id for wait_session. Standalone creates a top-level thread and returns session_id instead. Explicit agent fields override the preset from list_harnesses. User approval applies.",
+    description: "Start a delegate in its own worktree by default. Give the full task, repo rules, acceptance criteria and timeouts. Returns link_id for wait_session. Standalone creates a top-level thread and returns session_id instead. Explicit agent fields, including a named account, override the preset from list_harnesses. The user approves.",
     arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -428,7 +428,7 @@ pub const START_SESSION: Tool = Tool {
 
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
-    description: "Start the same full task on 2–4 harnesses in separate worktrees. Returns link IDs for wait_session, or session IDs for standalone threads. Specify agent settings or presets from list_harnesses. User approval applies.",
+    description: "Start the same full task on 2–4 harnesses in separate worktrees. Returns link IDs for wait_session, or session IDs for standalone threads. Specify agent settings, named accounts or presets from list_harnesses. User approval applies.",
     arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -473,7 +473,7 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List harnesses, models, effort, named logins and delegate presets. Filter by harness or model. Without a model filter, the default and recent models come first, with up to 12 per harness. Check each login’s usage windows before choosing an account.",
+    description: "List harnesses, models, effort, named accounts and delegate presets. Filter with `harness` or `model`. Defaults and recent models come first. Without a model filter, omitted_models counts models beyond the first 12. Check account usage (as_of, windows with used_percent, window_minutes and resets_at) before choosing a login.",
     arguments: r#"{"harness": "codex", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
