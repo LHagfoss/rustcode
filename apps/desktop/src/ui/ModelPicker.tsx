@@ -47,6 +47,7 @@ import {
   newThreadChoice,
   pickNewThreadAccount,
   pickNewThreadChoice,
+  refreshHarnesses,
   setConfigOption,
   shownPlan,
   switchThreadAccount,
@@ -1124,6 +1125,15 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     if (!open || !engineReady || !listing) return;
     for (const id of listing.split(",")) void ensureHarnessModels(id, host);
   }, [open, engineReady, listing, host]);
+  // The list read at connect goes stale: a harness installed or signed in since, or a model list
+  // the engine listed again after the harness updated (it does so in the background once the
+  // cached one is a day old or from another version). Each open reads it again, so the card shows
+  // what the engine knows now rather than what it knew when the app started.
+  useEffect(() => {
+    if (!open || !engineReady) return;
+    if (host) void loadMachineHarnesses(host, { report: false, refresh: true });
+    else void refreshHarnesses();
+  }, [open, engineReady, host]);
 
   /**
    * A model row. In the current harness it is set in place and the level the
