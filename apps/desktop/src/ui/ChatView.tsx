@@ -175,7 +175,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
           <button
             type="button"
             aria-label={`Thread actions (status: ${STATUS_LABEL[status]})`}
-            className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
+            className="flex h-6 min-w-8 items-center justify-center gap-1.5 rounded-full px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong data-[state=open]:text-fg"
           >
             {wt && (
               <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">

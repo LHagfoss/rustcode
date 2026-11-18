@@ -45,7 +45,6 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/AttentionCards.tsx", "send([o])", "the answers are choice rows"],
   ["ui/Board.tsx", "Unsettle", "a 24px icon button"],
   ["ui/ChatView.tsx", "px-2 font-medium", "the plan pill is a popover trigger"],
-  ["ui/ChatView.tsx", "Thread actions (status:", "the status pill is a menu trigger"],
   ["ui/Composer.tsx", "aria-pressed={wt.on}", "a worktree toggle; its fill is its state"],
   ["ui/Composer.tsx", "Attach and more", "a round icon button, the send button's size"],
   ["ui/Attachments.tsx", "Show all", "the +N thumbnail tile, sized and shaped as the pictures beside it"],
