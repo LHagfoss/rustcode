@@ -754,8 +754,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   button sits above search, and a hairline and the Threads label set it apart from the
   list. A detailed thread row is a fixed grid of two lines, 54px tall, with `rounded-xl`, so a
   column of rows reads as a table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`).
-  Line 1 is the title, in one weight whatever the thread does, then its state as a dot and a
-  word in the state's tone (Working and Needs you pulse; Waiting, Failed, Done, Review), then
+  Line 1 is the title, in one weight whatever the thread does, then its state as an icon and a
+  word in the state's tone, as T3 Code's sidebar does (Working spins; Approval and Question
+  pulse; Waiting, Failed, Done, Review hold still), then
   always a time: the running turn's clock, else its age. Line 2 always shows, so every row has
   the same height. Its left part is where it runs when that says something
   (`state/sidebarGroups.ts` `rowWhere`: a worktree's branch, a branch off the default one, a

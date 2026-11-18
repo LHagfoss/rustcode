@@ -1253,7 +1253,7 @@ composer's keys stay outside the table.
   then on the right the computer, the model or harness name, running delegates
   and the pull request, none of them cut. Every
   row is two lines, and its first line always ends with a time after the state's
-  dot and word.
+  icon and word.
   Remote rows keep their machine glyph; local rows show it when the list spans
   several machines. *Sidebar rows: Compact* (Settings › Appearance, or
   ⌘K *Sidebar: Compact rows*; `rustcode.sidebar.density`) draws each thread on

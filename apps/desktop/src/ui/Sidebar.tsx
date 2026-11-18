@@ -187,12 +187,14 @@ import {
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  MessageCircleQuestion,
   MessageSquareQuote,
   PanelLeft,
   Pencil,
   Pin,
   PinOff,
   Search,
+  ShieldQuestion,
   Sparkles,
   SquareTerminal,
   Trash2,
@@ -538,26 +540,35 @@ const STATUS_TINT: Record<RowStatusKind, string> = {
 };
 
 /**
- * What a row's first line says before its time: a dot in the state's tone and the state's word,
- * as T3 Code's sidebar does. `Working` and `Needs you` pulse (respecting reduced motion);
+ * What a row's first line says before its time, as T3 Code's sidebar does: an icon and a word in
+ * the state's tone. `Working` spins, `Approval` and `Question` pulse (respecting reduced motion);
  * `Waiting`, `Failed`, `Done` until you open it and `Review` hold still. The long form is the
  * tooltip. An idle row has none (state/sidebarRows.ts `rowStatus`).
  */
 function RowStatusLabel({ status }: { status: RowStatus }) {
   const kind = status.kind;
+  const word = kind === "needs" ? (status.approval ? "Approval" : "Question") : status.label;
   return (
     <span
       title={status.title ?? status.label}
       className={cx("inline-flex shrink-0 items-center gap-1", STATUS_TINT[kind])}
     >
-      <span
-        aria-hidden
-        className={cx(
-          "size-1.5 shrink-0 rounded-full bg-current",
-          (kind === "working" || kind === "needs") && "motion-safe:animate-pulse",
-        )}
-      />
-      {status.label}
+      {kind === "working" ? (
+        <Spinner size={10} />
+      ) : kind === "needs" ? (
+        <span className="flex motion-safe:animate-pulse">
+          {status.approval ? <ShieldQuestion size={12} /> : <MessageCircleQuestion size={12} />}
+        </span>
+      ) : kind === "waiting" ? (
+        <Clock size={12} />
+      ) : kind === "failed" ? (
+        <CircleAlert size={12} />
+      ) : kind === "completed" ? (
+        <CircleCheck size={12} />
+      ) : (
+        <Eye size={12} />
+      )}
+      {word}
     </span>
   );
 }
@@ -876,7 +887,12 @@ const ThreadRow = memo(function ThreadRow({
       {where.kind !== "none" && <span className="mr-1 flex shrink-0">{machineLabel}</span>}
       {(model || harnessName) && (
         <span className="flex shrink-0">
-          <HarnessIcon id={session.harness || "rustcode"} name={harness?.name} size={12} />
+          <HarnessIcon
+            id={session.harness || "rustcode"}
+            name={harness?.name}
+            size={12}
+            className="opacity-60"
+          />
         </span>
       )}
       {/* Normal figures: a tabular face (Inter) gives a model name's hyphens a digit's width. */}

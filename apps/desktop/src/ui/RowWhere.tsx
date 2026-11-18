@@ -27,7 +27,7 @@ export function MiddlePath({ path }: { path: string }) {
     return () => observer.disconnect();
   }, [font, textSize]);
   return (
-    <span ref={ref} className="block overflow-hidden text-ellipsis whitespace-nowrap">
+    <span ref={ref} className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
       {middleEllipsis(path, chars)}
     </span>
   );
