@@ -123,9 +123,12 @@ own answer.
 
 The engine listens only on `127.0.0.1`, at `/mcp`, using stateless
 Streamable HTTP (JSON responses; no SSE subscription). It prefers port
-`43871`, chosen away from common development server defaults. If occupied,
-it tries successive ports and saves the selected port in
-`<config>/outside-http-port`; restarts reuse that port unless it is occupied.
+`43871`, chosen away from common development server defaults. On the first
+start, if that is occupied, it tries successive ports and saves the selected
+port in `<config>/outside-http-port`. A tunnel points at the saved port, so
+it is never replaced: a restart waits up to 15 seconds for the engine before
+it to release it, and if it stays occupied that run serves on the next free
+port (logged) and the next start tries the saved one again.
 Other bind errors stop the endpoint rather than exposing it on another interface.
 
 Open Settings › Outside agents › Connection and press **Copy URL** to paste

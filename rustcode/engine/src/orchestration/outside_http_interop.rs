@@ -40,7 +40,9 @@ impl Fixture {
         Self::start_with(dir, None).await
     }
     async fn start_with(dir: &std::path::Path, public: Option<&str>) -> Self {
-        let listener = bind_configured(&dir.join(PORT_FILE)).await.unwrap();
+        let listener = bind_configured(&dir.join(PORT_FILE), Duration::ZERO)
+            .await
+            .unwrap();
         let server = Arc::new(Server {
             base: format!("http://{}", listener.local_addr().unwrap()),
             public: public.map(|p| public_base(p).unwrap()),

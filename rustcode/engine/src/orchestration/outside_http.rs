@@ -93,16 +93,46 @@ async fn bind_port(preferred: u16) -> std::io::Result<TcpListener> {
     ))
 }
 
-async fn bind_configured(path: &std::path::Path) -> Result<TcpListener, String> {
-    let preferred = std::fs::read_to_string(path)
+/// How long a restarting engine waits for the one before it to let go of the
+/// saved port before it serves on another.
+const PORT_HANDOVER: Duration = Duration::from_secs(15);
+
+/// Bind the saved port, waiting up to `handover` for an engine that is still
+/// shutting down to release it. A tunnel or reverse proxy (`[outside]
+/// public_url`) points at that port, so it is never replaced: when it stays
+/// busy this run serves on the next free one and the next start tries the
+/// saved one again. Only a first start saves the port it found.
+async fn bind_configured(
+    path: &std::path::Path,
+    handover: Duration,
+) -> Result<TcpListener, String> {
+    let saved = std::fs::read_to_string(path)
         .ok()
         .and_then(|text| text.trim().parse::<u16>().ok())
-        .filter(|port| *port != 0)
-        .unwrap_or(DEFAULT_PORT);
-    let listener = bind_port(preferred).await.map_err(|e| e.to_string())?;
+        .filter(|port| *port != 0);
+    let preferred = saved.unwrap_or(DEFAULT_PORT);
+    let deadline = Instant::now() + handover;
+    let listener = loop {
+        match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, preferred)).await {
+            Ok(listener) => break listener,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                if saved.is_none() || Instant::now() >= deadline {
+                    break bind_port(preferred).await.map_err(|e| e.to_string())?;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    };
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    crate::service::write_private(path, port.to_string().as_bytes())
-        .map_err(|e| format!("could not save outside-agent HTTP port: {e}"))?;
+    match saved {
+        None => crate::service::write_private(path, port.to_string().as_bytes())
+            .map_err(|e| format!("could not save outside-agent HTTP port: {e}"))?,
+        Some(saved) if saved != port => crate::dbg_log!(
+            "outside-agent HTTP port {saved} is busy; serving on {port} until the next start, so a tunnel to {saved} cannot reach it"
+        ),
+        Some(_) => {}
+    }
     Ok(listener)
 }
 
@@ -184,7 +214,7 @@ pub async fn ensure() -> Result<String, String> {
     URL.get_or_try_init(|| async {
         let dir =
             crate::config::get_config_dir().ok_or("could not determine the config directory")?;
-        let listener = bind_configured(&dir.join(PORT_FILE)).await?;
+        let listener = bind_configured(&dir.join(PORT_FILE), PORT_HANDOVER).await?;
         let base = format!(
             "http://127.0.0.1:{}",
             listener.local_addr().map_err(|e| e.to_string())?.port()
@@ -984,7 +1014,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn port_falls_forward_and_persists_across_restarts() {
+    async fn a_busy_saved_port_falls_forward_for_one_run_and_stays_saved() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(PORT_FILE);
         let occupied = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -992,23 +1022,43 @@ mod tests {
             .unwrap();
         let port = occupied.local_addr().unwrap().port();
         std::fs::write(&path, port.to_string()).unwrap();
-        let listener = bind_configured(&path).await.unwrap();
+        let listener = bind_configured(&path, Duration::ZERO).await.unwrap();
         let chosen = listener.local_addr().unwrap();
         assert!(chosen.ip().is_loopback());
         assert!(chosen.port() > port);
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            chosen.port().to_string()
-        );
+        // A tunnel points at the saved port: it is not replaced.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), port.to_string());
         drop(listener);
-        let restarted = bind_configured(&path).await.unwrap();
-        assert_eq!(restarted.local_addr().unwrap(), chosen);
+        drop(occupied);
+        let restarted = bind_configured(&path, Duration::ZERO).await.unwrap();
+        assert_eq!(restarted.local_addr().unwrap().port(), port);
+    }
+
+    #[tokio::test]
+    async fn a_restart_waits_for_the_old_engine_to_release_the_saved_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(PORT_FILE);
+        let old = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = old.local_addr().unwrap().port();
+        std::fs::write(&path, port.to_string()).unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            drop(old);
+        });
+        let listener = bind_configured(&path, Duration::from_secs(10))
+            .await
+            .unwrap();
+        assert_eq!(listener.local_addr().unwrap().port(), port);
     }
 
     #[tokio::test]
     async fn missing_port_uses_default_or_next_free_port() {
         let dir = tempfile::tempdir().unwrap();
-        let listener = bind_configured(&dir.path().join(PORT_FILE)).await.unwrap();
+        let listener = bind_configured(&dir.path().join(PORT_FILE), Duration::ZERO)
+            .await
+            .unwrap();
         assert!(listener.local_addr().unwrap().port() >= DEFAULT_PORT);
     }
 
