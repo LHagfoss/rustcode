@@ -74,18 +74,25 @@ struct PendingRequests(Mutex<HashSet<String>>);
 
 impl PendingRequests {
     fn remember(&self, frame: &str) -> Result<(), ErrorCode> {
-        let Ok(value) = serde_json::from_str::<Value>(frame) else {
-            return Ok(());
-        };
-        if value.get("method").and_then(Value::as_str).is_none() {
-            return Ok(());
+        // Every frame the server sends passes here, most of them transcript
+        // chunks: read the two fields that decide and skip the rest unbuilt.
+        #[derive(serde::Deserialize)]
+        struct Head<'a> {
+            #[serde(borrow, default)]
+            method: Option<std::borrow::Cow<'a, str>>,
+            #[serde(default)]
+            id: Option<Value>,
         }
-        let Some(id) = value
-            .get("id")
-            .filter(|id| id.is_string() || id.is_number())
+        let Ok(Head {
+            method: Some(_),
+            id: Some(id),
+        }) = serde_json::from_str::<Head>(frame)
         else {
             return Ok(());
         };
+        if !(id.is_string() || id.is_number()) {
+            return Ok(());
+        }
         let mut pending = self.0.lock().unwrap();
         if pending.len() >= MAX_PENDING_REQUESTS {
             return Err(ErrorCode::SlowConsumer);
