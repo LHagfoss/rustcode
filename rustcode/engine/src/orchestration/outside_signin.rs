@@ -248,7 +248,12 @@ pub(super) const LOGO: &[u8] =
     include_bytes!("../../../../apps/desktop/src-tauri/icons/128x128.png");
 
 /// Script-free pages: only inline styles and this server's own logo.
-pub(super) const PAGE_HEADERS: &str = "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\n";
+///
+/// `same-origin`, not `no-referrer`: under `no-referrer` Chromium browsers
+/// post the consent form with `Origin: null`, which the server's origin
+/// check refuses, so Approve answered `{"error":"forbidden"}`. `same-origin`
+/// still sends nothing to another site.
+pub(super) const PAGE_HEADERS: &str = "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'\r\nX-Frame-Options: DENY\r\nReferrer-Policy: same-origin\r\n";
 
 /// What a level allows and what it does not, as the page and the app list it.
 pub fn scope_points(
@@ -298,47 +303,57 @@ const SCOPES: [Scope; 4] = [
 ];
 
 const STYLE: &str = r#"
-:root{color-scheme:light dark;--bg:#f4f4f5;--card:#fff;--fg:#18181b;--muted:#52525b;--faint:#a1a1aa;--line:#e4e4e7;--accent:#e2572b;--accent-fg:#fff;--soft:#f4f4f5;--ok:#15803d;--no:#b91c1c;--warn-bg:#fff7ed;--warn-fg:#9a3412}
-@media (prefers-color-scheme:dark){:root{--bg:#0b0b0d;--card:#17171a;--fg:#f4f4f5;--muted:#a1a1aa;--faint:#71717a;--line:#2a2a2f;--soft:#1f1f23;--ok:#4ade80;--no:#f87171;--warn-bg:#2a1a10;--warn-fg:#fdba74}}
+:root{color-scheme:light dark;--bg:#ffffff;--surface:#eaeaea;--text:#171717;--muted:#5c5c5c;--faint:#9a9a9a;--accent:#2f6fe4;--danger:#d93d3d;--success:#1f9d55;--warning:#b7791f;--line:#0000000f}
+@media (prefers-color-scheme:dark){:root{--bg:#0b0b0c;--surface:#1d1d20;--text:#ededed;--muted:#a1a1a1;--faint:#6b6b6b;--accent:#93a3e8;--danger:#f26d6d;--success:#4ec27a;--warning:#e5a54b;--line:#ffffff0f}}
+:root{--fill-subtle:color-mix(in srgb,var(--text) 4.5%,transparent);--fill:color-mix(in srgb,var(--text) 8%,transparent);--fill-strong:color-mix(in srgb,var(--text) 13%,transparent)}
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px}
-.card{width:100%;max-width:460px;background:var(--card);border:1px solid var(--line);border-radius:20px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.18)}
-.pair{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:18px}
-.avatar{width:64px;height:64px;border-radius:18px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:28px;color:#fff;flex:none}
-.avatar img{width:64px;height:64px;border-radius:16px}
-.dots{display:flex;gap:5px}.dots i{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--text);font:14px/1.4 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px;-webkit-font-smoothing:antialiased}
+.card{width:100%;max-width:440px;background:var(--surface);border-radius:20px;padding:24px}
+.pair{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:16px}
+.avatar{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:20px;color:#fff;flex:none}
+.avatar img{width:48px;height:48px;border-radius:12px}
+.dots{display:flex;gap:4px}.dots i{width:4px;height:4px;border-radius:50%;background:var(--faint)}
 .wait .dots i{animation:pulse 1.2s infinite ease-in-out}.wait .dots i:nth-child(2){animation-delay:.2s}.wait .dots i:nth-child(3){animation-delay:.4s}
+@media (prefers-reduced-motion:reduce){.wait .dots i{animation:none}}
 @keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
-.eyebrow{text-align:center;color:var(--muted);font-size:13px;margin:0}
-h1{text-align:center;font-size:21px;line-height:1.3;margin:4px 0 6px}
-.sub{text-align:center;color:var(--muted);margin:0 0 20px;font-size:14px}
-.label{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:0 0 8px}
-.opt{display:block;border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;cursor:pointer}
+.eyebrow{text-align:center;color:var(--faint);font-size:12px;margin:0}
+h1{text-align:center;font-size:18px;line-height:23px;font-weight:600;margin:4px 0}
+.sub{text-align:center;color:var(--muted);margin:0 0 24px;font-size:13px}
+.sub b{color:var(--text);font-weight:500}
+.label{font-size:12px;font-weight:500;color:var(--muted);margin:0 0 8px}
+.opts{background:var(--fill-subtle);border-radius:12px;padding:4px}
+.opt{display:block;border-radius:8px;padding:8px 12px;cursor:pointer}
+.opt+.opt{margin-top:2px}
+.opt:hover{background:var(--fill-subtle)}
 .opt input{position:absolute;opacity:0;pointer-events:none}
-.opt .head{display:flex;align-items:center;gap:10px}
-.opt .radio{width:16px;height:16px;border-radius:50%;border:2px solid var(--faint);flex:none}
-.opt .name{font-weight:600}.opt .tag{color:var(--muted);font-size:13px;margin-left:auto;text-align:right}
-.opt ul{display:none;list-style:none;margin:8px 0 0 26px;padding:0;font-size:13.5px}
-.opt li{margin:3px 0;padding-left:20px;position:relative;color:var(--muted)}
-.opt li.yes:before{content:"✓";position:absolute;left:0;color:var(--ok);font-weight:700}
-.opt li.no:before{content:"✕";position:absolute;left:0;color:var(--no);font-weight:700}
-.opt:has(input:checked){border-color:var(--accent);background:var(--soft)}
-.opt:has(input:checked) .radio{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 45%,transparent 50%)}
-.opt:has(input:checked) ul{display:block}
-.opt:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
-.note{background:var(--warn-bg);color:var(--warn-fg);border-radius:12px;padding:10px 12px;font-size:13.5px;margin:14px 0}
-.error{background:var(--warn-bg);color:var(--no);border-radius:12px;padding:10px 12px;font-size:14px;margin:0 0 14px;font-weight:500}
-.actions{display:flex;gap:10px;margin-top:16px}
-button,.button{font:inherit;font-weight:600;border-radius:12px;padding:11px 16px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;text-decoration:none;text-align:center}
-.primary{flex:1;background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
-details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
-summary{cursor:pointer;color:var(--muted);font-size:14px}
-.coderow{display:flex;gap:8px;margin-top:10px}
-.coderow input{flex:1;min-width:0;font:inherit;font-size:18px;letter-spacing:.14em;text-transform:uppercase;padding:9px 12px;border-radius:12px;border:1px solid var(--line);background:var(--soft);color:var(--fg)}
-.hint{color:var(--faint);font-size:12.5px;margin:8px 0 0}
-.hint code{background:var(--soft);padding:1px 5px;border-radius:5px}
-.words{display:block;text-align:center;font-size:26px;font-weight:700;letter-spacing:.04em;background:var(--soft);border:1px dashed var(--line);border-radius:14px;padding:14px;margin:6px 0 6px;text-transform:uppercase}
-.foot{text-align:center;color:var(--faint);font-size:12.5px;margin:18px 0 0}
+.opt .head{display:flex;align-items:center;gap:8px}
+.opt .radio{width:14px;height:14px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--faint);flex:none}
+.opt .name{font-weight:500}.opt .tag{color:var(--faint);font-size:12px;margin-left:auto;text-align:right}
+.opt ul{display:none;list-style:none;margin:6px 0 2px 22px;padding:0;font-size:13px}
+.opt li{margin:2px 0;padding-left:18px;position:relative;color:var(--muted)}
+.opt li.yes:before{content:"✓";position:absolute;left:0;color:var(--success)}
+.opt li.no:before{content:"✕";position:absolute;left:0;color:var(--danger)}
+.opt:has(input:checked){background:var(--fill)}
+.opt:has(input:checked) .radio{box-shadow:inset 0 0 0 4px var(--accent)}
+.opt:has(input:focus-visible){outline:2px solid color-mix(in srgb,var(--accent) 40%,transparent);outline-offset:2px}
+.note{background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--text);border-radius:12px;padding:8px 12px;font-size:13px;margin:12px 0 0}
+.note b{font-weight:600}
+.error{background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--text);border-radius:12px;padding:8px 12px;font-size:13px;margin:0 0 16px}
+.actions{display:flex;gap:8px;margin-top:16px}
+button,.button{font:inherit;font-weight:500;border-radius:999px;padding:8px 16px;border:0;background:var(--fill);color:var(--text);cursor:pointer;text-decoration:none;text-align:center}
+button:hover,.button:hover{background:var(--fill-strong)}
+button:focus-visible,.button:focus-visible,.coderow input:focus-visible,summary:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 40%,transparent);outline-offset:2px}
+.primary,.primary:hover{flex:1;background:var(--text);color:var(--bg)}
+.primary:hover{opacity:.9}
+details{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+summary{cursor:pointer;color:var(--muted);font-size:13px}
+.coderow{display:flex;gap:8px;margin-top:12px}
+.coderow input{flex:1;min-width:0;font:inherit;font-size:16px;letter-spacing:.14em;text-transform:uppercase;padding:8px 12px;border-radius:10px;border:0;background:var(--fill);color:var(--text)}
+.coderow input::placeholder{color:var(--faint)}
+.hint{color:var(--faint);font-size:12px;margin:8px 0 0}
+.hint code{font:12px ui-monospace,"SF Mono",monospace;background:var(--fill);padding:1px 4px;border-radius:6px}
+.words{display:block;text-align:center;font-size:23px;font-weight:600;letter-spacing:.04em;background:var(--fill-subtle);border-radius:12px;padding:12px;margin:8px 0;text-transform:uppercase}
+.foot{text-align:center;color:var(--faint);font-size:12px;margin:16px 0 0}
 "#;
 
 fn avatar_color(name: &str) -> &'static str {
@@ -433,7 +448,7 @@ pub(super) fn consent_page(
         .map(|e| format!(r#"<p class="error" role="alert">{}</p>"#, escape(e)))
         .unwrap_or_default();
     let body = format!(
-        r#"{pair}<p class="eyebrow">RustCode on {machine}</p><h1>{name} wants to connect</h1><p class="sub">It will use RustCode's tools through <b>{host}</b>.</p>{error}<form method="post" action="/authorize">{hidden}<p class="label">Choose what it can do</p>{options}<p class="note">{note}</p><div class="actions"><button name="decision" value="deny" formnovalidate>Cancel</button><button class="primary" name="decision" value="app">Approve in RustCode</button></div><details{open}><summary>Have a sign-in code?</summary><div class="coderow"><input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Sign-in code"><button name="decision" value="approve">Use code</button></div><p class="hint">In RustCode open Settings › Outside agents › Get a sign-in code, or run <code>rustcode outside code</code> on {machine}. The code sets the most this app may do.</p></details></form><p class="foot">You can see and revoke it any time in RustCode › Settings › Outside agents.</p>"#,
+        r#"{pair}<p class="eyebrow">RustCode on {machine}</p><h1>{name} wants to connect</h1><p class="sub">It will use RustCode's tools through <b>{host}</b>.</p>{error}<form method="post" action="/authorize">{hidden}<p class="label">Choose what it can do</p><div class="opts">{options}</div><p class="note">{note}</p><div class="actions"><button name="decision" value="deny" formnovalidate>Cancel</button><button class="primary" name="decision" value="app">Approve in RustCode</button></div><details{open}><summary>Have a sign-in code?</summary><div class="coderow"><input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Sign-in code"><button name="decision" value="approve">Use code</button></div><p class="hint">In RustCode open Settings › Outside agents › Get a sign-in code, or run <code>rustcode outside code</code> on {machine}. The code sets the most this app may do.</p></details></form><p class="foot">You can see and revoke it any time in RustCode › Settings › Outside agents.</p>"#,
         pair = pair(c.client_name, false),
         machine = escape(c.machine),
         name = escape(c.client_name),
@@ -561,5 +576,13 @@ mod tests {
         );
         assert!(!waiting.contains("<i>x</i>"));
         assert!(waiting.contains("http-equiv=\"refresh\""));
+    }
+
+    #[test]
+    fn the_pages_keep_their_origin_on_a_form_post() {
+        // Chromium sends `Origin: null` under `no-referrer`, and the server
+        // refuses a POST whose origin is not its own.
+        assert!(PAGE_HEADERS.contains("Referrer-Policy: same-origin\r\n"));
+        assert!(!PAGE_HEADERS.contains("no-referrer"));
     }
 }
