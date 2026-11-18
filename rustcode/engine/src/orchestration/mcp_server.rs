@@ -63,6 +63,44 @@ impl Forward for SocketForward {
     }
 }
 
+/// What an app that is not a thread of RustCode is told when no engine
+/// answers: it was not started by one, so "the thread may have closed" would
+/// send its user looking for a thread that never existed.
+const NOT_RUNNING: &str = "RustCode is not running on this computer: open the RustCode app (or start `rustcode server run`) and try again";
+
+/// Whichever engine is running now, for `rustcode mcp-connect`. The bridge
+/// lives as long as the app that started it, which is usually longer than one
+/// run of RustCode, and every engine listens on a socket named for its own
+/// process: a socket read once at startup is dead after the first restart.
+pub struct PublishedForward;
+
+impl Forward for PublishedForward {
+    fn call(
+        &self,
+        request: CallRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CallAnswer> + Send + '_>> {
+        Box::pin(async move {
+            #[cfg(unix)]
+            {
+                let Some(socket) = super::hub::published_socket() else {
+                    return CallAnswer::failure(format!("error: {NOT_RUNNING}. Nothing was sent."));
+                };
+                match super::hub::try_call(&socket, &request).await {
+                    Ok(answer) => answer,
+                    Err(_) => {
+                        CallAnswer::failure(format!("error: {NOT_RUNNING}. Nothing was sent."))
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = request;
+                CallAnswer::failure("error: the orchestrator needs a unix socket")
+            }
+        })
+    }
+}
+
 /// The session and token every call carries.
 #[derive(Debug, Clone)]
 pub struct Identity {
@@ -336,9 +374,11 @@ pub async fn run_outside(token: String) -> Result<(), String> {
             super::outside::TOKEN_ENV
         ));
     }
-    let socket = super::hub::published_socket().ok_or_else(|| {
-        "RustCode is not running on this computer: open the RustCode app (or start `rustcode server run`) and try again".to_owned()
-    })?;
+    // Checked once here so an app started without RustCode says so at once;
+    // every call after that finds the engine running at the time.
+    if super::hub::published_socket().is_none() {
+        return Err(NOT_RUNNING.to_owned());
+    }
     serve(
         tokio::io::stdin(),
         tokio::io::stdout(),
@@ -347,7 +387,7 @@ pub async fn run_outside(token: String) -> Result<(), String> {
             token,
             outside: true,
         },
-        Arc::new(SocketForward { socket }),
+        Arc::new(PublishedForward),
         super::VERSION,
         false,
     )
@@ -849,17 +889,30 @@ async fn call_inside(
     }
 }
 
+/// How long the engine has to answer a request of the handshake.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// One of the engine's own requests that build the handshake.
 async fn control(forward: &dyn Forward, identity: &Identity, name: &str) -> Result<String, String> {
-    let answer = forward
-        .call(CallRequest {
+    // The engine answers these from memory: one that takes this long is not
+    // going to, and the app's handshake must not wait on it.
+    let Some(answer) = bounded(
+        CONTROL_TIMEOUT,
+        forward.call(CallRequest {
             session_id: String::new(),
             token: identity.token.clone(),
             tool: name.to_owned(),
             args: json!({}),
             outside: true,
-        })
-        .await;
+        }),
+    )
+    .await
+    else {
+        return Err(format!(
+            "RustCode did not answer in {} s; restart the RustCode app and reconnect",
+            CONTROL_TIMEOUT.as_secs()
+        ));
+    };
     if answer.success {
         Ok(answer.content)
     } else {
