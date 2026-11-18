@@ -445,10 +445,10 @@ export function CommandPalette() {
               {...noTextHelpers}
               className="min-w-0 flex-1 bg-transparent text-title3 outline-none placeholder:text-fg-faint"
             />
-          </div>
-          <div className="flex items-center justify-end gap-1 px-3 pb-2">
-            <SortMenu />
-            <FilterMenu filtering={scope === "project"} />
+            <div className="-mr-1 flex shrink-0 items-center gap-1">
+              <SortMenu />
+              <FilterMenu filtering={scope === "project"} />
+            </div>
           </div>
           <div className="max-h-[440px] overflow-y-auto p-2" role="listbox" aria-label="Results">
             {!results.length && (
