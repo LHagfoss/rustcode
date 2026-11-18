@@ -612,11 +612,8 @@ pub(crate) struct SessionChildActivityNotification {
 }
 
 fn send_activity(clients: &SessionClients, session_id: &str, state: &str, background: usize) {
-    let _ = clients.notify(SessionActivityNotification {
-        session_id: session_id.to_owned(),
-        state: state.to_owned(),
-        background,
-    });
+    debug_assert_eq!(clients.session_id(), session_id);
+    let _ = clients.activity(state, background);
 }
 
 /// A turn parked on background commands, resumed once they finish.
