@@ -24,8 +24,10 @@ import {
   targetMachine,
 } from "./host";
 import { projectPath } from "./hostProjects";
+import { userTimeZone } from "./loops";
 import {
   activityOf,
+  type Call,
   type Failure,
   failure,
   failureJson,
@@ -35,31 +37,25 @@ import {
   type PullStateChoice,
   projectOf,
   type RuleThread,
+  type TaskSchedule,
 } from "./orchestration";
 import { rememberPullSummaries } from "./pullQueries";
 import { errorText, request, useApp } from "./store";
 import { splitThreadKey } from "./threadKeys";
 
-/** The user's IANA time zone, which a cron with none is read in. */
-function userTimeZone(): string | undefined {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** How a schedule reads in the approval card. */
-function scheduleText(schedule: {
-  kind: "cron" | "at";
-  expression?: string;
-  timezone?: string;
-  at?: string;
-}): string {
+function scheduleText(schedule: TaskSchedule): string {
   if (schedule.kind === "cron") {
     return `every cron ${schedule.expression}${schedule.timezone ? ` (${schedule.timezone})` : ""}`;
   }
   return `once at ${schedule.at}`;
+}
+
+/** A cron without an explicit zone is read in the user's own zone. */
+function localSchedule(schedule: TaskSchedule): TaskSchedule {
+  if (schedule.kind !== "cron" || schedule.timezone) return schedule;
+  const timezone = userTimeZone();
+  return timezone ? { ...schedule, timezone } : schedule;
 }
 
 /** The engine's scheduler call, answered as a failure the agent can read. */
@@ -79,7 +75,7 @@ export async function scheduleTask(
   caller: RuleThread,
   call: {
     prompt: string;
-    schedule: { kind: "cron"; expression: string; timezone?: string } | { kind: "at"; at: string };
+    schedule: TaskSchedule;
     project?: string;
     name?: string;
     modelProfile?: string;
@@ -89,16 +85,7 @@ export async function scheduleTask(
   if (!workspace) {
     return failureJson(failure("failed", "this thread has no project folder; pass project"));
   }
-  // A cron is read in the user's own zone unless the call named one: the app knows it, the engine only guesses.
-  const timezone = call.schedule.kind === "cron" ? call.schedule.timezone || userTimeZone() : undefined;
-  const schedule =
-    call.schedule.kind === "cron"
-      ? {
-          kind: "cron" as const,
-          expression: call.schedule.expression,
-          ...(timezone ? { timezone } : {}),
-        }
-      : call.schedule;
+  const schedule = localSchedule(call.schedule);
   const title = call.name || call.prompt.trim().split("\n")[0]?.slice(0, 60) || "this task";
   const no = await permitted(caller, "schedule:new", {
     kind: "schedule",
@@ -115,6 +102,68 @@ export async function scheduleTask(
     ...(call.name ? { name: call.name } : {}),
     ...(call.modelProfile ? { modelProfile: call.modelProfile } : {}),
   });
+}
+
+/** Create the same loop the desktop editor saves, after approving this particular schedule. */
+export async function createLoop(
+  caller: RuleThread,
+  call: Extract<Call, { tool: "create_loop" }>,
+): Promise<JsonObject> {
+  const workspace = projectPath(call.project || projectOf(caller));
+  if (!workspace) return failureJson(failure("invalid", "this thread has no project folder; pass project"));
+  const state = useApp.getState();
+  const { name, prompt, harness, model, effort, threadId, readOnly } = call;
+  const target = threadId
+    ? state.sessions.find((session) => session.id === threadId && !session.host)
+    : undefined;
+  if (threadId && (!target || projectPath(target.cwd) !== workspace)) {
+    return failureJson(failure("invalid", "thread_id must name a local thread in the loop's project"));
+  }
+  const runHarness = state.harnesses?.harnesses.find((entry) => entry.id === harness);
+  const account = runHarness?.accounts?.find((entry) => entry.id === call.account);
+  if (call.account && !account) {
+    return failureJson(failure("invalid", "choose an account ID for this harness from list_harnesses"));
+  }
+  const schedule = localSchedule(call.schedule);
+  const agent = [
+    runHarness?.name ?? harness ?? "Default harness",
+    account?.name ?? "Default account",
+    model ?? "Default model",
+    effort,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const no = await permitted(caller, "loop:create", {
+    kind: "schedule",
+    onceOnly: true,
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: name,
+    detail: [
+      scheduleText(schedule),
+      workspace,
+      target ? `Use thread “${target.title || target.id}”` : agent,
+      readOnly ? "Read-only" : "Full access during unattended runs",
+      "",
+      prompt,
+    ].join("\n"),
+  });
+  if (no) return failureJson(no);
+  const saved = await askScheduler(Method.loopsSave, {
+    name,
+    workspace,
+    prompt,
+    schedule,
+    ...(harness ? { harness } : {}),
+    ...(account ? { account: account.id } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(threadId ? { threadId } : {}),
+    readOnly,
+  });
+  const loop = obj(saved.loop);
+  if (!loop) return saved;
+  return { id: loop.id ?? null, name, schedule, next_due_at: loop.nextDueAt ?? null };
 }
 
 /** `list_scheduled_tasks`: what the daemon holds, and whether it is running. */

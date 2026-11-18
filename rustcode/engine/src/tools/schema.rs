@@ -168,6 +168,7 @@ pub struct ToolSchemaPolicy {
     pub(crate) include_orchestration_v12_tools: bool,
     /// `worktree_status` and `handoff_worktree`, for orchestration version 13.
     pub(crate) include_orchestration_v13_tools: bool,
+    pub(crate) include_orchestration_loops: bool,
     /// What the client advertised, capped at [`crate::orchestration::VERSION`]:
     /// the tool set follows the flags above, and the args follow this one.
     pub(crate) orchestration_version: u8,
@@ -241,6 +242,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v11_tools: false,
             include_orchestration_v12_tools: false,
             include_orchestration_v13_tools: false,
+            include_orchestration_loops: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
@@ -274,6 +276,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v11_tools: false,
             include_orchestration_v12_tools: false,
             include_orchestration_v13_tools: false,
+            include_orchestration_loops: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
@@ -300,6 +303,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v11_tools: false,
             include_orchestration_v12_tools: false,
             include_orchestration_v13_tools: false,
+            include_orchestration_loops: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
@@ -363,6 +367,8 @@ impl ToolSchemaPolicy {
         self.include_orchestration_v11_tools = self.include_orchestration_tools && version >= 11;
         self.include_orchestration_v12_tools = self.include_orchestration_tools && version >= 12;
         self.include_orchestration_v13_tools = self.include_orchestration_tools && version >= 13;
+        self.include_orchestration_loops =
+            self.include_orchestration_tools && version >= crate::orchestration::LOOPS_VERSION;
         self.orchestration_version = version.min(crate::orchestration::VERSION);
         self
     }
@@ -960,6 +966,7 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::UPDATE_PROJECT,
     crate::orchestration::REMOVE_PROJECT,
     crate::orchestration::SCHEDULE_TASK,
+    crate::orchestration::CREATE_LOOP,
     crate::orchestration::LIST_SCHEDULED_TASKS,
     crate::orchestration::DELETE_SCHEDULED_TASK,
     crate::orchestration::RUN_SCHEDULED_TASK_NOW,
@@ -1019,6 +1026,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_v11_tool(tool.name) && !policy.include_orchestration_v11_tools)
         || (crate::orchestration::is_v12_tool(tool.name) && !policy.include_orchestration_v12_tools)
         || (crate::orchestration::is_v13_tool(tool.name) && !policy.include_orchestration_v13_tools)
+        || (tool.name == crate::orchestration::CREATE_LOOP && !policy.include_orchestration_loops)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools

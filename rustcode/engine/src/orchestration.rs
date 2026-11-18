@@ -72,6 +72,7 @@ pub const CREATE_PROJECT: &str = "create_project";
 pub const CLONE_PROJECT: &str = "clone_project";
 pub const UPDATE_PROJECT: &str = "update_project";
 pub const REMOVE_PROJECT: &str = "remove_project";
+pub const CREATE_LOOP: &str = "create_loop";
 pub const SCHEDULE_TASK: &str = "schedule_task";
 pub const LIST_SCHEDULED_TASKS: &str = "list_scheduled_tasks";
 pub const DELETE_SCHEDULED_TASK: &str = "delete_scheduled_task";
@@ -127,7 +128,9 @@ pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// Added by version 13: where a thread's work stands, and handing it over.
 pub const V13_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 18;
+pub const VERSION: u8 = LOOPS_VERSION;
+/// Version 19 adds creating scheduled Loops.
+pub const LOOPS_VERSION: u8 = 19;
 /// Version 14 adds mid-turn messaging.
 pub const STEER_VERSION: u8 = 14;
 /// Version 15 adds `standalone` to `start_session` and `fan_out`: the thread
@@ -237,7 +240,7 @@ pub const MAX_FAN_OUT: usize = 4;
 /// answer was dropped returns the first result instead of acting twice.
 pub const CLIENT_REQUEST_ID: &str = "client_request_id";
 /// The tools a retry key applies to.
-pub const KEYED_TOOL_NAMES: [&str; 3] = [MESSAGE_SESSION, START_SESSION, FAN_OUT];
+pub const KEYED_TOOL_NAMES: [&str; 4] = [MESSAGE_SESSION, START_SESSION, FAN_OUT, CREATE_LOOP];
 /// The longest retry key, and the characters it may hold.
 pub const MAX_CLIENT_REQUEST_ID_CHARS: usize = 128;
 /// The longest SQL `query_data` takes: a question, not a dump.
@@ -342,7 +345,13 @@ pub fn prompt_hint(version: u8) -> &'static str {
         13 => PROMPT_HINT_V13,
         14 => PROMPT_HINT_V14,
         15 => PROMPT_HINT_V15,
-        _ => PROMPT_HINT_V16,
+        16..=18 => PROMPT_HINT_V16,
+        _ => {
+            static HINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            HINT.get_or_init(|| {
+                format!("{PROMPT_HINT_V16} To create a Loop shown in the desktop Loops page, use `create_loop` when the user asks. The user approves the schedule and prompt in the app.")
+            })
+        }
     }
 }
 
@@ -359,6 +368,7 @@ pub fn is_tool(name: &str) -> bool {
         || V11_TOOL_NAMES.contains(&name)
         || V12_TOOL_NAMES.contains(&name)
         || V13_TOOL_NAMES.contains(&name)
+        || name == CREATE_LOOP
 }
 
 /// Whether `name` needs a version 2 client.
@@ -469,9 +479,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             names.extend(V12_TOOL_NAMES);
             names
         }
-        _ => {
+        13..=18 => {
             let mut names = tool_names(12);
             names.extend(V13_TOOL_NAMES);
+            names
+        }
+        _ => {
+            let mut names = tool_names(18);
+            names.push(CREATE_LOOP);
             names
         }
     }
@@ -1151,10 +1166,37 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             }
             Ok(())
         }
-        SCHEDULE_TASK => {
+        SCHEDULE_TASK | CREATE_LOOP => {
             bounded_text(args, "prompt")?;
             optional_name(args, "name")?;
-            optional_name(args, "model_profile")?;
+            if name == CREATE_LOOP {
+                required_name(args, "name")?;
+                optional_request_id(args)?;
+                for field in ["harness", "account", "model", "effort", "thread_id"] {
+                    optional_name(args, field)?;
+                }
+                if args.get("account").is_some_and(Value::is_string) {
+                    required_name(args, "harness")?;
+                }
+                if args.get("thread_id").is_some_and(Value::is_string)
+                    && ["harness", "account", "model", "effort"]
+                        .iter()
+                        .any(|key| args.get(key).is_some_and(Value::is_string))
+                {
+                    return Err(
+                        "an existing thread uses its own harness, account, model and effort"
+                            .to_owned(),
+                    );
+                }
+                if args
+                    .get("read_only")
+                    .is_some_and(|value| !value.is_boolean())
+                {
+                    return Err("read_only must be a boolean".to_owned());
+                }
+            } else {
+                optional_name(args, "model_profile")?;
+            }
             match args.get("project") {
                 None | Some(Value::Null) => {}
                 Some(Value::String(path)) if absolute_on_any_machine(path) => {}
@@ -1742,7 +1784,8 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 15}})), 15);
         assert_eq!(version(json!({"rustcode": {"orchestration": 16}})), 16);
         assert_eq!(version(json!({"rustcode": {"orchestration": 17}})), 17);
-        assert_eq!(version(json!({"rustcode": {"orchestration": 18}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 18}})), 18);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 19}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"orchestration": 99}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
@@ -1780,11 +1823,6 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        // The newest version this engine speaks; v14 added `steer` and v15
-        // `standalone`, v16 `machine`, v17 `return_to` and v18 transfer `account` and
-        // `model` to existing tools, so the
-        // tool list stops changing at v13.
-        assert_eq!(VERSION, 18);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -1895,7 +1933,7 @@ mod tests {
             PROMPT_HINT_V15,
             "a v15 app keeps its exact hint"
         );
-        assert_eq!(prompt_hint(VERSION), PROMPT_HINT_V16);
+        assert!(prompt_hint(VERSION).contains(CREATE_LOOP));
         // v16 teaches `machine` on the project tools and matching by remote.
         for said in ["`clone_project` take", "this one's git remote", "offline"] {
             assert!(PROMPT_HINT_V16.contains(said), "{said} in the v16 hint");
@@ -1974,8 +2012,7 @@ mod tests {
         assert_eq!(prompt_hint(14), PROMPT_HINT_V14);
         assert_eq!(prompt_hint(15), PROMPT_HINT_V15);
         assert_eq!(prompt_hint(16), PROMPT_HINT_V16);
-        // v17 adds an argument the tool's own schema explains; a version this
-        // engine does not speak yet gets the newest hint it has.
+        // Versions 17 and 18 add arguments explained by each tool's schema.
         assert_eq!(prompt_hint(17), PROMPT_HINT_V16);
         assert_eq!(prompt_hint(18), PROMPT_HINT_V16);
         assert_eq!(prompt_hint(0), "");
@@ -2163,6 +2200,15 @@ mod tests {
             "project": "/abs/project",
         });
         assert!(ok(SCHEDULE_TASK, task.clone()));
+        let mut loop_args = task.clone();
+        loop_args["name"] = json!("CI watch");
+        loop_args["harness"] = json!("codex");
+        loop_args["account"] = json!("work");
+        assert!(ok(CREATE_LOOP, loop_args.clone()));
+        loop_args["thread_id"] = json!("existing");
+        assert!(!ok(CREATE_LOOP, loop_args));
+        assert!(!tool_names(18).contains(&CREATE_LOOP));
+        assert!(tool_names(LOOPS_VERSION).contains(&CREATE_LOOP));
         assert!(ok(
             SCHEDULE_TASK,
             json!({"prompt": "Once", "schedule": {"kind": "at", "at": "2026-03-04T09:30:00+01:00"}})

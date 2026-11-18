@@ -21,6 +21,7 @@ import {
   type Repeat,
   type ScheduleForm,
   saveLoop,
+  userTimeZone,
   WEEKDAYS,
   WEEKENDS,
 } from "../state/loops";
@@ -32,7 +33,7 @@ const EFFORTS = ["low", "medium", "high"];
 
 const REPEATS: { value: Repeat; label: string }[] = [
   { value: "hours", label: "Hourly" },
-  { value: "days", label: "Daily" },
+  { value: "days", label: "Weekly" },
   { value: "monthly", label: "Monthly" },
   { value: "once", label: "Once" },
   { value: "cron", label: "Cron" },
@@ -73,9 +74,11 @@ function draftOf(loop: Loop | null, project: string): LoopDraft {
     workspace: loop.workspace,
     prompt: loop.prompt,
     cron: loop.schedule.kind === "cron" ? loop.schedule.expression : "0 9 * * *",
+    timezone: "timezone" in loop.schedule ? loop.schedule.timezone : undefined,
     harness: loop.harness,
+    account: loop.account,
     model: loop.model,
-    effort: loop.effort,
+    effort: loop.effort?.toLowerCase() === "default" ? undefined : loop.effort,
     readOnly: loop.readOnly,
     threadId: loop.threadId,
   };
@@ -130,8 +133,8 @@ function onceInWords(at: Date, now = new Date()): string {
 }
 
 const TARGETS = [
-  { value: "fresh", label: "A new thread each run" },
-  { value: "one", label: "One thread" },
+  { value: "fresh", label: "New thread" },
+  { value: "one", label: "Existing thread" },
 ] as const;
 
 function TimeInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -174,6 +177,7 @@ export function LoopDialog({
   const [draft, setDraft] = useState<LoopDraft>(() => draftOf(loop, projectCwd));
   const [form, setForm] = useState<ScheduleForm>(() => formOf(loop));
   const [target, setTarget] = useState<"fresh" | "one">("fresh");
+  const [customDays, setCustomDays] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fallbackProject = projectCwd || projects[0]?.path || "";
@@ -193,6 +197,7 @@ export function LoopDialog({
     setDraft(draftOf(loop, fallbackProject));
     setForm(formOf(loop));
     setTarget(loop?.threadId ? "one" : "fresh");
+    setCustomDays(false);
     setError(null);
     setSaving(false);
   }, [open, loop, fallbackProject]);
@@ -216,6 +221,11 @@ export function LoopDialog({
     threadOptions.unshift({ value: draft.threadId, label: "The loop's thread" });
   }
   const threadId = target === "one" ? draft.threadId || threadOptions[0]?.value : undefined;
+  const timezone = draft.timezone ?? userTimeZone();
+  const daysChoice =
+    DAY_SHORTCUTS.find(
+      ({ days }) => days.length === form.days.length && days.every((day) => form.days.includes(day)),
+    )?.label ?? "Custom days";
   const projectOptions = projects.map((project) => ({ value: project.path, label: project.name }));
   if (draft.workspace && !projectOptions.some((option) => option.value === draft.workspace)) {
     projectOptions.unshift({ value: draft.workspace, label: draft.workspace });
@@ -230,6 +240,14 @@ export function LoopDialog({
   const runHarness = harnesses?.harnesses.find(
     (harness) => harness.id === (draft.harness || harnesses.default.harness),
   );
+  const accounts = runHarness?.accounts ?? [];
+  const accountOptions = [
+    { value: "", label: "Default account" },
+    ...accounts.map((account) => ({ value: account.id, label: account.name })),
+  ];
+  if (draft.account && !accounts.some((account) => account.id === draft.account)) {
+    accountOptions.push({ value: draft.account, label: `${draft.account} (unavailable)` });
+  }
   const models = runHarness?.models ?? [];
   const modelOptions = [
     { value: "", label: "Default model" },
@@ -238,8 +256,12 @@ export function LoopDialog({
   if (draft.model && !models.some((model) => model.id === draft.model)) {
     modelOptions.push({ value: draft.model, label: draft.model });
   }
-  const chosenModel = models.find((model) => model.id === draft.model);
-  const effortValues = chosenModel?.efforts.length ? chosenModel.efforts : EFFORTS;
+  const defaultModel =
+    harnesses?.default.harness === runHarness?.id ? harnesses?.default.model : runHarness?.last?.model;
+  const chosenModel = models.find((model) => model.id === (draft.model || defaultModel));
+  const effortValues = [...new Set(chosenModel?.efforts.length ? chosenModel.efforts : EFFORTS)].filter(
+    (effort) => effort.toLowerCase() !== "default",
+  );
   const effortOptions = [
     { value: "", label: "Default" },
     ...effortValues.map((effort) => ({ value: effort, label: effort[0]?.toUpperCase() + effort.slice(1) })),
@@ -276,239 +298,279 @@ export function LoopDialog({
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
           <Dialog.Content
             aria-describedby={undefined}
-            className="elevated pointer-events-auto flex max-h-[calc(100%-48px)] w-[min(520px,calc(100vw-48px))] flex-col gap-4 overflow-y-auto p-5"
+            className="elevated pointer-events-auto flex max-h-[calc(100%-48px)] w-[min(580px,calc(100vw-48px))] flex-col overflow-hidden"
           >
-            <Dialog.Title className="font-semibold text-body">{loop ? "Edit loop" : "New loop"}</Dialog.Title>
-            <Field label="Name">
-              <input
-                value={draft.name}
-                onChange={(e) => patch({ name: e.target.value })}
-                placeholder="CI watch"
-                aria-label="Name"
-                {...noTextHelpers}
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Project">
-              <Select
-                label="Project"
-                value={draft.workspace}
-                options={projectOptions.length ? projectOptions : [{ value: "", label: "No projects yet" }]}
-                onChange={(workspace) => patch({ workspace })}
-                className="max-w-full self-start"
-              />
-            </Field>
-            <Field label="Prompt">
-              <textarea
-                value={draft.prompt}
-                onChange={(e) => patch({ prompt: e.target.value })}
-                placeholder="Check CI on main and tell me only if something broke."
-                aria-label="Prompt"
-                rows={4}
-                {...noTextHelpers}
-                className="resize-none rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
-              />
-            </Field>
-            <Field label="Schedule">
-              <Segments
-                label="Repeat"
-                value={form.repeat}
-                options={REPEATS}
-                onChange={(repeat) =>
-                  // Switching to Cron starts from what the other choices made, to edit by hand.
-                  patchForm(repeat === "cron" && form.repeat !== "once" ? { repeat, cron } : { repeat })
-                }
-              />
-              {form.repeat === "hours" && (
-                <div className="flex items-center gap-2 text-callout text-fg-muted">
-                  <span>Every</span>
-                  <Select
-                    label="Hours between runs"
-                    value={String(form.everyHours)}
-                    options={HOUR_STEPS.map((n) => ({
-                      value: String(n),
-                      label: n === 1 ? "hour" : `${n} hours`,
-                    }))}
-                    onChange={(n) => patchForm({ everyHours: Number(n) })}
+            <div className="flex shrink-0 flex-col gap-1 px-5 pt-5 pb-3">
+              <Dialog.Title className="font-semibold text-title3">
+                {loop ? "Edit loop" : "New loop"}
+              </Dialog.Title>
+              <p className="text-caption text-fg-muted">Runs while RustCode is open.</p>
+            </div>
+            <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pb-3">
+              <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] items-end gap-3">
+                <Field label="Name">
+                  <input
+                    value={draft.name}
+                    onChange={(e) => patch({ name: e.target.value })}
+                    placeholder="CI watch"
+                    aria-label="Name"
+                    {...noTextHelpers}
+                    className={inputClass}
                   />
-                </div>
-              )}
-              {form.repeat === "days" && (
-                <>
-                  <div role="group" aria-label="Days" className="flex flex-wrap gap-1">
-                    {DAY_TOGGLES.map(({ day, label }) => {
-                      const on = form.days.includes(day);
-                      return (
-                        <Pill
-                          key={day}
-                          size="sm"
-                          prominent={on}
-                          aria-pressed={on}
-                          className="w-11"
-                          onClick={() =>
-                            setForm((f) => ({
-                              ...f,
-                              days: f.days.includes(day) ? f.days.filter((d) => d !== day) : [...f.days, day],
-                            }))
-                          }
-                        >
-                          {label}
-                        </Pill>
-                      );
-                    })}
+                </Field>
+                <Field label="Project">
+                  <Select
+                    label="Project"
+                    value={draft.workspace}
+                    options={
+                      projectOptions.length ? projectOptions : [{ value: "", label: "No projects yet" }]
+                    }
+                    onChange={(workspace) => patch({ workspace, threadId: undefined })}
+                    className="h-8 max-w-full justify-between rounded-md bg-fill-subtle"
+                  />
+                </Field>
+              </div>
+              <Field label="Prompt">
+                <textarea
+                  value={draft.prompt}
+                  onChange={(e) => patch({ prompt: e.target.value })}
+                  placeholder="Check CI on main and tell me only if something broke."
+                  aria-label="Prompt"
+                  rows={3}
+                  {...noTextHelpers}
+                  className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+                />
+              </Field>
+              <Field label="Schedule">
+                <Segments
+                  label="Repeat"
+                  value={form.repeat}
+                  options={REPEATS}
+                  onChange={(repeat) =>
+                    // Switching to Cron starts from what the other choices made, to edit by hand.
+                    patchForm(repeat === "cron" && form.repeat !== "once" ? { repeat, cron } : { repeat })
+                  }
+                />
+                {form.repeat === "hours" && (
+                  <div className="flex items-center gap-2 text-callout text-fg-muted">
+                    <span>Every</span>
+                    <Select
+                      label="Hours between runs"
+                      value={String(form.everyHours)}
+                      options={HOUR_STEPS.map((n) => ({
+                        value: String(n),
+                        label: n === 1 ? "hour" : `${n} hours`,
+                      }))}
+                      onChange={(n) => patchForm({ everyHours: Number(n) })}
+                    />
                   </div>
+                )}
+                {form.repeat === "days" && (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Select
+                        label="Days to run"
+                        value={customDays ? "Custom days" : daysChoice}
+                        options={[
+                          ...DAY_SHORTCUTS.map(({ label }) => ({ value: label, label })),
+                          {
+                            value: "Custom days",
+                            label: "Custom days",
+                          },
+                        ]}
+                        onChange={(value) => {
+                          const preset = DAY_SHORTCUTS.find(({ label }) => label === value);
+                          setCustomDays(!preset);
+                          if (preset) patchForm({ days: [...preset.days] });
+                        }}
+                      />
+                      <span className="text-callout text-fg-muted">at</span>
+                      <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
+                    </div>
+                    {(customDays || daysChoice === "Custom days") && (
+                      <div role="group" aria-label="Days" className="flex flex-wrap gap-1">
+                        {DAY_TOGGLES.map(({ day, label }) => {
+                          const on = form.days.includes(day);
+                          return (
+                            <Pill
+                              key={day}
+                              size="sm"
+                              prominent={on}
+                              aria-pressed={on}
+                              className="w-11"
+                              onClick={() =>
+                                setForm((f) => ({
+                                  ...f,
+                                  days: f.days.includes(day)
+                                    ? f.days.filter((d) => d !== day)
+                                    : [...f.days, day],
+                                }))
+                              }
+                            >
+                              {label}
+                            </Pill>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                )}
+                {form.repeat === "monthly" && (
+                  <div className="flex items-center gap-2 text-callout text-fg-muted">
+                    <span>On the</span>
+                    <Select
+                      label="Day of the month"
+                      value={String(form.monthDay)}
+                      options={MONTH_DAYS}
+                      onChange={(day) => patchForm({ monthDay: Number(day) })}
+                    />
+                    <span>at</span>
+                    <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
+                  </div>
+                )}
+                {form.repeat === "once" && (
                   <div className="flex flex-wrap items-center gap-2">
-                    {DAY_SHORTCUTS.map((shortcut) => (
+                    <input
+                      type="datetime-local"
+                      value={form.onceAt}
+                      min={localDateTime(new Date())}
+                      onChange={(e) => patchForm({ onceAt: e.target.value })}
+                      aria-label="Date and time"
+                      className={cx(inputClass, "w-auto")}
+                    />
+                    {onceShortcuts().map((shortcut) => (
                       <Pill
                         key={shortcut.label}
                         quiet
                         size="sm"
-                        onClick={() => patchForm({ days: [...shortcut.days] })}
+                        onClick={() => patchForm({ onceAt: shortcut.at })}
                       >
                         {shortcut.label}
                       </Pill>
                     ))}
-                    <span className="ml-auto text-callout text-fg-muted">at</span>
-                    <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
                   </div>
-                </>
-              )}
-              {form.repeat === "monthly" && (
-                <div className="flex items-center gap-2 text-callout text-fg-muted">
-                  <span>On the</span>
-                  <Select
-                    label="Day of the month"
-                    value={String(form.monthDay)}
-                    options={MONTH_DAYS}
-                    onChange={(day) => patchForm({ monthDay: Number(day) })}
-                  />
-                  <span>at</span>
-                  <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
-                </div>
-              )}
-              {form.repeat === "once" && (
-                <div className="flex flex-wrap items-center gap-2">
+                )}
+                {form.repeat === "cron" && (
                   <input
-                    type="datetime-local"
-                    value={form.onceAt}
-                    min={localDateTime(new Date())}
-                    onChange={(e) => patchForm({ onceAt: e.target.value })}
-                    aria-label="Date and time"
-                    className={cx(inputClass, "w-auto")}
+                    value={form.cron}
+                    onChange={(e) => patchForm({ cron: e.target.value })}
+                    placeholder="0 9 * * MON-FRI"
+                    aria-label="Cron expression"
+                    {...noTextHelpers}
+                    className={cx(inputClass, "font-mono")}
                   />
-                  {onceShortcuts().map((shortcut) => (
-                    <Pill
-                      key={shortcut.label}
-                      quiet
-                      size="sm"
-                      onClick={() => patchForm({ onceAt: shortcut.at })}
-                    >
-                      {shortcut.label}
-                    </Pill>
-                  ))}
-                </div>
-              )}
-              {form.repeat === "cron" && (
-                <input
-                  value={form.cron}
-                  onChange={(e) => patchForm({ cron: e.target.value })}
-                  placeholder="0 9 * * MON-FRI"
-                  aria-label="Cron expression"
-                  {...noTextHelpers}
-                  className={cx(inputClass, "font-mono")}
+                )}
+                <p
+                  aria-live="polite"
+                  className={cx("text-caption", cronError ? "text-danger" : "text-fg-muted")}
+                >
+                  {cronError ?? words ?? `Cron ${cron}`}
+                  {!cronError && !once && timezone && ` · ${timezone}`}
+                </p>
+              </Field>
+              <Field label="Each run">
+                <Segments
+                  label="Each run"
+                  value={target}
+                  options={TARGETS.map((t) => ({ value: t.value, label: t.label }))}
+                  onChange={setTarget}
                 />
-              )}
-              <p
-                aria-live="polite"
-                className={cx("text-caption", cronError ? "text-danger" : "text-fg-muted")}
-              >
-                {cronError ?? words ?? `Cron ${cron}`}
-                {!cronError && !once && " · a run missed while the computer slept runs once when it wakes"}
-              </p>
-            </Field>
-            <Field label="Each run">
-              <Segments
-                label="Each run"
-                value={target}
-                options={TARGETS.map((t) => ({ value: t.value, label: t.label }))}
-                onChange={setTarget}
-              />
-              {target === "one" &&
-                (threadOptions.length ? (
-                  <Select
-                    label="Thread"
-                    value={threadId ?? ""}
-                    options={threadOptions}
-                    onChange={(id) => patch({ threadId: id })}
-                    className="max-w-full self-start"
-                  />
-                ) : (
-                  <p className="text-caption text-danger">This project has no threads yet.</p>
-                ))}
-              <p className="text-caption text-fg-muted">
-                {target === "one"
-                  ? "Every run is a new message in this thread; a run while it is busy is skipped."
-                  : "A run that finds nothing to report archives its thread."}
-              </p>
-            </Field>
-            {target === "fresh" && (
-              <Field label="Agent">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Select
-                    label="Harness"
-                    value={draft.harness ?? ""}
-                    options={harnessOptions}
-                    // Another harness lists other models and efforts: start from its defaults.
-                    onChange={(harness) => patch({ harness, model: "", effort: "" })}
-                  />
-                  {models.length ? (
+                {target === "one" &&
+                  (threadOptions.length ? (
                     <Select
-                      label="Model"
-                      value={draft.model ?? ""}
-                      options={modelOptions}
-                      onChange={(model) => patch({ model })}
+                      label="Thread"
+                      value={threadId ?? ""}
+                      options={threadOptions}
+                      onChange={(id) => patch({ threadId: id })}
+                      className="max-w-full self-start"
                     />
                   ) : (
-                    <input
-                      value={draft.model ?? ""}
-                      onChange={(e) => patch({ model: e.target.value })}
-                      placeholder="Model (default)"
-                      aria-label="Model"
-                      {...noTextHelpers}
-                      className={cx(inputClass, "min-w-0 flex-1")}
-                    />
-                  )}
-                </div>
-                <Segments
-                  label="Effort"
-                  value={draft.effort ?? ""}
-                  options={effortOptions}
-                  onChange={(effort) => patch({ effort })}
-                />
+                    <p className="text-caption text-danger">This project has no threads yet.</p>
+                  ))}
+                <p className="text-caption text-fg-muted">
+                  {target === "one"
+                    ? "Sends the prompt to this thread when it’s idle."
+                    : "Archives the thread when there’s nothing to report."}
+                </p>
               </Field>
-            )}
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex flex-col">
-                <span className="text-callout text-fg">Read-only</span>
-                <span className="text-caption text-fg-muted">
-                  Edits, commits, pushes and anything else that asks for approval are declined.
-                </span>
+              {target === "fresh" && (
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
+                  <Field label="Harness">
+                    <Select
+                      label="Harness"
+                      value={draft.harness ?? ""}
+                      options={harnessOptions}
+                      onChange={(harness) => patch({ harness, account: "", model: "", effort: "" })}
+                    />
+                  </Field>
+                  <Field label="Account">
+                    <Select
+                      label="Account"
+                      value={draft.account ?? ""}
+                      options={accountOptions}
+                      disabled={accountOptions.length === 1}
+                      onChange={(account) =>
+                        patch({
+                          account,
+                          harness: account ? runHarness?.id : draft.harness,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="Model">
+                    {models.length ? (
+                      <Select
+                        label="Model"
+                        value={draft.model ?? ""}
+                        options={modelOptions}
+                        onChange={(model) => patch({ model, effort: "" })}
+                      />
+                    ) : (
+                      <input
+                        value={draft.model ?? ""}
+                        onChange={(e) => patch({ model: e.target.value, effort: "" })}
+                        placeholder="Default model"
+                        aria-label="Model"
+                        {...noTextHelpers}
+                        className={cx(inputClass, "h-[26px] min-w-0")}
+                      />
+                    )}
+                  </Field>
+                  <Field label="Effort">
+                    <Select
+                      label="Effort"
+                      value={draft.effort ?? ""}
+                      options={effortOptions}
+                      onChange={(effort) => patch({ effort })}
+                    />
+                  </Field>
+                </div>
+              )}
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col">
+                  <span className="text-callout text-fg">Read-only</span>
+                  <span className="text-caption text-fg-muted">
+                    {draft.readOnly
+                      ? "Decline approvals for edits, commits, pushes, and other actions."
+                      : "Runs with full access, including edits, commits, and pushes."}
+                  </span>
+                </div>
+                <Switch
+                  label="Read-only"
+                  checked={draft.readOnly}
+                  onChange={(readOnly) => patch({ readOnly })}
+                />
               </div>
-              <Switch
-                label="Read-only"
-                checked={draft.readOnly}
-                onChange={(readOnly) => patch({ readOnly })}
-              />
+              {error && (
+                <p role="alert" className="text-callout text-danger">
+                  {error}
+                </p>
+              )}
             </div>
-            {error && (
-              <p role="alert" className="text-callout text-danger">
-                {error}
-              </p>
-            )}
-            <div className="flex justify-end gap-2">
+            <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3">
               <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
               <Pill prominent disabled={!ready || saving} onClick={() => void save()}>
-                {loop ? "Save" : "Create loop"}
+                {saving ? "Saving…" : loop ? "Save changes" : "Create loop"}
               </Pill>
             </div>
           </Dialog.Content>

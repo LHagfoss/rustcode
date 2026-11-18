@@ -859,6 +859,7 @@ fn loop_action() -> JobAction {
         prompt: "Check CI on main".into(),
         workspace: "/recorded/project".into(),
         harness: Some("codex".into()),
+        account: None,
         model: None,
         effort: Some("medium".into()),
         read_only: true,
@@ -877,6 +878,7 @@ fn a_loop_action_is_read_only_unless_it_says_otherwise() {
         JobAction::Loop {
             read_only: true,
             harness: None,
+            account: None,
             ..
         }
     ));

@@ -58,6 +58,7 @@ import {
   searchSessions,
 } from "./hostReads";
 import {
+  createLoop,
   deleteScheduledTask,
   listPullRequests,
   listScheduledTasks,
@@ -574,7 +575,7 @@ export function verb(q: GrantAsk): string {
     case "project":
       return `change the project “${q.target}”`;
     case "schedule":
-      return `schedule “${q.target}”`;
+      return q.onceOnly ? `create the loop “${q.target}”` : `schedule “${q.target}”`;
   }
 }
 
@@ -636,11 +637,11 @@ export async function permitted(
     accountKeys,
     useApp.getState().trustDelegateAccounts,
   );
-  if (!needsAccountApproval && hasGrant(book(), caller.id, key)) return null;
+  if (!question.onceOnly && !needsAccountApproval && hasGrant(book(), caller.id, key)) return null;
   // The thread's access level answers for the user where it already allows the work: the same
   // policy that answers the harness's own approvals, so a Full-access thread is not re-asked here.
   const mode = permissionModeOf(useApp.getState(), caller.id);
-  if (!needsAccountApproval && delegationAllowed(mode, question.kind)) {
+  if (!question.onceOnly && !needsAccountApproval && delegationAllowed(mode, question.kind)) {
     // Not silent: the call's own row says the thread did it on its own, and why. A notice would
     // both name the caller (the reader is already in that thread) and split the run of calls.
     const why = modeLabel(mode);
@@ -669,7 +670,7 @@ export async function permitted(
   // allows anything, nor is an "always" kept for a call nobody is waiting on.
   if (call?.dropped) return droppedFailure();
   if (choice === "deny") return failure("denied", `the user did not allow this thread to ${verb(question)}`);
-  if (choice === "always") {
+  if (choice === "always" && !question.onceOnly) {
     setBook((b) => [key, ...accountKeys].reduce((next, allowed) => grant(next, caller.id, allowed), b));
     // User authority must reach durable storage before the approved work starts.
     await flushSave();
@@ -1682,7 +1683,12 @@ function withContextNote(callerId: string, answered: JsonObject): JsonObject {
 }
 
 /** The tools a retry key applies to: the ones that can start or deliver twice. */
-const KEYED_TOOLS: ReadonlySet<string> = new Set(["message_session", "start_session", "fan_out"]);
+const KEYED_TOOLS: ReadonlySet<string> = new Set([
+  "message_session",
+  "start_session",
+  "fan_out",
+  "create_loop",
+]);
 
 /** The retry key a request carries, when it is one the app keeps a receipt for. */
 function retryKey(params: JsonObject, call: { tool: string }): { id: string; argsHash: string } | null {
@@ -1931,6 +1937,8 @@ async function perform(
       return updateProject(caller, call);
     case "remove_project":
       return removeProject(caller, call);
+    case "create_loop":
+      return createLoop(caller, call);
     case "schedule_task":
       return scheduleTask(caller, call);
     case "list_scheduled_tasks":

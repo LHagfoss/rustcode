@@ -162,6 +162,7 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
         | UPDATE_PROJECT
         | REMOVE_PROJECT
         | SCHEDULE_TASK
+        | CREATE_LOOP
         | DELETE_SCHEDULED_TASK
         | RUN_SCHEDULED_TASK_NOW => Scope::Manage,
         _ => return None,
@@ -204,6 +205,7 @@ pub fn implemented(tool: &str) -> bool {
             | CONFIGURE_SESSION
             | MERGE_WHEN_GREEN
             | CLEANUP_WORKTREE
+            | CREATE_LOOP
             | crate::manage::MANAGE_SETTINGS
             | crate::manage::MANAGE_CAPABILITIES
     )
@@ -667,6 +669,34 @@ pub fn summarize(tool: &str, args: &Value) -> String {
         if let Some(value) = text(key, limit) {
             parts.push(format!("{label} {value}"));
         }
+    }
+    if tool == super::CREATE_LOOP {
+        for (key, label) in [
+            ("name", "named"),
+            ("account", "using account"),
+            ("thread_id", "in thread"),
+        ] {
+            if let Some(value) = text(key, 80) {
+                parts.push(format!("{label} {value}"));
+            }
+        }
+        let schedule = &args["schedule"];
+        if let Some(at) = schedule["at"].as_str() {
+            parts.push(format!("once at {at}"));
+        } else if let Some(expression) = schedule["expression"].as_str() {
+            let timezone = schedule["timezone"].as_str().unwrap_or("local time");
+            let expression: String = expression.chars().take(100).collect();
+            let timezone: String = timezone.chars().take(60).collect();
+            parts.push(format!("cron {expression} ({timezone})"));
+        }
+        parts.push(
+            if args["read_only"] == false {
+                "full access"
+            } else {
+                "read-only"
+            }
+            .to_owned(),
+        );
     }
     for key in ["prompt", "message"] {
         if let Some(value) = text(key, 160) {
@@ -1172,7 +1202,7 @@ pub fn instructions(grant: &Grant) -> String {
         ""
     };
     format!(
-        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_session` sends an existing thread a message, `interrupt_session` stops a running turn, and `wait_session` returns an answer. With Manage access `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` act on a thread you name with `session_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Work you start runs at Auto-edit: it can edit files but a command that needs approval is declined. Tools outside your access are not listed.",
+        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_sessions` finds threads and `read_session` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_session` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_session` sends an existing thread a message, `interrupt_session` stops a running turn, and `wait_session` returns an answer. With Manage access `create_loop` adds a scheduled Loop in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_session` and `configure_session` act on a thread you name with `session_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Threads started by `start_session` and `fan_out` run at Auto-edit: they can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
         grant.name,
         grant.scope.label(),
         grant.scope.meaning(),
@@ -1196,6 +1226,17 @@ pub fn tools_for(scope: Scope) -> Vec<Value> {
         };
         if needed > scope || !implemented(&name) || name == WHOAMI {
             continue;
+        }
+        if name == super::CREATE_LOOP {
+            let schema = &mut entry["inputSchema"];
+            if let Some(properties) = schema["properties"].as_object_mut() {
+                properties.remove(super::CLIENT_REQUEST_ID);
+                properties["project"]["description"] =
+                    json!("Absolute project folder on this computer");
+            }
+            if let Some(required) = schema["required"].as_array_mut() {
+                required.push(json!("project"));
+            }
         }
         if needed > Scope::ReadOnly {
             let note = format!(
@@ -1385,6 +1426,30 @@ mod tests {
             assert!(required_scope(name).is_some(), "{name}");
         }
         assert_eq!(required_scope("not_a_tool"), None);
+    }
+
+    #[test]
+    fn outside_agents_need_manage_access_and_a_project_for_create_loop() {
+        let name = super::super::CREATE_LOOP;
+        assert_eq!(required_scope(name), Some(Scope::Manage));
+        assert!(
+            !tools_for(Scope::Delegate)
+                .iter()
+                .any(|tool| tool["name"] == name)
+        );
+        let tools = tools_for(Scope::Manage);
+        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        assert!(
+            tool["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("project"))
+        );
+        assert!(
+            tool["inputSchema"]["properties"]
+                .get("client_request_id")
+                .is_none()
+        );
     }
 
     #[test]

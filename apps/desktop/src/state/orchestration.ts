@@ -28,8 +28,9 @@ import { type ChildActivity, formatDuration, type QueuedPrompt, withWakeMark } f
  * `configure_session`, `update_session`, `worktree_status`, `list_worktrees`,
  * `list_pull_requests`, `read_project`, `clone_project`).
  * Version 18 gives `transfer_session` an `account` and a `model`.
+ * Version 19 adds `create_loop`.
  */
-export const CAPABILITY_VERSION = 18;
+export const CAPABILITY_VERSION = 19;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -668,6 +669,19 @@ export type Call =
       name?: string;
       modelProfile?: string;
     }
+  | {
+      tool: "create_loop";
+      name: string;
+      prompt: string;
+      schedule: TaskSchedule;
+      project?: string;
+      harness?: string;
+      account?: string;
+      model?: string;
+      effort?: string;
+      threadId?: string;
+      readOnly: boolean;
+    }
   | { tool: "list_scheduled_tasks" }
   | { tool: "delete_scheduled_task"; id: string }
   | { tool: "run_scheduled_task_now"; id: string };
@@ -1176,6 +1190,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       }
       return { tool: "update_project", path, ...change };
     }
+    case "create_loop":
     case "schedule_task": {
       const prompt = s(args.prompt) ?? "";
       if (!prompt.trim()) return failure("invalid", "prompt is required");
@@ -1186,6 +1201,35 @@ export function parseCall(params: JsonObject): Call | Failure {
           : {};
       const schedule = parseSchedule(raw);
       if (typeof schedule === "string") return failure("invalid", schedule);
+      if (tool === "create_loop") {
+        const name = s(args.name)?.trim();
+        if (!name) return failure("invalid", "name is required");
+        const harness = s(args.harness)?.trim() || undefined;
+        const account = s(args.account)?.trim() || undefined;
+        const model = s(args.model)?.trim() || undefined;
+        const effort = s(args.effort)?.trim() || undefined;
+        const threadId = s(args.thread_id)?.trim() || undefined;
+        if (account && !harness) return failure("invalid", "account requires a harness");
+        if (threadId && (harness || account || model || effort)) {
+          return failure("invalid", "an existing thread uses its own harness, account, model and effort");
+        }
+        if (args.read_only !== undefined && typeof args.read_only !== "boolean") {
+          return failure("invalid", "read_only must be a boolean");
+        }
+        return {
+          tool,
+          name,
+          prompt,
+          schedule,
+          project: s(args.project)?.trim() || undefined,
+          harness,
+          account,
+          model,
+          effort,
+          threadId,
+          readOnly: args.read_only !== false,
+        };
+      }
       return {
         tool: "schedule_task",
         prompt,
@@ -3087,6 +3131,8 @@ export interface GrantAsk {
     | "schedule";
   caller: string;
   callerTitle: string;
+  /** A request that needs individual approval, even in a Full access thread. */
+  onceOnly?: boolean;
   /** The thread messaged or read, or the new thread's title. */
   target: string;
   detail: string;

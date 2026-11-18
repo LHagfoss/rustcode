@@ -55,6 +55,8 @@ pub(crate) struct LoopsSaveRequest {
     #[serde(default)]
     pub harness: Option<String>,
     #[serde(default)]
+    pub account: Option<String>,
+    #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
@@ -138,6 +140,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         prompt,
         workspace,
         harness,
+        account,
         model,
         effort,
         read_only,
@@ -154,6 +157,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         "workspace": workspace,
         "prompt": prompt,
         "harness": harness,
+        "account": account,
         "model": model,
         "effort": effort,
         "readOnly": read_only,
@@ -230,6 +234,7 @@ pub(crate) fn job_from(request: LoopsSaveRequest, id: &str) -> Result<JobRecord,
         prompt,
         workspace: request.workspace.clone(),
         harness: trimmed(request.harness),
+        account: trimmed(request.account),
         model: trimmed(request.model),
         effort: trimmed(request.effort),
         read_only: request.read_only,
@@ -327,6 +332,7 @@ mod tests {
             prompt: " Check CI on main ".into(),
             schedule: json!({"kind": "cron", "expression": "0 */4 * * *", "timezone": "Europe/Oslo"}),
             harness: Some("codex".into()),
+            account: Some(" work ".into()),
             model: Some("  ".into()),
             effort: None,
             read_only: true,
@@ -367,6 +373,7 @@ mod tests {
         }
         let shown = loop_json(&job, &[]).unwrap();
         assert_eq!(shown["readOnly"], true);
+        assert_eq!(shown["account"], "work");
         assert_eq!(shown["prompt"], "Check CI on main");
         assert_eq!(shown["threadId"], Value::Null);
     }

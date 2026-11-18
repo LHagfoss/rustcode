@@ -227,7 +227,7 @@ export function GrantDialog() {
           <Dialog.Title className="font-semibold text-body">
             “{grant.callerTitle}” wants to {verb(grant)}
           </Dialog.Title>
-          <GrantWhy grant={grant} />
+          {!grant.onceOnly && <GrantWhy grant={grant} />}
           <div className="flex flex-col gap-1.5 text-callout text-fg-muted">
             {starts && <StartPlan grant={grant} />}
             {grant.kind === "message" && (
@@ -244,25 +244,31 @@ export function GrantDialog() {
               </span>
             )}
           </div>
-          <button
-            type="button"
-            className="text-left text-callout text-accent"
-            onClick={() => {
-              resolveGrant("deny");
-              openSettings("orchestration");
-            }}
-          >
-            Named account approval settings…
-          </button>
+          {!grant.onceOnly && (
+            <button
+              type="button"
+              className="text-left text-callout text-accent"
+              onClick={() => {
+                resolveGrant("deny");
+                openSettings("orchestration");
+              }}
+            >
+              Named account approval settings…
+            </button>
+          )}
           <pre className="selectable m-0 max-h-[180px] overflow-auto rounded-lg bg-fill-subtle p-3 font-sans text-callout whitespace-pre-wrap">
             {grant.detail}
           </pre>
           <div className="flex flex-wrap justify-end gap-2">
             <Pill onClick={() => resolveGrant("deny")}>{starts ? "Don’t Start" : "Don’t Allow"}</Pill>
-            <Pill onClick={() => resolveGrant("once")}>{starts ? "Start" : "Allow Once"}</Pill>
-            <Pill prominent autoFocus onClick={() => resolveGrant("always")}>
-              {starts ? "Start, and Allow for This Thread" : "Allow for This Thread"}
+            <Pill prominent={grant.onceOnly} onClick={() => resolveGrant("once")}>
+              {grant.onceOnly ? "Create loop" : starts ? "Start" : "Allow Once"}
             </Pill>
+            {!grant.onceOnly && (
+              <Pill prominent autoFocus onClick={() => resolveGrant("always")}>
+                {starts ? "Start, and Allow for This Thread" : "Allow for This Thread"}
+              </Pill>
+            )}
           </div>
         </Dialog.Content>
       </Dialog.Portal>

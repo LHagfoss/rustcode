@@ -10,7 +10,7 @@ pub(crate) mod data;
 mod edit_diff;
 mod harnesses;
 mod hosted;
-mod loops;
+pub(crate) mod loops;
 mod machine_sync;
 mod mcp_app;
 mod mirror;

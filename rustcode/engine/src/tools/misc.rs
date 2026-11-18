@@ -942,6 +942,33 @@ pub const REMOVE_PROJECT: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+pub const CREATE_LOOP: Tool = Tool {
+    name: crate::orchestration::CREATE_LOOP,
+    description: "Create a Loop in RustCode's Loops page when the user asks for recurring or one-time work. Runs while RustCode is open. Defaults to read-only and a fresh thread each run. Use list_harnesses for harness, account and model IDs, or pass thread_id to reuse an existing thread's agent. In a RustCode thread, the desktop asks the user to approve the loop.",
+    arguments: r#"{"name":"Morning check","prompt":"Check the build","schedule":{"kind":"cron","expression":"0 9 * * 1-5"}}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        let mut schema = (SCHEDULE_TASK.schema)();
+        let properties = schema["properties"].as_object_mut().unwrap();
+        properties.remove("model_profile");
+        properties.extend(serde_json::Map::from_iter([
+            ("harness".into(), serde_json::json!({"type":"string","description":"Harness ID from list_harnesses; omitted uses the default harness"})),
+            ("account".into(), serde_json::json!({"type":"string","description":"Named account ID from list_harnesses; requires harness"})),
+            ("model".into(), serde_json::json!({"type":"string","description":"Model ID from list_harnesses"})),
+            ("effort".into(), serde_json::json!({"type":"string","description":"Reasoning effort supported by the model"})),
+            ("thread_id".into(), serde_json::json!({"type":"string","description":"Existing thread in the project; omit harness, account, model and effort when supplied"})),
+            ("read_only".into(), serde_json::json!({"type":"boolean","default":true,"description":"Decline approvals during unattended runs"})),
+            ("client_request_id".into(), serde_json::json!({"type":"string","description":"Reuse the same ID when retrying this exact request"})),
+        ]));
+        properties["name"]["description"] = serde_json::json!("Name shown in Loops");
+        schema["required"] = serde_json::json!(["name", "prompt", "schedule"]);
+        schema
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 pub const SCHEDULE_TASK: Tool = Tool {
     name: crate::orchestration::SCHEDULE_TASK,
     description: "Schedule work that runs with no thread open: a prompt the scheduler daemon runs on a cron expression or once at an ISO 8601 time. `schedule` is {kind: cron, expression, timezone?} or {kind: at, at}; the timezone defaults to the user's. The daemon must be running (`rustcode daemon start`); report the next run it answers. The user approves it.",

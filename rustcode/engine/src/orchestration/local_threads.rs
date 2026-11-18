@@ -1304,7 +1304,7 @@ fn project_for(
     Ok(asked)
 }
 
-fn harness_for(asked: Option<&str>) -> Result<crate::harness::ResolvedHarness, Value> {
+pub(super) fn harness_for(asked: Option<&str>) -> Result<crate::harness::ResolvedHarness, Value> {
     let dir = crate::harness::config::config_dir()
         .map_err(|error| unavailable(format!("harness configuration is unavailable: {error}")))?;
     let (defaults, entries) = crate::harness::config::load_in(&dir);
@@ -1431,7 +1431,7 @@ fn authorize_account(
     )))
 }
 
-fn account_for(
+pub(super) fn account_for(
     harness: &crate::harness::ResolvedHarness,
     asked: Option<&str>,
 ) -> Result<Option<String>, Value> {
@@ -1477,6 +1477,7 @@ pub(crate) struct LoopThread {
     pub prompt: String,
     pub workspace: String,
     pub harness: Option<String>,
+    pub account: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub read_only: bool,
@@ -1564,14 +1565,6 @@ pub(crate) async fn run_loop_thread(
     if !std::path::Path::new(&run.workspace).is_dir() {
         return failed(format!("{} is not a folder", run.workspace));
     }
-    let harness = match harness_for(run.harness.as_deref()) {
-        Ok(harness) => harness,
-        Err(value) => return failed(refusal(value)),
-    };
-    let model = match model_for(&harness, run.model.as_deref()) {
-        Ok(model) => model,
-        Err(value) => return failed(refusal(value)),
-    };
     let Some(endpoint) = loop_endpoint() else {
         return LoopRunEnd::Skipped("RustCode was not open, so the run was skipped".to_owned());
     };
@@ -1593,8 +1586,23 @@ pub(crate) async fn run_loop_thread(
             }
         }
         None => {
+            let harness = match harness_for(run.harness.as_deref()) {
+                Ok(harness) => harness,
+                Err(value) => return failed(refusal(value)),
+            };
+            let model = match model_for(&harness, run.model.as_deref()) {
+                Ok(model) => model,
+                Err(value) => return failed(refusal(value)),
+            };
+            let account = match account_for(&harness, run.account.as_deref()) {
+                Ok(account) => account,
+                Err(value) => return failed(refusal(value)),
+            };
             let mut meta = Map::new();
             meta.insert("harness".to_owned(), json!(harness.id));
+            if let Some(account) = account {
+                meta.insert("account".to_owned(), json!(account));
+            }
             meta.insert("title".to_owned(), json!(run.name));
             if let Some(model) = model.as_ref() {
                 meta.insert("model".to_owned(), json!(model));

@@ -1565,6 +1565,7 @@ pub const TOOLS: &[Tool] = &[
     misc::UPDATE_PROJECT,
     misc::REMOVE_PROJECT,
     misc::SCHEDULE_TASK,
+    misc::CREATE_LOOP,
     misc::LIST_SCHEDULED_TASKS,
     misc::DELETE_SCHEDULED_TASK,
     misc::RUN_SCHEDULED_TASK_NOW,

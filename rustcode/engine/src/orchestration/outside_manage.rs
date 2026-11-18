@@ -1,6 +1,6 @@
 //! The tools that change other threads, for an outside agent
 //! (`docs/mcp-outside-agents.md`): `interrupt_session`, `update_session`,
-//! `configure_session`, `merge_when_green` and `cleanup_worktree`.
+//! `configure_session`, `merge_when_green`, `cleanup_worktree` and `create_loop`.
 //!
 //! The app hosts these for a thread because it holds the thread's worktree,
 //! pull request and card. An outside agent has no thread and no app behind
@@ -77,8 +77,76 @@ pub(crate) async fn answer(
         super::CONFIGURE_SESSION => configure_session(caller, args),
         super::MERGE_WHEN_GREEN => merge_when_green(caller, cancel, args).await,
         super::CLEANUP_WORKTREE => cleanup_worktree(caller, args).await,
+        super::CREATE_LOOP => create_loop(caller, args).await,
         _ => return None,
     })
+}
+
+/// Save a Loop on this computer using the same scheduler as the desktop.
+async fn create_loop(caller: &str, args: &Value) -> Value {
+    if let Err(refusal) = super::local::local_machine(args) {
+        return refusal;
+    }
+    let field = |key: &str| args[key].as_str().map(|value| value.trim().to_owned());
+    let Some(workspace) = field("project") else {
+        return error(
+            "invalid",
+            "an outside agent must give the absolute project path",
+        );
+    };
+    let thread_id = field("thread_id");
+    if let Some(id) = thread_id.as_deref() {
+        let Some(meta) = crate::config::session_meta_by_id(id) else {
+            return error("not_found", "no local thread has that id");
+        };
+        if !may_reach(caller, id, &meta) {
+            return error("not_allowed", reach_refused());
+        }
+        if super::local::project_of(id, &meta) != workspace {
+            return error(
+                "invalid",
+                "thread_id must name a thread in the loop's project",
+            );
+        }
+    }
+    let mut harness = field("harness");
+    let mut account = field("account");
+    if harness.is_some() {
+        let resolved = match super::local_threads::harness_for(harness.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(refusal) => return refusal,
+        };
+        account = match super::local_threads::account_for(&resolved, account.as_deref()) {
+            Ok(account) => account,
+            Err(refusal) => return refusal,
+        };
+        harness = Some(resolved.id);
+    }
+    let request = crate::acp::loops::LoopsSaveRequest {
+        id: None,
+        name: field("name").unwrap_or_default(),
+        workspace,
+        prompt: field("prompt").unwrap_or_default(),
+        schedule: args["schedule"].clone(),
+        harness,
+        account,
+        model: field("model"),
+        effort: field("effort"),
+        read_only: args["read_only"].as_bool().unwrap_or(true),
+        thread_id,
+    };
+    match crate::acp::loops::save(request).await {
+        Ok(value) => {
+            let saved = &value["loop"];
+            json!({
+                "id": saved["id"],
+                "name": saved["name"],
+                "schedule": saved["schedule"],
+                "next_due_at": saved["nextDueAt"],
+            })
+        }
+        Err(reason) => error("target_unavailable", reason),
+    }
 }
 
 /// The status words `update_session` speaks, from what the engine stores.
