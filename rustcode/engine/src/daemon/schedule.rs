@@ -5,13 +5,54 @@ use chrono_tz::Tz;
 use cron::Schedule;
 use std::str::FromStr;
 
+const WEEKDAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/// A standard cron's weekday field (0 or 7 = Sunday, 1 = Monday) in names, which the `cron`
+/// crate reads the same way: it numbers weekdays from Sunday = 1, so a plain `1-5` would run
+/// Sunday to Thursday. Parts it cannot read as numbers (names, `*`, `*/2`) stay as written.
+fn standard_weekdays(field: &str) -> String {
+    let mut names: Vec<String> = Vec::new();
+    for part in field.split(',') {
+        let (range, step) = match part.split_once('/') {
+            Some((range, step)) => (range, step.parse::<usize>().ok().filter(|step| *step > 0)),
+            None => (part, Some(1)),
+        };
+        let bounds = match range.split_once('-') {
+            Some((from, to)) => from.parse::<usize>().ok().zip(to.parse::<usize>().ok()),
+            None if !part.contains('/') => range.parse::<usize>().ok().map(|day| (day, day)),
+            None => None,
+        };
+        match (bounds, step) {
+            (Some((from, to)), Some(step)) if from <= to && to <= 7 => {
+                for day in (from..=to).step_by(step) {
+                    let name = WEEKDAYS[day % 7].to_string();
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+            }
+            _ => names.push(part.to_string()),
+        }
+    }
+    names.join(",")
+}
+
+/// A five-field cron with its weekday field read the standard way (see `standard_weekdays`).
+fn standard_cron(expression: &str) -> String {
+    let mut fields: Vec<String> = expression.split_whitespace().map(str::to_string).collect();
+    if let Some(weekday) = fields.get_mut(4) {
+        *weekday = standard_weekdays(weekday);
+    }
+    fields.join(" ")
+}
+
 fn cron_parts(spec: &ScheduleSpec) -> Result<(Schedule, Tz)> {
     let (expression, timezone) = match spec {
         ScheduleSpec::Cron {
             expression,
             timezone,
             ..
-        } => (expression.clone(), timezone.as_str()),
+        } => (standard_cron(expression), timezone.as_str()),
         ScheduleSpec::Daily {
             hour,
             minute,
@@ -168,6 +209,25 @@ mod tests {
             schedule.next_after(first).unwrap(),
             utc(2026, 10, 26, 1, 30)
         );
+    }
+
+    #[test]
+    fn weekday_numbers_are_read_as_standard_cron() {
+        // 2026-11-15 is a Sunday.
+        let next = |expression: &str| {
+            ScheduleSpec::cron(expression, "UTC", MisfirePolicy::SkipMissed)
+                .unwrap()
+                .next_after(utc(2026, 11, 15, 0, 0))
+                .unwrap()
+        };
+        assert_eq!(next("0 9 * * 1"), utc(2026, 11, 16, 9, 0));
+        assert_eq!(next("0 9 * * 1-5"), utc(2026, 11, 16, 9, 0));
+        assert_eq!(next("0 9 * * 0"), utc(2026, 11, 15, 9, 0));
+        assert_eq!(next("0 9 * * 7"), utc(2026, 11, 15, 9, 0));
+        assert_eq!(next("0 9 * * 6"), utc(2026, 11, 21, 9, 0));
+        assert_eq!(next("0 9 * * MON-FRI"), utc(2026, 11, 16, 9, 0));
+        assert_eq!(super::standard_weekdays("1-5/2,0"), "MON,WED,FRI,SUN");
+        assert_eq!(super::standard_weekdays("*"), "*");
     }
 
     #[test]

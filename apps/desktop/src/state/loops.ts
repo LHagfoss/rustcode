@@ -162,6 +162,18 @@ function ordinal(n: number): string {
 
 const isNumber = (field: string) => /^\d+$/.test(field);
 
+/** "Weekdays", "Every Monday", "Mon, Wed and Fri": the days a schedule runs on, Monday first. */
+export function daysInWords(days: readonly number[]): string {
+  const set = new Set(days);
+  if (set.size === 7) return "Every day";
+  if (set.size === 5 && [1, 2, 3, 4, 5].every((d) => set.has(d))) return "Weekdays";
+  if (set.size === 2 && set.has(0) && set.has(6)) return "Weekends";
+  const ordered = [1, 2, 3, 4, 5, 6, 0].filter((d) => set.has(d));
+  if (ordered.length === 1) return `Every ${DAYS[ordered[0] ?? 0]}`;
+  const short = ordered.map((d) => (DAYS[d] ?? "").slice(0, 3));
+  return `${short.slice(0, -1).join(", ")} and ${short.at(-1)}`;
+}
+
 /** A five-field cron in words, or null when it is not one of the shapes people write by hand. */
 export function cronInWords(expression: string): string | null {
   const fields = expression.trim().split(/\s+/);
@@ -188,13 +200,8 @@ export function cronInWords(expression: string): string | null {
   const at = clock(Number(hour), Number(minute));
   if (day === "*" && weekday === "*") return `Every day at ${at}`;
   if (day === "*") {
-    if (weekday === "1-5") return `Weekdays at ${at}`;
-    if (weekday === "0,6" || weekday === "6,0") return `Weekends at ${at}`;
-    if (isNumber(weekday)) {
-      const name = DAYS[Number(weekday) % 7];
-      return name ? `Every ${name} at ${at}` : null;
-    }
-    return null;
+    const days = weekdaysOf(weekday);
+    return days ? `${daysInWords(days)} at ${at}` : null;
   }
   if (weekday === "*" && isNumber(day)) return `Monthly on the ${ordinal(Number(day))} at ${at}`;
   return null;
@@ -218,51 +225,168 @@ export function scheduleInWords(schedule: LoopSchedule): string {
   }
 }
 
-/** The New loop dialog's schedules; "custom" opens the cron field. */
-export const SCHEDULE_PRESETS = [
-  { id: "hourly", label: "Every hour", cron: "0 * * * *" },
-  { id: "4h", label: "Every 4 hours", cron: "0 */4 * * *" },
-  { id: "morning", label: "Every morning", cron: "0 9 * * *" },
-  { id: "weekdays", label: "Weekdays", cron: "0 9 * * 1-5" },
-  { id: "weekly", label: "Mondays", cron: "0 9 * * 1" },
-  { id: "custom", label: "Custom", cron: "" },
-  { id: "once", label: "Once", cron: "" },
-] as const;
+// ---------------------------------------------------------------- the schedule form
 
-export type SchedulePreset = (typeof SCHEDULE_PRESETS)[number]["id"];
-/** What a new loop runs on unless the user picks another: every 4 hours. */
-export const DEFAULT_PRESET: SchedulePreset = "4h";
+/** How the loop dialog builds a schedule; every kind but "once" is saved as a cron. */
+export type Repeat = "hours" | "days" | "monthly" | "once" | "cron";
 
-/**
- * A one-shot time the user typed: "in 2h", "in 30 min", "in 1 day", "at 09:00" or "9:30" (the next
- * time the clock reads that, today or tomorrow). Null when it is none of those.
- */
-export function parseOnce(text: string, now = Date.now()): Date | null {
-  const input = text.trim().toLowerCase();
-  const after = /^in\s+(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hrs?|hours?|d|days?)$/.exec(input);
-  if (after) {
-    const n = Number(after[1]);
-    const unit = after[2] ?? "";
-    const step = unit.startsWith("m") ? MINUTE : unit.startsWith("h") ? HOUR : DAY;
-    return n > 0 ? new Date(now + Math.round(n * step)) : null;
-  }
-  const at = /^(?:at\s+)?(\d{1,2})(?::(\d{2}))?$/.exec(input);
-  if (at && (input.startsWith("at") || at[2] !== undefined)) {
-    const hour = Number(at[1]);
-    const minute = Number(at[2] ?? 0);
-    if (hour > 23 || minute > 59) return null;
-    const next = new Date(now);
-    next.setHours(hour, minute, 0, 0);
-    if (next.getTime() <= now) next.setDate(next.getDate() + 1);
-    return next;
-  }
-  return null;
+export interface ScheduleForm {
+  repeat: Repeat;
+  /** "hours": the hours between runs. */
+  everyHours: number;
+  /** "days" and "monthly": the clock time, "HH:MM"; "hours" keeps its minute. */
+  time: string;
+  /** "days": the weekdays it runs on, 0 = Sunday. */
+  days: number[];
+  /** "monthly": the day of the month. */
+  monthDay: number;
+  /** "once": a local date and time, as an `<input type="datetime-local">` holds it. */
+  onceAt: string;
+  /** "cron": the expression as written. */
+  cron: string;
 }
 
-/** The preset a cron is, so editing a loop opens on its own choice; anything else is custom. */
-export function presetOf(expression: string): SchedulePreset {
+export const HOUR_STEPS = [1, 2, 3, 4, 6, 8, 12] as const;
+export const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
+export const WEEKDAYS = [1, 2, 3, 4, 5];
+export const WEEKENDS = [0, 6];
+/** Weekday names a cron reads the same in every implementation, unlike numbers. */
+const CRON_DAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/** "YYYY-MM-DDTHH:MM" in local time, what a datetime-local input holds. */
+export function localDateTime(at: Date): string {
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${clock(at.getHours(), at.getMinutes())}`;
+}
+
+/** The form a new loop opens on: every 4 hours. */
+export function defaultForm(now = Date.now()): ScheduleForm {
+  const soon = new Date(now + HOUR);
+  soon.setMinutes(0, 0, 0);
+  return {
+    repeat: "hours",
+    everyHours: 4,
+    time: "09:00",
+    days: [...EVERY_DAY],
+    monthDay: 1,
+    onceAt: localDateTime(soon),
+    cron: "0 */4 * * *",
+  };
+}
+
+const sameDays = (a: readonly number[], b: readonly number[]) =>
+  a.length === b.length && a.every((day) => b.includes(day));
+
+function clockParts(time: string): [number, number] | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour <= 23 && minute <= 59 ? [hour, minute] : null;
+}
+
+/**
+ * A cron weekday field as days, 0 = Sunday: numbers the standard way (0 and 7 Sunday), names,
+ * ranges and lists. Null for what it cannot read, such as a step.
+ */
+export function weekdaysOf(field: string): number[] | null {
+  if (field === "*") return [...EVERY_DAY];
+  const day = (token: string): number | null => {
+    if (/^\d$/.test(token)) return Number(token) <= 7 ? Number(token) % 7 : null;
+    const at = CRON_DAYS.indexOf(token.slice(0, 3).toUpperCase());
+    return at >= 0 && /^[a-z]+$/i.test(token) ? at : null;
+  };
+  const days = new Set<number>();
+  for (const part of field.split(",")) {
+    const [from, to, extra] = part.split("-");
+    if (extra !== undefined || from === undefined) return null;
+    const a = day(from);
+    const b = to === undefined ? a : to === "7" || to === "0" ? 7 : day(to);
+    if (a === null || b === null || a > b) return null;
+    for (let d = a; d <= b; d++) days.add(d % 7);
+  }
+  return [...days].sort((x, y) => x - y);
+}
+
+/** The days as a cron weekday field: `*`, `MON-FRI`, or a list of names. */
+function weekdayField(days: readonly number[]): string {
+  if (days.length === 0 || sameDays(days, EVERY_DAY)) return "*";
+  if (sameDays(days, WEEKDAYS)) return "MON-FRI";
+  return [...days]
+    .sort((a, b) => a - b)
+    .map((day) => CRON_DAYS[day])
+    .join(",");
+}
+
+/** The cron a form saves; empty for "once", which saves a time instead. */
+export function cronOfForm(form: ScheduleForm): string {
+  const [hour, minute] = clockParts(form.time) ?? [9, 0];
+  switch (form.repeat) {
+    case "hours":
+      return form.everyHours <= 1 ? `${minute} * * * *` : `${minute} */${form.everyHours} * * *`;
+    case "days":
+      return `${minute} ${hour} * * ${weekdayField(form.days)}`;
+    case "monthly":
+      return `${minute} ${hour} ${form.monthDay} * *`;
+    case "cron":
+      return form.cron.trim().split(/\s+/).join(" ");
+    case "once":
+      return "";
+  }
+}
+
+/** The form that shows a saved cron, so an edit opens on its own choice; anything else is "cron". */
+export function formOfCron(expression: string, base: ScheduleForm = defaultForm()): ScheduleForm {
   const normal = expression.trim().split(/\s+/).join(" ");
-  return SCHEDULE_PRESETS.find((preset) => preset.cron && preset.cron === normal)?.id ?? "custom";
+  const asCron = { ...base, repeat: "cron" as const, cron: normal };
+  const fields = normal.split(" ");
+  if (fields.length !== 5) return asCron;
+  const [minute, hour, day, month, weekday] = fields as [string, string, string, string, string];
+  if (month !== "*" || !isNumber(minute) || Number(minute) > 59) return asCron;
+  const time = (h: number) => clock(h, Number(minute));
+  if (day === "*" && weekday === "*") {
+    if (hour === "*") return { ...base, repeat: "hours", everyHours: 1, time: time(0), cron: normal };
+    const step = /^\*\/(\d+)$/.exec(hour);
+    const every = Number(step?.[1]);
+    if (step && (HOUR_STEPS as readonly number[]).includes(every))
+      return { ...base, repeat: "hours", everyHours: every, time: time(0), cron: normal };
+  }
+  if (!isNumber(hour) || Number(hour) > 23) return asCron;
+  if (day === "*") {
+    const days = weekdaysOf(weekday);
+    return days ? { ...base, repeat: "days", days, time: time(Number(hour)), cron: normal } : asCron;
+  }
+  if (weekday === "*" && isNumber(day) && Number(day) >= 1 && Number(day) <= 28)
+    return { ...base, repeat: "monthly", monthDay: Number(day), time: time(Number(hour)), cron: normal };
+  return asCron;
+}
+
+/** The time a "once" form runs at, or null while it is not a valid date and time. */
+export function onceOfForm(form: ScheduleForm): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(form.onceAt);
+  if (!match) return null;
+  const [, y, mo, d, h, mi] = match.map(Number) as number[];
+  const at = new Date(y ?? 0, (mo ?? 1) - 1, d ?? 1, h ?? 0, mi ?? 0);
+  return Number.isFinite(at.getTime()) ? at : null;
+}
+
+/** Why a form cannot be saved yet; null when it can. */
+export function formProblem(form: ScheduleForm, now = Date.now()): string | null {
+  switch (form.repeat) {
+    case "once": {
+      const at = onceOfForm(form);
+      if (!at) return "Pick a date and time";
+      return at.getTime() <= now ? "That time has passed" : null;
+    }
+    case "days":
+      if (form.days.length === 0) return "Pick at least one day";
+      return clockParts(form.time) ? null : "Pick a time";
+    case "monthly":
+      return clockParts(form.time) ? null : "Pick a time";
+    case "cron":
+      return cronProblem(form.cron);
+    case "hours":
+      return null;
+  }
 }
 
 /** Why a cron cannot be saved, checked before the engine is asked; null when it reads as five fields. */
