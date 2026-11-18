@@ -809,6 +809,42 @@ impl MachineRegistry {
         })
     }
 
+    /// Record everything one successful connection told this computer, in one
+    /// read and one write of the registry: the route it came up over and when
+    /// ([`Self::mark_connected`]), the routes the machine reported
+    /// ([`Self::learn_routes`]), and its version and platform when it named
+    /// them. An unknown `host_id` changes nothing.
+    pub fn record_connection(
+        &mut self,
+        host_id: &str,
+        route: &str,
+        now: DateTime<Utc>,
+        learned: &[Route],
+        version: Option<&str>,
+        platform: Option<&str>,
+    ) -> Result<()> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                return Ok(());
+            };
+            machine.last_connected_at = Some(now);
+            machine.last_route = Some(route.to_owned());
+            for route in learned {
+                machine.learn_route(route.clone());
+            }
+            if let Some(version) = version {
+                machine.version = Some(version.to_owned());
+            }
+            if let Some(platform) = platform.filter(|platform| !platform.is_empty()) {
+                platform.clone_into(&mut machine.platform);
+            }
+            Ok(())
+        })
+    }
+
     /// Record the version a machine reported, so its row can say it needs
     /// updating even while the machine is away. Returns whether it changed.
     pub fn set_version(&mut self, host_id: &str, version: Option<&str>) -> Result<bool> {
@@ -1650,6 +1686,53 @@ mod tests {
         let mut forgotten = studio.clone();
         forgotten.last_route = Some("10.9.9.9:17879".to_owned());
         assert_eq!(forgotten.last_working_route().unwrap().kind, RouteKind::Lan);
+    }
+
+    /// One connection's news is one write: the route, what the machine
+    /// reported about itself and the routes it named all land together.
+    #[test]
+    fn a_connection_is_recorded_in_one_write() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "Studio", "192.168.1.20:17879"))
+            .unwrap();
+        let now = Utc::now();
+        store
+            .record_connection(
+                "gw-a",
+                "192.168.1.20:17879",
+                now,
+                &[Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879")],
+                Some("9.9.9"),
+                Some("linux"),
+            )
+            .unwrap();
+        let registry = load(dir.path());
+        let studio = &registry.machines()[0];
+        assert_eq!(studio.last_connected_at, Some(now));
+        assert_eq!(studio.last_route.as_deref(), Some("192.168.1.20:17879"));
+        assert_eq!(studio.version.as_deref(), Some("9.9.9"));
+        assert_eq!(studio.platform, "linux");
+        assert!(
+            studio
+                .routes
+                .iter()
+                .any(|route| route.address == "100.90.16.237:17879")
+        );
+        // A machine that names neither keeps what was saved.
+        store
+            .record_connection("gw-a", "192.168.1.20:17879", now, &[], None, Some(""))
+            .unwrap();
+        let registry = load(dir.path());
+        let studio = &registry.machines()[0];
+        assert_eq!(studio.version.as_deref(), Some("9.9.9"));
+        assert_eq!(studio.platform, "linux");
+        // An unknown machine is left out, not an error.
+        store
+            .record_connection("gw-z", "10.0.0.1:1", now, &[], None, None)
+            .unwrap();
+        assert_eq!(load(dir.path()).machines().len(), 1);
     }
 
     /// Routes a handshake reports are saved in the order the race uses, with

@@ -670,6 +670,60 @@ fn set_failure(machines: &Arc<Machines>, id: &str, cause: Cause, answered: Optio
     }
 }
 
+/// The one scan of this computer's interfaces every machine's supervisor
+/// reads. Each of them used to list the interfaces itself every
+/// [`NETWORK_POLL`]; with five machines that is five scans per poll for one
+/// answer.
+static NETWORK: Mutex<Option<Arc<tokio::sync::watch::Sender<Vec<IpAddr>>>>> = Mutex::new(None);
+
+/// Subscribe to this computer's addresses. The first subscriber starts the
+/// scan and the last one to go ends it, so an app with no machine scans
+/// nothing. A new value is sent only when the network changed
+/// ([`rustcode_client::network_changed`]).
+fn network() -> tokio::sync::watch::Receiver<Vec<IpAddr>> {
+    let mut shared = NETWORK.lock().unwrap();
+    if let Some(sender) = shared.as_ref() {
+        return sender.subscribe();
+    }
+    let (sender, receiver) = tokio::sync::watch::channel(local_addresses());
+    let sender = Arc::new(sender);
+    *shared = Some(sender.clone());
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(NETWORK_POLL).await;
+            {
+                // Decided under the lock a subscriber takes, so none joins a
+                // scan that is about to end.
+                let mut shared = NETWORK.lock().unwrap();
+                if sender.receiver_count() == 0 {
+                    *shared = None;
+                    return;
+                }
+            }
+            let current = local_addresses();
+            sender.send_if_modified(|known| {
+                let changed = rustcode_client::network_changed(known, &current);
+                // An empty list says nothing about the network: keep the last
+                // one that did, unless there was none.
+                if changed || known.is_empty() {
+                    *known = current;
+                }
+                changed
+            });
+        }
+    });
+    receiver
+}
+
+/// Whether the network changed since this subscriber last asked.
+fn network_moved(network: &mut tokio::sync::watch::Receiver<Vec<IpAddr>>) -> bool {
+    let changed = network.has_changed().unwrap_or(false);
+    if changed {
+        network.borrow_and_update();
+    }
+    changed
+}
+
 /// Wait out the backoff, ending the wait as soon as this computer's own
 /// network changes: a machine that went away because the VPN dropped is
 /// reachable again the moment it is back, without waiting out the minute
@@ -684,7 +738,7 @@ async fn wait_out(
     wake: &Notify,
     delay: Duration,
 ) {
-    let before = local_addresses();
+    let mut network = network();
     let mut left = delay;
     while !left.is_zero() {
         let slice = left.min(NETWORK_POLL);
@@ -707,7 +761,7 @@ async fn wait_out(
             set_state(machines, id, MachineState::Connecting, None, None);
             return;
         }
-        if rustcode_client::network_changed(&before, &local_addresses()) {
+        if network_moved(&mut network) {
             emit_log(
                 channel,
                 "desktop: this computer's network changed; trying the machine again now."
@@ -770,19 +824,18 @@ async fn relay_once(
     let session = connected.session;
     let version = session.welcome().version.clone();
     let platform = session.welcome().platform.clone();
+    // One read and one write for everything this connection told us; a
+    // machine paired while its gateway reported no platform learns it here
+    // (#3418).
     if let Ok(mut registry) = MachineRegistry::load(config_dir) {
-        let _ = registry.mark_connected(&machine.host_id, &route.address, chrono::Utc::now());
-        if !learned.is_empty() {
-            let _ = registry.learn_routes(&machine.host_id, &learned);
-        }
-        if version.is_some() {
-            let _ = registry.set_version(&machine.host_id, version.as_deref());
-        }
-        // A machine paired while its gateway reported no platform learns it
-        // on the next connection (#3418).
-        if platform.is_some() {
-            let _ = registry.set_platform(&machine.host_id, platform.as_deref());
-        }
+        let _ = registry.record_connection(
+            &machine.host_id,
+            &route.address,
+            chrono::Utc::now(),
+            &learned,
+            version.as_deref(),
+            platform.as_deref(),
+        );
     }
     let mut acp = match session.acp().await {
         Ok(acp) => acp,
@@ -814,7 +867,7 @@ async fn relay_once(
     // Liveness: a link the network dropped without a close is noticed by its
     // silence, and checked at once after a wake from sleep or a network
     // change by a ping the machine has to answer.
-    let mut addresses = local_addresses();
+    let mut network = network();
     let mut check = tokio::time::interval(NETWORK_POLL);
     check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut clocks = (Instant::now(), SystemTime::now());
@@ -870,9 +923,7 @@ async fn relay_once(
                 clocks = (Instant::now(), SystemTime::now());
                 let walled = clocks.1.duration_since(wall).unwrap_or_default();
                 let woke = rustcode_client::slept(started.elapsed(), walled);
-                let current = local_addresses();
-                let moved = rustcode_client::network_changed(&addresses, &current);
-                addresses = current;
+                let moved = network_moved(&mut network);
                 if (woke || moved) && pinged.is_none() {
                     if let Err(error) = within_send_timeout(acp.ping()).await {
                         return End::Failed(error, Some(route.clone()));
