@@ -455,6 +455,8 @@ pub fn with_explicit_port(address: &str) -> String {
 /// port filled in, and no scheme or path.
 pub fn dial_target(address: &str) -> Result<String> {
     let address = address.trim();
+    // The scheme picks the default port (`wss://` is 443), so read it first.
+    let port = port_or_default(address);
     let address = address.split_once("://").map_or(address, |(_, rest)| rest);
     // `rest` may still carry a path (`ws://host:1/`); the gateway serves `/`.
     let address = address.split('/').next().unwrap_or(address);
@@ -465,7 +467,6 @@ pub fn dial_target(address: &str) -> Result<String> {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':')),
         "{address} is not a machine address"
     );
-    let port = port_or_default(address);
     Ok(if host.contains(':') {
         format!("[{host}]:{port}")
     } else {

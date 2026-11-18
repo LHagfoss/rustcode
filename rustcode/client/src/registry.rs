@@ -378,7 +378,8 @@ pub fn plain_ws_refusal(address: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "refusing to dial {address}: it is a public address and the gateway has no TLS listener, \
          so the pairing code and the device token would travel in the clear. Dial a LAN, \
-         Tailscale or VPN address, or the machine's `wss://` public address, instead"
+         Tailscale or VPN address, or the machine's `wss://` public address, instead \
+         (#2651)"
     )
 }
 
