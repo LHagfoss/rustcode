@@ -937,3 +937,21 @@ describe("a delegate that finishes on another machine", () => {
     expect(queued.some((item) => item.wake && item.wakeLinks?.includes(link))).toBe(true);
   });
 });
+
+describe("machine handshake", () => {
+  test("advertises Smart UI and rustcode-viz as this app's setting says", async () => {
+    const { machineInitializeParams } = await import("./store");
+    const meta = () =>
+      (machineInitializeParams() as { clientCapabilities: { _meta: { rustcode: Record<string, unknown> } } })
+        .clientCapabilities._meta.rustcode;
+    const before = useApp.getState().smartUi;
+    try {
+      useApp.setState({ smartUi: true });
+      expect(meta()).toMatchObject({ smartUi: 1, visualizations: 2, threads: 1 });
+      useApp.setState({ smartUi: false });
+      expect(meta()).toMatchObject({ smartUi: 0 });
+    } finally {
+      useApp.setState({ smartUi: before });
+    }
+  });
+});
