@@ -60,6 +60,7 @@ import {
 } from "./orchestration";
 import { QUEUE_REASON } from "./queue";
 import { parseQueueBook } from "./queues";
+import { takeAgentRename } from "./renameCommand";
 import {
   type AppState,
   answerPermission,
@@ -141,6 +142,8 @@ export function targetMachine(id: string): string | undefined {
 /** The changes `update_session` and `organize_threads` share, as one list. */
 interface ManagedChange {
   title?: string;
+  /** The title is one the user asked for (`/rename`): recorded as their choice. */
+  userTitle?: boolean;
   pinned?: boolean;
   unread?: boolean;
 }
@@ -164,7 +167,8 @@ async function applyManagedChange(
   let applied = 0;
   const live = () => ruleThread(useApp.getState(), target.id) ?? target;
   if (change.title !== undefined && change.title !== live().title) {
-    if (!(await renameThread(target.id, change.title))) return { applied, renameFailed: true };
+    if (!(await renameThread(target.id, change.title, { user: !!change.userTitle })))
+      return { applied, renameFailed: true };
     applied += 1;
   }
   if (change.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== change.pinned) {
@@ -215,10 +219,13 @@ export async function updateSession(
   }
   // An agent naming its own thread leaves a name the user chose alone (issue 3599); renaming
   // another thread is the user's own approval above.
-  const titleStatus = call.title && target.id === caller.id ? await userTitled(target.id) : false;
+  // A title that answers the user's `/rename` replaces even a name they chose, and is theirs now.
+  const asked = !!call.title && target.id === caller.id && takeAgentRename(target.id);
+  const titleStatus = call.title && target.id === caller.id && !asked ? await userTitled(target.id) : false;
   const keepTitle = titleStatus !== false;
   const applied = await applyManagedChange(target, {
     title: keepTitle ? undefined : call.title,
+    userTitle: asked,
     pinned: call.pinned,
     unread: call.unread,
   });
