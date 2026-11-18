@@ -158,6 +158,8 @@ export class MockLoops {
       prompt: str(params.prompt) ?? "",
       schedule: { ...(schedule as JsonObject), misfire_policy: "run_once" },
       harness: str(params.harness) ?? null,
+      account: str(params.account) ?? null,
+      threadId: str(params.threadId) ?? null,
       model: str(params.model) ?? null,
       effort: str(params.effort) ?? null,
       readOnly: params.readOnly !== false,

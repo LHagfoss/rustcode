@@ -77,6 +77,8 @@ pub enum JobAction {
         workspace: String,
         #[serde(default)]
         harness: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
         #[serde(default)]
         model: Option<String>,
         #[serde(default)]

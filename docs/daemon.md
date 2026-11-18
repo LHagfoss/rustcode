@@ -100,7 +100,13 @@ in a fresh top-level thread on any harness, or every run in one thread the
 Loop names. The desktop app's Loops page
 creates, edits, pauses, resumes, runs and deletes them through
 `_rustcode/loops/*` (`engine/src/acp/loops.rs`) and the scheduled run/delete
-methods, so `rustcode cron list` shows the same jobs.
+methods, so `rustcode cron list` shows the same jobs. Agents running in a
+RustCode thread can use the RustCode MCP tool `create_loop`. The desktop shows
+the schedule, project, agent, access and prompt for approval. Pass a five-field
+cron or one ISO 8601 time, and use `list_harnesses` for harness and account IDs.
+Outside agents with Manage access can also use `create_loop` with an absolute
+project path. Their connection's approval setting applies, and cron uses
+the scheduler machine’s time zone when they omit it.
 
 ```json
 {
@@ -108,12 +114,17 @@ methods, so `rustcode cron list` shows the same jobs.
   "prompt": "Check CI on main and tell me only if something broke.",
   "workspace": "/absolute/project",
   "harness": "codex",
+  "account": null,
   "model": null,
   "effort": "medium",
   "read_only": true,
   "thread_id": null
 }
 ```
+
+A named account applies to fresh threads on its harness. Selecting one in the
+editor also saves the harness. A loop aimed at an existing thread uses that
+thread's account.
 
 - **One thread per run.** The daemon opens the ACP endpoint the app's engine
   publishes (`run/engine.json`, else a shared server's) and sends the same

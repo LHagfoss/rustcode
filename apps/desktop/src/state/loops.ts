@@ -46,6 +46,7 @@ export interface Loop {
   workspace: string;
   prompt: string;
   harness?: string;
+  account?: string;
   model?: string;
   effort?: string;
   readOnly: boolean;
@@ -130,6 +131,7 @@ function loopOf(value: Json): Loop | null {
     workspace: str(raw.workspace) ?? "",
     prompt: str(raw.prompt) ?? "",
     harness: str(raw.harness),
+    account: str(raw.account),
     model: str(raw.model),
     effort: str(raw.effort),
     readOnly: bool(raw.readOnly) ?? true,
@@ -528,9 +530,11 @@ export interface LoopDraft {
   workspace: string;
   prompt: string;
   cron: string;
+  timezone?: string;
   /** A one-shot run at this time instead of the cron. */
   once?: Date;
   harness?: string;
+  account?: string;
   model?: string;
   effort?: string;
   readOnly: boolean;
@@ -539,7 +543,7 @@ export interface LoopDraft {
 }
 
 /** The user's IANA zone, which a loop's cron is read in. */
-function userTimeZone(): string | undefined {
+export function userTimeZone(): string | undefined {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
   } catch {
@@ -548,7 +552,7 @@ function userTimeZone(): string | undefined {
 }
 
 /** The save call's parameters: a cron in the user's own zone, empty fields left out. */
-export function saveParams(draft: LoopDraft, timezone = userTimeZone()): JsonObject {
+export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTimeZone()): JsonObject {
   const params: JsonObject = {
     name: draft.name.trim(),
     workspace: draft.workspace,
@@ -563,7 +567,9 @@ export function saveParams(draft: LoopDraft, timezone = userTimeZone()): JsonObj
     readOnly: draft.readOnly,
   };
   if (draft.id) params.id = draft.id;
-  for (const key of ["harness", "model", "effort", "threadId"] as const) {
+  for (const key of draft.threadId
+    ? (["threadId"] as const)
+    : (["harness", "account", "model", "effort"] as const)) {
     const value = draft[key]?.trim();
     if (value) params[key] = value;
   }

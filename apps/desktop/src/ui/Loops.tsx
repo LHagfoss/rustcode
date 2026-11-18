@@ -4,7 +4,7 @@
 // prompt and run history. Review lists what loops did on their own that is still worth a look.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Method, projectName } from "../acp/types";
+import { type HarnessSnapshot, Method, projectName } from "../acp/types";
 import {
   agoText,
   deleteLoop,
@@ -43,7 +43,7 @@ const STATE_BADGE: Record<ReturnType<typeof loopState>, { label: string; tint: s
   running: { label: "Running", tint: "bg-accent" },
   failing: { label: "Paused", tint: "bg-danger" },
   paused: { label: "Paused", tint: "bg-fg-faint" },
-  active: { label: "On", tint: "bg-success" },
+  active: { label: "Scheduled", tint: "bg-success" },
 };
 
 const TONE: Record<"ok" | "bad" | "muted", string> = {
@@ -81,10 +81,35 @@ function IconAction({
   );
 }
 
+const NEXT_RUN_FORMAT = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+function loopAgent(loop: Loop, harnesses: HarnessSnapshot | null): string {
+  if (loop.threadId) return "Existing thread";
+  const harness = harnesses?.harnesses.find(
+    (item) => item.id === (loop.harness || harnesses.default.harness),
+  );
+  const account = harness?.accounts?.find((item) => item.id === loop.account);
+  const model = harness?.models.find((item) => item.id === loop.model);
+  return [
+    harness?.name ?? loop.harness ?? "Default harness",
+    account?.name ?? loop.account ?? "Default account",
+    model?.name ?? loop.model,
+    loop.effort && `${loop.effort} effort`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function LoopRow({
   loop,
   now,
   expanded,
+  agent,
   onToggle,
   onEdit,
   act,
@@ -92,6 +117,7 @@ function LoopRow({
   loop: Loop;
   now: number;
   expanded: boolean;
+  agent: string;
   onToggle: () => void;
   onEdit: () => void;
   act: (what: string, run: () => Promise<void>) => void;
@@ -101,41 +127,58 @@ function LoopRow({
   const result = lastResult(loop, now);
   const reason = pauseReason(loop);
   const running = state === "running";
+  const next = !loop.paused && loop.nextDueAt !== undefined ? loop.nextDueAt : undefined;
+  const badgeLabel =
+    state === "active" && next === undefined
+      ? loop.schedule.kind === "once"
+        ? "Completed"
+        : "Unscheduled"
+      : badge.label;
   return (
     <li className="flex flex-col rounded-lg bg-surface">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggle();
-          }
-        }}
-        className="flex cursor-default items-center gap-3 rounded-lg px-4 py-3 hover:bg-fill-subtle"
-      >
-        <ChevronRight
-          size={12}
-          className={cx("shrink-0 text-fg-faint transition-transform", expanded && "rotate-90")}
-        />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-medium text-body text-fg">{loop.name}</span>
-            <span className="inline-flex shrink-0 items-center gap-1.5 text-caption text-fg-muted">
-              <span aria-hidden className={cx("size-1.5 rounded-full", badge.tint)} />
-              {badge.label}
+      <div className="flex flex-wrap items-center gap-x-2 px-3 py-2">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={onToggle}
+          className="flex min-w-[min(100%,210px)] flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-subtle"
+        >
+          <ChevronRight
+            size={12}
+            className={cx("shrink-0 text-fg-faint transition-transform", expanded && "rotate-90")}
+          />
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2">
+              <span className="truncate font-medium text-body text-fg">{loop.name}</span>
+              <span className="inline-flex shrink-0 items-center gap-1.5 text-caption text-fg-muted">
+                <span
+                  aria-hidden
+                  className={cx(
+                    "size-1.5 rounded-full",
+                    next === undefined && state === "active" ? "bg-fg-faint" : badge.tint,
+                  )}
+                />
+                {badgeLabel}
+              </span>
             </span>
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-caption text-fg-muted">
-            <span>{scheduleInWords(loop.schedule)}</span>
-            <span aria-hidden>·</span>
-            <span>{projectName(loop.workspace)}</span>
-            <span aria-hidden>·</span>
-            <span>Next {nextRunText(loop, now)}</span>
-          </div>
-          <span className={cx("truncate text-caption", TONE[result.tone])}>{result.text}</span>
+            <span className="truncate text-caption text-fg-muted">
+              {projectName(loop.workspace)} · {scheduleInWords(loop.schedule)}
+            </span>
+          </span>
+        </button>
+        <div className="min-w-0 basis-44 px-2 py-1">
+          {next !== undefined && (
+            <time
+              dateTime={new Date(next).toISOString()}
+              title={nextRunText(loop, now)}
+              className="block truncate font-medium text-callout text-fg"
+            >
+              {NEXT_RUN_FORMAT.format(next)}
+            </time>
+          )}
+          <span title={result.text} className={cx("block truncate text-caption", TONE[result.tone])}>
+            {result.text}
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           {running && <Spinner size={12} className="mr-1 text-fg-muted" />}
@@ -174,29 +217,30 @@ function LoopRow({
         </div>
       </div>
       {reason && <Callout className="mx-4 mb-3 bg-bg">{reason}. Fix the cause, then resume it.</Callout>}
-      {expanded && <LoopDetail loop={loop} now={now} />}
+      {expanded && <LoopDetail loop={loop} now={now} agent={agent} />}
     </li>
   );
 }
 
-function LoopDetail({ loop, now }: { loop: Loop; now: number }) {
-  const agent = [loop.harness ?? "Default harness", loop.model, loop.effort && `${loop.effort} effort`]
-    .filter(Boolean)
-    .join(" · ");
+function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: string }) {
   return (
-    <div className="flex flex-col gap-3 px-4 pb-4 pl-10">
-      <p className="selectable whitespace-pre-wrap text-callout text-fg">{loop.prompt}</p>
+    <div className="mx-5 flex flex-col gap-3 border-t border-border py-3">
+      <p className="selectable whitespace-pre-wrap break-words rounded-md bg-fill-subtle px-3 py-2 text-callout text-fg">
+        {loop.prompt}
+      </p>
       <p className="text-caption text-fg-muted">
         {agent} · {loop.readOnly ? "Read-only" : "Can edit, commit and push"}
         {loop.schedule.kind === "cron" && loop.schedule.timezone ? ` · ${loop.schedule.timezone}` : ""}
       </p>
-      {loop.runs.length > 0 ? (
-        <ol aria-label="Runs" className="flex flex-col">
+      {loop.runs.length > 0 && (
+        <ol aria-label="Recent runs" className="flex flex-col border-t border-border pt-2">
           {loop.runs.map((run) => {
             const at = run.finishedAt ?? run.startedAt ?? run.scheduledAt;
             const text =
               run.state === "succeeded"
-                ? "Finished"
+                ? run.quiet
+                  ? "Nothing to report"
+                  : "Finished"
                 : run.state === "running" || run.state === "claimed"
                   ? "Running"
                   : run.state === "cancelled"
@@ -210,7 +254,7 @@ function LoopDetail({ loop, now }: { loop: Loop; now: number }) {
                 <span className="w-20 shrink-0 text-fg-faint">{agoText(at, now)}</span>
                 <span
                   className={cx(
-                    "min-w-0 flex-1 truncate",
+                    "min-w-0 flex-1 break-words",
                     run.state === "failed" || run.state === "ambiguous" ? "text-danger" : "text-fg-muted",
                   )}
                 >
@@ -225,8 +269,6 @@ function LoopDetail({ loop, now }: { loop: Loop; now: number }) {
             );
           })}
         </ol>
-      ) : (
-        <p className="text-caption text-fg-faint">No runs yet.</p>
       )}
     </div>
   );
@@ -283,6 +325,7 @@ function ReviewList({
 export function Loops() {
   const { data, error, reload } = useEngineData(Method.loopsList, parseLoops);
   const sessions = useApp((s) => s.sessions);
+  const harnesses = useApp((s) => s.harnesses);
   const statusMarks = useApp((s) => s.statusMarks);
   const [tab, setTab] = useState<Tab>("loops");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -319,6 +362,14 @@ export function Loops() {
   }, [data]);
 
   const loops = data?.loops ?? [];
+  const upcoming: Loop[] = [];
+  const inactive: Loop[] = [];
+  for (const loop of loops) {
+    if (loopState(loop) === "running" || (!loop.paused && loop.nextDueAt !== undefined)) upcoming.push(loop);
+    else inactive.push(loop);
+  }
+  upcoming.sort((a, b) => (a.nextDueAt ?? 0) - (b.nextDueAt ?? 0));
+  inactive.sort((a, b) => Number(b.paused) - Number(a.paused) || a.name.localeCompare(b.name));
   // Open: still in the list and not archived. `statusMarks` changes when the user archives one.
   // biome-ignore lint/correctness/useExhaustiveDependencies: statusMarks is what statusOf reads
   const open = useMemo(() => {
@@ -368,10 +419,12 @@ export function Loops() {
               onChange={setTab}
             />
           )}
-          <Pill onClick={openNew} disabled={data !== null && !data.daemonRunning}>
-            <Plus size={13} />
-            New loop
-          </Pill>
+          {data?.daemonRunning && loops.length > 0 && (
+            <Pill prominent onClick={openNew}>
+              <Plus size={13} />
+              New loop
+            </Pill>
+          )}
         </div>
       </ViewHeader>
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -408,28 +461,34 @@ export function Loops() {
           ) : tab === "review" ? (
             <ReviewList items={review} now={now} onReviewed={markReviewed} />
           ) : (
-            <ul className="flex flex-col gap-2">
-              {loops.map((loop) => (
-                <LoopRow
-                  key={loop.id}
-                  loop={loop}
-                  now={now}
-                  expanded={expanded === loop.id}
-                  onToggle={() => setExpanded((id) => (id === loop.id ? null : loop.id))}
-                  onEdit={() => {
-                    setEditing(loop);
-                    setDialogOpen(true);
-                  }}
-                  act={act}
-                />
-              ))}
-            </ul>
-          )}
-          {data?.daemonRunning && loops.length > 0 && tab === "loops" && (
-            <p className="text-caption text-fg-faint">
-              Each run starts a thread in its project while RustCode is open; a run due while it is closed is
-              skipped and says so. Three failed runs in a row pause a loop.
-            </p>
+            [
+              { title: "Upcoming", loops: upcoming },
+              { title: "Inactive", loops: inactive },
+            ].map(
+              (group) =>
+                group.loops.length > 0 && (
+                  <section key={group.title} aria-label={group.title} className="flex flex-col gap-2 pb-3">
+                    <h2 className="px-1 font-medium text-caption text-fg-muted">{group.title}</h2>
+                    <ul className="flex flex-col gap-2">
+                      {group.loops.map((loop) => (
+                        <LoopRow
+                          key={loop.id}
+                          loop={loop}
+                          now={now}
+                          agent={loopAgent(loop, harnesses)}
+                          expanded={expanded === loop.id}
+                          onToggle={() => setExpanded((id) => (id === loop.id ? null : loop.id))}
+                          onEdit={() => {
+                            setEditing(loop);
+                            setDialogOpen(true);
+                          }}
+                          act={act}
+                        />
+                      ))}
+                    </ul>
+                  </section>
+                ),
+            )
           )}
         </div>
       </div>

@@ -41,6 +41,7 @@ export const ORCHESTRATION_TOOLS = [
   "update_project",
   "remove_project",
   "schedule_task",
+  "create_loop",
   "list_scheduled_tasks",
   "delete_scheduled_task",
   "run_scheduled_task_now",
@@ -274,6 +275,8 @@ function orchestrationLabel(
       return { title: "Updated project", summary: text(args.name) || text(args.path) || undefined };
     case "remove_project":
       return { title: "Removed project", summary: text(args.path) || undefined };
+    case "create_loop":
+      return { title: "Created a loop", summary: text(args.name) || undefined };
     case "schedule_task":
       return { title: "Scheduled a task", summary: text(args.name) || text(args.prompt) || undefined };
     case "list_scheduled_tasks":

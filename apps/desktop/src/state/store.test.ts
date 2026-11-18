@@ -6384,6 +6384,35 @@ describe("projects and scheduled work", () => {
     }
   });
 
+  test("creating a loop in Full access asks first and saves the selected harness account", async () => {
+    const { caller, call } = await ready();
+    await until(() => useApp.getState().harnesses !== null);
+    setPermissionMode(caller, "full");
+    const args: JsonObject = {
+      name: "Daily CI",
+      prompt: "Summarize the latest build",
+      schedule: { kind: "cron", expression: "0 9 * * 1-5" },
+      harness: "codex",
+      account: "paral",
+    };
+
+    const creating = call("create_loop", args);
+    await until(() => useApp.getState().grant !== null);
+    expect(useApp.getState().grant).toMatchObject({ onceOnly: true, target: "Daily CI" });
+    expect(useApp.getState().grant?.detail).toContain("Paral");
+    expect(useApp.getState().grant?.detail).toContain("Summarize the latest build");
+    resolveGrant("once");
+    const created = await creating;
+
+    const listed = await request<{ loops: JsonObject[] }>(Method.loopsList, {});
+    expect(listed.loops.find((loop) => loop.id === created.id)).toMatchObject({
+      name: "Daily CI",
+      harness: "codex",
+      account: "paral",
+      readOnly: true,
+    });
+  });
+
   test("scheduled work reads freely and asks before it is added, run or deleted", async () => {
     const { call } = await ready();
     const listed = await call("list_scheduled_tasks", {});

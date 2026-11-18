@@ -101,6 +101,10 @@ pub(super) enum ReplyNames {
 
 pub(super) fn call_args(name: &str, args: &mut Value) -> Result<ReplyNames, CallAnswer> {
     let tool = internal_tool(name);
+    // Loops already use thread_id from the MCP schema through to the app.
+    if tool == super::CREATE_LOOP {
+        return Ok(ReplyNames::Thread);
+    }
     if !super::is_tool(tool) && tool != crate::workflow::STATUS_TOOL_NAME {
         return Ok(ReplyNames::Legacy);
     }
@@ -219,6 +223,13 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn create_loop_keeps_its_existing_thread_id() {
+        let mut args = json!({"thread_id": "existing"});
+        call_args(super::super::CREATE_LOOP, &mut args).unwrap();
+        assert_eq!(args, json!({"thread_id": "existing"}));
     }
 
     #[test]

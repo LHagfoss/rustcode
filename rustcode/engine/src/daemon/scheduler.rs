@@ -721,6 +721,7 @@ mod tests {
             prompt: "Check CI".into(),
             workspace: "/tmp".into(),
             harness: None,
+            account: None,
             model: None,
             effort: None,
             read_only: true,

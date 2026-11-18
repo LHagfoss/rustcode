@@ -348,7 +348,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
 
 pub const WAIT_SESSION: Tool = Tool {
     name: crate::orchestration::WAIT_SESSION,
-    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish, or with all: true every one of them in one answer once all have settled (or one needs the user), each answer cut to 2 KiB. Waits at most 25 minutes per call; call again to keep waiting. needs_user means that thread waits for the user. When the answer was cut, it says answer_truncated: true and gives the session_id: read the rest with read_session, which pages. The app also wakes this thread when its children finish or ask, so call this when you need an answer now; do not poll with sleeps. A timeout says how long each child has been idle (idle_ms), its last tool and its turns.",
+    description: "Wait up to 25 minutes on delegate link IDs. Returns the first result, or with all: true every result or a request for the user. Use read_session if answer_truncated is true. RustCode wakes the parent when a delegate finishes or needs approval. Wait only when you need the result now. Timeouts report child activity.",
     arguments: r#"{"link_ids": ["from start_session or message_session"], "all": true, "timeout_ms": 1200000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -396,7 +396,7 @@ pub const READ_SESSION: Tool = Tool {
 
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
-    description: "Start a thread with prompt, optional harness/model/named account, and its own worktree by default. Returns a delegate link_id for wait_session; standalone:true instead creates a top-level user thread with no result delivery: report its session_id. machine from list_machines selects another computer. The thread sees no conversation: include the whole task, AGENTS.md rules, acceptance criteria and command timeouts (no TTY or default timeout). Choose sensible harness/account/model/effort and call directly. The user approves in the app. preset from list_harnesses supplies defaults; explicit arguments override.",
+    description: "Start a delegate in its own worktree by default. Give the full task, repo rules, acceptance criteria and timeouts. Returns link_id for wait_session. Standalone creates a top-level thread and returns session_id instead. Explicit agent fields, including a named account, override the preset from list_harnesses. The user approves.",
     arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -428,7 +428,7 @@ pub const START_SESSION: Tool = Tool {
 
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
-    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Each is a delegate whose results you wait for, unless `standalone: true`: then each is a thread of the user's own and nothing comes back, so name the session ids to the user. Pass `machine` (from list_machines) to run them on another computer (with `project`, its path there). Pass the whole task as the shared prompt: they do not see this conversation. Brief each as start_session says. Each entry may name a harness, model, effort and named account as list_harnesses lists them, or a saved `preset` (list_harnesses). The user is asked first. Returns one link per thread for wait_session, or the session ids when standalone.",
+    description: "Start the same full task on 2–4 harnesses in separate worktrees. Returns link IDs for wait_session, or session IDs for standalone threads. Specify agent settings, named accounts or presets from list_harnesses. User approval applies.",
     arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -473,7 +473,7 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Pass `machine` for another paired computer's harnesses. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name (up to 50). Every login a plan was read for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }` — read it before choosing an account, so a delegate skips a nearly used window. It ends with the saved delegate presets.",
+    description: "List harnesses, models, effort, named accounts and delegate presets. Filter with `harness` or `model`. Defaults and recent models come first. Without a model filter, omitted_models counts models beyond the first 12. Check account usage (as_of, windows with used_percent, window_minutes and resets_at) before choosing a login.",
     arguments: r#"{"harness": "codex", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -726,7 +726,7 @@ pub const LIST_PROJECTS: Tool = Tool {
 /// paired, which `start_session` and the other machine-aware tools take.
 pub const LIST_MACHINES: Tool = Tool {
     name: crate::orchestration::LIST_MACHINES,
-    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name, platform, version, state (connected, connecting, reconnecting, unavailable, offline or revoked), why not connected and its cause, routes with the last test of each, running and waiting threads, harnesses with models and accounts, and projects with path and git remote. Every tool's `machine` argument takes an id or name from here; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name. `probe: true` tests every route and retries machines not connected (up to 10 s).",
+    description: "List paired computers and this computer, with their connection state, routes, threads, harnesses and projects. Use the ID or name in machine arguments. Remote thread IDs already include the machine. Remote changes ask for approval. With probe, retry each route. Offline machines are refused.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -937,6 +937,33 @@ pub const REMOVE_PROJECT: Tool = Tool {
             "required": ["path"],
             "additionalProperties": false
         })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const CREATE_LOOP: Tool = Tool {
+    name: crate::orchestration::CREATE_LOOP,
+    description: "Create a scheduled loop shown in Loops. Runs while RustCode is open, read-only in a fresh thread by default. Use list_harnesses for agent IDs. A RustCode thread asks for approval.",
+    arguments: r#"{"name":"Morning check","prompt":"Check the build","schedule":{"kind":"cron","expression":"0 9 * * 1-5"}}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        let mut schema = (SCHEDULE_TASK.schema)();
+        let properties = schema["properties"].as_object_mut().unwrap();
+        properties.remove("model_profile");
+        properties.extend(serde_json::Map::from_iter([
+            ("harness".into(), serde_json::json!({"type":"string","description":"Harness ID from list_harnesses; omitted uses the default harness"})),
+            ("account".into(), serde_json::json!({"type":"string","description":"Named account ID from list_harnesses; requires harness"})),
+            ("model".into(), serde_json::json!({"type":"string","description":"Model ID from list_harnesses"})),
+            ("effort".into(), serde_json::json!({"type":"string","description":"Reasoning effort supported by the model"})),
+            ("thread_id".into(), serde_json::json!({"type":"string","description":"Existing thread in the project; omit harness, account, model and effort when supplied"})),
+            ("read_only".into(), serde_json::json!({"type":"boolean","default":true,"description":"Decline approvals during unattended runs"})),
+            ("client_request_id".into(), serde_json::json!({"type":"string","description":"Reuse the same ID when retrying this exact request"})),
+        ]));
+        properties["name"]["description"] = serde_json::json!("Name shown in Loops");
+        schema["required"] = serde_json::json!(["name", "prompt", "schedule"]);
+        schema
     },
     capabilities: &[ToolCapability::UserInteraction],
     safety: ToolSafety::Interactive,
