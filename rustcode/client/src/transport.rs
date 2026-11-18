@@ -44,8 +44,8 @@ pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The byte stream under the WebSocket: plain TCP, or TLS to a tunnel's edge.
-trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
+trait Stream: AsyncRead + AsyncWrite + Unpin + Send + Sync {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + Sync> Stream for T {}
 
 type Socket = WebSocketStream<Box<dyn Stream>>;
 
