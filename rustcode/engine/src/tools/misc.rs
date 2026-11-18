@@ -3779,7 +3779,7 @@ pub const MANAGE_CAPABILITIES: Tool = Tool {
 
 pub const REQUEST_SECRET: Tool = Tool {
     name: crate::orchestration::secret::TOOL_NAME,
-    description: "Ask for a credential privately, not in chat. Saves to an untracked dotenv destination; env=true sets $NAME for later commands. Never print it or read that file.",
+    description: "Ask for a credential privately, not in chat. Saves to an untracked dotenv destination; env=true sets $NAME for later commands. Never print it.",
     arguments: r#"{"name":"API_KEY","reason":"Deploy the service","destination":"optional .env.local","env":"optional true"}"#,
     handler: ask_user_question_unavailable,
     requires_confirmation: false,
