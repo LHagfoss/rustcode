@@ -1,6 +1,6 @@
 // design-lint: allow-file (brand marks carry their owners' colours, not theme tokens)
 //
-// The mark of each harness, inline so nothing is fetched at run time:
+// The mark of each harness, bundled so nothing is fetched at run time:
 // - Codex: the OpenAI blossom, from @lobehub/icons-static-svg 1.102.0 (MIT,
 //   https://github.com/lobehub/lobe-icons), monochrome in currentColor.
 // - Claude Code: the Claude mark in its orange, same source.
@@ -8,7 +8,10 @@
 // - OpenCode: `packages/identity/mark.svg` of https://github.com/anomalyco/opencode
 //   (MIT), its two greys as currentColor at full and 35%, cropped to the mark.
 // - RustCode: the app's own icon.
-// - Pi: the letter π in the rounded square other harnesses get.
+// - Cursor: the 2D cube from https://cursor.com/brand, in currentColor.
+// - Pi: https://pi.dev/logo-auto.svg
+// - Perch: the Perch AI terminal mark from https://www.perchai.app/
+// - Antigravity: the full-color icon from https://antigravity.google/press.
 // NOTICE: these marks are trademarks of their owners (OpenAI, Anthropic,
 // Google, Anomaly/OpenCode); they are used only to identify the integration.
 // A harness that sends its own `icon` (a URL or `data:`) shows that instead,
@@ -26,8 +29,22 @@ const CLAUDE =
 const GEMINI =
   "M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z";
 
+const CURSOR =
+  "M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z";
+
+const HARNESS_IMAGES = new Map([
+  ["rustcode", "/icon.png"],
+  ["pi", "/harnesses/pi.svg"],
+  ["perch", "/harnesses/perch.png"],
+  ["antigravity", "/harnesses/antigravity.svg"],
+]);
+
 /** Which mark a harness id or name shows. */
-function markOf(id: string, name?: string): "openai" | "claude" | "gemini" | "opencode" | undefined {
+function markOf(
+  id: string,
+  name?: string,
+): "openai" | "claude" | "gemini" | "opencode" | "cursor" | undefined {
+  if (id === "cursor") return "cursor";
   const key = `${id} ${name ?? ""}`.toLowerCase();
   if (key.includes("claude")) return "claude";
   if (key.includes("gemini")) return "gemini";
@@ -92,10 +109,11 @@ export function HarnessIcon({
       <img src={icon} alt="" width={size} height={size} className={cx("shrink-0 rounded-xs", className)} />
     );
   }
-  if (id === "rustcode") {
+  const image = HARNESS_IMAGES.get(id);
+  if (image) {
     return (
       <img
-        src="/icon.png"
+        src={image}
         alt=""
         width={size}
         height={size}
@@ -108,13 +126,16 @@ export function HarnessIcon({
   if (mark) {
     return (
       <svg
-        viewBox={mark === "opencode" ? "96 96 320 320" : "0 0 24 24"}
+        viewBox={
+          mark === "opencode" ? "96 96 320 320" : mark === "cursor" ? "0 0 466.73 532.09" : "0 0 24 24"
+        }
         width={size}
         height={size}
         aria-hidden
         className={cx("shrink-0", className)}
         fill="currentColor"
       >
+        {mark === "cursor" && <path d={CURSOR} fillRule="evenodd" />}
         {mark === "openai" && <path d={OPENAI} fillRule="evenodd" />}
         {mark === "claude" && <path d={CLAUDE} fill={mono ? "currentColor" : "#D97757"} />}
         {mark === "gemini" && <GeminiMark mono={mono} />}
@@ -131,14 +152,11 @@ export function HarnessIcon({
       </svg>
     );
   }
-  // Pi has no mark of its own to ship; its name is the letter.
   const letter =
-    id === "pi"
-      ? "π"
-      : (name || id)
-          .replace(/[^a-z0-9]/gi, "")
-          .charAt(0)
-          .toUpperCase() || "?";
+    (name || id)
+      .replace(/[^a-z0-9]/gi, "")
+      .charAt(0)
+      .toUpperCase() || "?";
   if (plain)
     return (
       <span

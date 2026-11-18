@@ -295,7 +295,7 @@ export function traitsLabel({
 const ROW_PX = 28;
 const LIST_CHROME_PX = 48;
 /** What the right column needs to show a model's levels and its logins without scrolling much. */
-const COLUMN_PX = 264;
+const COLUMN_PX = 288;
 /** A rail button (`size-9`) and the gap under it, and the rail's own padding. */
 const RAIL_ITEM_PX = 40;
 const RAIL_CHROME_PX = 8;
@@ -385,9 +385,9 @@ function TraitsColumn({
           onSearch();
         } else menuKeys(event);
       }}
-      className="ms-1 flex w-[208px] shrink-0 flex-col rounded-lg bg-fill-subtle max-sm:w-[160px]"
+      className="my-1 me-1 ms-1 flex w-[208px] shrink-0 flex-col rounded-lg bg-fill-subtle max-sm:w-[160px]"
     >
-      <div className="scroll-stable min-h-0 flex-1 overscroll-contain p-1">
+      <div className="scroll-stable min-h-0 flex-1 overscroll-contain p-3">
         {(showLevels || effortReason) && (
           <div className={cx(menuLabel, "flex items-baseline gap-1.5")}>
             <span>Effort</span>
