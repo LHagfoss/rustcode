@@ -42,8 +42,8 @@ pub enum EngineEvent {
 }
 
 /// At most this many lines, or about this many bytes, go in one `Lines` message.
-const BATCH_LINES: usize = 1024;
-const BATCH_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const BATCH_LINES: usize = 1024;
+pub(crate) const BATCH_BYTES: usize = 4 * 1024 * 1024;
 /// A server log line is truncated before it reaches Tauri or the webview.
 const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
 const LOG_LINE_TRUNCATED: &str = " … [line truncated]";

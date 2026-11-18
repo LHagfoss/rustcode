@@ -59,6 +59,24 @@ export class TauriTransport implements Transport {
 }
 
 /**
+ * The answer to a request the shell would not send, so whoever waits for it
+ * hears now instead of at its timeout. Null for a line nobody waits on: a
+ * notification, or an answer to the machine.
+ */
+export function droppedLineAnswer(line: string, reason: string): string | null {
+  let message: unknown;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!message || typeof message !== "object" || Array.isArray(message)) return null;
+  const { id, method } = message as { id?: unknown; method?: unknown };
+  if (typeof method !== "string" || (typeof id !== "number" && typeof id !== "string")) return null;
+  return JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: reason } });
+}
+
+/**
  * Another computer this app is paired with (Settings › Machines). The shell
  * holds the supervisor, the connection and the pairing token; this relays the
  * machine's ACP frames to the page the way [`TauriTransport`] relays the local
@@ -105,15 +123,23 @@ export class MachineTransport implements Transport {
 
   send(line: string): void {
     if (isTauri()) {
-      void import("@tauri-apps/api/core").then(({ invoke }) =>
-        invoke("machine_send", { id: this.machineId, line }),
-      );
+      void import("@tauri-apps/api/core")
+        .then(({ invoke }) => invoke("machine_send", { id: this.machineId, line }))
+        .catch((error: unknown) => this.dropped(line, error));
       return;
     }
     // Deferred: an answer must arrive after the client has registered the request it answers.
     for (const reply of this.mock?.receive(line) ?? []) {
       queueMicrotask(() => this.onEvent?.({ type: "line", line: reply }));
     }
+  }
+
+  /** The shell did not take a line (its queue is full, or the machine is not connected). */
+  private dropped(line: string, error: unknown): void {
+    const reason = typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
+    this.onEvent?.({ type: "log", line: `desktop: a line for ${this.label} was not sent: ${reason}` });
+    const refusal = droppedLineAnswer(line, reason);
+    if (refusal) this.onEvent?.({ type: "line", line: refusal });
   }
 
   async restart(): Promise<void> {
