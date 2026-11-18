@@ -30,6 +30,7 @@ import {
   sendDecision,
   type TurnState,
 } from "./queue";
+import { allowAgentRename, parseRename, RENAME_PROMPT } from "./renameCommand";
 import {
   type AppState,
   advertisedCommands,
@@ -66,7 +67,7 @@ import {
   type QueuedPrompt,
   type ThreadState,
 } from "./thread";
-import { askConfirm, cancelEdit, rewindTo } from "./threadActions";
+import { askConfirm, cancelEdit, renameThread, rewindTo } from "./threadActions";
 import { LOCAL_HOST, splitThreadKey } from "./threadKeys";
 import { sessionById, unsettleThreads } from "./threadStatus";
 
@@ -156,6 +157,18 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
       ? extras.command.name
       : null;
   if (bare && runCommandAction(bare, get().selectedId)) return true;
+  const rename = hasExtras(extras) ? null : parseRename(trimmed);
+  if (rename) {
+    const open = get().selectedId;
+    if (!open) {
+      toast("Start the thread first, then /rename it.", "info");
+      return false;
+    }
+    if (rename.title) return renameThread(open, rename.title, { user: true });
+    // The agent names it with `update_session`; the turn runs, or waits in the queue, as any message.
+    allowAgentRename(open);
+    text = RENAME_PROMPT;
+  }
   let id = get().selectedId;
   // The thread is made for this message, so the new-thread screen already draws its row: it must not
   // fly in again when the thread takes the screen over (lib/sendFlight.ts).

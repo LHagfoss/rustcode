@@ -10,6 +10,7 @@ import {
   serializeHarnessCommands,
   withSkills,
 } from "./commands";
+import { RENAME_COMMAND } from "./renameCommand";
 
 const command = (name: string, action = "execute", description = ""): SlashCommand => ({
   name,
@@ -35,26 +36,28 @@ describe("the slash-command menu of a thread without a session", () => {
       "/model",
       "/clear",
       "/compact",
+      "/rename",
     ]);
   });
 
   test("a harness's last list sits over the catalog by name, and adds what it has", () => {
     const seen = [command("/compact", "execute", "Compact Claude's history"), command("/review")];
     const menu = menuCommands({ base: BASE, seen, builtin: true });
-    expect(names(menu)).toEqual(["/status", "/model", "/clear", "/compact", "/review"]);
+    expect(names(menu)).toEqual(["/status", "/model", "/clear", "/compact", "/review", "/rename"]);
     expect(menu.find((c) => c.name === "/compact")?.description).toBe("Compact Claude's history");
   });
 
   test("another harness gets only the commands the app answers itself", () => {
     // `/status` and `/compact` are prompts to the harness there, which has advisory commands of
     // its own; `/model` and `/clear` never reach it.
-    expect(names(menuCommands({ base: BASE, builtin: false }))).toEqual(["/model", "/clear"]);
+    expect(names(menuCommands({ base: BASE, builtin: false }))).toEqual(["/model", "/clear", "/rename"]);
     const seen = [command("/compact"), command("/review")];
     expect(names(menuCommands({ base: BASE, seen, builtin: false }))).toEqual([
       "/model",
       "/clear",
       "/compact",
       "/review",
+      "/rename",
     ]);
   });
 
@@ -86,12 +89,19 @@ describe("the slash-command menu of a thread without a session", () => {
       command("/review", "skill", "RustCode's review"),
     ];
     const merged = withSkills(own, base);
-    expect(names(merged)).toEqual(["/compact", "/review", "/release-automation"]);
+    expect(names(merged)).toEqual(["/compact", "/review", "/release-automation", "/rename"]);
     // A command the engine answers itself is not a skill and does not cross over.
     expect(names(merged)).not.toContain("/status");
     expect(merged.find((c) => c.name === "/review")?.description).toBe("Claude's review");
-    // Nothing to add returns the list itself, so a re-render keeps the reference.
-    expect(withSkills(own, [])).toBe(own);
+    // The same list in gives the same list out, so a re-render keeps the reference.
+    expect(withSkills(own, [])).toBe(withSkills(own, []));
+  });
+
+  test("/rename is the app's, over a harness's own", () => {
+    const own = [command("/rename", "execute", "Claude's rename"), command("/compact")];
+    const menu = withSkills(own, []);
+    expect(names(menu)).toEqual(["/compact", "/rename"]);
+    expect(menu.find((c) => c.name === "/rename")?.description).toBe(RENAME_COMMAND.description);
   });
 
   test("stored lists are read back, and malformed ones are dropped", () => {

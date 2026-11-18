@@ -6,6 +6,7 @@
 
 import { arr, bool, type Json, obj, str } from "../acp/jsonrpc";
 import type { SlashCommand } from "../acp/types";
+import { withRename } from "./renameCommand";
 
 /** How many harnesses' lists are kept in app storage. */
 export const HARNESS_COMMANDS_MAX = 12;
@@ -35,7 +36,8 @@ export function menuCommands({
   const merged = new Map<string, SlashCommand>();
   for (const command of base) if (builtin || command.action !== "execute") merged.set(command.name, command);
   for (const command of seen ?? []) merged.set(command.name, command);
-  return [...merged.values()];
+  // `/rename` is the app's on every harness (state/renameCommand.ts).
+  return withRename([...merged.values()]);
 }
 
 /**
@@ -49,7 +51,7 @@ export function withSkills(commands: SlashCommand[], base: SlashCommand[]): Slas
   const skills = base.filter(
     (command) => command.action === "skill" && !present.has(command.name.toLowerCase()),
   );
-  return skills.length ? [...commands, ...skills] : commands;
+  return withRename(skills.length ? [...commands, ...skills] : commands);
 }
 
 /**
