@@ -1893,7 +1893,11 @@ export function Sidebar() {
         ...settledSection.items.map((s, index) => (chain.some((c) => c.parent === s.id) ? index : -1)),
       )
     : -1;
-  const settledForChain = settledAt >= 0;
+  // The shelf opens for that row once; folding it while the delegate is open keeps it shut until
+  // another settled parent's delegate is opened.
+  const chainParent = settledAt >= 0 ? settledSection!.items[settledAt]!.id : null;
+  const [shelfShutFor, setShelfShutFor] = useState<string | null>(null);
+  const settledForChain = chainParent !== null && chainParent !== shelfShutFor;
   // Every shelf folds on its own header, and the choice is kept per shelf. The sections above them
   // are the list itself and never fold; a project's folder folds with `folded`.
   const shelfIsOpen: Record<ShelfId, boolean> = {
@@ -1912,8 +1916,11 @@ export function Sidebar() {
   const toggle = (id: string) => {
     if (id === "working") setWorkingStored(!isOpen(id));
     else if (id === "snoozed") setSnoozedStored(!isOpen(id));
-    else if (id === "settled") setSettledStored(!isOpen(id));
-    else setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
+    else if (id === "settled") {
+      const open = isOpen(id);
+      setShelfShutFor(open ? chainParent : null);
+      setSettledStored(!open);
+    } else setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
   };
   const settledLimit = Math.max(settledShown, settledAt + 1);
 

@@ -23,6 +23,7 @@ import {
   useApp,
 } from "./store";
 import { HOME_FOLDER, startNewThreadFromContext } from "./threadOpen";
+import { leaveSettledThreads, statusOf } from "./threadStatus";
 
 function zoom(direction: 1 | -1 | 0) {
   void stepZoom(direction).then((level) => toast(`Zoom ${Math.round(level * 100)}%`, "info"));
@@ -33,7 +34,9 @@ export function runShortcut(command: string): boolean {
   const s = useApp.getState();
   switch (command) {
     case "settle-current-thread":
-      if (s.selectedId) void settleThread(s.selectedId);
+      // A thread that is settled already closes for a new thread instead of settling again.
+      if (s.selectedId && statusOf(s, s.selectedId) === "done") leaveSettledThreads([s.selectedId]);
+      else if (s.selectedId) void settleThread(s.selectedId);
       return true;
     case "new-thread":
       startNewThreadFromContext();
