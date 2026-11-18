@@ -47,6 +47,13 @@ pub const STABLE_AFTER: Duration = Duration::from_secs(30);
 /// of at the end of the backoff.
 pub const NETWORK_POLL: Duration = Duration::from_secs(5);
 
+/// How long one write to a connected machine may take. A peer that vanished
+/// without a reset leaves a full send buffer, and a write to it would block
+/// until TCP gives up, minutes later, with the row still saying Connected.
+/// Longer than the gateway's own 10 s, so a 1 MiB upload over a slow uplink
+/// is not mistaken for a dead link.
+pub const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Where a machine stands, as the page shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -270,8 +277,9 @@ struct PendingApproval {
 
 /// One machine's supervisor.
 struct Live {
-    /// Sends one JSON-RPC line to the machine. Kept across reconnects, so a
-    /// line the app writes while the machine is being reached is not lost.
+    /// Sends one JSON-RPC line to the machine. The queue outlives a
+    /// connection, and what is left in it when the next one opens is thrown
+    /// away: those lines belong to the connection that ended.
     outbox: Option<tokio::sync::mpsc::Sender<String>>,
     /// Aborted when the app asks for the machine to be connected again or
     /// disconnected; dropping it closes the socket.
@@ -795,6 +803,11 @@ async fn relay_once(
         route.clone(),
         failed,
     );
+    // The page writes to this connection only once it has seen `Open`, so a
+    // line still queued here was written to the one before. Sent now it would
+    // go out ahead of `initialize`, and its answer could settle another
+    // request: every connection numbers its requests from 1.
+    while inbox.try_recv().is_ok() {}
     let _ = channel.send(EngineEvent::Open {
         engine: format!("{} ({})", machine.name, route.address),
     });
@@ -861,7 +874,7 @@ async fn relay_once(
                 let moved = rustcode_client::network_changed(&addresses, &current);
                 addresses = current;
                 if (woke || moved) && pinged.is_none() {
-                    if let Err(error) = acp.ping().await {
+                    if let Err(error) = within_send_timeout(acp.ping()).await {
                         return End::Failed(error, Some(route.clone()));
                     }
                     let sent = tokio::time::Instant::now();
@@ -872,13 +885,31 @@ async fn relay_once(
                 }
             }
             Step::Frame(Ok(Some(frame))) => {
-                if channel
-                    .send(EngineEvent::Line {
-                        line: frame.to_string(),
-                    })
-                    .is_err()
-                {
+                // Take what the socket already holds with it (a transcript
+                // replay, a burst of chunks): one message to the page, and one
+                // task there, instead of one per frame.
+                let mut batch = Batch::new(frame.to_string());
+                let mut ended = None;
+                while batch.has_room() {
+                    match tokio::time::timeout(Duration::ZERO, acp.next()).await {
+                        Ok(Ok(Some(frame))) => batch.push(frame.to_string()),
+                        Ok(Ok(None)) => {
+                            ended = Some(End::Closed);
+                            break;
+                        }
+                        Ok(Err(error)) => {
+                            ended = Some(End::Failed(error, Some(route.clone())));
+                            break;
+                        }
+                        // Nothing more is ready.
+                        Err(_) => break,
+                    }
+                }
+                if channel.send(batch.into_event()).is_err() {
                     return End::Closed;
+                }
+                if let Some(end) = ended {
+                    return end;
                 }
             }
             Step::Frame(Ok(None)) => return End::Closed,
@@ -888,11 +919,61 @@ async fn relay_once(
                 let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
-                if let Err(error) = acp.send(frame).await {
+                if let Err(error) = within_send_timeout(acp.send(frame)).await {
                     return End::Failed(error, Some(route.clone()));
                 }
             }
             Step::Line(None) => return End::Closed,
+        }
+    }
+}
+
+/// One write to the machine, given up after [`SEND_TIMEOUT`]: the relay's
+/// loop reads frames and checks the link between writes, so a write that
+/// never returns would stop both.
+async fn within_send_timeout(
+    write: impl std::future::Future<Output = Result<(), Error>>,
+) -> Result<(), Error> {
+    match tokio::time::timeout(SEND_TIMEOUT, write).await {
+        Ok(sent) => sent,
+        Err(_) => Err(anyhow::anyhow!(
+            "the machine took no data for {} s; the connection is gone",
+            SEND_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+/// Frames that were ready together, on their way to the page as one message.
+struct Batch {
+    lines: Vec<String>,
+    bytes: usize,
+}
+
+impl Batch {
+    fn new(first: String) -> Self {
+        Self {
+            bytes: first.len(),
+            lines: vec![first],
+        }
+    }
+
+    fn push(&mut self, line: String) {
+        self.bytes += line.len();
+        self.lines.push(line);
+    }
+
+    /// Whether another frame fits in the message.
+    fn has_room(&self) -> bool {
+        self.lines.len() < crate::engine::BATCH_LINES && self.bytes < crate::engine::BATCH_BYTES
+    }
+
+    fn into_event(mut self) -> EngineEvent {
+        if self.lines.len() == 1 {
+            EngineEvent::Line {
+                line: self.lines.pop().unwrap_or_default(),
+            }
+        } else {
+            EngineEvent::Lines { lines: self.lines }
         }
     }
 }
@@ -2373,6 +2454,43 @@ mod tests {
 
     /// The ask id is the page's name for a request, used as a map key and a
     /// command argument: anything a map or a log should not hold is refused.
+    #[test]
+    fn frames_that_were_ready_together_reach_the_page_as_one_message() {
+        let one = serde_json::to_value(Batch::new("{}".into()).into_event()).unwrap();
+        assert_eq!(one, serde_json::json!({"type": "line", "line": "{}"}));
+
+        let mut batch = Batch::new("{\"a\":1}".into());
+        batch.push("{\"b\":2}".into());
+        assert!(batch.has_room());
+        let both = serde_json::to_value(batch.into_event()).unwrap();
+        assert_eq!(
+            both,
+            serde_json::json!({"type": "lines", "lines": ["{\"a\":1}", "{\"b\":2}"]})
+        );
+    }
+
+    #[test]
+    fn a_batch_stops_at_the_line_and_byte_limits() {
+        let mut batch = Batch::new(String::new());
+        for _ in 1..crate::engine::BATCH_LINES {
+            assert!(batch.has_room());
+            batch.push(String::new());
+        }
+        assert!(!batch.has_room());
+
+        let large = Batch::new("x".repeat(crate::engine::BATCH_BYTES));
+        assert!(!large.has_room());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_the_machine_never_takes_ends_the_connection() {
+        let error = within_send_timeout(std::future::pending())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("took no data for 30 s"));
+        assert!(within_send_timeout(async { Ok(()) }).await.is_ok());
+    }
+
     #[test]
     fn an_ask_id_is_short_and_printable() {
         for usable in ["ask-1", "8f1c2d3e4a5b6c7d", "ask-mg3kq1-1_2"] {

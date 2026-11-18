@@ -64,7 +64,7 @@ objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKW
 
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "test-util"] }
 
 # Incremental compilation stays on (cargo's default), as in the root
 # workspace: with it off, a one-file edit rebuilt the whole app crate.
