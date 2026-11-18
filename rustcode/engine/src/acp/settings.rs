@@ -74,6 +74,13 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("workflow-call-budget", SettingType::Number, json!(40)),
             ("workflow-timeout-minutes", SettingType::Number, json!(60)),
             ("workflow-kept-runs", SettingType::Number, json!(20)),
+            // Whether a thread is listed the tools few threads need
+            // (`orchestration::EXTRA_TOOL_NAMES`), which cost context in every one.
+            (
+                crate::orchestration::ALL_TOOLS_SETTING,
+                SettingType::Boolean,
+                json!(false),
+            ),
         ]
     })
 }
@@ -418,6 +425,10 @@ fn about(key: &str) -> (&'static str, Option<&'static [&'static str]>) {
         "workflow-call-budget" => ("Workflow agent calls per run", None),
         "workflow-timeout-minutes" => ("Workflow run time limit, in minutes", None),
         "workflow-kept-runs" => ("Finished workflow runs kept per thread", None),
+        crate::orchestration::ALL_TOOLS_SETTING => (
+            "List the project, scheduled task, workflow and worktree handoff tools to threads",
+            None,
+        ),
         _ => ("", None),
     }
 }

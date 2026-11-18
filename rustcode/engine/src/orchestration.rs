@@ -368,6 +368,44 @@ pub const MCP_INSTRUCTIONS_LIMIT: usize = 4000;
 /// that tool's description, which a client does not cut.
 pub const MCP_INSTRUCTIONS_V16: &str = "RustCode's threads, projects, settings and usage. Rules first. Use `request_secret` for credentials instead of asking for them in chat; never read or print the destination file. Change RustCode's settings, skills and MCP servers with `manage_settings` and `manage_capabilities`; never edit `settings.json` or `config.toml` by hand. Tools that change another thread (`update_session`, `organize_threads`, `configure_session`, `transfer_session`, `interrupt_session`, `answer_request`, `merge_when_green`, `cleanup_worktree`, `handoff_worktree`), a project or a schedule run only when the user asks; the user approves, and a card for another machine names it. `machine` takes another paired computer's id or name from `list_machines`: omitted, a tool acts on this computer. Name one only when the user did, and never fall back to this computer when it is offline. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path.\n\nQuestions about the user's threads, projects, past work and usage: ask `list_sessions`, `search_sessions`, `read_session`, `list_worktrees`, `list_projects`, `thread_usage` and `query_data` instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it.\n\nDelegating: `start_session` and `fan_out` start a delegate, shown nested under this thread: give it a whole task; a Claude Code thread has no subagent tool, so delegate through them. `message_session` gives an existing thread work. For a thread the user will follow up themselves, pass `standalone: true` and name its session id to them: nothing is delivered back. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates and check their pull requests with `thread_status`. Wait on a whole wave in one `wait_session` with `link_ids` and `all: true`, or end the turn: the app wakes this thread when children finish. Call `list_harnesses` once.\n\nThis thread: when its title is still automatic, call `update_session` once with a short title (6 words or fewer); a title the user chose stays. When the user says to settle (\"settle\", \"settle this\", \"settle it\"), call `update_session` with `status: \"settled\"` on this thread or the one they name. Settling only marks it done; it does not merge, push or clean anything up.";
 
+/// The setting that lists [`EXTRA_TOOL_NAMES`] to a thread; off by default.
+pub const ALL_TOOLS_SETTING: &str = "orchestration-all-tools";
+
+/// The tools a thread's MCP server leaves out of its list unless the user
+/// turns [`ALL_TOOLS_SETTING`] on. Every listed tool is sent with each request
+/// of a harness that does not defer them, and these are the ones few threads
+/// call: managing projects, the daemon's scheduled tasks, workflow runs and
+/// moving a worktree. Leaving them out takes about a third off the list. One
+/// that is called anyway is still answered, so a harness holding an older
+/// list keeps working.
+pub const EXTRA_TOOL_NAMES: [&str; 14] = [
+    READ_PROJECT,
+    CREATE_PROJECT,
+    CLONE_PROJECT,
+    UPDATE_PROJECT,
+    REMOVE_PROJECT,
+    SCHEDULE_TASK,
+    LIST_SCHEDULED_TASKS,
+    DELETE_SCHEDULED_TASK,
+    RUN_SCHEDULED_TASK_NOW,
+    WORKTREE_STATUS,
+    HANDOFF_WORKTREE,
+    crate::workflow::RUN_TOOL_NAME,
+    crate::workflow::STATUS_TOOL_NAME,
+    crate::workflow::STOP_TOOL_NAME,
+];
+
+/// What the MCP server adds to its instructions when it lists the core tools
+/// alone, so an agent asked for one of the others knows where it went.
+pub const CORE_TOOLS_NOTE: &str = "Not listed here: the tools that manage projects, scheduled tasks, workflow runs and worktree handoff. When the user asks for one, turn `orchestration-all-tools` on with `manage_settings`; threads started after that list them.";
+
+/// Whether the user has every tool listed to threads ([`ALL_TOOLS_SETTING`]).
+pub fn lists_all_tools() -> bool {
+    crate::acp::settings::value(ALL_TOOLS_SETTING)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 /// The `instructions` the MCP server gives a client of `version`. Up to
 /// version 15 the prompt hint fits what a client keeps (4,000 characters); from 16
 /// it does not, so those clients get the cross-tool rules alone.
