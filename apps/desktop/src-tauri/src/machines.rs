@@ -826,12 +826,12 @@ async fn relay_once(
         // branch goes first, so the frame branch is polled first and a frame
         // that is already there is never dropped.
         enum Step {
-            Frame(Result<Option<serde_json::Value>, Error>),
+            Frame(Result<Option<String>, Error>),
             Line(Option<String>),
             Check,
         }
         let step = {
-            let read = acp.next();
+            let read = acp.next_text();
             tokio::pin!(read);
             tokio::select! {
                 biased;
@@ -888,11 +888,11 @@ async fn relay_once(
                 // Take what the socket already holds with it (a transcript
                 // replay, a burst of chunks): one message to the page, and one
                 // task there, instead of one per frame.
-                let mut batch = Batch::new(frame.to_string());
+                let mut batch = Batch::new(frame);
                 let mut ended = None;
                 while batch.has_room() {
-                    match tokio::time::timeout(Duration::ZERO, acp.next()).await {
-                        Ok(Ok(Some(frame))) => batch.push(frame.to_string()),
+                    match tokio::time::timeout(Duration::ZERO, acp.next_text()).await {
+                        Ok(Ok(Some(frame))) => batch.push(frame),
                         Ok(Ok(None)) => {
                             ended = Some(End::Closed);
                             break;
@@ -915,11 +915,12 @@ async fn relay_once(
             Step::Frame(Ok(None)) => return End::Closed,
             Step::Frame(Err(error)) => return End::Failed(error, Some(route.clone())),
             Step::Line(Some(line)) => {
-                // A line the webview wrote; only JSON reaches a machine.
-                let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line) else {
+                // A line the webview wrote; only JSON reaches a machine, and
+                // it goes as written.
+                if serde_json::from_str::<serde::de::IgnoredAny>(&line).is_err() {
                     continue;
-                };
-                if let Err(error) = within_send_timeout(acp.send(frame)).await {
+                }
+                if let Err(error) = within_send_timeout(acp.send_text(line)).await {
                     return End::Failed(error, Some(route.clone()));
                 }
             }

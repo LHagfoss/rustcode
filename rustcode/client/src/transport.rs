@@ -271,6 +271,8 @@ impl Connection {
     }
 }
 
+const NOT_JSON: &str = "the machine sent a frame that is not JSON";
+
 /// A JSON-RPC channel over a socket that is now carrying ACP.
 ///
 /// One object per text frame. The machine sends notifications
@@ -330,6 +332,14 @@ impl AcpChannel {
 
     /// The next frame before `deadline`; pings do not restart the wait.
     async fn recv_by(&mut self, deadline: Option<tokio::time::Instant>) -> Result<Option<Value>> {
+        let Some(text) = self.text_by(deadline).await? else {
+            return Ok(None);
+        };
+        Ok(Some(serde_json::from_str(&text).context(NOT_JSON)?))
+    }
+
+    /// The next frame's text before `deadline`, as the machine wrote it.
+    async fn text_by(&mut self, deadline: Option<tokio::time::Instant>) -> Result<Option<String>> {
         loop {
             let next = match deadline {
                 Some(deadline) => tokio::time::timeout_at(deadline, self.socket.next())
@@ -344,10 +354,7 @@ impl AcpChannel {
             }
             match next {
                 Some(Ok(Message::Text(text))) => {
-                    return Ok(Some(
-                        serde_json::from_str(&text)
-                            .context("the machine sent a frame that is not JSON")?,
-                    ));
+                    return Ok(Some(text.as_str().to_owned()));
                 }
                 Some(Ok(Message::Binary(_))) => bail!("the machine sent a binary ACP frame"),
                 Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
@@ -357,6 +364,25 @@ impl AcpChannel {
                 }
             }
         }
+    }
+
+    /// The next ACP frame as the machine wrote it, for a relay that passes
+    /// frames on without reading them: checked to be JSON, never built into a
+    /// tree and written out again. Waits like [`Self::next`].
+    pub async fn next_text(&mut self) -> Result<Option<String>> {
+        let Some(text) = self.text_by(None).await? else {
+            return Ok(None);
+        };
+        serde_json::from_str::<serde::de::IgnoredAny>(&text).context(NOT_JSON)?;
+        Ok(Some(text))
+    }
+
+    /// Send one JSON-RPC frame that is already text. Text that is not JSON is
+    /// refused here, since the machine closes the connection on it.
+    pub async fn send_text(&mut self, frame: String) -> Result<()> {
+        serde_json::from_str::<serde::de::IgnoredAny>(&frame)
+            .context("the frame to send is not JSON")?;
+        self.socket.send(Message::text(frame)).await.context("send")
     }
 
     /// Send a request and return its answer, skipping notifications and
@@ -680,6 +706,46 @@ mod tests {
         let frame = channel.next().await.unwrap().expect("a frame arrives");
         assert_eq!(frame["method"], "session/update");
         assert!(channel.next().await.unwrap().is_none(), "then it closes");
+        server.await.unwrap();
+    }
+
+    /// A relay passes a frame on byte for byte, in both directions, and
+    /// still refuses text that is not JSON.
+    #[tokio::test]
+    async fn a_relayed_frame_keeps_its_text() {
+        // Key order and spacing a rebuilt tree would not keep.
+        const FRAME: &str =
+            r#"{"method":"session/update",  "jsonrpc":"2.0","params":{"b":1,"a":2}}"#;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            assert!(matches!(socket.next().await, Some(Ok(Message::Text(_)))));
+            socket
+                .send(Message::text(r#"{"type":"acp_opened"}"#))
+                .await
+                .unwrap();
+            socket.send(Message::text(FRAME)).await.unwrap();
+            let Some(Ok(Message::Text(echo))) = socket.next().await else {
+                panic!("the relay sends the frame back");
+            };
+            assert_eq!(echo.as_str(), FRAME);
+            socket.send(Message::text("not json")).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+        let mut channel = Connection::open(&addr.to_string())
+            .await
+            .unwrap()
+            .acp_open()
+            .await
+            .expect("the stub opens ACP");
+        let frame = channel.next_text().await.unwrap().expect("a frame arrives");
+        assert_eq!(frame, FRAME);
+        assert!(channel.send_text("{oops".into()).await.is_err());
+        channel.send_text(frame).await.unwrap();
+        let error = channel.next_text().await.unwrap_err();
+        assert!(error.to_string().contains("not JSON"), "{error}");
         server.await.unwrap();
     }
 
