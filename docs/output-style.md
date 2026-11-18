@@ -18,6 +18,10 @@ The root agent's prompt gets a `# Output style` section
 - Code cited as `` `path:line` `` in inline code, with the full repo-relative
   path. The citation rule itself is in the base `# Workflow` section, so
   subagent reports keep it too.
+- Issues and pull requests linked by their full URL, never a bare `#12`:
+  the desktop app draws a URL as a link chip (an issue or pull request as
+  its icon, number and title, `src/lib/links.ts` `linkChipLabel`), while
+  `#12` stays plain text.
 - No emoji, filler, or recap of what the reply already said.
 - A next step only when the user has one to take.
 
@@ -39,14 +43,14 @@ not repeat either.
 
 | Client | Visualization level | Smart UI | Output style | Extra tokens |
 | --- | --- | --- | --- | --- |
-| TUI | 1 | none | rules + viz sentence | ~130 |
-| Desktop app (Tauri), Smart UI on | 2, not taught | on | rules + views sentence | ~127 (plus the Smart UI section; no viz section) |
-| Desktop app (Tauri), Smart UI off | 2 | off | rules + viz sentence | ~130 (plus the viz section and the off note) |
-| macOS app | 2 | per setting | rules + viz sentence | ~130 |
-| Other ACP clients (Zed, …) | 0 | none | rules only | ~110 |
+| TUI | 1 | none | rules + viz sentence | ~160 |
+| Desktop app (Tauri), Smart UI on | 2, not taught | on | rules + views sentence | ~155 (plus the Smart UI section; no viz section) |
+| Desktop app (Tauri), Smart UI off | 2 | off | rules + viz sentence | ~160 (plus the viz section and the off note) |
+| macOS app | 2 | per setting | rules + viz sentence | ~160 |
+| Other ACP clients (Zed, …) | 0 | none | rules only | ~140 |
 | Subagents, compact prompts (small local models) | any | any | none | 0 |
-| Codex harness | n/a | n/a | runtime info + rules + citation rule (+ views sentence with Smart UI on), as `developerInstructions` | ~190 |
-| ACP harnesses that take a client system prompt (Claude Code) | n/a | n/a | runtime info + rules + citation rule (+ views sentence with Smart UI on), as `systemPrompt` (`append`) | ~190 |
+| Codex harness | n/a | n/a | runtime info + rules + citation rule (+ views sentence with Smart UI on), as `developerInstructions` | ~220 |
+| ACP harnesses that take a client system prompt (Claude Code) | n/a | n/a | runtime info + rules + citation rule (+ views sentence with Smart UI on), as `systemPrompt` (`append`) | ~220 |
 | Other ACP harnesses (Gemini, OpenCode) | n/a | n/a | none | 0 |
 
 Every RustCode frontend renders CommonMark with tables and highlighted

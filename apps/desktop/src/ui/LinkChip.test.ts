@@ -55,4 +55,11 @@ describe("a link chip", () => {
     // The words, not the URL: a selection across the chip copies "example.com".
     expect(out).toContain('<span class="font-medium">example.com</span>');
   });
+
+  test("an issue or pull request shows which it is and its number before the title arrives", () => {
+    const pull = drawn("https://github.com/acme/app/pull/12");
+    expect(pull).toContain('data-icon="GitPullRequest"');
+    expect(pull).toContain("acme/app#12");
+    expect(drawn("https://github.com/acme/app/issues/7")).toContain('data-icon="CircleDot"');
+  });
 });

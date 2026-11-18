@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Transport } from "../acp/transport";
-import { hostOf, linkChipLabel, sanitizeMeta } from "./links";
+import { githubRefOf, githubTitle, hostOf, linkChipLabel, sanitizeMeta } from "./links";
 
 describe("link metadata", () => {
   test("keeps only safe values", () => {
@@ -14,6 +14,44 @@ describe("link metadata", () => {
     expect(sanitizeMeta({ icon: "data:image/png;base64,AAAA", color: "#1e2327" })?.color).toBe("#1e2327");
     expect(sanitizeMeta(null)).toBeNull();
     expect(sanitizeMeta({})).toBeNull();
+  });
+});
+
+describe("a GitHub issue or pull request link", () => {
+  const pr = "https://github.com/acme/app/pull/3975";
+  test("is recognised with anything after its number", () => {
+    expect(githubRefOf(pr)).toEqual({ repo: "acme/app", kind: "pull", number: 3975 });
+    expect(githubRefOf("https://github.com/acme/app/issues/12#issuecomment-1")).toEqual({
+      repo: "acme/app",
+      kind: "issue",
+      number: 12,
+    });
+    expect(githubRefOf(`${pr}/files`)?.number).toBe(3975);
+    expect(githubRefOf("https://github.com/acme/app/pull/12x")).toBeUndefined();
+    expect(githubRefOf("https://github.com/acme/app")).toBeUndefined();
+    expect(githubRefOf("https://example.com/acme/app/pull/1")).toBeUndefined();
+  });
+
+  test("keeps only its own title from GitHub's page title", () => {
+    const ref = githubRefOf(pr)!;
+    expect(githubTitle("Keep the name by someone · Pull Request #3975 · acme/app · GitHub", ref)).toBe(
+      "Keep the name",
+    );
+    expect(githubTitle("Keep the name by dependabot[bot] · Pull Request #3975 · acme/app", ref)).toBe(
+      "Keep the name",
+    );
+    const issue = githubRefOf("https://github.com/acme/app/issues/12")!;
+    expect(githubTitle("Crash on start · Issue #12 · acme/app · GitHub", issue)).toBe("Crash on start");
+    // A private repository's page, or another number's, is not this one's title.
+    expect(githubTitle("Page not found · GitHub", issue)).toBeUndefined();
+    expect(githubTitle("Crash · Issue #13 · acme/app", issue)).toBeUndefined();
+  });
+
+  test("reads as its number and title, or owner/repo#number until the title is known", () => {
+    expect(linkChipLabel(pr, null)).toMatchObject({ title: "acme/app#3975", showsHost: false });
+    expect(
+      linkChipLabel(pr, { title: "Keep the name by someone · Pull Request #3975 · acme/app · GitHub" }),
+    ).toMatchObject({ tag: "#3975", title: "Keep the name", host: "app", showsHost: true });
   });
 });
 

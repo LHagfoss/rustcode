@@ -307,7 +307,7 @@ When an orchestrator thread hands work to other threads (`start_session`,
   the push. Delegates do not run `cargo test` locally: they build in
   parallel, and seven of them at once drained the user's battery. Reviewers
   read the code and the PR's CI instead of building it.
-- Waiting on CI is not work: after pushing, end the turn with the PR number
+- Waiting on CI is not work: after pushing, end the turn with the PR URL
   instead of polling `gh pr checks` in a sleep loop. Every poll resends the
   whole context; one thread spent 17.7M input tokens on 70 sleeps. The
   orchestrator watches the linked pull request and wakes the thread. Ask for

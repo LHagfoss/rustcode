@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { type LinkMeta, linkChipLabel, linkMetaCached, loadLinkMeta } from "../lib/links";
 import { openExternal } from "../lib/native";
-import { ArrowUpRight, Globe, X } from "./icons";
+import { ArrowUpRight, CircleDot, GitPullRequest, Globe, X } from "./icons";
 import { cx, Tooltip } from "./primitives";
 
 export function useLinkMeta(url: string): LinkMeta | null {
@@ -40,7 +40,7 @@ export function LinkChip({
   variant?: "inline" | "token";
 }) {
   const meta = useLinkMeta(url);
-  const { title, host, showsHost } = linkChipLabel(url, meta);
+  const { title, host, showsHost, tag, github } = linkChipLabel(url, meta);
   const tint = meta?.color;
   const inline = variant === "inline";
   // A favicon that will not decode is the same as no favicon: a globe, never a gap. The URL is
@@ -91,7 +91,15 @@ export function LinkChip({
           {/* A favicon sits on its own light tile: sites draw them dark as often as light, and a
               dark mark straight on the chip's grey disappears in the dark theme. `bg-knob` is the
               one white in every theme, so both kinds read on it. */}
-          {icon ? (
+          {/* An issue or pull request says which it is, the way GitHub draws them, rather than
+              showing GitHub's own mark on every one. */}
+          {github ? (
+            github.kind === "pull" ? (
+              <GitPullRequest size={12} aria-hidden className="ml-0.5 shrink-0 text-fg-muted" />
+            ) : (
+              <CircleDot size={12} aria-hidden className="ml-0.5 shrink-0 text-fg-muted" />
+            )
+          ) : icon ? (
             <span className="flex size-[14px] shrink-0 items-center justify-center rounded-xs bg-knob p-px">
               <img
                 src={icon}
@@ -108,7 +116,8 @@ export function LinkChip({
               "titlehost": the host is the faint tail of the same words, and the whole run
               truncates to the chip's cap. */}
           <span className="truncate">
-            <span className="font-medium">{title}</span>
+            {tag && <span className="font-medium">{tag} </span>}
+            <span className={tag ? undefined : "font-medium"}>{title}</span>
             {showsHost && <span className="text-caption text-fg-faint"> {host}</span>}
           </span>
           {!onRemove && (

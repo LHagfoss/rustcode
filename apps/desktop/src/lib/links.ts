@@ -70,16 +70,57 @@ export function hostOf(url: string): string {
   }
 }
 
+/** A GitHub issue or pull request a URL points at, with anything after its number ignored. */
+export interface GitHubRef {
+  repo: string;
+  kind: "pull" | "issue";
+  number: number;
+}
+
+export function githubRefOf(url: string): GitHubRef | undefined {
+  const match = /^https:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/(pull|issues)\/(\d+)(?:[/?#]|$)/i.exec(
+    url,
+  );
+  const number = Number(match?.[3]);
+  if (!match || !Number.isSafeInteger(number) || number <= 0) return undefined;
+  return { repo: match[1] ?? "", kind: match[2]?.toLowerCase() === "pull" ? "pull" : "issue", number };
+}
+
+/**
+ * The issue's or pull request's own title out of GitHub's page title, "Fix it by someone · Pull
+ * Request #12 · owner/repo · GitHub". A page that does not name the number (a private repository's
+ * "Page not found", a sign-in page) has no title worth showing.
+ */
+export function githubTitle(title: string | undefined, ref: GitHubRef): string | undefined {
+  const marker = ref.kind === "pull" ? ` · Pull Request #${ref.number}` : ` · Issue #${ref.number}`;
+  const at = title?.indexOf(marker) ?? -1;
+  if (!title || at <= 0) return undefined;
+  let own = title.slice(0, at).trim();
+  // A pull request's page title names its author: "Fix it by someone".
+  if (ref.kind === "pull") own = own.replace(/\s+by\s+[\w-]+(?:\[bot\])?$/, "");
+  return own || undefined;
+}
+
 /**
  * What a chip says: the page's title over its host, or the host alone when the shell
- * had no title (or a title that is only the host). These are the chip's words, so a
- * text selection dragged across a chip copies them and never the favicon or the arrow.
+ * had no title (or a title that is only the host). A GitHub issue or pull request leads with
+ * its number (`tag`) and its own title, and says `owner/repo#12` until the title is known.
+ * These are the chip's words, so a text selection dragged across a chip copies them and
+ * never the favicon or the arrow.
  */
 export function linkChipLabel(
   url: string,
   meta: LinkMeta | null,
-): { title: string; host: string; showsHost: boolean } {
+): { title: string; host: string; showsHost: boolean; tag?: string; github?: GitHubRef } {
   const host = hostOf(url);
+  const github = githubRefOf(url);
+  if (github) {
+    const own = githubTitle(meta?.title, github);
+    const repoName = github.repo.split("/")[1] ?? github.repo;
+    return own
+      ? { tag: `#${github.number}`, title: own, host: repoName, showsHost: true, github }
+      : { title: `${github.repo}#${github.number}`, host, showsHost: false, github };
+  }
   const title = meta?.title?.trim() || host;
   return { title, host, showsHost: title !== host };
 }
