@@ -452,7 +452,7 @@ export function RightPanel() {
           width: "var(--rc-panel-width)",
           marginTop: HEADER_HEIGHT + CARD_GAP,
           marginRight: CARD_GAP,
-          marginBottom: CARD_GAP,
+          marginBottom: `max(${CARD_GAP}px, 20dvh)`,
         }}
       >
         {contents}
