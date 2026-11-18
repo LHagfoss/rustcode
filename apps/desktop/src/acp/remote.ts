@@ -157,9 +157,12 @@ export interface RemoteDevice {
 }
 
 /** The kind of network a connected device reached this computer over. */
-export type ConnectionPath = "loopback" | "lan" | "overlay" | "other";
+export type ConnectionPath = "loopback" | "lan" | "overlay" | "tunnel" | "other";
 
-const CONNECTION_PATHS: readonly ConnectionPath[] = ["loopback", "lan", "overlay", "other"];
+const CONNECTION_PATHS: readonly ConnectionPath[] = ["loopback", "lan", "overlay", "tunnel", "other"];
+
+/** Paths whose network encrypts: a VPN, or TLS to the public address's tunnel edge. */
+const ENCRYPTED_PATHS: readonly ConnectionPath[] = ["overlay", "tunnel"];
 
 /** One connection's network, as the gateway classifies the address the device dialled. */
 export interface RemoteConnectionRoute {
@@ -169,8 +172,9 @@ export interface RemoteConnectionRoute {
   /** The `host:port` on this computer the device dialled. */
   localAddress: string;
   /**
-   * The network encrypts the traffic. Only a tunnel does: the gateway itself speaks plain
-   * WebSocket, so a LAN connection is never encrypted whatever else is reported.
+   * The network encrypts the traffic. Only a tunnel does (a VPN, or TLS to the public address's
+   * tunnel edge): the gateway itself speaks plain WebSocket, so a LAN connection is never
+   * encrypted whatever else is reported.
    */
   encrypted: boolean;
 }
@@ -192,7 +196,9 @@ export function connectionRouteLabel(route: RemoteConnectionRoute): string {
       ? "LAN"
       : route.path === "overlay"
         ? ((route.provider && PROVIDER_LABELS[route.provider]) ?? "VPN")
-        : "Other network";
+        : route.path === "tunnel"
+          ? "Public address"
+          : "Other network";
   return `${network} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
 }
 
@@ -399,7 +405,7 @@ function parseConnectionRoutes(value: Json | undefined): RemoteConnectionRoute[]
           ...(provider ? { provider } : {}),
           localAddress,
           // Only a tunnel encrypts; a plain network is never labelled so, whatever the frame says.
-          encrypted: path === "overlay" && bool(route.encrypted) === true,
+          encrypted: ENCRYPTED_PATHS.includes(path) && bool(route.encrypted) === true,
         },
       ];
     }) ?? []

@@ -17,10 +17,14 @@ if-addrs = "0.15"
 keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 mdns-sd = { version = "0.21.7", default-features = false }
 rand = "0.10.2"
+# `wss://` routes to a machine's public address (a tunnel such as cloudflared):
+# TLS with the operating system's trust store, as reqwest does elsewhere.
+rustls-platform-verifier = "0.7"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tempfile = "3.10"
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "tls12"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 
 [dev-dependencies]

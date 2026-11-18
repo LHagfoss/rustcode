@@ -49,6 +49,7 @@ impl Fixture {
             key: load_key(&dir.join(KEY_FILE)).unwrap(),
             sign_in_codes: dir.join("outside-codes.json"),
             machine: "test-machine".to_owned(),
+            config: dir.to_path_buf(),
             failures: Mutex::new(Vec::new()),
             settings: outside::Settings {
                 grants: dir.join("outside-agents.json"),
@@ -64,7 +65,7 @@ impl Fixture {
         let task = tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let state = state.clone();
-                tokio::spawn(serve(stream, state));
+                tokio::spawn(handle(stream, state, None));
             }
         });
         Self { server, task }
@@ -839,4 +840,124 @@ async fn a_hosted_agent_is_approved_in_the_app_after_the_words_match() {
         .await;
     assert_eq!(location(&answer.1)["error"], "access_denied");
     assert!(super::outside_signin::view().is_empty());
+}
+
+/// One tunnel serves both audiences (#3955): `/ws` on the public host is the
+/// remote gateway's WebSocket, relayed to its loopback ingress, with the
+/// gateway's own browser-origin rule; any other host is refused, and without
+/// a running gateway the device is told so.
+#[tokio::test]
+async fn ws_on_the_public_host_reaches_the_remote_gateway() {
+    use crate::remote_gateway::{
+        address::plan_listen,
+        gateway::{Gateway, GatewayConfig, Limits},
+        lifecycle::RemoteLifecycle,
+        router::NoSessionsRouter,
+    };
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{client_async, tungstenite::Message};
+
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let f = Fixture::start_with(dir.path(), Some("https://rustcode.example.com")).await;
+    let authority = f.server.base.trim_start_matches("http://").to_owned();
+    let upgrade = |host: &str, origin: Option<&str>| {
+        let origin = origin.map_or(String::new(), |o| format!("Origin: {o}\r\n"));
+        format!(
+            "GET /ws HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{origin}\r\n"
+        )
+    };
+    let status_of = |request: String| {
+        let authority = authority.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let mut stream = TcpStream::connect(&authority).await.unwrap();
+                stream.write_all(request.as_bytes()).await.unwrap();
+                let mut head = vec![0; 512];
+                let n = stream.read(&mut head).await.unwrap();
+                let text = String::from_utf8_lossy(&head[..n]).into_owned();
+                text.split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .parse::<u16>()
+                    .unwrap()
+            })
+            .await
+            .expect("HTTP request stalled")
+        }
+    };
+
+    // No gateway runs for this configuration yet.
+    assert_eq!(status_of(upgrade("rustcode.example.com", None)).await, 503);
+    // A host this listener does not answer for, and a plain GET.
+    assert_eq!(status_of(upgrade("evil.example", None)).await, 403);
+    assert_eq!(
+        f.request_to("rustcode.example.com", "GET", "/ws", "", "")
+            .await
+            .0,
+        426
+    );
+
+    let lifecycle = RemoteLifecycle::new(dir.path());
+    let gateway = Gateway::bind(
+        &lifecycle,
+        GatewayConfig {
+            replan: None,
+            plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
+            port: 0,
+            router: Arc::new(NoSessionsRouter),
+            sessions: None,
+            limits: Limits::default(),
+        },
+    )
+    .await
+    .unwrap();
+    let shutdown = gateway.shutdown_token();
+    let running = tokio::spawn(gateway.run());
+
+    // A browser page cannot use the tunnel to reach the gateway.
+    assert_eq!(
+        status_of(upgrade(
+            "rustcode.example.com",
+            Some("https://rustcode.example.com")
+        ))
+        .await,
+        403
+    );
+
+    // A native client gets the gateway's handshake answers through the relay.
+    let stream = TcpStream::connect(&authority).await.unwrap();
+    let (mut socket, _) = tokio::time::timeout(
+        Duration::from_secs(5),
+        client_async("ws://rustcode.example.com/ws", stream),
+    )
+    .await
+    .unwrap()
+    .expect("the relayed upgrade succeeds");
+    socket
+        .send(Message::text(
+            json!({
+                "type": "pair",
+                "protocol_version": 1,
+                "method": "credential",
+                "secret": "not-a-real-credential",
+                "device_name": "phone",
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    let answer = loop {
+        match tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+        {
+            Some(Ok(Message::Text(text))) => break serde_json::from_str::<Value>(&text).unwrap(),
+            Some(Ok(_)) => continue,
+            other => panic!("expected a handshake answer, got {other:?}"),
+        }
+    };
+    assert_eq!(answer["type"], "error", "{answer}");
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), running).await;
 }

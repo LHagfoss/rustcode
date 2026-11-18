@@ -1487,6 +1487,12 @@ pub struct Gateway {
     /// Overlay and extra LAN listeners the plan asked for; `listener` is the
     /// primary one a device dials.
     extra: Vec<TcpListener>,
+    /// Loopback only: WebSocket upgrades the engine's HTTP listener relays
+    /// from the public address (`/ws`), served as [`ConnectionPath::Tunnel`]
+    /// connections. `None` when it could not be bound.
+    ///
+    /// [`ConnectionPath::Tunnel`]: super::address::ConnectionPath::Tunnel
+    ingress: Option<TcpListener>,
     control: LocalListener,
     owners: LocalListener,
     shared: Arc<Shared>,
@@ -1513,13 +1519,24 @@ impl Gateway {
         let extra = bind_extras(&config.plan, local.port()).await;
         let bound = bound_addresses(local, &extra);
         let advertised = config.plan.advertise.clone().with_port(local.port());
-        let registration = GatewayRegistration::current(
+        let ingress = match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await {
+            Ok(ingress) => Some(ingress),
+            Err(error) => {
+                crate::dbg_log!("remote gateway: no public-address ingress: {error}");
+                None
+            }
+        };
+        let mut registration = GatewayRegistration::current(
             lifecycle.socket_path(),
             lifecycle.owner_socket_path(),
             gateway_id.clone(),
             local.to_string(),
             advertised.to_string(),
         )?;
+        registration.ingress_address = ingress
+            .as_ref()
+            .and_then(|ingress| ingress.local_addr().ok())
+            .map(|address| address.to_string());
         let control = LocalListener::bind(&lifecycle.socket_path()).with_context(|| {
             format!(
                 "failed to bind control socket {}",
@@ -1588,6 +1605,7 @@ impl Gateway {
         Ok(Self {
             listener,
             extra,
+            ingress,
             control,
             owners,
             shared,
@@ -1644,6 +1662,7 @@ impl Gateway {
         let Gateway {
             listener,
             extra,
+            ingress,
             control,
             owners,
             shared,
@@ -1722,6 +1741,7 @@ impl Gateway {
                             Arc::clone(&shared),
                             socket,
                             slot,
+                            Arrival::Direct,
                         ));
                     }
                 }
@@ -1733,12 +1753,32 @@ impl Gateway {
                                 Arc::clone(&shared),
                                 socket,
                                 slot,
+                                Arrival::Direct,
                             ));
                         }
                     }
                     Err(error) => {
                         // Typically descriptor exhaustion; do not spin on it.
                         crate::dbg_log!("remote gateway: accept failed: {error}");
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                },
+                // Every relayed connection comes from the engine on loopback,
+                // so they share one per-address budget: the tunnel cannot be
+                // used to spend more attempts than one address could.
+                accepted = accept_ingress(ingress.as_ref()) => match accepted {
+                    Ok((socket, peer)) => {
+                        if let Some(slot) = shared.admit_socket(peer.ip()) {
+                            tasks.spawn(transport::serve_connection(
+                                Arc::clone(&shared),
+                                socket,
+                                slot,
+                                Arrival::Tunnel,
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        crate::dbg_log!("remote gateway: ingress accept failed: {error}");
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
                 },
@@ -1776,6 +1816,25 @@ impl Gateway {
         .await;
         tasks.shutdown().await;
         Ok(())
+    }
+}
+
+/// How a socket reached the gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Arrival {
+    /// Dialled at one of the gateway's own listeners.
+    Direct,
+    /// Relayed by the engine's HTTP listener from the public address (`/ws`).
+    Tunnel,
+}
+
+/// The next relayed socket, or never when there is no ingress listener.
+async fn accept_ingress(
+    ingress: Option<&TcpListener>,
+) -> std::io::Result<(tokio::net::TcpStream, SocketAddr)> {
+    match ingress {
+        Some(ingress) => ingress.accept().await,
+        None => std::future::pending().await,
     }
 }
 

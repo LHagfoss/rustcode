@@ -272,6 +272,14 @@ describe("remote access", () => {
       expect(connectionRouteLabel(claimed)).toBe("VPN · Unencrypted");
     });
 
+    test("the public address reads as encrypted to its tunnel", () => {
+      const route = only([{ path: "tunnel", localAddress: "127.0.0.1:52011", encrypted: true }]);
+      expect(connectionRouteLabel(route)).toBe("Public address · Encrypted");
+      expect(connectionRouteTone(route)).toBe("ok");
+      const claimed = only([{ path: "tunnel", localAddress: "127.0.0.1:52011", encrypted: false }]);
+      expect(connectionRouteLabel(claimed)).toBe("Public address · Unencrypted");
+    });
+
     test("a client on this computer never left it", () => {
       const route = only([{ path: "loopback", localAddress: "127.0.0.1:17879", encrypted: false }]);
       expect(connectionRouteLabel(route)).toBe("This computer");

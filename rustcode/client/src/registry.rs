@@ -255,10 +255,17 @@ impl Route {
         }
     }
 
-    /// Whether the network this route runs over encrypts the traffic: only
-    /// a tunnel does ([`RouteKind::is_encrypted`]).
+    /// Whether the network this route runs over encrypts the traffic: a
+    /// tunnel does ([`RouteKind::is_encrypted`]), and so does TLS to a public
+    /// address's tunnel edge (`wss://`).
     pub fn is_encrypted(&self) -> bool {
-        self.kind.is_encrypted()
+        self.kind.is_encrypted() || self.is_tls()
+    }
+
+    /// Whether this route dials TLS (`wss://`): a machine's public address
+    /// behind a tunnel such as cloudflared.
+    pub fn is_tls(&self) -> bool {
+        self.kind != RouteKind::Ssh && crate::transport::is_tls(&self.address)
     }
 
     /// The name of the network this route is on, for a person: the product
@@ -269,6 +276,7 @@ impl Route {
             None if self.kind == RouteKind::Tailscale => "Tailscale".to_owned(),
             None if self.kind == RouteKind::Vpn => "the VPN".to_owned(),
             None if self.kind == RouteKind::Ssh => "SSH".to_owned(),
+            None if self.is_tls() => "the public address".to_owned(),
             None => "the LAN".to_owned(),
         }
     }
@@ -353,15 +361,15 @@ pub fn classify_address(address: &str) -> RouteKind {
     }
 }
 
-/// Whether a credential may travel to `address` on the plain `ws` transport
-/// this client speaks.
+/// Whether a credential may travel to `address`.
 ///
-/// The gateway has no TLS listener, so a token sent to a public address is a
-/// token handed to the network. A LAN or overlay route is the same risk the
-/// phone app already accepts; a public one is not, and waits for encrypted
-/// transport (#2651).
+/// The gateway has no TLS listener, so a token sent to a plain public
+/// address is a token handed to the network. A LAN or overlay route is the
+/// same risk the phone app already accepts. A `wss://` address is TLS to a
+/// tunnel's edge (the machine's public address, `docs/remote-security.md`),
+/// so it may carry one.
 pub fn may_send_secrets(address: &str) -> bool {
-    classify_address(address) != RouteKind::Public
+    crate::transport::is_tls(address) || classify_address(address) != RouteKind::Public
 }
 
 /// The error for a route that may not carry a credential, naming the reason
@@ -370,7 +378,7 @@ pub fn plain_ws_refusal(address: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "refusing to dial {address}: it is a public address and the gateway has no TLS listener, \
          so the pairing code and the device token would travel in the clear. Dial a LAN, \
-         Tailscale or VPN address instead; encrypted transport is tracked in #2651"
+         Tailscale or VPN address, or the machine's `wss://` public address, instead"
     )
 }
 
@@ -1864,9 +1872,10 @@ mod tests {
     }
 
     /// A credential may not travel to a public address on plain `ws`; a LAN,
-    /// Tailscale or VPN route is the risk the phone app already accepts.
+    /// Tailscale or VPN route is the risk the phone app already accepts, and
+    /// a `wss://` public address is TLS to its tunnel's edge.
     #[test]
-    fn only_non_public_routes_may_carry_a_credential() {
+    fn only_non_public_or_tls_routes_may_carry_a_credential() {
         for address in [
             "192.168.1.20:17879",
             "10.0.0.2",
@@ -1875,6 +1884,8 @@ mod tests {
             "100.92.13.44:17879",
             "mac.tail1234.ts.net",
             "studio.local",
+            "wss://rustcode.example.com",
+            "https://rustcode.example.com/ws",
         ] {
             assert!(may_send_secrets(address), "{address}");
         }
@@ -1882,9 +1893,24 @@ mod tests {
             assert!(!may_send_secrets(address), "{address}");
             let refusal = plain_ws_refusal(address).to_string();
             assert!(refusal.contains(address), "{refusal}");
-            assert!(refusal.contains("#2651"), "{refusal}");
             assert!(refusal.contains("no TLS listener"), "{refusal}");
+            assert!(refusal.contains("wss://"), "{refusal}");
         }
+    }
+
+    /// A `wss://` route is public and encrypted to its tunnel's edge; the
+    /// same host on plain `ws` is neither encrypted nor dialable.
+    #[test]
+    fn a_tls_public_route_is_encrypted_and_dialable() {
+        let tls = Route::new("wss://rustcode.example.com");
+        assert_eq!(tls.kind, RouteKind::Public);
+        assert!(tls.is_tls() && tls.is_encrypted() && tls.is_dialable());
+        assert_eq!(tls.network_name(), "the public address");
+        let plain = Route::new("ws://rustcode.example.com");
+        assert!(!plain.is_tls() && !plain.is_encrypted() && !plain.is_dialable());
+        // Leaving the tunnel for the LAN is a downgrade like leaving a VPN.
+        let change = RouteChange::between(Some(&tls), &Route::new("192.168.1.20:17879"));
+        assert!(change.is_some_and(|change| change.is_downgrade()));
     }
 
     #[test]

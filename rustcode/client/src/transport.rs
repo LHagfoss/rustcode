@@ -6,10 +6,12 @@
 //! [`Connection`] for plain remote-protocol frames or switches the socket to
 //! ACP ([`AcpChannel`]).
 //!
-//! TLS is not spoken here: the gateway has no TLS listener
-//! (`docs/remote.md` › Security posture), and a private overlay such as
-//! Tailscale or NetBird is what encrypts the traffic. A `wss://` address is
-//! therefore refused with a message saying so rather than silently dialled.
+//! The gateway itself has no TLS listener (`docs/remote.md` › Security
+//! posture): on a LAN or a private overlay such as Tailscale or NetBird this
+//! dials plain `ws://`, and the overlay is what encrypts the traffic. A
+//! `wss://` address is a machine's public address, a tunnel (cloudflared) to
+//! its engine's HTTP listener, which relays `/ws` to the gateway: TLS runs
+//! to the tunnel's edge, verified against the operating system's trust store.
 
 use crate::protocol::{
     AcpClientFrame, AcpServerFrame, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES,
@@ -17,13 +19,21 @@ use crate::protocol::{
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{WebSocketStream, client_async_with_config, tungstenite::Message};
 
 /// Default TCP port of a machine's gateway.
 pub const DEFAULT_PORT: u16 = 17879;
+
+/// Port of a `wss://` address that names none.
+pub const TLS_PORT: u16 = 443;
+
+/// Where a machine's public address serves the gateway's WebSocket.
+pub const PUBLIC_WS_PATH: &str = "/ws";
 
 /// Frames larger than this are refused by the gateway; refuse them here too,
 /// so a broken peer cannot make the client allocate without bound.
@@ -33,9 +43,40 @@ pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 /// route racing in step 1.8 keeps its own, much shorter, per-route deadline.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-// Plain `ws` only: the gateway has no TLS listener, so there is no TLS
-// stream type to allow for here.
-type Socket = WebSocketStream<TcpStream>;
+/// The byte stream under the WebSocket: plain TCP, or TLS to a tunnel's edge.
+trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
+
+type Socket = WebSocketStream<Box<dyn Stream>>;
+
+/// One TLS configuration for the process, built on first use.
+fn tls_connector() -> Result<tokio_rustls::TlsConnector> {
+    static CONFIG: OnceLock<Result<Arc<tokio_rustls::rustls::ClientConfig>, String>> =
+        OnceLock::new();
+    let config = CONFIG.get_or_init(|| {
+        use rustls_platform_verifier::BuilderVerifierExt;
+        use tokio_rustls::rustls;
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .and_then(|builder| builder.with_platform_verifier())
+            .map(|builder| Arc::new(builder.with_no_client_auth()))
+            .map_err(|error| error.to_string())
+    });
+    match config {
+        Ok(config) => Ok(tokio_rustls::TlsConnector::from(Arc::clone(config))),
+        Err(error) => bail!("TLS is unavailable on this computer: {error}"),
+    }
+}
+
+/// Whether `address` is a TLS (`wss://` or `https://`) address: a machine's
+/// public address behind a tunnel.
+pub fn is_tls(address: &str) -> bool {
+    address
+        .trim()
+        .split_once("://")
+        .is_some_and(|(scheme, _)| matches!(scheme.to_ascii_lowercase().as_str(), "wss" | "https"))
+}
 
 /// An open WebSocket to a machine's gateway, before or after authentication.
 pub struct Connection {
@@ -60,6 +101,18 @@ impl Connection {
             .with_context(|| format!("could not connect to {address}"))?;
         // A prompt's worth of output is small; do not wait on Nagle for it.
         let _ = socket.set_nodelay(true);
+        let socket: Box<dyn Stream> = if is_tls(address) {
+            let host = host_part(address).to_owned();
+            let name = tokio_rustls::rustls::pki_types::ServerName::try_from(host)
+                .with_context(|| format!("{address} is not a host name TLS can verify"))?;
+            let tls = tokio::time::timeout(timeout, tls_connector()?.connect(name, socket))
+                .await
+                .with_context(|| format!("{address} did not finish the TLS handshake in time"))?
+                .with_context(|| format!("the TLS handshake with {address} failed"))?;
+            Box::new(tls)
+        } else {
+            Box::new(socket)
+        };
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_FRAME_BYTES))
             .max_frame_size(Some(MAX_FRAME_BYTES));
@@ -347,7 +400,9 @@ impl Describe {
     }
 }
 
-/// The `ws://` URL for `address`, refusing schemes this transport cannot dial.
+/// The WebSocket URL for `address`, refusing schemes this transport cannot
+/// dial. A `wss://` (or `https://`) address without a path dials
+/// [`PUBLIC_WS_PATH`], where a machine's public address serves the gateway.
 pub fn websocket_url(address: &str) -> Result<String> {
     let address = address.trim();
     ensure!(!address.is_empty(), "enter a machine address");
@@ -357,9 +412,15 @@ pub fn websocket_url(address: &str) -> Result<String> {
     };
     match scheme.as_str() {
         "ws" => Ok(format!("ws://{rest}")),
-        "wss" | "https" => bail!(
-            "{address}: the gateway has no TLS listener; dial its plain `ws://` address over a private network instead"
-        ),
+        "wss" | "https" => {
+            let has_path = rest.find('/').is_some_and(|slash| slash + 1 < rest.len());
+            let host = rest.trim_end_matches('/');
+            Ok(if has_path {
+                format!("wss://{rest}")
+            } else {
+                format!("wss://{host}{PUBLIC_WS_PATH}")
+            })
+        }
         "http" => Ok(format!("ws://{rest}")),
         "" => Ok(format!("ws://{address}")),
         other => bail!("{address}: `{other}://` is not a machine address"),
@@ -412,8 +473,10 @@ pub fn dial_target(address: &str) -> Result<String> {
     })
 }
 
-/// The port in `address`, or [`DEFAULT_PORT`].
+/// The port in `address`, or [`TLS_PORT`] for a `wss://` address and
+/// [`DEFAULT_PORT`] for any other.
 pub fn port_or_default(address: &str) -> u16 {
+    let original = address;
     let address = address.trim();
     let address = address.split_once("://").map_or(address, |(_, rest)| rest);
     let address = address.split('/').next().unwrap_or(address);
@@ -427,7 +490,11 @@ pub fn port_or_default(address: &str) -> u16 {
     };
     port.and_then(|port| port.parse().ok())
         .filter(|port| *port != 0)
-        .unwrap_or(DEFAULT_PORT)
+        .unwrap_or(if is_tls(original) {
+            TLS_PORT
+        } else {
+            DEFAULT_PORT
+        })
 }
 
 /// The host of `[v6]:port`, `host:port`, `[v6]` or `host`, without brackets,
@@ -480,16 +547,55 @@ mod tests {
     }
 
     #[test]
-    fn a_tls_address_is_refused_with_a_reason() {
-        for address in ["wss://studio.local:17879", "https://studio.local"] {
-            let error = websocket_url(address).unwrap_err();
-            assert!(
-                format!("{error:#}").contains("no TLS listener"),
-                "{error:#}"
-            );
+    fn a_tls_address_dials_the_public_listener() {
+        for (address, url, target) in [
+            (
+                "wss://rustcode.example.com",
+                "wss://rustcode.example.com/ws",
+                "rustcode.example.com:443",
+            ),
+            (
+                "https://rustcode.example.com/",
+                "wss://rustcode.example.com/ws",
+                "rustcode.example.com:443",
+            ),
+            (
+                "wss://rustcode.example.com:8443/ws",
+                "wss://rustcode.example.com:8443/ws",
+                "rustcode.example.com:8443",
+            ),
+        ] {
+            assert!(is_tls(address), "{address}");
+            assert_eq!(websocket_url(address).unwrap(), url, "{address}");
+            assert_eq!(dial_target(address).unwrap(), target, "{address}");
         }
+        assert!(!is_tls("ws://studio.local"));
+        assert!(!is_tls("studio.local:17879"));
         assert!(websocket_url("ftp://studio").is_err());
         assert!(websocket_url("  ").is_err());
+    }
+
+    /// A certificate the operating system does not trust ends the dial: a
+    /// public route never falls back to a connection it cannot verify.
+    #[tokio::test]
+    async fn an_untrusted_certificate_is_refused() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            // Not a TLS server at all: whatever it answers cannot verify.
+            let (mut stream, _) = listener.accept().await.unwrap();
+            use tokio::io::AsyncWriteExt;
+            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await;
+        });
+        let error = Connection::open_with_timeout(
+            &format!("wss://localhost:{port}"),
+            Duration::from_secs(5),
+        )
+        .await
+        .err()
+        .expect("an unverifiable server is refused");
+        assert!(format!("{error:#}").contains("TLS handshake"), "{error:#}");
+        server.abort();
     }
 
     /// The wait for one frame is one deadline, not one per frame: a peer that

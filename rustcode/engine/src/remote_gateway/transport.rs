@@ -12,12 +12,12 @@
 //! `connect_approved` it may send exactly one more frame, a `pair` request
 //! with the code the owner reads off the host.
 
-use super::address::{candidate_addresses, connection_route};
+use super::address::{candidate_addresses, connection_route, tunnel_route};
 use super::connect::Outcome;
 use super::control::RefusalReason;
 use super::devices::DeviceProfile;
 use super::gateway::{
-    Admitted, ConnectTicket, LiveConnection, MAX_FRAME_BYTES, Shared, UnauthenticatedSlot,
+    Admitted, Arrival, ConnectTicket, LiveConnection, MAX_FRAME_BYTES, Shared, UnauthenticatedSlot,
 };
 use super::handshake::{
     DeviceHint, ErrorCode, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES,
@@ -50,6 +50,7 @@ pub(super) async fn serve_connection(
     shared: Arc<Shared>,
     socket: TcpStream,
     slot: UnauthenticatedSlot,
+    arrival: Arrival,
 ) {
     let deadline = Instant::now() + shared.limits.handshake_timeout;
     // The local address the device dialled says which network it arrived on.
@@ -134,8 +135,12 @@ pub(super) async fn serve_connection(
         }
     };
     drop(slot);
-    if let Some(local) = local {
-        connection.set_route(connection_route(local, &candidate_addresses()));
+    match (arrival, local) {
+        (Arrival::Tunnel, Some(local)) => connection.set_route(tunnel_route(local)),
+        (Arrival::Direct, Some(local)) => {
+            connection.set_route(connection_route(local, &candidate_addresses()))
+        }
+        (_, None) => {}
     }
     if thread_names {
         welcome.confirm_thread_names();

@@ -1828,3 +1828,53 @@ async fn a_replan_whose_primary_was_an_extra_releases_it_before_binding() {
     );
     harness.stop().await;
 }
+
+/// A connection the engine's HTTP listener relays from the public address
+/// arrives on the loopback ingress the registration names, and is reported
+/// as the tunnel, encrypted to its edge, while one dialled directly on
+/// loopback stays `loopback` (#3955).
+#[tokio::test]
+async fn a_relayed_connection_is_reported_as_the_tunnel() {
+    use crate::remote_gateway::address::ConnectionPath;
+    let harness = Harness::start().await;
+    let registration = GatewayRegistration::read(&harness.lifecycle.registration_path()).unwrap();
+    let ingress: SocketAddr = registration
+        .ingress_address
+        .expect("the registration names the ingress")
+        .parse()
+        .unwrap();
+    assert!(ingress.ip().is_loopback());
+    assert_ne!(ingress, harness.addr);
+
+    let offer = harness.offer().await;
+    let mut relayed = Client::connect(ingress).await;
+    relayed
+        .send(json!({
+            "type": "pair",
+            "protocol_version": 1,
+            "method": "credential",
+            "secret": offer.credential.expose(),
+            "device_name": "phone",
+        }))
+        .await;
+    let paired = relayed.next_json().await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+    let (_direct, _, _) = harness.paired_device("laptop").await;
+
+    let status = harness.status().await;
+    let mut paths: Vec<_> = status
+        .connections
+        .iter()
+        .filter_map(|connection| connection.route.clone())
+        .map(|route| (route.path, route.encrypted))
+        .collect();
+    paths.sort_by_key(|(path, _)| format!("{path:?}"));
+    assert_eq!(
+        paths,
+        vec![
+            (ConnectionPath::Loopback, false),
+            (ConnectionPath::Tunnel, true)
+        ]
+    );
+    harness.stop().await;
+}

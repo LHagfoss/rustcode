@@ -86,15 +86,45 @@ plain `ws://`. The engine classifies each address it listens on
 | A generic VPN whose interface is named `utunN`, `tun*`, `wg*` | `overlay`, no provider | **Yes, assumed** | The interface being a tunnel is all the engine can see. A VPN that does not encrypt (a plain GRE or IP-in-IP tunnel) would be mislabelled; none of the supported products behave so. |
 | `100.64.0.0/10` on Wi-Fi or Ethernet | not a route | n/a | A carrier's CGNAT address, never advertised, never bound, never labelled encrypted. |
 | A host name (the machine's `.local` name, or `--advertise <name>`) | `hostname` | **Unknown** | The name resolves to whichever address the client picks. The *connection* is classified by the address it actually reached. |
-| A public address or name | `public` | **No** | The client refuses to send a pairing code or token to one (`rustcode/client/src/registry.rs`: `may_send_secrets`). |
+| A public address or name on plain `ws://` | `public` | **No** | The client refuses to send a pairing code or token to one (`rustcode/client/src/registry.rs`: `may_send_secrets`). |
+| The machine's public address, `wss://<host>` (a tunnel such as `cloudflared` to the engine's HTTP listener, `/ws`) | `public` on the client; the connection is `tunnel` | **Yes, to the tunnel's edge** | The client verifies the certificate against the operating system's trust store and refuses one it cannot verify. TLS ends at the tunnel provider, **which can read the traffic**; from there it is plain loopback to the engine, which relays it to the gateway. See [The public address](#the-public-address). |
 | Loopback (a Simulator or a client on this computer) | `loopback` | n/a | Never leaves the machine. |
-| TLS (`wss://`) | not supported | n/a | The gateway answers a TLS ClientHello with a refusal recorded as `secure_connection` and closes the socket. Nothing is shared. |
+| TLS (`wss://`) straight at the gateway's port | not supported | n/a | The gateway itself has no TLS listener: it answers a TLS ClientHello with a refusal recorded as `secure_connection` and closes the socket. Nothing is shared. |
 
 Per connection, the gateway classifies the local address the device dialled and
-reports its `path` (`loopback`, `lan`, `overlay` or `other`), the overlay
-`provider`, the `localAddress` and whether the network `encrypted` it. An
-address on no interface is `other` and unencrypted: the engine never assumes
-a tunnel. `encrypted` is true only for `overlay`.
+reports its `path` (`loopback`, `lan`, `overlay`, `tunnel` or `other`), the
+overlay `provider`, the `localAddress` and whether the network `encrypted` it.
+An address on no interface is `other` and unencrypted: the engine never
+assumes a tunnel. `encrypted` is true only for `overlay` and for `tunnel`, a
+connection relayed from the public address (it arrives on the gateway's
+loopback ingress, which only the engine's `/ws` relay uses).
+
+### The public address
+
+With `[outside] public_url` set and a tunnel forwarding that host to the
+engine's HTTP listener (`docs/mcp-outside-agents.md` › Hosted agents), the
+same origin serves `/mcp` for hosted agents and `/ws` for paired phones and
+machines (`wss://rustcode.example.com`).
+
+- **Who can read it:** the tunnel provider. TLS ends at its edge, and the
+  hop from `cloudflared` to the engine is plain loopback. Use it when you
+  accept that provider seeing prompts, threads and device tokens in transit;
+  a VPN overlay keeps them end to end.
+- **Host and Origin:** `/ws` is answered only for this computer's loopback
+  address and the public host, like `/mcp`. The gateway's browser rule applies
+  to the relayed upgrade unchanged: an `Origin` other than the native app's is
+  refused, so a page on the public host cannot open the gateway.
+- **Audiences stay apart:** `/ws` speaks the remote protocol and accepts only
+  device and machine credentials; an MCP token means nothing there, and a
+  device token means nothing on `/mcp`.
+- **Limits:** every relayed connection reaches the gateway from loopback, so
+  they all share one per-address budget for unauthenticated sockets. Pairing
+  attempts are limited for the whole host, whichever route they come over.
+- **No gateway running:** the engine answers `/ws` with HTTP 503
+  (`remote_access_off`) instead of leaving the device waiting.
+- **Replay:** device and machine tokens are still bearer tokens, so one seen
+  at the tunnel's edge could be replayed from anywhere. Key-pair
+  authentication (#3956) removes that.
 
 Where this shows:
 

@@ -148,6 +148,12 @@ pub struct GatewayRegistration {
     pub owner_socket_path: Option<PathBuf>,
     pub listen_address: String,
     pub advertised_address: String,
+    /// The loopback `host:port` where the engine's HTTP listener hands over
+    /// WebSocket upgrades it received at `/ws` from the public address
+    /// (`[outside] public_url`). Absent in a registration from a gateway
+    /// that does not take them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress_address: Option<String>,
     /// Who started this gateway. Absent in a registration from before it was
     /// recorded; those report `Terminal`.
     #[serde(default)]
@@ -175,6 +181,7 @@ impl GatewayRegistration {
             started_by: GatewayOwner::from_env(),
             listen_address,
             advertised_address,
+            ingress_address: None,
         })
     }
 

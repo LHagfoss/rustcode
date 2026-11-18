@@ -1358,7 +1358,7 @@ fn devices_json(
 }
 
 /// The networks a device's open connections arrived over, one entry each:
-/// `path` (`loopback`, `lan`, `overlay` or `other`), the overlay's
+/// `path` (`loopback`, `lan`, `overlay`, `tunnel` or `other`), the overlay's
 /// `provider` when the interface names it, the `localAddress` it dialled and
 /// whether the network `encrypted` the traffic. A gateway that does not
 /// classify connections yields none.
@@ -1374,7 +1374,8 @@ fn connection_routes_json(connections: &[ConnectionSummary], device_id: &str) ->
                 "localAddress": route.local_address,
                 // Only a tunnel encrypts: whatever else a frame says, a plain
                 // network (or one nothing is known about) never reads as so.
-                "encrypted": route.encrypted && route.path == ConnectionPath::Overlay,
+                "encrypted": route.encrypted
+                    && matches!(route.path, ConnectionPath::Overlay | ConnectionPath::Tunnel),
             })
         })
         .collect()
