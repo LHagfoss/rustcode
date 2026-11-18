@@ -12,16 +12,85 @@
 // A machine is a computer, a route is one way to reach it, and the server is
 // what runs on it (docs/terminology.md).
 
+import {
+  type MachineIdentity,
+  mergeDiscovered,
+  readLocalIdentity,
+  routeChangeNotices,
+  toldRouteChanges,
+} from "./machineLabels";
+
+export {
+  cleanMachineName,
+  codeCheckOverdue,
+  codeComplete,
+  codeDigits,
+  DEV_APP_VERSION,
+  defaultSelfName,
+  forgetLocalAppVersion,
+  isLocalForward,
+  LOCAL_MACHINE_ID,
+  lastSeen,
+  localAppVersion,
+  localIdentity,
+  MACHINE_ICONS,
+  MACHINE_TINTS,
+  type MachineIcon,
+  type MachineIdentity,
+  type MachineTint,
+  machineGlyph,
+  machineIconOf,
+  machineLine,
+  machineName,
+  machineReconnecting,
+  machineTint,
+  machineTintOf,
+  mergeDiscovered,
+  offlineSinceLabel,
+  platformIcon,
+  platformName,
+  type RouteChangeNotice,
+  reasonLabel,
+  routeChangeNotices,
+  routeLabel,
+  routeName,
+  selfName,
+  setLocalIdentity,
+  setMachineDisplayName,
+  setMachineIcon,
+  stateLabel,
+  stateTone,
+  threadCount,
+  threadLabel,
+  updateAdvice,
+  useLocalIdentity,
+  useMachineReconnecting,
+  versionSkew,
+} from "./machineLabels";
+
+import type { ConnectOffer, SshStep } from "./machineConnect";
+
+export {
+  type ConnectOffer,
+  cancelConnectCode,
+  connectOverSsh,
+  connectWithCode,
+  createConnectCode,
+  dismissSsh,
+  followConnectCode,
+  pairBackNotice,
+  parseConnectOffer,
+  SSH_DEADLINE_MS,
+  type SshRun,
+  type SshStep,
+} from "./machineConnect";
+
 import { create } from "zustand";
-import { AcpConnection, bool, type JsonObject, num, obj, str } from "../acp/jsonrpc";
-import { RemoteMethod } from "../acp/remote";
+import { AcpConnection, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { isTauri, MachineTransport } from "../acp/transport";
 import { Method, parseSessionList, type SessionSummary } from "../acp/types";
 import type { Op } from "../lib/op";
-import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
-import { readStorage, writeStorage } from "../lib/storage";
-import { appVersion } from "../lib/updater";
 import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
 import { type LinkState, LinkTable, linkConnection, linkMachineState } from "./machineLink";
 import { loadMirroredList, mirrorThreadList, withMirroredRows } from "./machineMirror";
@@ -34,13 +103,11 @@ import {
   keptUnlisted,
   machineInitializeParams,
   noteThreadList,
-  request,
   settleKeptUnlisted,
   toast,
   tombstoneThread,
 } from "./store";
 import { splitThreadKey, threadKey } from "./threadKeys";
-import { compareVersions } from "./updates";
 
 /**
  * Where a machine stands, as the shell reports it. `unavailable` is a machine a route reached
@@ -351,539 +418,6 @@ useMachines.subscribe((state, prev) => {
     }
   }
 });
-
-// ---------------------------------------------------------------- labels
-
-/** The id `list_machines` gives this computer: the machine a call is on when it names none. */
-export const LOCAL_MACHINE_ID = "local";
-
-/** The glyph a machine gets: one of a small fixed set, so it always draws. */
-export type MachineIcon =
-  | "laptop"
-  | "desktop"
-  | "studio"
-  | "server"
-  | "tower"
-  | "linux"
-  | "cloud"
-  | "phone"
-  | "unknown";
-
-/** The icons the picker offers, in the order it shows them. */
-export const MACHINE_ICONS: readonly MachineIcon[] = [
-  "laptop",
-  "desktop",
-  "studio",
-  "server",
-  "tower",
-  "linux",
-  "cloud",
-  "phone",
-  "unknown",
-];
-
-/** A colour from the app's chart palette, `--rc-series-1`..`8`. */
-export type MachineTint = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8";
-
-export const MACHINE_TINTS: readonly MachineTint[] = ["1", "2", "3", "4", "5", "6", "7", "8"];
-
-/** What this app shows for one computer: its local name and glyph. */
-export interface MachineIdentity {
-  displayName: string | null;
-  icon: MachineIcon | null;
-  tint: MachineTint | null;
-  /**
-   * When `displayName` was chosen, here or on another computer, as an ISO time. The machine
-   * sync (`state/fleet.ts`) keeps the newest rename: a name without a time stays on this computer.
-   */
-  nameUpdatedAt?: string | null;
-}
-
-const LOCAL_IDENTITY_KEY = "rustcode.localMachineIdentity";
-
-/** A name as it is stored: trimmed, or null when blank so the fallback shows. */
-export function cleanMachineName(value: string | null | undefined): string | null {
-  const name = value?.trim();
-  return name ? name : null;
-}
-
-/** An icon id the app knows, or null for one it does not (an older or newer file). */
-export function machineIconOf(value: string | null | undefined): MachineIcon | null {
-  return MACHINE_ICONS.includes(value as MachineIcon) ? (value as MachineIcon) : null;
-}
-
-/** A tint id the app knows, or null. */
-export function machineTintOf(value: string | null | undefined): MachineTint | null {
-  return MACHINE_TINTS.includes(value as MachineTint) ? (value as MachineTint) : null;
-}
-
-/** The glyph a platform gets when the user has not picked one. */
-export function platformIcon(platform: string | null | undefined): MachineIcon {
-  switch (platform?.toLowerCase()) {
-    case "macos":
-    case "darwin":
-      return "laptop";
-    case "windows":
-      return "tower";
-    case "linux":
-      return "linux";
-    default:
-      return "unknown";
-  }
-}
-
-/** The name to show for a paired machine: the local one, else what it reports. */
-export function machineName(machine: Pick<Machine, "name" | "displayName">): string {
-  return cleanMachineName(machine.displayName) ?? machine.name;
-}
-
-/** The glyph to draw for a paired machine: the chosen one, else its platform's. */
-export function machineGlyph(machine: Pick<Machine, "platform" | "icon">): MachineIcon {
-  return machineIconOf(machine.icon) ?? platformIcon(machine.platform);
-}
-
-/** The tint of that glyph, or null for the plain foreground colour. */
-export function machineTint(machine: Pick<Machine, "iconTint">): MachineTint | null {
-  return machineTintOf(machine.iconTint);
-}
-
-function readLocalIdentity(): MachineIdentity {
-  try {
-    const raw = JSON.parse(readStorage(LOCAL_IDENTITY_KEY) ?? "null") as unknown;
-    const root = obj(raw);
-    return {
-      displayName: cleanMachineName(typeof root?.displayName === "string" ? root.displayName : null),
-      icon: machineIconOf(typeof root?.icon === "string" ? root.icon : null),
-      tint: machineTintOf(typeof root?.tint === "string" ? root.tint : null),
-      nameUpdatedAt: typeof root?.nameUpdatedAt === "string" ? root.nameUpdatedAt : null,
-    };
-  } catch {
-    return { displayName: null, icon: null, tint: null, nameUpdatedAt: null };
-  }
-}
-
-/** This computer's name and glyph, outside React. */
-export function localIdentity(): MachineIdentity {
-  return useMachines.getState().local;
-}
-
-/** This computer's name and glyph in a component, so a rename redraws it. */
-export function useLocalIdentity(): MachineIdentity {
-  return useMachines((state) => state.local);
-}
-
-/**
- * Rename this computer, or give it a glyph. A rename is stamped, so the machine sync
- * (`state/fleet.ts`) tells every paired computer and the newest rename wins; a name another
- * computer chose arrives with its own `nameUpdatedAt` and is not stamped again.
- */
-export function setLocalIdentity(patch: Partial<MachineIdentity>): void {
-  const current = localIdentity();
-  const renamed = patch.displayName !== undefined;
-  const next: MachineIdentity = {
-    displayName: patch.displayName === undefined ? current.displayName : cleanMachineName(patch.displayName),
-    icon: patch.icon === undefined ? current.icon : machineIconOf(patch.icon),
-    tint: patch.tint === undefined ? current.tint : machineTintOf(patch.tint),
-    nameUpdatedAt: renamed
-      ? (patch.nameUpdatedAt ?? new Date().toISOString())
-      : (current.nameUpdatedAt ?? null),
-  };
-  // A full or disabled store keeps the choice for this run only.
-  writeStorage(LOCAL_IDENTITY_KEY, JSON.stringify(next));
-  useMachines.setState({ local: next });
-}
-
-/** The name a platform gives this computer before the user renames it. */
-export function defaultSelfName(): string {
-  switch (currentPlatform()) {
-    case "mac":
-      return "This Mac";
-    case "windows":
-      return "This PC";
-    default:
-      return "This computer";
-  }
-}
-
-/**
- * This computer's name as people say it (docs/terminology.md): the local entry
- * `list_machines` returns, and what an approval card calls it. Renaming it here
- * changes every place that names it; the platform's default is the fallback.
- */
-export function selfName(): string {
-  return localIdentity().displayName ?? defaultSelfName();
-}
-
-/** Rename a paired machine. The newest name wins across every paired computer (`state/fleet.ts`). */
-export async function setMachineDisplayName(
-  machine: Pick<Machine, "id">,
-  displayName: string | null,
-): Promise<void> {
-  try {
-    await shellCallWithin(SHELL_READ_MS, "machines_set_display_name", {
-      id: machine.id,
-      name: cleanMachineName(displayName),
-    });
-    await refreshMachines();
-  } catch (error) {
-    toast(errorText(error), "error");
-  }
-}
-
-/** Choose a paired machine's glyph and tint, or clear both for its platform's. */
-export async function setMachineIcon(
-  machine: Pick<Machine, "id">,
-  icon: MachineIcon | null,
-  tint: MachineTint | null,
-): Promise<void> {
-  try {
-    await shellCallWithin(SHELL_READ_MS, "machines_set_icon", {
-      id: machine.id,
-      icon: icon ?? null,
-      tint: icon ? (tint ?? null) : null,
-    });
-    await refreshMachines();
-  } catch (error) {
-    toast(errorText(error), "error");
-  }
-}
-
-/** When a machine went away, as `09:12`: the time `offlineSince` holds, or undefined. */
-export function offlineSinceLabel(at: number | undefined): string | undefined {
-  if (at === undefined) return undefined;
-  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-/**
- * Whether a machine that is away is already on its supervisor's retry clock.
- * The app reconnects on its own with backoff (PR 3506), so its state is
- * "reconnecting", not a failure the user has to act on (issue 3487).
- */
-export function machineReconnecting(
-  machine: Pick<Machine, "state" | "retryInSecs"> | null | undefined,
-): boolean {
-  return machine?.state === "offline" && !!machine.retryInSecs;
-}
-
-/** The same, for the machine a thread runs on, as its key's host (`state/threadKeys.ts`). */
-export function useMachineReconnecting(host: string | null | undefined): boolean {
-  return useMachines((state) =>
-    machineReconnecting(host ? state.machines.find((entry) => entry.id === host) : undefined),
-  );
-}
-
-/** The words a row's state chip uses. */
-export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs" | "reason">): string {
-  switch (machine.state) {
-    case "connected":
-      return "Connected";
-    case "connecting":
-      return "Connecting";
-    case "needsPairing":
-      return "Needs pairing";
-    case "offline":
-      return machineReconnecting(machine) ? "Reconnecting…" : "Offline";
-    case "unavailable":
-      return reasonLabel(machine.reason);
-    case "stopped":
-      return "Not connected";
-  }
-}
-
-/** A machine that answered and would not serve, in a chip's few words. */
-export function reasonLabel(reason: MachineReason | null | undefined): string {
-  switch (reason) {
-    case "server_not_running":
-      return "Server not running";
-    case "version_mismatch":
-      return "Version mismatch";
-    case "not_allowed":
-      return "Not allowed";
-    case "rejected_token":
-      return "Pairing refused";
-    case "busy":
-      return "Busy";
-    default:
-      return "Refused";
-  }
-}
-
-/** The chip's tone for a state: `ok` while connected, `warn` once it has given up retrying by itself. */
-export function stateTone(machine: Pick<Machine, "state" | "retryInSecs">): "ok" | "warn" | "bad" | "idle" {
-  switch (machine.state) {
-    case "connected":
-      return "ok";
-    case "connecting":
-      return "idle";
-    case "offline":
-      return machineReconnecting(machine) ? "idle" : "warn";
-    case "unavailable":
-      return "warn";
-    case "needsPairing":
-      return "bad";
-    case "stopped":
-      return "idle";
-  }
-}
-
-const ROUTE_NAME: Record<string, string> = {
-  lan: "LAN",
-  tailscale: "Tailscale",
-  netbird: "NetBird",
-  zerotier: "ZeroTier",
-  vpn: "VPN",
-  public: "Public",
-  ssh: "SSH",
-};
-
-/** A LAN route on this computer's own loopback: a port forwarded to the machine by something else. */
-export function isLocalForward(route: Pick<MachineRoute, "kind" | "address">): boolean {
-  if (route.kind !== "lan") return false;
-  const host = route.address.replace(/^\[/, "").replace(/\]?(:\d+)?$/, "");
-  return host === "localhost" || host === "::1" || /^127\./.test(host);
-}
-
-/**
- * The network a route travels over, as people know it: `LAN`, `NetBird`,
- * `Tailscale`, `ZeroTier`, `VPN`, `Public`. The product the machine named wins
- * over the generic kind: `100.64.0.0/10` is shared by several overlays (PR 3402).
- */
-export function routeName(route: MachineRoute | null | undefined, kind?: string): string {
-  const wire = route?.provider || route?.kind || kind;
-  if (!wire) return "No route saved";
-  if (route && isLocalForward(route)) return "Forwarded port";
-  return ROUTE_NAME[wire] ?? ROUTE_NAME[kind ?? ""] ?? wire;
-}
-
-/**
- * One route as people read it: `LAN · Unencrypted`, `NetBird · Encrypted`.
- * Only a tunnel encrypts (the shell applies the gateway's own
- * rule): a LAN or a public address never does.
- */
-export function routeLabel(route: MachineRoute | null | undefined): string {
-  if (!route) return "No route saved";
-  // Whatever forwards the port decides; this computer cannot tell.
-  if (isLocalForward(route)) return "Forwarded port";
-  return `${routeName(route)} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
-}
-
-/** One change of route, as a toast says it: `Studio: Now on LAN · Unencrypted`. */
-export interface RouteChangeNotice {
-  machineId: string;
-  text: string;
-  /** A move off a tunnel is an error tone; any other change is plain information. */
-  tone: "info" | "error";
-}
-
-/**
- * The route changes `machines` report that `seen` has not told yet. A machine's first listing in a
- * window only records where it stands: a change from before the window opened is not news. `seen`
- * is updated, so the same change is told once however often the list is read.
- */
-export function routeChangeNotices(
-  machines: readonly Machine[],
-  seen: Map<string, number>,
-): RouteChangeNotice[] {
-  const notices: RouteChangeNotice[] = [];
-  for (const machine of machines) {
-    const change = machine.routeChange;
-    const told = seen.get(machine.id);
-    seen.set(machine.id, change?.seq ?? 0);
-    // A machine listed for the first time only records where it stands.
-    if (!change || told === undefined || change.seq <= told) continue;
-    notices.push({
-      machineId: machine.id,
-      text: `${machineName(machine)}: Now on ${routeLabel(change.to)}`,
-      tone: change.downgrade ? "error" : "info",
-    });
-  }
-  return notices;
-}
-
-/** The changes already told in this window, by machine. */
-const toldRouteChanges = new Map<string, number>();
-
-/**
- * What one machine row says under its name: the route it is on, or what is
- * wrong. The state itself is the row's chip, so it is not repeated here.
- */
-export function machineLine(machine: Machine): string {
-  switch (machine.state) {
-    // The shell's hint (why another route to this machine is not used) is
-    // the row's own line under this one, so it is not repeated here.
-    case "connected":
-      return routeLabel(machine.route);
-    case "connecting":
-      return `Connecting over ${routeLabel(machine.route)}`;
-    case "needsPairing":
-      return machine.detail ?? "This machine no longer accepts this computer's pairing. Pair it again.";
-    case "offline":
-      return (
-        machine.detail ??
-        (machineReconnecting(machine) ? "Trying again. The app keeps reconnecting." : "Not connected.")
-      );
-    case "unavailable":
-      return machine.detail ?? `${routeLabel(machine.route)} answered but refused. The app keeps trying.`;
-    case "stopped":
-      return "Not connected.";
-  }
-}
-
-/**
- * This app's own version, for the rows that compare it with another machine's.
- * The app knows it without the network (`tauri getVersion`); a dev build in a
- * browser asks the mock instead, so a mismatched row still shows there.
- */
-let localVersion: string | null | undefined;
-export async function localAppVersion(): Promise<string | null> {
-  if (localVersion !== undefined) return localVersion;
-  const own = await appVersion().catch(() => null);
-  localVersion = own ?? (hasShell() ? await shellCall<string | null>("app_version").catch(() => null) : null);
-  return localVersion;
-}
-
-/** For tests: forget the version this app read. */
-export function forgetLocalAppVersion(): void {
-  localVersion = undefined;
-}
-
-/**
- * The version `tauri.conf.json` gives a development build; a released app is
- * stamped with its own version by `scripts/bundle-version.ts`. Every machine
- * would read as newer against it, so the skew line is not shown in a `tauri
- * dev` build (the mock reports a released version and does show it).
- */
-export const DEV_APP_VERSION = "0.1.0";
-
-/**
- * A machine running another RustCode version, in words: an older one is
- * updated there, a newer one means this app is the one to update. Version
- * skew is how the Mac Studio kept talking RustCode 0.96 to a 1.28 app without
- * either end saying so.
- */
-export function versionSkew(
-  remote: string | null | undefined,
-  local: string | null | undefined,
-  platform?: string | null,
-): string | null {
-  if (!remote || !local || local === DEV_APP_VERSION) return null;
-  const order = compareVersions(remote, local);
-  if (order === 0) return null;
-  return order < 0
-    ? `RustCode ${remote} on that machine — update it there: ${updateAdvice(platform ?? "")}`
-    : `RustCode ${remote} on that machine — update RustCode here`;
-}
-
-/**
- * How RustCode is updated on a machine of that platform, as docs/install.md
- * gives it: the app's own updater or Homebrew on a Mac, the app's updater or a
- * new AppImage on Linux, the installer on Windows.
- */
-export function updateAdvice(platform: string): string {
-  switch (platformName(platform)?.toLowerCase()) {
-    case "mac":
-      return "Settings › About › Check for updates, or `brew upgrade rustcode`";
-    case "windows":
-      return "run the RustCode installer";
-    case "linux":
-      return "install the new AppImage, or run `rustcode --update`";
-    default:
-      return "install the newer RustCode";
-  }
-}
-
-/**
- * One row per machine, however many ways it was found: Bonjour hears a machine
- * on the LAN, and its own handshake reported the overlay address saved for it.
- * The first row keeps its route (the LAN one, when there is one) and takes
- * what only the other source knew — the version it runs, the platform, the
- * hint — so the Add sheet lists each machine once with everything known of it.
- */
-export function mergeDiscovered(rows: DiscoveredMachine[]): DiscoveredMachine[] {
-  const byMachine = new Map<string, DiscoveredMachine>();
-  for (const row of rows) {
-    const key = row.gatewayId ?? row.name;
-    const known = byMachine.get(key);
-    if (!known) {
-      byMachine.set(key, row);
-      continue;
-    }
-    byMachine.set(key, {
-      ...known,
-      addresses: [...new Set([...known.addresses, ...row.addresses])],
-      platform: known.platform ?? row.platform,
-      version: known.version ?? row.version,
-      hint: known.hint ?? row.hint,
-      saved: known.saved || row.saved,
-    });
-  }
-  return [...byMachine.values()];
-}
-
-/** The platform as people say it: Mac, Windows, Linux, or nothing when unknown. */
-export function platformName(platform: string): string | undefined {
-  switch (platform.toLowerCase()) {
-    case "macos":
-    case "darwin":
-      return "Mac";
-    case "windows":
-      return "Windows";
-    case "linux":
-      return "Linux";
-    case "unknown":
-    case "":
-      return undefined;
-    default:
-      return platform.charAt(0).toUpperCase() + platform.slice(1);
-  }
-}
-
-/** When a machine was last reached: "just now", "3 min ago", or its date. */
-export function lastSeen(iso: string | null, now = Date.now()): string {
-  if (!iso) return "Never";
-  const at = Date.parse(iso);
-  if (Number.isNaN(at)) return "Never";
-  const minutes = Math.floor(Math.max(0, now - at) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} ${hours === 1 ? "hour" : "hours"} ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} ${days === 1 ? "day" : "days"} ago`;
-  return new Date(at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
-
-/** The threads a connected machine reports, or nothing while it is not connected. */
-export function threadCount(machine: Machine, counts: Record<string, number>): number | undefined {
-  return machine.state === "connected" ? counts[machine.id] : undefined;
-}
-
-/** "3 threads", "1 thread", or nothing before the machine answered. */
-export function threadLabel(count: number | undefined): string | undefined {
-  if (count === undefined) return undefined;
-  return `${count} ${count === 1 ? "thread" : "threads"}`;
-}
-
-/** Whether the code on screen is being checked with a machine that has gone quiet. */
-export function codeCheckOverdue(pairing: Pairing | null, now = Date.now()): boolean {
-  return pairing?.stage === "pairing" && now - pairing.since > PAIR_DEADLINE_MS;
-}
-
-// ---------------------------------------------------------------- code input
-
-/**
- * What a code field holds: the digits typed, in order, never more than the
- * machine's code has. A space or a dash is a separator the user typed, and a
- * paste may carry either.
- */
-export function codeDigits(raw: string, length: number): string {
-  return raw.replace(/\D/g, "").slice(0, Math.max(0, length));
-}
-
-/** Whether the code is complete and can be sent. */
-export function codeComplete(code: string, length: number): boolean {
-  return code.length === length && /^\d+$/.test(code);
-}
 
 // ---------------------------------------------------------------- the shell
 
@@ -1697,263 +1231,6 @@ export async function pairMachine(code: string): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------- connect codes
-
-/**
- * A connect code this computer shows for another computer to pair with it: no request and no
- * accept step, valid ten minutes, once (docs/remote.md › Connect codes). The engine creates it on
- * this computer's gateway; the other computer redeems it with `machines_connect_code` (or
- * `rustcode machines connect`).
- */
-export interface ConnectOffer {
-  /** The short form, `K7MQ-29XH-TP4W-NRD6`. */
-  code: string;
-  /** The long form, `rustcode://connect/…`: every address and the gateway's id. */
-  link: string;
-  /** The address the short code carries, or the one to type next to it. */
-  address: string;
-  addressInCode: boolean;
-  hostName: string | null;
-  loopbackOnly: boolean;
-  serial: number;
-  expiresAt: number;
-  /** The computer that paired with it, once one has. */
-  pairedWith: string | null;
-  /** Its wrong tries ran out. */
-  usedUp: boolean;
-}
-
-/** Read the engine's `connectCode` answer. */
-export function parseConnectOffer(value: unknown, now = Date.now()): ConnectOffer | null {
-  const offer = obj(value);
-  const code = str(offer?.code);
-  const link = str(offer?.link);
-  if (!offer || !code || !link) return null;
-  return {
-    code,
-    link,
-    address: str(offer.address) ?? "",
-    addressInCode: bool(offer.addressInCode) ?? false,
-    hostName: str(offer.hostName) ?? null,
-    loopbackOnly: bool(offer.loopbackOnly) ?? false,
-    serial: num(offer.serial) ?? 0,
-    expiresAt: now + (num(offer.expiresInSecs) ?? 600) * 1000,
-    pairedWith: null,
-    usedUp: false,
-  };
-}
-
-/** Create a connect code on this computer. Remote access is switched on first if it was off. */
-export async function createConnectCode(): Promise<void> {
-  useMachines.setState({ connect: { status: "running" } });
-  try {
-    const answer = obj(await request<JsonObject>(RemoteMethod.connectCode, {}, 20_000));
-    const offer = parseConnectOffer(answer?.connectCode);
-    const error = str(answer?.connectCodeError);
-    useMachines.setState({
-      connectOffer: offer,
-      connect: offer
-        ? { status: "idle" }
-        : { status: "failed", error: error ?? "The gateway did not hand out a connect code." },
-    });
-  } catch (error) {
-    useMachines.setState({ connect: { status: "failed", error: errorText(error) } });
-  }
-}
-
-/** Withdraw the open connect code, or take a spent one off the screen. */
-export async function cancelConnectCode(): Promise<void> {
-  const offer = useMachines.getState().connectOffer;
-  useMachines.setState((state) => ({
-    connectOffer: null,
-    connect: state.connect.status === "running" ? state.connect : { status: "idle" },
-  }));
-  if (!offer || offer.pairedWith || offer.usedUp || offer.expiresAt <= Date.now()) return;
-  try {
-    await request(RemoteMethod.connectCode, { cancel: true }, 15_000);
-  } catch (error) {
-    toast(errorText(error), "error");
-  }
-}
-
-/**
- * Follow the open connect code: the gateway says when a computer paired with it, or its tries ran
- * out. The page asks while the code is on screen.
- */
-export async function followConnectCode(): Promise<void> {
-  const offer = useMachines.getState().connectOffer;
-  if (!offer || offer.pairedWith || offer.usedUp) return;
-  try {
-    const status = obj(await request<JsonObject>(RemoteMethod.status, {}, 10_000));
-    const ended = obj(obj(obj(status?.gateway)?.machineOffer)?.lastEnded);
-    if (!ended || num(ended.serial) !== offer.serial) return;
-    const current = useMachines.getState().connectOffer;
-    if (current?.serial !== offer.serial) return;
-    useMachines.setState({
-      connectOffer:
-        str(ended.end) === "paired"
-          ? { ...current, pairedWith: str(ended.deviceName) ?? "A computer" }
-          : { ...current, usedUp: true },
-    });
-  } catch {
-    // The next tick asks again; the countdown says when it no longer matters.
-  }
-}
-
-/**
- * Pair with a connect code created on another computer. `address` is where to reach it when the
- * code carries none.
- */
-export async function connectWithCode(code: string, address?: string): Promise<boolean> {
-  const typed = code.trim();
-  if (!typed) {
-    useMachines.setState({ connect: { status: "failed", error: "Paste or type the connect code first." } });
-    return false;
-  }
-  useMachines.setState({ connect: { status: "running" } });
-  try {
-    const machine = await shellCallWithin<Machine>(PAIR_DEADLINE_MS, "machines_connect_code", {
-      code: typed,
-      address: address?.trim() || null,
-      name: null,
-    });
-    useMachines.setState((state) => ({
-      machines: [...state.machines.filter((saved) => saved.id !== machine.id), machine],
-    }));
-    toast(`Connected to ${machine.name}.`, "success");
-    await refreshMachines();
-    useMachines.setState({ connect: { status: "idle" } });
-    return true;
-  } catch (error) {
-    useMachines.setState({ connect: { status: "failed", error: errorText(error) } });
-    return false;
-  }
-}
-
-/** One step of a connection over SSH (`rustcode_client::ssh::Progress`). */
-export interface SshStep {
-  step: "sign_in" | "check" | "install" | "start" | "pair" | "pair_back";
-  state: "running" | "done" | "skipped" | "failed";
-  label: string;
-  detail?: string | null;
-}
-
-export interface SshRun {
-  running: boolean;
-  steps: SshStep[];
-}
-
-/** SSH deadline: a ten-minute install on the other computer, plus sign-in, start and pairing. */
-export const SSH_DEADLINE_MS = 15 * 60_000;
-
-/**
- * Connect over SSH: install RustCode on `target` at this version when allowed and needed, start
- * its server and pair with it. The steps are polled while it runs.
- */
-export async function connectOverSsh(
-  target: string,
-  allowInstall: boolean,
-  mutual = false,
-  via: SshVia = "auto",
-): Promise<boolean> {
-  const typed = target.trim();
-  if (!typed) {
-    useMachines.setState({
-      ssh: {
-        status: "failed",
-        error: "Type the host first, like lars@box or an alias from ~/.ssh/config.",
-        data: useMachines.getState().ssh.data,
-      },
-    });
-    return false;
-  }
-  useMachines.setState({ ssh: { status: "running", data: { steps: [] } } });
-  const poll = setInterval(() => {
-    void shellCall<SshRun>("machines_ssh_progress").then(
-      (run) => {
-        if (useMachines.getState().ssh.status === "running")
-          useMachines.setState({ ssh: { status: "running", data: { steps: run.steps } } });
-      },
-      () => {},
-    );
-  }, 400);
-  let failure: string | null = null;
-  let notice: string | undefined;
-  try {
-    const machine = await shellCallWithin<Machine>(SSH_DEADLINE_MS, "machines_connect_ssh", {
-      target: typed,
-      port: null,
-      identity: null,
-      allowInstall,
-      name: null,
-      via,
-    });
-    useMachines.setState((state) => ({
-      machines: [...state.machines.filter((saved) => saved.id !== machine.id), machine],
-    }));
-    if (mutual) {
-      const failure = await pairBack(typed);
-      if (failure) notice = pairBackNotice(machine.name, failure);
-    }
-    toast(`Connected to ${machine.name}.`, "success");
-    await refreshMachines();
-    return true;
-  } catch (error) {
-    failure = errorText(error);
-    return false;
-  } finally {
-    clearInterval(poll);
-    const last = await shellCall<SshRun>("machines_ssh_progress").catch(() => null);
-    useMachines.setState((state) => ({
-      ssh: {
-        ...(failure ? { status: "failed" as const, error: failure } : { status: "idle" as const }),
-        data: { steps: last?.steps ?? state.ssh.data?.steps ?? [], notice },
-      },
-    }));
-  }
-}
-
-/**
- * The second direction of mutual access: create a connect code on this computer and have the
- * computer just connected redeem it over SSH. Returns why it did not work, or null. The one-way
- * pairing is saved either way, and a code that was not used is withdrawn.
- */
-async function pairBack(target: string): Promise<string | null> {
-  let link: string | null = null;
-  try {
-    const answer = obj(await request<JsonObject>(RemoteMethod.connectCode, {}, 20_000));
-    const offer = parseConnectOffer(answer?.connectCode);
-    if (!offer) return str(answer?.connectCodeError) ?? "This computer could not create a connect code.";
-    if (offer.loopbackOnly) {
-      return "Remote access on this computer listens here only (remote.bind), so no other computer can reach it. Set remote.bind to auto and try again.";
-    }
-    link = offer.link;
-    await shellCallWithin<null>(PAIR_BACK_DEADLINE_MS, "machines_pair_back", {
-      target,
-      port: null,
-      identity: null,
-      link,
-    });
-    return null;
-  } catch (error) {
-    if (link) await request(RemoteMethod.connectCode, { cancel: true }, 15_000).catch(() => {});
-    return errorText(error);
-  }
-}
-
-/** How long the page waits for the other computer to redeem the code: the shell bounds it at two minutes. */
-const PAIR_BACK_DEADLINE_MS = 3 * 60_000;
-
-/** The notice for a connection that is one way because pairing back failed. */
-export function pairBackNotice(name: string, reason: string): string {
-  return `Connected to ${name}, one way: this computer reaches it, but it cannot reach this computer. ${reason.trim()}`;
-}
-
-/** Clear the steps of a finished connection over SSH. */
-export function dismissSsh(): void {
-  useMachines.setState({ ssh: { status: "idle" } });
-}
-
 /** Forget a machine, after asking: its token and its routes go with it. */
 export function removeMachine(machine: Machine): void {
   askConfirm({
@@ -2086,6 +1363,6 @@ export function reconnectMachine(machine: Pick<Machine, "id">): void {
     });
 }
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
