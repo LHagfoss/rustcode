@@ -1,7 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
-import { dirname } from "../lib/paths";
-import { appPlatform, currentPlatform } from "../lib/platform";
+import { currentPlatform } from "../lib/platform";
 import { ComputerUseGroup } from "./ComputerUseGroup";
 import { ProjectGenerators } from "./ProjectGenerators";
 import { TextGeneration } from "./TextGeneration";
@@ -18,41 +17,17 @@ import { VoiceGroup } from "./VoiceGroup";
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
-import { type PayloadCapture, parsePayloadCapture } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { CHAT_WIDTH_LABEL, type ChatWidth } from "../lib/chatWidth";
 import { HAPTICS_DEFAULT, haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
 import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
-import { openExternal, pickFolder, revealPath } from "../lib/native";
+import { pickFolder } from "../lib/native";
 import { NEXT_PROMPT_DEFAULT, nextPromptEnabled, setNextPrompt } from "../lib/nextPrompt";
-import { hasShell } from "../lib/shell";
-import {
-  commandIn,
-  loadSystemSetup,
-  runSystemSetup,
-  type SetupStep,
-  setupChip,
-  systemSetupAvailable,
-} from "../lib/systemSetup";
-import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
-import { canUpdate } from "../lib/updater";
 import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
 import { validateDefault } from "../state/harness";
 import { runAllHarnessChecks, useHarnessChecks } from "../state/harnessChecks";
-import {
-  activeDelegates,
-  busiestThreadDelegates,
-  effectivePerThreadLimit,
-  MAX_DELEGATES_PER_THREAD,
-  MAX_DELEGATES_TOTAL,
-  MIN_DELEGATES_PER_THREAD,
-  MIN_DELEGATES_TOTAL,
-  WAKE_BATCH_DEFAULT_S,
-  WAKE_BATCH_MAX_S,
-} from "../state/orchestration";
 import { PERMISSION_MODES } from "../state/permissions";
 import { RECAP_HOUR_OPTIONS } from "../state/recap";
-import { serverSetting, WORKFLOW_LIMITS } from "../state/settingsRegistry";
 import {
   useLoadScopeSettings,
   useProjectScope,
@@ -62,8 +37,6 @@ import {
   useSettingsSave,
 } from "../state/settingsScope";
 import {
-  APP_VERSION,
-  createTheme,
   errorText,
   type NewThreadChoice,
   openSettings,
@@ -71,42 +44,21 @@ import {
   restartEngine,
   SETTINGS_DEFAULTS,
   type SettingsSection,
-  setActiveTheme,
-  setAnimateStreaming,
   setChatWidth,
   setDefaultCwd,
-  setFont,
   setNotificationsBackgroundOnly,
-  setOnboarding,
   setRecapHours,
   setRecapWhileAway,
-  setReduceTransparency,
   setShowToolCalls,
   setSmartUi,
   setSystemNotifications,
-  setTextSize,
-  setTheme,
-  toast,
   useApp,
 } from "../state/store";
-import {
-  checkIfStale,
-  checkNow,
-  installProgress,
-  loadChannels,
-  offersUpdate,
-  requestUpdate,
-  setAutoInstall,
-  setUpdateChannel,
-  showWhatsNew,
-  useUpdates,
-} from "../state/updates";
 import { AddHarnessForm } from "./AddHarness";
 import {
   Blocks,
   ChartColumn,
   Check,
-  FolderOpen,
   Gauge,
   Settings as Gear,
   Info,
@@ -129,17 +81,16 @@ import {
   X,
 } from "./icons";
 
-const CapabilitiesPage = lazy(() => import("./Capabilities").then((m) => ({ default: m.CapabilitiesPage })));
+import { AboutPage, AdvancedPage, STATUS_READ_MS } from "./SettingsAbout";
+import { AppearancePage } from "./SettingsAppearance";
+import { OrchestrationPage } from "./SettingsOrchestration";
 
-import { DelegatePresetsGroup } from "./DelegatePresets";
+const CapabilitiesPage = lazy(() => import("./Capabilities").then((m) => ({ default: m.CapabilitiesPage })));
 
 const DiagnosticsPage = lazy(() => import("./DiagnosticsPage").then((m) => ({ default: m.DiagnosticsPage })));
 
-import { ChatBackgroundGroup } from "./ChatBackgroundGroup";
 import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
-import { LimitFallbackGroup } from "./LimitFallback";
-import { LiveBackgroundGroup } from "./LiveBackgroundGroup";
 import { MachineSettingsPage } from "./MachineSettingsPage";
 import { MachinesPage } from "./MachinesPage";
 
@@ -160,18 +111,16 @@ const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ defa
 import { refreshServerService, useMachines } from "../state/machines";
 import { useSettingsAttention } from "../state/settingsAttention";
 import { isRunning } from "../state/thread";
-import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
+  boolLabel,
   Chip,
   Choice,
-  fieldClass,
   Group,
   Loading,
   Row,
   RowResets,
-  SectionTitle,
   Slider,
   useEngineData,
   useRowResets,
@@ -248,8 +197,6 @@ const pageLabel = (id: SettingsSection) => PAGES.find((p) => p.id === id)?.label
  * folder name and whether a turn runs. It reads the same `discord_rpc_enabled` the CLI writes, so
  * this row and `rustcode discord` are one setting.
  */
-/** A status read on a Settings page ends in an error row within this, never a spinner that stays. */
-const STATUS_READ_MS = 8_000;
 
 function PresenceRow() {
   const projectCwd = useApp((s) => s.projectCwd || s.defaultCwd);
@@ -308,7 +255,6 @@ function PresenceRow() {
 
 const permissionLabel = (value: Json | undefined) =>
   PERMISSION_MODES.find((mode) => mode.id === value)?.label ?? String(value ?? "Ask");
-const boolLabel = (value: Json | undefined) => (value ? "On" : "Off");
 const compactLabel = (value: Json | undefined) =>
   AUTO_COMPACT_MODES.find((mode) => mode.value === value)?.label ?? String(value ?? "Off");
 const thresholdLabel = (value: Json | undefined) =>
@@ -743,20 +689,6 @@ function AgentsPage() {
   );
 }
 
-/** Threads that start and message other threads, and what their delegates and workflows may use. */
-function OrchestrationPage() {
-  useLoadScopeSettings();
-  return (
-    <>
-      <SettingsScopeBar />
-      <OrchestrationGroup />
-      <WorkflowsGroup />
-      <DelegatePresetsGroup />
-      <LimitFallbackGroup />
-    </>
-  );
-}
-
 /** Dictation in the composer and the browser tools: both kept by this machine, each behind a switch. */
 function VoicePage() {
   const { scope, machines } = useScope();
@@ -780,279 +712,6 @@ function VoicePage() {
           <ComputerUseGroup />
         </>
       )}
-    </>
-  );
-}
-
-/** One workflow limit: a slider over the engine's own range, with the value in the engine's unit. */
-function WorkflowLimitRow({
-  setting,
-  title,
-  subtitle,
-  hint,
-  unit,
-}: {
-  setting: keyof typeof WORKFLOW_LIMITS;
-  title: string;
-  subtitle?: string;
-  hint: string;
-  unit: string;
-}) {
-  const range = WORKFLOW_LIMITS[setting];
-  const fallback = serverSetting(setting).default as number;
-  const scoped = useScopedSetting(setting, (value) =>
-    typeof value === "number" ? String(value) : String(fallback),
-  );
-  const value = Math.min(range.max, Math.max(range.min, Number(scoped.value ?? fallback)));
-  return (
-    <Row
-      title={title}
-      reset={scoped.mixed || value !== fallback ? () => void scoped.set(fallback) : undefined}
-      subtitle={subtitle}
-      hint={hint}
-    >
-      <ScopedValue mixed={scoped.mixed} breakdown={scoped.breakdown} project={scoped.project}>
-        <Slider
-          label={title}
-          value={value}
-          min={range.min}
-          max={range.max}
-          onCommit={(next) => void scoped.set(next)}
-          unit={unit}
-        />
-      </ScopedValue>
-    </Row>
-  );
-}
-
-/** Durable workflow runs (docs/workflows.md): what a run may use, read when it starts. */
-function WorkflowsGroup() {
-  return (
-    <Group title="Workflows">
-      <WorkflowLimitRow
-        setting="workflow-concurrency"
-        title="Workflow workers at once"
-        hint="Workers are delegates of the thread that started the run, so the delegate limits above apply too. A run can ask for fewer, never more."
-        unit="workers"
-      />
-      <WorkflowLimitRow
-        setting="workflow-call-budget"
-        title="Workflow agent calls per run"
-        subtitle="Worker threads one run may start in all."
-        hint="A call a restarted run replays from disk is not counted again. The call that goes over fails inside the script."
-        unit="calls"
-      />
-      <WorkflowLimitRow
-        setting="workflow-timeout-minutes"
-        title="Workflow run time limit"
-        hint="Counted from each start. When it passes, the run ends as timed out and its running workers are stopped."
-        unit="minutes"
-      />
-      <WorkflowLimitRow
-        setting="workflow-kept-runs"
-        title="Finished workflow runs kept"
-        subtitle="Per thread. Running runs are always kept."
-        hint="When a new run starts, older finished runs past this count are deleted with their logs and results. The run list shows the newest 20."
-        unit="runs"
-      />
-    </Group>
-  );
-}
-
-/** Threads that start and message other threads (`state/host.ts`, docs/orchestrator.md). */
-function OrchestrationGroup() {
-  const orchestration = useScopedSetting("orchestration", boolLabel);
-  const threadLimitSetting = useScopedSetting("delegates-per-thread", (value) =>
-    typeof value === "number" ? String(value) : "4",
-  );
-  const totalLimitSetting = useScopedSetting("delegates-total", (value) =>
-    typeof value === "number" ? String(value) : "8",
-  );
-  const wakeBatchSetting = useScopedSetting("wake-batch-seconds", (value) =>
-    typeof value === "number" ? (value === 0 ? "Off" : `${value} s`) : "60 s",
-  );
-  const wakeBatch = Number(wakeBatchSetting.value ?? WAKE_BATCH_DEFAULT_S);
-  const trustAccounts = useScopedSetting("trust-delegate-accounts", boolLabel);
-  const readAcrossProjects = useScopedSetting("read-across-projects", boolLabel);
-  const orchestrationValue = Boolean(orchestration.value ?? true);
-  const readAcrossValue = Boolean(readAcrossProjects.value ?? true);
-  const threadLimit = Number(threadLimitSetting.value ?? SETTINGS_DEFAULTS.threadLimit);
-  const totalLimit = Number(totalLimitSetting.value ?? SETTINGS_DEFAULTS.totalLimit);
-  const pending = useApp((s) => s.orchestrationPending);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
-  const links = useApp((s) => s.links);
-  const running = useMemo(() => activeDelegates(links), [links]);
-  const busiest = useMemo(() => busiestThreadDelegates(links), [links]);
-  const possible = effectivePerThreadLimit({ perThread: threadLimit, total: totalLimit });
-  return (
-    <>
-      <Group title="Orchestration">
-        <Row
-          title="Let delegates use my named accounts without asking"
-          subtitle="Named logins on this computer."
-          hint="Accounts on other computers still need approval."
-        >
-          <ScopedValue
-            mixed={trustAccounts.mixed}
-            breakdown={trustAccounts.breakdown}
-            project={trustAccounts.project}
-          >
-            <Switch
-              label="Let delegates use my named accounts without asking"
-              checked={Boolean(trustAccounts.value ?? false)}
-              onChange={(value) => void trustAccounts.set(value)}
-            />
-          </ScopedValue>
-        </Row>
-        <Row
-          title="Threads can start and message other threads"
-          reset={
-            orchestration.mixed || !orchestrationValue
-              ? () => void orchestration.set(SETTINGS_DEFAULTS.orchestration)
-              : undefined
-          }
-          subtitle="Read, message and start threads, and compare a task across harnesses."
-          hint="Full access does this without asking; Auto-edit may list, read and wait; otherwise you approve each. A thread it starts gets the lower of this thread's access and Default access."
-        >
-          <ScopedValue
-            mixed={orchestration.mixed}
-            breakdown={orchestration.breakdown}
-            project={orchestration.project}
-          >
-            <Switch
-              label="Threads can start and message other threads"
-              checked={orchestrationValue}
-              onChange={(value) => void orchestration.set(value)}
-            />
-          </ScopedValue>
-        </Row>
-        <Row
-          title="Let agents read threads in other projects"
-          reset={
-            readAcrossProjects.mixed || !readAcrossValue
-              ? () => void readAcrossProjects.set(SETTINGS_DEFAULTS.readAcrossProjects)
-              : undefined
-          }
-          hint="An agent can list, search and read any thread, in any project. Reading still follows the approval rules above. Messaging and starting threads stay in the project."
-        >
-          <ScopedValue
-            mixed={readAcrossProjects.mixed}
-            breakdown={readAcrossProjects.breakdown}
-            project={readAcrossProjects.project}
-          >
-            <Switch
-              label="Let agents read threads in other projects"
-              checked={readAcrossValue}
-              onChange={(value) => void readAcrossProjects.set(value)}
-            />
-          </ScopedValue>
-        </Row>
-        {pending && (
-          <Row title="Restart the server to apply" subtitle="The server reads this setting when it starts.">
-            <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-              Restart Server
-            </Action>
-          </Row>
-        )}
-      </Group>
-      <Group
-        title="Delegation"
-        disabled={!orchestrationValue}
-        footer={
-          orchestrationValue
-            ? "Only live delegates take a slot. A follow-up to a thread this one already runs takes none."
-            : "These limits have no effect while “Threads can start and message other threads” is off."
-        }
-      >
-        <Row
-          title="Delegates across all threads"
-          reset={
-            totalLimitSetting.mixed || totalLimit !== SETTINGS_DEFAULTS.totalLimit
-              ? () => void totalLimitSetting.set(SETTINGS_DEFAULTS.totalLimit)
-              : undefined
-          }
-          subtitle="Running at once, whichever thread started them."
-          status={
-            running === 0
-              ? "No delegates running now"
-              : running === 1
-                ? "1 running now"
-                : `${running} running now`
-          }
-        >
-          <ScopedValue
-            mixed={totalLimitSetting.mixed}
-            breakdown={totalLimitSetting.breakdown}
-            project={totalLimitSetting.project}
-          >
-            <Slider
-              label="Delegates across all threads"
-              value={totalLimit}
-              min={MIN_DELEGATES_TOTAL}
-              max={MAX_DELEGATES_TOTAL}
-              onCommit={(value) => void totalLimitSetting.set(value)}
-              unit="delegates"
-            />
-          </ScopedValue>
-        </Row>
-        <Row
-          title="Delegates one thread can run at once"
-          reset={
-            threadLimitSetting.mixed || threadLimit !== SETTINGS_DEFAULTS.threadLimit
-              ? () => void threadLimitSetting.set(SETTINGS_DEFAULTS.threadLimit)
-              : undefined
-          }
-          hint="The total above can make this lower."
-          status={
-            threadLimit > totalLimit
-              ? `${threadLimit} set, ${possible} possible while the total is ${totalLimit}`
-              : busiest === 0
-                ? "No delegates on any thread now"
-                : `The busiest thread has ${busiest} now`
-          }
-        >
-          <ScopedValue
-            mixed={threadLimitSetting.mixed}
-            breakdown={threadLimitSetting.breakdown}
-            project={threadLimitSetting.project}
-          >
-            <Slider
-              label="Delegates one thread can run at once"
-              value={threadLimit}
-              min={MIN_DELEGATES_PER_THREAD}
-              max={MAX_DELEGATES_PER_THREAD}
-              onCommit={(value) => void threadLimitSetting.set(value)}
-              unit="delegates"
-            />
-          </ScopedValue>
-        </Row>
-        <Row
-          title="Merge delegate wakes within"
-          reset={
-            wakeBatchSetting.mixed || wakeBatch !== WAKE_BATCH_DEFAULT_S
-              ? () => void wakeBatchSetting.set(WAKE_BATCH_DEFAULT_S)
-              : undefined
-          }
-          subtitle="Delegates that finish or stall in this window wake the thread once."
-          hint="Each wake is a model turn that resends the thread's whole context. A question for you is never held back. Off sends each as it comes."
-        >
-          <ScopedValue
-            mixed={wakeBatchSetting.mixed}
-            breakdown={wakeBatchSetting.breakdown}
-            project={wakeBatchSetting.project}
-          >
-            <Slider
-              label="Merge delegate wakes within"
-              value={wakeBatch}
-              min={0}
-              max={WAKE_BATCH_MAX_S}
-              step={15}
-              onCommit={(value) => void wakeBatchSetting.set(value)}
-              unit="seconds"
-            />
-          </ScopedValue>
-        </Row>
-      </Group>
     </>
   );
 }
@@ -1177,637 +836,6 @@ function ConnectionsPage() {
 }
 
 // ---------------------------------------------------------------- appearance
-
-/** A small picture of the app in a theme's own colours: sidebar, rows, a reply and the composer. */
-function ThemePreview({ theme }: { theme: Theme }) {
-  const t = theme.tokens;
-  const r = theme.radius === "sharp" ? 2 : theme.radius === "round" ? 7 : 4;
-  return (
-    <div className="flex h-[74px] w-full overflow-hidden" style={{ background: t.bg }} aria-hidden>
-      <div className="flex w-[34%] flex-col gap-1 p-1.5" style={{ background: t.sidebar }}>
-        <div className="h-2.5" style={{ background: t.surface_2, borderRadius: r }} />
-        <div className="h-1.5 w-4/5" style={{ background: t.text_muted, opacity: 0.5, borderRadius: 2 }} />
-        <div className="h-1.5 w-3/5" style={{ background: t.text_faint, opacity: 0.5, borderRadius: 2 }} />
-      </div>
-      <div className="flex flex-1 flex-col justify-between p-1.5">
-        <div className="flex flex-col gap-1">
-          <div className="ml-auto h-2.5 w-1/2" style={{ background: t.surface_2, borderRadius: r }} />
-          <div className="h-1.5 w-4/5" style={{ background: t.text, opacity: 0.7, borderRadius: 2 }} />
-          <div className="h-1.5 w-2/3" style={{ background: t.text_muted, opacity: 0.6, borderRadius: 2 }} />
-        </div>
-        <div
-          className="flex h-4 items-center justify-end px-1"
-          style={{ background: t.surface, borderRadius: r + 2, boxShadow: `0 0 0 1px ${t.border}` }}
-        >
-          <div className="size-2 rounded-full" style={{ background: t.accent }} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ThemeCard({ theme, active, onPick }: { theme: Theme; active: boolean; onPick: () => void }) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={onPick}
-      className="group flex flex-col gap-1.5 text-left"
-    >
-      <span
-        className={cx(
-          "relative block overflow-hidden rounded-md shadow-1 transition-shadow duration-150",
-          active ? "outline-2 outline-offset-2 outline-fg" : "group-hover:shadow-2",
-        )}
-      >
-        <ThemePreview theme={theme} />
-        {active && (
-          <span className="absolute top-1 right-1 flex size-4 items-center justify-center rounded-full bg-fg text-bg">
-            <Check size={10} strokeWidth={3} />
-          </span>
-        )}
-      </span>
-      <span className="flex items-baseline gap-1.5 px-0.5">
-        <span className={cx("truncate text-callout", active ? "font-medium text-fg" : "text-fg-muted")}>
-          {theme.name}
-        </span>
-        <span className="shrink-0 text-caption text-fg-faint">
-          {theme.source === "builtin" ? theme.mode : theme.source}
-        </span>
-      </span>
-    </button>
-  );
-}
-
-function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
-  const [name, setName] = useState("");
-  const [cli, setCli] = useState<string | null>(null);
-  const valid = /^[a-z0-9][a-z0-9-]{0,63}$/.test(name);
-  const create = async () => {
-    try {
-      const path = await createTheme(name, base);
-      if (path === null) {
-        setCli(`rustcode theme new ${name} --from ${base}`);
-        return;
-      }
-      toast(path ? `Created ${path}` : "Theme created", "success");
-      onDone();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "error");
-    }
-  };
-  return (
-    <div className="rc-expand rule-t flex flex-col gap-2 px-4 py-3">
-      <div className="flex items-center gap-2">
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value.toLowerCase());
-            setCli(null);
-          }}
-          onKeyDown={(e) => e.key === "Enter" && valid && void create()}
-          placeholder="theme-name"
-          aria-label="Theme name"
-          aria-invalid={name.length > 0 && !valid}
-          {...noTextHelpers}
-          className={cx(fieldClass, "flex-1 font-mono")}
-        />
-        <Action onClick={onDone}>Cancel</Action>
-        <Action prominent disabled={!valid} onClick={() => void create()}>
-          Create
-        </Action>
-      </div>
-      {name.length > 0 && !valid ? (
-        <p className="m-0 text-caption text-warning">
-          A theme name is lowercase letters, digits and dashes, up to 64, starting with a letter or digit.
-        </p>
-      ) : cli ? (
-        <p className="m-0 text-caption text-fg-muted">
-          This server cannot create themes from the app. In a terminal:{" "}
-          <code className="selectable rounded-xs bg-fill px-1 py-px font-mono text-fg">{cli}</code>
-        </p>
-      ) : (
-        <p className="m-0 text-caption text-fg-faint">A copy of {base} in your themes folder, to edit.</p>
-      )}
-    </div>
-  );
-}
-
-function AppearancePage() {
-  const mode = useApp((s) => s.theme);
-  const font = useApp((s) => s.font);
-  const textSize = useApp((s) => s.textSize);
-  const animateStreaming = useApp((s) => s.animateStreaming);
-  const reduceTransparency = useApp((s) => s.reduceTransparency);
-  const active = useApp((s) => s.themeActive);
-  const snapshot = useApp((s) => s.themes);
-  const supported = useApp((s) => s.features.themes);
-  const [creating, setCreating] = useState(false);
-  const themes = snapshot?.themes.length ? snapshot.themes : BUILTIN_THEMES;
-  const userPath = themes.find((t) => t.source === "user" && t.path)?.path;
-  const userDir = userPath
-    ? dirname(userPath)
-    : appPlatform() === "windows"
-      ? "%APPDATA%\\rustcode\\themes"
-      : "~/.config/rustcode/themes";
-  return (
-    <>
-      <Group title="Mode">
-        <Row
-          title="Light or dark"
-          reset={mode !== SETTINGS_DEFAULTS.theme ? () => setTheme(SETTINGS_DEFAULTS.theme) : undefined}
-          subtitle="System follows your operating system."
-        >
-          <Choice
-            label="Appearance"
-            value={mode}
-            onChange={setTheme}
-            options={[
-              { value: "system", label: "System" },
-              { value: "light", label: "Light" },
-              { value: "dark", label: "Dark" },
-            ]}
-          />
-        </Row>
-        <Row
-          title="Font"
-          reset={font !== SETTINGS_DEFAULTS.font ? () => setFont(SETTINGS_DEFAULTS.font) : undefined}
-          subtitle="For the interface and chat. Code stays monospaced."
-        >
-          <Choice
-            label="Font"
-            value={font}
-            onChange={setFont}
-            options={[
-              { value: "inter", label: "Inter" },
-              { value: "system", label: "System" },
-              { value: "rounded", label: "Rounded" },
-            ]}
-          />
-        </Row>
-        <Row
-          title="Text size"
-          reset={
-            textSize !== SETTINGS_DEFAULTS.textSize
-              ? () => setTextSize(SETTINGS_DEFAULTS.textSize)
-              : undefined
-          }
-          subtitle="Larger sizes scale the chat and sidebar text."
-        >
-          <Choice
-            label="Text size"
-            value={textSize}
-            onChange={setTextSize}
-            options={[
-              { value: "small", label: "Default" },
-              { value: "medium", label: "Large" },
-              { value: "large", label: "Larger" },
-            ]}
-          />
-        </Row>
-        <Row
-          title="Animate streaming text"
-          reset={animateStreaming ? undefined : () => setAnimateStreaming(SETTINGS_DEFAULTS.animateStreaming)}
-          subtitle="New words fade in as the model writes them."
-        >
-          <Switch label="Animate streaming text" checked={animateStreaming} onChange={setAnimateStreaming} />
-        </Row>
-        <Row
-          title="Reduce transparency"
-          reset={
-            reduceTransparency !== SETTINGS_DEFAULTS.reduceTransparency
-              ? () => setReduceTransparency(SETTINGS_DEFAULTS.reduceTransparency)
-              : undefined
-          }
-          subtitle="Menus, dialogs and the sidebar turn solid instead of frosted."
-          hint="Also on when your system asks for it."
-        >
-          <Switch label="Reduce transparency" checked={reduceTransparency} onChange={setReduceTransparency} />
-        </Row>
-        <SidebarDensitySetting />
-        <SidebarToolbarSetting />
-        <SettleAfterSetting />
-      </Group>
-      <Group
-        title="Theme"
-        action={
-          <div className="flex items-center gap-1">
-            {hasShell() && (
-              <Action quiet size="sm" onClick={() => revealPath(userDir)}>
-                <FolderOpen size={12} /> Open themes folder
-              </Action>
-            )}
-            <Action quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
-              <Plus size={12} /> New theme
-            </Action>
-          </div>
-        }
-        footer={
-          supported === false
-            ? "This server has no theme files yet. Update RustCode to add your own."
-            : `Theme files live in ${userDir}; edits apply live. See docs/themes.md.`
-        }
-      >
-        <div
-          role="radiogroup"
-          aria-label="Theme"
-          className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4 p-4"
-        >
-          {themes.map((t) => (
-            <ThemeCard
-              key={`${t.source}/${t.name}`}
-              theme={t}
-              active={t.name === active && (mode === "system" ? true : t.mode === mode)}
-              onPick={() => void setActiveTheme(t.name)}
-            />
-          ))}
-        </div>
-        {creating && <NewTheme base={active} onDone={() => setCreating(false)} />}
-      </Group>
-      <LiveBackgroundGroup />
-      <ChatBackgroundGroup />
-      <TokenList />
-    </>
-  );
-}
-
-/** The live tokens, for theme authors: what each variable resolves to now. */
-function TokenList() {
-  const [open, setOpen] = useState(false);
-  return (
-    <section className="mb-6">
-      <SectionTitle
-        title="Tokens"
-        action={
-          <Action quiet size="sm" onClick={() => setOpen(!open)} aria-expanded={open}>
-            {open ? "Hide" : "Show"}
-          </Action>
-        }
-      />
-      {open && (
-        <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 rounded-xl bg-surface p-3">
-          {TOKENS.map((t) => (
-            <div key={t} className="flex items-center gap-2 rounded-lg bg-surface-2 px-2 py-1.5">
-              <span
-                className="size-4 shrink-0 rounded-xs shadow-1"
-                style={{ background: `var(${cssName(t)})` }}
-              />
-              <span className="truncate font-mono text-caption text-fg-muted">{t}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * The app's version and its update, like the SwiftUI app's UpdateControl:
- * Check for Updates, then Update to X (installs in place on macOS, a Linux
- * AppImage or .deb and Windows, quits and reopens) or Download X (the release
- * page, for a copy that cannot replace itself).
- */
-function AppVersion() {
-  const info = useUpdates((s) => s.info);
-  const channel = useUpdates((s) => s.channel);
-  const installState = useUpdates((s) => s.install);
-  const installing = installState.phase === "installing";
-  const progress = installState.phase === "installing" ? installState.progress : null;
-  const background = useUpdates((s) => s.error);
-  const waiting = installState.phase === "waiting";
-  const [checking, setChecking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const shellVersion = useUpdates((s) => s.version);
-  const version = info?.current ?? shellVersion ?? APP_VERSION;
-  const offered = info !== null && offersUpdate(info, channel);
-  useEffect(() => checkIfStale(), []);
-  const check = async () => {
-    setChecking(true);
-    setError(null);
-    await checkNow();
-    // A check that failed says so, even when an earlier one found the app up to date.
-    setError(useUpdates.getState().error);
-    setChecking(false);
-  };
-  const install = async () => {
-    if (!offered || !info?.canInstall) {
-      if (info?.page) openExternal(info.page);
-      return;
-    }
-    setError(null);
-    // One install path: the sidebar row shows the same progress when it is visible.
-    const failed = await requestUpdate();
-    if (failed) setError(failed);
-  };
-  const { fraction, step } = installProgress(progress);
-  const failure = error ?? (info ? null : background);
-  const subtitle = failure
-    ? failure
-    : installing
-      ? step
-      : waiting
-        ? "Waiting for threads to finish, then reopens."
-        : info && !info.available
-          ? "RustCode is up to date."
-          : info?.development
-            ? "A development build; it does not update itself."
-            : offered
-              ? (info?.installNote ?? undefined)
-              : undefined;
-  return (
-    <Row
-      title={`RustCode ${version}`}
-      subtitle={
-        <span className={failure ? "text-warning" : undefined}>
-          {subtitle ?? "App version"}
-          {installing && (
-            <span
-              role="progressbar"
-              aria-label="Update progress"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={fraction === undefined ? undefined : Math.round(fraction * 100)}
-              className="mt-1.5 block h-[4px] max-w-[280px] overflow-hidden rounded-full bg-fill-strong"
-            >
-              <span
-                className={cx(
-                  "block h-full rounded-full bg-accent transition-[width] duration-200 ease-snappy",
-                  fraction === undefined && "w-1/3 animate-pulse",
-                )}
-                style={fraction === undefined ? undefined : { width: `max(4px, ${fraction * 100}%)` }}
-              />
-            </span>
-          )}
-        </span>
-      }
-    >
-      {canUpdate() && <Action onClick={() => void showWhatsNew(version)}>What's New</Action>}
-      {error && offered && info?.canInstall && info.page && (
-        <Action onClick={() => openExternal(info.page ?? "")}>Release page</Action>
-      )}
-      {!canUpdate() ? (
-        <Info size={14} className="text-fg-faint" />
-      ) : offered && info.latest ? (
-        <Action prominent disabled={installing} onClick={() => void install()}>
-          {installing ? (
-            <span className="flex items-center gap-1.5">
-              <Spinner size={12} />
-              {fraction === undefined ? "Updating…" : `Updating… ${Math.round(fraction * 100)}%`}
-            </span>
-          ) : info.canInstall ? (
-            `Update to ${info.latest}`
-          ) : (
-            `Download ${info.latest}`
-          )}
-        </Action>
-      ) : (
-        <Action disabled={checking} onClick={() => void check()}>
-          {checking ? "Checking…" : "Check for Updates"}
-        </Action>
-      )}
-    </Row>
-  );
-}
-
-/**
- * Payload capture (`docs/data-store.md` › Captured payloads): the engine's own
- * `capture_provider_payloads` and `capture_harness_rpc_payloads`, which are
- * global and off by default, so nobody has to hand-edit `config.toml`. The
- * engine reads both from the config it started with, so a change offers the
- * restart right below it.
- */
-function RecordRequestBodiesGroup() {
-  const status = useApp((s) => s.engine.phase);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
-  const [capture, setCapture] = useState<PayloadCapture | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const load = useCallback(async () => {
-    try {
-      setCapture(parsePayloadCapture(await request(Method.telemetry, {}, STATUS_READ_MS)));
-      setError(null);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }, []);
-  useEffect(() => {
-    if (status === "ready") void load();
-  }, [status, load]);
-  // Both keys are saved together, so a switch turns one on and leaves the other as it was.
-  const save = (next: PayloadCapture) => {
-    void request(Method.telemetrySet, { ...next }).then(
-      (value) => {
-        setCapture(parsePayloadCapture(value));
-        setPending(true);
-        setError(null);
-      },
-      (e) => setError(errorText(e)),
-    );
-  };
-  if (!capture) return <Loading error={error} />;
-  return (
-    <Group
-      title="Record request bodies"
-      hint="Redacted, clipped and dropped after 7 days. Off, only timing and status are kept."
-    >
-      <Row
-        title="Provider requests (built-in harness)"
-        reset={capture.providerPayloads ? () => save({ ...capture, providerPayloads: false }) : undefined}
-        subtitle="Save each request the built-in harness sends a provider."
-        hint="With a summary of the response, so a slow or failed turn can be read back. Agents query it with query_data (docs/data-store.md)."
-      >
-        <Switch
-          label="Provider requests (built-in harness)"
-          checked={capture.providerPayloads}
-          onChange={(providerPayloads) => save({ ...capture, providerPayloads })}
-        />
-      </Row>
-      <Row
-        title="Harness messages"
-        reset={capture.harnessRpcPayloads ? () => save({ ...capture, harnessRpcPayloads: false }) : undefined}
-        subtitle="Save each message exchanged with a harness."
-        hint="ACP or Codex JSON-RPC, so a failed handshake or tool call can be read back."
-      >
-        <Switch
-          label="Harness messages"
-          checked={capture.harnessRpcPayloads}
-          onChange={(harnessRpcPayloads) => save({ ...capture, harnessRpcPayloads })}
-        />
-      </Row>
-      {error && <Row title="Could not save" subtitle={error} />}
-      {pending && (
-        <Row title="Restart the server to apply" subtitle="The server reads these when it starts.">
-          <Action
-            prominent
-            disabled={anyRunning}
-            onClick={() => {
-              setPending(false);
-              void restartEngine();
-            }}
-          >
-            Restart Server
-          </Action>
-        </Row>
-      )}
-    </Group>
-  );
-}
-
-function AdvancedPage() {
-  return (
-    <>
-      <RecordRequestBodiesGroup />
-      <Group title="Setup">
-        <Row title="Agent setup" subtitle="Find each harness, sign it in and check that it runs.">
-          <Action onClick={() => setOnboarding(true)}>Run setup</Action>
-        </Row>
-      </Group>
-    </>
-  );
-}
-
-function AboutPage() {
-  return (
-    <>
-      <Group title="Version" hint="RustCode is open source; its licences ship in each release.">
-        <AppVersion />
-        <UpdateChannelRow />
-        <AutoInstallRow />
-      </Group>
-      <SystemSetupGroup />
-    </>
-  );
-}
-
-/**
- * Settings › About › System setup: the per-OS steps (PATH, quarantine, launcher
- * entry, the background server), each with what it found. The automatic ones
- * ran after the install or the last update; Run again checks a step and fixes
- * only what is missing. A step that needs an administrator or a shell-profile
- * edit shows its command to copy instead of running it.
- */
-function SystemSetupGroup() {
-  const [steps, setSteps] = useState<SetupStep[] | null>(null);
-  const [running, setRunning] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!systemSetupAvailable()) return;
-    loadSystemSetup().then(setSteps, (e) => setError(errorText(e)));
-  }, []);
-  if (!systemSetupAvailable()) return null;
-  const run = async (step?: string) => {
-    setRunning(step ?? "all");
-    setError(null);
-    try {
-      setSteps(await runSystemSetup(step));
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setRunning(null);
-    }
-  };
-  return (
-    <Group
-      title="System setup"
-      hint="Runs after an install or an update. RustCode never asks for an administrator silently."
-      footer={error ?? undefined}
-      action={
-        <Action disabled={running !== null} onClick={() => void run()}>
-          {running === "all" ? <Spinner size={12} /> : null}
-          Run again
-        </Action>
-      }
-    >
-      {steps === null ? (
-        <Row title="Checking…" subtitle={error ?? undefined} />
-      ) : (
-        steps.map((step) => {
-          const chip = setupChip(step.status);
-          const command = step.status === "needs-you" ? commandIn(step.message) : null;
-          return (
-            <Row
-              key={step.id}
-              title={step.title}
-              subtitle={step.message}
-              hint={step.about}
-              badge={<Chip tone={chip.tone}>{chip.label}</Chip>}
-            >
-              {command && (
-                <Action
-                  onClick={() =>
-                    void navigator.clipboard.writeText(command).then(() => toast("Command copied"))
-                  }
-                >
-                  Copy command
-                </Action>
-              )}
-              {/* A step that stands needs no button of its own: the section's Run again checks it. */}
-              {(step.status === "pending" || step.status === "failed" || running === step.id) && (
-                <Action disabled={running !== null} onClick={() => void run(step.id)}>
-                  {running === step.id ? <Spinner size={12} /> : null}
-                  {step.status === "failed" ? "Try again" : "Set up"}
-                </Action>
-              )}
-            </Row>
-          );
-        })
-      )}
-    </Group>
-  );
-}
-
-/**
- * Settings › About › Update channel: Stable follows releases only; Beta also
- * offers the betas of the next version, which show in the same row and install
- * the same way. Betas build the macOS app alone, so the row is hidden where
- * there is no beta to install. The channels come from the shell without a
- * release check, so the row is there before one answers and when it fails.
- */
-function UpdateChannelRow() {
-  const channels = useUpdates((s) => s.channels);
-  const channel = useUpdates((s) => s.channel);
-  useEffect(() => {
-    if (canUpdate()) void loadChannels();
-  }, []);
-  if (!canUpdate() || !channels.includes("beta")) return null;
-  return (
-    <Row
-      title="Update channel"
-      subtitle={channel === "beta" ? "Beta: also offers betas of the next version." : "Stable releases only."}
-    >
-      <Choice
-        label="Update channel"
-        value={channel}
-        onChange={setUpdateChannel}
-        options={[
-          { value: "stable", label: "Stable" },
-          { value: "beta", label: "Beta" },
-        ]}
-      />
-    </Row>
-  );
-}
-
-/**
- * Settings › About › Install updates automatically: a newer release on the
- * selected channel installs and reopens RustCode by itself once no thread is
- * working. A running turn, an approval or a question is never interrupted.
- */
-function AutoInstallRow() {
-  const enabled = useUpdates((s) => s.autoInstall);
-  if (!canUpdate()) return null;
-  return (
-    <Row
-      title="Install updates automatically"
-      subtitle="Install a newer release once no thread is working."
-      hint="RustCode reopens by itself. A running turn is never interrupted."
-    >
-      <Switch label="Install updates automatically" checked={enabled} onChange={setAutoInstall} />
-    </Row>
-  );
-}
 
 // ---------------------------------------------------------------- the panel
 

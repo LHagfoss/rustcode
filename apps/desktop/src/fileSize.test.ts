@@ -17,7 +17,6 @@ const SLACK = 100;
 const OVERSIZED: Record<string, number> = {
   "state/store.ts": 1800,
   "acp/mock.ts": 3300,
-  "ui/Settings.tsx": 2200,
 };
 
 function sources(dir: string): string[] {
