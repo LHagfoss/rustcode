@@ -13,9 +13,11 @@ import {
   type OutsidePlatform,
   type OutsideScope,
   type OutsideStatus,
+  type PasskeyLink,
   parseCode,
   parseCreated,
   parseOutsideStatus,
+  parsePasskeyLink,
 } from "../acp/outside";
 import { machineRequest } from "./settingsScope";
 import { errorText, toast } from "./store";
@@ -156,4 +158,29 @@ export async function makeOutsideCode(
     toast(errorText(error), "error");
     return null;
   }
+}
+
+/** A link that adds an owner passkey on the machine's public sign-in page. */
+export async function makePasskeyLink(host: string, name: string): Promise<PasskeyLink | null> {
+  try {
+    const link = parsePasskeyLink(
+      await machineRequest(host, OutsideMethod.passkeyAdd, { name: name.trim() || "Passkey" }, 10_000),
+    );
+    if (!link) throw new Error("RustCode did not return a link");
+    return link;
+  } catch (error) {
+    toast(errorText(error), "error");
+    return null;
+  }
+}
+
+/** Remove an owner passkey; it stops approving sign-ins at once. */
+export async function removePasskey(host: string, id: string, name: string) {
+  try {
+    await machineRequest(host, OutsideMethod.passkeyRemove, { id }, 10_000);
+    toast(`The passkey ${name} no longer approves sign-ins.`, "success");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+  await refreshOutside(host);
 }

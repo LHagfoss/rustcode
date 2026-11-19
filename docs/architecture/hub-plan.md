@@ -49,7 +49,7 @@ machine, and in which order it is built.
 | Phase | What | Issue |
 | --- | --- | --- |
 | 1 | Public MCP on one machine: `[outside] public_url`, Host validation for it, client registration, `https` callbacks, refresh tokens (30-day sign-in), sign-in page approved with `rustcode outside code` | this PR |
-| 2 | Approve sign-ins with the owner's passkey | #3954 |
+| 2 | Approve sign-ins with the owner's passkey | #3954 (built) |
 | 3 | One listener for the gateway (`/ws`) and `/mcp`, so one tunnel serves both; `wss://` routes | #3955 (built) |
 | 4 | Machines and devices authenticate with key pairs instead of bearer tokens | #3956 |
 | 5 | The hub role: outbound connections from other machines, `machine` for outside agents, a mailbox for offline machines | #3957 (built) |
@@ -58,6 +58,18 @@ machine, and in which order it is built.
 Phase 1 alone makes `https://rustcode.example.com/mcp` work for hosted agents
 against the machine that runs the tunnel. Phases 3–5 extend that to the rest
 of the fleet; 2 and 6 replace the terminal code with a login.
+
+## Phase 2 in practice
+
+`rustcode outside owner add-passkey` (or Settings › Outside agents) writes a
+one-time enrollment ticket to `<config>/owner-passkey-enrollments.json` and
+prints `<public_url>/owner/passkey?ticket=…`; the page there runs WebAuthn
+`create` and posts the result back. The consent page offers *Approve with
+passkey* when the owner has one for that host, with a single-use challenge and
+one inline script allowed by a nonce. Both ceremonies are verified in
+`orchestration/outside_passkey.rs` with `aws-lc-rs` and a small bounded CBOR
+reader; attestation is `none`, since the ticket is what proves the key is the
+owner's.
 
 ## Phase 5 in practice
 

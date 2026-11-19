@@ -15,6 +15,10 @@ export const OutsideMethod = {
   signIn: "_rustcode/outside/signin",
   /** A one-time sign-in code for the public sign-in page. */
   code: "_rustcode/outside/code",
+  /** A link that adds an owner passkey on the public sign-in page. */
+  passkeyAdd: "_rustcode/outside/passkey/add",
+  /** Remove an owner passkey; it stops approving sign-ins at once. */
+  passkeyRemove: "_rustcode/outside/passkey/remove",
   /** Notification: something waiting for the owner appeared or went. */
   changed: "_rustcode/outside/changed",
 } as const;
@@ -103,6 +107,23 @@ export interface OutsideCode {
   minutes: number;
 }
 
+/** One of the machine owner's passkeys, which approve a sign-in on the
+ * public sign-in page without a code. */
+export interface OwnerPasskey {
+  id: string;
+  name: string;
+  /** The public address it belongs to. */
+  host: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** A link that adds a passkey, shown once. */
+export interface PasskeyLink {
+  link: string;
+  minutes: number;
+}
+
 export interface OutsideCall {
   at: string;
   clientId: string;
@@ -130,6 +151,7 @@ export interface OutsideStatus {
   publicError: string | null;
   machineName: string | null;
   levels: OutsideLevel[];
+  passkeys: OwnerPasskey[];
 }
 
 export interface OutsideSnippet {
@@ -230,9 +252,23 @@ export function parseOutsideStatus(value: Json): OutsideStatus {
       cannot: arr(level.cannot).flatMap((t) => (typeof t === "string" ? [t] : [])),
     });
   }
+  const passkeys: OwnerPasskey[] = [];
+  for (const entry of arr(root.passkeys)) {
+    const item = obj(entry);
+    const id = str(item?.id);
+    if (!item || !id) continue;
+    passkeys.push({
+      id,
+      name: str(item.name) ?? "Passkey",
+      host: str(item.host) ?? "",
+      createdAt: str(item.createdAt) ?? "",
+      lastUsedAt: str(item.lastUsedAt) ?? null,
+    });
+  }
   return {
     signIns,
     levels,
+    passkeys,
     publicUrl: str(root.publicUrl) || null,
     publicError: str(root.publicError) || null,
     machineName: str(root.machineName) || null,
@@ -254,6 +290,13 @@ export function parseCode(value: Json): OutsideCode | null {
   const code = str(root?.code);
   if (!root || !code) return null;
   return { code, scope: scopeOf(root.scope), minutes: num(root.minutes) ?? 10 };
+}
+
+export function parsePasskeyLink(value: Json): PasskeyLink | null {
+  const root = obj(value);
+  const link = str(root?.link);
+  if (!root || !link) return null;
+  return { link, minutes: num(root.minutes) ?? 10 };
 }
 
 export function parseCreated(value: Json): OutsideCreated | null {

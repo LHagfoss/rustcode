@@ -20,6 +20,7 @@ import {
   type OutsideScope,
   type OutsideStatus,
   outcomeLabel,
+  type PasskeyLink,
   PLATFORM_LABEL,
   SCOPE_HELP,
   SCOPE_LABEL,
@@ -29,8 +30,10 @@ import {
   answerOutsideCall,
   connectOutsideApp,
   makeOutsideCode,
+  makePasskeyLink,
   OUTSIDE_POLL_MS,
   refreshOutside,
+  removePasskey,
   revokeOutsideApp,
   updateOutsideApp,
   useOutside,
@@ -332,7 +335,95 @@ function HostedGroup({ host, status, where }: { host: string; status: OutsideSta
         </div>
       )}
       <CodeRow host={host} status={status} />
+      <PasskeyRows host={host} status={status} />
     </Group>
+  );
+}
+
+/** The owner's passkeys: each approves a sign-in on the page with no code. */
+function PasskeyRows({ host, status }: { host: string; status: OutsideStatus }) {
+  const [name, setName] = useState("");
+  const [link, setLink] = useState<(PasskeyLink & { until: number }) | null>(null);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!link) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [link]);
+  const left = link ? Math.max(0, Math.round((link.until - now) / 1000)) : 0;
+  return (
+    <>
+      <Row
+        title="Passkeys"
+        subtitle="Approve a sign-in on the page with your passkey, from any device, with no code. Add one by opening a link on the device that keeps it."
+        stacked
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className={fieldClass}
+              value={name}
+              placeholder="Name, such as My phone"
+              aria-label="Passkey name"
+              onChange={(event) => setName(event.target.value)}
+            />
+            <Action
+              onClick={async () => {
+                const made = await makePasskeyLink(host, name);
+                if (made) {
+                  setNow(Date.now());
+                  setLink({ ...made, until: Date.now() + made.minutes * 60_000 });
+                }
+              }}
+            >
+              <KeyRound size={14} />
+              Add a passkey
+            </Action>
+          </div>
+          {link && left > 0 && (
+            <div className="flex flex-col gap-2 rounded-xl bg-fill px-4 py-3">
+              <span className="selectable break-all font-mono text-caption text-fg">{link.link}</span>
+              <span className="flex items-center gap-2">
+                <span className="flex-1 text-caption text-fg-faint tabular-nums">
+                  Works once · {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")} left · Do not
+                  share it
+                </span>
+                <Action onClick={() => void copyText(link.link)}>
+                  <Copy size={14} />
+                  Copy
+                </Action>
+                <Action onClick={() => void openExternal(link.link)}>
+                  <ExternalLink size={14} />
+                  Open
+                </Action>
+              </span>
+            </div>
+          )}
+        </div>
+      </Row>
+      {status.passkeys.map((passkey) => (
+        <Row
+          key={passkey.id}
+          title={passkey.name}
+          subtitle={`${passkey.host} · ${lastUsedLabel(passkey.lastUsedAt)}`}
+        >
+          <Action
+            danger
+            onClick={() =>
+              askConfirm({
+                title: `Remove ${passkey.name}?`,
+                message: `${passkey.name} stops approving sign-ins at once. Agents it approved stay connected; revoke them below.`,
+                action: "Remove",
+                destructive: true,
+                run: () => void removePasskey(host, passkey.id, passkey.name),
+              })
+            }
+          >
+            Remove
+          </Action>
+        </Row>
+      ))}
+    </>
   );
 }
 

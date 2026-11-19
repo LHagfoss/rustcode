@@ -275,7 +275,40 @@ loopback one. Run it on a machine that stays on, such as a VPS running
      for 10 minutes, and sets the most the app may do: the connection gets
      the lower of the page's pick and what the code allows. `--ask false`
      makes the app's changes run without waiting for approval in the app.
+   - **Approve with passkey**, once you added one (below). The browser asks
+     for your passkey (Face ID, a fingerprint, a PIN or a security key), and
+     the app gets the level picked on the page, at most the one it asked for.
 5. Ask the agent to call `whoami`.
+
+### Approve with a passkey
+
+A passkey of the machine's owner approves a sign-in on the page itself, from
+any device, with no code and no RustCode window. To add one, on the machine
+(or Settings › Outside agents › *Add a passkey* for that machine):
+
+```sh
+rustcode outside owner add-passkey --name "My phone"
+```
+
+It prints a link to `https://rustcode.example.com/owner/passkey?ticket=…`.
+Open it on the device that keeps the passkey and press *Add passkey*. The link
+works once, for 10 minutes, and only the local user (or a RustCode app with
+access to that machine) can make one, so do not share it. From then on the
+sign-in page shows *Approve with passkey*.
+
+- RustCode checks every answer itself, with no service in between: the
+  origin is the public address, the relying party is its host, you were
+  present and verified, the signature matches the stored public key (ES256,
+  EdDSA or RS256), the page's challenge is used once, and a passkey that
+  keeps a counter only counts up. A passkey belongs to the public address it
+  was made on: a new `public_url` needs new passkeys.
+- Failed passkey answers count with wrong codes towards locking the page for
+  a while.
+- `rustcode outside owner passkeys` lists them; `rustcode outside owner
+  remove-passkey <name or id>`, or *Remove* in Settings › Outside agents,
+  stops one approving sign-ins at once. Agents it approved stay connected
+  until you revoke them.
+- Only public keys are stored, in `<config>/owner-passkeys.json`.
 
 A sign-in only reaches the app after somebody chose *Approve in RustCode* on
 the page, at most two wait at once and ten can start in ten minutes, and the

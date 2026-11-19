@@ -44,6 +44,9 @@ struct Server {
     key: [u8; 32],
     /// Where `rustcode outside code` leaves its one-time sign-in codes.
     sign_in_codes: PathBuf,
+    /// The owner's passkeys, and the links that add one.
+    passkeys: PathBuf,
+    passkey_enrollments: PathBuf,
     /// This computer's name, as the sign-in page shows it.
     machine: String,
     /// The configuration root whose remote gateway `/ws` is relayed to.
@@ -235,6 +238,9 @@ pub async fn ensure() -> Result<String, String> {
             public,
             key: load_key(&dir.join(KEY_FILE))?,
             sign_in_codes: outside::sign_in_code_path().ok_or("configuration unavailable")?,
+            passkeys: super::outside_passkey::passkey_path().ok_or("configuration unavailable")?,
+            passkey_enrollments: super::outside_passkey::enrollment_path()
+                .ok_or("configuration unavailable")?,
             config: dir.clone(),
             machine: crate::fleet::own_name_override()
                 .or_else(crate::remote_gateway::gateway::os_host_name)
@@ -369,6 +375,11 @@ async fn html(stream: &mut TcpStream, status: u16, page: &str) {
         PAGE_HEADERS,
     )
     .await;
+}
+
+/// A page served with headers of its own (a consent page with a script).
+async fn html_with(stream: &mut TcpStream, status: u16, (page, headers): (String, String)) {
+    write_response(stream, status, "text/html; charset=utf-8", page, &headers).await;
 }
 
 async fn see_other(stream: &mut TcpStream, location: &str) {
@@ -649,14 +660,23 @@ const AUTHORIZE_FIELDS: [&str; 8] = [
 ];
 
 impl Server {
-    /// The consent page for `a`, with the level `selected` and an `error`.
+    /// The consent page for `a`, with the level `selected` and an `error`,
+    /// and the headers it is served with: a page that offers the owner's
+    /// passkeys runs one script, allowed by its nonce.
     fn consent(
         &self,
         a: &Authorization,
         q: &HashMap<String, String>,
         error: Option<&str>,
         selected: Option<outside::Scope>,
-    ) -> String {
+    ) -> (String, String) {
+        let prompt = self.public.as_deref().and_then(|public| {
+            super::outside_passkey::PasskeyPrompt::for_origin(&self.passkeys, public)
+        });
+        let headers = prompt.as_ref().map_or_else(
+            || PAGE_HEADERS.to_owned(),
+            |prompt| super::outside_passkey::script_headers(&prompt.nonce),
+        );
         let hidden: Vec<(&str, &str)> = AUTHORIZE_FIELDS
             .iter()
             .filter_map(|k| q.get(*k).map(|v| (*k, v.as_str())))
@@ -668,7 +688,7 @@ impl Server {
             .split("://")
             .nth(1)
             .unwrap_or("");
-        outside_signin::consent_page(
+        let page = outside_signin::consent_page(
             &Consent {
                 client_name: &a.client.name,
                 destination: (!loopback(&a.redirect)).then(|| a.redirect.host_str().unwrap_or("")),
@@ -676,10 +696,12 @@ impl Server {
                 host,
                 requested: a.scope,
                 hidden: &hidden,
+                passkey: prompt.as_ref(),
             },
             error,
             selected,
-        )
+        );
+        (page, headers)
     }
 }
 
@@ -827,7 +849,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                     json!({"error":"invalid_request"})
                 }
                 Some(a) if public => {
-                    html(&mut stream, 200, &server.consent(&a, &q, None, None)).await;
+                    html_with(&mut stream, 200, server.consent(&a, &q, None, None)).await;
                     return None;
                 }
                 Some(a) => {
@@ -856,6 +878,77 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                 "Cache-Control: public, max-age=86400\r\n",
             )
             .await;
+            return None;
+        }
+        // A link from `rustcode outside owner add-passkey`: the page that
+        // makes the owner's passkey for this public address.
+        ("GET", "/owner/passkey") if public => {
+            let q = fields(query.as_bytes());
+            let ticket = q.get("ticket").map(String::as_str).unwrap_or("");
+            let Some(offer) =
+                super::outside_passkey::enrollment_at(&server.passkey_enrollments, ticket)
+            else {
+                html(
+                    &mut stream,
+                    410,
+                    &outside_signin::message_page(
+                        "This link no longer works",
+                        "A passkey link works once, for 10 minutes. Make a new one with `rustcode outside owner add-passkey` on this machine.",
+                    ),
+                )
+                .await;
+                return None;
+            };
+            let rp = super::outside_passkey::rp_id(base);
+            let existing: Vec<String> = super::outside_passkey::list_at(&server.passkeys)
+                .into_iter()
+                .filter(|passkey| passkey.rp_id == rp)
+                .map(|passkey| passkey.id)
+                .collect();
+            let nonce = super::outside_passkey::nonce();
+            let page = super::outside_passkey::enrollment_page(
+                &server.machine,
+                ticket,
+                &offer,
+                &rp,
+                &existing,
+                &nonce,
+            );
+            html_with(
+                &mut stream,
+                200,
+                (page, super::outside_passkey::script_headers(&nonce)),
+            )
+            .await;
+            return None;
+        }
+        ("POST", "/owner/passkey") if public => {
+            let q = fields(&req.body);
+            let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
+            let page = match super::outside_passkey::register_at(
+                &server.passkeys,
+                &server.passkey_enrollments,
+                base,
+                &super::outside_passkey::Registration {
+                    ticket: get("ticket"),
+                    client_data: get("pk_client"),
+                    attestation: get("pk_attestation"),
+                },
+            ) {
+                Ok(passkey) => {
+                    crate::dbg_log!("owner passkey {} added", passkey.name);
+                    outside::changed();
+                    outside_signin::message_page(
+                        "Passkey added",
+                        &format!(
+                            "“{}” now approves hosted agents that sign in to RustCode on {}. The sign-in page offers it next to the code.",
+                            passkey.name, server.machine
+                        ),
+                    )
+                }
+                Err(why) => outside_signin::message_page("No passkey was added", &why),
+            };
+            html(&mut stream, 200, &page).await;
             return None;
         }
         // The consent page's form; only the public address shows that page.
@@ -887,11 +980,43 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                                 .await;
                             return None;
                         }
-                        Err(error) => error,
+                        Err(error) => error.to_string(),
                     }
                 }
-                Some("approve") if server.locked() => {
-                    "Too many wrong codes. Wait a few minutes, then make a new code and try again."
+                Some("approve" | "passkey") if server.locked() => {
+                    "Too many failed approvals. Wait a few minutes, then try again.".to_owned()
+                }
+                // The owner's passkey, checked here against this public
+                // address (`outside_passkey.rs`). It approves the level chosen
+                // on the page, at most the one the app asked for.
+                Some("passkey") => {
+                    let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
+                    let assertion = super::outside_passkey::Assertion {
+                        id: get("pk_id"),
+                        client_data: get("pk_client"),
+                        authenticator_data: get("pk_auth"),
+                        signature: get("pk_sig"),
+                    };
+                    match super::outside_passkey::verify_assertion_at(
+                        &server.passkeys,
+                        base,
+                        &assertion,
+                    ) {
+                        Ok(name) => {
+                            crate::dbg_log!(
+                                "outside-agent sign-in for {} approved with the passkey {name}",
+                                a.client.name
+                            );
+                            let scope = selected.min(a.scope.unwrap_or(outside::Scope::Admin));
+                            let code = server.issue(&a, scope, None);
+                            see_other(&mut stream, &a.answer(base, &[("code", &code)])).await;
+                            return None;
+                        }
+                        Err(why) => {
+                            server.failed();
+                            format!("The passkey did not approve this sign-in: {why}.")
+                        }
+                    }
                 }
                 Some("approve") => match outside::redeem_sign_in_code_at(
                     &server.sign_in_codes,
@@ -905,6 +1030,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                     None => {
                         server.failed();
                         "That sign-in code is not valid. A code works once, for 10 minutes."
+                            .to_owned()
                     }
                 },
                 _ => {
@@ -912,10 +1038,10 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                     return None;
                 }
             };
-            html(
+            html_with(
                 &mut stream,
                 200,
-                &server.consent(&a, &q, Some(error), Some(selected)),
+                server.consent(&a, &q, Some(&error), Some(selected)),
             )
             .await;
             return None;
