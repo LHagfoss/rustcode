@@ -344,6 +344,9 @@ export function Row({
  * The field shape a row's control takes: 28px high, `rounded-lg` and a step of
  * its own over the card, so it reads as a control and not as a block.
  */
+/** A switch setting's value as a row reads it. */
+export const boolLabel = (value: Json | undefined) => (value ? "On" : "Off");
+
 export const fieldClass =
   "h-7 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
 
