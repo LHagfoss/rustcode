@@ -1260,7 +1260,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   the compare view. Every view draws on one surface, the Details card's: the chat's
   own `bg-bg` with a hairline `border-border` and `rounded-2xl`, inset 12px from the
   header's foot and the window's right edge. It is as tall as its content, up to
-  20% of the window short of the bottom edge. The chat column keeps the row's whole
+  12px above the window's bottom edge; nothing in the chat (the composer included)
+  sets that cap. The chat column keeps the row's whole
   width, so the transcript's scrollbar stays at the window's edge; the card
   publishes the room it takes as `--rc-panel-room` on the row, and the lane pads by
   it (`.rc-lane-pad` on a scroller, `.rc-lane-inset` on an absolute box, index.css),
@@ -1274,7 +1275,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   a close button, with no rule under it; a view adds one slim toolbar (`h-9`):
   Changes says the file count and `+/−` lines, the Unified/Split switch when the
   pane is wide enough for split, and a reload. The card draws
-  520px wide by default and never wider than 760, 70% of the window, or the row
+  520px wide by default and never wider than 640, 70% of the window, or the row
   less the 360px the chat column always keeps, nor narrower than 360; it is
   fitted down when the window or the row cannot hold what was asked and comes back
   when it can. The width is kept per thread, with the last one used as what a

@@ -43,7 +43,7 @@ type Kind = NonNullable<AppState["panel"]>;
 
 /** The card's own bounds, in px, and the width it starts with. */
 export const MIN = 360;
-export const MAX = 760;
+export const MAX = 640;
 export const DEFAULT_WIDTH = 520;
 /** The room the chat column always keeps of the row, however wide the card asks to be. */
 export const CHAT_MIN = 360;
@@ -470,10 +470,10 @@ export function RightPanel() {
           width: "var(--rc-panel-width)",
           marginTop: HEADER_HEIGHT + CARD_GAP,
           marginRight: CARD_GAP,
+          // Fit to the content, capped by the window alone: the card may run down to 12px above the
+          // window's bottom edge, whatever the composer or anything else in the chat is doing.
           marginBottom: CARD_GAP,
-          maxHeight: compact
-            ? `calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px)`
-            : `calc(100% - ${HEADER_HEIGHT + CARD_GAP}px - max(${CARD_GAP}px, 20dvh))`,
+          maxHeight: `calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px)`,
         }}
       >
         {contents}
