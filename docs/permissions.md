@@ -22,7 +22,7 @@ access" lists the same three:
 | What | Why | Where it is approved |
 | --- | --- | --- |
 | Questions and plan reviews | Only the user can answer them. | The card in the thread, or "Needs you" in the sidebar. |
-| A delegate on a named account | Starting a thread on a signed-in account spends that account's usage, and a thread's access does not cover spending another login. | The card, once per thread (kept in Settings › Permissions › Remembered approvals), or for all delegates with Settings › Orchestration › "Let delegates use my named accounts without asking". That switch covers named accounts; the default sign-in of a harness with named accounts is approved per thread. |
+| A delegate on a named account | Starting a thread on a signed-in account spends that account's usage, and a thread's access does not cover spending another login. A delegate on the caller's own named login (the same harness with no `account`, or the same one named) is not asked. | The card, once per thread (kept in Settings › Permissions › Remembered approvals), or for all delegates with Settings › Orchestration › "Let delegates use my named accounts without asking". That switch covers named accounts; the default sign-in of a harness with named accounts is approved per thread. |
 | Outside agents | An app connected under Settings › Outside agents is not one of the user's threads. | Its card in the app, or `rustcode outside update <name> --ask false`. |
 
 When the engine answers a call itself because no RustCode window hosts the
