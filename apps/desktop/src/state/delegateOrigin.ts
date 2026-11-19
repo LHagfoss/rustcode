@@ -36,11 +36,14 @@ export function sameProject(
 export function detachedDelegates(
   drawn: ReadonlySet<string>,
   parentOf: ReadonlyMap<string, string>,
+  listed?: ReadonlySet<string>,
 ): Set<string> {
   const out = new Set<string>();
   for (const id of drawn) {
     const parent = parentOf.get(id);
-    if (parent && !drawn.has(parent)) out.add(id);
+    // A parent the app does not list at all (past the list's cap) is not filtered out of view:
+    // its delegates stay folded under it instead of each taking a row.
+    if (parent && !drawn.has(parent) && (!listed || listed.has(parent))) out.add(id);
   }
   return out;
 }

@@ -40,6 +40,8 @@ export interface LoopRun {
   skipped?: string;
   /** The job's script printed nothing, so no agent turn started. */
   silent?: boolean;
+  /** The harness's login was signed out; `error` names the login and how to sign in. */
+  signedOut?: boolean;
 }
 
 export interface Loop {
@@ -127,6 +129,7 @@ function runOf(value: Json): LoopRun | null {
     quiet: bool(raw.quiet) ?? false,
     skipped: str(raw.skipped),
     silent: bool(raw.silent) ?? false,
+    signedOut: bool(raw.signedOut) ?? false,
   };
 }
 
@@ -436,11 +439,15 @@ const isFailure = (run: LoopRun) =>
   run.finishedAt !== undefined && (run.state === "failed" || run.state === "ambiguous");
 
 /**
- * Why a paused loop stopped: the daemon pauses one whose last three runs failed, and those runs say
- * why. Null for a loop the user paused, or one that runs.
+ * Why a paused loop stopped: the daemon pauses one whose last three runs failed, or whose last run
+ * found its login signed out, and those runs say why. Null for a loop the user paused, or one that runs.
  */
 export function pauseReason(loop: Loop): string | null {
   if (!loop.paused) return null;
+  // A signed-out login pauses the job on its first run, and the run says which login and how to sign in.
+  const latest = loop.runs[0];
+  if (latest && isFailure(latest) && latest.signedOut)
+    return `Paused: ${latest.error ?? "the harness is not signed in"}`;
   const last = loop.runs.slice(0, LOOP_FAILURE_LIMIT);
   if (last.length < LOOP_FAILURE_LIMIT || !last.every(isFailure)) return null;
   return `Paused after ${LOOP_FAILURE_LIMIT} failed runs: ${last[0]?.error ?? "no reason given"}`;
@@ -591,6 +598,21 @@ export function userTimeZone(): string | undefined {
   }
 }
 
+/**
+ * The draft as it is saved: a job that starts fresh threads and names no account runs on `account`,
+ * the one a new thread on `harness` would get, with the harness it belongs to. Without it every run
+ * started on the harness's bare default login, which may be signed out while the user's threads run
+ * on a named account. A job that sends runs to one thread keeps that thread's own account.
+ */
+export function withRunAccount(
+  draft: LoopDraft,
+  harness: string | undefined,
+  account: string | null,
+): LoopDraft {
+  if (draft.threadId || draft.account?.trim() || !account || !harness) return draft;
+  return { ...draft, account, harness: draft.harness?.trim() || harness };
+}
+
 /** The save call's parameters: a cron in the user's own zone, empty fields left out. */
 export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTimeZone()): JsonObject {
   const params: JsonObject = {
@@ -654,8 +676,40 @@ export async function startScheduler(): Promise<void> {
 
 // ---------------------------------------------------------------- loop threads in the sidebar
 
-/** Which loop each thread a run started or ran in belongs to, by thread id: the sidebar's Loop badge. */
-export const useLoopThreads = create<{ byThread: Record<string, string> }>(() => ({ byThread: {} }));
+/**
+ * Which loop each thread a run started or ran in belongs to, by thread id: the sidebar's Loop badge.
+ * `runs`: the threads a run started fresh, which live in the Scheduled Jobs view and not the sidebar.
+ */
+export const useLoopThreads = create<{ byThread: Record<string, string>; runs: Record<string, true> }>(
+  () => ({
+    byThread: {},
+    runs: {},
+  }),
+);
+
+/**
+ * The threads fresh runs started, by id. A loop that sends every run to one thread leaves that
+ * thread out: the user picked it, and it stays in the list.
+ */
+export function loopRunThreads(loops: readonly Loop[]): Record<string, true> {
+  const runs: Record<string, true> = {};
+  for (const loop of loops) {
+    for (const run of loop.runs)
+      if (run.threadId && run.threadId !== loop.threadId) runs[run.threadId] = true;
+  }
+  return runs;
+}
+
+/**
+ * Whether a thread is a scheduled job's run, which the thread list leaves to the Scheduled Jobs view:
+ * the engine marks every run thread it starts, and the loops' run history names older ones.
+ */
+export function isJobRunThread(
+  session: { id: string; scheduledJob?: string },
+  runs: Record<string, true>,
+): boolean {
+  return !!session.scheduledJob || !!runs[session.id];
+}
 
 /** Every thread the loops' recorded runs went to, and the loop's name. */
 export function loopThreadNames(loops: readonly Loop[]): Record<string, string> {
@@ -669,7 +723,10 @@ export function loopThreadNames(loops: readonly Loop[]): Record<string, string> 
 
 /** Keep the sidebar's Loop badges in step with a list the page or a refresh read. */
 export function rememberLoops(snapshot: LoopsSnapshot): void {
-  useLoopThreads.setState({ byThread: loopThreadNames(snapshot.loops) });
+  useLoopThreads.setState({
+    byThread: loopThreadNames(snapshot.loops),
+    runs: loopRunThreads(snapshot.loops),
+  });
 }
 
 /** Read the loops once for the badges; a scheduler that is not running leaves them empty. */

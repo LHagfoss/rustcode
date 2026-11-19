@@ -48,6 +48,29 @@ export function parentOf(thread: DelegatedThread, links: readonly Link[]): strin
 }
 
 /**
+ * When a thread was created, from its id: the first 12 hex digits are milliseconds since the epoch
+ * (`01a1c1a63760-7000-…`). Undefined for an id of another shape.
+ */
+export function threadCreatedAt(id: string): number | undefined {
+  const match = /^([0-9a-f]{12})-[0-9a-f]{4}-/.exec(id);
+  return match ? Number.parseInt(match[1]!, 16) : undefined;
+}
+
+/**
+ * The creation time of the oldest thread a capped list holds, before which a missing thread is past
+ * the cap rather than gone; undefined for a list that holds every thread.
+ */
+export function listedSinceOf(ids: Iterable<string>, capped: boolean): number | undefined {
+  if (!capped) return undefined;
+  let oldest: number | undefined;
+  for (const id of ids) {
+    const at = threadCreatedAt(id);
+    if (at !== undefined && (oldest === undefined || at < oldest)) oldest = at;
+  }
+  return oldest;
+}
+
+/**
  * Where `thread` goes, given the link book and every thread the app knows
  * (`known`: all sessions, not the filtered list — a project filter or a search
  * changes what is drawn, never who a thread belongs to).
@@ -61,11 +84,15 @@ export function parentOf(thread: DelegatedThread, links: readonly Link[]): strin
  * - A parent that is gone from the app entirely: shown. Its row is the only
  *   place it can be seen, so it keeps one; hiding it would make the thread
  *   vanish.
+ * - A parent the list left out because it stops at its page cap (`listedSince`:
+ *   the oldest listed thread's creation time, only when the list is capped):
+ *   nested. It still exists, and the thread is still its delegate.
  */
 export function topLevel(
   thread: DelegatedThread,
   links: readonly Link[],
   known: ReadonlySet<string>,
+  listedSince?: number,
 ): Placement {
   const parent = parentOf(thread, links);
   // A thread older releases started has only its parent's title: it is still
@@ -77,6 +104,11 @@ export function topLevel(
   // own. A delegate or a fork the user writes in is theirs now.
   if (thread.pinned || (thread.messaged && thread.parent?.relationship !== "side_chat")) return "shown";
   if (parent && known.has(parent)) return "nested";
+  // The app lists the newest threads only (`refreshSessions` stops at its page cap), and a parent
+  // is always older than the threads it started: one created before the oldest listed thread is
+  // past the cap, not gone, so its delegates stay under it rather than all coming back as rows.
+  const createdAt = parent ? threadCreatedAt(parent) : undefined;
+  if (listedSince !== undefined && createdAt !== undefined && createdAt < listedSince) return "nested";
   return "shown";
 }
 

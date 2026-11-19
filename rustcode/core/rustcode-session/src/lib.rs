@@ -119,13 +119,31 @@ fn prompt_text<'a>(role: &str, content: &'a str) -> Option<&'a str> {
 /// Character limit for automatically named threads.
 pub const MAX_AUTOMATIC_TITLE_CHARS: usize = 32;
 
+fn title_line(line: &str) -> &str {
+    let line = line.trim_end();
+    let heading = line.trim_start_matches(' ');
+    let body = heading.trim_start_matches('#');
+    let markers = heading.len() - body.len();
+    if line.len() - heading.len() <= 3
+        && (1..=6).contains(&markers)
+        && (body.is_empty() || body.starts_with([' ', '\t']))
+    {
+        let closing = body.trim_end_matches('#');
+        if closing.len() < body.len() && closing.ends_with([' ', '\t']) {
+            return closing.trim();
+        }
+        return body.trim();
+    }
+    line.trim_start()
+}
+
 fn title_from_prompt(content: &str) -> String {
     let text = unwrap_title_paste_markers(content);
     let title = text
         .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("")
-        .trim();
+        .map(title_line)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
     if title.chars().count() > MAX_AUTOMATIC_TITLE_CHARS {
         let prefix: String = title.chars().take(MAX_AUTOMATIC_TITLE_CHARS - 3).collect();
         let prefix = prefix
@@ -748,6 +766,11 @@ pub struct SessionMetadata {
     /// renaming its own thread (issue 3599). False for older threads.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub user_titled: bool,
+    /// The scheduled job whose run started this thread (`docs/daemon.md` ›
+    /// Scheduled jobs). Such a thread belongs to the job's own view, never to
+    /// the thread list. Absent for every other thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_job: Option<String>,
 }
 
 /// The thread above a related one. `id` is absent for a thread an older
@@ -853,6 +876,7 @@ impl SessionMetadata {
             parent: None,
             repo: None,
             user_titled: false,
+            scheduled_job: None,
         }
     }
 }
@@ -1529,6 +1553,15 @@ impl SessionStore {
         self.update_session_metadata(session_id, |metadata| {
             let changed = metadata.parent.as_ref() != Some(&parent);
             metadata.parent = Some(parent);
+            changed
+        })
+    }
+
+    /// Record the scheduled job whose run started this thread.
+    pub fn save_session_scheduled_job(&self, session_id: &str, job: &str) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            let changed = metadata.scheduled_job.as_deref() != Some(job);
+            metadata.scheduled_job = Some(job.to_owned());
             changed
         })
     }
@@ -2559,13 +2592,23 @@ mod tests {
     }
 
     #[test]
+    fn fallback_titles_use_heading_text_and_keep_issue_numbers() {
+        assert_eq!(
+            title_from_prompt("# Check ParalX Problems\nDetails"),
+            "Check ParalX Problems"
+        );
+        assert_eq!(title_from_prompt("## Overview ##"), "Overview");
+        assert_eq!(title_from_prompt("###\n#123 Follow up"), "#123 Follow up");
+    }
+
+    #[test]
     fn pasted_titles_are_unwrapped_before_first_line_and_truncation() {
-        let body = "\n## Build a Chess MCP Server\n\nImplement the server.";
+        let body = "\n## Build a Chess MCP Server in Rust\n\nImplement the server.";
         let wrapped = format!("<!--PASTE:{}:{body}-->", body.chars().count());
         let history = vec![message("user", &wrapped), message("assistant", "done")];
         assert_eq!(
             SessionStore::session_title(&history),
-            "## Build a Chess MCP Server"
+            "Build a Chess MCP Server in Rust"
         );
         assert_eq!(
             history[0].content, wrapped,
@@ -2579,7 +2622,7 @@ mod tests {
         let path = store.session_dir("paste").join(HISTORY_FILE);
         assert_eq!(
             store.load_session_meta(&path).unwrap().title,
-            "## Build a Chess MCP Server"
+            "Build a Chess MCP Server in Rust"
         );
 
         let long = "棋".repeat(60);

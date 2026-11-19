@@ -266,6 +266,11 @@ export interface SessionSummary {
    * why the parent exists: a record without one was always a delegate.
    */
   parent?: ThreadParent;
+  /**
+   * The scheduled job whose run started this thread (`_meta.rustcode.scheduledJob`): it lives in
+   * the Scheduled Jobs view, never in the thread list.
+   */
+  scheduledJob?: string;
 }
 
 /** Why a thread has a parent (`_meta.rustcode.parent.relationship`). */
@@ -316,6 +321,7 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
       workspaceUnknown: bool(rc?.workspaceUnknown),
       snoozedUntil: rc?.snoozedUntil === null ? null : num(rc?.snoozedUntil),
       account: str(rc?.account),
+      scheduledJob: str(rc?.scheduledJob),
       parent: parentId || parentTitle ? { id: parentId, title: parentTitle, relationship } : undefined,
       id,
       cwd: str(e?.cwd) ?? "",

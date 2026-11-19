@@ -982,6 +982,17 @@ fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
         }
         other => panic!("{other:?}"),
     }
+    match loop_outcome(LoopRunEnd::SignedOut {
+        thread_id: Some("t-4".into()),
+        error: "Claude Code is not signed in".into(),
+    }) {
+        RunOutcome::Permanent { error, output } => {
+            assert!(error.contains("not signed in"));
+            let output: serde_json::Value = serde_json::from_str(&output.unwrap()).unwrap();
+            assert_eq!(output, json!({"thread_id": "t-4", "signed_out": true}));
+        }
+        other => panic!("{other:?}"),
+    }
     assert!(matches!(
         loop_outcome(LoopRunEnd::Skipped("RustCode was not open".into())),
         RunOutcome::Cancelled { output: Some(output) } if output.contains("not open")
@@ -1011,4 +1022,61 @@ fn a_loop_prompt_says_when_it_is_read_only() {
     assert!(text.ends_with("Check CI"));
     let open = crate::orchestration::local_threads::loop_prompt("CI", "Check CI", false);
     assert!(!open.contains("read-only"));
+}
+
+#[test]
+fn a_job_without_an_account_runs_on_the_last_used_named_account() {
+    use crate::harness::config::HarnessAccount;
+    use crate::orchestration::local_threads::default_job_account;
+    let account = |id: &str| HarnessAccount {
+        id: id.into(),
+        harness: "claude-code".into(),
+        name: None,
+        config_dir: format!("~/.claude-{id}"),
+    };
+    let accounts = [account("personal-1"), account("paral-2")];
+    // The account the user's threads last ran on.
+    assert_eq!(
+        default_job_account(&accounts, Some("paral-2")).as_deref(),
+        Some("paral-2")
+    );
+    // Never the bare default login while named accounts exist.
+    assert_eq!(
+        default_job_account(&accounts, None).as_deref(),
+        Some("personal-1")
+    );
+    assert_eq!(
+        default_job_account(&accounts, Some("removed")).as_deref(),
+        Some("personal-1")
+    );
+    // A harness with no named accounts runs on its own sign-in.
+    assert_eq!(default_job_account(&[], Some("paral-2")), None);
+}
+
+#[test]
+fn a_signed_out_run_names_the_login_and_how_to_sign_in() {
+    use crate::harness::config::HarnessAccount;
+    use crate::orchestration::local_threads::{is_sign_in_failure, signed_out_message};
+    assert!(is_sign_in_failure("Authentication required"));
+    assert!(is_sign_in_failure("Not logged in · Please run /login"));
+    assert!(!is_sign_in_failure("the turn stopped: Refusal"));
+    let harness = crate::harness::resolve_all(&[])
+        .into_iter()
+        .find(|harness| harness.id == "claude-code")
+        .expect("claude-code is a known harness");
+    let account = HarnessAccount {
+        id: "paral-2".into(),
+        harness: "claude-code".into(),
+        name: Some("Paral 2".into()),
+        config_dir: "~/.claude-paral-2".into(),
+    };
+    let named = signed_out_message(&harness, Some(&account));
+    assert!(named.contains("“Paral 2”"), "{named}");
+    assert!(
+        named.contains("CLAUDE_CONFIG_DIR=~/.claude-paral-2 claude auth login"),
+        "{named}"
+    );
+    assert!(named.contains("resume the job"), "{named}");
+    let default = signed_out_message(&harness, None);
+    assert!(default.contains("default login (~/.claude)"), "{default}");
 }

@@ -9,9 +9,11 @@ import {
   defaultForm,
   formOfCron,
   formProblem,
+  isJobRunThread,
   type Loop,
   type LoopRun,
   lastResult,
+  loopRunThreads,
   loopState,
   loopThreadNames,
   nextRunText,
@@ -21,6 +23,7 @@ import {
   saveParams,
   scheduleInWords,
   webhookOf,
+  withRunAccount,
 } from "./loops";
 
 const NOW = Date.parse("2026-11-17T12:00:00Z");
@@ -167,6 +170,27 @@ describe("a loop's state", () => {
     });
     expect(pauseReason(failing)).toBe("Paused after 3 failed runs: Codex is turned off");
     expect(loopState(failing)).toBe("failing");
+  });
+
+  test("a loop paused by a signed-out login names it after one run", () => {
+    const signedOut = loop({
+      paused: true,
+      runs: [
+        run("r1", "failed", 1, {
+          error:
+            "Claude Code is not signed in on its default login (~/.claude). Sign in, then resume the job.",
+          signedOut: true,
+        }),
+      ],
+    });
+    expect(pauseReason(signedOut)).toBe(
+      "Paused: Claude Code is not signed in on its default login (~/.claude). Sign in, then resume the job.",
+    );
+    expect(loopState(signedOut)).toBe("failing");
+    expect(
+      parseLoops({ loops: [{ id: "l", runs: [{ id: "r", state: "failed", signedOut: true }] }] }).loops[0]
+        ?.runs[0]?.signedOut,
+    ).toBe(true);
   });
 
   test("a loop the user paused is only paused", () => {
@@ -357,5 +381,47 @@ describe("loop follow-ups (issue 3937)", () => {
       loop({ id: "loop-2", name: "Triage", threadId: "t-own", runs: [] }),
     ];
     expect(loopThreadNames(loops)).toEqual({ "t-1": "CI", "t-own": "Triage" });
+  });
+
+  test("a run's fresh thread stays out of the thread list, a loop's own thread stays in", () => {
+    const loops = [
+      loop({ name: "CI", runs: [run("r1", "succeeded", 1, { threadId: "t-1" })] }),
+      loop({
+        id: "loop-2",
+        name: "Triage",
+        threadId: "t-own",
+        runs: [run("r2", "succeeded", 1, { threadId: "t-own" })],
+      }),
+    ];
+    const runs = loopRunThreads(loops);
+    expect(runs).toEqual({ "t-1": true });
+    expect(isJobRunThread({ id: "t-1" }, runs)).toBe(true);
+    expect(isJobRunThread({ id: "t-own" }, runs)).toBe(false);
+    // The engine marks every run thread it starts, whether or not the history still lists the run.
+    expect(isJobRunThread({ id: "t-old", scheduledJob: "CI" }, {})).toBe(true);
+    expect(isJobRunThread({ id: "t-user" }, {})).toBe(false);
+  });
+});
+
+describe("a job's account", () => {
+  const draft = { name: "Watch", workspace: "/repo", prompt: "Check", cron: "0 * * * *", readOnly: true };
+
+  test("a job that names none runs on the account a new thread would get", () => {
+    expect(withRunAccount(draft, "claude-code", "paral-2")).toMatchObject({
+      harness: "claude-code",
+      account: "paral-2",
+    });
+    expect(saveParams(withRunAccount(draft, "claude-code", "paral-2"))).toMatchObject({
+      harness: "claude-code",
+      account: "paral-2",
+    });
+  });
+
+  test("a job's own account, its own thread, or no named account is left as it is", () => {
+    const own = { ...draft, harness: "claude-code", account: "personal-1" };
+    expect(withRunAccount(own, "claude-code", "paral-2")).toBe(own);
+    const thread = { ...draft, threadId: "t-own" };
+    expect(withRunAccount(thread, "claude-code", "paral-2")).toBe(thread);
+    expect(withRunAccount(draft, "pi", null)).toBe(draft);
   });
 });

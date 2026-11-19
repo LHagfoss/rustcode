@@ -8,6 +8,8 @@
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { projectName } from "../acp/types";
+import { lastAccountFor } from "../state/harnessActions";
+import { newThreadAccountOn } from "../state/logins";
 import {
   cronInWords,
   cronOfForm,
@@ -27,6 +29,7 @@ import {
   userTimeZone,
   WEEKDAYS,
   WEEKENDS,
+  withRunAccount,
 } from "../state/loops";
 import { projectsOn } from "../state/projects";
 import { errorText, useApp } from "../state/store";
@@ -302,8 +305,14 @@ export function LoopDialog({
     (harness) => harness.id === (draft.harness || harnesses.default.harness),
   );
   const accounts = runHarness?.accounts ?? [];
+  // A job with no account runs on the one a new thread would get, never on the bare default login
+  // while named accounts exist; the picker shows it, and saving keeps it.
+  const signedOut = useApp((s) => s.signedOutLogins);
+  const runAccount = runHarness
+    ? newThreadAccountOn(runHarness, lastAccountFor(runHarness.id), signedOut)
+    : null;
   const accountOptions = [
-    { value: "", label: "Default account" },
+    ...(runAccount ? [] : [{ value: "", label: "Default account" }]),
     ...accounts.map((account) => ({ value: account.id, label: account.name })),
   ];
   if (draft.account && !accounts.some((account) => account.id === draft.account)) {
@@ -342,7 +351,12 @@ export function LoopDialog({
     setSaving(true);
     setError(null);
     try {
-      const made = await saveLoop({ ...draft, cron, once: once ?? undefined, threadId, manual });
+      const made = await saveLoop({
+        ...withRunAccount({ ...draft, threadId }, runHarness?.id, runAccount),
+        cron,
+        once: once ?? undefined,
+        manual,
+      });
       onSaved();
       if (made) setMadeWebhook(made);
       else onOpenChange(false);
@@ -638,7 +652,7 @@ export function LoopDialog({
                         <Field label="Account">
                           <Select
                             label="Account"
-                            value={draft.account ?? ""}
+                            value={draft.account || runAccount || ""}
                             options={accountOptions}
                             disabled={accountOptions.length === 1}
                             onChange={(account) =>

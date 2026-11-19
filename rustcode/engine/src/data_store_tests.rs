@@ -3540,3 +3540,40 @@ fn outside_agent_calls_past_the_retention_window_are_pruned() {
     assert_eq!(prune_outside_calls(&connection).unwrap(), 1);
     assert_eq!(count_rows(&path, "outside_agent_calls"), 1);
 }
+
+#[test]
+fn a_harness_last_account_is_the_newest_turn_that_named_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DATA_FILE);
+    assert_eq!(last_account_at(&path, "claude-code").unwrap(), None);
+    let connection = open(&path).unwrap();
+    let on = |thread: &str, started: &str, harness: &str, account: Option<&str>| TurnRow {
+        harness: Some(harness.to_owned()),
+        account: account.map(str::to_owned),
+        ..turn(thread, started, (1, 1), "completed")
+    };
+    for row in [
+        on(
+            "a",
+            "2026-11-18T10:00:00Z",
+            "claude-code",
+            Some("personal-1"),
+        ),
+        on("b", "2026-11-19T09:00:00Z", "claude-code", Some("paral-2")),
+        // A scheduled run on the default login, and another harness's account,
+        // both newer: neither is what a new Claude Code thread runs on.
+        on("c", "2026-11-19T10:00:00Z", "claude-code", None),
+        on("d", "2026-11-19T11:00:00Z", "codex", Some("work")),
+    ] {
+        write_turn(&connection, &row).unwrap();
+    }
+    assert_eq!(
+        last_account_at(&path, "claude-code").unwrap().as_deref(),
+        Some("paral-2")
+    );
+    assert_eq!(
+        last_account_at(&path, "codex").unwrap().as_deref(),
+        Some("work")
+    );
+    assert_eq!(last_account_at(&path, "gemini").unwrap(), None);
+}
