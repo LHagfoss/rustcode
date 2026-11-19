@@ -43,6 +43,7 @@ export function LinkChip({
   const { title, host, showsHost, tag, github } = linkChipLabel(url, meta);
   const tint = meta?.color;
   const inline = variant === "inline";
+  const padding = inline ? "pr-[5px] pl-[7px]" : "pr-1 pl-1.5";
   // A favicon that will not decode is the same as no favicon: a globe, never a gap. The URL is
   // what is remembered, so a chip that later gets another icon tries that one.
   const [brokenIcon, setBrokenIcon] = useState<string | null>(null);
@@ -63,10 +64,9 @@ export function LinkChip({
           // the field's own line box (21px) and the call site gives it the field's 6px of top
           // padding, so it sits on the first line and not above it.
           "group/link inline-flex max-w-[340px] shrink-0 items-center gap-1 text-callout leading-none select-text hover:brightness-125",
-          // A chip in a reply is the pill the code and the links around it are too (ui/Markdown.tsx
-          // `PILL`): full rounding and a pixel more room on each side. A token in the composer keeps
-          // the shape of the field's own tokens (an `@file` reference, the slash command).
-          inline ? "h-[18px] rounded-full pr-[5px] pl-[7px] align-middle" : "h-[21px] rounded-sm pr-1 pl-1.5",
+          // Reply chips are round and composer chips match the field's other tokens.
+          inline ? "h-[18px] rounded-full align-middle" : "h-[21px] rounded-sm",
+          onRemove && padding,
           !tint && "bg-fill shadow-[inset_0_0_0_0.5px_var(--color-border)]",
           className,
         )}
@@ -86,7 +86,11 @@ export function LinkChip({
             e.preventDefault();
             openExternal(url);
           }}
-          className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 text-fg no-underline"
+          className={cx(
+            "inline-flex h-full min-w-0 cursor-pointer items-center gap-1.5 text-fg no-underline",
+            inline ? "rounded-full" : "rounded-sm",
+            !onRemove && padding,
+          )}
         >
           {/* A favicon sits on its own light tile: sites draw them dark as often as light, and a
               dark mark straight on the chip's grey disappears in the dark theme. `bg-knob` is the
