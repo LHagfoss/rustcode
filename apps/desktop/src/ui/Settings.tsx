@@ -105,7 +105,7 @@ import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primiti
 import { RemoteAccessPage } from "./RemoteAccessPage";
 import { SchemeWarning } from "./SchemeWarning";
 import { ScopedHarnessList } from "./ScopedHarnesses";
-import { ScopedValue, SettingsScopeBar, SourceChip } from "./SettingsScope";
+import { MixedChip, ScopedValue, SettingsScopeBar, SourceChip } from "./SettingsScope";
 import { ShortcutsPage } from "./ShortcutSettings";
 
 const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
@@ -631,26 +631,25 @@ function AgentsPage() {
         <Group
           title="New threads start on"
           action={
-            saved ? (
-              <Chip tone="ok">
-                <Check size={12} /> Saved
-              </Chip>
+            // Where the value comes from sits in the title row, beside the title it qualifies,
+            // instead of crowding the top edge of the card.
+            saved || scoped.project || scoped.mixed ? (
+              <div className="flex items-center gap-2">
+                {scoped.project ? (
+                  <SourceChip project={scoped.project} />
+                ) : (
+                  scoped.mixed && <MixedChip breakdown={scoped.breakdown} />
+                )}
+                {saved && (
+                  <Chip tone="ok">
+                    <Check size={12} /> Saved
+                  </Chip>
+                )}
+              </div>
             ) : undefined
           }
           hint="A thread can still switch harness and model from the composer."
         >
-          {scoped.project && (
-            <div className="px-4 pb-2">
-              <SourceChip project={scoped.project} />
-            </div>
-          )}
-          {!scoped.project && scoped.mixed && (
-            <div className="px-4 pb-2">
-              <ScopedValue mixed breakdown={scoped.breakdown}>
-                <span className="text-callout text-fg-muted">The connected machines disagree</span>
-              </ScopedValue>
-            </div>
-          )}
           <DefaultsForm snapshot={snapshot} value={value} onChange={change} />
         </Group>
       )}
