@@ -111,6 +111,7 @@ import {
 import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
 import { draftMirror } from "./DraftMirror";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
+import { IssueReportDialog } from "./IssueReportDialog";
 import { ArrowUp, Check, GitBranch, ListEnd, Pencil, Square } from "./icons";
 import { LinkChip } from "./LinkChip";
 import { MachineSelector } from "./MachineSelector";
@@ -202,6 +203,7 @@ export const Composer = memo(function Composer({
   const [dropping, setDropping] = useState(false);
   // The send-later dialog: opened from the + menu, with the draft it is scheduling.
   const [sendLater, setSendLater] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const running = isRunning(thread);
   // A thread on a paired computer that is not connected now is read-only: its turns run there,
@@ -220,10 +222,20 @@ export const Composer = memo(function Composer({
   // token the caret is in. `/usr/bin` is a path, not a command (state/compose.ts).
   const slash = dismissed === draft || extras.command ? null : slashToken(draft, caret);
   const commandQuery = slash?.query ?? null;
-  const list = useMemo(
-    () => (commandQuery === null ? [] : commandSuggestions(commandQuery, commands)),
-    [commandQuery, commands],
-  );
+  const list = useMemo(() => {
+    if (commandQuery === null) return [];
+    if (slash?.start !== 0 || queuedEdit) return commandSuggestions(commandQuery, commands);
+    return commandSuggestions(commandQuery, [
+      {
+        name: "/report",
+        description: "Report a bug or suggest a feature on GitHub",
+        takesArguments: false,
+        report: false,
+        action: "issue_report",
+      },
+      ...commands.filter((command) => command.name !== "/report"),
+    ]);
+  }, [commandQuery, commands, queuedEdit, slash?.start]);
   // `@`: one drawer for agents, threads and the project's files, narrowed by a keyword (`@agents`,
   // `@threads`, `@files`); `#` opens it straight on the threads. The project's file list is read when
   // the first `@` opens it, and again once it is stale.
@@ -667,7 +679,15 @@ export const Composer = memo(function Composer({
     dismissNextPrompt(suggestion.key);
     setDismissedNext((n) => n + 1);
   };
+  const openIssueReport = () => {
+    update("");
+    setReportOpen(true);
+  };
   const send = (steer: boolean) => {
+    if (!queuedEdit && !extras.command && draft.trim().toLowerCase() === "/report") {
+      openIssueReport();
+      return;
+    }
     if (offline) return;
     haptic("generic");
     // ⏎ on a queued message being edited saves it in the queue: nothing is sent.
@@ -741,7 +761,9 @@ export const Composer = memo(function Composer({
     // thread) runs at once, arguments or not; one that wants arguments becomes the token in
     // front of the field.
     if (slash.start === 0 && slash.start + 1 + slash.query.length === draft.length) {
-      if (run && (!command.takesArguments || command.action !== "execute")) {
+      if (command.action === "issue_report") {
+        openIssueReport();
+      } else if (run && (!command.takesArguments || command.action !== "execute")) {
         update("");
         const message = commandSubmission(command);
         void submit(message.text, message.extras);
@@ -1398,6 +1420,7 @@ export const Composer = memo(function Composer({
           </span>
         </div>
       </div>
+      <IssueReportDialog open={reportOpen} onOpenChange={setReportOpen} />
       {thread && (
         <SendLaterDialog
           open={sendLater}
