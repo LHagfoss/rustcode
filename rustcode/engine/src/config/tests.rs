@@ -1484,7 +1484,7 @@ fn test_session_title_first_prompt_truncated() {
     ];
     let title = session_title(&history);
     assert!(title.ends_with("..."));
-    assert_eq!(title.chars().count(), 48);
+    assert_eq!(title.chars().count(), 32);
     assert_eq!(session_title(&[]), "(no prompt)");
 }
 

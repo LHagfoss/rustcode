@@ -3209,27 +3209,33 @@ async fn serve_connection(
                             .collect::<Vec<_>>()
                             .join("\n");
                         if crate::config::load_session_title(&session_id).is_none()
-                            && crate::config::load_config().2.generate_session_titles
-                            && crate::text_generation::configured_for(crate::config::load_session_repo(&session_id).as_deref())
+                            && crate::app::actions::wants_generated_title(&prompt_text)
                         {
-                            let fallback: String = prompt_text.lines().next().unwrap_or_default().chars().take(48).collect();
-                            crate::config::save_session_title(&session_id, &fallback);
-                            let title_session = session_id.clone();
-                            let title_prompt = prompt_text.clone();
+                            let history = [crate::app::ChatMessage::new("user", prompt_text.clone())];
+                            crate::config::save_session_title_if_absent(&session_id, &history[..]);
+                            let fallback = crate::config::session_title(&history);
                             let title_clients = server.clients.session(&session_id);
-                            tokio::spawn(async move {
-                                if let Ok(answer) = crate::text_generation::generate(crate::text_generation::GenerateRequest {
-                                    kind: "thread_title".into(), prompt: Some(title_prompt), path: None, files: vec![],
-                                    project: crate::config::load_session_repo(&title_session),
-                                }).await {
-                                    if let Some(title) = answer["text"].as_str().and_then(crate::app::actions::normalize_generated_title) {
-                                        if crate::app::actions::apply_generated_title(&title_session, Some(&fallback), &title) {
-                                            let update = SessionUpdate::SessionInfoUpdate(agent_client_protocol::schema::v1::SessionInfoUpdate::new().title(title));
-                                            let _ = prompt::send_updates(&title_clients, &title_session, vec![update]);
+                            let update = SessionUpdate::SessionInfoUpdate(agent_client_protocol::schema::v1::SessionInfoUpdate::new().title(fallback.clone()));
+                            let _ = prompt::send_updates(&title_clients, &session_id, vec![update]);
+                            if crate::config::load_config().2.generate_session_titles
+                                && crate::text_generation::configured_for(crate::config::load_session_repo(&session_id).as_deref())
+                            {
+                                let title_session = session_id.clone();
+                                let title_prompt = prompt_text.clone();
+                                tokio::spawn(async move {
+                                    if let Ok(answer) = crate::text_generation::generate(crate::text_generation::GenerateRequest {
+                                        kind: "thread_title".into(), prompt: Some(title_prompt), path: None, files: vec![],
+                                        project: crate::config::load_session_repo(&title_session),
+                                    }).await {
+                                        if let Some(title) = answer["text"].as_str().and_then(crate::app::actions::normalize_generated_title) {
+                                            if crate::app::actions::apply_generated_title(&title_session, Some(&fallback), &title) {
+                                                let update = SessionUpdate::SessionInfoUpdate(agent_client_protocol::schema::v1::SessionInfoUpdate::new().title(title));
+                                                let _ = prompt::send_updates(&title_clients, &title_session, vec![update]);
+                                            }
                                         }
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                         server.remote.note_prompt(&session_id, &prompt_text, origin.clone());
                         server.remote.note_prompt_applied(&session_id);

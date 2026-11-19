@@ -214,7 +214,7 @@ fn bounded_rows(key: &str, mut rows: Vec<Value>, total: usize) -> Result<String,
     }
 }
 
-pub(crate) const MAX_SESSION_TITLE_CHARS: usize = 80;
+pub(crate) const MAX_SESSION_TITLE_CHARS: usize = rustcode_session::MAX_AUTOMATIC_TITLE_CHARS;
 
 fn ask_question_schema() -> Value {
     serde_json::json!({
@@ -1398,7 +1398,7 @@ fn set_session_title_schema() -> Value {
 pub const SET_SESSION_TITLE: Tool = Tool {
     name: "set_session_title",
     description: "Set a concise title for this new session's first turn. Derive it from the user's request without copying the full prompt, transcript, or secrets.",
-    arguments: r#"{"title": "concise session title (1-80 characters)"}"#,
+    arguments: r#"{"title": "short task title (1-32 characters)"}"#,
     handler: set_session_title,
     requires_confirmation: false,
     schema: set_session_title_schema,

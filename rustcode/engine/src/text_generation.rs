@@ -296,9 +296,7 @@ async fn generate_inner(r: GenerateRequest) -> Result<Value> {
     })
     .await??;
     let instruction = match r.kind.as_str() {
-        "thread_title" => {
-            "Write a thread title, 2-6 words, at most 48 characters. Return only the title."
-        }
+        "thread_title" => crate::app::actions::THREAD_TITLE_INSTRUCTION,
         "branch_name" => {
             "Write a short lowercase git branch name using slashes and hyphens. Return only the name."
         }

@@ -178,8 +178,10 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             if is_wakeup {
                 crate::app::actions::resume_delegation_for_wakeup(&mut s);
             }
-            let is_first_prompt = !is_wakeup && !crate::config::session_has_content(&s.history);
-            s.session_title_tool_available = is_first_prompt;
+            let is_first_prompt = crate::app::actions::wants_generated_title(&prompt)
+                && !crate::config::session_has_content(&s.history)
+                && crate::config::load_session_title(&s.active_session_id).is_none();
+            s.session_title_tool_available = is_first_prompt && s.config.generate_session_titles;
             let max_tool_rounds = s.config.max_tool_rounds;
             let max_total_tool_rounds = s.config.max_total_tool_rounds;
             let had_saved_turn = s.background_turn_context.is_some();

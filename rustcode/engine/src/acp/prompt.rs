@@ -476,7 +476,10 @@ pub(crate) async fn run_prompt(
         };
         let is_first_prompt = {
             let mut state = state.lock().await;
-            let is_first = !crate::config::session_has_content(&state.history);
+            let is_first = !crate::config::session_has_content(&state.history)
+                && crate::config::load_session_title(&session_id).is_none()
+                && crate::app::actions::wants_generated_title(&text);
+            state.session_title_tool_available = is_first && state.config.generate_session_titles;
             record_prompt(&mut state, &session_id, &text);
             if let Some(message) = state.history.last_mut() {
                 message.origin = origin.clone();

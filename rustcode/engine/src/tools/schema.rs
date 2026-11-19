@@ -3204,7 +3204,7 @@ Assistant: Hi! Ready to help with your code. What are you working on?\n",
 /// request's `tools` field.
 pub(crate) fn session_title_turn_hint(protocol: crate::config::ToolProtocol) -> String {
     let mut hint = String::from(
-        "First-turn session title: a concise title is already saved from the user's request. You may call `set_session_title` once to refine it before doing other work. Do not copy the full prompt, transcript, or secrets into the title.",
+        "First-turn session title: a concise title is already saved from the user's request. Call `set_session_title` before doing other work. Name the main task in 2 to 4 plain words when possible, using at most 32 characters. Do not copy the full prompt, transcript, or secrets into the title.",
     );
     if !matches!(protocol, crate::config::ToolProtocol::ApiNative) {
         let tool = &super::misc::SET_SESSION_TITLE;

@@ -116,6 +116,9 @@ fn prompt_text<'a>(role: &str, content: &'a str) -> Option<&'a str> {
     .filter(|prompt| !prompt.starts_with('/'))
 }
 
+/// Character limit for automatically named threads.
+pub const MAX_AUTOMATIC_TITLE_CHARS: usize = 32;
+
 fn title_from_prompt(content: &str) -> String {
     let text = unwrap_title_paste_markers(content);
     let title = text
@@ -123,8 +126,13 @@ fn title_from_prompt(content: &str) -> String {
         .find(|line| !line.trim().is_empty())
         .unwrap_or("")
         .trim();
-    if title.chars().count() > 48 {
-        format!("{}...", title.chars().take(45).collect::<String>())
+    if title.chars().count() > MAX_AUTOMATIC_TITLE_CHARS {
+        let prefix: String = title.chars().take(MAX_AUTOMATIC_TITLE_CHARS - 3).collect();
+        let prefix = prefix
+            .rsplit_once(char::is_whitespace)
+            .filter(|(words, _)| !words.is_empty())
+            .map_or(prefix.as_str(), |(words, _)| words);
+        format!("{}...", prefix.trim_end())
     } else {
         title.to_string()
     }
@@ -2552,12 +2560,12 @@ mod tests {
 
     #[test]
     fn pasted_titles_are_unwrapped_before_first_line_and_truncation() {
-        let body = "\n## Build a Chess MCP Server in Rust\n\nImplement the server.";
+        let body = "\n## Build a Chess MCP Server\n\nImplement the server.";
         let wrapped = format!("<!--PASTE:{}:{body}-->", body.chars().count());
         let history = vec![message("user", &wrapped), message("assistant", "done")];
         assert_eq!(
             SessionStore::session_title(&history),
-            "## Build a Chess MCP Server in Rust"
+            "## Build a Chess MCP Server"
         );
         assert_eq!(
             history[0].content, wrapped,
@@ -2571,14 +2579,14 @@ mod tests {
         let path = store.session_dir("paste").join(HISTORY_FILE);
         assert_eq!(
             store.load_session_meta(&path).unwrap().title,
-            "## Build a Chess MCP Server in Rust"
+            "## Build a Chess MCP Server"
         );
 
         let long = "棋".repeat(60);
         let history = vec![message("user", &format!("<!--PASTE:60:{long}-->"))];
         assert_eq!(
             SessionStore::session_title(&history),
-            format!("{}...", "棋".repeat(45))
+            format!("{}...", "棋".repeat(29))
         );
     }
 
