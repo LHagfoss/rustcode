@@ -8,7 +8,7 @@ use futures_util::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::VecDeque,
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -69,11 +69,16 @@ impl OutboundQueue {
 
 const MAX_PENDING_REQUESTS: usize = 1024;
 
+/// The server requests a desktop may still answer, oldest first. A request
+/// the server gave up on (its turn ended, its thread closed) is never
+/// answered, so at the cap the oldest is forgotten rather than the connection
+/// closed: a desktop that stays connected for days would otherwise be dropped
+/// for requests nobody is waiting on.
 #[derive(Default)]
-struct PendingRequests(Mutex<HashSet<String>>);
+struct PendingRequests(Mutex<VecDeque<String>>);
 
 impl PendingRequests {
-    fn remember(&self, frame: &str) -> Result<(), ErrorCode> {
+    fn remember(&self, frame: &str) {
         // Every frame the server sends passes here, most of them transcript
         // chunks: read the two fields that decide and skip the rest unbuilt.
         #[derive(serde::Deserialize)]
@@ -88,21 +93,29 @@ impl PendingRequests {
             id: Some(id),
         }) = serde_json::from_str::<Head>(frame)
         else {
-            return Ok(());
+            return;
         };
         if !(id.is_string() || id.is_number()) {
-            return Ok(());
+            return;
         }
+        let id = id.to_string();
         let mut pending = self.0.lock().unwrap();
-        if pending.len() >= MAX_PENDING_REQUESTS {
-            return Err(ErrorCode::SlowConsumer);
+        if pending.contains(&id) {
+            return;
         }
-        pending.insert(id.to_string());
-        Ok(())
+        if pending.len() >= MAX_PENDING_REQUESTS {
+            pending.pop_front();
+        }
+        pending.push_back(id);
     }
 
     fn answer(&self, id: &Value) -> bool {
-        self.0.lock().unwrap().remove(&id.to_string())
+        let id = id.to_string();
+        let mut pending = self.0.lock().unwrap();
+        match pending.iter().position(|known| *known == id) {
+            Some(index) => pending.remove(index).is_some(),
+            None => false,
+        }
     }
 }
 
@@ -241,9 +254,7 @@ pub(super) async fn relay(
             let Ok(text) = String::from_utf8(bytes) else {
                 return Some(ErrorCode::InvalidFrame);
             };
-            if let Err(code) = pending.remember(&text) {
-                return Some(code);
-            }
+            pending.remember(&text);
             if sink
                 .send(text.trim_end_matches(['\r', '\n']).to_owned())
                 .is_err()
@@ -360,22 +371,20 @@ mod tests {
     #[test]
     fn server_request_ids_are_bounded_and_answers_are_single_use() {
         let pending = PendingRequests::default();
-        pending
-            .remember(r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission"}"#)
-            .unwrap();
+        pending.remember(r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission"}"#);
         assert!(!pending.answer(&json!("7")));
         assert!(!pending.answer(&json!(99)));
         assert!(pending.answer(&json!(7)));
         assert!(!pending.answer(&json!(7)));
         for id in 0..MAX_PENDING_REQUESTS {
-            pending
-                .remember(&json!({"id":id,"method":"session/request_permission"}).to_string())
-                .unwrap();
+            pending.remember(&json!({"id":id,"method":"session/request_permission"}).to_string());
         }
-        assert_eq!(
-            pending.remember(r#"{"id":"overflow","method":"session/request_permission"}"#),
-            Err(ErrorCode::SlowConsumer)
-        );
+        // At the cap the oldest request is forgotten, and the rest still answer.
+        pending.remember(r#"{"id":"overflow","method":"session/request_permission"}"#);
+        assert_eq!(pending.0.lock().unwrap().len(), MAX_PENDING_REQUESTS);
+        assert!(!pending.answer(&json!(0)));
+        assert!(pending.answer(&json!(1)));
+        assert!(pending.answer(&json!("overflow")));
     }
 
     #[test]

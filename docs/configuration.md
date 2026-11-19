@@ -605,7 +605,9 @@ how long an orchestrator waits to merge its delegates' finishes and stalls into
 one wake turn, 0 turns it off, see › Waking a parent thread), and the
 workflow limits `workflow-concurrency` (3), `workflow-call-budget` (40),
 `workflow-timeout-minutes` (60) and `workflow-kept-runs` (20)
-([workflows.md](workflows.md)). A client
+([workflows.md](workflows.md)), and `orchestration-all-tools` (off by default;
+lists the project, scheduled task, workflow and worktree handoff tools to
+threads, see [orchestrator.md](orchestrator.md) › External harnesses as orchestrators). A client
 that reads a key the machine never set gets the engine's default. The desktop
 app seeds its own values once on first start, but only for the keys `stored`
 does not list, so a value another machine wrote first is kept.
