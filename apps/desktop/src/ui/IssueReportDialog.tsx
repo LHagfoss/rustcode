@@ -5,15 +5,15 @@ import { clipboardImage, openExternal } from "../lib/native";
 import { pastedImages } from "../lib/paste";
 import { activeTransport, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
-import { Bug, ExternalLink, Image, MessageSquarePlus, X } from "./icons";
+import { Bug, ChevronDown, ExternalLink, Image, MessageSquarePlus, X } from "./icons";
 import { Pill } from "./primitives";
 
 const repository = "https://github.com/lhagfoss/rustcode";
 const field =
-  "w-full rounded-lg border border-border bg-bg/40 px-3 py-2 text-body text-fg placeholder:text-fg-faint focus-visible:outline-1 focus-visible:outline-accent";
+  "w-full rounded-md border border-border bg-bg/40 px-3 py-2 text-body text-fg placeholder:text-fg-faint focus-visible:outline-1 focus-visible:outline-accent";
 const reportTypes = [
-  { kind: "bug", name: "Bug report", label: "bug", Icon: Bug },
-  { kind: "feature", name: "Feature request", label: "enhancement", Icon: MessageSquarePlus },
+  { kind: "bug", name: "Bug", label: "bug", Icon: Bug },
+  { kind: "feature", name: "Feature", label: "enhancement", Icon: MessageSquarePlus },
 ] as const;
 
 type ReportType = (typeof reportTypes)[number];
@@ -163,7 +163,8 @@ export function IssueReportDialog({
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-5">
           <Dialog.Content
-            className="elevated pointer-events-auto flex max-h-full w-full max-w-[560px] flex-col overflow-hidden"
+            className="elevated pointer-events-auto flex max-h-full w-full max-w-[520px] rounded-xl flex-col overflow-hidden"
+            aria-describedby={undefined}
             onOpenAutoFocus={(event) => {
               event.preventDefault();
               titleInput.current?.focus();
@@ -186,20 +187,10 @@ export function IssueReportDialog({
               }
             }}
           >
-            <header className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-4">
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
-                <type.Icon size={24} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <Dialog.Title className="font-semibold text-[17px]">
-                  {issue ? "Issue submitted" : "Report an issue"}
-                </Dialog.Title>
-                <Dialog.Description className="mt-0.5 text-callout text-fg-muted">
-                  {issue
-                    ? "Your report is on GitHub."
-                    : "Send public feedback to lhagfoss/rustcode on GitHub."}
-                </Dialog.Description>
-              </div>
+            <header className="flex shrink-0 items-center justify-between gap-3 px-5 pt-4">
+              <Dialog.Title className="font-semibold text-title3">
+                {issue ? "Issue submitted" : "Report an issue"}
+              </Dialog.Title>
               <Pill quiet disabled={submitting} aria-label="Close report" onClick={() => close(false)}>
                 <X size={16} />
               </Pill>
@@ -211,17 +202,20 @@ export function IssueReportDialog({
                 void submit();
               }}
             >
-              <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4">
+              <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pb-4 pt-3">
                 {!issue && (
                   <>
-                    <div role="group" aria-label="Report type" className="grid grid-cols-2 gap-2">
+                    <div
+                      role="group"
+                      aria-label="Report type"
+                      className="flex w-fit gap-1 rounded-lg bg-fill p-1"
+                    >
                       {reportTypes.map((item) => (
                         <Pill
                           key={item.kind}
-                          size="lg"
                           quiet
                           aria-pressed={type === item}
-                          className="justify-center border border-border aria-pressed:border-accent/40 aria-pressed:bg-accent/15 aria-pressed:text-accent"
+                          className="justify-center px-3 text-fg-muted aria-pressed:bg-surface-2 aria-pressed:text-fg"
                           onClick={() => setType(item)}
                         >
                           <item.Icon size={16} />
@@ -244,43 +238,38 @@ export function IssueReportDialog({
                     <label className="grid gap-1.5 text-callout font-medium">
                       {bug ? "What happened?" : "What are you trying to do?"}
                       <textarea
-                        className={field}
+                        className={`${field} resize-y`}
                         rows={3}
                         required
                         maxLength={7000}
                         value={description}
                         onChange={(event) => setDescription(event.target.value)}
                         placeholder={
-                          bug
-                            ? "Describe what you expected and what happened instead."
-                            : "Describe the problem or use case."
+                          bug ? "What did you expect to happen?" : "Describe the problem or use case."
                         }
                       />
                     </label>
                     <label className="grid gap-1.5 text-callout font-medium">
                       <span>
                         {bug ? "Steps to reproduce" : "Idea"}{" "}
-                        <span className="font-normal text-fg-faint">· Optional</span>
+                        <span className="font-normal text-fg-faint">(optional)</span>
                       </span>
                       <textarea
-                        className={field}
+                        className={`${field} resize-y`}
                         rows={2}
                         maxLength={7000}
                         value={details}
                         onChange={(event) => setDetails(event.target.value)}
-                        placeholder={
-                          bug
-                            ? "List the steps someone can follow to see the problem."
-                            : "Describe how you’d like it to work."
-                        }
+                        placeholder={bug ? "How can we reproduce it?" : "Describe how you’d like it to work."}
                       />
                     </label>
                     {options?.can_label && (
-                      <details className="rounded-lg bg-fill px-3 py-2">
-                        <summary className="cursor-pointer text-callout font-medium">
+                      <details className="group">
+                        <summary className="flex cursor-pointer list-none items-center gap-2 text-callout font-medium [&::-webkit-details-marker]:hidden">
+                          <ChevronDown size={14} className="-rotate-90 text-fg-muted group-open:rotate-0" />
                           Labels
                           {selectedLabels.length > 0 && (
-                            <span className="ml-2 font-normal text-fg-muted">
+                            <span className="min-w-0 truncate font-normal text-fg-muted">
                               {selectedLabels.join(", ")}
                             </span>
                           )}
@@ -310,21 +299,16 @@ export function IssueReportDialog({
                   </>
                 )}
                 {(!issue || screenshots.length > 0) && (
-                  <section
-                    aria-label="Screenshots"
-                    className="rounded-xl border border-dashed border-border-strong px-3 py-3"
-                  >
-                    <div className="flex items-center gap-3">
+                  <section aria-label="Screenshots" className="rounded-lg border border-border px-3 py-2">
+                    <div className="flex items-center gap-2">
                       <Image size={18} className="shrink-0 text-fg-muted" />
                       <div className="flex-1">
                         <p className="text-callout font-medium">Screenshots</p>
                         <p className="text-caption text-fg-muted">
-                          {issue
-                            ? "Save the images, then attach them in GitHub."
-                            : "Paste or choose images to attach later on GitHub."}
+                          {issue ? "Save images to attach on GitHub." : "Paste images to attach on GitHub."}
                         </p>
                       </div>
-                      {!issue && <Pill onClick={() => uploads.current?.click()}>Choose files</Pill>}
+                      {!issue && <Pill onClick={() => uploads.current?.click()}>Add images</Pill>}
                       <input
                         ref={uploads}
                         type="file"
@@ -390,14 +374,23 @@ export function IssueReportDialog({
                 )}
               </div>
               <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-3">
-                <Pill quiet onClick={() => openExternal(issue || `${repository}/issues/new/choose`)}>
-                  <ExternalLink size={14} /> {issue ? "Open issue on GitHub" : "Open GitHub"}
-                </Pill>
+                {setupError && !issue ? (
+                  <Pill quiet onClick={() => openExternal(`${repository}/issues/new/choose`)}>
+                    GitHub <ExternalLink size={12} />
+                  </Pill>
+                ) : !issue ? (
+                  <span className="text-caption text-fg-muted">Public on GitHub</span>
+                ) : null}
                 <div className="ml-auto flex items-center gap-2">
                   {issue ? (
-                    <Pill prominent onClick={() => close(false)}>
-                      Done
-                    </Pill>
+                    <>
+                      <Pill quiet onClick={() => close(false)}>
+                        Done
+                      </Pill>
+                      <Pill prominent onClick={() => openExternal(issue)}>
+                        View issue <ExternalLink size={14} />
+                      </Pill>
+                    </>
                   ) : (
                     <>
                       <Pill quiet disabled={submitting} onClick={() => close(false)}>
@@ -405,7 +398,7 @@ export function IssueReportDialog({
                       </Pill>
                       {setupError && isTauri() ? (
                         <Pill prominent onClick={() => setAttempt(attempt + 1)}>
-                          Retry connection
+                          Retry
                         </Pill>
                       ) : (
                         <Pill
@@ -413,11 +406,7 @@ export function IssueReportDialog({
                           prominent
                           disabled={!options || !title.trim() || !description.trim() || submitting}
                         >
-                          {submitting
-                            ? "Submitting…"
-                            : options || setupError
-                              ? "Submit to GitHub"
-                              : "Checking GitHub…"}
+                          {submitting ? "Submitting…" : options || setupError ? "Submit" : "Checking GitHub…"}
                         </Pill>
                       )}
                     </>
