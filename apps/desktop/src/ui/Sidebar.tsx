@@ -76,7 +76,6 @@ import {
   type ProjectGroup,
   rowWhere,
   sidebarProjects,
-  spansMachines,
   threadFolder,
 } from "../state/sidebarGroups";
 import { applyOrder, keepPlaces, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
@@ -541,42 +540,37 @@ const STATUS_TINT: Record<RowStatusKind, string> = {
 };
 
 /**
- * What the roomy row's first line ends with: an icon in the state's tone, with no word, so the
- * title keeps the room. `Working` spins and keeps the running turn's clock, `Needs you` pulses
- * (respecting reduced motion), and `Waiting`, `Failed`, `Done` until you open it and `Review` hold
- * still. The word is the icon's accessible name and its tooltip. A row that shows its age instead
- * has none (state/sidebarRows.ts `rowStatus`).
+ * What a row's first line says before its time, as T3 Code's sidebar does: an icon and a word in
+ * the state's tone, medium weight. `Working` turns slowly (respecting reduced motion); `Approval`,
+ * `Input`, `Waiting`, `Failed`, `Done` until you open it and `Review` hold still. The long form is the
+ * tooltip. An idle row has none (state/sidebarRows.ts `rowStatus`).
  */
-function RowStatusLabel({ status, startedAt }: { status: RowStatus; startedAt?: number }) {
+function RowStatusLabel({ status }: { status: RowStatus }) {
   const kind = status.kind;
+  const word = kind === "needs" ? (status.approval ? "Approval" : "Input") : status.label;
   return (
     <span
-      // The long form goes in the title, which the app reads out as the row's label
-      // (lib/quietNative.ts); the icon is what the eye gets, the word what a screen reader says.
       title={status.title ?? status.label}
       className={cx("inline-flex shrink-0 items-center gap-1 font-medium", STATUS_TINT[kind])}
     >
       {kind === "working" ? (
-        <Spinner size={10} />
+        <CircleDashed size={12} className="shrink-0 motion-safe:animate-[spin_3s_linear_infinite]" />
       ) : kind === "needs" ? (
-        <span className="flex motion-safe:animate-pulse">
-          {status.approval ? <ShieldQuestion size={13} /> : <MessageCircleQuestion size={13} />}
-        </span>
+        status.approval ? (
+          <ShieldQuestion size={12} className="shrink-0" />
+        ) : (
+          <MessageCircleQuestion size={12} className="shrink-0" />
+        )
       ) : kind === "waiting" ? (
-        <Clock size={12} />
+        <Clock size={12} className="shrink-0" />
       ) : kind === "failed" ? (
-        <CircleAlert size={13} />
+        <CircleAlert size={12} className="shrink-0" />
       ) : kind === "completed" ? (
-        <CircleCheck size={13} />
+        <CircleCheck size={12} className="shrink-0" />
       ) : (
-        <Eye size={13} />
+        <Eye size={12} className="shrink-0" />
       )}
-      <span className="sr-only">{status.label}</span>
-      {kind === "working" && startedAt !== undefined && (
-        <span className="font-normal text-fg-muted tabular">
-          <Elapsed since={startedAt} />
-        </span>
-      )}
+      {word}
     </span>
   );
 }
@@ -611,9 +605,10 @@ const SWAPPED_ON_HOVER = cx(
  * cut and one line's right part never narrows another line's left one.
  */
 const ROW_HEIGHT = 54;
+/** Two lines: the title with its state and time; where it runs, its marks and its model. */
 const ROW_GRID = "grid h-[54px] grid-rows-[22px_18px] content-center rounded-xl px-3";
-/** A row with no place to name: line 1 alone, at the offset it has in the two-line grid. */
-const ROW_ONE_LINE = "grid h-[36px] grid-rows-[22px] content-center rounded-xl px-3";
+/** Line 2 starts where the title does, past the project mark (14px and its 6px gap). */
+const ROW_INDENT = "pl-5";
 /** One line of the row: its left part and its right part. */
 const ROW_LINE = "flex min-w-0 items-center gap-2";
 /** A line's left part: truncated. */
@@ -715,7 +710,6 @@ const ThreadRow = memo(function ThreadRow({
   session,
   selected,
   context,
-  mixedMachines,
   now,
   from,
   pull,
@@ -736,8 +730,6 @@ const ThreadRow = memo(function ThreadRow({
   context?: boolean;
   /** Being dragged to another place in its section: no hover card, and no pointer of its own. */
   dragging?: boolean;
-  /** The filtered rows span more than one computer. */
-  mixedMachines: boolean;
   now: number;
   /**
    * No parent row above it (a search result, or a parent in another project the filter left out):
@@ -825,8 +817,6 @@ const ThreadRow = memo(function ThreadRow({
   const model = modelName(session.model);
   // Its branch or subfolder, else nothing its project's heading already says (`rowWhere`).
   const where = rowWhere({ session: { ...session, worktree }, ...checkout, grouped: !!grouped });
-  // Nothing to say about where it runs: the row is its title line alone, its details beside the state.
-  const oneLine = where.kind === "none";
   const startRename = () => {
     // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
     // says so instead of opening an editor whose save would only be refused (store.ts).
@@ -869,43 +859,44 @@ const ThreadRow = memo(function ThreadRow({
   const lit = selected || !!context;
   // What wants you reads strong; what works, waits or has been read recedes until hovered.
   const wantsYou = !!request || fresh || failed || lit || picked;
-  const recedes = !wantsYou && (running || !!wait || done);
   const markTint = cx(
     "transition-opacity duration-150 ease-snappy",
     wantsYou ? "opacity-100" : "opacity-60 group-hover:opacity-100",
   );
-  // The title's own weight: what wants you is medium and full; what works, waits or is settled
-  // recedes to regular at 75% until hovered.
-  const titleTint = cx(
-    "min-w-0 flex-1 truncate text-body",
-    wantsYou ? "font-medium text-fg" : recedes ? "font-normal text-fg" : "font-medium text-fg",
-  );
+  // One weight for every title, whatever the thread is doing: the status word says that.
+  const titleTint = "min-w-0 flex-1 truncate text-body font-medium text-fg";
   const fromText = from ? originText(from) : undefined;
-  // Remote rows always name their computer; local rows do so only in a mixed list.
-  const place =
+  // The computer it runs on: a remote one by its name, this one by its own.
+  const computer =
     host && machine
       ? { glyph: machineGlyph(host), tint: machineTint(host), name: machine }
-      : mixedMachines
-        ? {
-            glyph: local.icon ?? platformIcon(platform === "mac" ? "macos" : platform),
-            tint: local.tint,
-            name: local.displayName ?? selfName(),
-          }
-        : undefined;
-  // The harness mark always accompanies the model, which a one-line row leaves to its tooltip.
-  const details = (
-    <>
-      {(model || harnessName) && (
-        <span title={oneLine ? model || harnessName : undefined} className="flex shrink-0">
-          <HarnessIcon id={session.harness || "rustcode"} name={harness?.name} size={12} />
-        </span>
-      )}
+      : {
+          glyph: local.icon ?? platformIcon(platform === "mac" ? "macos" : platform),
+          tint: local.tint,
+          name: local.displayName ?? selfName(),
+        };
+  const placeTitle = unsynced
+    ? `Runs on ${computer.name}. Your change syncs when ${computer.name} is back.`
+    : `Runs on ${computer.name}`;
+  const machineLabel = (
+    <span className="flex min-w-0 items-center gap-1" title={placeTitle}>
+      <DeviceGlyphIcon glyph={computer.glyph} tint={computer.tint} size={13} />
+      <span className="min-w-0 truncate">{computer.name}</span>
+      {unsynced && <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />}
+    </span>
+  );
+  // Line 2's end: the harness mark with its model, never cut.
+  const modelMark = (model || harnessName) && (
+    <span className="ml-auto flex shrink-0 items-center gap-1" title={harnessName ?? model}>
+      <HarnessIcon id={session.harness || "rustcode"} name={harness?.name} size={12} className="opacity-70" />
       {/* Normal figures: a tabular face (Inter) gives a model name's hyphens a digit's width. */}
-      {(model || harnessName) && !oneLine && (
-        <span className="min-w-0 max-w-[96px] truncate normal-nums" title={model || harnessName}>
-          {model || harnessName}
-        </span>
-      )}
+      <span className="normal-nums">{model || harnessName}</span>
+    </span>
+  );
+  // Line 2's marks before the model: what it started, its pull request, and a remote computer's
+  // glyph when the line names its branch rather than the computer.
+  const details = (
+    <span className="ml-auto flex shrink-0 items-center gap-1.5">
       {delegates && (
         <Tooltip label={delegates.title}>
           <span
@@ -919,35 +910,35 @@ const ThreadRow = memo(function ThreadRow({
         </Tooltip>
       )}
       {pull && <PullMark pull={pull} />}
-      {place && (
-        <span
-          className="flex min-w-0 max-w-[104px] shrink items-center gap-1 text-sub text-fg-muted"
-          title={
-            unsynced
-              ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
-              : `Runs on ${place.name}`
-          }
-        >
-          <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={12} />
-          {unsynced && <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />}
+      {where.kind !== "none" && host && (
+        <span className="flex shrink-0 opacity-70" title={placeTitle}>
+          <DeviceGlyphIcon glyph={computer.glyph} tint={computer.tint} size={12} />
         </span>
       )}
-    </>
-  );
-  // The one thing a row says at the end of its first line: what the thread is doing, else the hour
-  // a snoozed one wakes, else its age, with a settled thread's check before it.
-  const age = (
-    <span className="min-w-0 truncate">{wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}</span>
-  );
-  const state = chip ? (
-    <RowStatusLabel status={chip} startedAt={startedAt} />
-  ) : done ? (
-    <span className="flex min-w-0 items-center gap-1">
-      <Check size={12} className="shrink-0" />
-      {age}
     </span>
-  ) : (
-    age
+  );
+  // The end of the first line always has a time: a running turn's clock, else the hour a snoozed
+  // one wakes, else its age, with a settled thread's check before it.
+  const time = (
+    <span className="flex min-w-0 items-center gap-1">
+      {done && !chip && <Check size={12} className="shrink-0" />}
+      <span className="min-w-0 truncate tabular">
+        {chip?.kind === "working" && startedAt !== undefined ? (
+          <Elapsed since={startedAt} />
+        ) : wake ? (
+          wakeLabel(wake, now)
+        ) : (
+          shortAge(session.updatedAt, now)
+        )}
+      </span>
+    </span>
+  );
+  // The roomy row says what the thread is doing in words before its time.
+  const state = (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {chip && <RowStatusLabel status={chip} />}
+      {time}
+    </span>
   );
   return (
     <ContextMenu.Root
@@ -1004,10 +995,7 @@ const ThreadRow = memo(function ThreadRow({
               }}
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
-              className={cx(
-                compact ? COMPACT_ROW : oneLine ? ROW_ONE_LINE : ROW_GRID,
-                "relative w-full text-left",
-              )}
+              className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
             >
               <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
               {compact ? (
@@ -1051,12 +1039,12 @@ const ThreadRow = memo(function ThreadRow({
                         <span aria-hidden>{delegates.count}</span>
                       </span>
                     )}
-                    <span className="flex min-w-0 items-center justify-end">{state}</span>
+                    <span className="flex min-w-0 items-center justify-end">{time}</span>
                   </span>
                 </>
               ) : (
                 <>
-                  {/* Line 1: the project mark, title and state (hover actions take the state’s place). */}
+                  {/* Line 1: the title, then its state and time (hover actions take their place). */}
                   <span className={ROW_LINE}>
                     <span className={ROW_LEFT}>
                       <ProjectMark name={project} size={14} className={markTint} />
@@ -1074,26 +1062,28 @@ const ThreadRow = memo(function ThreadRow({
                         {session.title || "New thread"}
                       </span>
                     </span>
+                    {/* What it is doing and since when; the hover actions take its place. */}
                     <span
                       title={chip?.title}
                       className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
                     >
-                      {oneLine && details}
                       <span className="flex min-w-0 items-center justify-end">{state}</span>
                     </span>
                   </span>
-                  {/* Line 2, when it has a place to say: branch or subfolder, then the details. */}
-                  {!oneLine && (
-                    <span className={ROW_LINE}>
-                      <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-                        <RowWhereLabel
-                          where={where}
-                          title={displayPath(threadFolder({ ...session, worktree }))}
-                        />
-                      </span>
-                      <span className={cx(ROW_RIGHT, "text-sub text-fg-muted")}>{details}</span>
-                    </span>
-                  )}
+                  {/* Line 2: its worktree, branch or folder cut in the middle (else its computer), then
+                      its marks and its model against the edge. */}
+                  <span className={cx(ROW_LINE, ROW_INDENT, "gap-1.5 text-sub text-fg-muted")}>
+                    {where.kind === "none" ? (
+                      machineLabel
+                    ) : (
+                      <RowWhereLabel
+                        where={where}
+                        title={displayPath(threadFolder({ ...session, worktree }))}
+                      />
+                    )}
+                    {details}
+                    {modelMark && <span className="flex shrink-0">{modelMark}</span>}
+                  </span>
                 </>
               )}
             </button>
@@ -1414,14 +1404,11 @@ function SectionHeader({
   );
 }
 
-/** The heading of Pinned or Threads: it names the group and never folds. */
+/** The heading of Pinned or Threads: it names the group, sits close to its rows, and never folds. */
 function SectionLabel({ section }: { section: Section }) {
   return (
-    <div className="flex h-7 w-full items-center gap-2 px-2 font-medium text-caption text-fg-faint">
+    <div className="flex h-5 w-full items-start px-2 font-medium text-caption text-fg-faint">
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
-      <span className="shrink-0 font-normal text-fg-faint">
-        <RollingNumber value={section.items.length} />
-      </span>
     </div>
   );
 }
@@ -1596,7 +1583,6 @@ export function Sidebar() {
       ),
     [sessions, onlyProject, projectCwd],
   );
-  const mixedMachines = useMemo(() => spansMachines(filtered), [filtered]);
   // The threads waiting on work they handed out, though no turn of theirs runs: the Threads list
   // holds them beside the ones running (state/waiting.ts).
   const waiting = useWaitingIds(useMemo(() => filtered.map((s) => s.id), [filtered]));
@@ -2289,7 +2275,6 @@ export function Sidebar() {
       context={!loopsOpen && s.id === contextSelected && s.id !== selectedId}
       // A row being dragged shows no hover card and takes no pointer.
       dragging={drag.draggedId === s.id}
-      mixedMachines={mixedMachines}
       pull={pullOf(s)}
       now={now}
       from={hint ? origins.get(s.id) : undefined}

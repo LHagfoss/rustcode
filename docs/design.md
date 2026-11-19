@@ -752,13 +752,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   the chevron.
 - **Sidebar rows:** project groups inset their threads by 32px. A full-width New thread
   button sits above search, and a hairline and the Threads label set it apart from the
-  list. A detailed thread row is a fixed grid of two lines, 54px tall, with `rounded-xl`, so a
-  column of rows reads as a table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`).
-  Line 2 names where the thread runs only when that says something (`state/sidebarGroups.ts`
-  `rowWhere`): a worktree's branch, a branch off the default one, or a subfolder. A row in its
-  project's checkout on the default branch says nothing there, so it is line 1 alone at 36px
-  (`ROW_ONE_LINE`), its harness mark, delegates, pull request and machine before the state and
-  its model in the mark's tooltip. Each line
+  list. A detailed thread row is a fixed grid of two lines, 54px tall, with `rounded-xl`
+  (`ui/Sidebar.tsx` `ROW_GRID`), so every row has the same height. Line 1 is the project
+  mark and the title, in one weight whatever the thread does, then the state as an icon and
+  a word in its tone, medium weight, as T3 Code's sidebar has it (Working turns slowly;
+  Approval, Input, Waiting, Failed, Done, Review), then always a time: the running turn's
+  clock, else its age. The hover actions take the state's place. Line 2 starts where the
+  title does: where it runs (`state/sidebarGroups.ts` `rowWhere`: a worktree's branch, a
+  branch off the default one, or a subfolder), cut in the middle at its real width
+  (`ui/MiddleTruncate.tsx`, adapted from T3 Code), else the computer it runs on; then
+  delegates, the pull request, a remote computer's glyph, and against the edge the harness
+  mark with its model name, never cut. The Threads label carries no count and sits close
+  above its rows. Each line
   is a left part that truncates and a right part against the row's edge that
   takes what it needs (at least 76px on line 1, room for the three 24px hover
   actions), so the right side is never cut and every right edge lines up.
