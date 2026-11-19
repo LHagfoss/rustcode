@@ -24,7 +24,6 @@ import {
 } from "../state/machines";
 import { pullState } from "../state/pulls";
 import type { PendingSetup } from "../state/setup";
-import { rowWhere, threadFolder } from "../state/sidebarGroups";
 import {
   type CompactMark,
   compactMark,
@@ -117,7 +116,6 @@ import {
   surfaceCollisionPadding,
   Tooltip,
 } from "./primitives";
-import { RowWhereLabel } from "./RowWhere";
 import { ThreadHoverCard } from "./ThreadHoverCard";
 import { ThreadQuickActions } from "./ThreadQuickActions";
 
@@ -598,7 +596,6 @@ export const ThreadRow = memo(function ThreadRow({
   settleKey,
   onClearSelection,
   compact,
-  grouped,
 }: {
   session: SessionSummary;
   selected: boolean;
@@ -628,7 +625,7 @@ export const ThreadRow = memo(function ThreadRow({
   onClearSelection?: () => void;
   /** The sidebar's compact density: one line, the rest on the hover card. */
   compact?: boolean;
-  /** Under its project's heading, which already names where it runs. */
+  /** Under its project's heading. The row names its computer either way. */
   grouped?: boolean;
 }) {
   // The computer a thread runs on, when that is not this one: its row carries the glyph and name,
@@ -691,8 +688,6 @@ export const ThreadRow = memo(function ThreadRow({
   // What the row cannot spell out, on its hover card (ui/ThreadHoverCard.tsx).
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
   const model = modelName(session.model);
-  // Its branch or subfolder, else nothing its project's heading already says (`rowWhere`).
-  const where = rowWhere({ session: { ...session, worktree }, ...checkout, grouped: !!grouped });
   const startRename = () => {
     // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
     // says so instead of opening an editor whose save would only be refused (store.ts).
@@ -769,8 +764,7 @@ export const ThreadRow = memo(function ThreadRow({
       <span className="normal-nums">{model || harnessName}</span>
     </span>
   );
-  // Line 2's marks before the model: what it started, its pull request, and a remote computer's
-  // glyph when the line names its branch rather than the computer.
+  // Line 2's marks before the model: what it started and its pull request.
   const details = (
     <span className="ml-auto flex shrink-0 items-center gap-1.5">
       {delegates && (
@@ -786,11 +780,6 @@ export const ThreadRow = memo(function ThreadRow({
         </Tooltip>
       )}
       {pull && <PullMark pull={pull} />}
-      {where.kind !== "none" && host && (
-        <span className="flex shrink-0 opacity-70" title={placeTitle}>
-          <DeviceGlyphIcon glyph={computer.glyph} tint={computer.tint} size={12} />
-        </span>
-      )}
     </span>
   );
   // The end of the first line always has a time: a running turn's clock, else the hour a snoozed
@@ -946,17 +935,11 @@ export const ThreadRow = memo(function ThreadRow({
                       <span className="flex min-w-0 items-center justify-end">{state}</span>
                     </span>
                   </span>
-                  {/* Line 2: its worktree, branch or folder cut in the middle (else its computer), then
-                      its marks and its model against the edge. */}
+                  {/* Line 2: the computer it runs on, from the first frame (a branch read later would
+                      swap it out), then its marks and its model against the edge. Its branch and
+                      folder are on the hover card. */}
                   <span className={cx(ROW_LINE, ROW_INDENT, "gap-1.5 text-sub text-fg-muted")}>
-                    {where.kind === "none" ? (
-                      machineLabel
-                    ) : (
-                      <RowWhereLabel
-                        where={where}
-                        title={displayPath(threadFolder({ ...session, worktree }))}
-                      />
-                    )}
+                    {machineLabel}
                     {details}
                     {modelMark && <span className="flex shrink-0">{modelMark}</span>}
                   </span>
