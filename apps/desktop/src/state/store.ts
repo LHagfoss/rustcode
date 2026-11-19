@@ -1,8 +1,16 @@
+import { forcingStops } from "./promptRun";
 import { parseAppFont, parseTextSize } from "./settingsActions";
+import {
+  connectionForThread,
+  machineOfThread,
+  resetMachinesForTests,
+  startMachineRouting,
+  threadIsRemote,
+} from "./threadMachines";
 
 export * from "./settingsActions";
 
-import { advertisedCommands, commandsFor, harnessOf, parsePanels } from "./viewActions";
+import { commandsFor, harnessOf, parsePanels } from "./viewActions";
 
 export * from "./viewActions";
 
@@ -30,20 +38,11 @@ import { onThemesChanged, refreshThemes } from "./themeActions";
 
 export { createTheme, setActiveTheme } from "./themeActions";
 
-import { refreshAgents, startAgentPolling } from "./agentActions";
+import { startAgentPolling } from "./agentActions";
 import { permissionModeOf, refreshGrants } from "./approvals";
-import {
-  forgetAskedModels,
-  lastAccountFor,
-  noteChoice,
-  refreshHarnesses,
-  rememberModelEffort,
-  switchThreadHarness,
-} from "./harnessActions";
+import { forgetAskedModels, refreshHarnesses } from "./harnessActions";
 
 export { agentHistory, hasAgents, refreshAgents, startAgentPolling } from "./agentActions";
-
-import { refreshCheckpoints } from "./checkpointActions";
 
 export { refreshCheckpoints, returnToAttempt, rewindCheckpoint, turnDiff } from "./checkpointActions";
 
@@ -124,13 +123,7 @@ export {
   unsettleThreads,
 } from "./threadStatus";
 
-import {
-  prunePlans,
-  refreshPlanCache,
-  refreshPlanUsage,
-  startPlanPolling,
-  stopPlanPolling,
-} from "./planUsage";
+import { prunePlans, refreshPlanCache, startPlanPolling, stopPlanPolling } from "./planUsage";
 
 export {
   answerPermission,
@@ -177,26 +170,14 @@ export {
   windowNow,
 } from "./planUsage";
 
-import {
-  AcpConnection,
-  ConnectionClosedError,
-  type Inbound,
-  type Json,
-  type JsonObject,
-  obj,
-  RpcError,
-  str,
-} from "../acp/jsonrpc";
+import { AcpConnection, type Inbound, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
 import type { Transport } from "../acp/transport";
 import {
   byActivity,
-  type Harness,
-  type HarnessSnapshot,
   initializeParams,
   isReportUpdate,
   Method,
   parseAgentInfo,
-  parseConfigOptions,
   parsePermissionRequest,
   parseSessionList,
   parseSessionUpdate,
@@ -209,11 +190,9 @@ import { WorkflowMethod } from "../acp/workflows";
 import { announce, mountAnnouncer } from "../lib/announce";
 import { parseChatWidth } from "../lib/chatWidth";
 import { capServerLogLine } from "../lib/diagnostics";
-import { afterPaint } from "../lib/frame";
 import { parseOverrides } from "../lib/keys";
 import { setShellTransport } from "../lib/shell";
 import { ThemeMethod } from "../lib/themes";
-import { titleFrom } from "../lib/title";
 import {
   applyWindowTitle,
   momentOf,
@@ -223,41 +202,20 @@ import {
   windowStatus,
   windowTitle,
 } from "./announceThreads";
-import { uploadPromptImages } from "./attachmentTransfer";
 import { automaticCompactionText, DEFAULT_AUTO_COMPACT, parseAutoCompactSettings } from "./autoCompact";
-import {
-  beginAutoCompactIdle,
-  forgetAutoCompact,
-  noteCompactionCard,
-  noteTyping,
-  scheduleAutoCompact,
-} from "./autoCompactRun";
+import { forgetAutoCompact, noteCompactionCard, noteTyping, scheduleAutoCompact } from "./autoCompactRun";
 import { createBatcher, frameQueue } from "./batch";
 import { parseHarnessCommands, rememberCommands, serializeHarnessCommands } from "./commands";
+import { type ComposeExtras, emptyExtras, hasExtras } from "./compose";
 import {
-  type ComposeExtras,
-  carriesExtras,
-  composedText,
-  emptyExtras,
-  hasExtras,
-  promptBlocks,
-  sentAttachments,
-} from "./compose";
-import {
-  clearStopped,
   continueDueThreads,
   continueInternetThreads,
-  dropLimitWait,
-  dropWaits,
   interruptedThreads,
-  noteStopped,
   resetContinueWaits,
   resumeInterrupted,
-  settleStopWait,
   syncWaitTimers,
   watchRunningThreads,
 } from "./continueThreads";
-import { contextPercent } from "./details";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import {
   type EngineEvent,
@@ -267,84 +225,50 @@ import {
   startingText,
   transitionEngine,
 } from "./engine";
-import { selectOption, unavailableReason } from "./harness";
+import { selectOption } from "./harness";
 import { sanitizeHeaderButtons } from "./headerButtons";
 import {
   answerOrchestration,
-  linkFinished,
-  linkStarted,
-  linksFinished,
-  linksReopened,
-  linksResumed,
-  linkWaitEnded,
   linkWaitStarted,
   loadBook,
   orchestrationCallDropped,
   reconcileLinks,
-  requeueUnreadSteers,
   resetLinkBook,
   resetWaits,
   restoreQueuedThreads,
-  stopLinksFrom,
   syncLinkBook,
-  takeSteeredLinks,
-  threadTurnEnded,
-  wakeDelivered,
   wakeTick,
 } from "./host";
 import type { InboxDismissals } from "./inboxDismissed";
 import type { InternetWait } from "./internetWait";
-import { type FallbackRule, movedNotice, pickFallback, switchText } from "./limitFallback";
 import type { LimitWait } from "./limitResume";
-import { newThreadAccountOn } from "./logins";
-import { lostTurn, lostTurnStatus, reloadThread, resetLostTurns, resumeLostTurns } from "./lostTurns";
-import { saveTranscript } from "./machineCache";
-import { mirrorTranscript, setMirrorRequest } from "./machineMirror";
+import { lostTurnStatus, resetLostTurns } from "./lostTurns";
 import { useOutbox } from "./machineOutbox";
-import { flushingOutbox, mergeMachineLists } from "./machineSync";
+import { flushingOutbox } from "./machineSync";
 import { notifyThread, startNotifications, warmingUp } from "./notify";
-import {
-  CAPABILITY_VERSION,
-  failure,
-  failureJson,
-  MACHINE_LOST_TURN,
-  parseDelivered,
-  WAKE_BATCH_DEFAULT_S,
-} from "./orchestration";
+import { CAPABILITY_VERSION, failure, failureJson, WAKE_BATCH_DEFAULT_S } from "./orchestration";
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { projectKey } from "./projectBook";
 import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
-import { nextQueued } from "./queue";
 import { parseRecapHours } from "./recap";
 import { resetRemoteStatusReads } from "./remoteAccess";
-import { engineBusy, FORCE_STOP_MS } from "./runState";
 import { forgetRunDrift, reconcileRunState, resetRunStatePoll, startRunStatePoll } from "./runStatePoll";
 import { parseScheduleBook, SCHEDULED_KEY } from "./schedule";
 import { resetScheduledSends, restoreScheduled } from "./scheduledSends";
-import { acceptsImages, removeQueued, threadHarness } from "./sendActions";
 import type { SidebarOrder } from "./sidebarOrder";
 import {
-  appendNotice,
   applyUpdate,
-  beginQuietTurn,
-  beginTurn,
   endTurn,
   finishTurn,
   foldingBatch,
-  isContinueMessage,
   isRunning,
-  isWakeMessage,
   isWoken,
   localId,
-  requeueSteers,
-  settleEveryWait,
-  startCompaction,
   type ThreadState,
   waitingOn,
   wakeTurn,
   withChildActivity,
-  withContinueMark,
 } from "./thread";
 import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 import {
@@ -355,22 +279,10 @@ import {
   resetThreadListGuards,
   settleKeptUnlisted,
 } from "./threadListGuards";
-import {
-  announceFinished,
-  applySnooze,
-  finishToast,
-  isDelegated,
-  markFinished,
-  markMessaged,
-  notifyTitle,
-  threadName,
-  wakeOnWrite,
-} from "./threadNotices";
+import { announceFinished, applySnooze, notifyTitle } from "./threadNotices";
 import {
   autoRepaired,
-  closeThread,
   loading,
-  loadMachineHarnesses,
   opening,
   openThread,
   receiveActivity,
@@ -389,8 +301,7 @@ import {
   type Toast,
   type ToastTone,
 } from "./toasts";
-import { noticeOnlyHistory, userTypedPrompt } from "./topLevel";
-import { readableTurnError } from "./turnError";
+import { noticeOnlyHistory } from "./topLevel";
 import { onWorkflowChanged, subscribeWorkflows } from "./workflows";
 
 export {
@@ -765,250 +676,6 @@ function rpcReason(data: Json | undefined): string | null {
 
 export let connection: AcpConnection | null = null;
 let transport: Transport | null = null;
-
-// ---------------------------------------------------------------- machines
-//
-// A thread on a paired computer is driven over that computer's own connection
-// (state/machines.ts holds one per machine, the shell's supervisor keeps it).
-// Local threads keep their bare id and this module's `connection`; a remote
-// thread's key carries its machine (`state/threadKeys.ts`), and every call
-// that names it on the machine goes through `connectionForThread` with the
-// key split back into the machine's own session id. Responses to a machine's
-// own requests go back on the same connection they arrived on.
-
-const machineConnections = new Map<string, AcpConnection>();
-const machineOff = new Map<string, () => void>();
-let machineRouting: Promise<void> | null = null;
-/** The machine store's own subscription, kept so a test reset can let it go. */
-let machineMirrorOff: (() => void) | null = null;
-let transcriptKeepOff: (() => void) | null = null;
-/** Threads whose transcript is waiting to be kept on this computer, by key. */
-const transcriptTimers = new Map<string, ReturnType<typeof setTimeout>>();
-/** A remote thread's transcript is kept at most this often while it changes. */
-const KEEP_TRANSCRIPT_MS = 2_000;
-
-/**
- * Keep the transcript of a thread opened on a machine (`state/machineCache.ts`), so it can be read
- * while the machine is away. Only a copy the machine just gave is kept: one drawn from this
- * computer's own copy is already what is kept.
- */
-function keepRemoteTranscript(key: string): void {
-  transcriptTimers.delete(key);
-  const thread = get().threads[key];
-  if (!isLoaded(thread) || !machineConnections.has(splitThreadKey(key).host)) return;
-  saveTranscript(thread, key);
-  // The same read also goes to this computer's disk, where nothing ages out (docs/data-store.md ›
-  // Thread mirror).
-  mirrorTranscript(thread, key);
-}
-
-function watchRemoteTranscripts(next: AppState, prev: AppState): void {
-  if (next.threads === prev.threads) return;
-  for (const [key, thread] of Object.entries(next.threads)) {
-    if (thread === prev.threads[key] || !isRemoteThread(key) || transcriptTimers.has(key)) continue;
-    transcriptTimers.set(
-      key,
-      setTimeout(() => keepRemoteTranscript(key), KEEP_TRANSCRIPT_MS),
-    );
-  }
-}
-/** `state/machines.ts` `resetMachinesForTests`, once its module is loaded. */
-let machineReset: (() => void) | null = null;
-
-/** The connection a thread's operations go over: this computer's engine, or that machine's own. */
-export function connectionFor(host: string): AcpConnection | null {
-  return host ? (machineConnections.get(host) ?? null) : connection;
-}
-
-// The thread mirror writes through this computer's own engine (`state/machineMirror.ts`).
-setMirrorRequest(async (params) => {
-  const engine = connectionFor("");
-  if (!engine) throw new Error("This computer's engine is not connected.");
-  return engine.request(Method.mirror, params as JsonObject, 15_000);
-});
-
-/** The same, from a thread key (`state/threadKeys.ts`). */
-export function connectionForThread(key: string): AcpConnection | null {
-  return connectionFor(splitThreadKey(key).host);
-}
-
-/** Whether the thread runs on another computer. */
-export function threadIsRemote(key: string): boolean {
-  return isRemoteThread(key);
-}
-
-/** The name of the machine a remote thread runs on; undefined for this computer. */
-export function machineOfThread(key: string): string | undefined {
-  return get().machineNames[splitThreadKey(key).host];
-}
-
-/** Whether a machine's threads are listed but its connection is not open (read-only). */
-export function threadOffline(key: string | null | undefined): boolean {
-  if (!key) return false;
-  const host = splitThreadKey(key).host;
-  return !!host && !machineConnections.has(host);
-}
-
-/**
- * The harnesses, models and accounts one computer lists: this one's own, or a paired
- * machine's read over its connection (`loadMachineHarnesses`). Nothing for a machine that has
- * not answered yet, which the pickers draw as loading rather than as an empty engine.
- */
-export function harnessesOn(
-  s: { harnesses: HarnessSnapshot | null; remoteHarnesses?: Record<string, HarnessSnapshot> },
-  host: string | null | undefined,
-): HarnessSnapshot | null {
-  return host ? (s.remoteHarnesses?.[host] ?? null) : s.harnesses;
-}
-
-/** The machine a thread runs on, as the chat's header reads it, and whether it is away now. */
-export function useMachineOfThread(key: string | null | undefined): string | undefined {
-  const names = useApp((s) => s.machineNames);
-  return key ? names[splitThreadKey(key).host] : undefined;
-}
-
-/** A remote thread's machine is away: the row stays, the thread opens read-only (ChatView, Composer). */
-export function useThreadOffline(key: string | null | undefined): boolean {
-  const hosts = useApp((s) => s.connectedHosts);
-  if (!key) return false;
-  const host = splitThreadKey(key).host;
-  return !!host && !hosts.includes(host);
-}
-
-/**
- * Follow the shell's machines: one inbound subscription per connection (so a
- * machine's notifications reach the transcript tagged with its key), and its
- * thread list mirrored into `sessions` whenever it is re-read.
- */
-export async function startMachineRouting(): Promise<void> {
-  if (machineRouting) return machineRouting;
-  machineRouting = (async () => {
-    // Loaded here, not at the top: state/machines.ts reads this module's `toast` and `askConfirm`.
-    const machines = await import("./machines");
-    machineReset = machines.resetMachinesForTests;
-    machines.onMachineLinks((id, conn) => watchMachineConnection(id, conn));
-    const mirror = () => {
-      const state = machines.useMachines.getState();
-      const names = Object.fromEntries(
-        state.machines.map((machine) => [machine.id, machines.machineName(machine)]),
-      );
-      set((s) => {
-        // A machine that was removed takes its kept harnesses with it, and **Run on** naming it
-        // goes back here rather than to a machine that is no longer saved.
-        const snapshots = Object.fromEntries(
-          Object.entries(s.remoteHarnesses).filter(([host]) => !!names[host]),
-        );
-        const named = s.newThreadHost && !names[s.newThreadHost];
-        return {
-          machineNames: names,
-          remoteHarnesses: snapshots,
-          ...(named ? { newThreadHost: LOCAL_HOST, projectCwd: "" } : {}),
-        };
-      });
-      mergeMachineLists(state.sessions);
-    };
-    machineMirrorOff = machines.useMachines.subscribe((state, prev) => {
-      if (state.sessions !== prev.sessions || state.machines !== prev.machines) mirror();
-    });
-    transcriptKeepOff = useApp.subscribe(watchRemoteTranscripts);
-    for (const link of machines.machineLinks()) watchMachineConnection(link.machine.id, link.connection);
-    mirror();
-  })();
-  return machineRouting;
-}
-
-/**
- * Tests only: forget every machine's channel, the threads it listed and the names it had, so one
- * test file's machines cannot be another's (machinesThreads.test.ts, `resetForTests`).
- */
-export function resetMachinesForTests(): void {
-  for (const off of machineOff.values()) off();
-  machineOff.clear();
-  machineConnections.clear();
-  machineRouting = null;
-  machineMirrorOff?.();
-  machineMirrorOff = null;
-  transcriptKeepOff?.();
-  transcriptKeepOff = null;
-  for (const timer of transcriptTimers.values()) clearTimeout(timer);
-  transcriptTimers.clear();
-  // Kept once loaded: a later reset has to clear the machines module too, even after a file
-  // attached machines without ever routing through this module (`state/machines.test.ts`).
-  machineReset?.();
-  set({ connectedHosts: [], machineNames: {}, sessions: [] });
-}
-
-/**
- * Point the store at a machine's live connection (or at none, when it drops).
- * `startMachineRouting` calls it for every change `state/machines.ts` announces;
- * exported so the routing is testable without the app's shell (machinesThreads.test.ts).
- */
-export function watchMachineConnection(id: string, next: AcpConnection | null): void {
-  const current = machineConnections.get(id) ?? null;
-  if (current === next) return;
-  machineOff.get(id)?.();
-  machineOff.delete(id);
-  if (!next) {
-    machineConnections.delete(id);
-    // Its threads stay listed and keep the copy this window drew, read-only: the last replay is
-    // still the thread. A turn that was running there ended with the connection, and the request
-    // it waited on died with it (the engine keeps no pending-permission replay): its card goes
-    // with the turn's own failure rather than holding an answer no connection can carry. A request
-    // on a thread that was not running goes too, for the same reason (`reply` refuses an answer
-    // made in the moment before this runs).
-    set((s) => ({
-      connectedHosts: [...machineConnections.keys()],
-      threads: Object.fromEntries(
-        Object.entries(s.threads).map(([key, t]) => {
-          if (splitThreadKey(key).host !== id) return [key, t];
-          if (isRunning(t)) return [key, finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN)];
-          return [key, t.permissions.length ? { ...t, permissions: [] } : t];
-        }),
-      ),
-    }));
-    return;
-  }
-  machineConnections.set(id, next);
-  void subscribePullWatches(next, id).catch(() => {});
-  void subscribeWorkflows(next).catch(() => {});
-  machineOff.set(
-    id,
-    next.onInbound((message) => void handleInbound(scopeInbound(message, id), next, id)),
-  );
-  // Back: a harness or login added there while it was away is in the list a second read gives.
-  if (get().remoteHarnesses[id]) void loadMachineHarnesses(id, { refresh: true });
-  // Back: a turn whose request died with this machine's channel is asked about again now.
-  resumeLostTurns(id);
-  // Back: the copy on screen is from before it went away, so the thread it shows is read again.
-  // Requests of the old connection did not survive the drop (they died with it), so there is
-  // nothing to keep here: the reload is the machine's whole answer about the thread.
-  set((s) => ({
-    connectedHosts: [...machineConnections.keys()],
-    threads: Object.fromEntries(
-      Object.entries(s.threads).map(([key, t]) =>
-        splitThreadKey(key).host === id
-          ? [key, { ...endTurn(t), load: { phase: "idle" as const } }]
-          : [key, t],
-      ),
-    ),
-  }));
-  // Reload background transcripts too: they may have finished while disconnected.
-  for (const key of Object.keys(get().threads)) {
-    if (splitThreadKey(key).host === id) void openThread(key);
-  }
-  for (const row of get().sessions) {
-    if (row.host === id && (row.status === "running" || row.status === "needs_input"))
-      void openThread(row.id);
-  }
-}
-
-/** A machine's ids reach the store as keys: `‹host›/‹sessionId›`. */
-function scopeInbound(message: Inbound, host: string): Inbound {
-  if (message.type === "closed") return message;
-  const sessionId = str(message.params.sessionId);
-  if (!sessionId) return message;
-  return { ...message, params: { ...message.params, sessionId: threadKey(host, sessionId) } };
-}
 
 /**
  * Threads whose messages contain `query`, from the engine's SQLite index
@@ -1439,7 +1106,11 @@ function onChildActivity(params: unknown) {
 /** `_rustcode/settings/changed`: the engine saw `settings.json` change. */
 const SETTINGS_CHANGED = "_rustcode/settings/changed";
 
-async function handleInbound(message: Inbound, conn: AcpConnection | null = connection, host = LOCAL_HOST) {
+export async function handleInbound(
+  message: Inbound,
+  conn: AcpConnection | null = connection,
+  host = LOCAL_HOST,
+) {
   switch (message.type) {
     case "closed":
       if (host) {
@@ -1806,478 +1477,6 @@ export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExt
   if (hasExtras(get().extras[key])) noteTyping(key);
 }
 
-// ---------------------------------------------------------------- running a turn
-
-export async function runPrompt(
-  id: string,
-  text: string,
-  extras: ComposeExtras = emptyExtras,
-  options: {
-    fromView?: boolean;
-    link?: string;
-    sender?: string;
-    /**
-     * The links a restart severed and this resume turn answers (`resumeInterrupted`): started as
-     * working when its turn begins and settled when it ends, as a link's own turn leaves its link
-     * (host.ts `linksResumed`, `linksFinished`).
-     */
-    resumeLinks?: string[];
-    wake?: boolean;
-    /** The links a queued wake row reports: marked as heard when its turn starts (host.ts). */
-    wakeLinks?: string[];
-    /** The links that row named as waiting on the user: a question, not a finish (host.ts). */
-    wakeAsking?: string[];
-    automatic?: boolean;
-    /** A `/compact` the app sent because the context or the cache said so. */
-    autoCompact?: boolean;
-    /** What the "Compacting context…" divider says for that `/compact` (`autoCompactingText`). */
-    autoCompactText?: string;
-    /**
-     * The turn that continues a thread the app was waiting for (a usage limit, an overload, the
-     * internet): its wait is kept while it runs and settled when it ends.
-     */
-    autoResume?: boolean;
-    /**
-     * The turn that carries the thread on after the app compacted it: its prompt reads as a divider
-     * in the transcript, never as a message the user typed (`state/thread.ts` `CONTINUE_MARK`).
-     */
-    continued?: boolean;
-    /**
-     * The next message of a thread's queue, started because the turn before it ended: work the user
-     * already sent, so starting it is not a new send and does not bring a snoozed thread back
-     * (`state/store.ts` `wakeOnWrite`). Unlike `continued`, it is the user's turn in every other way.
-     */
-    queued?: boolean;
-    /**
-     * The thread was made for this message, and the new-thread screen already shows its row
-     * (`state/setup.ts`): it does not fly in when the thread takes the screen over.
-     */
-    alreadyShown?: boolean;
-  } = {},
-): Promise<TurnOutcome> {
-  // Check again when a queued notice starts: settling may have happened after delivery.
-  if (
-    (options.automatic ||
-      options.autoCompact ||
-      options.autoResume ||
-      options.continued ||
-      options.wake ||
-      isContinueMessage(text) ||
-      isWakeMessage(text)) &&
-    (get().statusMarks[id] ?? sessionById(get(), id)?.status) === "done"
-  )
-    return "skipped";
-  // The turn runs on the thread's own computer, which may have gone away since it was opened.
-  const conn = connectionForThread(id);
-  if (!conn) {
-    toast(threadIsRemote(id) ? "That computer is not connected." : "The server is not connected.", "error");
-    return "skipped";
-  }
-  const thread = get().threads[id];
-  // The user starting a turn again settles any stop they made before it.
-  if (!options.automatic) clearStopped(id);
-  // The prompt reads as a divider both ways: live, and after a reload from the history the engine
-  // kept, which carries the text and not this flag (state/thread.ts `CONTINUE_MARK`).
-  if (options.continued) text = withContinueMark(text);
-  // A prompt no agent asked for is the user's: the thread is theirs now, even
-  // when it was started by an agent (state/topLevel.ts). A resume after a
-  // restart, a wake or a message from another thread is not a message the user
-  // sent, and neither is the turn that continues after a wait.
-  if (userTypedPrompt(options, text)) markMessaged(id);
-  // Whoever starts a turn now moots the wait, and if this one stops the same way it waits again.
-  if (!options.autoResume && !options.autoCompact && !isRunning(thread)) dropWaits(id);
-  // Never a second prompt into a running turn: an external harness takes it as the next turn and can
-  // interrupt the tools it is still running (a parent's wait_session). It waits in the queue, like a
-  // message typed meanwhile, and starts when this turn ends.
-  if (isRunning(thread)) {
-    // An automatic compaction never waits in the queue: the next turn may run
-    // before it, and the guards will offer another one in a later idle period.
-    if (options.autoCompact) return "skipped";
-    updateThread(id, (t) => ({
-      ...t,
-      queue: [
-        ...t.queue,
-        {
-          id: localId("queued"),
-          text,
-          extras: carriesExtras(extras) ? extras : undefined,
-          fromView: options.fromView,
-          link: options.link,
-          resume: options.resumeLinks,
-          wake: options.wake,
-          wakeLinks: options.wakeLinks,
-          wakeAsking: options.wakeAsking,
-        },
-      ],
-    }));
-    return "skipped";
-  }
-  // A user turn starts a new idle period, which may auto-compact once more. The app's own continue is
-  // not one: it is the same idle period as the compaction that asked for it, and re-arming the rule
-  // that just ran would let a harness whose compaction left the context over the threshold compact
-  // and continue for ever.
-  if (!options.autoCompact && !options.continued) beginAutoCompactIdle(id);
-  // Writing in a thread brings it back from a snooze, as it always has: that is the user asking for
-  // it (`submit` and `steerOrSubmit` have already done it for a message they took). A turn the app
-  // starts — a delegate's wake, a resume after a restart, the next row of the queue (`queued`), the
-  // turn after a usage limit — is not a new send and leaves the snooze alone, so a sleeping thread
-  // keeps working in the background without coming back to the list.
-  if (userTypedPrompt(options, text) && !options.queued) wakeOnWrite(id);
-  const startIndex = thread?.items.length ?? 0;
-  if (options.link) linkStarted(options.link);
-  // The turn a restart resumes this thread with answers the links the quit severed: they work again
-  // from here, so the parent reads this turn's answer and its time, never the time before the quit.
-  if (options.resumeLinks?.length) {
-    linksResumed(options.resumeLinks);
-    // Links a usage limit settled as failed work again: this turn is the one that answers them.
-    linksReopened(id, options.resumeLinks);
-  }
-  // A queued wake reports its links now, as its turn starts: late enough that a restart before this
-  // point brings the wake back, early enough that nothing in the turn reports it again.
-  if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
-  // The message the transcript shows: the command, links and typed text, with each long paste back
-  // where it was pasted. The prompt's blocks say the same thing (below).
-  const shown = composedText(text, extras);
-  // A message typed here flies out of the composer on its first sighting; one the new-thread screen
-  // already drew does not (lib/sendFlight.ts).
-  const sent = userTypedPrompt(options, text) && !options.fromView && !options.alreadyShown;
-  // The message is on screen before its blocks are built: a long paste or a 20 MB picture is copied
-  // into the prompt's JSON after the bubble lands, not before it — and that update gets a painted
-  // frame of its own, so the bubble's row (and the flight it starts) is drawn before the work that
-  // follows it, which on a fast harness is the whole rest of the turn's first frame.
-  updateThread(id, (t) =>
-    options.autoCompact
-      ? // The turn writes no rows, so "Compacting context…" is the one sign the thread is busy.
-        startCompaction(beginQuietTurn(t), options.autoCompactText, "auto-compact")
-      : beginTurn(
-          t,
-          shown,
-          Date.now(),
-          sentAttachments(extras),
-          options.fromView,
-          options.wake,
-          sent,
-          options.continued,
-        ),
-  );
-  await afterPaint();
-  const harness = threadHarness(thread);
-  const prompt = promptBlocks(text, extras, {
-    images: acceptsImages(thread),
-    builtin: harness?.builtin ?? true,
-    cwd: thread?.cwd ?? "",
-    advertised: advertisedCommands(get(), id),
-  });
-  // A new prompt starts a new report, if it is one.
-  if (get().report?.threadId === id) set({ report: null });
-  if (!options.autoCompact) {
-    set((s) => ({
-      sessions: byActivity(
-        s.sessions.map((x) =>
-          x.id === id
-            ? { ...x, updatedAt: Date.now(), title: x.title ?? (titleFrom(shown, 80) || "Image") }
-            : x,
-        ),
-      ),
-    }));
-  }
-  let outcome: "completed" | "cancelled" | "failed" = "completed";
-  let failure: string | undefined;
-  let unused: string[] = [];
-  try {
-    const sent = threadIsRemote(id) ? await remotePromptImages(conn, id, prompt) : prompt;
-    const request: JsonObject = { sessionId: splitThreadKey(id).id, prompt: sent };
-    // The access level rides on every prompt: a harness that sandboxes its own shell (Codex) leaves
-    // the sandbox for Full access, on this machine and on a remote one alike.
-    request._meta = {
-      rustcode: {
-        access: permissionModeOf(get(), id),
-        ...(options.sender && parseDelivered(text)
-          ? {
-              origin: {
-                kind: "agent",
-                threads: [
-                  {
-                    sessionId: options.sender,
-                    title: parseDelivered(text)?.title ?? "",
-                    ...(options.link ? { linkId: options.link } : {}),
-                  },
-                ],
-              },
-            }
-          : {}),
-        ...(options.autoCompact ? { autoCompact: true } : {}),
-      },
-    };
-    const result = (await conn.request(Method.sessionPrompt, request)) as JsonObject | null;
-    if (str(result?.stopReason) === "cancelled") outcome = "cancelled";
-    const meta = (result?._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined;
-    unused = Array.isArray(meta?.unusedSteers)
-      ? meta.unusedSteers.filter((x): x is string => typeof x === "string")
-      : [];
-  } catch (error) {
-    // A turn on another machine outlives the request that asked for it: the request dies with the
-    // machine's connection, and the turn there goes on. Nothing is settled from the rows that had
-    // arrived — a half-written answer is not an answer — so the links are handed to `lostTurn`: it
-    // asks the machine how the thread ended once its channel is back, and gives them that answer
-    // then, or their failure after `LOST_MACHINE_MS` (issue 3440). Anything else is the engine's own
-    // refusal, and a failure as it always was.
-    if (error instanceof ConnectionClosedError && threadIsRemote(id)) {
-      // The channel's close usually ended the turn already (`watchMachineConnection`); when a
-      // closed channel is what refused the request, this is what ends it.
-      if (isRunning(get().threads[id]))
-        updateThread(id, (t) => finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN));
-      lostTurn(id, [options.link, ...(options.resumeLinks ?? []), ...takeSteeredLinks(id)]);
-      return "skipped";
-    }
-    outcome = "failed";
-    failure = errorText(error);
-  }
-  // A provider's raw answer (`Codex: {"detail":"Bad Request"}`) is said in words, with what to do
-  // when the conversation is full; the raw text stays on the thread, behind the error's Details.
-  const rawFailure = failure;
-  if (failure !== undefined) failure = readableTurnError(failure, contextPercent(get().threads[id]?.usage));
-  updateThread(id, (t) => ({
-    ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
-    ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
-  }));
-  // Steers the turn never read wait as turns of their own, and carry the links they came from.
-  if (!options.autoCompact) requeueUnreadSteers(id, unused);
-  // The stop is settled first: a turn it stopped is reported as the stop, not twice.
-  // An automatic compaction must leave a pending wait alone, not settle it.
-  const waiting = options.autoCompact
-    ? (get().limitWaits[id] ?? null)
-    : // The stop is read from what the harness said, not the words the thread shows.
-      settleStopWait(id, outcome, rawFailure, startIndex, [options.link, ...(options.resumeLinks ?? [])]);
-  // A thread waiting for the internet is held, not dead: it says so in the composer's row.
-  const offline = options.autoCompact ? undefined : get().internetWaits[id];
-  // An automatic compaction is not a turn the user waits for: it is not "Done"
-  // news, and it must not wake the thread's parent as if its work finished.
-  if (!options.autoCompact) {
-    if (outcome === "completed") markFinished(id);
-    else if (outcome === "failed") markFinished(id, Date.now(), true);
-  }
-  // A report command that answered in the panel leaves no turn behind: its message and footer go.
-  const reported = get().report?.threadId === id;
-  if (reported && outcome === "completed" && isReportCommand(id, text, extras)) {
-    updateThread(id, (t) => ({ ...t, items: t.items.slice(0, startIndex) }));
-  }
-  if (options.link)
-    linkFinished(options.link, id, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
-  // The links this resume turn answers settle together: one write, one wake tick (host.ts).
-  if (options.resumeLinks?.length)
-    linksFinished(
-      options.resumeLinks,
-      id,
-      outcome,
-      failure,
-      get().threads[id]?.items.slice(startIndex) ?? [],
-      // Stopped on a limit or an overload again: the parent heard it once and waits for the end.
-      !!waiting,
-    );
-  // Every finished turn of a thread matters to a parent waiting on it: a middle thread's real
-  // answer is the one after the work it started (state/host.ts threadTurnEnded).
-  if (!options.autoCompact) {
-    threadTurnEnded(id, !!options.wake, outcome, failure, get().threads[id]?.items.slice(startIndex) ?? []);
-  }
-  // An automatic compaction must not move the thread in the sidebar: no list
-  // refresh that would read the turn as new activity.
-  if (!options.autoCompact) void refreshSessions();
-  void refreshPlanUsage(id);
-  // A window's numbers move with the turn, and so does the account's own row:
-  // the thread on screen asks again as it ends.
-  if (id === get().selectedId) void refreshPlanCache();
-  void refreshAgents(id);
-  void refreshCheckpoints(id);
-  // A delegate stopped on a plan limit may go on elsewhere at once (issue 3392); the move says so.
-  const move = waiting && !options.autoCompact ? limitMoveFor(id, waiting) : null;
-  const moved = move && waiting ? await switchOnLimit(id, waiting, move) : false;
-  if (move && !moved) {
-    notifyThread({ threadId: id, kind: "limit", key: String(waiting!.until), title: threadName(id) }, get());
-  }
-  if (
-    !moved &&
-    !options.autoCompact &&
-    !options.continued &&
-    (outcome === "completed" || outcome === "failed")
-  ) {
-    finishToast(id, outcome, { waiting, offline, link: options.link });
-  }
-  // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
-  // stopped or failed leaves the queue held instead (thread.ts `holdsQueue`): the rows read Held and
-  // Resume starts them.
-  // Nor does one go out into a wait: it waits for the turn that continues.
-  const after = get().threads[id];
-  const next = after && !waiting && !moved && !offline ? nextQueued(after.queue, after) : undefined;
-  if (next) {
-    removeQueued(id, next.id);
-    await runPrompt(id, next.text, next.extras, {
-      fromView: next.fromView,
-      link: next.link,
-      resumeLinks: next.resume,
-      wake: next.wake,
-      wakeLinks: next.wakeLinks,
-      wakeAsking: next.wakeAsking,
-      automatic: next.resume !== undefined,
-      // The row was typed before this turn: starting it is not a new send (`runPrompt` above).
-      queued: true,
-    });
-  }
-  if (outcome === "completed" && !options.continued) scheduleAutoCompact(id);
-  return outcome;
-}
-
-/** How a turn ended, and `skipped` for a prompt that never became one (a queued one, a compaction that found a turn running). */
-export type TurnOutcome = "completed" | "cancelled" | "failed" | "skipped";
-
-export async function cancel(id = get().selectedId): Promise<void> {
-  if (!id) return;
-  const conn = connectionForThread(id);
-  // A stop that finds nothing to send it on says so, instead of doing nothing.
-  if (!conn) {
-    toast(threadIsRemote(id) ? "That computer is not connected." : "The server is not connected.", "error");
-    return;
-  }
-  const thread = get().threads[id];
-  // Stopping a thread stops the work it gave other threads (M1); turns the user started there go on.
-  void stopLinksFrom(id);
-  // The engine may run a turn this window lost track of (`engineRunning`, the list's status): Stop
-  // still stops it.
-  const engineRuns =
-    !!get().engineRunning[id] || (!isLoaded(thread) && engineBusy(sessionById(get(), id)?.status));
-  if (!isRunning(thread) && !engineRuns) return;
-  // Recorded first: a quit inside the harness's cancel grace would otherwise leave the thread
-  // listed as running, and the restart would resume a turn the user stopped.
-  noteStopped(id);
-  try {
-    conn.notify(Method.sessionCancel, { sessionId: splitThreadKey(id).id });
-    // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
-    for (const request of thread?.permissions ?? []) conn.respond(request.rpcId, permissionCancelled);
-    if (thread) {
-      updateThread(id, (t) => settleEveryWait({ ...t, permissions: [] }, Date.now()));
-      if (thread.permissions.length) linkWaitEnded(id);
-    }
-  } catch (error) {
-    toast(errorText(error), "error");
-    return;
-  }
-  void forceStopIfStuck(id, thread?.turn?.startedAt);
-}
-
-/**
- * Stops a thread's turn and waits for it to end, forcing it after a short wait: `cancel` for a
- * turn that obeys, closing the thread in the engine for one that does not. True once it runs nothing.
- */
-export async function stopNow(id: string, waitMs = 3_000): Promise<boolean> {
-  await cancel(id);
-  const until = Date.now() + waitMs;
-  while (isRunning(get().threads[id]) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
-  if (isRunning(get().threads[id])) {
-    await closeThread(id);
-    updateThread(id, (t) => (isRunning(t) ? finishTurn(t, "cancelled", Date.now()) : t));
-  }
-  return !isRunning(get().threads[id]);
-}
-
-/** The stops waiting to be forced: one per thread, however many times Stop is pressed. */
-const forcingStops = new Set<string>();
-
-/**
- * `session/cancel` is a notification: nothing says it landed. A harness that ignores it, or a turn
- * wedged on a tool, would leave Stop doing nothing for good. When the turn is still the same one
- * after `FORCE_STOP_MS`, the thread is closed in the engine (which ends its harness) and the window
- * settles it as stopped and reads it again, so the thread can be used and closed (issue 3652).
- */
-async function forceStopIfStuck(id: string, turnStartedAt: number | undefined): Promise<void> {
-  if (forcingStops.has(id)) return;
-  forcingStops.add(id);
-  try {
-    await new Promise((resolve) => setTimeout(resolve, FORCE_STOP_MS));
-    const now = get();
-    const thread = now.threads[id];
-    // Ended, or a new turn began since: nothing is stuck.
-    const sameTurn = isRunning(thread) && thread.turn?.startedAt === turnStartedAt;
-    const engineStill = !isRunning(thread) && !!now.engineRunning[id];
-    if (!sameTurn && !engineStill) return;
-    toast("The turn did not stop, so it was ended.", "info");
-    await closeThread(id);
-    updateThread(id, (t) => (isRunning(t) ? finishTurn(t, "cancelled", Date.now()) : t));
-    set((s) => {
-      const { [id]: _gone, ...rest } = s.engineRunning;
-      return _gone ? { engineRunning: rest } : {};
-    });
-    if (get().agent?.closeSession) void reloadThread(id);
-  } finally {
-    forcingStops.delete(id);
-  }
-}
-
-/** Below this a prompt fits one frame of a paired computer's connection (1 MiB), with room to spare. */
-const INLINE_PROMPT_CHARS = 900_000;
-
-/**
- * A remote thread's images go ahead of its prompt, in chunks under the connection's 1 MiB frame
- * (state/attachmentTransfer.ts), and the prompt names each by the file the machine kept. A machine
- * on a RustCode from before the upload takes them inline, only when the prompt fits a frame.
- */
-async function remotePromptImages(conn: AcpConnection, id: string, prompt: Json[]): Promise<Json[]> {
-  if (!prompt.some((block) => obj(block)?.type === "image")) return prompt;
-  try {
-    return await uploadPromptImages(
-      (method, params, timeout) => conn.request(method, params, timeout),
-      prompt,
-    );
-  } catch (error) {
-    if (!(error instanceof RpcError && error.isMethodNotFound)) throw error;
-    if (JSON.stringify(prompt).length < INLINE_PROMPT_CHARS) return prompt;
-    throw new Error(
-      `${machineOfThread(id) ?? "That computer"} runs an older RustCode that cannot take an image this large from another computer. Update RustCode there, or send a smaller image.`,
-    );
-  }
-}
-
-/**
- * Sets a config option on a thread. `remember` (the default) mirrors a model or effort into the
- * harness's next new-thread choice and the model's own effort memory: the user picked it here.
- * A turn's own `configure_session`, and the apply after `session/new` (whose choice the picker
- * already noted), write their options with `remember: false`, so an agent never rewrites the
- * user's memory.
- */
-export async function setConfigOption(
-  id: string,
-  configId: string,
-  value: string | boolean,
-  options: { remember?: boolean } = {},
-): Promise<void> {
-  // A remote thread's options are its machine's to list and set.
-  const conn = connectionForThread(id);
-  if (!conn) {
-    toast("That computer is not connected.", "error");
-    return;
-  }
-  const params: JsonObject =
-    typeof value === "boolean"
-      ? { sessionId: splitThreadKey(id).id, configId, type: "boolean", value }
-      : { sessionId: splitThreadKey(id).id, configId, value };
-  try {
-    const result = (await conn.request(Method.sessionSetConfigOption, params, 15_000)) as JsonObject | null;
-    if (result?.configOptions) {
-      updateThread(id, (t) => ({ ...t, configOptions: parseConfigOptions(result.configOptions) }));
-    }
-    // A model or effort picked in a thread is also its harness's next new-thread choice; the
-    // engine keeps it (docs/harnesses.md), the app only mirrors it, and the model keeps the
-    // effort it was left on for the next time it is picked.
-    const thread = get().threads[id];
-    if (thread && options.remember !== false && (configId === "model" || configId === "effort")) {
-      const current = (option: string) => thread.configOptions.find((o) => o.id === option)?.current ?? null;
-      noteChoice(thread.harness?.id ?? "rustcode", { model: current("model"), effort: current("effort") });
-      rememberModelEffort(thread.harness?.id ?? "rustcode", current("model"), current("effort"));
-    }
-  } catch (error) {
-    toast(`Could not change ${configId}: ${errorText(error)}`, "error");
-  }
-}
-
 // ---------------------------------------------------------------- permission loading
 
 function loadProjectPermissionModes(): Record<string, PermissionMode> {
@@ -2303,73 +1502,6 @@ function loadPermissionPins(): Record<string, PermissionMode> {
   store(STORAGE.permissionModes, JSON.stringify(kept));
   store(STORAGE.permissionPinsThinned, "1");
   return kept;
-}
-
-// ---------------------------------------------------------------- switching at a limit
-
-// The harnesses a thread left on a limit, by thread: a row never sends it back to one of them, so two
-// providers at their limits do not hand it to each other. Memory only: a restart starts afresh.
-const leftOnLimit = new Map<string, Set<string>>();
-
-interface LimitMove {
-  rule: FallbackRule;
-  fromName: string;
-  to: Harness;
-}
-
-/**
- * Where a delegate that just stopped on a plan limit would go on instead of waiting (issue 3392), or
- * null: the setting is off, the stop is not a limit, the thread is not a delegate of this machine, or
- * no row of the table names an available harness for what it ran on.
- */
-export function limitMoveFor(id: string, wait: LimitWait): LimitMove | null {
-  const s = get();
-  if (!s.limitFallback || (wait.reason ?? "limit") !== "limit") return null;
-  if (threadIsRemote(id) || !isDelegated(id)) return null;
-  const ran = harnessOf(s, id);
-  const model = selectOption(s.threads[id]?.configOptions ?? [], "model")?.current;
-  const rule = pickFallback(s.limitFallbackMap, { harness: ran, model }, leftOnLimit.get(id));
-  if (!rule) return null;
-  const listed = s.harnesses?.harnesses ?? [];
-  const to = listed.find((h) => h.id === rule.to.harness);
-  if (!to || unavailableReason(to)) return null;
-  return { rule, fromName: listed.find((h) => h.id === ran)?.name ?? ran ?? "The harness", to };
-}
-
-/**
- * Move a limited delegate to the table's model and carry on there with the turn it was in, in the
- * same way `continueDueThreads` carries on after a reset: the links the stop settled are reopened and
- * answered by it. The thread says which model it moved to and why, and the engine records the move
- * in its activity. False when the move did not happen; the thread then waits for the reset as before.
- */
-async function switchOnLimit(id: string, wait: LimitWait, move: LimitMove): Promise<boolean> {
-  const { rule, fromName, to } = move;
-  const from = harnessOf(get(), id);
-  const account = rule.to.account ?? newThreadAccountOn(to, lastAccountFor(to.id), get().signedOutLogins);
-  const moved = await switchThreadHarness(id, to.id, account, {
-    model: rule.to.model,
-    effort: rule.to.effort,
-    reason: "limit",
-    quiet: true,
-  });
-  if (!moved) return false;
-  if (from) leftOnLimit.set(id, new Set([...(leftOnLimit.get(id) ?? []), from]));
-  dropLimitWait(id);
-  const options = get().threads[id]?.configOptions ?? [];
-  const modelOption = selectOption(options, "model");
-  const model =
-    modelOption?.choices.find((c) => c.value === modelOption.current)?.name ?? modelOption?.current;
-  const target = model ? `${to.name} · ${model}` : to.name;
-  updateThread(id, (t) => appendNotice(t, movedNotice(fromName, target), "info"));
-  toast(`“${threadName(id)}” hit its limit and moved to ${target}`, "info", {
-    action: { label: "Open", run: () => selectThread(id) },
-  });
-  void runPrompt(id, switchText(fromName, target), undefined, {
-    automatic: true,
-    autoResume: true,
-    resumeLinks: wait.links,
-  });
-  return true;
 }
 
 /** Test hook: reset to a clean slate. */
@@ -2480,7 +1612,7 @@ export function resetForTests() {
 }
 
 /** A command the engine marks as a report (`/status`, `/context`…), sent alone. */
-function isReportCommand(id: string, text: string, extras: ComposeExtras): boolean {
+export function isReportCommand(id: string, text: string, extras: ComposeExtras): boolean {
   const name = extras.command?.name ?? text.trim().split(/\s/)[0];
   return (
     !extras.links.length &&
@@ -2546,3 +1678,26 @@ function announceThreads(s: AppState, prev?: AppState) {
 mountAnnouncer();
 announceThreads(useApp.getState());
 useApp.subscribe(announceThreads);
+
+export {
+  cancel,
+  forcingStops,
+  limitMoveFor,
+  runPrompt,
+  setConfigOption,
+  stopNow,
+  type TurnOutcome,
+} from "./promptRun";
+export {
+  connectionFor,
+  connectionForThread,
+  harnessesOn,
+  machineOfThread,
+  resetMachinesForTests,
+  startMachineRouting,
+  threadIsRemote,
+  threadOffline,
+  useMachineOfThread,
+  useThreadOffline,
+  watchMachineConnection,
+} from "./threadMachines";
