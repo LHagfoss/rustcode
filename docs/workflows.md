@@ -100,7 +100,8 @@ no loader.
 
 Both are tools of the `rustcode` MCP server, answered by the engine's hub, so
 they reach any harness that has the orchestration tools (version 2 and up) and
-need no app to be open. The built-in RustCode harness does not have them yet.
+need no app to be open. The built-in RustCode harness offers them too, from
+the same orchestration version, and the engine runs them the same way.
 The workflow tools are three: `run_workflow`, `workflow_status` and
 `stop_workflow`.
 
@@ -228,5 +229,5 @@ reads them when it starts.
 
 ## Not yet
 
-- The built-in RustCode harness and outside agents (`mcp-connect`) as callers.
+- Outside agents (`mcp-connect`) as callers.
 - A workflow list that can resume runs across threads.

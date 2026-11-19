@@ -11,8 +11,8 @@
 //! finished ([`run`]).
 //!
 //! The agent starts, reads and stops a run with three tools the `rustcode` MCP
-//! server offers, `run_workflow`, `workflow_status` and `stop_workflow`; the
-//! engine's hub answers them ([`start`], [`status`], [`stop`]). The app shows a
+//! server offers, `run_workflow`, `workflow_status` and `stop_workflow`, and
+//! the built-in harness offers too; the engine answers them ([`answer`]). The app shows a
 //! run from the same record: every change is announced ([`changes`]) and the
 //! app reads a run's summary ([`run_summary`]), stops it and claims the one
 //! wake that tells the starting thread it ended ([`claim_wake`]).
@@ -317,6 +317,37 @@ fn spawn(store: Store, runner: Arc<dyn AgentRunner>, record: RunRecord, source: 
             .unwrap_or_else(|error| error.into_inner())
             .remove(&id);
     });
+}
+
+/// Answer one workflow tool call made by `thread`: start, read or stop a run.
+/// The engine's hub calls it for a harness's `rustcode` MCP server, and the
+/// built-in harness for its own turn (#3943). Workers start through `client`
+/// when an app hosts the thread's tools, and the engine's own answer when none
+/// does. Workers are delegates, so a client below version 2 has no runs.
+pub(crate) async fn answer(
+    thread: &str,
+    client: Option<Arc<dyn crate::preview::PreviewClient>>,
+    version: u8,
+    cancel: &CancellationToken,
+    tool: &str,
+    args: &Value,
+) -> Result<String, String> {
+    if version < 2 || !is_tool(tool) {
+        return Err(format!("unknown tool '{tool}'"));
+    }
+    if tool == RUN_TOOL_NAME {
+        start(thread, ThreadRunner::new(thread, client, version), args)
+    } else if tool == STOP_TOOL_NAME {
+        let run_id = args
+            .get("run_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        stop(thread, run_id, true)
+            .await
+            .map(|answer| answer.to_string())
+    } else {
+        status(thread, args, cancel).await
+    }
 }
 
 /// Create a run in `store` and start it. The run id.

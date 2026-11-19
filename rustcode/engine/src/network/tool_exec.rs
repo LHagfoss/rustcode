@@ -1513,6 +1513,19 @@ async fn execute_tool_batch_validated(
                 )
             } else if name_clone == crate::orchestration::secret::TOOL_NAME {
                 (crate::orchestration::secret::execute(&state_clone, &cancel_token_clone, &args_clone).await, None, std::time::Duration::ZERO)
+            } else if crate::workflow::is_tool(&name_clone) {
+                // Run by the engine; its workers are this thread's delegates.
+                (
+                    crate::orchestration::execute_workflow(
+                        &state_clone,
+                        &cancel_token_clone,
+                        &name_clone,
+                        &args_clone,
+                    )
+                    .await,
+                    None,
+                    std::time::Duration::ZERO,
+                )
             } else if crate::orchestration::is_tool(&name_clone) {
                 // Forwarded to the client that hosts the other threads, which
                 // asks the user before a message goes.
