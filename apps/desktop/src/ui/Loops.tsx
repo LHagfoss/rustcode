@@ -278,7 +278,12 @@ function LoopRow({
           </DropdownMenu.Root>
         </div>
       </div>
-      {reason && <Callout className="mx-4 mb-3 bg-bg">{reason}. Fix the cause, then resume it.</Callout>}
+      {reason && (
+        <Callout className="mx-4 mb-3 bg-bg">
+          {/* A signed-out login's reason already says how to sign in. */}
+          {loop.runs[0]?.signedOut ? reason : `${reason}. Fix the cause, then resume it.`}
+        </Callout>
+      )}
       {expanded && <LoopDetail loop={loop} now={now} agent={agent} />}
     </li>
   );

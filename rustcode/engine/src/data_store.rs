@@ -3165,6 +3165,29 @@ pub fn activity_at_ordered(
     })
 }
 
+/// The named account of `harness` the user's turns ran on most recently: what
+/// a scheduled job with no account of its own runs on (issue: every run of a
+/// job saved before it had an account started on the signed-out default login).
+pub fn last_account(harness: &str) -> Option<String> {
+    last_account_at(&data_path()?, harness).ok().flatten()
+}
+
+pub(crate) fn last_account_at(path: &Path, harness: &str) -> Result<Option<String>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let connection = open_readonly(path)?;
+    use rusqlite::OptionalExtension;
+    connection
+        .query_row(
+            "SELECT account FROM turns WHERE harness = ?1 AND account IS NOT NULL AND account <> '' ORDER BY started_at DESC, id DESC LIMIT 1",
+            [harness],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(query_error)
+}
+
 pub fn last_provider_error(thread_id: &str) -> Result<Option<Value>, String> {
     let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
     last_provider_error_at(&path, thread_id)

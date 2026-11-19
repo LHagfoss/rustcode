@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { Link } from "./orchestration";
 import {
   type DelegatedThread,
+  listedSinceOf,
   noticeOnlyHistory,
   openChain,
   parentOf,
+  threadCreatedAt,
   topLevel,
   userTypedPrompt,
 } from "./topLevel";
@@ -206,5 +208,36 @@ describe("app notices preserve delegation", () => {
     expect(noticeOnlyHistory([typed])).toBe(false);
     expect(noticeOnlyHistory([])).toBe(false);
     expect(userTypedPrompt({}, typed.text)).toBe(true);
+  });
+});
+
+describe("a delegate whose parent is past the list's cap", () => {
+  // The 2026-11-19 case: a Nov 9 parent fell just past the 500-thread cap while its delegates,
+  // started minutes later, were still listed, and every one of them came back as a row.
+  const parent = "01a1c1a63760-7000-b834-c6ee-c6ee7c8c0034";
+  const delegate = child({ id: "01a1c1b36304-7005-8f4b-cd02-cd0279006c9d", parent: { id: parent } });
+  const oldestListed = "01a1c1a7613f-7003-92db-5956-5956da6b7473";
+
+  test("reads a thread's creation time from its id", () => {
+    expect(threadCreatedAt(parent)).toBe(1794250258272);
+    expect(threadCreatedAt("child")).toBeUndefined();
+  });
+
+  test("stays nested under a parent older than the oldest listed thread", () => {
+    const listed = [delegate.id, oldestListed];
+    const since = listedSinceOf(listed, true);
+    expect(since).toBe(threadCreatedAt(oldestListed));
+    expect(topLevel(delegate, [], known(...listed), since)).toBe("nested");
+  });
+
+  test("keeps a row when the parent is really gone", () => {
+    // A complete list: a parent missing from it no longer exists.
+    expect(listedSinceOf([delegate.id, oldestListed], false)).toBeUndefined();
+    expect(topLevel(delegate, [], known(delegate.id, oldestListed), undefined)).toBe("shown");
+    // A capped list, but the missing parent is newer than its oldest thread: it was deleted.
+    const newer = child({ id: delegate.id, parent: { id: "01a1f3290043-7008-b020-edd4-edd4b57de0dc" } });
+    expect(topLevel(newer, [], known(delegate.id, oldestListed), listedSinceOf([oldestListed], true))).toBe(
+      "shown",
+    );
   });
 });

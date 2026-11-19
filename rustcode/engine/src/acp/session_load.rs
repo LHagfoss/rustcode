@@ -92,6 +92,14 @@ pub(super) fn session_info(
     {
         extra = crate::worktrees::merge_rustcode_meta(Some(extra), "repo", serde_json::json!(repo));
     }
+    // A scheduled job's run thread: the app leaves it out of the thread list
+    // and shows it in the job's view instead.
+    if let Some(job) = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.scheduled_job.clone())
+    {
+        extra = crate::worktrees::merge_rustcode_meta(Some(extra), "scheduledJob", job.into());
+    }
     // The thread an agent started this one from, kept in its own metadata so a
     // pruned link cannot turn it into a top-level thread (`thread_parent.rs`).
     if let Some(parent) = metadata.and_then(|metadata| metadata.parent) {
@@ -504,6 +512,10 @@ pub(super) async fn create_builtin_session(
     // the link book the app prunes (`thread_parent.rs`).
     if let Some((parent, relationship)) = crate::thread_parent::requested(request.meta.as_ref()) {
         crate::thread_parent::record(&session_id, &parent, relationship);
+    }
+    // A scheduled job's run: its thread lives in the job's view, not the list.
+    if let Some(job) = crate::config::requested_scheduled_job(request.meta.as_ref()) {
+        crate::config::save_session_scheduled_job(&session_id, &job);
     }
     let session_clients = peer.attach(&session_id);
     apply_client_info(&mut state, peer.info(), &session_clients);

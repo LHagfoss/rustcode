@@ -1594,6 +1594,12 @@ pub(crate) enum LoopRunEnd {
         thread_id: Option<String>,
         error: String,
     },
+    /// The harness's login was signed out; `error` names the login, its
+    /// folder and how to sign in. The job pauses until the user has.
+    SignedOut {
+        thread_id: Option<String>,
+        error: String,
+    },
     /// Nothing ran, and why: the app is closed, or the Loop's thread was busy.
     Skipped(String),
     /// The daemon stopped the run.
@@ -1640,6 +1646,91 @@ pub(crate) fn loop_prompt(name: &str, prompt: &str, read_only: bool) -> String {
     text
 }
 
+/// The account a scheduled job's run starts on: the job's own, else the one a
+/// new thread on the harness would get. A harness with named accounts never
+/// falls back to its bare default login, which is often signed out: that is
+/// the account the user's turns last ran on, else its first named account.
+pub(crate) fn loop_account(
+    harness: &crate::harness::ResolvedHarness,
+    asked: Option<&str>,
+) -> Result<Option<String>, Value> {
+    if asked.is_some_and(|asked| !asked.trim().is_empty()) {
+        return account_for(harness, asked);
+    }
+    let Ok(dir) = crate::harness::config::config_dir() else {
+        return Ok(None);
+    };
+    let accounts = crate::harness::config::accounts_of(
+        &crate::harness::config::load_accounts_in(&dir),
+        &harness.id,
+    );
+    if accounts.is_empty() {
+        return Ok(None);
+    }
+    let last = crate::data_store::last_account(&harness.id);
+    Ok(default_job_account(&accounts, last.as_deref()))
+}
+
+/// [`loop_account`]'s pick among `accounts` (one harness's, in config order)
+/// when the job names none: the last one used while it still exists, else the first.
+pub(crate) fn default_job_account(
+    accounts: &[crate::harness::config::HarnessAccount],
+    last: Option<&str>,
+) -> Option<String> {
+    accounts
+        .iter()
+        .find(|account| Some(account.id.as_str()) == last)
+        .or_else(|| accounts.first())
+        .map(|account| account.id.clone())
+}
+
+/// Whether a harness's error says its login is signed out.
+pub(crate) fn is_sign_in_failure(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "authentication required",
+        "not logged in",
+        "not signed in",
+        "please run /login",
+    ]
+    .iter()
+    .any(|phrase| error.contains(phrase))
+}
+
+/// What a run on a signed-out login says: which login, where it lives, and
+/// how to sign it in again.
+pub(crate) fn signed_out_message(
+    harness: &crate::harness::ResolvedHarness,
+    account: Option<&crate::harness::config::HarnessAccount>,
+) -> String {
+    let layout = crate::harness::config::account_layout(&harness.id);
+    let folder = match (account, layout) {
+        (Some(account), _) => Some(account.config_dir.clone()),
+        (None, Some(layout)) => Some(format!("~/{}", layout.dir_name)),
+        (None, None) => None,
+    };
+    let login = match account {
+        Some(account) => format!("the account “{}”", account.display_name()),
+        None => "its default login".to_owned(),
+    };
+    let mut text = format!("{} is not signed in on {login}", harness.name);
+    if let Some(folder) = folder.as_deref() {
+        text.push_str(&format!(" ({folder})"));
+    }
+    text.push_str(". Sign in");
+    if let (Some(layout), Some(folder)) = (layout, folder.as_deref()) {
+        text.push_str(&format!(
+            " with `{}={folder} {}`, or in Settings › Harnesses",
+            layout.env_var,
+            layout.login_command.join(" ")
+        ));
+    } else {
+        text.push_str(" in Settings › Harnesses");
+    }
+    text.push_str(", or pick a signed-in account in the job's settings; then resume the job.");
+    text
+}
+
 fn refusal(value: Value) -> String {
     value
         .get("message")
@@ -1676,6 +1767,8 @@ pub(crate) async fn run_loop_thread(
         Err(value) => return LoopRunEnd::Skipped(refusal(value)),
     };
     let fresh = run.thread_id.is_none();
+    // The harness and account a fresh thread started on, for a sign-in error.
+    let mut run_login: Option<(crate::harness::ResolvedHarness, Option<String>)> = None;
     let thread_id = match run.thread_id.as_deref() {
         Some(thread_id) => {
             match open_loop_thread(&engine, thread_id, &run.workspace, &cancellation).await {
@@ -1692,16 +1785,19 @@ pub(crate) async fn run_loop_thread(
                 Ok(model) => model,
                 Err(value) => return failed(refusal(value)),
             };
-            let account = match account_for(&harness, run.account.as_deref()) {
+            let account = match loop_account(&harness, run.account.as_deref()) {
                 Ok(account) => account,
                 Err(value) => return failed(refusal(value)),
             };
+            run_login = Some((harness.clone(), account.clone()));
             let mut meta = Map::new();
             meta.insert("harness".to_owned(), json!(harness.id));
             if let Some(account) = account {
                 meta.insert("account".to_owned(), json!(account));
             }
             meta.insert("title".to_owned(), json!(run.name));
+            // The run's thread belongs to the job's view, not the thread list.
+            meta.insert("scheduledJob".to_owned(), json!(run.name));
             if let Some(model) = model.as_ref() {
                 meta.insert("model".to_owned(), json!(model));
             }
@@ -1750,11 +1846,42 @@ pub(crate) async fn run_loop_thread(
             thread_id: Some(thread_id),
             error: format!("the turn stopped: {other:?}"),
         },
+        Err(message) if is_sign_in_failure(&message) => LoopRunEnd::SignedOut {
+            error: signed_out_error(&thread_id, run_login, &message),
+            thread_id: Some(thread_id),
+        },
         Err(message) => LoopRunEnd::Failed {
             thread_id: Some(thread_id),
             error: message,
         },
     }
+}
+
+/// The sign-in error of a run: the login a fresh thread started on, else the
+/// one the job's own thread runs on (its `harness.json`).
+fn signed_out_error(
+    thread_id: &str,
+    login: Option<(crate::harness::ResolvedHarness, Option<String>)>,
+    message: &str,
+) -> String {
+    let login = login.or_else(|| {
+        let record = crate::harness::store::load(thread_id)?;
+        let harness = harness_for(Some(&record.harness)).ok()?;
+        Some((harness, record.account))
+    });
+    let Some((harness, account)) = login else {
+        return format!("{message}: the harness is not signed in. Sign in, then resume the job.");
+    };
+    let account = account.and_then(|id| {
+        let dir = crate::harness::config::config_dir().ok()?;
+        crate::harness::config::find_account(
+            &crate::harness::config::load_accounts_in(&dir),
+            &harness.id,
+            &id,
+        )
+        .ok()
+    });
+    signed_out_message(&harness, account.as_ref())
 }
 
 /// Open the thread a Loop sends every run to, in this engine. A thread that

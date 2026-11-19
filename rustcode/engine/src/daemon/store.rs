@@ -307,6 +307,20 @@ impl JobStore {
             }))
     }
 
+    /// Whether the job's latest run failed on a signed-out login
+    /// (`daemon::executor::loop_outcome`).
+    pub fn last_run_signed_out(&self, id: &str) -> Result<bool> {
+        Ok(self.history(id, 1)?.first().is_some_and(|run| {
+            run.state == JobRunState::Failed
+                && run
+                    .output
+                    .as_deref()
+                    .and_then(|output| serde_json::from_str::<serde_json::Value>(output).ok())
+                    .and_then(|output| output.get("signed_out")?.as_bool())
+                    .unwrap_or(false)
+        }))
+    }
+
     /// Explicit deletion also removes this job's history and invalidates its leases.
     pub fn delete(&mut self, id: &str) -> Result<()> {
         let changed = self

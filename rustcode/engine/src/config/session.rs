@@ -885,6 +885,33 @@ pub fn save_session_parent(session_id: &str, parent: &rustcode_session::SessionP
     }
 }
 
+/// Record that a run of the scheduled job `job` started this thread, so the
+/// thread list leaves it to the job's own view.
+pub fn save_session_scheduled_job(session_id: &str, job: &str) {
+    let job = job.trim();
+    if !rustcode_session::valid_session_id(session_id) || job.is_empty() {
+        return;
+    }
+    if let Some(session_store) = store()
+        && let Err(error) = session_store.save_session_scheduled_job(session_id, job)
+    {
+        crate::dbg_log!("failed to record the scheduled job of session {session_id}: {error}");
+    }
+}
+
+/// The scheduled job `_meta.rustcode.scheduledJob` names on `session/new`.
+pub(crate) fn requested_scheduled_job(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    meta?
+        .get("rustcode")?
+        .get("scheduledJob")?
+        .as_str()
+        .map(str::trim)
+        .filter(|job| !job.is_empty())
+        .map(str::to_owned)
+}
+
 pub fn load_session_parent(session_id: &str) -> Option<rustcode_session::SessionParent> {
     store()?.load_session_parent(session_id)
 }

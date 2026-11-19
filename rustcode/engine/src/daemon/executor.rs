@@ -73,6 +73,14 @@ pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd)
             error,
             output: thread(thread_id),
         },
+        // Its output says so: the scheduler pauses the job on the first one,
+        // since every run until the user signs in fails the same way.
+        LoopRunEnd::SignedOut { thread_id, error } => RunOutcome::Permanent {
+            error,
+            output: Some(
+                serde_json::json!({ "thread_id": thread_id, "signed_out": true }).to_string(),
+            ),
+        },
         LoopRunEnd::Skipped(reason) => RunOutcome::Cancelled {
             output: Some(serde_json::json!({ "skipped": reason }).to_string()),
         },
