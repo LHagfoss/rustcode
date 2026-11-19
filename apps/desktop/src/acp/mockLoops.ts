@@ -1,7 +1,7 @@
 // The mock engine's Scheduled Jobs (issues 3892, 3937), as `_rustcode/loops/*` and the scheduled
 // run/delete calls answer them: one healthy with a thread left open for review, one whose last run
-// was skipped while the app was closed, one the daemon paused after three failed runs, and one in
-// script mode whose last run printed nothing.
+// was skipped while the app was closed, one the daemon paused after three failed runs, one in
+// script mode whose last run printed nothing; one more runs only from its webhook.
 
 import { type JsonObject, str } from "./jsonrpc";
 
@@ -95,6 +95,21 @@ function seed(): JsonObject[] {
       ],
     },
     {
+      id: "loop-triage",
+      name: "Issue triage",
+      paused: false,
+      schedule: { kind: "manual", misfire_policy: "run_once" },
+      workspace: "/Users/me/code/rustcode",
+      prompt: "Label the new issue by area, and ask for a reproduction if it has none.",
+      harness: null,
+      model: null,
+      effort: null,
+      readOnly: true,
+      webhook: true,
+      nextDueAt: null,
+      runs: [{ ...done("run-triage-1", 5), input: '{"action":"opened"}' }],
+    },
+    {
       id: "loop-deps",
       name: "Dependency audit",
       paused: true,
@@ -124,8 +139,17 @@ export class MockLoops {
     switch (method) {
       case "_rustcode/loops/list":
         return { daemonRunning: true, loops: this.loops };
-      case "_rustcode/loops/save":
-        return { loop: this.save(params) };
+      case "_rustcode/loops/save": {
+        const id = str(params.id);
+        const before = this.loops.find((loop) => loop.id === id);
+        const saved = this.save(params);
+        // A new webhook secret is answered once, as the engine does.
+        const made = params.webhook === true && (before?.webhook !== true || params.rotateWebhook === true);
+        if (!made) return { loop: saved };
+        const secret = "5e3c".repeat(16);
+        const url = `http://127.0.0.1:43871/hooks/${str(saved.id)}/${secret}`;
+        return { loop: saved, webhook: { url, localUrl: url, public: false, secret } };
+      }
       case "_rustcode/loops/set_paused": {
         const id = str(params.id) ?? "";
         const paused = params.paused === true;
@@ -183,7 +207,8 @@ export class MockLoops {
       model: str(params.model) ?? null,
       effort: str(params.effort) ?? null,
       readOnly: params.readOnly !== false,
-      nextDueAt: ahead(4),
+      webhook: params.webhook === true,
+      nextDueAt: (schedule as JsonObject).kind === "manual" ? null : ahead(4),
     };
     this.loops = existing
       ? this.loops.map((loop) => (loop.id === id ? saved : loop))

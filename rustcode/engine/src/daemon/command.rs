@@ -71,6 +71,7 @@ pub fn create_job(
         schedule_revision: 1,
         created_at: now,
         updated_at: now,
+        pending_input: None,
     };
     job.validate().map_err(|error| invalid(error.to_string()))?;
     Ok(job)

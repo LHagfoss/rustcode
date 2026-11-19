@@ -189,6 +189,7 @@ async fn run_daemon_or_cron_command(
                     "run",
                     DaemonRequest::RunNow {
                         job_id: job_id.clone(),
+                        input: None,
                     },
                     *json,
                 ),

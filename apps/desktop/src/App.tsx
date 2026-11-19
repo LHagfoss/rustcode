@@ -86,6 +86,8 @@ function useShortcuts() {
         return;
       }
       const s = useApp.getState();
+      // A menu or dialog that closed on this Escape (Radix prevents its default) keeps the page.
+      if (e.key === "Escape" && e.defaultPrevented) return;
       if (
         e.key === "Escape" &&
         !s.settings &&

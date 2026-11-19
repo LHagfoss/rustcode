@@ -164,11 +164,27 @@ thread's account.
   every permission request is declined, so edits, commands that ask, commits
   and pushes do not happen. Turned off, the run is at Full access, as a
   delegate is.
+- **Webhook.** A Loop with its webhook on also runs when
+  `POST /hooks/<loop-id>/<secret>` (or `/hooks/<loop-id>` with
+  `Authorization: Bearer <secret>`) reaches the outside-agent listener: on
+  this computer's loopback port, and through the public address when
+  `[outside] public_url` is set. The request body (up to 64 KB) is kept on
+  the run and added to the prompt, fenced and marked as outside data the
+  agent must not take instructions from. The daemon stores only the secret's
+  SHA-256, so the URL is shown once, when the webhook is turned on or its
+  secret replaced; `rustcode cron list` and agents never see it, and an
+  agent's `create_loop` cannot turn a webhook on. An unknown Loop, one
+  without a webhook and a wrong secret all answer 404; a paused Loop or one
+  with a run going answers 409, and calls that arrive before a run starts
+  collapse into one with the latest body. A request with
+  `X-GitHub-Event: ping`, which GitHub sends when a webhook is added, checks
+  the secret and answers 200 without a run. A Loop saved with
+  `{ "kind": "manual" }` has no schedule and runs only from its webhook or
+  Run now.
 - **The app must be open.** With no engine to reach, the run is recorded as
   cancelled with `{"skipped": …}` and does not count as a failure. (A
   headless engine the daemon starts itself would lift this; not built yet,
-  issue 3937.) Webhook triggers are not built either: they need a listener
-  reachable from outside, which the hub work (issue 3955) provides.
+  issue 3937.) A webhook call while the app is closed finds no listener.
 - **A missed run fires once.** A Loop's cron uses the `run_once` misfire
   policy: runs missed while the computer slept coalesce into one.
 - **No overlapping runs.** The scheduler never claims a job with a run still
