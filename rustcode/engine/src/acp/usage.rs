@@ -348,6 +348,9 @@ fn claude_limits(
 #[request(method = "_rustcode/usage/plans", response = serde_json::Value)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UsagePlansRequest {
+    /// Read the machine's Antigravity CLI quota for Settings › Usage.
+    #[serde(default)]
+    pub antigravity: bool,
     #[serde(default)]
     pub claude: bool,
     /// Read each named Claude account's own sign-in too. Only an explicit
@@ -398,6 +401,19 @@ pub(crate) fn named_claude_accounts<'a>(
 /// lapsed), and an `unavailable` Claude row's `reason` is `expired`, `refused`,
 /// `forbidden`, `denied` or `transient` (see `claude_usage::NoUsage`).
 pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
+    let antigravity = async {
+        if request.antigravity {
+            #[cfg(unix)]
+            return crate::provider_auth::antigravity_usage::plan(request.force).await;
+        }
+        None::<serde_json::Value>
+    };
+    let (mut plans, antigravity) = tokio::join!(subscription_plans(&request), antigravity);
+    plans.extend(antigravity);
+    serde_json::json!({ "plans": plans })
+}
+
+async fn subscription_plans(request: &UsagePlansRequest) -> Vec<serde_json::Value> {
     let window = |label: &str, window: &crate::provider_auth::RateLimitWindow| {
         serde_json::json!({
             "label": label,
@@ -446,7 +462,7 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
         .map(|dir| crate::harness::config::load_accounts_in(&dir))
         .unwrap_or_default();
     let named = named_reads(
-        named_claude_accounts(&request, &known),
+        named_claude_accounts(request, &known),
         default.as_ref(),
         freshness,
         |dir, freshness| async move { usage(dir.as_deref(), freshness).await },
@@ -496,7 +512,7 @@ fn plans_answer(
         crate::provider_auth::claude_usage::ClaudeUsage,
     )],
     codex: serde_json::Value,
-) -> serde_json::Value {
+) -> Vec<serde_json::Value> {
     let mut plans = Vec::new();
     plans.push(match default {
         Some(read) => claude_row("claude", "Claude", None, read),
@@ -513,7 +529,7 @@ fn plans_answer(
         ));
     }
     plans.push(codex);
-    serde_json::json!({ "plans": plans })
+    plans
 }
 
 fn claude_row(
@@ -666,6 +682,7 @@ mod tests {
         ];
         let named = super::named_claude_accounts(
             &super::UsagePlansRequest {
+                antigravity: false,
                 claude: true,
                 claude_accounts: false,
                 claude_account: Some("work".into()),
@@ -679,6 +696,7 @@ mod tests {
         );
         // Without an id, or with one that belongs to another harness, nothing is read.
         let none = super::UsagePlansRequest {
+            antigravity: false,
             claude: true,
             claude_accounts: false,
             claude_account: None,
@@ -686,6 +704,7 @@ mod tests {
         };
         assert!(super::named_claude_accounts(&none, &known).is_empty());
         let unknown = super::UsagePlansRequest {
+            antigravity: false,
             claude: true,
             claude_accounts: false,
             claude_account: Some("gone".into()),
@@ -695,6 +714,7 @@ mod tests {
         // An explicit look in Settings › Usage reads every one of them.
         let all = super::named_claude_accounts(
             &super::UsagePlansRequest {
+                antigravity: false,
                 claude: true,
                 claude_accounts: true,
                 claude_account: None,
@@ -793,13 +813,12 @@ mod tests {
     #[test]
     fn an_account_is_answered_without_the_default_login() {
         let work = account("work", "claude-code");
-        let value = super::plans_answer(
+        let plans = super::plans_answer(
             None,
             &[(&work, claude_windows(71.0, 300))],
             serde_json::json!({"id": "codex", "name": "ChatGPT", "status": "notInstalled",
                                "windows": []}),
         );
-        let plans = value["plans"].as_array().unwrap();
         // Rows keep their shape and order: the default login first, then the
         // account's own, then the other subscriptions.
         assert_eq!(

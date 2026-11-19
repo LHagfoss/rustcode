@@ -1,6 +1,8 @@
 //! Provider credentials live in the OS credential store. This module keeps
 //! only non-secret account bindings in RustCode's owner-only config folder.
 
+#[cfg(unix)]
+pub(crate) mod antigravity_usage;
 pub(crate) mod claude_usage;
 pub(crate) mod codex_usage;
 pub(crate) mod github_copilot;

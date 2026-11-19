@@ -459,3 +459,17 @@ export function mockUsage(threads: MockThread[], groupBy: string, since?: string
     version: 1,
   };
 }
+
+export function mockAntigravityPlan(at: (hours: number) => number): JsonObject {
+  return {
+    id: "antigravity",
+    harness: "antigravity",
+    name: "Model quotas",
+    via: "Antigravity",
+    status: "ok",
+    windows: [
+      { label: "Gemini Models · Weekly", usedPercent: 21, windowMinutes: 10080, resetsAt: at(84) },
+      { label: "Claude and GPT models · Weekly", usedPercent: 0, windowMinutes: 10080, resetsAt: at(110) },
+    ],
+  };
+}
