@@ -1,3 +1,36 @@
+## [v1.44.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.44.0) - 2026-11-19
+
+### Features
+- Choose how many finished workflow runs each thread keeps, in Settings › Orchestration › Workflows. (#4007)
+- Fix a paired machine staying "Connected" after its link died mid-send, and deliver bursts of its frames to the app in one message. (#4006)
+- Machines: a paired machine's transcript loads with less CPU on both computers. (#4009)
+- Fixed: harnesses now receive RustCode's full MCP instructions, including the credential and settings rules that were cut off, and can tell its read-only tools from the ones that change something. (#4008)
+- Paired machines: a stalled LAN address no longer keeps the VPN route from connecting, and the app does less background work per machine. (#4011)
+- Outside agents (Claude Desktop, Cursor, Codex): the RustCode connection keeps working after RustCode restarts, without restarting the other app. (#4012)
+- Threads on the built-in RustCode harness can start, read and stop workflow runs. (#4015)
+- Thread rows show the state in words with its time beside the title, and the branch or computer with the model on the second line. (#4010)
+- Threads on an external harness (Codex, Claude Code, Gemini CLI, OpenCode, Pi) are given a shorter RustCode tool list by default; turn `orchestration-all-tools` on to list the project, scheduled task, workflow and worktree handoff tools again. (#4014)
+- Delegates on the orchestrator's own login start without an account approval. (#4016)
+- Scheduled jobs can be started by a webhook, with the request body added to the prompt, and can run with no schedule at all. (#4025)
+- Improve Markdown link and file reference click targets, clarify named links, and tighten URL chip spacing. (#4028)
+- Scheduled jobs run on your current account instead of a signed-out default login, say which login to sign in when one is signed out, and keep their run threads out of the sidebar. Old delegate threads no longer come back to the sidebar once you have more than 500 threads. (#4029)
+- Tighten heading spacing in sent messages, highlight Markdown as you type, and omit heading markers from automatic thread names. (#4030)
+- Give new threads shorter, clearer titles based on the first request. (#4031)
+- Paired computers now sign in to each other with a device key instead of a reusable token. (#4026)
+- An always-on machine can now be the fleet's hub (`rustcode machines hub on`). Other machines keep an outbound link to it, and outside agents on the hub reach them with `machine`, at the access ceiling each machine grants. Starting or messaging a thread on an offline machine waits on the hub until that machine connects. (#4032)
+- Hosted-agent sign-ins (ChatGPT, Claude) can be approved with the machine owner's passkey on the sign-in page, with no sign-in code. Add one with `rustcode outside owner add-passkey` or in Settings › Outside agents. (#4033)
+- Show concrete model and account choices and combine Claude Code's Opus 5.5 usage aliases in Statistics. (#4036)
+- Make message actions easier to click and add a whole-interface scale setting. (#4037)
+- Toggle the desktop model picker with Cmd+M or Ctrl+M. (#4034)
+- The machine with a public address serves the RustCode app to a browser: open it, sign in with your passkey, and use RustCode with no app installed. Signed-in browsers are listed and signed out in Settings › Outside agents. (#4035)
+- Show Antigravity model quotas and reset times in Settings › Usage on macOS and Linux. (#4038)
+- Make a computer the fleet's hub, or join a hub, from Settings › Machines, without the command line. (#4040)
+- Releases include the web app a hub serves to a browser; the installer, Homebrew and `rustcode update` install and update it next to the CLI. (#4041)
+- The fleet's hub can run Scheduled Jobs on another machine, holding each run until that machine is online. (#4043)
+- Show a compact thread details card with workspace actions, delegates, context usage, and a Command-Shift-B shortcut. (#4042)
+- RustCode MCP can compact the current thread or another thread and optionally continue afterward. (#4044)
+- Simplify machine management and detect silently dropped machine connections sooner. (#4045)
+- File bugs and feature requests from the desktop composer with `/report`. (#4046)
 ## [v1.43.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.43.0) - 2026-11-18
 
 ### Features
