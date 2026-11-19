@@ -7,6 +7,7 @@ mod banner;
 mod diagnostics;
 mod engine;
 mod hub;
+mod issue_report;
 mod links;
 mod machines;
 mod microphone;
@@ -96,6 +97,9 @@ pub fn run() {
             machines::machine_connect,
             machines::machine_send,
             machines::machine_disconnect,
+            issue_report::issue_report_options,
+            issue_report::issue_report_submit,
+            issue_report::issue_report_save_image,
             native::open_url,
             native::reveal_path,
             native::open_login_terminal,
