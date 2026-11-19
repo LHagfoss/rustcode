@@ -19,7 +19,9 @@ export type LoopSchedule =
   | { kind: "cron"; expression: string; timezone?: string }
   | { kind: "daily"; hour: number; minute: number; timezone?: string }
   | { kind: "monthly"; day: number; hour: number; minute: number; timezone?: string }
-  | { kind: "once"; at: string };
+  | { kind: "once"; at: string }
+  /** Never due on its own: runs from Run now or the loop's webhook. */
+  | { kind: "manual" };
 
 export type LoopRunState = "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "ambiguous";
 
@@ -56,6 +58,8 @@ export interface Loop {
   threadId?: string;
   /** Script mode: run first; the agent wakes only when it prints something. */
   script?: string;
+  /** Calling the loop's webhook URL starts a run (its URL is shown once, when made). */
+  webhook: boolean;
   nextDueAt?: number;
   /** Newest first. */
   runs: LoopRun[];
@@ -100,6 +104,8 @@ function scheduleOf(value: Json | undefined): LoopSchedule {
     case "once":
     case "at":
       return { kind: "once", at: str(raw.at) ?? "" };
+    case "manual":
+      return { kind: "manual" };
     default:
       return { kind: "cron", expression: str(raw.expression) ?? "", ...(timezone ? { timezone } : {}) };
   }
@@ -142,6 +148,7 @@ function loopOf(value: Json): Loop | null {
     readOnly: bool(raw.readOnly) ?? true,
     threadId: str(raw.threadId),
     script: str(raw.script),
+    webhook: bool(raw.webhook) ?? false,
     nextDueAt: time(raw.nextDueAt),
     runs: arr(raw.runs).flatMap((run) => runOf(run) ?? []),
   };
@@ -230,13 +237,18 @@ export function scheduleInWords(schedule: LoopSchedule): string {
       const d = new Date(at);
       return `Once on ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} at ${clock(d.getHours(), d.getMinutes())}`;
     }
+    case "manual":
+      return "No schedule";
   }
 }
 
 // ---------------------------------------------------------------- the schedule form
 
-/** How the loop dialog builds a schedule; every kind but "once" is saved as a cron. */
-export type Repeat = "hours" | "days" | "monthly" | "once" | "cron";
+/**
+ * How the loop dialog builds a schedule; every kind but "once" and "manual" is saved as a cron.
+ * "manual" has no schedule: the loop runs from Run now or its webhook.
+ */
+export type Repeat = "hours" | "days" | "monthly" | "once" | "cron" | "manual";
 
 export interface ScheduleForm {
   repeat: Repeat;
@@ -338,6 +350,7 @@ export function cronOfForm(form: ScheduleForm): string {
     case "cron":
       return form.cron.trim().split(/\s+/).join(" ");
     case "once":
+    case "manual":
       return "";
   }
 }
@@ -393,6 +406,7 @@ export function formProblem(form: ScheduleForm, now = Date.now()): string | null
     case "cron":
       return cronProblem(form.cron);
     case "hours":
+    case "manual":
       return null;
   }
 }
@@ -463,6 +477,7 @@ export function lastResult(loop: Loop, now = Date.now()): { text: string; tone: 
 /** When the next run is, or why there is none. */
 export function nextRunText(loop: Loop, now = Date.now()): string {
   if (loop.paused) return "Paused";
+  if (loop.schedule.kind === "manual") return loop.webhook ? "On webhook" : "Run by hand";
   if (loop.nextDueAt === undefined) return "Not scheduled";
   const left = loop.nextDueAt - now;
   if (left <= 0) return "Due now";
@@ -549,6 +564,22 @@ export interface LoopDraft {
   threadId?: string;
   /** Script mode: run first; the agent wakes only when it prints something. */
   script?: string;
+  /** No schedule: the loop runs from Run now or its webhook. */
+  manual?: boolean;
+  /** Start a run when the loop's webhook URL is called. */
+  webhook?: boolean;
+  /** Replace the webhook's secret, so the old URL stops working. */
+  rotateWebhook?: boolean;
+}
+
+/** A loop's webhook as saving it answers, once, when its secret is new. */
+export interface LoopWebhook {
+  /** The URL to give the sender: the public address when one is set, else this computer's. */
+  url: string;
+  /** False when only this computer can reach the URL. */
+  public: boolean;
+  /** The secret alone, for a sender that takes `Authorization: Bearer <secret>`. */
+  secret: string;
 }
 
 /** The user's IANA zone, which a loop's cron is read in. */
@@ -566,16 +597,20 @@ export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTi
     name: draft.name.trim(),
     workspace: draft.workspace,
     prompt: draft.prompt.trim(),
-    schedule: draft.once
-      ? { kind: "at", at: draft.once.toISOString() }
-      : {
-          kind: "cron",
-          expression: draft.cron.trim().split(/\s+/).join(" "),
-          ...(timezone ? { timezone } : {}),
-        },
+    schedule: draft.manual
+      ? { kind: "manual" }
+      : draft.once
+        ? { kind: "at", at: draft.once.toISOString() }
+        : {
+            kind: "cron",
+            expression: draft.cron.trim().split(/\s+/).join(" "),
+            ...(timezone ? { timezone } : {}),
+          },
     readOnly: draft.readOnly,
   };
   if (draft.id) params.id = draft.id;
+  if (draft.webhook) params.webhook = true;
+  if (draft.webhook && draft.rotateWebhook) params.rotateWebhook = true;
   const script = draft.script?.trim();
   if (script) params.script = script;
   for (const key of draft.threadId
@@ -587,8 +622,18 @@ export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTi
   return params;
 }
 
-export async function saveLoop(draft: LoopDraft): Promise<void> {
-  await request(Method.loopsSave, saveParams(draft), 30_000);
+/** The webhook a save answered with, when it made a new secret. */
+export function webhookOf(value: Json): LoopWebhook | null {
+  const raw = obj(obj(value)?.webhook);
+  const url = str(raw?.url);
+  const secret = str(raw?.secret);
+  if (!raw || !url || !secret) return null;
+  return { url, public: bool(raw.public) ?? false, secret };
+}
+
+/** Save a loop; answers its webhook when the save made a new URL, which is shown only then. */
+export async function saveLoop(draft: LoopDraft): Promise<LoopWebhook | null> {
+  return webhookOf(await request(Method.loopsSave, saveParams(draft), 30_000));
 }
 
 export async function setLoopPaused(id: string, paused: boolean): Promise<void> {

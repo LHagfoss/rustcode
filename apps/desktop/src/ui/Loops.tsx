@@ -4,6 +4,7 @@
 // when next and how its last run went, with pause/resume, run now, edit and delete; a row opens its
 // prompt and run history. Review lists what loops did on their own that is still worth a look.
 
+import { DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type HarnessSnapshot, Method, projectName } from "../acp/types";
 import {
@@ -30,15 +31,31 @@ import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { selectThread } from "../state/threadOpen";
 import { statusOf } from "../state/threadStatus";
 import { ViewHeader } from "./Board";
-import { ChevronRight, Pause, Play, Plus, Repeat, RotateCw, SquarePen, Trash2 } from "./icons";
+import { ChevronRight, Ellipsis, Play, Plus, Repeat, SquarePen, Trash2, Webhook } from "./icons";
 import { LoopDialog } from "./LoopDialog";
-import { Callout, cardInset, cx, Pill, Segments, Spinner, Tooltip } from "./primitives";
+import {
+  Callout,
+  cardInset,
+  cx,
+  MenuContent,
+  menuItem,
+  menuItemDanger,
+  menuSeparator,
+  Pill,
+  Segments,
+  Spinner,
+  Switch,
+  Tooltip,
+} from "./primitives";
 import { Loading, useEngineData } from "./settingsKit";
 
 /** How often the open page asks again, so a run going or ending shows without a click. */
 const REFRESH_MS = 30_000;
 
 type Tab = "loops" | "review";
+
+/** A loop that is not paused and has a webhook: a call can start it at any time. */
+const listening = (loop: Loop) => !loop.paused && loop.webhook;
 
 const STATE_BADGE: Record<ReturnType<typeof loopState>, { label: string; tint: string }> = {
   running: { label: "Running", tint: "bg-accent" },
@@ -88,6 +105,25 @@ const NEXT_RUN_FORMAT = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
+const NEXT_RUN_TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const NEXT_RUN_WEEKDAY = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "numeric",
+  minute: "2-digit",
+});
+const WEEK_MS = 6 * 86_400_000;
+
+/** "In 20 min · 9:59 AM" today, "In 20 h · Thu 5:44 AM" this week, then the date: how long, then when. */
+function nextRunLine(loop: Loop, next: number, now: number): string {
+  const left = nextRunText(loop, now);
+  const when =
+    new Date(next).toDateString() === new Date(now).toDateString()
+      ? NEXT_RUN_TIME
+      : next - now < WEEK_MS
+        ? NEXT_RUN_WEEKDAY
+        : NEXT_RUN_FORMAT;
+  return `${left[0]?.toUpperCase()}${left.slice(1)} · ${when.format(next)}`;
+}
 
 function loopAgent(loop: Loop, harnesses: HarnessSnapshot | null): string {
   if (loop.threadId) return "Existing thread";
@@ -129,8 +165,11 @@ function LoopRow({
   const reason = pauseReason(loop);
   const running = state === "running";
   const next = !loop.paused && loop.nextDueAt !== undefined ? loop.nextDueAt : undefined;
-  const badgeLabel =
-    state === "active" && next === undefined
+  // A loop with no schedule but a webhook is waiting for a call, not unscheduled.
+  const waiting = state === "active" && next === undefined && listening(loop);
+  const badgeLabel = waiting
+    ? "On webhook"
+    : state === "active" && next === undefined
       ? loop.schedule.kind === "once"
         ? "Completed"
         : "Unscheduled"
@@ -156,7 +195,7 @@ function LoopRow({
                   aria-hidden
                   className={cx(
                     "size-1.5 rounded-full",
-                    next === undefined && state === "active" ? "bg-fg-faint" : badge.tint,
+                    next === undefined && state === "active" && !waiting ? "bg-fg-faint" : badge.tint,
                   )}
                 />
                 {badgeLabel}
@@ -164,6 +203,12 @@ function LoopRow({
             </span>
             <span className="truncate text-caption text-fg-muted">
               {projectName(loop.workspace)} · {scheduleInWords(loop.schedule)}
+              {loop.webhook && loop.schedule.kind !== "manual" && (
+                <span className="ml-2 inline-flex items-center gap-1 align-[-2px] text-fg-faint">
+                  <Webhook size={12} />
+                  Webhook
+                </span>
+              )}
             </span>
           </span>
         </button>
@@ -171,50 +216,66 @@ function LoopRow({
           {next !== undefined && (
             <time
               dateTime={new Date(next).toISOString()}
-              title={nextRunText(loop, now)}
+              title={NEXT_RUN_FORMAT.format(next)}
               className="block truncate font-medium text-callout text-fg"
             >
-              {NEXT_RUN_FORMAT.format(next)}
+              {nextRunLine(loop, next, now)}
             </time>
           )}
           <span title={result.text} className={cx("block truncate text-caption", TONE[result.tone])}>
             {result.text}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div className="flex shrink-0 items-center gap-1">
           {running && <Spinner size={12} className="mr-1 text-fg-muted" />}
           <IconAction
-            label={loop.paused ? "Resume" : "Pause"}
-            onClick={() =>
-              act(loop.paused ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !loop.paused))
-            }
-          >
-            {loop.paused ? <Play size={14} /> : <Pause size={14} />}
-          </IconAction>
-          <IconAction
-            label="Run now"
+            label={loop.paused ? "Resume it to run now" : "Run now"}
             disabled={running || loop.paused}
             onClick={() => act("Started a run", () => runLoopNow(loop.id))}
           >
-            <RotateCw size={14} />
+            <Play size={14} />
           </IconAction>
-          <IconAction label="Edit" disabled={running} onClick={onEdit}>
-            <SquarePen size={14} />
-          </IconAction>
-          <IconAction
-            label="Delete"
-            onClick={() =>
-              askConfirm({
-                title: `Delete “${loop.name}”?`,
-                message: "It stops at once, and its run history goes with it. The threads it started stay.",
-                action: "Delete",
-                destructive: true,
-                run: () => act("Deleted", () => deleteLoop(loop.id)),
-              })
-            }
-          >
-            <Trash2 size={14} />
-          </IconAction>
+          <Tooltip label={loop.paused ? "Paused" : "On"}>
+            <span className="inline-flex px-1">
+              <Switch
+                label={loop.paused ? `Resume ${loop.name}` : `Pause ${loop.name}`}
+                checked={!loop.paused}
+                onChange={(on) => act(on ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !on))}
+              />
+            </span>
+          </Tooltip>
+          <DropdownMenu.Root modal={false}>
+            <DropdownMenu.Trigger asChild>
+              <button
+                type="button"
+                aria-label={`More for ${loop.name}`}
+                className="inline-flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill"
+              >
+                <Ellipsis size={14} />
+              </button>
+            </DropdownMenu.Trigger>
+            <MenuContent align="end">
+              <DropdownMenu.Item className={menuItem} disabled={running} onSelect={onEdit}>
+                <SquarePen size={13} className="text-fg-muted" /> Edit
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator className={menuSeparator} />
+              <DropdownMenu.Item
+                className={cx(menuItem, menuItemDanger)}
+                onSelect={() =>
+                  askConfirm({
+                    title: `Delete “${loop.name}”?`,
+                    message:
+                      "It stops at once, and its run history goes with it. The threads it started stay.",
+                    action: "Delete",
+                    destructive: true,
+                    run: () => act("Deleted", () => deleteLoop(loop.id)),
+                  })
+                }
+              >
+                <Trash2 size={13} /> Delete
+              </DropdownMenu.Item>
+            </MenuContent>
+          </DropdownMenu.Root>
         </div>
       </div>
       {reason && <Callout className="mx-4 mb-3 bg-bg">{reason}. Fix the cause, then resume it.</Callout>}
@@ -377,10 +438,14 @@ export function Loops() {
   const upcoming: Loop[] = [];
   const inactive: Loop[] = [];
   for (const loop of loops) {
-    if (loopState(loop) === "running" || (!loop.paused && loop.nextDueAt !== undefined)) upcoming.push(loop);
+    if (loopState(loop) === "running" || (!loop.paused && loop.nextDueAt !== undefined) || listening(loop))
+      upcoming.push(loop);
     else inactive.push(loop);
   }
-  upcoming.sort((a, b) => (a.nextDueAt ?? 0) - (b.nextDueAt ?? 0));
+  // Loops that only wait for their webhook go after the ones with a time.
+  upcoming.sort(
+    (a, b) => (a.nextDueAt ?? Infinity) - (b.nextDueAt ?? Infinity) || a.name.localeCompare(b.name),
+  );
   inactive.sort((a, b) => Number(b.paused) - Number(a.paused) || a.name.localeCompare(b.name));
   // Open: still in the list and not archived. `statusMarks` changes when the user archives one.
   // biome-ignore lint/correctness/useExhaustiveDependencies: statusMarks is what statusOf reads

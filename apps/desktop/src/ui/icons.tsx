@@ -154,6 +154,7 @@ import {
   UserMultipleIcon,
   ViewIcon,
   ViewOffIcon,
+  WebhookIcon,
   WifiOff01Icon,
   WorkflowSquare01Icon,
   Wrench01Icon,
@@ -473,6 +474,7 @@ export const Undo2 = (props: IconProps) => <Rounded name="Undo2" icon={Undo02Ico
 export const Unplug = (props: IconProps) => <Rounded name="Unplug" icon={Unlink01Icon} {...props} />;
 export const UserRound = (props: IconProps) => <Rounded name="UserRound" icon={UserIcon} {...props} />;
 export const Users = (props: IconProps) => <Rounded name="Users" icon={UserMultipleIcon} {...props} />;
+export const Webhook = (props: IconProps) => <Rounded name="Webhook" icon={WebhookIcon} {...props} />;
 export const WifiOff = (props: IconProps) => <Rounded name="WifiOff" icon={WifiOff01Icon} {...props} />;
 export const Workflow = (props: IconProps) => (
   <Rounded name="Workflow" icon={WorkflowSquare01Icon} {...props} />

@@ -696,6 +696,9 @@ fn token_answer(tokens: outside::HttpTokens) -> Value {
 
 /// Where the remote gateway's WebSocket is served on this listener.
 pub const WS_PATH: &str = "/ws";
+/// Where Loop webhooks answer: `POST /hooks/<loop-id>/<secret>`, or
+/// `/hooks/<loop-id>` with `Authorization: Bearer <secret>` (`acp::loops`).
+pub const HOOKS_PATH: &str = "/hooks/";
 
 /// Serve one accepted connection. A `/ws` connection lives as long as the
 /// device stays connected, so it holds neither the request slot nor the
@@ -1086,6 +1089,25 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                         json!({"error":"invalid_request"})
                     }
                 }
+            }
+        }
+        (method, path) if path.starts_with(HOOKS_PATH) => {
+            if method != "POST" {
+                status = 405;
+                json!({"error":"method_not_allowed"})
+            } else {
+                let rest = &path[HOOKS_PATH.len()..];
+                let bearer = req
+                    .headers
+                    .get("authorization")
+                    .and_then(|v| v.strip_prefix("Bearer "))
+                    .unwrap_or("");
+                let (id, secret) = rest.split_once('/').unwrap_or((rest, bearer));
+                let ping = req.headers.get("x-github-event").map(String::as_str) == Some("ping");
+                let (code, answer) =
+                    crate::acp::loops::trigger(id, secret.trim(), &req.body, ping).await;
+                status = code;
+                answer
             }
         }
         _ => {

@@ -5,6 +5,10 @@ use chrono_tz::Tz;
 use cron::Schedule;
 use std::str::FromStr;
 
+/// How far ahead a [`ScheduleSpec::Manual`] job's due time is kept: far
+/// enough never to arrive, near enough for every clock and timer to hold.
+const MANUAL_HORIZON_DAYS: i64 = 3650;
+
 const WEEKDAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
 /// A standard cron's weekday field (0 or 7 = Sunday, 1 = Monday) in names, which the `cron`
@@ -66,9 +70,9 @@ fn cron_parts(spec: &ScheduleSpec) -> Result<(Schedule, Tz)> {
             timezone,
             ..
         } => (format!("{minute} {hour} {day} * *"), timezone.as_str()),
-        ScheduleSpec::Once { .. } => {
+        ScheduleSpec::Once { .. } | ScheduleSpec::Manual => {
             return Err(DaemonError::InvalidSchedule(
-                "one-shot schedules do not contain cron fields".into(),
+                "one-shot and manual schedules do not contain cron fields".into(),
             ));
         }
     };
@@ -107,7 +111,7 @@ pub fn validate(spec: &ScheduleSpec) -> Result<()> {
             cron_parts(spec).map(|_| ())
         }
         ScheduleSpec::Cron { .. } => cron_parts(spec).map(|_| ()),
-        ScheduleSpec::Once { .. } => Ok(()),
+        ScheduleSpec::Once { .. } | ScheduleSpec::Manual => Ok(()),
     }
 }
 
@@ -116,6 +120,9 @@ pub fn next_after(spec: &ScheduleSpec, after: DateTime<Utc>) -> Result<DateTime<
         return (*at > after)
             .then_some(*at)
             .ok_or_else(|| DaemonError::InvalidSchedule("one-shot schedule has elapsed".into()));
+    }
+    if matches!(spec, ScheduleSpec::Manual) {
+        return Ok(after + Duration::days(MANUAL_HORIZON_DAYS));
     }
 
     let (schedule, timezone) = cron_parts(spec)?;
@@ -160,6 +167,18 @@ mod tests {
         Utc.with_ymd_and_hms(year, month, day, hour, minute, 0)
             .single()
             .unwrap()
+    }
+
+    #[test]
+    fn a_manual_schedule_is_never_due_on_its_own() {
+        let now = utc(2026, 11, 19, 9, 0);
+        assert!(ScheduleSpec::Manual.validate().is_ok());
+        let next = ScheduleSpec::Manual.next_after(now).unwrap();
+        assert!(next - now >= chrono::Duration::days(3000), "{next}");
+        assert_eq!(
+            ScheduleSpec::Manual.misfire_policy(),
+            MisfirePolicy::RunOnce
+        );
     }
 
     #[test]

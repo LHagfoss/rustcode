@@ -291,6 +291,7 @@ async fn run_with(client: &DaemonClient, id: &str) -> Result<Value, String> {
         client,
         DaemonRequest::RunNow {
             job_id: id.to_owned(),
+            input: None,
         },
     )
     .await?

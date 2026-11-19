@@ -151,6 +151,7 @@ fn list_and_history_are_compact_and_bounded() {
             schedule_revision: 1,
             created_at: due,
             updated_at: due,
+            pending_input: None,
         })
         .collect();
     let (list_client, _) = client(DaemonResponse::Jobs { jobs });
@@ -180,6 +181,7 @@ fn list_and_history_are_compact_and_bounded() {
             result_summary: Some("summary".into()),
             error_class: Some("error".into()),
             output: Some("x".repeat(100_000)),
+            input: None,
         })
         .collect();
     let (client, requests) = client(DaemonResponse::History { runs });
@@ -218,6 +220,7 @@ fn all_control_operations_use_protocol_and_errors_are_clear() {
             "run",
             DaemonRequest::RunNow {
                 job_id: "missing".into(),
+                input: None,
             },
         ),
         (
