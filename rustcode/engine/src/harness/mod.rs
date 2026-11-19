@@ -230,6 +230,9 @@ pub(crate) struct KnownHarness {
     /// multiple-choice question (Claude Code's `AskUserQuestion`); without
     /// one the thread gets RustCode's `ask_user_question` (#3393).
     pub native_questions: bool,
+    /// A signed-in session always offers a model choice, so a listing that
+    /// comes back empty is a failure to report, not a harness without models.
+    pub lists_models: bool,
 }
 
 pub(crate) const KNOWN: &[KnownHarness] = &[
@@ -249,6 +252,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         auth_probe: None,
         requires: None,
         native_questions: false,
+        lists_models: false,
     },
     KnownHarness {
         id: "codex",
@@ -263,6 +267,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         auth_probe: Some(AuthProbe::Text(&["codex", "login", "status"])),
         requires: None,
         native_questions: true,
+        lists_models: false,
     },
     KnownHarness {
         id: "claude-code",
@@ -277,6 +282,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         auth_probe: Some(AuthProbe::Json(&["claude", "auth", "status", "--json"])),
         requires: None,
         native_questions: true,
+        lists_models: false,
     },
     KnownHarness {
         id: "gemini",
@@ -291,6 +297,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         auth_probe: None,
         requires: None,
         native_questions: false,
+        lists_models: false,
     },
     KnownHarness {
         id: "opencode",
@@ -305,6 +312,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         auth_probe: None,
         requires: None,
         native_questions: false,
+        lists_models: false,
     },
     // Pi speaks its own RPC protocol; `pi-acp` adapts it to ACP, as claude-agent-acp does for
     // Claude Code. Pi keeps its own models, logins, skills and sessions (~/.pi).
@@ -321,6 +329,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         auth_probe: None,
         requires: Some("pi"),
         native_questions: false,
+        lists_models: false,
     },
     // Perch (`perchai-cli`) speaks ACP with its `acp` subcommand. It has no
     // `--version`; `perch status` prints `Perch CLI 2.4.132 · Not signed in.`,
@@ -336,6 +345,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         auth_probe: Some(AuthProbe::Text(&["perch", "status"])),
         requires: None,
         native_questions: false,
+        lists_models: false,
     },
     // Google's Antigravity CLI (`agy`) speaks ACP with `agy acp` since 1.5.0.
     // Its `session/prompt` answer carries the turn's token usage
@@ -356,6 +366,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         auth_probe: None,
         requires: None,
         native_questions: false,
+        lists_models: true,
     },
 ];
 

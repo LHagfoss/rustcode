@@ -567,6 +567,7 @@ mod tests {
         auth_probe: None,
         requires: Some("rustcode-no-such-prerequisite-on-path"),
         native_questions: false,
+        lists_models: false,
     };
 
     #[test]
@@ -993,6 +994,7 @@ mod tests {
             auth_probe: Some(AuthProbe::Json(&["claude", "auth", "status", "--json"])),
             requires: None,
             native_questions: false,
+            lists_models: false,
         };
         let harness = ResolvedHarness {
             id: "fixture".into(),

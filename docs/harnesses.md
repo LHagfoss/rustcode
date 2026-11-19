@@ -147,6 +147,12 @@ latter, and groups those apart. Detection is cached for a minute; `set` and
 | `perch` | `acp` | `perch acp` | `perch status` | `perch status` (`Not signed in.` is signed out) |
 | `antigravity` | `acp` | `agy acp` | `agy --version` | `unknown` |
 
+A signed-in Antigravity session always offers a model choice
+(`KnownHarness::lists_models`), so a listing that comes back empty is a Check
+error naming what the session offered and `agy`'s last stderr lines, and the
+models listed before stay cached; another harness that lists none is "Ready ·
+no model list".
+
 Commands are looked up on the engine's `PATH` and then the login shell's, so
 an app started from the Dock finds what the terminal finds. On Windows a bare
 name tries the `PATHEXT` extensions in order, as the shell does: `codex` is

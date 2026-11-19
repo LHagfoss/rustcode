@@ -290,8 +290,17 @@ pub(crate) fn account_home(session_id: &str, harness: &str) -> Option<std::path:
 pub(crate) async fn harness_limits(
     harness: &str,
     home: Option<&std::path::Path>,
+    model: Option<&str>,
 ) -> serde_json::Value {
     match harness {
+        #[cfg(unix)]
+        "antigravity" => {
+            let read = crate::provider_auth::antigravity_usage::read_cached(false).await;
+            let limits = read
+                .and_then(Result::ok)
+                .and_then(|rows| antigravity_limits(&rows, model));
+            limits_json(limits.as_ref(), "antigravity")
+        }
         "codex" => {
             let limits = crate::provider_auth::codex_usage::rate_limits(home).await;
             limits_json(limits.as_ref(), "codex")
@@ -303,6 +312,48 @@ pub(crate) async fn harness_limits(
         }
         _ => serde_json::Value::Null,
     }
+}
+
+/// The model a thread on another harness runs, as its record names it.
+pub(crate) fn external_model(session_id: &str) -> Option<String> {
+    crate::harness::store::load(session_id)
+        .and_then(|record| record.model)
+        .filter(|model| !model.is_empty())
+}
+
+/// Antigravity's quota for the group `model` draws on: Gemini models share
+/// one group and the other providers' models another (`agy --print /usage`).
+/// A thread with no model runs Gemini, Antigravity's default. The group's
+/// 5-hour window comes first and its weekly one second, as the meter reads
+/// them; null when the report has neither for that group.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn antigravity_limits(
+    rows: &[serde_json::Value],
+    model: Option<&str>,
+) -> Option<crate::provider_auth::ProviderRateLimits> {
+    let gemini = model.is_none_or(|model| model.to_ascii_lowercase().starts_with("gemini"));
+    let in_group = |row: &&serde_json::Value| {
+        let label = row["label"].as_str().unwrap_or_default();
+        let group = label.split(" · ").next().unwrap_or_default();
+        group.to_ascii_lowercase().contains("gemini") == gemini
+    };
+    let window = |minutes: u64| {
+        rows.iter()
+            .filter(in_group)
+            .find(|row| row["windowMinutes"].as_u64() == Some(minutes))
+            .and_then(|row| {
+                Some(crate::provider_auth::RateLimitWindow {
+                    used_percent: row["usedPercent"].as_f64()?,
+                    window_minutes: Some(minutes),
+                    resets_at: row["resetsAt"].as_i64(),
+                })
+            })
+    };
+    let limits = crate::provider_auth::ProviderRateLimits {
+        primary: window(300),
+        secondary: window(10_080),
+    };
+    (limits.primary.is_some() || limits.secondary.is_some()).then_some(limits)
 }
 
 /// Whether a thread's own limits call may read Claude Code's sign-in. On macOS
@@ -1168,7 +1219,35 @@ mod harness_tests {
         );
         assert_eq!(external_harness("usage-no-such-thread"), None);
         // A harness with no plan to read answers null.
-        assert!(harness_limits("gemini", None).await.is_null());
+        assert!(harness_limits("gemini", None, None).await.is_null());
+    }
+
+    #[test]
+    fn antigravity_meter_reads_the_quota_group_of_the_threads_model() {
+        let rows = vec![
+            serde_json::json!({"label": "Gemini Models · Weekly", "usedPercent": 21.0,
+                               "windowMinutes": 10_080, "resetsAt": 100}),
+            serde_json::json!({"label": "Claude and GPT models · Weekly", "usedPercent": 60.0,
+                               "windowMinutes": 10_080, "resetsAt": 200}),
+            serde_json::json!({"label": "Claude and GPT models · 5-hour", "usedPercent": 5.0,
+                               "windowMinutes": 300, "resetsAt": 50}),
+        ];
+        let gemini = super::antigravity_limits(&rows, Some("gemini-3.8-flash")).unwrap();
+        assert!(gemini.primary.is_none());
+        assert_eq!(gemini.secondary.as_ref().unwrap().used_percent, 21.0);
+        assert_eq!(gemini.secondary.unwrap().resets_at, Some(100));
+        // No model is Antigravity's default, a Gemini model.
+        assert_eq!(
+            super::antigravity_limits(&rows, None),
+            Some(super::antigravity_limits(&rows, Some("gemini-3.8-flash")).unwrap())
+        );
+        let claude = super::antigravity_limits(&rows, Some("claude-opus-4-6-thinking")).unwrap();
+        assert_eq!(claude.primary.unwrap().used_percent, 5.0);
+        assert_eq!(claude.secondary.unwrap().used_percent, 60.0);
+        assert_eq!(
+            super::antigravity_limits(&rows[..1], Some("gpt-oss-120b-medium")),
+            None
+        );
     }
 
     #[test]

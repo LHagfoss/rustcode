@@ -1358,8 +1358,11 @@ async fn serve_connection(
                             // A named account's own login, so the meter never
                             // shows another home's numbers.
                             let home = usage::account_home(&session_id, &harness);
-                            responder
-                                .respond(usage::harness_limits(&harness, home.as_deref()).await)?;
+                            let model = usage::external_model(&session_id);
+                            responder.respond(
+                                usage::harness_limits(&harness, home.as_deref(), model.as_deref())
+                                    .await,
+                            )?;
                             Ok(())
                         });
                     };
