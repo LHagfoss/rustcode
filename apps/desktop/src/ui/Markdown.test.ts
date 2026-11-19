@@ -51,14 +51,10 @@ describe("blocks in a reply", () => {
 });
 
 describe("the inline pills in a reply", () => {
-  test("code, a file reference and a link are one shape", () => {
+  test("code and file references share a pill shape", () => {
     // One radius and one padding scale (ui/Markdown.tsx `PILL`), in em of the text around them.
-    for (const out of [
-      drawn("run `bun run check` now"),
-      drawn("see `src/lib/keys.ts:12`"),
-      drawn("[the docs](https://example.com/page)"),
-    ]) {
-      expect(out).toContain("rounded-full px-[0.5em] py-[0.2em]");
+    for (const out of [drawn("run `bun run check` now"), drawn("see `src/lib/keys.ts:12`")]) {
+      expect(out).toContain("rounded-full px-[0.5em] py-[0.25em]");
     }
   });
 
@@ -78,6 +74,12 @@ describe("the inline pills in a reply", () => {
 });
 
 describe("links in a reply", () => {
+  test("a named link stays underlined on hover", () => {
+    const out = drawn("[the docs](https://example.com/page)");
+    expect(out).toContain("cursor-pointer text-accent underline");
+    expect(out).toContain("hover:decoration-current");
+  });
+
   test("a bare URL is a chip that stays inside the text's line box", () => {
     const out = drawn("See https://example.com/page for it.");
     // `align-middle` seats the chip on the x-height without growing the line (ui/LinkChip.tsx).

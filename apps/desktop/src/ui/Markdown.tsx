@@ -208,10 +208,9 @@ const Formula = memo(function Formula({ tex, display }: { tex: string; display: 
   );
 });
 
-// One pill for the inline things a reply sets on a fill: code, a file reference and a link share
-// the rounding and the padding, so a line holding all three reads as one family. The padding is
-// in em of the text around them, so code in a heading keeps its proportion.
-const PILL = "rounded-full px-[0.5em] py-[0.2em]";
+// Code, file references and thread mentions share the same pill padding.
+// Use em units so the padding scales with the text around the pill.
+const PILL = "rounded-full px-[0.5em] py-[0.25em]";
 
 /** A thread a message points at, as the composer writes it: `#[Title](rustcode://thread/<id>)`. */
 const THREAD_LINK = /^rustcode:\/\/thread\/([^/?#\s]+)$/;
@@ -230,7 +229,7 @@ function ThreadChip({ id, label }: { id: string; label?: string }) {
       onClick={() => selectThread(id)}
       className={cx(
         PILL,
-        "-mx-[0.5em] inline-flex max-w-full cursor-pointer items-center gap-1 bg-fill-strong align-baseline text-fg hover:bg-accent/12",
+        "inline-flex max-w-full cursor-pointer items-center gap-1 bg-fill-strong align-baseline text-fg hover:bg-accent/12",
       )}
     >
       <MessagesSquare size={12} className="shrink-0 text-fg-muted" />
@@ -302,11 +301,9 @@ const components: Components = {
           if (ref) openRef(ref);
           else openExternal(href);
         }}
-        // The pill's own room is taken back by the margins, so a link never moves the words around
-        // it; only the tint it gets on hover is wider.
         className={cx(
-          PILL,
-          "-mx-[0.5em] cursor-pointer text-accent underline decoration-accent/30 underline-offset-2 hover:bg-accent/12 hover:decoration-transparent",
+          "rounded-sm px-[0.15em] py-[0.25em] [box-decoration-break:clone]",
+          "cursor-pointer text-accent underline decoration-accent/60 underline-offset-[3px] hover:bg-accent/12 hover:decoration-current",
         )}
       >
         {href ? shortUrl(href, children) : children}
@@ -359,11 +356,9 @@ const components: Components = {
           type="button"
           title={`Open ${ref.path}${ref.line ? ` at line ${ref.line}` : ""}`}
           onClick={() => openRef(ref)}
-          className="group inline rounded-full text-accent"
+          className={cx(PILL, "cursor-pointer bg-accent/10 text-accent hover:bg-accent/20")}
         >
-          <code className={cx(PILL, "bg-accent/10 font-mono text-[0.9em] group-hover:bg-accent/20")}>
-            {children}
-          </code>
+          <code className="font-mono text-[0.9em]">{children}</code>
         </button>
       );
     return (
