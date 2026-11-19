@@ -215,6 +215,32 @@ impl Connection {
         }
     }
 
+    /// Switch the authenticated socket to the hub link (#3957): send
+    /// `hub_join` with the access this machine grants the hub (an
+    /// outside-agent level such as `delegate`), wait for `hub_joined`, and
+    /// return the channel the hub's calls arrive on. The hub refuses with an
+    /// `error` frame when it is not the fleet's hub or this device is not
+    /// another computer.
+    pub async fn hub_open(self, access: &str, ask: bool) -> Result<AcpChannel> {
+        let mut connection = self;
+        let join = serde_json::json!({"type": "hub_join", "access": access, "ask": ask});
+        connection.send_json(&join).await.context("send hub_join")?;
+        let answer = connection.next_text(Some(CONNECT_TIMEOUT)).await?;
+        let joined = serde_json::from_str::<Value>(&answer)
+            .ok()
+            .is_some_and(|frame| frame.get("type").and_then(Value::as_str) == Some("hub_joined"));
+        if joined {
+            return Ok(AcpChannel {
+                socket: connection.socket,
+                last_heard: tokio::time::Instant::now(),
+            });
+        }
+        match serde_json::from_str::<HandshakeResponse>(&answer) {
+            Ok(response) => Err(crate::machine::handshake_failure("hub_join", response)),
+            Err(_) => bail!("the machine did not confirm hub_join"),
+        }
+    }
+
     async fn send_json(&mut self, frame: &Value) -> Result<()> {
         self.socket
             .send(Message::text(frame.to_string()))

@@ -710,6 +710,47 @@ the agent (`ssh-add`), and an unknown host key must be accepted once in a termin
         #[arg(long)]
         json: bool,
     },
+    /// Make this machine the fleet's hub, or join or leave one. A hub is an
+    /// always-on machine (a VPS, a desktop that stays on) that outside agents
+    /// reach the other machines through; they keep an outbound connection
+    /// to it, so they need no open port
+    Hub {
+        #[command(subcommand)]
+        command: HubCommands,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum HubCommands {
+    /// Make this machine the fleet's hub: machines that join it keep a link
+    /// to its remote gateway
+    On,
+    /// Stop being the hub; linked machines are let go
+    Off,
+    /// Join a saved machine that is the hub, granting it an access ceiling
+    #[command(after_help = "Examples:
+  rustcode machines hub join vps --access delegate
+  rustcode machines hub join vps --access read-only --ask false")]
+    Join {
+        /// The hub: name, host id or a prefix of one, from `rustcode machines list`
+        machine: String,
+        /// The most the hub may do here, at the outside-agent levels:
+        /// read-only, delegate, manage or admin
+        #[arg(long, default_value = "read-only")]
+        access: String,
+        /// Ask in the app here before each call from the hub that changes
+        /// something
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        ask: bool,
+    },
+    /// Leave the hub; the hub cannot reach this machine any more
+    Leave,
+    /// Show this machine's role and, on the hub, its members
+    Status {
+        /// Print the status as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]

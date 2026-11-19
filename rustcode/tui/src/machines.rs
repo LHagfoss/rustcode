@@ -127,6 +127,7 @@ pub async fn run(command: &MachineCommands) -> Result<()> {
         MachineCommands::Discover { secs, json } => {
             discover(Duration::from_secs(*secs), *json).await
         }
+        MachineCommands::Hub { command } => crate::hub_command::run(&config_dir, command).await,
     }
 }
 

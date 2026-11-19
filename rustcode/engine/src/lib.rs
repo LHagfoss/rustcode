@@ -49,6 +49,8 @@ pub use orchestration::outside::TOKEN_ENV as MCP_CONNECT_TOKEN_ENV;
 pub use orchestration::outside_http::{
     SignInCode as OutsideSignInCode, sign_in_code as outside_sign_in_code,
 };
+/// A member answers a call its hub forwarded (#3957).
+pub use orchestration::outside_hub::answer_for_hub as answer_hub_call;
 mod platform;
 pub mod preview;
 mod project_hooks;

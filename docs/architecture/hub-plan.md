@@ -52,12 +52,30 @@ machine, and in which order it is built.
 | 2 | Approve sign-ins with the owner's passkey | #3954 |
 | 3 | One listener for the gateway (`/ws`) and `/mcp`, so one tunnel serves both; `wss://` routes | #3955 (built) |
 | 4 | Machines and devices authenticate with key pairs instead of bearer tokens | #3956 |
-| 5 | The hub role: outbound connections from other machines, `machine` for outside agents, a mailbox for offline machines | #3957 |
+| 5 | The hub role: outbound connections from other machines, `machine` for outside agents, a mailbox for offline machines | #3957 (built) |
 | 6 | The app served from a hub, with passkey login | #3958 |
 
 Phase 1 alone makes `https://rustcode.example.com/mcp` work for hosted agents
 against the machine that runs the tunnel. Phases 3–5 extend that to the rest
 of the fleet; 2 and 6 replace the terminal code with a login.
+
+## Phase 5 in practice
+
+`rustcode machines hub on` writes `"hub": true` to `<config>/hub.json`;
+`rustcode machines hub join <machine> --access <level>` writes the membership
+there on the member. The member's gateway process (`rustcode remote serve`)
+runs the link (`tui/src/hub_member.rs`): it connects to the hub with the
+saved machine's routes and credentials and sends `hub_join` on the
+authenticated socket. The hub's gateway (`remote_gateway/hub_link.rs`) admits
+only a paired desktop or command line with a `host_id`, keeps the link, the
+member list and the mailbox. An outside agent's call that names a member goes
+from the hub's engine to its gateway over the control socket (`hub_call`,
+allowed 5 minutes), down the link, and through the member's gate
+(`orchestration/outside_hub.rs`) at the membership's ceiling. The member side
+of the gate is the same `answer_granted` the hub's own grants pass through.
+
+Not yet: Settings › Machines in the app (the CLI is the only way to set the
+role), and Loops on the hub for other machines.
 
 ## Phase 3 in practice
 

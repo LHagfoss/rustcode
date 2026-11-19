@@ -37,4 +37,5 @@ unicode-segmentation = "1.12"
 
 [dev-dependencies]
 ctor = "1.0.13"
+tempfile = "3.10"
 tokio = { version = "1.52.3", features = ["test-util"] }

@@ -1306,6 +1306,67 @@ access work as on the other systems. What differs:
 - **Firewall:** allow `rustcode` on private networks when Windows asks, or a
   phone can neither find nor reach the gateway.
 
+## The hub
+
+A hub is an ordinary machine that stays on (a VPS, a desktop that never
+sleeps) and that the rest of the fleet keeps a link to, so hosted agents
+signed in on it reach every machine, and work for a sleeping laptop waits
+on it. It is a role, not a different install, and never required: machines
+still pair and talk directly when there is no hub or it is down. The design
+is phase 5 of [the hub plan](architecture/hub-plan.md).
+
+On the hub:
+
+```sh
+rustcode machines hub on
+```
+
+On each other machine, after pairing with the hub as usual (`rustcode
+machines add`, a connect code, or over SSH):
+
+```sh
+rustcode machines hub join vps --access delegate
+```
+
+- **The link is outbound.** The member's own remote gateway connects to the
+  hub's gateway over a saved route, as the paired computer it already is, and
+  switches that connection to the hub link (`hub_join`). The hub needs no
+  route to the member and the member opens no port. Give the hub a route the
+  member reaches from anywhere, such as its public `wss://` address
+  ([Hosted agents](mcp-outside-agents.md#hosted-agents-chatgpt-claude-and-other-cloud-clients)).
+  The member's gateway must run (remote access on, or `rustcode remote
+  start`); it reconnects with a backoff from 5 seconds to 5 minutes while the
+  hub is away.
+- **Only computers join.** A paired desktop or command line with its machine
+  identifier may join; a phone cannot. The hub names the member by the device
+  record it paired as, never by what the join frame says.
+- **Each member sets a ceiling.** `--access` takes the
+  [outside-agent levels](mcp-outside-agents.md#access-levels) (`read-only` by
+  default, `delegate`, `manage`, `admin`), and `--ask` (on by default) asks in
+  the app on the member before each call that changes something. A call
+  forwarded by the hub passes the hub's gate for the agent that made it, then
+  the member's own gate at that ceiling, and is in the member's outside-agent
+  audit log as "*agent* via the hub *name*". With `--ask` on and no app open on
+  the member, a change is refused at once with how to stop asking.
+- **Threads stay where they run.** The hub forwards calls and keeps the
+  fleet list; nothing about a thread is copied to it.
+- **Offline machines.** The hub remembers its members and when each was last
+  seen (`remote/hub-members.json`). `start_thread` and `message_thread` for
+  an offline member wait in a mailbox on the hub (`remote/hub-mailbox.json`:
+  at most 32 per machine and 256 in all, dropped after 7 days) and are
+  delivered when it links again, each with a retry key so a redelivery does
+  not run twice. Anything else for an offline member fails at once, naming it
+  and when it was last seen.
+- `rustcode machines hub status` shows the role and, on the hub, each member
+  with its state, ceiling and waiting calls (`--json` too). `rustcode machines
+  hub leave` and `rustcode machines hub off` undo each side; an open link closes
+  within a minute.
+
+The hub's frames are between two RustCode gateways and are not part of the
+phone's [remote protocol](remote-protocol/README.md): after `hub_join` and
+`hub_joined`, the hub sends `hub_call {call_id, tool, arguments, caller}` and
+the member answers `hub_result {call_id, success, content}`.
+
 ## Not covered yet
 
 - No TLS; see the warning at the top.
@@ -1322,7 +1383,8 @@ access work as on the other systems. What differs:
   cannot be opened twice. Close the thread in the app and open it again.
 - No push notifications.
 - `rustcode machines` reaches a machine over its WebSocket, directly or through
-  an [SSH route](#ssh-routes); there is no relay, and a route list is not reordered or learned yet (steps 1.8 and
+  an [SSH route](#ssh-routes); the only relay is [the hub](#the-hub), and only
+  for outside agents' calls, and a route list is not reordered or learned yet (steps 1.8 and
   1.11 of the machine network plan). Connect over SSH pairs one way unless *Both ways* is chosen
   ([Mutual access](#mutual-access)); a connect code or an address request
   still pairs one way, and agents cannot start a pairing yet (no

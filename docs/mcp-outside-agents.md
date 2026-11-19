@@ -113,11 +113,24 @@ reads them.
 | "needs Delegate access" | Raise its access in Settings › Outside agents. |
 | "the user did not answer" | Open RustCode, then ask the agent to try again. |
 
+## Other machines through the hub
+
+On a machine that is the fleet's [hub](remote.md#the-hub), an outside agent
+passes `machine` (an id or name from `list_machines`) to act on a member. The
+call needs the access on the hub as usual, and runs on the member at most at
+the ceiling that member granted the hub, asking in the app there when it asks.
+`list_machines` on the hub lists the members with `hub.linked`, `last_seen`,
+the ceiling and the calls waiting. Starting or messaging a thread on an
+offline member waits on the hub and the answer says so (`"queued": true`);
+other calls for it fail at once. Without a hub, `machine` naming another
+computer is refused as before.
+
 ## Not in this release
 
-- Reaching another paired computer (`machine`) from an outside agent, `unread`
-  and `snoozed_until` in `update_thread`, and changing a thread's model or
-  effort with `configure_thread`: they need the app.
+- Reaching another paired computer (`machine`) from an outside agent on a
+  machine that is not the hub, `unread` and `snoozed_until` in
+  `update_thread`, and changing a thread's model or effort with
+  `configure_thread`: they need the app.
 
 `search_threads` matches titles and what was said; across projects it follows
 the "Let agents read threads in other projects" setting, as `list_threads`

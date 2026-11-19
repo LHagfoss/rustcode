@@ -506,7 +506,8 @@ where
     Ok(())
 }
 
-pub(crate) fn append_line(line: &str) {
+#[doc(hidden)]
+pub fn append_line(line: &str) {
     append_line_with_session(line, None);
 }
 

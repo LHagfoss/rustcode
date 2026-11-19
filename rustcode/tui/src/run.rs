@@ -260,6 +260,11 @@ async fn run_remote_command(
             advertise,
             prefer_interface,
         } => {
+            // A machine that joined a hub keeps its link from here: the one
+            // gateway process a machine runs (#3957).
+            let stop = tokio_util::sync::CancellationToken::new();
+            tokio::spawn(crate::hub_member::run(config_dir.clone(), stop.clone()));
+            let _stop_link = stop.drop_guard();
             remote::serve(
                 &config_dir,
                 bind,

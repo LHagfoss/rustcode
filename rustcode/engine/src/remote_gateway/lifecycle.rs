@@ -620,6 +620,49 @@ impl RemoteLifecycle {
         }
     }
 
+    /// Forward an outside agent's call to the hub member `machine` names
+    /// (#3957). `None` when no gateway runs here to hold the members.
+    pub async fn hub_call(
+        &self,
+        machine: &str,
+        tool: &str,
+        arguments: serde_json::Value,
+        caller: &str,
+    ) -> Result<Option<super::hub_link::HubCallAnswer>> {
+        if self.status().await?.is_none() {
+            return Ok(None);
+        }
+        let request = ControlRequest::HubCall {
+            machine: machine.to_owned(),
+            tool: tool.to_owned(),
+            arguments,
+            caller: caller.to_owned(),
+        };
+        match control::request(&self.socket_path(), &request)
+            .await
+            .context(OLD_GATEWAY)?
+        {
+            ControlResponse::HubAnswer { answer } => Ok(Some(answer)),
+            ControlResponse::Error { message } => bail!(message),
+            response => bail!("unexpected hub response: {response:?}"),
+        }
+    }
+
+    /// The hub's members, or `None` when no gateway runs here.
+    pub async fn hub_members(&self) -> Result<Option<Vec<super::hub_link::HubMember>>> {
+        if self.status().await?.is_none() {
+            return Ok(None);
+        }
+        match control::request(&self.socket_path(), &ControlRequest::HubMembers)
+            .await
+            .context(OLD_GATEWAY)?
+        {
+            ControlResponse::HubMembers { members, .. } => Ok(Some(members)),
+            ControlResponse::Error { message } => bail!(message),
+            response => bail!("unexpected hub response: {response:?}"),
+        }
+    }
+
     /// Paired devices as stored on disk. Never includes a token.
     pub fn devices(&self) -> Result<Vec<DeviceRecord>> {
         Ok(self.device_store().load()?.list().to_vec())

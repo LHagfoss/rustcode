@@ -56,6 +56,17 @@ pub enum ControlRequest {
     Shutdown {
         instance_id: String,
     },
+    /// Forward an outside agent's call, already allowed by this machine's
+    /// gate, to the hub member `machine` names (#3957). Answered within
+    /// [`super::hub_link::HUB_CALL_TIMEOUT`], not [`CONTROL_TIMEOUT`].
+    HubCall {
+        machine: String,
+        tool: String,
+        arguments: serde_json::Value,
+        caller: String,
+    },
+    /// The hub's members, connected or not.
+    HubMembers,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +92,14 @@ pub enum ControlResponse {
     },
     ConnectAnswered {
         answer: ConnectAnswer,
+    },
+    HubAnswer {
+        answer: super::hub_link::HubCallAnswer,
+    },
+    HubMembers {
+        /// Empty on a machine that is not the hub.
+        is_hub: bool,
+        members: Vec<super::hub_link::HubMember>,
     },
     Ack,
     Error {
@@ -540,7 +559,23 @@ impl OfferDetails {
 
 /// Send one request to a running gateway and wait for its answer.
 pub async fn request(socket_path: &Path, request: &ControlRequest) -> Result<ControlResponse> {
-    tokio::time::timeout(CONTROL_TIMEOUT, async {
+    request_within(socket_path, request, timeout_for(request)).await
+}
+
+/// How long the gateway may take to answer `request`.
+pub fn timeout_for(request: &ControlRequest) -> Duration {
+    match request {
+        ControlRequest::HubCall { .. } => super::hub_link::HUB_CALL_TIMEOUT + CONTROL_TIMEOUT,
+        _ => CONTROL_TIMEOUT,
+    }
+}
+
+async fn request_within(
+    socket_path: &Path,
+    request: &ControlRequest,
+    timeout: Duration,
+) -> Result<ControlResponse> {
+    tokio::time::timeout(timeout, async {
         let mut stream = super::local_socket::connect(socket_path).await?;
         write_async_frame(&mut stream, request).await?;
         Ok(read_async_frame(&mut BufReader::new(stream)).await?)

@@ -1596,6 +1596,12 @@ impl Session {
     pub async fn acp(self) -> Result<AcpChannel> {
         self.connection.acp_open().await
     }
+
+    /// Switch the connection to the hub link, granting the hub `access` (an
+    /// outside-agent level: `read_only`, `delegate`, `manage` or `admin`).
+    pub async fn hub_join(self, access: &str, ask: bool) -> Result<AcpChannel> {
+        self.connection.hub_open(access, ask).await
+    }
 }
 
 /// The titles of the machine's threads, newest first as `session/list` lists
