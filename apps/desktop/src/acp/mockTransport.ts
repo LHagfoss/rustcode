@@ -29,6 +29,39 @@ export class MockTransport implements Transport {
   /** Whether the RustCode server is installed as a service (`?machines=connect` starts without it). */
   private serverInstalled: boolean;
 
+  /** `<config>/hub.json` as `machines hub status --json` answers it. */
+  private hub: { hub: boolean; member: JsonObject | null } = { hub: false, member: null };
+
+  private hubStatus(): JsonObject {
+    const at = new Date(Date.now() - 3 * 3600_000).toISOString();
+    return {
+      hub: this.hub.hub,
+      member: this.hub.member,
+      members: this.hub.hub
+        ? [
+            {
+              host_id: "mock-laptop",
+              name: "laptop",
+              access: "delegate",
+              ask: true,
+              online: true,
+              last_seen_at: new Date().toISOString(),
+              queued: 0,
+            },
+            {
+              host_id: "mock-desk",
+              name: "desk",
+              access: "read_only",
+              ask: false,
+              online: false,
+              last_seen_at: at,
+              queued: 2,
+            },
+          ]
+        : null,
+    };
+  }
+
   constructor(private readonly options: MockOptions = {}) {
     this.machineList = mockMachineList(options.machines);
     this.serverInstalled = options.machines !== "connect";
@@ -236,6 +269,22 @@ export class MockTransport implements Transport {
       return mockServerService(true);
     }
     if (command === "server_link_path") return mockServerService(this.serverInstalled);
+    if (command === "hub_status") return this.hubStatus();
+    if (command === "hub_set") {
+      if (args.action === "on" || args.action === "off") this.hub.hub = args.action === "on";
+      if (args.action === "leave") this.hub.member = null;
+      if (args.action === "join") {
+        const machine = this.machineList.find((m) => m.id === String(args.machine));
+        if (!machine) throw new Error(`no saved machine matches ${String(args.machine)}`);
+        this.hub.member = {
+          machine: String(machine.id),
+          name: String(machine.name),
+          access: String(args.access ?? "read_only"),
+          ask: args.ask !== false,
+        };
+      }
+      return this.hubStatus();
+    }
     if (command === "machines_remove" || command.startsWith("machines_route_")) {
       this.machineList = mockRouteCommand(command, args, this.machineList);
       return command === "machines_remove" ? null : this.machineList;

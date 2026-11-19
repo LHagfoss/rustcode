@@ -6,6 +6,7 @@
 mod banner;
 mod diagnostics;
 mod engine;
+mod hub;
 mod links;
 mod machines;
 mod microphone;
@@ -132,6 +133,8 @@ pub fn run() {
             service::server_service_status,
             service::server_service_install,
             service::server_link_path,
+            hub::hub_status,
+            hub::hub_set,
             system_setup::system_setup_status,
             system_setup::system_setup_run,
             diagnostics::resolve_binaries,

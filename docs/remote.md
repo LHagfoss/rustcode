@@ -1357,6 +1357,11 @@ rustcode machines hub join vps --access delegate
   delivered when it links again, each with a retry key so a redelivery does
   not run twice. Anything else for an offline member fails at once, naming it
   and when it was last seen.
+- **In the app**, Settings › Machines › *Hub* does the same: a switch makes
+  this computer the hub and lists its members (linked or offline, their
+  ceiling, calls waiting), and on a member *Join a hub* picks the paired hub,
+  its access and whether to ask, with *Leave* to undo. The app runs these
+  commands (`apps/desktop/src-tauri/src/hub.rs`).
 - `rustcode machines hub status` shows the role and, on the hub, each member
   with its state, ceiling and waiting calls (`--json` too). `rustcode machines
   hub leave` and `rustcode machines hub off` undo each side; an open link closes
