@@ -18,8 +18,6 @@ const OVERSIZED: Record<string, number> = {
   "state/store.ts": 1800,
   "acp/mock.ts": 3300,
   "ui/Settings.tsx": 2200,
-  "state/thread.ts": 1800,
-  "ui/Transcript.tsx": 1500,
 };
 
 function sources(dir: string): string[] {
