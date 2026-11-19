@@ -387,7 +387,7 @@ fn pair(name: &str, waiting: bool) -> String {
     )
 }
 
-fn page(title: &str, head: &str, body: &str) -> String {
+pub(super) fn page(title: &str, head: &str, body: &str) -> String {
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">{head}<title>{title}</title><style>{STYLE}</style></head><body><main class="card">{body}</main></body></html>"#,
         title = escape(title),
@@ -404,6 +404,8 @@ pub(super) struct Consent<'a> {
     pub requested: Option<Scope>,
     /// The `/authorize` parameters, carried as hidden fields.
     pub hidden: &'a [(&'a str, &'a str)],
+    /// The owner's passkeys for this address, when there are any.
+    pub passkey: Option<&'a super::outside_passkey::PasskeyPrompt>,
 }
 
 /// The consent page: who asks, a level to choose, and the two ways to approve.
@@ -448,12 +450,16 @@ pub(super) fn consent_page(
         .map(|e| format!(r#"<p class="error" role="alert">{}</p>"#, escape(e)))
         .unwrap_or_default();
     let body = format!(
-        r#"{pair}<p class="eyebrow">RustCode on {machine}</p><h1>{name} wants to connect</h1><p class="sub">It will use RustCode's tools through <b>{host}</b>.</p>{error}<form method="post" action="/authorize">{hidden}<p class="label">Choose what it can do</p><div class="opts">{options}</div><p class="note">{note}</p><div class="actions"><button name="decision" value="deny" formnovalidate>Cancel</button><button class="primary" name="decision" value="app">Approve in RustCode</button></div><details{open}><summary>Have a sign-in code?</summary><div class="coderow"><input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Sign-in code"><button name="decision" value="approve">Use code</button></div><p class="hint">In RustCode open Settings › Outside agents › Get a sign-in code, or run <code>rustcode outside code</code> on {machine}. The code sets the most this app may do.</p></details></form><p class="foot">You can see and revoke it any time in RustCode › Settings › Outside agents.</p>"#,
+        r#"{pair}<p class="eyebrow">RustCode on {machine}</p><h1>{name} wants to connect</h1><p class="sub">It will use RustCode's tools through <b>{host}</b>.</p>{error}<form method="post" action="/authorize">{hidden}<p class="label">Choose what it can do</p><div class="opts">{options}</div><p class="note">{note}</p><div class="actions"><button name="decision" value="deny" formnovalidate>Cancel</button><button class="primary" name="decision" value="app">Approve in RustCode</button></div>{passkey}<details{open}><summary>Have a sign-in code?</summary><div class="coderow"><input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Sign-in code"><button name="decision" value="approve">Use code</button></div><p class="hint">In RustCode open Settings › Outside agents › Get a sign-in code, or run <code>rustcode outside code</code> on {machine}. The code sets the most this app may do.</p></details></form><p class="foot">You can see and revoke it any time in RustCode › Settings › Outside agents.</p>"#,
         pair = pair(c.client_name, false),
         machine = escape(c.machine),
         name = escape(c.client_name),
         host = escape(c.host),
         open = if error.contains("code") { " open" } else { "" },
+        passkey = c
+            .passkey
+            .map(super::outside_passkey::PasskeyPrompt::controls)
+            .unwrap_or_default(),
     );
     page(&format!("Connect {} to RustCode", c.client_name), "", &body)
 }
@@ -560,6 +566,7 @@ mod tests {
                 host: "rc.example.com",
                 requested: Some(Scope::Manage),
                 hidden: &hidden,
+                passkey: None,
             },
             None,
             None,

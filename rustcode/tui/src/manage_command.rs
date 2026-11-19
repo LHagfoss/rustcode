@@ -582,6 +582,7 @@ pub async fn credentials(command: &Commands) -> Option<Result<(), String>> {
                     }
                 })
             }
+            OutsideCommands::Owner { command } => owner(command),
             OutsideCommands::Revoke { id, yes } => {
                 if !*yes && !confirm(&format!("Revoke {id}? Its token stops working at once. [y/N] ")) {
                     Err("not revoked; pass --yes to confirm".to_owned())
@@ -620,4 +621,56 @@ fn print_accounts(answer: &Value, json: bool) -> Result<(), String> {
         crate::run::print_rows(&["HARNESS", "ID", "NAME", "SIGN-IN", "FOLDER"], &rows);
     }
     Ok(())
+}
+
+/// `rustcode outside owner`: the owner's passkeys for the sign-in page.
+fn owner(command: &crate::cli::OwnerCommands) -> Result<(), String> {
+    use crate::cli::OwnerCommands;
+    use rustcode::owner_passkeys;
+    match command {
+        OwnerCommands::AddPasskey { name } => {
+            let link = owner_passkeys::add_link(name)?;
+            println!("Open this link on the device that keeps the passkey:");
+            println!("{link}");
+            println!(
+                "It works once, for {} minutes. Anyone with it can add a passkey that approves sign-ins, so do not share it.",
+                owner_passkeys::ENROLLMENT_SECS / 60
+            );
+            Ok(())
+        }
+        OwnerCommands::Passkeys { json } => {
+            let passkeys = owner_passkeys::list();
+            if *json {
+                let rows: Vec<_> = passkeys.iter().map(owner_passkeys::Passkey::view).collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&rows).map_err(|error| error.to_string())?
+                );
+            } else if passkeys.is_empty() {
+                println!("No passkeys. Add one with `rustcode outside owner add-passkey`.");
+            } else {
+                for passkey in &passkeys {
+                    println!(
+                        "{}  {}  {}  added {}{}",
+                        &passkey.id[..passkey.id.len().min(12)],
+                        passkey.name,
+                        passkey.rp_id,
+                        passkey.created_at.get(..10).unwrap_or(&passkey.created_at),
+                        passkey
+                            .last_used_at
+                            .as_deref()
+                            .and_then(|used| used.get(..10))
+                            .map(|used| format!(", last used {used}"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+            Ok(())
+        }
+        OwnerCommands::RemovePasskey { passkey } => {
+            let removed = owner_passkeys::remove(passkey)?;
+            println!("Removed the passkey {}.", removed.name);
+            Ok(())
+        }
+    }
 }

@@ -51,6 +51,8 @@ pub use orchestration::outside_http::{
 };
 /// A member answers a call its hub forwarded (#3957).
 pub use orchestration::outside_hub::answer_for_hub as answer_hub_call;
+/// The machine owner's passkeys for the public sign-in page (#3954).
+pub use orchestration::outside_passkey as owner_passkeys;
 mod platform;
 pub mod preview;
 mod project_hooks;

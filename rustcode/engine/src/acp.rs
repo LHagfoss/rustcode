@@ -1386,6 +1386,26 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async |request: outside::OutsidePasskeyAddRequest, responder, _connection| {
+                match outside::passkey_add(request) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder
+                        .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async |request: outside::OutsidePasskeyRemoveRequest, responder, _connection| {
+                match outside::passkey_remove(request) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder
+                        .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async |request: outside::OutsideCodeRequest, responder, _connection| {
                 match outside::code(request) {
                     Ok(answer) => responder.respond(answer),

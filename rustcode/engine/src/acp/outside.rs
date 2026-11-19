@@ -108,6 +108,28 @@ pub(crate) struct OutsideCodeRequest {
     pub ask: Option<bool>,
 }
 
+/// `_rustcode/outside/passkey/add`: a link that adds an owner passkey on the
+/// public sign-in page, as `rustcode outside owner add-passkey` makes one.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/outside/passkey/add", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutsidePasskeyAddRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// `_rustcode/outside/passkey/remove`: the passkey stops approving sign-ins.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/outside/passkey/remove", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutsidePasskeyRemoveRequest {
+    pub id: String,
+}
+
 /// `_rustcode/outside/changed`: something now waits for the owner, or no
 /// longer does; ask `_rustcode/outside/list` again.
 #[derive(
@@ -168,6 +190,10 @@ pub(crate) async fn list(_request: OutsideListRequest) -> Result<Value, String> 
         "command": command(),
         "httpUrl": crate::orchestration::outside_http::ensure().await.ok(),
         "signIns": outside_signin::view(),
+        "passkeys": crate::orchestration::outside_passkey::list()
+            .iter()
+            .map(crate::orchestration::outside_passkey::Passkey::view)
+            .collect::<Vec<_>>(),
         "publicUrl": public.as_ref().and_then(|p| p.as_ref().ok()).map(|base| format!("{base}/mcp")),
         "publicError": public.and_then(Result::err),
         "machineName": crate::fleet::own_name_override()
@@ -282,6 +308,22 @@ pub(crate) fn code(request: OutsideCodeRequest) -> Result<Value, String> {
         "scope": made.scope,
         "minutes": made.minutes,
     }))
+}
+
+pub(crate) fn passkey_add(request: OutsidePasskeyAddRequest) -> Result<Value, String> {
+    let link = crate::orchestration::outside_passkey::add_link(
+        request.name.as_deref().unwrap_or("Passkey"),
+    )?;
+    Ok(json!({
+        "link": link,
+        "minutes": crate::orchestration::outside_passkey::ENROLLMENT_SECS / 60,
+    }))
+}
+
+pub(crate) fn passkey_remove(request: OutsidePasskeyRemoveRequest) -> Result<Value, String> {
+    let removed = crate::orchestration::outside_passkey::remove(&request.id)?;
+    outside::changed();
+    Ok(json!({ "removed": removed.view() }))
 }
 
 #[cfg(test)]

@@ -48,6 +48,8 @@ impl Fixture {
             public: public.map(|p| public_base(p).unwrap()),
             key: load_key(&dir.join(KEY_FILE)).unwrap(),
             sign_in_codes: dir.join("outside-codes.json"),
+            passkeys: dir.join("owner-passkeys.json"),
+            passkey_enrollments: dir.join("owner-passkey-enrollments.json"),
             machine: "test-machine".to_owned(),
             config: dir.to_path_buf(),
             failures: Mutex::new(Vec::new()),
@@ -979,4 +981,163 @@ async fn ws_on_the_public_host_reaches_the_remote_gateway() {
 
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(5), running).await;
+}
+
+/// The owner's passkey end to end over HTTP (#3954): a link from the CLI opens
+/// the page that adds it, the consent page then offers it with a script its
+/// nonce allows, and its answer approves the sign-in at the chosen level,
+/// once.
+#[tokio::test]
+async fn the_owners_passkey_is_added_from_a_link_and_approves_a_sign_in() {
+    use crate::orchestration::outside_passkey::{self, fake::Authenticator};
+    let dir = tempfile::tempdir().unwrap();
+    let f = Fixture::start_with(dir.path(), Some("https://rustcode.example.com")).await;
+    let public = "rustcode.example.com";
+    let base = "https://rustcode.example.com";
+    let encode = |pairs: &[(&str, &str)]| {
+        url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(pairs)
+            .finish()
+    };
+
+    // Without a passkey the consent page runs no script.
+    let callback = "https://chatgpt.com/connector_platform_oauth_redirect";
+    let registered = f
+        .request_to(
+            public,
+            "POST",
+            "/register",
+            "",
+            &json!({"client_name":"ChatGPT","redirect_uris":[callback]}).to_string(),
+        )
+        .await;
+    let client = registered.2["client_id"].as_str().unwrap().to_owned();
+    let mcp = format!("{base}/mcp");
+    let query = encode(&[
+        ("response_type", "code"),
+        ("client_id", &client),
+        ("redirect_uri", callback),
+        ("scope", "delegate"),
+        ("resource", &mcp),
+        ("state", "s1"),
+        ("code_challenge_method", "S256"),
+        (
+            "code_challenge",
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        ),
+    ]);
+    let page = f
+        .request_to(public, "GET", &format!("/authorize?{query}"), "", "")
+        .await;
+    assert!(!page.2.as_str().unwrap().contains("Approve with passkey"));
+    assert!(!page.1.contains("script-src"));
+
+    // The link works on the public address only, and once.
+    let ticket = outside_passkey::create_enrollment_at(
+        &f.server.passkey_enrollments,
+        &f.server.passkeys,
+        "Phone",
+    )
+    .unwrap();
+    let local = f
+        .request("GET", &format!("/owner/passkey?ticket={ticket}"), "", "")
+        .await;
+    assert_ne!(
+        local.0, 200,
+        "the loopback address shows no enrollment page"
+    );
+    let enroll = f
+        .request_to(
+            public,
+            "GET",
+            &format!("/owner/passkey?ticket={ticket}"),
+            "",
+            "",
+        )
+        .await;
+    assert_eq!(enroll.0, 200);
+    let html = enroll.2.as_str().unwrap().to_owned();
+    assert!(html.contains("Add passkey"), "{html}");
+    assert!(enroll.1.contains("script-src 'nonce-"), "{}", enroll.1);
+    let offer = outside_passkey::enrollment_at(&f.server.passkey_enrollments, &ticket).unwrap();
+    assert!(html.contains(&offer.challenge));
+    let mut phone = Authenticator::new();
+    let (client_data, attestation) = phone.create(&offer.challenge, base);
+    let added = f
+        .request_to(
+            public,
+            "POST",
+            "/owner/passkey",
+            "",
+            &encode(&[
+                ("ticket", &ticket),
+                ("pk_client", &client_data),
+                ("pk_attestation", &attestation),
+            ]),
+        )
+        .await;
+    assert!(
+        added.2.as_str().unwrap().contains("Passkey added"),
+        "{:?}",
+        added.2
+    );
+    assert_eq!(outside_passkey::list_at(&f.server.passkeys).len(), 1);
+
+    // Now the page offers it, and its answer approves Read-only when chosen.
+    let page = f
+        .request_to(public, "GET", &format!("/authorize?{query}"), "", "")
+        .await;
+    let html = page.2.as_str().unwrap().to_owned();
+    assert!(html.contains("Approve with passkey"), "{html}");
+    assert!(page.1.contains("script-src 'nonce-"));
+    let challenge = html
+        .split("challenge:b(\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the page carries a challenge")
+        .to_owned();
+    let answer = phone.get(&challenge, base);
+    let form = format!(
+        "{query}&access=read_only&{}",
+        encode(&[
+            ("decision", "passkey"),
+            ("pk_id", &answer[0]),
+            ("pk_client", &answer[1]),
+            ("pk_auth", &answer[2]),
+            ("pk_sig", &answer[3]),
+        ])
+    );
+    let approved = f.request_to(public, "POST", "/authorize", "", &form).await;
+    assert_eq!(approved.0, 303, "{:?}", approved.2);
+    let pairs = location(&approved.1);
+    assert_eq!(pairs["state"], "s1");
+    let code = pairs["code"].clone();
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let tokens = f
+        .request_to(
+            public,
+            "POST",
+            "/token",
+            "",
+            &encode(&[
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                ("client_id", &client),
+                ("redirect_uri", callback),
+                ("code_verifier", verifier),
+                ("resource", &mcp),
+            ]),
+        )
+        .await;
+    assert_eq!(tokens.0, 200, "{:?}", tokens.2);
+    assert_eq!(tokens.2["scope"], "read_only");
+
+    // The same answer again is refused and shows the page with why.
+    let replayed = f.request_to(public, "POST", "/authorize", "", &form).await;
+    assert_eq!(replayed.0, 200);
+    assert!(
+        replayed.2.as_str().unwrap().contains("used already"),
+        "{:?}",
+        replayed.2
+    );
 }

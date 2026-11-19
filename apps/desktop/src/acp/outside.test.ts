@@ -6,7 +6,35 @@ import {
   outcomeLabel,
   parseCreated,
   parseOutsideStatus,
+  parsePasskeyLink,
 } from "./outside";
+
+describe("owner passkeys", () => {
+  test("reads the passkeys and the link that adds one", () => {
+    const status = parseOutsideStatus({
+      passkeys: [
+        { id: "pk1", name: "My phone", host: "rc.example.com", createdAt: "2026-11-19T10:00:00Z" },
+        { name: "no id is dropped" },
+      ],
+    });
+    expect(status.passkeys).toEqual([
+      {
+        id: "pk1",
+        name: "My phone",
+        host: "rc.example.com",
+        createdAt: "2026-11-19T10:00:00Z",
+        lastUsedAt: null,
+      },
+    ]);
+    expect(parseOutsideStatus({}).passkeys).toEqual([]);
+    expect(parsePasskeyLink({ link: "https://rc.example.com/owner/passkey?ticket=t" })).toEqual({
+      link: "https://rc.example.com/owner/passkey?ticket=t",
+      minutes: 10,
+    });
+    expect(parsePasskeyLink({})).toBeNull();
+    expect(OutsideMethod.passkeyAdd).toBe("_rustcode/outside/passkey/add");
+  });
+});
 
 describe("outside agents", () => {
   test("reads the engine's list, with defaults for what is missing", () => {
