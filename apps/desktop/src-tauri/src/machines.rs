@@ -46,6 +46,8 @@ pub const STABLE_AFTER: Duration = Duration::from_secs(30);
 /// so a network change (a VPN up, another Wi-Fi) is acted on in seconds instead
 /// of at the end of the backoff.
 pub const NETWORK_POLL: Duration = Duration::from_secs(5);
+/// Probe quiet links before the hard timeout. Healthy gateways ping every 30 seconds.
+const IDLE_PROBE_AFTER: Duration = Duration::from_secs(35);
 
 /// How long one write to a connected machine may take. A peer that vanished
 /// without a reset leaves a full send buffer, and a write to it would block
@@ -897,7 +899,8 @@ async fn relay_once(
             Step::Check => {
                 let now = tokio::time::Instant::now();
                 let heard = acp.last_heard();
-                if now.duration_since(heard) >= rustcode_client::SILENCE_LIMIT {
+                let idle = now.duration_since(heard);
+                if idle >= rustcode_client::SILENCE_LIMIT {
                     return End::Failed(
                         anyhow::anyhow!(
                             "the machine sent nothing for {} s; the connection is gone",
@@ -924,7 +927,7 @@ async fn relay_once(
                 let walled = clocks.1.duration_since(wall).unwrap_or_default();
                 let woke = rustcode_client::slept(started.elapsed(), walled);
                 let moved = network_moved(&mut network);
-                if (woke || moved) && pinged.is_none() {
+                if (woke || moved || idle >= IDLE_PROBE_AFTER) && pinged.is_none() {
                     if let Err(error) = within_send_timeout(acp.ping()).await {
                         return End::Failed(error, Some(route.clone()));
                     }

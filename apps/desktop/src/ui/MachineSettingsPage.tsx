@@ -12,15 +12,19 @@
 import { useEffect, useState } from "react";
 import type { Harness } from "../acp/types";
 import { opError, opRunning, useOp } from "../lib/op";
+import { currentPlatform } from "../lib/platform";
 import { devicePlatform, deviceRoute, deviceStatus, machineAccess, versionLine } from "../state/deviceRows";
 import { accountState } from "../state/harness";
 import { addMachineRoute, removeMachineRoute, setMachineRouteOff } from "../state/machineRoutes";
 import {
+  defaultSelfName,
   disconnectMachine,
+  LOCAL_MACHINE_ID,
   lastSeen,
   localAppVersion,
   type Machine,
   machineGlyph,
+  machineLine,
   machineName,
   machineTint,
   probeLabel,
@@ -30,9 +34,11 @@ import {
   removeMachine,
   routeLabel,
   selfName,
+  setLocalIdentity,
   setMachineDisplayName,
   setMachineIcon,
   setMachinePaused,
+  useLocalIdentity,
   useMachines,
 } from "../state/machines";
 import { revokeRemoteDevice } from "../state/remoteAccess";
@@ -58,6 +64,7 @@ import { SYNC_COLUMNS, syncRows } from "./syncRows";
 /** One machine's name, state and controls. */
 export function MachineSettingsPage({ id }: { id: string }) {
   const machine = useMachines((state) => state.machines.find((entry) => entry.id === id));
+  if (id === LOCAL_MACHINE_ID) return <LocalMachineSettings />;
   if (!machine) {
     return (
       <Group title="Machine">
@@ -76,6 +83,43 @@ export function MachineSettingsPage({ id }: { id: string }) {
   return <MachineSettings machine={machine} />;
 }
 
+function BackToMachines() {
+  return (
+    <div className="mb-3 flex items-center gap-2 px-4">
+      <Action quiet size="sm" onClick={() => openSettings("machines")}>
+        <ArrowLeft size={13} />
+        Machines
+      </Action>
+    </div>
+  );
+}
+
+function LocalMachineSettings() {
+  const identity = useLocalIdentity();
+  const platform = currentPlatform();
+  return (
+    <>
+      <BackToMachines />
+      <Group title={selfName()}>
+        <Row title="Machine identity" subtitle="Change the name and icon shown for this computer.">
+          <MachineIdentityEditor
+            label={`${selfName()} on this computer`}
+            reportedName={defaultSelfName()}
+            platform={platform === "mac" ? "macos" : platform}
+            identity={identity}
+            onName={(name) => setLocalIdentity({ displayName: name })}
+            onIcon={(icon, tint) => setLocalIdentity({ icon, tint })}
+            trigger={<Action>Edit identity</Action>}
+          />
+        </Row>
+        <Row title="Remote access" subtitle="Manage how other devices connect to this computer.">
+          <Action onClick={() => openSettings("remote")}>Open Remote access</Action>
+        </Row>
+      </Group>
+    </>
+  );
+}
+
 function MachineSettings({ machine }: { machine: Machine }) {
   const [local, setLocal] = useState<string | null>(null);
   const status = deviceStatus(machine);
@@ -89,12 +133,7 @@ function MachineSettings({ machine }: { machine: Machine }) {
 
   return (
     <>
-      <div className="mb-3 flex items-center gap-2 px-4">
-        <Action quiet size="sm" onClick={() => openSettings("machines")}>
-          <ArrowLeft size={13} />
-          Machines
-        </Action>
-      </div>
+      <BackToMachines />
 
       <Group title="Machine">
         <div className="flex flex-col gap-3 p-4">
@@ -117,6 +156,12 @@ function MachineSettings({ machine }: { machine: Machine }) {
                 {machine.lastConnectedAt && !online && <> · Last seen {lastSeen(machine.lastConnectedAt)}</>}
               </div>
               {skew && <p className="m-0 pt-1 text-callout text-warning">{skew}</p>}
+              {!online && machine.detail && (
+                <details className="pt-1 text-callout text-fg-muted">
+                  <summary className="w-fit cursor-pointer">Connection details</summary>
+                  <p className="selectable mt-1 break-words">{machineLine(machine)}</p>
+                </details>
+              )}
               {machine.hint && <p className="m-0 pt-1 text-callout text-fg-muted">{machine.hint}</p>}
             </div>
           </div>
@@ -132,19 +177,19 @@ function MachineSettings({ machine }: { machine: Machine }) {
               }}
               onName={(next) => void setMachineDisplayName(machine, next)}
               onIcon={(icon, tint) => void setMachineIcon(machine, icon, tint)}
-              trigger={<Action size="sm">Rename</Action>}
+              trigger={<Action size="sm">Edit identity</Action>}
             />
-            <Action size="sm" onClick={() => reconnectMachine(machine)}>
+            <Action
+              size="sm"
+              disabled={machine.state === "connecting" || machine.state === "needsPairing"}
+              onClick={() => reconnectMachine(machine)}
+            >
               <RefreshCw size={12} />
               Reconnect
             </Action>
             <Action size="sm" disabled={!online} onClick={() => void disconnectMachine(machine)}>
               <Unplug size={12} />
               Disconnect
-            </Action>
-            <Action size="sm" danger onClick={() => removeMachine(machine)}>
-              <Trash2 size={12} />
-              Forget
             </Action>
           </div>
         </div>
@@ -165,6 +210,23 @@ function MachineSettings({ machine }: { machine: Machine }) {
 
       <Access machine={machine} />
       <Routes machine={machine} />
+      <Group title="Remove machine">
+        <Row
+          title="Remove from this computer"
+          subtitle="Deletes the saved pairing and routes. Its threads stay on the remote machine."
+        >
+          <Action
+            danger
+            onClick={() =>
+              removeMachine(machine, () => {
+                if (useApp.getState().settingsMachine === machine.id) openSettings("machines");
+              })
+            }
+          >
+            <Trash2 size={13} /> Remove machine
+          </Action>
+        </Row>
+      </Group>
       <Harnesses machine={machine} />
       <WhatSyncs machine={machine} online={online} />
     </>

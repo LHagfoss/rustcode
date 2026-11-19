@@ -14,6 +14,7 @@
 
 import {
   type MachineIdentity,
+  machineName,
   mergeDiscovered,
   readLocalIdentity,
   routeChangeNotices,
@@ -1232,11 +1233,12 @@ export async function pairMachine(code: string): Promise<void> {
 }
 
 /** Forget a machine, after asking: its token and its routes go with it. */
-export function removeMachine(machine: Machine): void {
+export function removeMachine(machine: Machine, onRemoved?: () => void): void {
+  const name = machineName(machine);
   askConfirm({
-    title: `Remove ${machine.name}?`,
+    title: `Remove ${name}?`,
     message:
-      `${machine.name} is forgotten on this computer: its pairing token and routes are deleted, and its threads are no longer listed here. ` +
+      `${name} is forgotten on this computer: its pairing token and routes are deleted, and its threads are no longer listed here. ` +
       "It keeps listing this computer until you revoke it there.",
     action: "Remove",
     destructive: true,
@@ -1244,8 +1246,9 @@ export function removeMachine(machine: Machine): void {
       void shellCall("machines_remove", { id: machine.id }).then(
         async () => {
           detach(machine.id);
-          toast(`Removed ${machine.name}.`, "success");
+          toast(`Removed ${name}.`, "success");
           await refreshMachines();
+          onRemoved?.();
         },
         (error) => toast(errorText(error), "error"),
       );
