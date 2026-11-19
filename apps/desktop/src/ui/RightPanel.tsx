@@ -52,7 +52,7 @@ const KEY = "rustcode.rightPanelWidth";
 /** The gap the card keeps from the header's foot and from the window's right and bottom edges. */
 const CARD_GAP = 12;
 const DETAILS_WIDTH = 280;
-const DETAILS_SURFACE = "rounded-2xl border border-border-strong bg-surface shadow-1";
+const DETAILS_SURFACE = "rounded-2xl border border-border bg-bg";
 /** The strip the resize edge straddles: a `-left-1 w-2` handle, half either side of the card's edge. */
 const HANDLE = 8;
 /** The surface a card of the right panel is drawn on: the details card and a pane alike. */
@@ -317,9 +317,7 @@ export function RightPanel() {
   }, [open, sheet]);
 
   const tabs: { value: Kind; label: string }[] = [
-    // The panel's first view is the overview: Properties, pulls, deliverables,
-    // the execution log and the rest of the details in one column (ui/ThreadDetails.tsx).
-    { value: "details", label: "Overview" },
+    { value: "details", label: "Details" },
     { value: "changes", label: "Changes" },
     ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
     ...(peekOn ? [{ value: "peek" as const, label: peekIsSideChat ? "Side chat" : "Thread" }] : []),
@@ -327,38 +325,35 @@ export function RightPanel() {
 
   const contents = kind && (
     <>
-      <div
-        data-tauri-drag-region
-        style={{ height: compact ? 36 : HEADER_HEIGHT }}
-        className={cx(
-          "flex shrink-0 items-center gap-2 px-2",
-          compact ? "rule-b [--rc-rule-inset:1rem]" : "border-border border-b",
-        )}
-      >
-        {/* The views keep their labels and scroll before the close button leaves the row. */}
-        <div className="flex min-w-0 items-center overflow-x-auto">
-          <div className="flex shrink-0 items-center">
-            {compact ? (
-              <span className="px-2 font-semibold text-callout text-fg">Thread details</span>
-            ) : tabs.length > 1 ? (
-              <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
-            ) : (
-              <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
-            )}
+      {!compact && (
+        <div
+          data-tauri-drag-region
+          style={{ height: HEADER_HEIGHT }}
+          className="flex shrink-0 items-center gap-2 border-border border-b px-2"
+        >
+          {/* The views keep their labels and scroll before the close button leaves the row. */}
+          <div className="flex min-w-0 items-center overflow-x-auto">
+            <div className="flex shrink-0 items-center">
+              {tabs.length > 1 ? (
+                <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
+              ) : (
+                <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
+              )}
+            </div>
           </div>
+          <span className="flex-1" data-tauri-drag-region />
+          <Tooltip label={`Close (${panelKey})`}>
+            <button
+              type="button"
+              aria-label="Close panel"
+              onClick={() => setPanel(null)}
+              className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+            >
+              <X size={14} />
+            </button>
+          </Tooltip>
         </div>
-        <span className="flex-1" data-tauri-drag-region />
-        <Tooltip label={`Close (${panelKey})`}>
-          <button
-            type="button"
-            aria-label="Close panel"
-            onClick={() => setPanel(null)}
-            className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-          >
-            <X size={14} />
-          </button>
-        </Tooltip>
-      </div>
+      )}
       <Suspense fallback={<div className="flex-1" />}>
         {kind === "details" && <ThreadDetails />}
         {kind === "changes" && <ChangesPanel />}

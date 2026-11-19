@@ -1,27 +1,17 @@
-// Compact workspace actions and context, with the full thread overview available on demand.
+// Compact workspace actions, lineage, and context usage.
 
 import { useEffect, useMemo, useState } from "react";
-import { modelName } from "../acp/types";
 import { type GitChanges, gitChangeSummary, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { contextPercent } from "../state/details";
-import { selectOption } from "../state/harness";
 import { showPanel, useApp, worktreeOf } from "../state/store";
 import { formatTokens, isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
 import { ChevronRight, FileDiff, FolderOpen, GitBranch, GitPullRequest, Laptop } from "./icons";
-import { DelegatesSection } from "./OverviewDelegates";
-import { DeliverablesSection } from "./OverviewDeliverables";
-import { DetailsSection } from "./OverviewDetails";
-import { ExecutionLogSection } from "./OverviewLog";
-import { PropertiesSection } from "./OverviewProperties";
-import { PullRequestsSection } from "./OverviewPulls";
 import {
-  delegatedIds,
   FOLDED_EVENT,
   isFolded as isFoldedOf,
-  pullBranches,
   readFolded,
   type OverviewSection as SectionId,
   toggleFolded,
@@ -55,20 +45,6 @@ export function ThreadDetails() {
   const worktree = useApp((s) => (s.selectedId ? worktreeOf(s, s.selectedId) : undefined));
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const links = useApp((s) => s.links.links);
-  const sessions = useApp((s) => s.sessions);
-  const threads = useApp((s) => s.threads);
-  // A delegate's branch is what its pull requests are opened from, so the panel
-  // reads the threads it started as well as the one it opens.
-  const delegatedBranches = useMemo(
-    () =>
-      id
-        ? delegatedIds(id, links).map(
-            (child) =>
-              threads[child]?.worktree?.branch ?? sessions.find((x) => x.id === child)?.worktree?.branch,
-          )
-        : [],
-    [id, links, sessions, threads],
-  );
   const host = id ? splitThreadKey(id).host : "";
   const machine = useApp((s) => s.machineNames[host]);
   const changes = useChanges(host ? undefined : thread?.cwd, isRunning(thread));
@@ -91,21 +67,13 @@ export function ThreadDetails() {
   };
   const isFolded = (section: SectionId) => isFoldedOf(folded, section);
 
-  const model = useMemo(
-    () => modelName(thread ? selectOption(thread.configOptions, "model")?.current : undefined),
-    [thread],
-  );
   const branch = worktree?.branch ?? changes?.branch;
-  const branches = useMemo(() => pullBranches(branch, delegatedBranches), [branch, delegatedBranches]);
 
   if (!id || !thread) {
     return (
       <p className="px-3 py-4 text-center text-callout text-fg-muted">Open a thread to see its details.</p>
     );
   }
-
-  // A worktree is the project's, checked out from the repository: the card names the project.
-  const project = worktree?.repo ?? thread.cwd;
 
   const usage = thread.usage;
   const used = contextPercent(usage);
@@ -182,63 +150,6 @@ export function ThreadDetails() {
           </span>
         </div>
       )}
-      <details className="group rule-t [--rc-rule-inset:1rem] px-2 py-1">
-        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-2 text-caption text-fg-muted hover:bg-fill-subtle [&::-webkit-details-marker]:hidden">
-          <ChevronRight size={12} className="group-open:rotate-90" />
-          More thread details
-        </summary>
-        <div className="flex flex-col gap-4 px-2 pb-3">
-          <PropertiesSection
-            thread={thread}
-            branch={branch}
-            project={project}
-            folded={isFolded("properties")}
-            onToggle={() => toggle("properties")}
-          />
-          {delegates > 0 && (
-            <div className="overflow-x-auto">
-              <div className="min-w-80">
-                <DelegatesSection
-                  threadId={id}
-                  count={delegates}
-                  folded={isFolded("delegates")}
-                  onToggle={() => toggle("delegates")}
-                />
-              </div>
-            </div>
-          )}
-          {pullsOn && (
-            <PullRequestsSection
-              cwd={project}
-              host={splitThreadKey(id).host}
-              branches={branches}
-              branch={branch}
-              folded={isFolded("pulls")}
-              onToggle={() => toggle("pulls")}
-            />
-          )}
-          <DeliverablesSection
-            items={thread.items}
-            cwd={thread.cwd}
-            folded={isFolded("deliverables")}
-            onToggle={() => toggle("deliverables")}
-          />
-          <ExecutionLogSection
-            items={thread.items}
-            usage={thread.usage}
-            harness={thread.harness?.id}
-            model={model}
-            folded={isFolded("log")}
-            onToggle={() => toggle("log")}
-          />
-          <DetailsSection
-            thread={thread}
-            changes={changes}
-            folded={isFolded("details")}
-            onToggle={() => toggle("details")}
-          />
-        </div>
-      </details>
     </div>
   );
 }
