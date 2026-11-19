@@ -52,6 +52,7 @@ const KEY = "rustcode.rightPanelWidth";
 /** The gap the card keeps from the header's foot and from the window's right and bottom edges. */
 const CARD_GAP = 12;
 const DETAILS_WIDTH = 280;
+const DETAILS_SURFACE = "rounded-2xl border border-border-strong bg-surface shadow-1";
 /** The strip the resize edge straddles: a `-left-1 w-2` handle, half either side of the card's edge. */
 const HANDLE = 8;
 /** The surface a card of the right panel is drawn on: the details card and a pane alike. */
@@ -328,14 +329,17 @@ export function RightPanel() {
     <>
       <div
         data-tauri-drag-region
-        style={{ height: HEADER_HEIGHT }}
-        className="flex shrink-0 items-center gap-2 border-border border-b px-2"
+        style={{ height: compact ? 36 : HEADER_HEIGHT }}
+        className={cx(
+          "flex shrink-0 items-center gap-2 px-2",
+          compact ? "rule-b [--rc-rule-inset:1rem]" : "border-border border-b",
+        )}
       >
         {/* The views keep their labels and scroll before the close button leaves the row. */}
         <div className="flex min-w-0 items-center overflow-x-auto">
           <div className="flex shrink-0 items-center">
             {compact ? (
-              <span className="px-2 font-medium text-caption text-fg-muted">Thread details</span>
+              <span className="px-2 font-semibold text-callout text-fg">Thread details</span>
             ) : tabs.length > 1 ? (
               <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
             ) : (
@@ -394,10 +398,10 @@ export function RightPanel() {
             if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
           }}
           className={cx(
-            SHEET_SURFACE,
+            compact ? DETAILS_SURFACE : SHEET_SURFACE,
             "absolute right-0 flex flex-col overflow-hidden outline-none transition-[opacity,translate] duration-200 ease-snappy",
             compact
-              ? "top-14 right-3 max-h-[calc(100%_-_4.25rem)] w-[min(88vw,280px)] rounded-xl border border-border"
+              ? "top-14 right-3 max-h-[calc(100%_-_4.25rem)] w-[min(88vw,280px)]"
               : "inset-y-0 w-[min(88vw,380px)] rounded-l-2xl",
             open ? "translate-x-0 opacity-100" : "translate-x-4 opacity-0",
           )}
@@ -440,7 +444,7 @@ export function RightPanel() {
           if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
         }}
         className={cx(
-          compact ? "self-start rounded-xl border border-border bg-bg" : CARD_SURFACE,
+          compact ? cx("self-start", DETAILS_SURFACE) : CARD_SURFACE,
           // Above the header's glass (`z-10`): the header spans the whole view and fades 24px past
           // its foot, which would otherwise wash over the card's top 12px. The card starts below
           // the header's band, so nothing of it covers the header's own controls.

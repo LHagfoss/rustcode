@@ -9,8 +9,8 @@ import { selectOption } from "../state/harness";
 import { showPanel, useApp, worktreeOf } from "../state/store";
 import { formatTokens, isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
-import { delegateBranchCount } from "./DelegateTree";
-import { FileDiff, FolderOpen, GitBranch, GitPullRequest, Laptop } from "./icons";
+import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
+import { ChevronRight, FileDiff, FolderOpen, GitBranch, GitPullRequest, Laptop } from "./icons";
 import { DelegatesSection } from "./OverviewDelegates";
 import { DeliverablesSection } from "./OverviewDeliverables";
 import { DetailsSection } from "./OverviewDetails";
@@ -109,58 +109,63 @@ export function ThreadDetails() {
 
   const usage = thread.usage;
   const used = contextPercent(usage);
-  const row = "flex min-h-8 w-full items-center gap-2 px-3 text-left text-callout";
+  const row = "flex min-h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout";
   const action = `${row} hover:bg-fill-subtle`;
+  const icon = "shrink-0 text-fg-muted";
 
   return (
     <div className="min-h-0 overflow-y-auto">
-      <div className="py-1">
+      <div className="px-2 py-1">
         <div className={row}>
-          <Laptop size={16} />
-          {machine ?? (host ? "Paired computer" : appPlatform() === "mac" ? "This Mac" : "This computer")}
+          <Laptop size={16} className={icon} />
+          <span className="min-w-0 truncate font-medium">
+            {machine ?? (host ? "Paired computer" : appPlatform() === "mac" ? "This Mac" : "This computer")}
+          </span>
         </div>
         {!host && (
           <button type="button" className={action} onClick={() => openPath(thread.cwd)}>
-            <FolderOpen size={16} />
-            Open in {fileManagerName(appPlatform())}
+            <FolderOpen size={16} className={icon} />
+            <span className="flex-1">Open in {fileManagerName(appPlatform())}</span>
+            <ChevronRight size={12} className="text-fg-faint" />
           </button>
         )}
       </div>
-      <div className="border-border border-t py-1">
+      <div className="rule-t [--rc-rule-inset:1rem] px-2 py-1">
         {branch && (
           <div className={row} title={branch}>
-            <GitBranch size={16} className="shrink-0" />
-            <span className="truncate">{branch}</span>
+            <GitBranch size={16} className={icon} />
+            <span className="truncate rounded-md bg-fill-subtle px-2 py-0.5 font-mono text-caption">
+              {branch}
+            </span>
           </div>
         )}
         {!host && (
           <button type="button" className={action} onClick={() => showPanel("changes")}>
-            <FileDiff size={16} />
-            Changes
-            {!!changes?.files.length && (
-              <span className="ml-auto tabular text-fg-muted">{changes.files.length}</span>
-            )}
+            <FileDiff size={16} className={icon} />
+            <span className="flex-1">Changes</span>
+            {!!changes?.files.length && <span className="tabular text-fg-muted">{changes.files.length}</span>}
+            <ChevronRight size={12} className="text-fg-faint" />
           </button>
         )}
         {pullsOn && (
           <button type="button" className={action} onClick={() => showPanel("pulls")}>
-            <GitPullRequest size={16} />
-            Pull requests
+            <GitPullRequest size={16} className={icon} />
+            <span className="flex-1">Pull requests</span>
+            <ChevronRight size={12} className="text-fg-faint" />
           </button>
         )}
       </div>
       {delegates > 0 && (
-        <div className="border-border border-t px-2 py-1">
-          <DelegatesSection
+        <div className="rule-t [--rc-rule-inset:1rem] px-2 py-2">
+          <DelegatePreview
             threadId={id}
-            count={delegates}
-            folded={isFolded("delegates")}
+            expanded={!isFolded("delegates")}
             onToggle={() => toggle("delegates")}
           />
         </div>
       )}
       {usage && used !== undefined && (
-        <div className={`${row} border-border border-t py-2 text-fg-muted`}>
+        <div className="rule-t [--rc-rule-inset:1rem] flex items-center gap-2 px-4 py-3 text-caption text-fg-muted">
           Context
           <div
             role="meter"
@@ -170,15 +175,18 @@ export function ThreadDetails() {
             aria-valuenow={used}
             className="h-1 flex-1 overflow-hidden rounded-full bg-fill"
           >
-            <div className="h-full rounded-full bg-fg-muted" style={{ width: `${used}%` }} />
+            <div className="h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
           </div>
           <span className="shrink-0 tabular">
             {formatTokens(usage.used)} / {formatTokens(usage.size)}
           </span>
         </div>
       )}
-      <details className="border-border border-t">
-        <summary className="mx-3 cursor-pointer py-2 text-caption text-fg-muted">More thread details</summary>
+      <details className="group rule-t [--rc-rule-inset:1rem] px-2 py-1">
+        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-2 text-caption text-fg-muted hover:bg-fill-subtle [&::-webkit-details-marker]:hidden">
+          <ChevronRight size={12} className="group-open:rotate-90" />
+          More thread details
+        </summary>
         <div className="flex flex-col gap-4 px-2 pb-3">
           <PropertiesSection
             thread={thread}
@@ -187,6 +195,18 @@ export function ThreadDetails() {
             folded={isFolded("properties")}
             onToggle={() => toggle("properties")}
           />
+          {delegates > 0 && (
+            <div className="overflow-x-auto">
+              <div className="min-w-80">
+                <DelegatesSection
+                  threadId={id}
+                  count={delegates}
+                  folded={isFolded("delegates")}
+                  onToggle={() => toggle("delegates")}
+                />
+              </div>
+            </div>
+          )}
           {pullsOn && (
             <PullRequestsSection
               cwd={project}

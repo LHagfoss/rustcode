@@ -1253,7 +1253,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   row's top right, so stacked controls share one left edge.
 - **Right panel:** one `RightPanel` for every side view (Details, Changes, Pull
   requests, Thread). Overview uses a 280px card sized to its contents, with workspace actions,
-  branch, Changes, delegates and context usage. The detailed sections are under More thread details.
+  branch, Changes, delegates and context usage. It previews up to three active delegates, with
+  the remaining agents available on demand. The detailed sections are under More thread details.
   The other views use a card **docked** at the window's right edge, beside the chat
   column and inside the chat view's row (`ui/ChatView.tsx`), so it is never drawn
   over the board, the review or the compare view. It is the card it always was —
