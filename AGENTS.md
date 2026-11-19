@@ -46,8 +46,12 @@ instructions for work in this repository.
   Do not use a separate worktree unless it is genuinely called for (subagents or
   other concurrent work, or an active checkout holding unrelated dirty work),
   and ask the user first.
-- When a worktree is used, build it under `/tmp` with `git worktree add`, and
-  clean it up as soon as its branch is pushed and merged: `git worktree remove`,
+- When a worktree is used, put it in `~/code/worktrees/<repo>-<slug>`
+  (`git worktree add -b <branch> ~/code/worktrees/rustcode-<slug> origin/main`),
+  not under `/tmp`. On Linux `/tmp` is often a RAM-backed tmpfs of a few GB:
+  one worktree's `target/` filled it, failed the build with "No space left on
+  device" and took the space from memory, and a reboot wipes it. Clean it up
+  as soon as its branch is pushed and merged: `git worktree remove`,
   `git worktree prune`, then `git branch -d`. Never leave a worktree or task
   branch behind. Before deleting, confirm nothing unique is lost with
   `git cherry main <branch>` (a squash-merged branch legitimately shows
