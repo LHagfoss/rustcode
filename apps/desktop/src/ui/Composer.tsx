@@ -15,23 +15,13 @@ import { primaryModifier } from "../lib/platform";
 
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { harnessPlanKey } from "../acp/rustcode";
-import { type Harness, projectName, type SlashCommand } from "../acp/types";
-import type { ThreadStatus } from "../acp/v2";
-import { suggestBranch, validBranch } from "../acp/v2";
+import { projectName, type SlashCommand } from "../acp/types";
 import { fieldBeat } from "../lib/backdrop/events";
 import { insertTranscript } from "../lib/dictation";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { measuredFieldHeight } from "../lib/fieldHeight";
 import { haptic } from "../lib/haptics";
-import {
-  clipboardImage,
-  type ImageFile,
-  onFileDrop,
-  pickFiles,
-  pickFolder,
-  projectFiles,
-} from "../lib/native";
+import { clipboardImage, type ImageFile, onFileDrop, pickFiles, projectFiles } from "../lib/native";
 import {
   dismissNextPrompt,
   nextPromptDismissed,
@@ -43,7 +33,6 @@ import { isLongPaste, pastedImages } from "../lib/paste";
 import { observeSize } from "../lib/resize";
 import { fadeClearedField } from "../lib/sendFlight";
 import {
-  type AgentChoice,
   type Attachment,
   type ComposeExtras,
   commandSubmission,
@@ -55,7 +44,6 @@ import {
   insertCommand,
   insertMention,
   type Mention,
-  type MentionState,
   pruneMentions,
   rankAgents,
   rankThreads,
@@ -66,50 +54,27 @@ import {
   trackPastes,
 } from "../state/compose";
 import { agentStateOf, type DelegateNode, delegateTree } from "../state/delegates";
-import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles, SCOPES } from "../state/fileRefs";
-import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason } from "../state/harness";
-import { usageOf } from "../state/harnessUsage";
-import { childAccountOn, type SignedOutLogins } from "../state/logins";
-import { useMachineReconnecting, useMachines } from "../state/machines";
-import {
-  type MentionEntry,
-  type MentionNode,
-  type MentionSection,
-  mentionNodes,
-  rankMachines,
-} from "../state/mentionDrawer";
-import { modeLabel, PERMISSION_MODES, type PermissionMode } from "../state/permissions";
+import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles } from "../state/fileRefs";
+import { controlDisabledReason } from "../state/harness";
+import { useMachineReconnecting } from "../state/machines";
+import { type MentionNode, type MentionSection, mentionNodes, rankMachines } from "../state/mentionDrawer";
 import { noteRecentFile, recentFiles, recentFirst } from "../state/recentFiles";
 import { scheduledSummary, scheduleRefusalText } from "../state/schedule";
-import type { CachedPlan } from "../state/store";
 import {
   acceptsImages,
   answerPermission,
   cancel,
   cancelEdit,
   cancelQueuedEdit,
-  cancelWait,
   commandsFor,
   endQueuedEdit,
-  featureMissing,
-  HOME_FOLDER,
   harnessesOn,
-  hasOwnPermissionMode,
-  inheritedModeOf,
-  limitTime,
   newThreadChoice,
-  openSettings,
-  permissionModeOf,
-  resumeWaitNow,
   saveQueuedEdit,
   scheduleMessage,
   sendDecisionFor,
   setDraft,
   setExtras,
-  setNewWorktree,
-  setPermissionMode,
-  setProjectCwd,
-  startNewThread,
   startQueuedEdit,
   steerOrSubmit,
   submit,
@@ -119,46 +84,45 @@ import {
   useMachineOfThread,
   useThreadOffline,
 } from "../state/store";
-import { isRunning, localId, shortAge, type ThreadState } from "../state/thread";
+import { isRunning, localId, type ThreadState } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./Attachments";
-import { UsageMeter } from "./ComposerUsage";
-import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
-import { threadMachine } from "./composerFooterLayout";
-import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
-import { DRAWER_NAME, Marked } from "./drawerMarks";
-import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
-import { HarnessIcon } from "./HarnessIcon";
+import { ComposerDrawer } from "./ComposerDrawer";
 import {
-  ArrowUp,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Clock,
-  Command,
-  FileText,
-  Folder,
-  GitBranch,
-  ListEnd,
-  Paperclip,
-  Pencil,
-  Shield,
-  ShieldCheck,
-  ShieldOff,
-  Square,
-  SquarePen,
-  WifiOff,
-} from "./icons";
+  FolderMenu,
+  LimitWaitRow,
+  PermissionMenu,
+  PlusMenu,
+  ThreadMachineChip,
+  WorktreeToggle,
+} from "./ComposerFooter";
+import { UsageMeter } from "./ComposerUsage";
+import {
+  ALL_MATCHES,
+  agentChoices,
+  type DrawerEntry,
+  type DrawerPick,
+  type DrawerRowItem,
+  FILES_FRESH_MS,
+  keywordEntries,
+  mentionStateOf,
+  NO_PLANS,
+  NOT_EXPANDED,
+  projectKeyOf,
+} from "./composerMentions";
+import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
+import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
+import { ArrowUp, Check, GitBranch, ListEnd, Pencil, Square } from "./icons";
 import { LinkChip } from "./LinkChip";
-import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineSelector } from "./MachineSelector";
 import { ModelPicker } from "./ModelPicker";
-import { MachineMentionRow, useMachineMentions } from "./machineMentions";
-import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
-import { cx, MenuQuickActions, noTextHelpers, Pill, Tooltip } from "./primitives";
+import { useMachineMentions } from "./machineMentions";
+import { cx, noTextHelpers, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
 import { ScheduledMessages } from "./ScheduledMessages";
 import { SendLaterDialog } from "./SendLaterDialog";
+
+export { PermissionMenu } from "./ComposerFooter";
 
 // The field's line box: 14px at 1.5 (`leading-normal`), a hair tighter than a reply's, which is what
 // makes a draft read as something being typed rather than something read back.
@@ -201,151 +165,6 @@ function sameComposer(
   return Object.keys(a.thread).length === Object.keys(b.thread).length;
 }
 
-/** How long a project's file list is used before `@` lists it again. */
-const FILES_FRESH_MS = 30_000;
-
-/** A row of the composer's drawer: a command, or one of the `@` drawer's own rows. */
-type DrawerEntry = { kind: "command"; command: SlashCommand } | MentionEntry;
-
-/**
- * A row of the drawer as it is drawn: a section's heading, a harness under it, or a bound row the
- * arrow keys can land on — one that points at something, or a section's `Show all`.
- */
-type DrawerRowItem =
-  | { kind: "heading"; label: string }
-  | { kind: "harness"; harness: string; name: string; account?: string; plan?: string }
-  | { kind: "row"; entry: DrawerEntry; index: number }
-  | { kind: "more"; section: MentionSection; hidden: number; index: number }
-  | { kind: "less"; section: MentionSection; index: number };
-
-/** What a bound row does when it is picked: point at something, or open/close a section. */
-type DrawerPick =
-  | { kind: "entry"; entry: DrawerEntry }
-  | { kind: "more"; section: MentionSection }
-  | { kind: "less"; section: MentionSection };
-
-/** Every match, before the drawer keeps some back behind `Show N more`: what the search looks through. */
-const ALL_MATCHES = 200;
-
-/** Nothing expanded: the drawer's first look at a folder shows a few rows of each section. */
-const NOT_EXPANDED: ReadonlySet<MentionSection> = new Set();
-
-/** No plans to draw: a machine's harness rows, whose plans this computer has not read. */
-const NO_PLANS: Record<string, CachedPlan> = {};
-
-/** What one login's plan has left across its windows: `62% left`, or nothing when it was not read. */
-function planLeft(plan: CachedPlan | undefined): string | undefined {
-  const windows = usageOf(plan)?.windows;
-  if (!windows?.length) return undefined;
-  return `${Math.max(0, Math.round(100 - Math.max(...windows.map((w) => w.used_percent))))}% left`;
-}
-
-/**
- * Who a delegate could run on: every available harness's models, with the model a new thread there
- * starts on first, and the effort, login and plan that go with each. The rows are interleaved one
- * model per harness, so the drawer's first rows show what every harness offers rather than one
- * harness's whole list, and the whole catalog is searched by name (`rankAgents`), not just what is
- * on screen.
- */
-function agentChoices(
-  harnesses: readonly Harness[],
-  plans: Record<string, CachedPlan>,
-  signedOut: SignedOutLogins,
-  /** The thread the delegate would be started from: a child on its harness inherits its login. */
-  parent: { harness?: string; account?: string | null },
-): AgentChoice[] {
-  const perHarness = orderHarnesses([...harnesses])
-    .filter((h) => !unavailableReason(h))
-    .map((h) => {
-      const accounts = h.accounts ?? [];
-      const accountId = accounts.length ? childAccountOn(h, parent, signedOut) : null;
-      // Only a harness with logins to choose between names one on its rows.
-      const account = accounts.length > 1 ? accounts.find((a) => a.id === accountId)?.name : undefined;
-      const plan = planLeft(plans[harnessPlanKey(h.id, accountId)]);
-      const lead = h.last?.model;
-      const models = [...h.models].sort((a, b) => Number(b.id === lead) - Number(a.id === lead));
-      if (!models.length) {
-        return [
-          {
-            harness: h.id,
-            harnessName: h.name,
-            name: h.name,
-            effort: h.capabilities.effort ? (h.last?.effort ?? undefined) : undefined,
-            account,
-            plan,
-            token: h.id,
-          },
-        ];
-      }
-      return models.map((m) => ({
-        harness: h.id,
-        harnessName: h.name,
-        model: m.id,
-        name: m.name,
-        effort: h.capabilities.effort
-          ? m.id === lead && h.last?.effort
-            ? h.last.effort
-            : (defaultEffort(m, m.efforts) ?? undefined)
-          : undefined,
-        account,
-        plan,
-        token: `${h.id}/${m.id}`,
-      }));
-    });
-  const rows: AgentChoice[] = [];
-  const deepest = Math.max(0, ...perHarness.map((choices) => choices.length));
-  for (let i = 0; i < deepest; i++) {
-    for (const choices of perHarness) {
-      const row = choices[i];
-      if (row) rows.push(row);
-    }
-  }
-  return rows;
-}
-
-/** The group keywords the drawer offers first, while what is typed is empty or still a prefix. */
-function keywordEntries(query: string, machines: boolean): MentionScope[] {
-  const asked = query.trim().toLowerCase();
-  return SCOPES.filter((scope) => scope.word.startsWith(asked))
-    .map((scope) => scope.scope)
-    .filter((scope) => machines || scope !== "machines");
-}
-
-/** The folder a thread is grouped by: a worktree's repo, else the thread's own folder. */
-const projectKeyOf = (session: { cwd?: string; repo?: string; worktree?: { repo?: string } }) =>
-  session.worktree?.repo || session.repo || session.cwd || "";
-
-/**
- * What a thread is doing, as the `#` list orders it and says it: the app's live turn first, then what
- * the engine listed (a thread working in another window is working here too), and settled only when
- * the engine says so.
- */
-function mentionStateOf(session: { status?: ThreadStatus }, working: boolean, asking: boolean): MentionState {
-  // The app's own reading of a thread (state/store.ts `statusOf`): what it asks of you, then that it
-  // works, then what the engine last listed.
-  if (asking) return "needs";
-  if (working) return "working";
-  if (session.status === "needs_input") return "needs";
-  if (session.status === "running") return "working";
-  return session.status === "done" ? "settled" : "open";
-}
-
-/** What a thread's state says last in its row, in the sidebar's own words and tones. */
-const MENTION_WORD: Record<MentionState, string> = {
-  needs: "Needs you",
-  working: "Working",
-  open: "",
-  settled: "Done",
-};
-const MENTION_TINT: Record<MentionState, string> = {
-  needs: "text-warning",
-  working: "text-accent",
-  open: "",
-  settled: "text-fg-muted",
-};
-
-// The drawer's row, shared by all four kinds: one line, the mark first, what it is last.
-const DRAWER_ROW = "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left";
 export const Composer = memo(function Composer({
   thread,
   compact,
@@ -1243,165 +1062,6 @@ export const Composer = memo(function Composer({
     };
   }, [drawer]);
 
-  // The scroll follows the arrow keys: the list runs past the drawer's height, the row it is on
-  // stays in view.
-  const selectedRow = useRef<HTMLButtonElement>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the row under the keys is the one that moves
-  useEffect(() => {
-    selectedRow.current?.scrollIntoView({ block: "nearest" });
-  }, [selected]);
-
-  // What every bound row is: one option of the list, lit while the arrows or the pointer are on it.
-  const drawerRowProps = (i: number) => {
-    const picked = i === selected;
-    return {
-      type: "button" as const,
-      role: "option",
-      "aria-selected": picked,
-      ref: picked ? selectedRow : undefined,
-      onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
-      onMouseEnter: () => setSelected(i),
-      className: cx(DRAWER_ROW, picked && "bg-fill"),
-    };
-  };
-
-  // The rest of a section, in place — or, with the section open, the way back to its few rows.
-  const restRow = (section: MentionSection, hidden: number, i: number) => (
-    <button key={`m:${section}`} {...drawerRowProps(i)} onClick={() => expand(section)}>
-      <ChevronDown size={16} className="shrink-0 text-fg-muted" />
-      <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
-        {hidden > 0 ? `Show ${hidden} more` : "Show more"}
-      </span>
-    </button>
-  );
-
-  const fewerRow = (section: MentionSection, i: number) => (
-    <button key={`l:${section}`} {...drawerRowProps(i)} onClick={() => collapse(section)}>
-      <ChevronUp size={16} className="shrink-0 text-fg-muted" />
-      <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">Show fewer</span>
-    </button>
-  );
-
-  const drawerRow = (entry: DrawerEntry, i: number) => {
-    const row = drawerRowProps(i);
-    switch (entry.kind) {
-      case "command":
-        return (
-          <button key={`c:${entry.command.name}`} {...row} onClick={() => complete(entry.command, true)}>
-            <Command size={16} className="shrink-0 text-fg-muted" />
-            {/* A command that wants arguments says so before it is picked. */}
-            <span className={DRAWER_NAME}>
-              {entry.command.name}
-              {entry.command.takesArguments && <span className="text-fg-faint"> …</span>}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
-              {entry.command.description}
-            </span>
-            {/* What answers it: the app itself, not the harness. */}
-            {(entry.command.action !== "execute" || entry.command.report) && (
-              <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
-                {entry.command.action === "skill" ? "Skill" : "App"}
-              </span>
-            )}
-          </button>
-        );
-      case "file": {
-        const cut = entry.path.lastIndexOf("/") + 1;
-        return (
-          <button key={`f:${entry.path}`} {...row} onClick={() => reference(entry.path)}>
-            <FileText size={16} className="shrink-0 text-fg-muted" />
-            <span className={DRAWER_NAME}>{entry.path.slice(cut)}</span>
-            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{entry.path.slice(0, cut)}</span>
-          </button>
-        );
-      }
-      case "keyword": {
-        const keyword = SCOPES.find((candidate) => candidate.scope === entry.scope)!;
-        return (
-          <button key={`k:${keyword.word}`} {...row} onClick={() => accept(entry, false)}>
-            {/* No mark: this row is not something to point at, it says where to look. */}
-            <span className="w-4 shrink-0" />
-            <span className={DRAWER_NAME}>
-              <Marked text={keyword.label} query={drawerQuery} />
-            </span>
-            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{keyword.hint}</span>
-            {i === selected && (
-              <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
-                @{keyword.word}
-              </span>
-            )}
-          </button>
-        );
-      }
-      case "agent":
-        return (
-          <button key={`a:${entry.agent.token}`} {...row} onClick={() => accept(entry, false)}>
-            <HarnessIcon
-              id={entry.agent.harness}
-              name={entry.agent.harnessName}
-              size={16}
-              className="shrink-0"
-            />
-            <span className={DRAWER_NAME}>
-              <Marked text={entry.agent.name} query={drawerQuery} />
-            </span>
-            {/* One muted detail: the effort it would start on. The harness is the group's header, the
-                login and plan are said there once. */}
-            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{entry.agent.effort}</span>
-            {/* The token the row writes, on the row under the keys only, so what the message will
-                say is no surprise without every row carrying it. */}
-            {i === selected && (
-              <span className="ml-auto max-w-[220px] shrink-0 truncate rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
-                @{entry.agent.token}
-              </span>
-            )}
-          </button>
-        );
-      case "machine":
-        return (
-          <MachineMentionRow
-            key={`mc:${entry.machine.id}`}
-            machine={entry.machine}
-            query={drawerQuery}
-            row={row}
-            onPick={() => accept(entry, false)}
-          />
-        );
-      case "thread": {
-        const thread = entry.thread;
-        return (
-          <button key={`t:${thread.id}`} {...row} onClick={() => accept(entry, false)}>
-            <HarnessIcon
-              id={thread.harness ?? "rustcode"}
-              name={thread.harness}
-              size={16}
-              className="shrink-0"
-            />
-            <span className={DRAWER_NAME}>
-              <Marked text={thread.title} query={drawerQuery} />
-            </span>
-            {thread.project && !thread.home && (
-              <span className="min-w-0 flex-1 truncate text-caption text-fg-faint">{thread.project}</span>
-            )}
-            <span className="ml-auto flex shrink-0 items-center gap-2">
-              {thread.delegate && (
-                <span className="rounded-xs bg-fill px-1.5 text-caption text-fg-muted">Delegate</span>
-              )}
-              {MENTION_WORD[thread.state] && (
-                <span className={cx("font-medium text-caption", MENTION_TINT[thread.state])}>
-                  {MENTION_WORD[thread.state]}
-                </span>
-              )}
-              {thread.updatedAt !== undefined && (
-                <span className="text-caption text-fg-faint tabular">{shortAge(thread.updatedAt)}</span>
-              )}
-            </span>
-          </button>
-        );
-      }
-    }
-  };
-
   return (
     <div
       ref={shell}
@@ -1418,52 +1078,21 @@ export const Composer = memo(function Composer({
           foot, so the three read as one floating surface over the transcript. */}
       <div className="relative">
         {drawer && (
-          <div
-            ref={drawerRef}
-            className="rc-composer-drawer rc-in absolute inset-x-6 bottom-[calc(100%-1rem)] z-0 flex max-h-64 flex-col overflow-y-auto px-1.5 pt-1.5 pb-[calc(1rem+6px)]"
-            role="listbox"
-            aria-label={drawerLabel}
-          >
-            {/* Nothing at all to offer: the drawer says so where the field is about to be typed in. */}
-            {!anyRows && <p className="px-5 pt-4 pb-7 text-fg-muted text-sub">{emptyText}</p>}
-            {drawerRows.map((item) => {
-              if (item.kind === "heading") {
-                // A section's name: the rows under it are the drawer's options, never this line.
-                return (
-                  <div
-                    key={`g:${item.label}`}
-                    role="presentation"
-                    className="px-2 pt-1.5 pb-0.5 font-medium text-caption text-fg-muted"
-                  >
-                    {item.label}
-                  </div>
-                );
-              }
-              if (item.kind === "harness") {
-                // Which harness the rows under it run on, marked as the app marks that harness.
-                return (
-                  <div
-                    key={`h:${item.harness}`}
-                    role="presentation"
-                    className="flex items-center gap-1.5 px-2 pt-1 pb-0.5 text-caption text-fg-muted"
-                  >
-                    <HarnessIcon id={item.harness} name={item.name} size={12} />
-                    <span className="truncate">{item.name}</span>
-                    {/* The login and what its plan has left, once for the group's rows. */}
-                    {(item.account || item.plan) && (
-                      <span className="ml-auto flex shrink-0 items-center gap-2 text-fg-faint">
-                        {item.account && <span className="max-w-[140px] truncate">{item.account}</span>}
-                        {item.plan && <span className="tabular">{item.plan}</span>}
-                      </span>
-                    )}
-                  </div>
-                );
-              }
-              if (item.kind === "more") return restRow(item.section, item.hidden, item.index);
-              if (item.kind === "less") return fewerRow(item.section, item.index);
-              return drawerRow(item.entry, item.index);
-            })}
-          </div>
+          <ComposerDrawer
+            drawerRef={drawerRef}
+            drawerLabel={drawerLabel}
+            anyRows={anyRows}
+            emptyText={emptyText}
+            drawerRows={drawerRows}
+            drawerQuery={drawerQuery}
+            selected={selected}
+            setSelected={setSelected}
+            expand={expand}
+            collapse={collapse}
+            complete={complete}
+            reference={reference}
+            accept={accept}
+          />
         )}
         <div
           className={cx(
@@ -1810,360 +1439,3 @@ export const Composer = memo(function Composer({
     </div>
   );
 }, sameComposer);
-
-/**
- * The thread waits to go on by itself: its plan's limit resetting, a provider that
- * was overloaded retrying, or the machine's network coming back. Send now skips the
- * wait; Cancel stops it continuing on its own.
- */
-function LimitWaitRow({ threadId }: { threadId: string }) {
-  const wait = useApp((s) => s.limitWaits[threadId]);
-  const offline = useApp((s) => s.internetWaits[threadId]);
-  // Once it is continuing, the turn says so; the wait is settled when it ends.
-  const running = useApp((s) => isRunning(s.threads[threadId]));
-  if ((!wait && !offline) || running) return null;
-  const text = offline
-    ? "Waiting for the internet, then it continues"
-    : wait?.reason === "overload"
-      ? `The provider was overloaded — trying again at ${limitTime(wait.until)}`
-      : wait
-        ? `Waiting for the limit to reset (${limitTime(wait.until)})`
-        : "";
-  return (
-    <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-fg-muted">
-      {offline ? <WifiOff size={12} className="shrink-0" /> : <Clock size={12} className="shrink-0" />}
-      <span className="min-w-0 truncate">{text}</span>
-      <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => resumeWaitNow(threadId)}>
-        Send now
-      </Pill>
-      <Pill quiet size="sm" className="shrink-0" onClick={() => cancelWait(threadId)}>
-        Cancel
-      </Pill>
-    </div>
-  );
-}
-
-/**
- * "New worktree" for a new thread: the thread runs on its own branch in its
- * own folder, so parallel threads never edit the same checkout. The branch
- * name follows the message until the user edits it.
- */
-function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }) {
-  const wt = useApp((s) => s.newWorktree);
-  const missing = useApp((s) => (s.features.worktrees ? null : featureMissing("worktrees")));
-  const suggested = suggestBranch(draft || "new thread");
-  // biome-ignore lint/correctness/useExhaustiveDependencies: follow the draft until edited
-  useEffect(() => {
-    if (wt.on && !wt.edited && wt.branch !== suggested) setNewWorktree({ branch: suggested });
-  }, [suggested, wt.on, wt.edited]);
-  const valid = !wt.branch.trim() || validBranch(wt.branch.trim());
-  return (
-    // Not `shrink`: the toggle keeps its button's width so it never runs under the mode beside it;
-    // the folder name is the one label that gives way.
-    <div className="flex min-w-0 shrink-0 items-center gap-1">
-      <Tooltip
-        side="bottom"
-        label={
-          missing ?? (wt.on ? "Runs on its own branch and folder" : "Run on a new branch, in its own folder")
-        }
-      >
-        <button
-          type="button"
-          aria-pressed={wt.on}
-          aria-label="Run in a new worktree"
-          disabled={!!missing}
-          onClick={() => setNewWorktree({ on: !wt.on, branch: suggested, edited: false })}
-          className={cx(
-            "flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2 text-callout disabled:opacity-40",
-            wt.on
-              ? "bg-fill-strong text-fg"
-              : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg enabled:active:bg-fill-strong",
-          )}
-        >
-          <GitBranch size={14} className="shrink-0" />
-          {/* The label drops at the same step as the branch chip beside it, so a narrow card keeps
-              the toggle, the folder and the mode without the row running out of room. */}
-          {!compact && !wt.on && <span className="@max-xl/composer:hidden">Worktree</span>}
-        </button>
-      </Tooltip>
-      {wt.on && (
-        <input
-          value={wt.branch}
-          onChange={(e) => setNewWorktree({ branch: e.target.value, edited: true })}
-          aria-label="Branch name"
-          aria-invalid={!valid}
-          {...noTextHelpers}
-          placeholder={suggested}
-          size={Math.min(32, Math.max(12, wt.branch.length + 1))}
-          className={cx(
-            "h-[24px] min-w-0 max-w-[220px] rounded-full bg-fill px-2 font-mono text-caption rc-in",
-            valid ? "focus:bg-fill-strong" : "text-danger",
-          )}
-        />
-      )}
-    </div>
-  );
-}
-
-/**
- * Where an open thread runs, when that is a paired machine: its glyph and name before the folder,
- * a quiet label rather than a button (the machine is fixed once a thread exists). A thread on this
- * computer shows nothing, as in the sidebar. The name is the first label to give way under a
- * container width, and the glyph keeps the name for assistive tech.
- */
-function ThreadMachineChip({ host }: { host: string }) {
-  const machines = useMachines((s) => s.machines);
-  const there = threadMachine(host, machines);
-  if (!there) return null;
-  return (
-    <Tooltip side="bottom" label={there.title}>
-      <span
-        role="img"
-        aria-label={there.title}
-        className="flex h-7 min-w-0 shrink items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-callout text-fg-muted"
-      >
-        <span className="relative flex shrink-0">
-          <DeviceGlyphIcon glyph={there.glyph} tint={there.tint} size={14} />
-          {there.away && (
-            <span className="-right-0.5 -top-0.5 absolute size-1.5 rounded-full bg-warning ring-2 ring-[var(--rc-composer-footer-bg)]" />
-          )}
-        </span>
-        <span className="min-w-0 max-w-[160px] truncate @max-lg/composer:max-w-[96px] @max-md/composer:hidden">
-          {there.name}
-        </span>
-      </span>
-    </Tooltip>
-  );
-}
-
-/**
-/**
- * The folder button under the composer: the project picker (ui/ProjectPicker.tsx), which starts a
- * new thread in a project or moves the open thread to another one.
- */
-function FolderMenu({ thread, cwd, host }: { thread?: ThreadState; cwd: string; host: string }) {
-  const blocked = useMoveBlockedReason(thread);
-  return (
-    <ProjectPicker
-      thread={thread}
-      cwd={cwd}
-      host={host}
-      // Always above the button, pinned: the list is what it is about, and the card above it has
-      // the room (docs/design.md › Composer strip).
-      side="top"
-      tooltip={blocked ? `${cwd} · ${blocked}` : cwd || "Choose a folder"}
-      trigger={
-        <button
-          type="button"
-          // The name is the trigger's own text at full width and its icon's label when it drops
-          // out under a container width, so the button keeps a name either way.
-          aria-label={cwd ? `Project folder: ${projectName(cwd)}` : "Choose a folder"}
-          disabled={!!thread && !cwd}
-          className={cx(
-            footerButton,
-            "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
-          )}
-        >
-          <Folder size={14} className="shrink-0" />
-          <span className="min-w-0 max-w-[220px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
-            {cwd === HOME_FOLDER ? "Home folder" : cwd ? projectName(cwd) : "Choose a folder"}
-          </span>
-          <ChevronDown size={12} className="shrink-0 text-fg-faint" />
-        </button>
-      }
-    />
-  );
-}
-
-// A button in the composer's footer: quiet until hovered, and its fill is its open state. It is
-// not `shrink-0`: a long folder name gives way to the controls to its right (see FolderMenu).
-// Its height is the footer's one height at every width, so the air around it stays even.
-const footerButton =
-  "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
-
-const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
-  ask: Shield,
-  edits: ShieldCheck,
-  full: ShieldOff,
-};
-
-/**
- * What the thread may do without asking. Full access is tinted so it is never on unnoticed. A thread
- * follows its project's default (Settings › Permissions) until a mode is picked here; the menu says
- * which, and "Use default" goes back to following it.
- */
-export function PermissionMenu({
-  threadId,
-  cwd,
-  compact,
-}: {
-  threadId?: string;
-  /** A new thread's folder, whose project may have its own default. */
-  cwd?: string;
-  compact?: boolean;
-}) {
-  const mode = useApp((s) => permissionModeOf(s, threadId, cwd));
-  const own = useApp((s) =>
-    threadId ? hasOwnPermissionMode(s, threadId) : s.newThreadPermissionMode !== null,
-  );
-  const inherited = useApp((s) => inheritedModeOf(s, threadId, cwd));
-  const current = PERMISSION_MODES.find((m) => m.id === mode)!;
-  const Icon = PERMISSION_ICON[mode];
-  const source = own ? "Set for this thread" : "Default";
-  return (
-    <CardPopover
-      role="menu"
-      label="Permissions"
-      tooltip={`${current.label} · ${current.detail}${own ? "" : " (the default)"}`}
-      onKeyDown={menuKeys}
-      className="w-[280px]"
-      trigger={
-        <button
-          type="button"
-          aria-label={`Permissions: ${current.label}${own ? "" : ", the default"}`}
-          className={cx(
-            footerButton,
-            "shrink-0 data-[state=open]:bg-fill",
-            mode === "full" && "text-warning hover:text-warning",
-          )}
-        >
-          <Icon size={14} />
-          {!compact && <span className="@max-md/composer:hidden">{current.label}</span>}
-          <ChevronDown size={12} className="text-fg-faint" />
-        </button>
-      }
-    >
-      <div role="menu" aria-label="Permissions">
-        <div className="px-2 pt-1 pb-1.5 text-caption text-fg-muted">{source}</div>
-        {PERMISSION_MODES.map((m) => {
-          const ItemIcon = PERMISSION_ICON[m.id];
-          const checked = m.id === mode;
-          return (
-            <CardMenuItem
-              key={m.id}
-              role="menuitemradio"
-              aria-checked={checked}
-              onSelect={() => setPermissionMode(threadId, m.id)}
-              className={cx("items-start gap-2 py-1.5", checked && "bg-fill-subtle")}
-            >
-              <ItemIcon
-                size={13}
-                className={cx("mt-[3px] shrink-0", m.id === "full" ? "text-warning" : "text-fg-muted")}
-              />
-              <span className="flex min-w-0 flex-col">
-                <span className="text-body text-fg">{m.label}</span>
-                <span className="text-caption text-fg-muted">{m.detail}</span>
-              </span>
-              {checked && <Check size={13} className="ms-auto mt-[3px] shrink-0 text-fg-muted" />}
-            </CardMenuItem>
-          );
-        })}
-        <div role="separator" className="mx-1.5 my-1 h-px shrink-0 bg-border" />
-        {own && (
-          <CardMenuItem role="menuitem" onSelect={() => setPermissionMode(threadId, null)}>
-            <span className="text-body text-fg">Use default</span>
-            <span className="ms-auto text-caption text-fg-muted">{modeLabel(inherited)}</span>
-          </CardMenuItem>
-        )}
-        <CardMenuItem role="menuitem" onSelect={() => openSettings("permissions")}>
-          <span className="text-body text-fg">Permission settings…</span>
-        </CardMenuItem>
-      </div>
-    </CardPopover>
-  );
-}
-
-/**
- * The + as one filled shape on a 16px grid: 2px arms, each 10px long, crossing at (8, 8). Every
- * edge is a whole pixel, at 1x and (as whole device pixels) at 2x, and a single path means the
- * crossing is painted once.
- */
-function PlusMark() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      shapeRendering="crispEdges"
-      aria-hidden="true"
-      className="shrink-0"
-    >
-      <path d="M7 3h2v4h4v2H9v4H7V9H3V7h4z" />
-    </svg>
-  );
-}
-
-/** The + menu at the start of the composer's row, after the SwiftUI app's AddPanel. */
-function PlusMenu({
-  onAttach,
-  attachLabel,
-  onSendLater,
-  sendLaterDisabled,
-  sendLaterTip,
-  cwd,
-}: {
-  onAttach: () => void;
-  attachLabel: string;
-  onSendLater: () => void;
-  /** Nothing to schedule yet, or the app cannot send now: the row says so instead of opening. */
-  sendLaterDisabled: boolean;
-  /** Why the row is disabled, said on the row itself. */
-  sendLaterTip: string;
-  cwd: string;
-}) {
-  return (
-    <CardPopover
-      role="menu"
-      label="Attach and more"
-      tooltip="Attach and more"
-      onKeyDown={menuKeys}
-      className="w-[280px]"
-      trigger={
-        // The one button the message is added to: the send circle's own diameter with a 16px mark, so
-        // the row's two ends read as the row's two ends and sit on one line. The mark is one filled
-        // outline on a whole-pixel grid (`PlusMark`), not two stroked lines: lucide's Plus draws two
-        // 24-unit strokes scaled to 16px, so their ends land on thirds of a pixel and the crossing
-        // is painted twice, which reads as "-|-" instead of one plus.
-        <button
-          type="button"
-          aria-label="Attach and more"
-          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-8"
-        >
-          <PlusMark />
-        </button>
-      }
-    >
-      <MenuQuickActions
-        Item={CardMenuItem}
-        actions={[
-          { label: "Attach", description: attachLabel, icon: <Paperclip />, onSelect: onAttach },
-          {
-            label: "Later",
-            description: sendLaterDisabled ? `Send later: ${sendLaterTip}` : "Send later…",
-            icon: <Clock />,
-            onSelect: onSendLater,
-            disabled: sendLaterDisabled,
-          },
-          {
-            label: "New",
-            description: `New Thread · ${formatBinding("mod+n")}`,
-            icon: <SquarePen />,
-            onSelect: () => startNewThread(),
-          },
-          {
-            label: "Folder",
-            description: "New Thread in Folder…",
-            icon: <Folder />,
-            onSelect: () =>
-              void pickFolder(cwd).then((p) => {
-                if (!p) return;
-                setProjectCwd(p);
-                startNewThread(p);
-              }),
-          },
-        ]}
-      />
-    </CardPopover>
-  );
-}
