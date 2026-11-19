@@ -176,14 +176,15 @@ thread's account.
   agent's `create_loop` cannot turn a webhook on. An unknown Loop, one
   without a webhook and a wrong secret all answer 404; a paused Loop or one
   with a run going answers 409, and calls that arrive before a run starts
-  collapse into one with the latest body. A Loop saved with
+  collapse into one with the latest body. A request with
+  `X-GitHub-Event: ping`, which GitHub sends when a webhook is added, checks
+  the secret and answers 200 without a run. A Loop saved with
   `{ "kind": "manual" }` has no schedule and runs only from its webhook or
   Run now.
 - **The app must be open.** With no engine to reach, the run is recorded as
   cancelled with `{"skipped": …}` and does not count as a failure. (A
   headless engine the daemon starts itself would lift this; not built yet,
-  issue 3937.) Webhook triggers are not built either: they need a listener
-  reachable from outside, which the hub work (issue 3955) provides.
+  issue 3937.) A webhook call while the app is closed finds no listener.
 - **A missed run fires once.** A Loop's cron uses the `run_once` misfire
   policy: runs missed while the computer slept coalesce into one.
 - **No overlapping runs.** The scheduler never claims a job with a run still

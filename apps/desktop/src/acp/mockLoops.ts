@@ -1,7 +1,7 @@
 // The mock engine's Scheduled Jobs (issues 3892, 3937), as `_rustcode/loops/*` and the scheduled
 // run/delete calls answer them: one healthy with a thread left open for review, one whose last run
-// was skipped while the app was closed, one the daemon paused after three failed runs, and one in
-// script mode whose last run printed nothing.
+// was skipped while the app was closed, one the daemon paused after three failed runs, one in
+// script mode whose last run printed nothing; one more runs only from its webhook.
 
 import { type JsonObject, str } from "./jsonrpc";
 
@@ -93,6 +93,21 @@ function seed(): JsonObject[] {
         },
         done("run-issues-1", 51),
       ],
+    },
+    {
+      id: "loop-triage",
+      name: "Issue triage",
+      paused: false,
+      schedule: { kind: "manual", misfire_policy: "run_once" },
+      workspace: "/Users/me/code/rustcode",
+      prompt: "Label the new issue by area, and ask for a reproduction if it has none.",
+      harness: null,
+      model: null,
+      effort: null,
+      readOnly: true,
+      webhook: true,
+      nextDueAt: null,
+      runs: [{ ...done("run-triage-1", 5), input: '{"action":"opened"}' }],
     },
     {
       id: "loop-deps",

@@ -1103,7 +1103,9 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                     .and_then(|v| v.strip_prefix("Bearer "))
                     .unwrap_or("");
                 let (id, secret) = rest.split_once('/').unwrap_or((rest, bearer));
-                let (code, answer) = crate::acp::loops::trigger(id, secret.trim(), &req.body).await;
+                let ping = req.headers.get("x-github-event").map(String::as_str) == Some("ping");
+                let (code, answer) =
+                    crate::acp::loops::trigger(id, secret.trim(), &req.body, ping).await;
                 status = code;
                 answer
             }

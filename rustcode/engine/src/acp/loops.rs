@@ -413,15 +413,22 @@ async fn webhook_urls(id: &str, secret: &str) -> Value {
 /// A call to a Loop's webhook (`POST /hooks/<id>/<secret>`): start a run
 /// whose prompt carries `body`. Answers an HTTP status and its JSON. An
 /// unknown Loop, a Loop without a webhook and a wrong secret all answer 404,
-/// so a caller cannot tell which Loops exist.
-pub(crate) async fn trigger(id: &str, secret: &str, body: &[u8]) -> (u16, Value) {
+/// so a caller cannot tell which Loops exist. A `ping` (GitHub sends one when
+/// a webhook is added) checks the secret and answers 200 without a run.
+pub(crate) async fn trigger(id: &str, secret: &str, body: &[u8], ping: bool) -> (u16, Value) {
     match client() {
-        Ok(client) => trigger_with(&client, id, secret, body).await,
+        Ok(client) => trigger_with(&client, id, secret, body, ping).await,
         Err(_) => (503, json!({ "error": "scheduler_off" })),
     }
 }
 
-async fn trigger_with(client: &DaemonClient, id: &str, secret: &str, body: &[u8]) -> (u16, Value) {
+async fn trigger_with(
+    client: &DaemonClient,
+    id: &str,
+    secret: &str,
+    body: &[u8],
+    ping: bool,
+) -> (u16, Value) {
     let not_found = (404, json!({ "error": "not_found" }));
     if id.is_empty() || secret.is_empty() {
         return not_found;
@@ -445,6 +452,9 @@ async fn trigger_with(client: &DaemonClient, id: &str, secret: &str, body: &[u8]
     };
     if !webhook_matches(hash, secret) {
         return not_found;
+    }
+    if ping {
+        return (200, json!({ "pong": true }));
     }
     if job.paused {
         return (409, json!({ "error": "paused" }));
@@ -770,13 +780,30 @@ mod tests {
             let secret = created["webhook"]["secret"].as_str().unwrap().to_owned();
             assert_eq!(secret.len(), 64, "{created}");
 
-            assert_eq!(trigger_with(&client, &id, "wrong", b"{}").await.0, 404);
             assert_eq!(
-                trigger_with(&client, "loop-none", &secret, b"{}").await.0,
+                trigger_with(&client, &id, "wrong", b"{}", false).await.0,
+                404
+            );
+            assert_eq!(
+                trigger_with(&client, &id, "wrong", b"{}", true).await.0,
+                404
+            );
+            // GitHub's ping when the webhook is added starts no run.
+            assert_eq!(
+                trigger_with(&client, &id, &secret, b"{}", true).await.0,
+                200
+            );
+            assert_eq!(
+                trigger_with(&client, "loop-none", &secret, b"{}", false)
+                    .await
+                    .0,
                 404
             );
             // The right secret reaches the scheduler, which this test does not run.
-            assert_eq!(trigger_with(&client, &id, &secret, b"{}").await.0, 503);
+            assert_eq!(
+                trigger_with(&client, &id, &secret, b"{}", false).await.0,
+                503
+            );
 
             // An edit keeps the secret and shows no URL again.
             let mut edit = request(&workspace);
@@ -784,13 +811,19 @@ mod tests {
             edit.webhook = true;
             let edited = save_with(&client, edit).await.unwrap();
             assert!(edited.get("webhook").is_none());
-            assert_eq!(trigger_with(&client, &id, &secret, b"{}").await.0, 503);
+            assert_eq!(
+                trigger_with(&client, &id, &secret, b"{}", false).await.0,
+                503
+            );
 
             // Turned off, the old URL is unknown.
             let mut off = request(&workspace);
             off.id = Some(id.clone());
             save_with(&client, off).await.unwrap();
-            assert_eq!(trigger_with(&client, &id, &secret, b"{}").await.0, 404);
+            assert_eq!(
+                trigger_with(&client, &id, &secret, b"{}", false).await.0,
+                404
+            );
         }
 
         #[tokio::test]
