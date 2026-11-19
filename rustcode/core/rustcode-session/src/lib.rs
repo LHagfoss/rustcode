@@ -116,6 +116,9 @@ fn prompt_text<'a>(role: &str, content: &'a str) -> Option<&'a str> {
     .filter(|prompt| !prompt.starts_with('/'))
 }
 
+/// Character limit for automatically named threads.
+pub const MAX_AUTOMATIC_TITLE_CHARS: usize = 32;
+
 fn title_line(line: &str) -> &str {
     let line = line.trim_end();
     let heading = line.trim_start_matches(' ');
@@ -141,8 +144,13 @@ fn title_from_prompt(content: &str) -> String {
         .map(title_line)
         .find(|line| !line.is_empty())
         .unwrap_or("");
-    if title.chars().count() > 48 {
-        format!("{}...", title.chars().take(45).collect::<String>())
+    if title.chars().count() > MAX_AUTOMATIC_TITLE_CHARS {
+        let prefix: String = title.chars().take(MAX_AUTOMATIC_TITLE_CHARS - 3).collect();
+        let prefix = prefix
+            .rsplit_once(char::is_whitespace)
+            .filter(|(words, _)| !words.is_empty())
+            .map_or(prefix.as_str(), |(words, _)| words);
+        format!("{}...", prefix.trim_end())
     } else {
         title.to_string()
     }
@@ -2572,7 +2580,7 @@ mod tests {
         store.save_session_title_if_absent("fallback", &history);
         assert_eq!(
             store.load_session_title("fallback").as_deref(),
-            Some("Implement reliable session titles")
+            Some("Implement reliable session...")
         );
 
         store.save_session_title("fallback", "Explicit title");
@@ -2621,7 +2629,7 @@ mod tests {
         let history = vec![message("user", &format!("<!--PASTE:60:{long}-->"))];
         assert_eq!(
             SessionStore::session_title(&history),
-            format!("{}...", "棋".repeat(45))
+            format!("{}...", "棋".repeat(29))
         );
     }
 

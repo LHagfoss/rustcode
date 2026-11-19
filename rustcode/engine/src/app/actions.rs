@@ -158,5 +158,6 @@ mod recap;
 pub use recap::{RECAP_IDLE_DELAY, generate_conversation_recap};
 mod session_title;
 pub(crate) use session_title::{
-    apply_generated_title, generate_session_title, normalize_generated_title,
+    THREAD_TITLE_INSTRUCTION, apply_generated_title, generate_session_title,
+    normalize_generated_title, wants_generated_title,
 };
