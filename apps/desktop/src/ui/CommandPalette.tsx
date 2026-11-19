@@ -1,7 +1,9 @@
 // ⌘K: one field for everything. Threads by title, project, branch or pull
 // request (and what was said in them), plus the app's actions: new threads on any
-// harness, panels, views, settings pages and the engine. ">" shows actions
-// only; ⇥ switches threads between all projects and this one.
+// harness, panels, views, settings pages and the engine. A query also finds
+// every Settings row, the projects, pull requests and shortcuts
+// (paletteSearch.ts). ">" shows actions only; ⇥ switches threads between all
+// projects and this one.
 
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
@@ -65,6 +67,7 @@ import {
   sidebarActions,
   threadHaystack,
 } from "./paletteActions";
+import { searchGroups } from "./paletteSearch";
 import { cx, Kbd, noTextHelpers } from "./primitives";
 import { FilterMenu, SortMenu } from "./SidebarToolbar";
 
@@ -337,13 +340,17 @@ export function CommandPalette() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: actions read live state when the palette opens
   const results = useMemo<Result[]>(() => {
+    const all = [...baseActions(), ...extra.flatMap((p) => p())];
     const actions = ranked(
-      [...baseActions(), ...extra.flatMap((p) => p())].filter(
-        (a) => !q || matches(`${a.label} ${a.words ?? ""} ${a.detail ?? ""}`, q),
-      ),
+      all.filter((a) => !q || matches(`${a.label} ${a.words ?? ""} ${a.detail ?? ""}`, q)),
       q,
     ).map((action): Result => ({ kind: "action", action }));
-    if (actionsOnly) return actions;
+    // Settings rows, projects, pull requests and shortcuts, each under its heading after the actions.
+    const found = searchGroups(
+      q,
+      all.map((a) => a.label),
+    ).map((action): Result => ({ kind: "action", action }));
+    if (actionsOnly) return [...actions, ...found];
     const threads = sessions
       .filter((s) => scope === "all" || s.cwd === projectCwd || s.worktree?.repo === projectCwd)
       // By title, project, branch and pull request, or by what was said in it.
@@ -378,7 +385,7 @@ export function CommandPalette() {
         }),
       );
     // With a query, threads lead; without one, the recent threads and then every action.
-    return q ? [...threads, ...actions.slice(0, 12)] : [...threads, ...actions];
+    return q ? [...threads, ...actions.slice(0, 12), ...found] : [...threads, ...actions];
   }, [sessions, q, scope, projectCwd, selectedId, actionsOnly, open, contentHits, sort, liveThreads]);
 
   const choose = (i: number) => {
@@ -391,7 +398,15 @@ export function CommandPalette() {
     }
   };
 
-  const firstAction = results.findIndex((r) => r.kind === "action");
+  // A heading where the kind of result changes: Actions, then each search group.
+  const heading = (i: number): string | undefined => {
+    const r = results[i];
+    if (r?.kind !== "action") return undefined;
+    const group = r.action.group ?? "Actions";
+    const before = results[i - 1];
+    const prev = before?.kind === "action" ? (before.action.group ?? "Actions") : undefined;
+    return group === prev ? undefined : group;
+  };
 
   return (
     <Dialog.Root
@@ -440,7 +455,7 @@ export function CommandPalette() {
                 setQuery(e.target.value);
                 setIndex(0);
               }}
-              placeholder="Search threads, branches and pull requests, or > for actions…"
+              placeholder="Search threads, settings, projects and pull requests, or > for actions…"
               aria-label="Search threads and actions"
               {...noTextHelpers}
               className="min-w-0 flex-1 bg-transparent text-title3 outline-none placeholder:text-fg-faint"
@@ -456,8 +471,8 @@ export function CommandPalette() {
             )}
             {results.map((r, i) => (
               <div key={r.kind === "thread" ? r.id : r.action.id}>
-                {i === firstAction && (
-                  <div className="px-3 pt-2 pb-1 font-semibold text-caption text-fg-muted">Actions</div>
+                {heading(i) && (
+                  <div className="px-3 pt-2 pb-1 font-semibold text-caption text-fg-muted">{heading(i)}</div>
                 )}
                 {i === 0 && r.kind === "thread" && (
                   <div className="px-3 pt-1 pb-1 font-semibold text-caption text-fg-muted">
@@ -496,6 +511,9 @@ export function CommandPalette() {
                       <r.action.icon size={13} className={i === index ? "text-accent" : "text-fg-muted"} />
                       <span className="min-w-0 flex-1 truncate text-body">
                         {highlight(r.action.label, q)}
+                        {r.action.group && r.action.detail && (
+                          <span className="ml-2 text-caption text-fg-muted">{r.action.detail}</span>
+                        )}
                       </span>
                       {r.action.disabled ? (
                         <span className="truncate text-caption text-fg-faint">{r.action.disabled}</span>

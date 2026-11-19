@@ -374,6 +374,17 @@ export function openSettings(
   set({ settings: next, settingsMachine: null, switcherOpen: false });
 }
 
+/** Opens Settings on a page and scrolls to one of its rows, named by its search-index title. */
+export function openSettingAt(section: SettingsSection, title: string) {
+  openSettings(section);
+  set({ settingsLanding: { section, title } });
+}
+
+/** The landing row was lit (or was not there): Settings forgets it. */
+export function settingLanded() {
+  set({ settingsLanding: null });
+}
+
 /** Open one machine's own Settings page, reached from its card and the Machines list. */
 export function openMachineSettings(id: string) {
   dismissOverlays();

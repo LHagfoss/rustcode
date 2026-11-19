@@ -66,6 +66,8 @@ export interface PaletteAction {
   /** Extra words it is found by. */
   words?: string;
   disabled?: string;
+  /** The heading it is listed under (ui/paletteSearch.ts); none is Actions. */
+  group?: string;
   run: () => void;
 }
 

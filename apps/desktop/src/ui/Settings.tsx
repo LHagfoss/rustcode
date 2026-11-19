@@ -39,6 +39,7 @@ import {
 import {
   errorText,
   type NewThreadChoice,
+  openSettingAt,
   openSettings,
   request,
   restartEngine,
@@ -52,6 +53,7 @@ import {
   setShowToolCalls,
   setSmartUi,
   setSystemNotifications,
+  settingLanded,
   useApp,
 } from "../state/store";
 import { AddHarnessForm } from "./AddHarness";
@@ -865,8 +867,8 @@ export function Settings() {
   useEffect(() => {
     if (query.trim()) virtualResults.scrollToIndex(active, { align: "auto" });
   }, [active, query, virtualResults]);
-  // The row to land on, set when a result is picked and cleared once it is lit.
-  const [landing, setLanding] = useState<{ section: SettingsSection; title: string } | null>(null);
+  // The row to land on, set when a result is picked (here or in ⌘K) and cleared once it is lit.
+  const landing = useApp((s) => s.settingsLanding);
   // A dot on each page that needs attention: the gear's dot says something does, the nav says
   // where. The server's warnings are read once when Settings opens, if no page has read them.
   const attention = useSettingsAttention();
@@ -886,8 +888,7 @@ export function Settings() {
   };
 
   const pick = (entry: SettingEntry) => {
-    setLanding({ section: entry.section, title: entry.title });
-    openSettings(entry.section);
+    openSettingAt(entry.section, entry.title);
     clear();
     field.current?.blur();
   };
@@ -901,7 +902,7 @@ export function Settings() {
     let again = 0;
     frame = requestAnimationFrame(() => {
       again = requestAnimationFrame(() => {
-        setLanding(null);
+        settingLanded();
         const target = findSetting(landing.title);
         if (!target) return;
         target.scrollIntoView({ block: "center" });

@@ -528,6 +528,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   scheduled: parseScheduleBook(stored(SCHEDULED_KEY)),
   settings: null,
   settingsMachine: null,
+  settingsLanding: null,
   switcherOpen: false,
   modelPickerAsk: null,
   report: null,

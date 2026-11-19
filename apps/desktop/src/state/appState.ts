@@ -181,6 +181,8 @@ export interface AppState {
   settings: SettingsSection | null;
   /** Which machine's own page Settings › Machines shows, or null for the list. */
   settingsMachine: string | null;
+  /** The Settings row to scroll to and light once its page is drawn (a search result picked). */
+  settingsLanding: { section: SettingsSection; title: string } | null;
   switcherOpen: boolean;
   /** A report command's answer (`/status`, `/context`…), shown over the composer of its thread. */
   report: { threadId: string; text: string } | null;
