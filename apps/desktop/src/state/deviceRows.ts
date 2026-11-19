@@ -223,7 +223,7 @@ export function machineAccess(
     inbound,
     label,
     outboundText: outbound
-      ? `This computer can see and run threads on ${name}. Forget removes it.`
+      ? `This computer can see and run threads on ${name}. Remove machine ends this access.`
       : `This computer's pairing with ${name} ended, so it cannot reach it. Pair it again.`,
     inboundText: inbound
       ? `${name} can see and run all threads on this computer. Revoke it under Remote access › Paired devices.`

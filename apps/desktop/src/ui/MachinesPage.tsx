@@ -5,7 +5,7 @@ import { isLoaded } from "../state/thread";
 // This computer first — the RustCode server the app starts itself — then every other computer the
 // app is paired with, each with a live status (online, connecting, offline), the address and route
 // it is reached over, the RustCode version it runs and its recovery action (Connect, Reconnect, Pair
-// again), a rename (shared across the fleet, `state/fleet.ts`) and Remove. Computers only known
+// again), and a link to its settings. Computers only known
 // through a paired one are listed read-only below them, with a Pair button. "Add machine" opens one dialog with every way in
 // (`ui/AddMachineDialog.tsx`): a connect code, SSH, or an address on the same network or a
 // tailnet; the new-thread selector (`ui/MachineSelector.tsx`) can open it too.
@@ -27,13 +27,12 @@ import { knownOnly, useFleet, viaName } from "../state/fleet";
 import {
   askInstallServer,
   askMachine,
-  defaultSelfName,
   gatewayLine,
+  LOCAL_MACHINE_ID,
   lastSeen,
   localAppVersion,
   type Machine,
   machineGlyph,
-  machineLine,
   machineName,
   machineTint,
   platformIcon,
@@ -41,31 +40,23 @@ import {
   reconnectMachine,
   refreshMachines,
   refreshServerService,
-  removeMachine,
   selfName,
   serverLine,
   setAddMachineOpen,
-  setLocalIdentity,
-  setMachineDisplayName,
-  setMachineIcon,
   threadCount,
   threadLabel,
-  updateAdvice,
   useLocalIdentity,
   useMachines,
-  versionSkew,
 } from "../state/machines";
 import { refreshRemote } from "../state/remoteAccess";
 import { openMachineSettings, useApp } from "../state/store";
 import { AddMachineDialog } from "./AddMachineDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
 import { HubGroup } from "./HubGroup";
-import { Plus, RefreshCw, Server } from "./icons";
+import { Plus, RefreshCw, Server, Settings } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
-import { MachineIdentityEditor } from "./MachineProfile";
 import {
   knownMachine,
-  machineAddress,
   machineOutdated,
   machineRecovery,
   machineRoute,
@@ -234,19 +225,9 @@ function ThisComputer() {
           Install server
         </Action>
       )}
-      <MachineIdentityEditor
-        label={`${selfName()} on this computer`}
-        reportedName={defaultSelfName()}
-        platform={reported}
-        identity={local}
-        onName={(name) => setLocalIdentity({ displayName: name })}
-        onIcon={(icon, tint) => setLocalIdentity({ icon, tint })}
-        trigger={
-          <Action quiet size="sm">
-            Rename
-          </Action>
-        }
-      />
+      <Action quiet onClick={() => openMachineSettings(LOCAL_MACHINE_ID)}>
+        <Settings size={13} /> Settings
+      </Action>
     </Row>
   );
 }
@@ -318,16 +299,8 @@ export function MachineRow({
   /** This app's version, for the row that says another machine runs another. */
   local: string | null;
 }) {
-  const platform = platformName(machine.platform);
   const threads = threadLabel(count);
   const outdated = machineOutdated(machine.version, local);
-  // The facts already carry its version: the line says only what updates it.
-  const skew = outdated
-    ? `Update it there: ${updateAdvice(machine.platform ?? "")}`
-    : versionSkew(machine.version, local, machine.platform)
-      ? "Newer than this app: update RustCode here"
-      : null;
-  const hint = machine.hint;
   const name = machineName(machine);
   const status = machineStatus(machine);
   const recovery = machineRecovery(machine);
@@ -335,7 +308,7 @@ export function MachineRow({
   const connected = machine.state === "connected";
   const direction = connectionDirection(connected, peerInbound(machine.id, devices ?? []), name);
   const facts = [
-    platform,
+    platformName(machine.platform),
     machine.version ? `RustCode ${machine.version}` : undefined,
     machine.lastConnectedAt ? `Last seen ${lastSeen(machine.lastConnectedAt, now)}` : "Not reached yet",
     threads,
@@ -343,7 +316,6 @@ export function MachineRow({
   ].filter(Boolean);
   return (
     <Row
-      stacked
       title={
         <>
           <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={16} />
@@ -351,27 +323,18 @@ export function MachineRow({
           {outdated && <Chip tone="warn">Outdated</Chip>}
         </>
       }
-      hint={direction}
-      subtitle={
-        <>
-          {/* Online: where it is and how it travels. Otherwise what is wrong, cut to one line
-              (all of it on hover and when selected), then the route it tries. */}
-          {connected ? (
-            <span className="selectable block">{machineRoute(machine)}</span>
-          ) : (
-            <>
-              <span className="selectable block truncate" title={machineLine(machine)}>
-                {machineLine(machine)}
-              </span>
-              {machineAddress(machine) && <span className="selectable block">{machineRoute(machine)}</span>}
-            </>
-          )}
-          {/* What updates it, when it runs another version than this app. */}
-          {skew && <span className="block text-warning">{skew}</span>}
-          {/* PR 3402's words for a route that does not answer while another does. */}
-          {hint && <span className="block">{hint}</span>}
-        </>
+      hint={
+        machine.hint ? (
+          <>
+            {direction}
+            <br />
+            {machine.hint}
+          </>
+        ) : (
+          direction
+        )
       }
+      subtitle={<span className="selectable break-words">{machineRoute(machine)}</span>}
       status={facts.join(" · ")}
       badge={
         <span data-status={status.kind}>
@@ -386,28 +349,8 @@ export function MachineRow({
           <RefreshCw size={12} /> {recoveryLabel(recovery)}
         </Action>
       ) : null}
-      <MachineIdentityEditor
-        label={`${name} on this computer`}
-        reportedName={machine.name}
-        platform={machine.platform}
-        identity={{
-          displayName: machine.displayName ?? null,
-          icon: machineGlyph(machine),
-          tint: machineTint(machine),
-        }}
-        onName={(next) => void setMachineDisplayName(machine, next)}
-        onIcon={(icon, tint) => void setMachineIcon(machine, icon, tint)}
-        trigger={
-          <Action quiet size="sm">
-            Rename
-          </Action>
-        }
-      />
-      <Action size="sm" onClick={() => openMachineSettings(machine.id)}>
-        Settings
-      </Action>
-      <Action quiet size="sm" aria-label={`Remove ${name}`} onClick={() => removeMachine(machine)}>
-        Remove
+      <Action quiet aria-label={`Settings for ${name}`} onClick={() => openMachineSettings(machine.id)}>
+        <Settings size={13} /> Settings
       </Action>
     </Row>
   );

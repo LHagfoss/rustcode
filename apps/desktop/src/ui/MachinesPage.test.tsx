@@ -31,9 +31,9 @@ function render(machine: Machine): string {
 }
 
 describe("a machine row", () => {
-  test("says an unreachable route once", () => {
+  test("keeps route diagnostics in settings", () => {
     const html = render(MACHINE);
-    expect(html.split("Not reachable over the VPN").length - 1).toBe(1);
+    expect(html).not.toContain(HINT);
     expect(html).toContain("LAN · Unencrypted");
   });
 
@@ -44,9 +44,9 @@ describe("a machine row", () => {
     expect(html).toContain("192.168.1.31:17879 · LAN · Unencrypted");
     expect(html).toContain("RustCode 1.29.1");
     expect(html).toContain("2 threads");
-    expect(html).toContain("Rename");
+    expect(html).not.toContain("Rename");
     expect(html).toContain("Settings");
-    expect(html).toContain('aria-label="Remove Studio"');
+    expect(html).not.toContain("Remove");
     expect(html).not.toContain("Reconnect");
   });
 
@@ -54,14 +54,14 @@ describe("a machine row", () => {
     const html = render({ ...MACHINE, state: "offline", detail: "No route answered.", hint: null });
     expect(html).toContain("Offline");
     expect(html).toContain("Reconnect");
-    expect(html).toContain("No route answered.");
+    expect(html).not.toContain("No route answered.");
     expect(html).toContain("192.168.1.31:17879 · LAN · Unencrypted");
   });
 
-  test("one that reconnects by itself says so and offers no button", () => {
+  test("one that reconnects by itself still offers a manual retry", () => {
     const html = render({ ...MACHINE, state: "offline", retryInSecs: 4, hint: null });
     expect(html).toContain("Reconnecting");
-    expect(html).not.toContain(">Reconnect<");
+    expect(html).toContain("Reconnect</button>");
   });
 
   test("one that ended the pairing offers Pair again", () => {
