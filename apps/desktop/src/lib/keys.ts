@@ -92,7 +92,7 @@ export const APP_COMMANDS: readonly AppCommand[] = [
   {
     id: "toggle-panel",
     label: "Toggle the right panel",
-    binding: "mod+alt+b",
+    binding: "mod+shift+b",
     group: "View",
     remappable: true,
   },

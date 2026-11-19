@@ -1,19 +1,16 @@
-// The overview: the thread's right panel as one scrolling column of sections —
-// what it is (Properties), the pull requests its branches have, what it
-// delivered, what its turns cost, and the rare facts behind Details — each one
-// foldable from its own header, separated by room rather than cards
-// (docs/design.md › Right panel). A thread opens on this; Changes, Pull
-// requests and a beside thread stay their own views of the panel, reachable
-// from the header and from the rows here.
+// Compact workspace actions and context, with the full thread overview available on demand.
 
 import { useEffect, useMemo, useState } from "react";
 import { modelName } from "../acp/types";
-import { type GitChanges, gitChangeSummary } from "../lib/native";
+import { type GitChanges, gitChangeSummary, openPath } from "../lib/native";
+import { appPlatform, fileManagerName } from "../lib/platform";
+import { contextPercent } from "../state/details";
 import { selectOption } from "../state/harness";
-import { useApp, worktreeOf } from "../state/store";
-import { isRunning } from "../state/thread";
+import { showPanel, useApp, worktreeOf } from "../state/store";
+import { formatTokens, isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { delegateBranchCount } from "./DelegateTree";
+import { FileDiff, FolderOpen, GitBranch, GitPullRequest, Laptop } from "./icons";
 import { DelegatesSection } from "./OverviewDelegates";
 import { DeliverablesSection } from "./OverviewDeliverables";
 import { DetailsSection } from "./OverviewDetails";
@@ -72,7 +69,9 @@ export function ThreadDetails() {
         : [],
     [id, links, sessions, threads],
   );
-  const changes = useChanges(thread?.cwd, isRunning(thread));
+  const host = id ? splitThreadKey(id).host : "";
+  const machine = useApp((s) => s.machineNames[host]);
+  const changes = useChanges(host ? undefined : thread?.cwd, isRunning(thread));
   // Which sections are folded away: the reader's habit, kept for every thread.
   const [folded, setFolded] = useState<SectionId[]>(readFolded);
   // A row elsewhere (`+2 nested` in the strip's popover) opens a section: the fold is read again.
@@ -108,55 +107,118 @@ export function ThreadDetails() {
   // A worktree is the project's, checked out from the repository: the card names the project.
   const project = worktree?.repo ?? thread.cwd;
 
+  const usage = thread.usage;
+  const used = contextPercent(usage);
+  const row = "flex min-h-8 w-full items-center gap-2 px-3 text-left text-callout";
+  const action = `${row} hover:bg-fill-subtle`;
+
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3">
-      <div className="flex flex-col gap-4">
-        <PropertiesSection
-          thread={thread}
-          branch={branch}
-          project={project}
-          folded={isFolded("properties")}
-          onToggle={() => toggle("properties")}
-        />
-        {delegates > 0 && (
+    <div className="min-h-0 overflow-y-auto">
+      <div className="py-1">
+        <div className={row}>
+          <Laptop size={16} />
+          {machine ?? (host ? "Paired computer" : appPlatform() === "mac" ? "This Mac" : "This computer")}
+        </div>
+        {!host && (
+          <button type="button" className={action} onClick={() => openPath(thread.cwd)}>
+            <FolderOpen size={16} />
+            Open in {fileManagerName(appPlatform())}
+          </button>
+        )}
+      </div>
+      <div className="border-border border-t py-1">
+        {branch && (
+          <div className={row} title={branch}>
+            <GitBranch size={16} className="shrink-0" />
+            <span className="truncate">{branch}</span>
+          </div>
+        )}
+        {!host && (
+          <button type="button" className={action} onClick={() => showPanel("changes")}>
+            <FileDiff size={16} />
+            Changes
+            {!!changes?.files.length && (
+              <span className="ml-auto tabular text-fg-muted">{changes.files.length}</span>
+            )}
+          </button>
+        )}
+        {pullsOn && (
+          <button type="button" className={action} onClick={() => showPanel("pulls")}>
+            <GitPullRequest size={16} />
+            Pull requests
+          </button>
+        )}
+      </div>
+      {delegates > 0 && (
+        <div className="border-border border-t px-2 py-1">
           <DelegatesSection
             threadId={id}
             count={delegates}
             folded={isFolded("delegates")}
             onToggle={() => toggle("delegates")}
           />
-        )}
-        {pullsOn && (
-          <PullRequestsSection
-            cwd={project}
-            host={splitThreadKey(id).host}
-            branches={branches}
+        </div>
+      )}
+      {usage && used !== undefined && (
+        <div className={`${row} border-border border-t py-2 text-fg-muted`}>
+          Context
+          <div
+            role="meter"
+            aria-label="Context used"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={used}
+            className="h-1 flex-1 overflow-hidden rounded-full bg-fill"
+          >
+            <div className="h-full rounded-full bg-fg-muted" style={{ width: `${used}%` }} />
+          </div>
+          <span className="shrink-0 tabular">
+            {formatTokens(usage.used)} / {formatTokens(usage.size)}
+          </span>
+        </div>
+      )}
+      <details className="border-border border-t">
+        <summary className="mx-3 cursor-pointer py-2 text-caption text-fg-muted">More thread details</summary>
+        <div className="flex flex-col gap-4 px-2 pb-3">
+          <PropertiesSection
+            thread={thread}
             branch={branch}
-            folded={isFolded("pulls")}
-            onToggle={() => toggle("pulls")}
+            project={project}
+            folded={isFolded("properties")}
+            onToggle={() => toggle("properties")}
           />
-        )}
-        <DeliverablesSection
-          items={thread.items}
-          cwd={thread.cwd}
-          folded={isFolded("deliverables")}
-          onToggle={() => toggle("deliverables")}
-        />
-        <ExecutionLogSection
-          items={thread.items}
-          usage={thread.usage}
-          harness={thread.harness?.id}
-          model={model}
-          folded={isFolded("log")}
-          onToggle={() => toggle("log")}
-        />
-        <DetailsSection
-          thread={thread}
-          changes={changes}
-          folded={isFolded("details")}
-          onToggle={() => toggle("details")}
-        />
-      </div>
+          {pullsOn && (
+            <PullRequestsSection
+              cwd={project}
+              host={splitThreadKey(id).host}
+              branches={branches}
+              branch={branch}
+              folded={isFolded("pulls")}
+              onToggle={() => toggle("pulls")}
+            />
+          )}
+          <DeliverablesSection
+            items={thread.items}
+            cwd={thread.cwd}
+            folded={isFolded("deliverables")}
+            onToggle={() => toggle("deliverables")}
+          />
+          <ExecutionLogSection
+            items={thread.items}
+            usage={thread.usage}
+            harness={thread.harness?.id}
+            model={model}
+            folded={isFolded("log")}
+            onToggle={() => toggle("log")}
+          />
+          <DetailsSection
+            thread={thread}
+            changes={changes}
+            folded={isFolded("details")}
+            onToggle={() => toggle("details")}
+          />
+        </div>
+      </details>
     </div>
   );
 }

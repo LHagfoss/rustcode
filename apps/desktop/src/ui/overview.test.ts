@@ -63,7 +63,7 @@ describe("the sections a reader folds away", () => {
   });
 
   test("a press on a header flips only that section", () => {
-    expect(toggleFolded(FOLDED_BY_DEFAULT, "details")).toEqual([]);
+    expect(toggleFolded(FOLDED_BY_DEFAULT, "details")).toEqual(["delegates"]);
     expect(toggleFolded([], "details")).toEqual(["details"]);
     expect(toggleFolded(["properties"], "log")).toEqual(["properties", "log"]);
     expect(toggleFolded(["properties", "log"], "properties")).toEqual(["log"]);

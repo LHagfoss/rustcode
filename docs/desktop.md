@@ -514,7 +514,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   up. Markdown is `react-markdown` + `remark-gfm`; code is highlighted lazily
   by Shiki with Xcode's colours.
 
-Keys: ⌘N new thread, ⌘O the folder of the thread in front (a new thread starts there; an open one moves there through `_rustcode/session/move`, closed and reopened; also a click on the header's path), ⌘⇧O the default folder for new threads (also Settings › General; picking a folder for one new thread no longer changes it), ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘⌥B right panel, ⌘F find
+Keys: ⌘N new thread, ⌘O the folder of the thread in front (a new thread starts there; an open one moves there through `_rustcode/session/move`, closed and reopened; also a click on the header's path), ⌘⇧O the default folder for new threads (also Settings › General; picking a folder for one new thread no longer changes it), ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘⇧B right panel, ⌘F find
 in thread, ⌘J terminal, ⌘+ / ⌘- / ⌘0 text zoom, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
 running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the
 command token, Esc clears the draft and then stops the
@@ -1533,17 +1533,14 @@ composer's keys stay outside the table.
   open the file in the editor at that line, resolved against the thread's
   folder (`open_in_editor`: VS Code, Cursor or Zed when installed, else
   the default text editor).
-- **Right panel.** Changes, Agents and Pull requests share one floating card at
-  the window's right edge (`src/ui/RightPanel.tsx`): the thread details card's
-  surface, full height, inset from the window's edges by the same gap, with
-  tabs between them, a close button, a draggable left edge (kept, and moved
-  with ←/→ or Home/End), Escape to close, and ⌘⌥B to toggle it. Each thread
-  keeps the view it was last showing, and opening it restores exactly that;
-  a thread never seen, or one whose panel was closed by hand, opens without
-  one, and nothing opens the panel on its own. The new-thread screen opens
-  without a panel (⌘⌥B still opens one), and settling the selected thread
-  while the chat is showing closes it and leaves that thread. Its Changes read
-  belongs to the thread's
+- **Right panel.** Thread details opens as a compact 280px card on wide windows.
+  It shows the device, a local folder shortcut, branch, Changes, pull requests,
+  delegates, and reported context usage. Expand More thread details for properties,
+  deliverables, and the execution log. Changes, Pull requests and a side chat use a
+  wider pane with a resizable edge. Press ⌘⇧B to toggle the panel and Escape from
+  inside it to close it. Each thread remembers its panel. A thread with no saved
+  preference opens on Thread Details in a wide window and closed in a narrow one.
+  The new-thread screen opens closed. The Changes read belongs to the thread's
   folder: an answer for the last thread's folder is dropped and never drawn
   with this thread's name, and while the turn runs the panel says the changes
   are read when it ends. It takes no slot, so the chat keeps the pane and the

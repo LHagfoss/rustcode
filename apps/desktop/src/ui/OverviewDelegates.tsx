@@ -1,8 +1,3 @@
-// The overview's Delegates section: the threads this one handed work to, at every
-// depth, as the tree the details panel draws (ui/DelegateTree.tsx). It sits right
-// after Properties and is open by default: a thread that delegated is defined by
-// what its branch is doing, not by the rare facts behind Details.
-
 import { useState } from "react";
 import { readStorage, writeStorage } from "../lib/storage";
 import { DelegateLanes } from "./DelegateLanes";
