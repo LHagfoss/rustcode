@@ -47,7 +47,7 @@ import { LOCAL_HOST } from "../state/threadKeys";
 import { HarnessIcon } from "./HarnessIcon";
 import { Copy, ExternalLink, Globe, KeyRound, Plug } from "./icons";
 import { AgentTile, LevelPoints, SignInCard } from "./OutsideSignIn";
-import { copyText, cx, Segments, Switch } from "./primitives";
+import { copyText, cx, Switch } from "./primitives";
 import { Action, Chip, fieldClass, Group, Loading, Row, Select } from "./settingsKit";
 
 const SCOPE_OPTIONS = OUTSIDE_SCOPES.map((scope) => ({ value: scope, label: SCOPE_LABEL[scope] }));
@@ -140,11 +140,13 @@ export function OutsideAgentsPage() {
     return () => clearInterval(timer);
   }, [engine, host]);
 
+  // The same bar as the other machine pages (SettingsScope), so "which machine" sits in one place.
   const picker =
     machines.length > 1 ? (
-      <div className="mb-5 px-4">
-        <Segments
-          label="Machine"
+      <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl bg-surface px-4 py-3">
+        <div className="min-w-0 flex-1 font-medium text-body text-fg">Showing</div>
+        <Select
+          label="Showing machine"
           value={host}
           options={machines.map((m) => ({ value: m.host, label: m.local ? "This machine" : m.name }))}
           onChange={(next) => {
@@ -166,11 +168,11 @@ export function OutsideAgentsPage() {
   const where = remote ? (machineName ?? "that machine") : "this computer";
   return (
     <>
-      <p className="mb-4 max-w-[70ch] px-4 text-callout text-fg-muted">
+      {picker}
+      <p className="mb-6 max-w-[70ch] px-4 text-callout text-fg-muted">
         Let other AI apps read, start or message RustCode threads on {where}. Each gets its own access level,
         and you can change or revoke it here.
       </p>
-      {picker}
       {!status.available && (
         <Group title="Not available here">
           <Row

@@ -930,6 +930,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Settings choice tiles:** a pick between a few large options (the hosted
   agent to connect) is told by fill, never by an outline: `bg-fill-subtle` at
   rest, `bg-fill` on hover, `bg-fill-strong` for the picked one.
+- **One arrow circle:** reset, restore defaults, restart, retry, run again and
+  refresh all show the same arrow-circle icon (`RefreshCw`; `RotateCcw` and
+  `RotateCw` draw it too). A setting that waits for a server restart shows
+  `RestartToApply`, never a hand-built row.
 - **Settings text with code in it:** a title, note or hint that names a command
   goes through `withCode` (settingsKit), which sets each backticked part in code
   type on `bg-fill`; the backticks themselves are never shown.

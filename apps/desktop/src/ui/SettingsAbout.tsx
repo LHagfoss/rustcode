@@ -11,8 +11,7 @@ import {
   systemSetupAvailable,
 } from "../lib/systemSetup";
 import { canUpdate } from "../lib/updater";
-import { APP_VERSION, errorText, request, restartEngine, setOnboarding, toast, useApp } from "../state/store";
-import { isRunning } from "../state/thread";
+import { APP_VERSION, errorText, request, setOnboarding, toast, useApp } from "../state/store";
 import {
   checkIfStale,
   checkNow,
@@ -25,8 +24,9 @@ import {
   showWhatsNew,
   useUpdates,
 } from "../state/updates";
-import { Info } from "./icons";
+import { Info, RefreshCw } from "./icons";
 import { cx, Spinner, Switch } from "./primitives";
+import { RestartToApply } from "./RestartToApply";
 import { Action, Chip, Choice, Group, Loading, Row, withCode } from "./settingsKit";
 
 // Settings, a full panel inside the window: the shell stays mounted behind it,
@@ -158,7 +158,6 @@ function AppVersion() {
  */
 function RecordRequestBodiesGroup() {
   const status = useApp((s) => s.engine.phase);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
   const [capture, setCapture] = useState<PayloadCapture | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -215,20 +214,7 @@ function RecordRequestBodiesGroup() {
         />
       </Row>
       {error && <Row title="Could not save" subtitle={error} />}
-      {pending && (
-        <Row title="Restart the server to apply" subtitle="The server reads these when it starts.">
-          <Action
-            prominent
-            disabled={anyRunning}
-            onClick={() => {
-              setPending(false);
-              void restartEngine();
-            }}
-          >
-            Restart server
-          </Action>
-        </Row>
-      )}
+      {pending && <RestartToApply plural onRestart={() => setPending(false)} />}
     </Group>
   );
 }
@@ -293,7 +279,7 @@ function SystemSetupGroup() {
       footer={error ?? undefined}
       action={
         <Action size="sm" disabled={running !== null} onClick={() => void run()}>
-          {running === "all" ? <Spinner size={12} /> : null}
+          {running === "all" ? <Spinner size={12} /> : <RefreshCw size={12} />}
           Run again
         </Action>
       }

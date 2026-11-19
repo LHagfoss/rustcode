@@ -220,7 +220,6 @@ function PlanSections({ plans, where = "on this computer" }: { plans: UsagePlan[
                   {name}
                 </>
               }
-              action={<span className="text-caption text-fg-muted">{soonestReset(plans)}</span>}
             />
             {plans.map((p) => (
               <Group

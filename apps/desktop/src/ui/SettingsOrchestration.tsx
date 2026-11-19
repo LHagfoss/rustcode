@@ -12,13 +12,13 @@ import {
 } from "../state/orchestration";
 import { serverSetting, WORKFLOW_LIMITS } from "../state/settingsRegistry";
 import { useLoadScopeSettings, useScopedSetting } from "../state/settingsScope";
-import { restartEngine, SETTINGS_DEFAULTS, useApp } from "../state/store";
-import { isRunning } from "../state/thread";
+import { SETTINGS_DEFAULTS, useApp } from "../state/store";
 import { DelegatePresetsGroup } from "./DelegatePresets";
 import { LimitFallbackGroup } from "./LimitFallback";
 import { Switch } from "./primitives";
+import { RestartToApply } from "./RestartToApply";
 import { ScopedValue, SettingsScopeBar } from "./SettingsScope";
-import { Action, boolLabel, Group, Row, Slider } from "./settingsKit";
+import { boolLabel, Group, Row, Slider } from "./settingsKit";
 
 // A grouped nav on the left searches every row's title and keywords
 // (settingsIndex.ts) and shows one page at a time beside it; picking a result
@@ -136,7 +136,6 @@ function OrchestrationGroup() {
   const threadLimit = Number(threadLimitSetting.value ?? SETTINGS_DEFAULTS.threadLimit);
   const totalLimit = Number(totalLimitSetting.value ?? SETTINGS_DEFAULTS.totalLimit);
   const pending = useApp((s) => s.orchestrationPending);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
   const links = useApp((s) => s.links);
   const running = useMemo(() => activeDelegates(links), [links]);
   const busiest = useMemo(() => busiestThreadDelegates(links), [links]);
@@ -204,13 +203,7 @@ function OrchestrationGroup() {
             />
           </ScopedValue>
         </Row>
-        {pending && (
-          <Row title="Restart the server to apply" subtitle="The server reads this setting when it starts.">
-            <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-              Restart server
-            </Action>
-          </Row>
-        )}
+        {pending && <RestartToApply />}
       </Group>
       <Group
         title="Delegation"
