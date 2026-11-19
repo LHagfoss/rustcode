@@ -318,6 +318,60 @@ pub(super) async fn relay(
     tokio::select! { result = produce => result, result = consume => result }
 }
 
+/// The web app's ACP socket (`orchestration/outside_web.rs`), already
+/// upgraded: relayed like a paired desktop's, with its method list, until the
+/// browser's session is signed out or expires.
+pub(crate) async fn serve_browser(
+    stream: TcpStream,
+    config_directory: &Path,
+    sessions: &Path,
+    session: &str,
+) {
+    use tokio_tungstenite::tungstenite::protocol::{
+        CloseFrame, Role, WebSocketConfig, frame::coding::CloseCode,
+    };
+    let _ = stream.set_nodelay(true);
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_FRAME_BYTES))
+        .max_frame_size(Some(MAX_FRAME_BYTES));
+    let socket = WebSocketStream::from_raw_socket(stream, Role::Server, Some(config)).await;
+    let (mut writer, mut reader) = socket.split();
+    let control = Arc::new(ConnectionControl::new(
+        tokio_util::sync::CancellationToken::new(),
+    ));
+    let still_signed_in = async {
+        let mut every = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            every.tick().await;
+            if !crate::orchestration::outside_web::active_at(sessions, session) {
+                return;
+            }
+        }
+    };
+    let (code, reason) = tokio::select! {
+        ended = relay(
+            config_directory,
+            &mut writer,
+            &mut reader,
+            Arc::clone(&control),
+            Duration::from_secs(10),
+            Duration::from_secs(30),
+            Duration::from_secs(90),
+        ) => match ended {
+            Some(ErrorCode::Internal) => (CloseCode::Again, "RustCode is not running on this machine"),
+            Some(_) => (CloseCode::Policy, "the connection was closed"),
+            None => (CloseCode::Normal, ""),
+        },
+        _ = control.cancel.cancelled() => (CloseCode::Policy, "the browser fell behind"),
+        _ = still_signed_in => (CloseCode::Policy, "signed out"),
+    };
+    let close = Message::Close(Some(CloseFrame {
+        code,
+        reason: reason.into(),
+    }));
+    let _ = tokio::time::timeout(Duration::from_secs(1), writer.send(close)).await;
+}
+
 /// The first endpoint that accepts a connection. Which endpoints exist is
 /// only a description (`server.json`, `engine.json`); connecting tells which
 /// engine is really running.
@@ -470,6 +524,7 @@ mod tests {
             "_rustcode/outside/code",
             "_rustcode/outside/passkey/add",
             "_rustcode/outside/passkey/remove",
+            "_rustcode/outside/web/sign-out",
         ] {
             assert!(allowed(method), "{method}");
         }

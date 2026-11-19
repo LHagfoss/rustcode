@@ -53,6 +53,7 @@ pub use orchestration::outside_http::{
 pub use orchestration::outside_hub::answer_for_hub as answer_hub_call;
 /// The machine owner's passkeys for the public sign-in page (#3954).
 pub use orchestration::outside_passkey as owner_passkeys;
+pub use orchestration::outside_web as owner_web_sessions;
 mod platform;
 pub mod preview;
 mod project_hooks;

@@ -70,8 +70,10 @@ export class MockOutside {
     signIns: Array<Record<string, Json>>;
     /** The owner's passkeys; a link "opened" by the mock adds one. */
     passkeys: Array<Record<string, Json>>;
+    /** Browsers signed in to the web app; each passkey the mock adds signs one in. */
+    webSessions: Array<Record<string, Json>>;
     next: number;
-  } = { grants: [], pending: [], recent: [], signIns: [], passkeys: [], next: 1 };
+  } = { grants: [], pending: [], recent: [], signIns: [], passkeys: [], webSessions: [], next: 1 };
 
   private list(): JsonObject {
     return {
@@ -89,6 +91,8 @@ export class MockOutside {
       machineName: "Mock Mac",
       levels: MOCK_OUTSIDE_LEVELS,
       passkeys: this.outside.passkeys,
+      webSessions: this.outside.webSessions,
+      webInstalled: true,
     } as unknown as JsonObject;
   }
 
@@ -203,6 +207,15 @@ export class MockOutside {
           createdAt: new Date().toISOString(),
           lastUsedAt: null,
         });
+        // ...and a browser then signs in to the web app with it.
+        this.outside.webSessions.push({
+          id: `web${this.outside.next++}`,
+          name: "Safari on macOS",
+          passkey: id,
+          createdAt: new Date().toISOString(),
+          lastUsedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+        });
         return { link: `https://rc.example.com/owner/passkey?ticket=${id}`, minutes: 10 };
       }
       case "_rustcode/outside/passkey/remove": {
@@ -210,7 +223,17 @@ export class MockOutside {
         const item = this.outside.passkeys.find((passkey) => passkey.id === id);
         if (!item) throw Object.assign(new Error(`no passkey matches ${id}`), { code: -32602 });
         this.outside.passkeys = this.outside.passkeys.filter((passkey) => passkey !== item);
+        // Removing a passkey signs out the browsers it signed in.
+        this.outside.webSessions = this.outside.webSessions.filter((session) => session.passkey !== id);
         return { removed: item };
+      }
+      case "_rustcode/outside/web/sign-out": {
+        const id = str(params.id);
+        const removed = this.outside.webSessions.filter((session) => id === "all" || session.id === id);
+        if (removed.length === 0)
+          throw Object.assign(new Error(`no browser session matches ${id}`), { code: -32602 });
+        this.outside.webSessions = this.outside.webSessions.filter((session) => !removed.includes(session));
+        return { removed };
       }
       // Mock-window hook: a hosted agent waits on the public sign-in page.
       case "_mock/outside/signin": {

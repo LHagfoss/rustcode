@@ -36,6 +36,31 @@ describe("owner passkeys", () => {
   });
 });
 
+describe("web app sessions", () => {
+  test("reads the browsers signed in, and whether the build is installed", () => {
+    const status = parseOutsideStatus({
+      webInstalled: true,
+      webSessions: [
+        { id: "w1", name: "Safari on macOS", passkey: "pk1", createdAt: "2026-11-19T10:00:00Z" },
+        { name: "no id is dropped" },
+      ],
+    });
+    expect(status.webInstalled).toBe(true);
+    expect(status.webSessions).toEqual([
+      {
+        id: "w1",
+        name: "Safari on macOS",
+        passkey: "pk1",
+        createdAt: "2026-11-19T10:00:00Z",
+        lastUsedAt: null,
+        expiresAt: null,
+      },
+    ]);
+    expect(parseOutsideStatus({}).webInstalled).toBe(false);
+    expect(OutsideMethod.webSignOut).toBe("_rustcode/outside/web/sign-out");
+  });
+});
+
 describe("outside agents", () => {
   test("reads the engine's list, with defaults for what is missing", () => {
     const status = parseOutsideStatus({

@@ -672,5 +672,44 @@ fn owner(command: &crate::cli::OwnerCommands) -> Result<(), String> {
             println!("Removed the passkey {}.", removed.name);
             Ok(())
         }
+        OwnerCommands::Sessions { json } => {
+            use rustcode::owner_web_sessions;
+            let sessions = owner_web_sessions::list();
+            if *json {
+                let rows: Vec<_> = sessions
+                    .iter()
+                    .map(owner_web_sessions::WebSession::view)
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&rows).map_err(|error| error.to_string())?
+                );
+            } else if sessions.is_empty() {
+                println!("No browser is signed in to the web app.");
+            } else {
+                for session in &sessions {
+                    println!(
+                        "{}  {}  signed in {}{}",
+                        session.id,
+                        session.name,
+                        session.created_at.get(..10).unwrap_or(&session.created_at),
+                        session
+                            .last_used_at
+                            .as_deref()
+                            .and_then(|used| used.get(..10))
+                            .map(|used| format!(", last used {used}"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+            Ok(())
+        }
+        OwnerCommands::SignOut { session } => {
+            let removed = rustcode::owner_web_sessions::remove(session)?;
+            for session in &removed {
+                println!("Signed out {} ({}).", session.name, session.id);
+            }
+            Ok(())
+        }
     }
 }

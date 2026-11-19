@@ -26,6 +26,8 @@ export async function shellCall<T>(command: string, args: Record<string, unknown
     return invoke<T>(command, args);
   }
   if (current?.call) return (await current.call(command, args)) as T;
+  if (current?.name === "hub")
+    throw new Error("Only the RustCode app on a computer can do this, not the browser.");
   throw new Error("Only the app can do this.");
 }
 

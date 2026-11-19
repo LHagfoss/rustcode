@@ -15,6 +15,7 @@
 //! unchanged.
 
 mod acp_relay;
+pub(crate) use acp_relay::serve_browser;
 pub mod address;
 pub mod command;
 pub mod connect;

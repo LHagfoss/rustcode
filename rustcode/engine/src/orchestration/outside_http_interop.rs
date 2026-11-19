@@ -40,6 +40,13 @@ impl Fixture {
         Self::start_with(dir, None).await
     }
     async fn start_with(dir: &std::path::Path, public: Option<&str>) -> Self {
+        Self::start_web(dir, public, None).await
+    }
+    async fn start_web(
+        dir: &std::path::Path,
+        public: Option<&str>,
+        web: Option<std::path::PathBuf>,
+    ) -> Self {
         let listener = bind_configured(&dir.join(PORT_FILE), Duration::ZERO)
             .await
             .unwrap();
@@ -50,6 +57,8 @@ impl Fixture {
             sign_in_codes: dir.join("outside-codes.json"),
             passkeys: dir.join("owner-passkeys.json"),
             passkey_enrollments: dir.join("owner-passkey-enrollments.json"),
+            web_sessions: dir.join("owner-web-sessions.json"),
+            web,
             machine: "test-machine".to_owned(),
             config: dir.to_path_buf(),
             failures: Mutex::new(Vec::new()),
@@ -106,6 +115,36 @@ impl Fixture {
             let value = serde_json::from_str(body).unwrap_or_else(|_| Value::String(body.to_owned()));
             (head.split_whitespace().nth(1).unwrap().parse().unwrap(), head.to_owned(), value)
         }).await.expect("HTTP request stalled")
+    }
+    /// A request with exactly the headers given (no bearer token), as a
+    /// browser sends one: `extra` is header lines, each ending in `\r\n`.
+    async fn browser(
+        &self,
+        method: &str,
+        target: &str,
+        extra: &str,
+        body: &str,
+    ) -> (u16, String, String) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let authority = self.server.base.trim_start_matches("http://");
+            let mut stream = TcpStream::connect(authority).await.unwrap();
+            let request = format!(
+                "{method} {target} HTTP/1.1\r\nHost: rustcode.example.com\r\n{extra}Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).await.unwrap();
+            let response = String::from_utf8_lossy(&bytes).into_owned();
+            let (head, body) = response.split_once("\r\n\r\n").unwrap();
+            (
+                head.split_whitespace().nth(1).unwrap().parse().unwrap(),
+                head.to_owned(),
+                body.to_owned(),
+            )
+        })
+        .await
+        .expect("HTTP request stalled")
     }
     async fn rpc(&self, token: &str, id: u32, method: &str, params: Value) -> (u16, String, Value) {
         self.request(
@@ -1140,4 +1179,355 @@ async fn the_owners_passkey_is_added_from_a_link_and_approves_a_sign_in() {
         "{:?}",
         replayed.2
     );
+}
+
+/// The web app (#3958): passkey login, the cookie, the app's files, the
+/// socket ticket, the refused cross-use with `/mcp`, and signing out.
+#[tokio::test]
+async fn the_owner_signs_in_to_the_web_app_with_a_passkey() {
+    use crate::orchestration::outside_passkey::{self, fake::Authenticator};
+    use crate::orchestration::outside_web;
+    let dir = tempfile::tempdir().unwrap();
+    let web = dir.path().join("web");
+    std::fs::create_dir_all(web.join("assets")).unwrap();
+    std::fs::write(web.join("index.html"), "<html>the app</html>").unwrap();
+    std::fs::write(web.join("assets/index-abc.js"), "console.log(1)").unwrap();
+    let base = "https://rustcode.example.com";
+    let f = Fixture::start_web(dir.path(), Some(base), Some(web)).await;
+    let origin = format!("Origin: {base}\r\n");
+    let encode = |pairs: &[(&str, &str)]| {
+        url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(pairs)
+            .finish()
+    };
+
+    // Not signed in: the app sends a browser to the login page, and its
+    // files are not served.
+    let home = f.browser("GET", "/", "", "").await;
+    assert_eq!(home.0, 303);
+    assert!(home.1.contains("Location: /login"), "{}", home.1);
+    assert_eq!(
+        f.browser("GET", "/assets/index-abc.js", "", "").await.0,
+        401
+    );
+    // Discovery stays the OAuth server's: no login redirect there.
+    assert_eq!(
+        f.browser("GET", "/.well-known/openid-configuration", "", "")
+            .await
+            .0,
+        404
+    );
+    // The loopback address has no app.
+    assert_ne!(f.request("GET", "/login", "", "").await.0, 200);
+
+    // With no passkey the login page says how to add one, and runs nothing.
+    let login = f.browser("GET", "/login", "", "").await;
+    assert_eq!(login.0, 200);
+    assert!(login.2.contains("Add a passkey first"), "{}", login.2);
+    assert!(!login.1.contains("script-src"));
+
+    let ticket = outside_passkey::create_enrollment_at(
+        &f.server.passkey_enrollments,
+        &f.server.passkeys,
+        "Laptop",
+    )
+    .unwrap();
+    let offer = outside_passkey::enrollment_at(&f.server.passkey_enrollments, &ticket).unwrap();
+    let mut laptop = Authenticator::new();
+    let (client_data, attestation) = laptop.create(&offer.challenge, base);
+    let passkey = outside_passkey::register_at(
+        &f.server.passkeys,
+        &f.server.passkey_enrollments,
+        base,
+        &outside_passkey::Registration {
+            ticket: &ticket,
+            client_data: &client_data,
+            attestation: &attestation,
+        },
+    )
+    .unwrap();
+
+    // The login page asks for it.
+    let login = f.browser("GET", "/login", "", "").await;
+    assert!(login.2.contains("Sign in with passkey"), "{}", login.2);
+    assert!(login.1.contains("script-src 'nonce-"), "{}", login.1);
+    let challenge = login
+        .2
+        .split("challenge:b(\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the page carries a challenge")
+        .to_owned();
+    let answer = laptop.get(&challenge, base);
+    let form = encode(&[
+        ("pk_id", &answer[0]),
+        ("pk_client", &answer[1]),
+        ("pk_auth", &answer[2]),
+        ("pk_sig", &answer[3]),
+    ]);
+    // A post from another origin, or with an outside agent's token, is refused.
+    assert_eq!(
+        f.browser("POST", "/login", "Origin: https://evil.example\r\n", &form)
+            .await
+            .0,
+        403
+    );
+    assert_eq!(f.browser("POST", "/login", "", &form).await.0, 403);
+    let bearer = format!("{origin}Authorization: Bearer rc_out_x\r\n");
+    let refused = f.browser("POST", "/login", &bearer, &form).await;
+    assert_eq!(refused.0, 401);
+    assert!(refused.2.contains("wrong_audience"), "{}", refused.2);
+
+    let signed_in = f
+        .browser(
+            "POST",
+            "/login",
+            &format!("{origin}User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.0 Safari/605.1.15\r\n"),
+            &form,
+        )
+        .await;
+    assert_eq!(signed_in.0, 303, "{}", signed_in.2);
+    let set = signed_in
+        .1
+        .lines()
+        .find_map(|line| line.strip_prefix("Set-Cookie: "))
+        .expect("a session cookie")
+        .to_owned();
+    for part in [
+        "__Host-rustcode-session=",
+        "HttpOnly",
+        "Secure",
+        "SameSite=Strict",
+        "Path=/",
+    ] {
+        assert!(set.contains(part), "{set}");
+    }
+    let secret = set
+        .split(';')
+        .next()
+        .and_then(|pair| pair.split_once('='))
+        .unwrap()
+        .1
+        .to_owned();
+    let cookie = format!("Cookie: {}={secret}\r\n", outside_web::COOKIE);
+    let sessions = outside_web::list_at(&f.server.web_sessions);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].name, "Safari on macOS");
+    assert_eq!(sessions[0].passkey, passkey.id);
+    // The same answer cannot sign in a second browser.
+    let replayed = f.browser("POST", "/login", &origin, &form).await;
+    assert_eq!(replayed.0, 401);
+
+    // Signed in: the app and its files.
+    let home = f.browser("GET", "/", &cookie, "").await;
+    assert_eq!(home.0, 200);
+    assert_eq!(home.2, "<html>the app</html>");
+    assert!(home.1.contains("frame-ancestors 'none'"));
+    let script = f.browser("GET", "/assets/index-abc.js", &cookie, "").await;
+    assert_eq!(script.0, 200);
+    assert!(script.1.contains("immutable"));
+    assert!(script.1.contains("text/javascript"));
+    assert_eq!(
+        f.browser("GET", "/settings/outside", &cookie, "").await.2,
+        "<html>the app</html>"
+    );
+    assert_eq!(
+        f.browser("GET", "/../outside-agents.json", &cookie, "")
+            .await
+            .0,
+        404
+    );
+    assert_eq!(f.browser("GET", "/login", &cookie, "").await.0, 303);
+
+    // A ticket for the socket, from the page's own origin only.
+    assert_eq!(f.browser("POST", "/app/ticket", &cookie, "").await.0, 403);
+    assert_eq!(f.browser("POST", "/app/ticket", &origin, "").await.0, 401);
+    let issued = f
+        .browser("POST", "/app/ticket", &format!("{origin}{cookie}"), "")
+        .await;
+    assert_eq!(issued.0, 200, "{}", issued.2);
+    let issued: Value = serde_json::from_str(&issued.2).unwrap();
+    assert_eq!(issued["session"], sessions[0].id.as_str());
+    let with_bearer = f
+        .browser(
+            "POST",
+            "/app/ticket",
+            &format!("{origin}{cookie}Authorization: Bearer rc_out_x\r\n"),
+            "",
+        )
+        .await;
+    assert_eq!(with_bearer.0, 401);
+    assert!(with_bearer.2.contains("wrong_audience"));
+
+    // The web session does not reach /mcp.
+    let mcp = f
+        .browser(
+            "POST",
+            "/mcp",
+            &cookie,
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string(),
+        )
+        .await;
+    assert_eq!(mcp.0, 401);
+    assert!(mcp.2.contains("wrong_audience"), "{}", mcp.2);
+
+    // A socket needs the page's origin and an unspent ticket.
+    let upgrade = |origin: &str| {
+        format!(
+            "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{origin}"
+        )
+    };
+    let ticket = issued["ticket"].as_str().unwrap();
+    let foreign = f
+        .browser(
+            "GET",
+            &format!("/app/acp?ticket={ticket}"),
+            &upgrade("Origin: https://evil.example\r\n"),
+            "",
+        )
+        .await;
+    assert_eq!(foreign.0, 403);
+    assert_eq!(
+        f.browser("GET", "/app/acp?ticket=made-up", &upgrade(&origin), "")
+            .await
+            .0,
+        401
+    );
+
+    // Signing out in Settings ends the session at once.
+    outside_web::remove_at(&f.server.web_sessions, &sessions[0].id).unwrap();
+    assert_eq!(f.browser("GET", "/", &cookie, "").await.0, 303);
+    let after = f
+        .browser("POST", "/app/ticket", &format!("{origin}{cookie}"), "")
+        .await;
+    assert_eq!(after.0, 401);
+    // The browser's own Sign out clears its cookie.
+    let out = f
+        .browser("POST", "/logout", &format!("{origin}{cookie}"), "")
+        .await;
+    assert_eq!(out.0, 303);
+    assert!(out.1.contains("Max-Age=0"), "{}", out.1);
+}
+
+/// The web app's socket reaches this machine's server, and closes when the
+/// browser is signed out.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_web_apps_socket_relays_acp_until_signed_out() {
+    use crate::orchestration::outside_web;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    let dir = tempfile::tempdir().unwrap();
+    let base = "https://rustcode.example.com";
+    let f = Fixture::start_web(dir.path(), Some(base), None).await;
+
+    // A server that answers `initialize`.
+    let run = dir.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let endpoint = run.join("acp-web.sock");
+    let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
+    std::fs::write(
+        run.join("server.json"),
+        serde_json::to_vec(&crate::server::ServerInfo::now(
+            endpoint.to_string_lossy().into(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (read, mut write) = tokio::io::split(stream);
+        let mut lines = BufReader::new(read).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let answer = json!({"jsonrpc":"2.0","id":request["id"],"result":{"agent":"rustcode"}});
+            write
+                .write_all(format!("{answer}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+    });
+
+    let (session, _) =
+        outside_web::create_at(&f.server.web_sessions, "Firefox on Linux", "pk").unwrap();
+    let ticket = outside_web::new_ticket(&session);
+    let mut request = format!("ws://rustcode.example.com/app/acp?ticket={ticket}")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("Origin", base.parse().unwrap());
+    let stream = TcpStream::connect(f.server.base.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    let (mut socket, _) = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::client_async(request, stream),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let opened = tokio::time::timeout(Duration::from_secs(15), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(opened.to_text().unwrap(), r#"{"type":"acp_opened"}"#);
+    socket
+        .send(Message::text(
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let answer: Value = serde_json::from_str(answer.to_text().unwrap()).unwrap();
+    assert_eq!(answer["result"]["agent"], "rustcode");
+    // A method a paired desktop may not call is refused here too.
+    socket
+        .send(Message::text(
+            json!({"jsonrpc":"2.0","id":2,"method":"fs/write_text_file","params":{}}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        refused.to_text().unwrap().contains("not permitted"),
+        "{refused}"
+    );
+    // The ticket worked once.
+    let mut again = format!("ws://rustcode.example.com/app/acp?ticket={ticket}")
+        .into_client_request()
+        .unwrap();
+    again.headers_mut().insert("Origin", base.parse().unwrap());
+    let stream = TcpStream::connect(f.server.base.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    assert!(
+        tokio_tungstenite::client_async(again, stream)
+            .await
+            .is_err()
+    );
+
+    // Signed out: the open socket closes with why.
+    outside_web::remove_at(&f.server.web_sessions, &session).unwrap();
+    let closed = loop {
+        match tokio::time::timeout(Duration::from_secs(15), socket.next())
+            .await
+            .expect("the socket stayed open after sign-out")
+        {
+            Some(Ok(Message::Close(frame))) => break frame,
+            Some(Ok(_)) => continue,
+            _ => break None,
+        }
+    };
+    assert_eq!(closed.unwrap().reason.as_str(), "signed out");
 }

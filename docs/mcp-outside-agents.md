@@ -328,6 +328,52 @@ same machine. Use a tunnel you trust with that.
 Codex) can use the public URL as well; it signs in through the same page and
 its loopback callback returns to the laptop.
 
+### The web app at the public address
+
+The same public address serves the RustCode app itself to a browser, so you
+can use the machine (a VPS hub, a desktop that stays on) from any computer
+with no app installed. You sign in with the owner's passkey (above).
+
+1. Build the web app once and put it where the engine looks:
+
+   ```sh
+   cd apps/desktop && bun run build:hub
+   cp -R dist-hub ~/.config/rustcode/web
+   ```
+
+   The engine serves `$RUSTCODE_WEB_DIR` if set, else `<config>/web`, else
+   `share/rustcode/web` next to the binary's `bin/`. Settings › Outside agents
+   says when none is there.
+2. Add a passkey for the public address, if you have none yet.
+3. Open `https://rustcode.example.com`. It sends you to `/login`; press
+   *Sign in with passkey*.
+
+How it is guarded:
+
+- **The cookie.** Signing in sets `__Host-rustcode-session`: `HttpOnly`,
+  `Secure`, `SameSite=Strict`, this host only, for 30 days. Only its hash is
+  stored, in `<config>/owner-web-sessions.json`, with the browser's name and
+  the passkey that signed it in. The app's files go only to a signed-in
+  browser.
+- **The socket.** The page trades its cookie for a ticket at `/app/ticket`
+  (from its own origin, single use, 30 seconds) and opens `/app/acp` with it.
+  The socket is relayed to this machine's server with the same method list a
+  paired desktop gets, so the browser can do what a desktop app connected to
+  this machine can.
+- **Separate audiences.** An outside agent's bearer token is refused on
+  `/login`, `/logout` and `/app/*`, and a request with the app's cookie is
+  refused on `/mcp`, both with `wrong_audience`.
+- **Signing out.** *Sign out* on a browser's row in Settings › Outside agents,
+  or `rustcode outside owner sign-out <id or all>` (`rustcode outside owner
+  sessions` lists them), ends the session; its open socket closes within ten
+  seconds. Removing a passkey signs out every browser it signed in. The row
+  marked *this browser* signs the browser you are in out and returns to the
+  login page.
+- **What the browser cannot do.** There is no native shell in a browser, so
+  what needs the desktop app (terminals, other machines in Settings ›
+  Machines, opening files in other apps) is hidden as it is in `dev:web`, or
+  says "Only the RustCode app on a computer can do this, not the browser".
+
 ## Client walkthrough and compatibility
 
 Documentation checked 2026-11-14. These are documented client configuration

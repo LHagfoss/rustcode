@@ -1,6 +1,8 @@
 // How the UI reaches the engine. Three implementations share one shape:
 // - Tauri: the Rust shell runs `rustcode --acp` as a sidecar and relays lines.
 // - WebSocket: `scripts/engine-bridge.ts` relays lines for `bun run dev:web`.
+// - Hub: the web build a hub serves (`bun run build:hub`), signed in with the
+//   owner's passkey; ACP over the hub's `/app/acp` socket.
 // - Mock: an in-process fake engine (`mock.ts`) for tests and screenshots.
 
 export type TransportEvent =
@@ -12,7 +14,7 @@ export type TransportEvent =
   | { type: "log"; line: string };
 
 export interface Transport {
-  readonly name: "tauri" | "websocket" | "mock" | "machine";
+  readonly name: "tauri" | "websocket" | "mock" | "machine" | "hub";
   /** Start (or restart) the engine and deliver its events. */
   start(onEvent: (event: TransportEvent) => void): Promise<void>;
   send(line: string): void;
@@ -237,6 +239,94 @@ export class WebSocketTransport implements Transport {
   }
 }
 
+/** The browser session the hub signed this page in with, once known. */
+let hubSessionId: string | null = null;
+export function hubSession(): string | null {
+  return hubSessionId;
+}
+
+/**
+ * The app served from a hub (`orchestration/outside_web.rs`). The page's
+ * cookie buys a single-use ticket at `/app/ticket`; the ticket opens
+ * `/app/acp`, which relays ACP lines to the hub's server as they are. Not
+ * signed in (or signed out in Settings) sends the page to `/login`. There is
+ * no native helper here, so `call` is absent and the shell's features say so.
+ */
+export class HubTransport implements Transport {
+  readonly name = "hub";
+  private socket: WebSocket | null = null;
+  private queue: string[] = [];
+  private ready = false;
+  private onEvent: ((event: TransportEvent) => void) | null = null;
+
+  constructor(private readonly origin: string = globalThis.location?.origin ?? "") {}
+
+  async start(onEvent: (event: TransportEvent) => void): Promise<void> {
+    this.onEvent = onEvent;
+    const answer = await fetch(`${this.origin}/app/ticket`, { method: "POST", credentials: "same-origin" });
+    if (answer.status === 401) {
+      globalThis.location?.assign("/login");
+      throw new Error("Sign in with your passkey to use RustCode here.");
+    }
+    if (!answer.ok) throw new Error(`The hub did not open a connection (HTTP ${answer.status}).`);
+    const { ticket, session } = (await answer.json()) as { ticket: string; session?: string };
+    hubSessionId = session ?? null;
+    const url = new URL(`/app/acp?ticket=${encodeURIComponent(ticket)}`, this.origin);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    await new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(url);
+      this.socket = socket;
+      this.ready = false;
+      socket.onmessage = (message) => {
+        const line = String(message.data);
+        if (!this.ready) {
+          // The relay's first frame says the hub's server is there.
+          this.ready = true;
+          onEvent({ type: "open", engine: url.host });
+          for (const queued of this.queue.splice(0)) socket.send(queued);
+          resolve();
+          if (line.includes('"acp_opened"')) return;
+        }
+        onEvent({ type: "line", line });
+      };
+      socket.onclose = (event) => {
+        if (this.socket !== socket) return;
+        this.socket = null;
+        const why = event.reason || "The connection to the hub closed.";
+        onEvent({ type: "closed", reason: why === "signed out" ? "This browser was signed out." : why });
+        if (!this.ready) reject(new Error(why));
+        if (event.reason === "signed out") globalThis.location?.assign("/login");
+      };
+    });
+  }
+
+  send(line: string): void {
+    if (this.ready && this.socket?.readyState === WebSocket.OPEN) this.socket.send(line);
+    else this.queue.push(line);
+  }
+
+  async restart(): Promise<void> {
+    await this.stop();
+    if (this.onEvent) await this.start(this.onEvent);
+  }
+
+  async stop(): Promise<void> {
+    const socket = this.socket;
+    this.socket = null;
+    this.ready = false;
+    socket?.close();
+  }
+}
+
+/** Sign this browser out of the hub and go back to its login page. */
+export function signOutOfHub() {
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = "/logout";
+  document.body.appendChild(form);
+  form.submit();
+}
+
 /** Terminal output and exits the dev bridge streams for `pty_*` sessions. */
 export type PtyEvent = { type: "pty"; id: number; data?: string; exit?: number | null };
 const ptyListeners = new Set<(event: PtyEvent) => void>();
@@ -266,6 +356,7 @@ export async function defaultTransport(): Promise<Transport> {
       seconds: n("seconds"),
     });
   }
+  if (choice === "hub") return new HubTransport();
   if (choice === "mock") {
     const { MockTransport } = await import("./mock");
     const q = new URLSearchParams(window.location.search);
