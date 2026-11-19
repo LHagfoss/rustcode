@@ -2110,9 +2110,11 @@ mod tests {
         assert_eq!(all.len() - core.len(), super::super::EXTRA_TOOL_NAMES.len());
         let (core_names, all_names) = (names(&core), names(&all));
         for kept in ["start_session", "wait_session", "manage_settings"] {
+            let kept = mcp_names::public_tool(kept);
             assert!(core_names.contains(&kept.to_owned()), "{kept}");
         }
         for left_out in ["run_workflow", "schedule_task", "handoff_worktree"] {
+            let left_out = mcp_names::public_tool(left_out);
             assert!(!core_names.contains(&left_out.to_owned()), "{left_out}");
             assert!(all_names.contains(&left_out.to_owned()), "{left_out}");
         }
