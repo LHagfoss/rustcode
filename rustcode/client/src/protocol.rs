@@ -459,6 +459,8 @@ mod tests {
                 "authenticate.json".to_owned(),
                 "authenticate_access.json".to_owned(),
                 "authenticate_refresh.json".to_owned(),
+                "authenticate_register_key.json".to_owned(),
+                "authenticate_signed.json".to_owned(),
                 "authenticate_thread_names.json".to_owned(),
                 "connect_request.json".to_owned(),
                 "connect_request_desktop.json".to_owned(),
