@@ -916,6 +916,23 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   and `bg-fill` over the card (hover and focus
   `bg-fill-strong`), with no edge, so the same control reads at every nesting
   depth; switches keep their own shape.
+- **Settings titles, two levels:** a section that holds several named cards (an
+  account under its harness in Usage, a source under Skills) names each card
+  with `minor` on `Group` or `SectionTitle`: `text-body font-medium
+  text-fg-muted`, an `h3`. Two `text-title3` titles never stack.
+- **Settings buttons, by place:** a section header's actions are `size="sm"`:
+  the one that adds to the section ("Add server", "New skill", "Add machine")
+  takes the default fill, its companions ("Edit config", "Check all") are
+  `quiet`, and none is `prominent`. In a row, `prominent` is for the one thing
+  the page waits on (a restart to apply, the pairing code); a repeated row's
+  action ("Sign in", "Revoke", "Check") is the default fill, so a list never
+  shows a column of white pills. Labels are sentence case ("Restart server").
+- **Settings choice tiles:** a pick between a few large options (the hosted
+  agent to connect) is told by fill, never by an outline: `bg-fill-subtle` at
+  rest, `bg-fill` on hover, `bg-fill-strong` for the picked one.
+- **Settings text with code in it:** a title, note or hint that names a command
+  goes through `withCode` (settingsKit), which sets each backticked part in code
+  type on `bg-fill`; the backticks themselves are never shown.
 - **Settings row, description and hint:** a description is one short line
   (about 90 characters at most): what the title does not already say. Anything
   longer a person may need goes in `hint`, a tip behind a small info mark after

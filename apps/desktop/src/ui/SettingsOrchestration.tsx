@@ -207,7 +207,7 @@ function OrchestrationGroup() {
         {pending && (
           <Row title="Restart the server to apply" subtitle="The server reads this setting when it starts.">
             <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-              Restart Server
+              Restart server
             </Action>
           </Row>
         )}

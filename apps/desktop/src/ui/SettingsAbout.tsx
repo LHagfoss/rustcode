@@ -27,7 +27,7 @@ import {
 } from "../state/updates";
 import { Info } from "./icons";
 import { cx, Spinner, Switch } from "./primitives";
-import { Action, Chip, Choice, Group, Loading, Row } from "./settingsKit";
+import { Action, Chip, Choice, Group, Loading, Row, withCode } from "./settingsKit";
 
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
@@ -225,7 +225,7 @@ function RecordRequestBodiesGroup() {
               void restartEngine();
             }}
           >
-            Restart Server
+            Restart server
           </Action>
         </Row>
       )}
@@ -292,7 +292,7 @@ function SystemSetupGroup() {
       hint="Runs after an install or an update. RustCode never asks for an administrator silently."
       footer={error ?? undefined}
       action={
-        <Action disabled={running !== null} onClick={() => void run()}>
+        <Action size="sm" disabled={running !== null} onClick={() => void run()}>
           {running === "all" ? <Spinner size={12} /> : null}
           Run again
         </Action>
@@ -307,9 +307,9 @@ function SystemSetupGroup() {
           return (
             <Row
               key={step.id}
-              title={step.title}
-              subtitle={step.message}
-              hint={step.about}
+              title={withCode(step.title)}
+              subtitle={withCode(step.message)}
+              hint={step.about ? withCode(step.about) : undefined}
               badge={<Chip tone={chip.tone}>{chip.label}</Chip>}
             >
               {command && (

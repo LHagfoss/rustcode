@@ -53,6 +53,11 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/TurnChanges.tsx", "bg-fill-subtle", "the changes pill is a popover trigger"],
   ["ui/TurnTrace.tsx", "bg-fill-subtle", "the trace pill is a popover trigger"],
   [
+    "ui/OutsideAgentsPage.tsx",
+    "aria-pressed={item.id === chosen}",
+    "a hosted agent's tile; its fill marks the one picked",
+  ],
+  [
     "ui/ModelPicker.tsx",
     "aria-pressed={selected}",
     "a harness in the model card's rail; its fill marks the one browsed",

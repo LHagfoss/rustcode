@@ -463,7 +463,7 @@ function McpSection({
               </Action>
             </Tooltip>
           )}
-          <Action quiet size="sm" onClick={() => setAdding(!adding)} aria-expanded={adding}>
+          <Action size="sm" onClick={() => setAdding(!adding)} aria-expanded={adding}>
             <Plus size={12} /> Add server
           </Action>
         </div>
@@ -627,13 +627,7 @@ function McpRow({
         </button>
         <div className="flex shrink-0 items-center gap-1.5">
           {needsSignIn && (
-            <Action
-              size="sm"
-              prominent
-              disabled={signingIn}
-              aria-busy={signingIn}
-              onClick={() => void signIn()}
-            >
+            <Action size="sm" disabled={signingIn} aria-busy={signingIn} onClick={() => void signIn()}>
               {signingIn ? <Spinner size={12} /> : null} Sign in
             </Action>
           )}
@@ -852,7 +846,7 @@ function SkillsSection({
               </Action>
             </Tooltip>
             {hasShell() && (
-              <Action quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
+              <Action size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
                 <FilePlus2 size={12} /> New skill
               </Action>
             )}
@@ -868,7 +862,8 @@ function SkillsSection({
       {groups.map(([source, skills]) => (
         <Group
           key={source}
-          title={<span className="font-medium text-body text-fg-muted">{sourceOf(source).label}</span>}
+          minor
+          title={sourceOf(source).label}
           footer={sourceOf(source).note}
           hint={sourceOf(source).hint}
         >

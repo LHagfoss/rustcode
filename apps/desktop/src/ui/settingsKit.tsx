@@ -51,20 +51,36 @@ import { connectionFor, request, useApp } from "../state/store";
 import { Check, ChevronDown, Info, RotateCcw } from "./icons";
 import { cx, menuItem, rowInset, Skeleton, Switch, Tooltip } from "./primitives";
 
-/** A section's name, above its card: `text-base` in `fg`, at the card's own inset. */
+/**
+ * A section's name, above its card: `text-title3` in `fg`, at the card's own inset. `minor` is a
+ * card's name inside a section that already has a title (an account under its harness, a
+ * source under Skills): a step down in size, weight and colour, so the two do not compete.
+ */
 export function SectionTitle({
   title,
   action,
+  minor,
   className,
 }: {
   title?: ReactNode;
   action?: ReactNode;
+  minor?: boolean;
   className?: string;
 }) {
   if (!title && !action) return null;
+  const Heading = minor ? "h3" : "h2";
   return (
-    <div className={cx("mb-2 flex min-h-7 flex-wrap items-center gap-2 px-4", className)}>
-      <h2 className="flex min-w-0 flex-1 items-center gap-2 font-semibold text-fg text-title3">{title}</h2>
+    <div
+      className={cx("mb-2 flex flex-wrap items-center gap-2 px-4", minor ? "min-h-5" : "min-h-7", className)}
+    >
+      <Heading
+        className={cx(
+          "flex min-w-0 flex-1 items-center gap-2",
+          minor ? "font-medium text-body text-fg-muted" : "font-semibold text-fg text-title3",
+        )}
+      >
+        {title}
+      </Heading>
       {action}
     </div>
   );
@@ -77,12 +93,15 @@ export function Group({
   footer,
   hint,
   action,
+  minor,
   disabled,
   enabled,
   onEnabledChange,
   switchLabel,
 }: {
   title?: ReactNode;
+  /** A card inside a section that has its own title: its name reads a step quieter. */
+  minor?: boolean;
   children: ReactNode;
   footer?: ReactNode;
   /** What the one-line footer leaves out: a tip behind an info mark after the title. */
@@ -116,6 +135,7 @@ export function Group({
       aria-disabled={disabled || undefined}
     >
       <SectionTitle
+        minor={minor}
         title={
           hint && title ? (
             <>
@@ -560,6 +580,29 @@ export function Chip({
   );
 }
 
+/**
+ * A sentence with its backticked commands and paths set in code type, so a title or a note never
+ * shows the backticks themselves. Text without any comes back as the same string.
+ */
+export function withCode(text: string): ReactNode {
+  if (!text.includes("`")) return text;
+  // One span, so a flex title row keeps the sentence as a single item.
+  return (
+    <span>
+      {text.split(/(`[^`]+`)/g).map((part, i) =>
+        part.length > 2 && part.startsWith("`") && part.endsWith("`") ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the parts of one fixed sentence
+          <code key={i} className="selectable rounded-xs bg-fill px-1 py-px font-mono">
+            {part.slice(1, -1)}
+          </code>
+        ) : (
+          part
+        ),
+      )}
+    </span>
+  );
+}
+
 /** One short literal the user may copy (a path, command, id or version), inline in the normal text around it. */
 export function Literal({ children, title }: { children: ReactNode; title?: string }) {
   return (
@@ -695,7 +738,7 @@ export function Slider({
           className="rc-range h-5 w-36 cursor-pointer"
           style={{ "--rc-range-progress": `${((shown - min) / (max - min)) * 100}%` } as React.CSSProperties}
         />
-        <span className="min-w-14 text-right font-medium text-callout text-fg tabular">
+        <span className="min-w-20 text-right font-medium text-callout text-fg tabular">
           {shown} {unit}
         </span>
       </div>

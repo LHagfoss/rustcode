@@ -124,8 +124,8 @@ export function MachinesPage() {
       <Group
         title="Machines"
         action={
-          <Action prominent onClick={() => setAddMachineOpen(true)}>
-            <Plus size={13} />
+          <Action size="sm" onClick={() => setAddMachineOpen(true)}>
+            <Plus size={12} />
             Add machine
           </Action>
         }

@@ -225,6 +225,7 @@ function PlanSections({ plans, where = "on this computer" }: { plans: UsagePlan[
             {plans.map((p) => (
               <Group
                 key={p.id}
+                minor
                 title={
                   <span>
                     {p.name}

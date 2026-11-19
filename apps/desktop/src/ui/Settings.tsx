@@ -126,6 +126,7 @@ import {
   Slider,
   useEngineData,
   useRowResets,
+  withCode,
 } from "./settingsKit";
 
 const UsagePage = lazy(() => import("./UsagePage").then((m) => ({ default: m.UsagePage })));
@@ -535,7 +536,7 @@ function ChatPage() {
       {smartUiPending && (
         <Row title="Restart the server to apply" subtitle="The server reads this setting when it starts.">
           <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-            Restart Server
+            Restart server
           </Action>
         </Row>
       )}
@@ -815,7 +816,7 @@ function ConnectionsPage() {
           <Row title="Not signed in" subtitle="Run: gh auth login" />
         )}
       </Group>
-      <Group title="Model accounts" footer="Sign in or out with `/login` in a thread.">
+      <Group title="Model accounts" footer={withCode("Sign in or out with `/login` in a thread.")}>
         {data.accounts.length ? (
           data.accounts.map((a, i) => (
             <Row key={i} title={a.display || a.provider} subtitle={`${a.provider} · ${a.method}`}>

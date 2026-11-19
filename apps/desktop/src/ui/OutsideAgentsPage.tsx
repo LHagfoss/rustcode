@@ -298,45 +298,50 @@ function HostedGroup({ host, status, where }: { host: string; status: OutsideSta
           Copy
         </Action>
       </Row>
-      <div className="grid grid-cols-3 gap-2 px-4 py-3">
-        {HOSTED_APPS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            aria-pressed={item.id === chosen}
-            onClick={() => setChosen(item.id)}
-            className={cx(
-              "flex flex-col items-center gap-2 rounded-xl border px-3 py-3 text-callout",
-              item.id === chosen ? "border-accent bg-fill" : "border-separator hover:bg-fill-subtle",
-            )}
-          >
-            <span className="flex size-10 items-center justify-center rounded-xl bg-fill text-fg-muted">
-              {item.mark ? <HarnessIcon id={item.mark} size={24} /> : <Plug size={18} />}
-            </span>
-            <span className="font-medium text-fg">{item.name}</span>
-          </button>
-        ))}
-      </div>
-      {app && (
-        <div className="flex flex-col gap-3 px-4 pb-4">
-          <ol className="flex flex-col gap-1.5 text-callout text-fg-muted">
-            {app.steps.map((step, index) => (
-              <li key={step} className="flex gap-2">
-                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-fill font-semibold text-caption text-fg">
-                  {index + 1}
-                </span>
-                {step}
-              </li>
-            ))}
-          </ol>
-          <div>
-            <Action prominent onClick={() => app.run(url)}>
-              {app.id === "claude" ? <ExternalLink size={14} /> : <Copy size={14} />}
-              {app.action}
-            </Action>
-          </div>
+      {/* One block: the pick, its steps and its action, with no rule between them. */}
+      <div className="flex flex-col gap-4 px-4 py-4">
+        <div className="grid grid-cols-3 gap-2">
+          {HOSTED_APPS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={item.id === chosen}
+              onClick={() => setChosen(item.id)}
+              className={cx(
+                "flex flex-col items-center gap-2 rounded-lg px-3 py-3 text-callout",
+                item.id === chosen
+                  ? "bg-fill-strong text-fg"
+                  : "bg-fill-subtle text-fg-muted hover:bg-fill hover:text-fg",
+              )}
+            >
+              <span className="flex size-10 items-center justify-center rounded-md bg-fill text-fg-muted">
+                {item.mark ? <HarnessIcon id={item.mark} size={24} /> : <Plug size={18} />}
+              </span>
+              <span className="font-medium">{item.name}</span>
+            </button>
+          ))}
         </div>
-      )}
+        {app && (
+          <>
+            <ol className="flex flex-col gap-2 text-callout text-fg-muted">
+              {app.steps.map((step, index) => (
+                <li key={step} className="flex items-start gap-2">
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-fill font-semibold text-caption text-fg">
+                    {index + 1}
+                  </span>
+                  <span className="pt-px">{step}</span>
+                </li>
+              ))}
+            </ol>
+            <div>
+              <Action prominent onClick={() => app.run(url)}>
+                {app.id === "claude" ? <ExternalLink size={14} /> : <Copy size={14} />}
+                {app.action}
+              </Action>
+            </div>
+          </>
+        )}
+      </div>
       <CodeRow host={host} status={status} />
       <PasskeyRows host={host} status={status} />
       <WebAppRows host={host} status={status} url={url} />
