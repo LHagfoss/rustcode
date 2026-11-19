@@ -23,12 +23,12 @@ describe("a link chip", () => {
     expect(out).not.toContain("align-middle");
   });
 
-  test("in text it is the pill the code and the links beside it are", () => {
+  test("in text the chip has compact padding and extra vertical hit area", () => {
     const out = drawn("https://example.com/a");
     expect(out).toContain("rounded-full");
-    // A pixel more room on each side than the chip had.
-    expect(out).toContain("pl-[7px]");
-    expect(out).toContain("pr-[5px]");
+    expect(out).toContain("pr-[5px] pl-1");
+    expect(out).toContain("before:bottom-full before:h-0.5");
+    expect(out).toContain("after:top-full after:h-0.5");
   });
 
   test("in the composer it keeps the field tokens' own shape", () => {
