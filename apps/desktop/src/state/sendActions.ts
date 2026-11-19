@@ -126,7 +126,7 @@ export function runCommandAction(text: string, from: string | null): boolean {
       return true;
     }
     case "model_picker":
-      set((s) => ({ modelPickerAsk: s.modelPickerAsk + 1 }));
+      set({ modelPickerAsk: { toggle: false } });
       return true;
     case "session_picker":
       setSwitcher(true);

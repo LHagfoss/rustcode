@@ -184,8 +184,8 @@ export interface AppState {
   switcherOpen: boolean;
   /** A report command's answer (`/status`, `/context`…), shown over the composer of its thread. */
   report: { threadId: string; text: string } | null;
-  /** Bumped to open the composer's model picker (`/model`). */
-  modelPickerAsk: number;
+  /** A fresh request from `/model` or the model picker shortcut. */
+  modelPickerAsk: { toggle: boolean } | null;
   onboardingOpen: boolean;
   sidebarHidden: boolean;
   /** Newest first, at most three (state/toasts.ts). */

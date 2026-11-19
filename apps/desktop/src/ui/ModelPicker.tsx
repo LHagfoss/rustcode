@@ -49,6 +49,7 @@ import {
   pickNewThreadChoice,
   refreshHarnesses,
   setConfigOption,
+  shortcutFor,
   shownPlan,
   switchThreadAccount,
   switchThreadHarness,
@@ -699,6 +700,7 @@ function ModelPanel({
           }}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "d") {
+              if (shortcutFor(e) === "toggle-model-picker") return;
               e.preventDefault();
               e.stopPropagation();
               if (row) toggleStar(row.group.harness.id, row.model.value);
@@ -987,15 +989,15 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     if (next) columnFocus.current = false;
     setOpenState(next);
   };
-  // `/model` asks the picker to open (store.runCommandAction).
   const ask = useApp((s) => s.modelPickerAsk);
   const seenAsk = useRef(ask);
   useEffect(() => {
-    if (ask === seenAsk.current) return;
+    if (!ask || ask === seenAsk.current) return;
     seenAsk.current = ask;
-    columnFocus.current = false;
-    setOpenState(true);
-  }, [ask]);
+    const next = !ask.toggle || !open;
+    if (next) columnFocus.current = false;
+    setOpenState(next);
+  }, [ask, open]);
 
   const isNew = !thread;
   // The project's own default belongs to this computer's folders, so a machine's picker never

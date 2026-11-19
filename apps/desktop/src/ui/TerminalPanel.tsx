@@ -120,14 +120,14 @@ function TerminalView({ tab, visible }: { tab: TerminalTab; visible: boolean }) 
     // The panel's own keys while a shell has focus: ⌘L sends the selection to the message,
     // ⌘T opens a tab, ⌘⇧[ and ⌘⇧] move between tabs.
     term.attachCustomKeyEventHandler((e) => {
-      // App shortcuts reach the window from a focused shell too; F6 leaving the terminal must
-      // not also send its escape sequence to the shell, so the terminal skips that key.
+      // These app shortcuts reach the window without also sending input to the shell.
       if (e.type === "keydown") {
         const command = shortcutFor(e);
         if (
           command === "focus-next-area" ||
           command === "focus-previous-area" ||
-          command === "settle-current-thread"
+          command === "settle-current-thread" ||
+          (command === "toggle-model-picker" && useApp.getState().view.kind === "chat")
         )
           return false;
       }

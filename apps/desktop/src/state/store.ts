@@ -529,7 +529,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   settings: null,
   settingsMachine: null,
   switcherOpen: false,
-  modelPickerAsk: 0,
+  modelPickerAsk: null,
   report: null,
   onboardingOpen: false,
   sidebarHidden: stored(STORAGE.sidebar) === "1",
