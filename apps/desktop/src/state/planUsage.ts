@@ -200,8 +200,10 @@ export async function refreshPlanUsage(id: string): Promise<void> {
     // other native thread reads them as its own.
     // A thread on a paired machine reads that machine's login, not this one's:
     // its numbers stay on the thread, so they never pass for the Mac's own plan.
+    // Antigravity's numbers are the quota group of the thread's model, not
+    // the harness's, so another Antigravity thread never reads them either.
     const harness = harnessOf(get(), id);
-    if (usage && harness && harness !== "rustcode" && !isRemoteThread(id)) {
+    if (usage && harness && harness !== "rustcode" && harness !== "antigravity" && !isRemoteThread(id)) {
       // The account's own row, so it never overwrites another login's numbers.
       const key = harnessPlanKey(harness, accountOn(get(), id));
       commitPlans({

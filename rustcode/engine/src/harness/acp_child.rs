@@ -829,6 +829,36 @@ impl AcpAdapter {
         matches!(answer, Ok(answer) if answer.get("outcome").and_then(Value::as_str) == Some("injected"))
     }
 
+    /// Why a listing found no models: what the session offered instead, and
+    /// the agent's last stderr lines. `agy` answers a session it cannot fully
+    /// set up (a login the app cannot read) with no model choice at all.
+    pub(crate) async fn no_models_reason(&self, name: &str) -> String {
+        let offered = {
+            let state = lock(&self.state);
+            let ids: Vec<String> = state
+                .options
+                .iter()
+                .map(|option| option.id.0.to_string())
+                .collect();
+            let options = if ids.is_empty() {
+                "no config options".to_owned()
+            } else {
+                format!("config options without a model ({})", ids.join(", "))
+            };
+            let models = match &state.legacy_models {
+                None => "no models list",
+                Some(models) => match models.get("availableModels").and_then(Value::as_array) {
+                    Some(list) if !list.is_empty() => "a models list RustCode could not read",
+                    _ => "an empty models list",
+                },
+            };
+            format!("{options} and {models}")
+        };
+        let error = format!("{name} started but offered no models: its new session had {offered}.");
+        crate::dbg_log!("{error}");
+        with_stderr(error, self.process.as_ref()).await
+    }
+
     pub(crate) fn config_options(&self) -> Vec<SessionConfigOption> {
         mapped_options(&lock(&self.state))
     }

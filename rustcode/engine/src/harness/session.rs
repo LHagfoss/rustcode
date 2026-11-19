@@ -396,8 +396,21 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
     let models = adapter
         .probed_models(&known, &preferred_models(harness))
         .await;
+    // A harness that always offers models when signed in and offered none
+    // failed to set up the session; say why rather than list nothing.
+    let reason = match &adapter {
+        Adapter::Acp(acp)
+            if models.is_empty() && harness.known.is_some_and(|known| known.lists_models) =>
+        {
+            Some(acp.no_models_reason(&harness.name).await)
+        }
+        _ => None,
+    };
     adapter.kill();
-    Ok(models)
+    match reason {
+        Some(reason) => Err(reason),
+        None => Ok(models),
+    }
 }
 
 /// The models a setting names for `harness`: the engine's default, and the

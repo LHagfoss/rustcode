@@ -773,7 +773,13 @@ composer's keys stay outside the table.
   path's SHA-256 for a named account — and `<config dir>/.credentials.json`,
   the copy with the freshest token winning) against
   `api.anthropic.com/api/oauth/usage` (5-hour, weekly, weekly per model),
-  read-only and never refreshed (`provider_auth/claude_usage.rs`). The first
+  read-only and never refreshed (`provider_auth/claude_usage.rs`). Antigravity
+  (macOS and Linux) comes from `agy --print /usage --output-format json`, run
+  with the executable and environment Settings › Harnesses › Antigravity
+  configures (`provider_auth/antigravity_usage.rs`); a failed read shows what
+  `agy` said, and a read that hangs (a CLI waiting for a sign-in) points to
+  Sign in. An Antigravity thread's meter shows the quota group of its model
+  (Gemini, or Claude and GPT), so those numbers stay on the thread. The first
   read happens when Usage opens or a Claude account is used; macOS may ask to
   allow Keychain access. A thread on a paired machine reads that machine's
   login instead: the plans call only reaches this computer's engine, so the
