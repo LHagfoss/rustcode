@@ -357,14 +357,25 @@ const components: Components = {
     const ref = parseInlineRef(text);
     if (ref)
       return (
-        <button
-          type="button"
+        // Inline like body `code` and the same size, so a file reference sits in the line the way
+        // code does: a <button> is an inline block, and its padding would raise the line around it.
+        <span
+          role="link"
+          tabIndex={0}
           title={`Open ${ref.path}${ref.line ? ` at line ${ref.line}` : ""}`}
           onClick={() => openRef(ref)}
-          className={cx(PILL, "cursor-pointer bg-accent/10 text-accent hover:bg-accent/20")}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            openRef(ref);
+          }}
+          className={cx(
+            PILL,
+            "cursor-pointer bg-accent/10 font-mono text-[0.85em] text-accent [box-decoration-break:clone] hover:bg-accent/20",
+          )}
         >
-          <code className="font-mono text-[0.9em]">{children}</code>
-        </button>
+          {children}
+        </span>
       );
     return (
       // The text is on the clipboard, so the press is the code's own and not what holds it (a
