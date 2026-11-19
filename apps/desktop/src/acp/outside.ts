@@ -19,6 +19,8 @@ export const OutsideMethod = {
   passkeyAdd: "_rustcode/outside/passkey/add",
   /** Remove an owner passkey; it stops approving sign-ins at once. */
   passkeyRemove: "_rustcode/outside/passkey/remove",
+  /** Sign out a browser signed in to the web app; its socket closes. */
+  webSignOut: "_rustcode/outside/web/sign-out",
   /** Notification: something waiting for the owner appeared or went. */
   changed: "_rustcode/outside/changed",
 } as const;
@@ -118,6 +120,18 @@ export interface OwnerPasskey {
   lastUsedAt: string | null;
 }
 
+/** A browser signed in to the web app the machine serves at its public address. */
+export interface WebSession {
+  id: string;
+  /** Such as "Safari on macOS". */
+  name: string;
+  /** The passkey that signed it in. */
+  passkey: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+}
+
 /** A link that adds a passkey, shown once. */
 export interface PasskeyLink {
   link: string;
@@ -152,6 +166,9 @@ export interface OutsideStatus {
   machineName: string | null;
   levels: OutsideLevel[];
   passkeys: OwnerPasskey[];
+  webSessions: WebSession[];
+  /** Whether the machine has the web build to serve (`bun run build:hub`). */
+  webInstalled: boolean;
 }
 
 export interface OutsideSnippet {
@@ -265,10 +282,26 @@ export function parseOutsideStatus(value: Json): OutsideStatus {
       lastUsedAt: str(item.lastUsedAt) ?? null,
     });
   }
+  const webSessions: WebSession[] = [];
+  for (const entry of arr(root.webSessions)) {
+    const item = obj(entry);
+    const id = str(item?.id);
+    if (!item || !id) continue;
+    webSessions.push({
+      id,
+      name: str(item.name) ?? "A browser",
+      passkey: str(item.passkey) ?? "",
+      createdAt: str(item.createdAt) ?? "",
+      lastUsedAt: str(item.lastUsedAt) ?? null,
+      expiresAt: str(item.expiresAt) ?? null,
+    });
+  }
   return {
     signIns,
     levels,
     passkeys,
+    webSessions,
+    webInstalled: bool(root.webInstalled) ?? false,
     publicUrl: str(root.publicUrl) || null,
     publicError: str(root.publicError) || null,
     machineName: str(root.machineName) || null,

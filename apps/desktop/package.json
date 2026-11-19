@@ -10,6 +10,7 @@
     "mock-window": "bun scripts/mock-window.ts",
     "bridge": "bun scripts/engine-bridge.ts",
     "build": "vite build",
+    "build:hub": "VITE_TRANSPORT=hub vite build --outDir dist-hub",
     "typecheck": "tsc --noEmit -p .",
     "lint": "biome check src scripts",
     "format": "biome check --write src scripts",

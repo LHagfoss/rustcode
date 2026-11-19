@@ -191,11 +191,14 @@ pub fn remove_at(path: &Path, selector: &str) -> Result<Passkey, String> {
     Ok(removed)
 }
 
+/// Remove a passkey, and sign out the browsers it signed in to the web app.
 pub fn remove(selector: &str) -> Result<Passkey, String> {
-    remove_at(
+    let removed = remove_at(
         &passkey_path().ok_or("configuration unavailable")?,
         selector,
-    )
+    )?;
+    super::outside_web::forget_passkey(&removed.id);
+    Ok(removed)
 }
 
 /// The link that adds a passkey named `name` on this machine's public
@@ -652,11 +655,22 @@ impl PasskeyPrompt {
 
     /// The button, its hidden fields and the script, inside the consent form.
     pub(super) fn controls(&self) -> String {
+        self.controls_labeled(
+            "Approve with passkey",
+            "The passkey did not answer. Try again, or use a sign-in code.",
+        )
+    }
+
+    /// The same controls with a button and a failure text of their own (the
+    /// web app's login page).
+    pub(super) fn controls_labeled(&self, button: &str, failure: &str) -> String {
+        let button = super::outside_signin::escape(button);
+        let failure = js(failure);
         let ids = js(&self.ids);
         let challenge = js(&self.challenge);
         let rp = js(&self.rp_id);
         format!(
-            r#"<input type="hidden" name="pk_id"><input type="hidden" name="pk_client"><input type="hidden" name="pk_auth"><input type="hidden" name="pk_sig"><div class="actions"><button type="button" class="primary" id="passkey" style="flex:1">Approve with passkey</button></div><p class="hint" id="passkey-error" role="alert" hidden></p><script nonce="{nonce}">{B64}document.getElementById('passkey').addEventListener('click',async()=>{{const f=document.getElementById('passkey').form;const say=t=>{{const p=document.getElementById('passkey-error');p.textContent=t;p.hidden=false;}};try{{const c=await navigator.credentials.get({{publicKey:{{challenge:b({challenge}),rpId:{rp},userVerification:'required',allowCredentials:{ids}.map(i=>({{type:'public-key',id:b(i)}}))}}}});f.pk_id.value=e(c.rawId);f.pk_client.value=e(c.response.clientDataJSON);f.pk_auth.value=e(c.response.authenticatorData);f.pk_sig.value=e(c.response.signature);const d=document.createElement('input');d.type='hidden';d.name='decision';d.value='passkey';f.appendChild(d);f.submit();}}catch(x){{say('The passkey did not answer. Try again, or use a sign-in code.');}}}});</script>"#,
+            r#"<input type="hidden" name="pk_id"><input type="hidden" name="pk_client"><input type="hidden" name="pk_auth"><input type="hidden" name="pk_sig"><div class="actions"><button type="button" class="primary" id="passkey" style="flex:1">{button}</button></div><p class="hint" id="passkey-error" role="alert" hidden></p><script nonce="{nonce}">{B64}document.getElementById('passkey').addEventListener('click',async()=>{{const f=document.getElementById('passkey').form;const say=t=>{{const p=document.getElementById('passkey-error');p.textContent=t;p.hidden=false;}};try{{const c=await navigator.credentials.get({{publicKey:{{challenge:b({challenge}),rpId:{rp},userVerification:'required',allowCredentials:{ids}.map(i=>({{type:'public-key',id:b(i)}}))}}}});f.pk_id.value=e(c.rawId);f.pk_client.value=e(c.response.clientDataJSON);f.pk_auth.value=e(c.response.authenticatorData);f.pk_sig.value=e(c.response.signature);const d=document.createElement('input');d.type='hidden';d.name='decision';d.value='passkey';f.appendChild(d);f.submit();}}catch(x){{say({failure});}}}});</script>"#,
             nonce = self.nonce,
         )
     }

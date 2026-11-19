@@ -47,6 +47,10 @@ struct Server {
     /// The owner's passkeys, and the links that add one.
     passkeys: PathBuf,
     passkey_enrollments: PathBuf,
+    /// The browsers signed in to the web app (`outside_web.rs`).
+    web_sessions: PathBuf,
+    /// The production web build, when this machine has one.
+    web: Option<PathBuf>,
     /// This computer's name, as the sign-in page shows it.
     machine: String,
     /// The configuration root whose remote gateway `/ws` is relayed to.
@@ -241,6 +245,8 @@ pub async fn ensure() -> Result<String, String> {
             passkeys: super::outside_passkey::passkey_path().ok_or("configuration unavailable")?,
             passkey_enrollments: super::outside_passkey::enrollment_path()
                 .ok_or("configuration unavailable")?,
+            web_sessions: super::outside_web::session_path().ok_or("configuration unavailable")?,
+            web: super::outside_web::web_dir(),
             config: dir.clone(),
             machine: crate::fleet::own_name_override()
                 .or_else(crate::remote_gateway::gateway::os_host_name)
@@ -731,6 +737,7 @@ async fn handle(
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) {
     let config = server.config.clone();
+    let sessions = server.web_sessions.clone();
     let upgrade = {
         let _permit = permit;
         tokio::time::timeout(Duration::from_secs(600), serve(stream, server))
@@ -738,9 +745,34 @@ async fn handle(
             .ok()
             .flatten()
     };
-    if let Some((stream, head)) = upgrade {
-        relay_to_gateway(stream, head, &config).await;
+    match upgrade {
+        Some(Upgrade::Gateway(stream, head)) => relay_to_gateway(stream, head, &config).await,
+        Some(Upgrade::App { stream, session }) => {
+            crate::remote_gateway::serve_browser(stream, &config, &sessions, &session).await
+        }
+        None => {}
     }
+}
+
+/// A socket that outlives its request: a device's `/ws`, relayed to the
+/// gateway as is, or the web app's ACP socket, already answered with `101`.
+enum Upgrade {
+    Gateway(TcpStream, Vec<u8>),
+    App { stream: TcpStream, session: String },
+}
+
+fn websocket_upgrade(req: &Request) -> bool {
+    req.method == "GET"
+        && req
+            .headers
+            .get("upgrade")
+            .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+}
+
+/// The refusal for a credential presented where it does not belong: an
+/// outside agent's token on the app's routes, or the app's cookie on `/mcp`.
+fn wrong_audience(what: &str) -> Value {
+    json!({"error":"wrong_audience","error_description":what})
 }
 
 /// Hand a `/ws` upgrade to the remote gateway's loopback ingress and copy
@@ -775,7 +807,7 @@ async fn relay_to_gateway(mut stream: TcpStream, head: Vec<u8>, config: &Path) {
 
 /// Answer one request. A WebSocket upgrade at `/ws` is not answered here:
 /// the socket and the bytes read from it come back for [`relay_to_gateway`].
-async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream, Vec<u8>)> {
+async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<Upgrade> {
     let Some(req) = tokio::time::timeout(Duration::from_secs(10), read(&mut stream))
         .await
         .ok()
@@ -803,12 +835,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
     // serves both. Its `Origin` rule is the gateway's (only the native app's
     // or none), applied to the relayed upgrade itself.
     if req.target == WS_PATH || req.target.starts_with(&format!("{WS_PATH}?")) {
-        let upgrade = req.method == "GET"
-            && req
-                .headers
-                .get("upgrade")
-                .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
-        if !upgrade {
+        if !websocket_upgrade(&req) {
             respond(
                 &mut stream,
                 426,
@@ -818,13 +845,18 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
             .await;
             return None;
         }
-        return Some((stream, req.raw));
+        return Some(Upgrade::Gateway(stream, req.raw));
     }
     if req.headers.get("origin").is_some_and(|o| o != base) {
         respond(&mut stream, 403, json!({"error":"forbidden"}), "").await;
         return None;
     }
     let (path, query) = req.target.split_once('?').unwrap_or((&req.target, ""));
+    if public
+        && (path == SOCKET_PATH || path == TICKET_PATH || path == LOGIN_PATH || path == LOGOUT_PATH)
+    {
+        return serve_app(stream, &server, &req, base, path, query).await;
+    }
     let resource = format!("{base}/mcp");
     let mut status = 200;
     let mut extra = String::new();
@@ -1136,6 +1168,10 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                 }
             }
         }
+        (_, "/mcp") if super::outside_web::cookie(&req.headers).is_some() => {
+            status = 401;
+            wrong_audience("a browser signed in to the RustCode app cannot use /mcp")
+        }
         (_, "/mcp") => {
             let token = req
                 .headers
@@ -1236,12 +1272,227 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<(TcpStream,
                 answer
             }
         }
+        // The web app's own files, for a browser signed in with the
+        // owner's passkey; anything else is sent to the login page.
+        ("GET", path) if public && !path.starts_with("/.well-known/") => {
+            serve_app_file(&mut stream, &server, &req, path).await;
+            return None;
+        }
         _ => {
             status = 404;
             json!({"error":"not_found"})
         }
     };
     respond(&mut stream, status, result, &extra).await;
+    None
+}
+
+use super::outside_web::{LOGIN_PATH, LOGOUT_PATH, SOCKET_PATH, TICKET_PATH};
+
+/// The signed-in browser's session id, from its cookie.
+fn web_session(server: &Server, req: &Request) -> Option<String> {
+    super::outside_web::check_at(
+        &server.web_sessions,
+        super::outside_web::cookie(&req.headers)?,
+    )
+}
+
+async fn serve_app_file(stream: &mut TcpStream, server: &Server, req: &Request, path: &str) {
+    let page = path
+        .rsplit('/')
+        .next()
+        .is_none_or(|last| !last.contains('.'))
+        || path.ends_with(".html");
+    if web_session(server, req).is_none() {
+        if page {
+            see_other(stream, LOGIN_PATH).await;
+        } else {
+            respond(stream, 401, json!({"error":"login_required"}), "").await;
+        }
+        return;
+    }
+    let Some(dir) = server.web.as_deref() else {
+        html(
+            stream,
+            404,
+            &outside_signin::message_page(
+                "The web app is not installed here",
+                "You are signed in, but this machine has no web build of RustCode. Build it with `bun run build:hub` in apps/desktop and copy dist-hub to ~/.config/rustcode/web (or set RUSTCODE_WEB_DIR).",
+            ),
+        )
+        .await;
+        return;
+    };
+    match super::outside_web::asset(dir, path) {
+        Some((bytes, kind, immutable)) => {
+            write_response(
+                stream,
+                200,
+                kind,
+                bytes,
+                &super::outside_web::app_headers(immutable),
+            )
+            .await
+        }
+        None => respond(stream, 404, json!({"error":"not_found"}), "").await,
+    }
+}
+
+/// The web app's login, logout, socket ticket and socket, on the public
+/// address only. A bearer token is never accepted here: those belong to
+/// `/mcp`.
+async fn serve_app(
+    mut stream: TcpStream,
+    server: &Server,
+    req: &Request,
+    base: &str,
+    path: &str,
+    query: &str,
+) -> Option<Upgrade> {
+    if req.headers.contains_key("authorization") {
+        respond(
+            &mut stream,
+            401,
+            wrong_audience("an outside agent's sign-in does not open the RustCode app"),
+            "",
+        )
+        .await;
+        return None;
+    }
+    // A form post or a socket comes from the app's own pages: the browser
+    // names their origin, which must be this one.
+    let same_origin = req.headers.get("origin").map(String::as_str) == Some(base);
+    match (req.method.as_str(), path) {
+        ("GET", LOGIN_PATH) => {
+            if web_session(server, req).is_some() {
+                see_other(&mut stream, "/").await;
+                return None;
+            }
+            let page = super::outside_web::login_page(&server.machine, &server.passkeys, base);
+            html_with(&mut stream, 200, page).await;
+        }
+        ("POST", LOGIN_PATH) if same_origin => {
+            if server.locked() {
+                html(
+                    &mut stream,
+                    429,
+                    &outside_signin::message_page(
+                        "Too many failed sign-ins",
+                        "Wait a few minutes, then try again.",
+                    ),
+                )
+                .await;
+                return None;
+            }
+            let q = fields(&req.body);
+            let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
+            let assertion = super::outside_passkey::Assertion {
+                id: get("pk_id"),
+                client_data: get("pk_client"),
+                authenticator_data: get("pk_auth"),
+                signature: get("pk_sig"),
+            };
+            let signed_in =
+                super::outside_passkey::verify_assertion_at(&server.passkeys, base, &assertion)
+                    .and_then(|name| {
+                        let browser = super::outside_web::browser_name(
+                            req.headers
+                                .get("user-agent")
+                                .map(String::as_str)
+                                .unwrap_or(""),
+                        );
+                        let (_, secret) = super::outside_web::create_at(
+                            &server.web_sessions,
+                            &browser,
+                            assertion.id.trim(),
+                        )?;
+                        crate::dbg_log!("web app: {browser} signed in with passkey {name}");
+                        Ok(secret)
+                    });
+            match signed_in {
+                Ok(secret) => {
+                    outside::changed();
+                    write_response(
+                        &mut stream,
+                        303,
+                        "text/plain",
+                        "",
+                        &format!(
+                            "Location: /\r\nReferrer-Policy: no-referrer\r\n{}",
+                            super::outside_web::set_cookie(&secret)
+                        ),
+                    )
+                    .await;
+                }
+                Err(why) => {
+                    server.failed();
+                    html(
+                        &mut stream,
+                        401,
+                        &outside_signin::message_page("You are not signed in", &why),
+                    )
+                    .await;
+                }
+            }
+        }
+        ("POST", LOGOUT_PATH) if same_origin => {
+            if let Some(secret) = super::outside_web::cookie(&req.headers) {
+                super::outside_web::sign_out_secret_at(&server.web_sessions, secret);
+                outside::changed();
+            }
+            write_response(
+                &mut stream,
+                303,
+                "text/plain",
+                "",
+                &format!(
+                    "Location: {LOGIN_PATH}\r\n{}",
+                    super::outside_web::clear_cookie()
+                ),
+            )
+            .await;
+        }
+        ("POST", TICKET_PATH) if same_origin => match web_session(server, req) {
+            Some(session) => {
+                let ticket = super::outside_web::new_ticket(&session);
+                respond(
+                    &mut stream,
+                    200,
+                    json!({"ticket": ticket, "session": session}),
+                    "",
+                )
+                .await;
+            }
+            None => respond(&mut stream, 401, json!({"error":"login_required"}), "").await,
+        },
+        // The ticket, not the cookie, opens the socket: it is the page's
+        // own `fetch` that made it, moments ago.
+        ("GET", SOCKET_PATH) if same_origin && websocket_upgrade(req) => {
+            let ticket = fields(query.as_bytes())
+                .remove("ticket")
+                .unwrap_or_default();
+            let key = req
+                .headers
+                .get("sec-websocket-key")
+                .cloned()
+                .unwrap_or_default();
+            let session = super::outside_web::spend_ticket(&ticket)
+                .filter(|session| super::outside_web::active_at(&server.web_sessions, session));
+            let (Some(session), false) = (session, key.is_empty()) else {
+                respond(&mut stream, 401, json!({"error":"login_required"}), "").await;
+                return None;
+            };
+            let head = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+                super::outside_web::accept_key(&key)
+            );
+            if stream.write_all(head.as_bytes()).await.is_err() {
+                return None;
+            }
+            return Some(Upgrade::App { stream, session });
+        }
+        _ => respond(&mut stream, 403, json!({"error":"forbidden"}), "").await,
+    }
     None
 }
 

@@ -130,6 +130,17 @@ pub(crate) struct OutsidePasskeyRemoveRequest {
     pub id: String,
 }
 
+/// `_rustcode/outside/web/sign-out`: a browser signed in to the web app is
+/// signed out; its open socket closes within seconds.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/outside/web/sign-out", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutsideWebSignOutRequest {
+    pub id: String,
+}
+
 /// `_rustcode/outside/changed`: something now waits for the owner, or no
 /// longer does; ask `_rustcode/outside/list` again.
 #[derive(
@@ -194,6 +205,11 @@ pub(crate) async fn list(_request: OutsideListRequest) -> Result<Value, String> 
             .iter()
             .map(crate::orchestration::outside_passkey::Passkey::view)
             .collect::<Vec<_>>(),
+        "webSessions": crate::orchestration::outside_web::list()
+            .iter()
+            .map(crate::orchestration::outside_web::WebSession::view)
+            .collect::<Vec<_>>(),
+        "webInstalled": crate::orchestration::outside_web::web_dir().is_some(),
         "publicUrl": public.as_ref().and_then(|p| p.as_ref().ok()).map(|base| format!("{base}/mcp")),
         "publicError": public.and_then(Result::err),
         "machineName": crate::fleet::own_name_override()
@@ -324,6 +340,13 @@ pub(crate) fn passkey_remove(request: OutsidePasskeyRemoveRequest) -> Result<Val
     let removed = crate::orchestration::outside_passkey::remove(&request.id)?;
     outside::changed();
     Ok(json!({ "removed": removed.view() }))
+}
+
+pub(crate) fn web_sign_out(request: OutsideWebSignOutRequest) -> Result<Value, String> {
+    let removed = crate::orchestration::outside_web::remove(&request.id)?;
+    Ok(json!({
+        "removed": removed.iter().map(crate::orchestration::outside_web::WebSession::view).collect::<Vec<_>>(),
+    }))
 }
 
 #[cfg(test)]

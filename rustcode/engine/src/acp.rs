@@ -1406,6 +1406,16 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async |request: outside::OutsideWebSignOutRequest, responder, _connection| {
+                match outside::web_sign_out(request) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder
+                        .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async |request: outside::OutsideCodeRequest, responder, _connection| {
                 match outside::code(request) {
                     Ok(answer) => responder.respond(answer),

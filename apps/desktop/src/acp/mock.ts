@@ -2027,6 +2027,7 @@ export class MockEngine {
       case "_rustcode/outside/code":
       case "_rustcode/outside/passkey/add":
       case "_rustcode/outside/passkey/remove":
+      case "_rustcode/outside/web/sign-out":
       case "_mock/outside/signin":
       case "_mock/outside/ask":
         return this.outside.handle(method, params);

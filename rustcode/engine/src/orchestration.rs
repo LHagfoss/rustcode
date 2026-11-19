@@ -35,6 +35,7 @@ pub mod outside_hub;
 pub(crate) mod outside_manage;
 pub mod outside_passkey;
 pub mod outside_signin;
+pub mod outside_web;
 pub mod presets;
 pub mod secret;
 

@@ -1129,8 +1129,17 @@ pub enum OwnerCommands {
         json: bool,
     },
     /// Remove a passkey by its id, a prefix of it, or its name; it stops
-    /// approving sign-ins at once
+    /// approving sign-ins at once, and the browsers it signed in to the web
+    /// app are signed out
     RemovePasskey { passkey: String },
+    /// List the browsers signed in to the web app with a passkey
+    Sessions {
+        /// Print them as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sign out a browser by its session id, a prefix of it, or `all`
+    SignOut { session: String },
 }
 
 #[derive(clap::Subcommand, Debug)]

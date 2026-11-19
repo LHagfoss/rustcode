@@ -53,7 +53,7 @@ machine, and in which order it is built.
 | 3 | One listener for the gateway (`/ws`) and `/mcp`, so one tunnel serves both; `wss://` routes | #3955 (built) |
 | 4 | Machines and devices authenticate with key pairs instead of bearer tokens | #3956 |
 | 5 | The hub role: outbound connections from other machines, `machine` for outside agents, a mailbox for offline machines | #3957 (built) |
-| 6 | The app served from a hub, with passkey login | #3958 |
+| 6 | The app served from a hub, with passkey login | #3958 (built) |
 
 Phase 1 alone makes `https://rustcode.example.com/mcp` work for hosted agents
 against the machine that runs the tunnel. Phases 3–5 extend that to the rest
@@ -70,6 +70,26 @@ one inline script allowed by a nonce. Both ceremonies are verified in
 `orchestration/outside_passkey.rs` with `aws-lc-rs` and a small bounded CBOR
 reader; attestation is `none`, since the ticket is what proves the key is the
 owner's.
+
+## Phase 6 in practice
+
+The engine's HTTP listener serves the production web build (`bun run
+build:hub`, `VITE_TRANSPORT=hub`) on the public address to a browser signed in
+with the owner's passkey (`orchestration/outside_web.rs`). `POST /login` checks
+the passkey's answer as the consent page does and sets a `__Host-` cookie
+(`HttpOnly`, `Secure`, `SameSite=Strict`, 30 days), stored as a hash in
+`<config>/owner-web-sessions.json`. The page's `HubTransport` trades the
+cookie for a single-use ticket at `/app/ticket` and opens `/app/acp`, which
+the engine answers itself and relays to the local server through
+`remote_gateway/acp_relay.rs` with a paired desktop's method list; the socket
+closes once the session is signed out. Bearer tokens are refused on these
+routes, and the cookie on `/mcp`. Sessions are listed and signed out in
+Settings › Outside agents and with `rustcode outside owner sessions` /
+`sign-out`.
+
+Not yet: shipping the web build in the release archives (it is built and
+copied by hand), and per-session access levels (a session can do what a
+paired desktop can).
 
 ## Phase 5 in practice
 

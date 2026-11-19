@@ -24,7 +24,9 @@ import {
   PLATFORM_LABEL,
   SCOPE_HELP,
   SCOPE_LABEL,
+  type WebSession,
 } from "../acp/outside";
+import { hubSession, signOutOfHub } from "../acp/transport";
 import { openExternal } from "../lib/native";
 import {
   answerOutsideCall,
@@ -35,6 +37,7 @@ import {
   refreshOutside,
   removePasskey,
   revokeOutsideApp,
+  signOutWebSession,
   updateOutsideApp,
   useOutside,
 } from "../state/outside";
@@ -336,6 +339,7 @@ function HostedGroup({ host, status, where }: { host: string; status: OutsideSta
       )}
       <CodeRow host={host} status={status} />
       <PasskeyRows host={host} status={status} />
+      <WebAppRows host={host} status={status} url={url} />
     </Group>
   );
 }
@@ -424,6 +428,64 @@ function PasskeyRows({ host, status }: { host: string; status: OutsideStatus }) 
         </Row>
       ))}
     </>
+  );
+}
+
+/** The app served at the public address, and the browsers signed in to it with a passkey. */
+function WebAppRows({ host, status, url }: { host: string; status: OutsideStatus; url: string }) {
+  const origin = url.replace(/\/mcp$/, "");
+  const signIn = status.passkeys.length > 0;
+  return (
+    <>
+      <Row
+        title="Web app"
+        subtitle={`Open ${origin} in any browser and sign in with your passkey to use RustCode there. Each browser stays signed in for 30 days.`}
+        status={
+          !status.webInstalled
+            ? "This machine has no web build yet: run `bun run build:hub` in apps/desktop and copy dist-hub to ~/.config/rustcode/web."
+            : !signIn
+              ? "Add a passkey above first; it is how you sign in."
+              : undefined
+        }
+      >
+        {status.webInstalled && signIn && (
+          <Action onClick={() => void openExternal(origin)}>
+            <ExternalLink size={14} />
+            Open
+          </Action>
+        )}
+      </Row>
+      {status.webSessions.map((session) => (
+        <WebSessionRow key={session.id} host={host} session={session} />
+      ))}
+    </>
+  );
+}
+
+function WebSessionRow({ host, session }: { host: string; session: WebSession }) {
+  const here = session.id === hubSession();
+  return (
+    <Row
+      title={here ? `${session.name} (this browser)` : session.name}
+      subtitle={`Signed in to the web app · ${lastUsedLabel(session.lastUsedAt ?? session.createdAt)}`}
+    >
+      <Action
+        danger
+        onClick={() =>
+          here
+            ? signOutOfHub()
+            : askConfirm({
+                title: `Sign out ${session.name}?`,
+                message: `${session.name} is signed out of the web app at once and has to sign in with a passkey again.`,
+                action: "Sign out",
+                destructive: true,
+                run: () => void signOutWebSession(host, session.id, session.name),
+              })
+        }
+      >
+        Sign out
+      </Action>
+    </Row>
   );
 }
 

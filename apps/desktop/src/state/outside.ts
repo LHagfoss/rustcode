@@ -174,6 +174,17 @@ export async function makePasskeyLink(host: string, name: string): Promise<Passk
   }
 }
 
+/** Sign out a browser signed in to the web app; its connection closes. */
+export async function signOutWebSession(host: string, id: string, name: string) {
+  try {
+    await machineRequest(host, OutsideMethod.webSignOut, { id }, 10_000);
+    toast(`${name} is signed out.`, "success");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+  await refreshOutside(host);
+}
+
 /** Remove an owner passkey; it stops approving sign-ins at once. */
 export async function removePasskey(host: string, id: string, name: string) {
   try {
