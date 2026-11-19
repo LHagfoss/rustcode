@@ -1,0 +1,7 @@
+{
+  "type": "authenticate",
+  "protocol_version": 1,
+  "device_id": "0011223344556677",
+  "wire_names": "thread",
+  "signature": "x0O1YqvVbH9n2l4mJk8sZr3tWc6eAd5fGh7iUj0pQy2wEo9vRb1nTs4uMx3kLz8aCd6fHg2jKl5mNo7pQr0sTu"
+}

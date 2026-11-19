@@ -8,6 +8,8 @@
   "platform": "macos",
   "capabilities": [
     "describe",
-    "machine_codes"
-  ]
+    "machine_codes",
+    "key_auth"
+  ],
+  "challenge": "n3Vd0lq9YzN8cBf2kX7tR4wJ1eHs6uAa5oPiGmLy0Zc"
 }
