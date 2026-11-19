@@ -456,12 +456,17 @@ impl Connector {
         let _presenting = tokens
             .presentation_lock(&machine.host_id, self.timeout)
             .await?;
-        if machine.signs {
+        let stored = tokens.get(&machine.host_id)?;
+        // The token store is what says so: it changes in the same write that
+        // drops the token, while `machine` may be a copy saved before that.
+        if machine.signs
+            || stored
+                .as_ref()
+                .is_some_and(|stored| stored.expose() == crate::tokens::SIGNS_WITH_KEY)
+        {
             return self.sign_in(first, address, machine, tokens).await;
         }
-        let stored = tokens
-            .get(&machine.host_id)?
-            .ok_or_else(|| PairingLost::new(machine, PairingLostReason::NoToken))?;
+        let stored = stored.ok_or_else(|| PairingLost::new(machine, PairingLostReason::NoToken))?;
         let result = self.present(first, address, machine, tokens, &stored).await;
         if let Err(error) = &result
             && error
@@ -501,7 +506,8 @@ impl Connector {
             // older RustCode there, or not the machine. No token is left to
             // fall back on, and none should be sent.
             bail!(
-                "{} no longer offers key sign-in, so this computer cannot prove who it is                  there; update RustCode on {} and connect again",
+                "{} no longer offers key sign-in, so this computer cannot prove who it is \
+                 there; update RustCode on {} and connect again",
                 machine.name,
                 machine.name
             );
@@ -701,17 +707,21 @@ impl Connector {
         // token untouched.
         check_identity(machine, &gateway_id, &device_id)?;
         if key_registered {
-            // The machine took this install's key and dropped the token: say
-            // so before the token goes, so the next connection signs.
-            MachineRegistry::load(&self.config_dir)
-                .and_then(|mut registry| registry.set_signs(&machine.host_id))
-                .with_context(|| {
-                    format!(
-                        "{} now takes this computer's key instead of its token, but that could                          not be saved; pair it again if the next connection is refused",
-                        machine.name
-                    )
-                })?;
-            let _ = tokens.remove(&machine.host_id);
+            // The machine took this install's key and dropped the token. The
+            // marker replaces the token in one write, so the next connection
+            // signs whichever copy of `machine` it is given.
+            tokens.set_signs(&machine.host_id).with_context(|| {
+                format!(
+                    "{} now takes this computer's key instead of its token, but that could \
+                     not be saved; pair it again if the next connection is refused",
+                    machine.name
+                )
+            })?;
+            // What the machines list shows; the marker above is what counts,
+            // and a machine that is not saved has no row to mark.
+            if let Ok(mut registry) = MachineRegistry::load(&self.config_dir) {
+                let _ = registry.set_signs(&machine.host_id);
+            }
         }
         if let Some(refresh) = &refresh_token {
             // Durable first: until this write lands, the answer is not

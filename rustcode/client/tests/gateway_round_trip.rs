@@ -1016,6 +1016,7 @@ async fn the_token_gives_way_to_this_installs_key() {
     registry.insert(machine.clone()).unwrap();
     let tokens = TokenStore::in_file(config.path()).unwrap();
     tokens.set(&machine.host_id, &paired.secret).unwrap();
+    let paired_secret = paired.secret.clone();
     drop(paired);
     assert!(!machine.signs);
 
@@ -1029,7 +1030,12 @@ async fn the_token_gives_way_to_this_installs_key() {
         .unwrap();
     assert!(machine.signs, "the machine took the key");
     assert!(
-        tokens.get(&machine.host_id).unwrap().is_none(),
+        tokens.signs(&machine.host_id).unwrap(),
+        "the key marker replaced the token"
+    );
+    assert_ne!(
+        tokens.get(&machine.host_id).unwrap(),
+        Some(paired_secret.clone()),
         "the token is dropped once the key replaced it"
     );
     assert!(DeviceKey::load(&tokens).unwrap().is_some());
@@ -1040,6 +1046,16 @@ async fn the_token_gives_way_to_this_installs_key() {
         .await
         .expect("the key signs in");
     assert_eq!(session.welcome().device_id, machine.device_id);
+    drop(session);
+
+    // A copy of the machine saved before the key was taken signs too: the
+    // token store is what says so.
+    let mut stale = machine.clone();
+    stale.signs = false;
+    let (session, _) = connector
+        .connect(&stale, &tokens)
+        .await
+        .expect("a stale copy signs in");
     drop(session);
 
     // Another key is not this computer.
