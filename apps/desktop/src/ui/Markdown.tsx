@@ -210,7 +210,7 @@ const Formula = memo(function Formula({ tex, display }: { tex: string; display: 
 
 // Code, file references and thread mentions share the same pill padding.
 // Use em units so the padding scales with the text around the pill.
-const PILL = "rounded-full px-[0.5em] py-[0.2em]";
+const PILL = "rounded-full px-[0.5em] py-[0.25em]";
 
 /** A thread a message points at, as the composer writes it: `#[Title](rustcode://thread/<id>)`. */
 const THREAD_LINK = /^rustcode:\/\/thread\/([^/?#\s]+)$/;
@@ -302,7 +302,7 @@ const components: Components = {
           else openExternal(href);
         }}
         className={cx(
-          "rounded-sm px-[0.15em] py-[0.2em] [box-decoration-break:clone]",
+          "rounded-sm px-[0.15em] py-[0.25em] [box-decoration-break:clone]",
           "cursor-pointer text-accent underline decoration-accent/60 underline-offset-[3px] hover:bg-accent/12 hover:decoration-current",
         )}
       >

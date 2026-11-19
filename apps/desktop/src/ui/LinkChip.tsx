@@ -43,7 +43,7 @@ export function LinkChip({
   const { title, host, showsHost, tag, github } = linkChipLabel(url, meta);
   const tint = meta?.color;
   const inline = variant === "inline";
-  const padding = inline ? "pr-[5px] pl-[7px]" : "pr-1 pl-1.5";
+  const padding = inline ? "pr-[5px] pl-1" : "pr-1 pl-1.5";
   // A favicon that will not decode is the same as no favicon: a globe, never a gap. The URL is
   // what is remembered, so a chip that later gets another icon tries that one.
   const [brokenIcon, setBrokenIcon] = useState<string | null>(null);
@@ -90,6 +90,10 @@ export function LinkChip({
             "inline-flex h-full min-w-0 cursor-pointer items-center gap-1.5 text-fg no-underline",
             inline ? "rounded-full" : "rounded-sm",
             !onRemove && padding,
+            // Extend the hit area above and below the chip while leaving its text selectable.
+            inline &&
+              !onRemove &&
+              "relative before:absolute before:inset-x-0 before:bottom-full before:h-0.5 after:absolute after:inset-x-0 after:top-full after:h-0.5",
           )}
         >
           {/* A favicon sits on its own light tile: sites draw them dark as often as light, and a
@@ -99,9 +103,9 @@ export function LinkChip({
               showing GitHub's own mark on every one. */}
           {github ? (
             github.kind === "pull" ? (
-              <GitPullRequest size={12} aria-hidden className="ml-0.5 shrink-0 text-fg-muted" />
+              <GitPullRequest size={12} aria-hidden className="shrink-0 text-fg-muted" />
             ) : (
-              <CircleDot size={12} aria-hidden className="ml-0.5 shrink-0 text-fg-muted" />
+              <CircleDot size={12} aria-hidden className="shrink-0 text-fg-muted" />
             )
           ) : icon ? (
             <span className="flex size-[14px] shrink-0 items-center justify-center rounded-xs bg-knob p-px">
@@ -114,7 +118,7 @@ export function LinkChip({
               />
             </span>
           ) : (
-            <Globe size={12} aria-hidden className="ml-0.5 shrink-0 text-fg-muted" />
+            <Globe size={12} aria-hidden className="shrink-0 text-fg-muted" />
           )}
           {/* One text run, so a selection across the chip copies "title host" and not
               "titlehost": the host is the faint tail of the same words, and the whole run
