@@ -90,6 +90,7 @@ async fn scheduled_job_executes_and_history_survives_restart() {
         workspace,
         target_session: None,
         retry_policy: RetryPolicy::default(),
+        pending_input: None,
         next_due_at: now,
         schedule_revision: 1,
         created_at: now,
