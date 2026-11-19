@@ -61,7 +61,7 @@ mod tests {
         }
         let inbox = include_str!("../../../apps/desktop/src/ui/Inbox.tsx");
         assert!(inbox.contains(">Needs you<"));
-        let composer = include_str!("../../../apps/desktop/src/ui/Composer.tsx");
+        let composer = include_str!("../../../apps/desktop/src/ui/ComposerFooter.tsx");
         assert!(composer.contains("aria-label=\"Permissions\""));
     }
 }
