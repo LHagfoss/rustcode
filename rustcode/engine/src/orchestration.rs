@@ -53,6 +53,7 @@ pub const FAN_OUT: &str = "fan_out";
 pub const LIST_HARNESSES: &str = "list_harnesses";
 pub const SEARCH_SESSIONS: &str = "search_sessions";
 pub const LIST_WORKTREES: &str = "list_worktrees";
+pub const COMPACT_SESSION: &str = "compact_session";
 pub const UPDATE_SESSION: &str = "update_session";
 pub const INTERRUPT_SESSION: &str = "interrupt_session";
 pub const CONFIGURE_SESSION: &str = "configure_session";
@@ -132,7 +133,8 @@ pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// Added by version 13: where a thread's work stands, and handing it over.
 pub const V13_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = LOOPS_VERSION;
+pub const VERSION: u8 = COMPACT_VERSION;
+pub const COMPACT_VERSION: u8 = 20;
 /// Version 19 adds creating scheduled Loops.
 pub const LOOPS_VERSION: u8 = 19;
 /// Version 14 adds mid-turn messaging.
@@ -438,7 +440,7 @@ pub fn is_tool(name: &str) -> bool {
         || V11_TOOL_NAMES.contains(&name)
         || V12_TOOL_NAMES.contains(&name)
         || V13_TOOL_NAMES.contains(&name)
-        || name == CREATE_LOOP
+        || matches!(name, CREATE_LOOP | COMPACT_SESSION)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -554,9 +556,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             names.extend(V13_TOOL_NAMES);
             names
         }
-        _ => {
+        19 => {
             let mut names = tool_names(18);
             names.push(CREATE_LOOP);
+            names
+        }
+        _ => {
+            let mut names = tool_names(19);
+            names.push(COMPACT_SESSION);
             names
         }
     }
@@ -988,6 +995,13 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             optional_name(args, "session_id")?;
             optional_name(args, "model")?;
             optional_name(args, "effort")
+        }
+        COMPACT_SESSION => {
+            optional_name(args, "session_id")?;
+            match args.get("resume") {
+                None | Some(Value::Bool(_)) => Ok(()),
+                _ => Err("resume must be true or false".to_owned()),
+            }
         }
         UPDATE_SESSION => {
             optional_name(args, "session_id")?;
@@ -1896,10 +1910,26 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 16}})), 16);
         assert_eq!(version(json!({"rustcode": {"orchestration": 17}})), 17);
         assert_eq!(version(json!({"rustcode": {"orchestration": 18}})), 18);
-        assert_eq!(version(json!({"rustcode": {"orchestration": 19}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 19}})), 19);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 20}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"orchestration": 99}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
+    }
+
+    #[test]
+    fn compaction_requires_a_compatible_app_and_a_boolean_resume_flag() {
+        assert!(!tool_names(LOOPS_VERSION).contains(&COMPACT_SESSION));
+        assert!(tool_names(COMPACT_VERSION).contains(&COMPACT_SESSION));
+        assert!(validate(COMPACT_SESSION, &json!({})).is_ok());
+        assert!(
+            validate(
+                COMPACT_SESSION,
+                &json!({"session_id": "thread", "resume": true})
+            )
+            .is_ok()
+        );
+        assert!(validate(COMPACT_SESSION, &json!({"resume": "yes"})).is_err());
     }
 
     #[test]

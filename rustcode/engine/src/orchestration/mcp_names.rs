@@ -12,6 +12,7 @@ const TOOLS: &[(&str, &str)] = &[
     (super::START_SESSION, "start_thread"),
     (super::MESSAGE_SESSION, "message_thread"),
     (super::WAIT_SESSION, "wait_thread"),
+    (super::COMPACT_SESSION, "compact_thread"),
     (super::UPDATE_SESSION, "update_thread"),
     (super::CONFIGURE_SESSION, "configure_thread"),
     (super::TRANSFER_SESSION, "transfer_thread"),

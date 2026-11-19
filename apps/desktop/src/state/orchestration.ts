@@ -68,7 +68,7 @@ import { formatDuration } from "./thread";
  * Version 18 gives `transfer_session` an `account` and a `model`.
  * Version 19 adds `create_loop`.
  */
-export const CAPABILITY_VERSION = 19;
+export const CAPABILITY_VERSION = 20;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** One `read_session` page. */

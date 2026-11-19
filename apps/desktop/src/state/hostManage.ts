@@ -14,6 +14,7 @@ import {
   attachmentRoots,
   MAX_ATTACHMENT_FILES,
 } from "./attachments";
+import { canCompact, requestCompaction } from "./autoCompactRun";
 import type { ComposeExtras } from "./compose";
 import { selectOption, unavailableReason } from "./harness";
 import {
@@ -181,6 +182,32 @@ async function applyManagedChange(
     applied += 1;
   }
   return { applied, renameFailed: false };
+}
+
+export async function compactSession(
+  caller: RuleThread,
+  id: string | undefined,
+  resume: boolean,
+): Promise<JsonObject> {
+  const target = manageTarget(caller, id);
+  if (isFailure(target)) return failureJson(target);
+  if (target.id !== caller.id) {
+    const no = await permitted(caller, `compact:${target.id}`, {
+      kind: "organize",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: target.title,
+      detail: resume ? "Compact its context and continue its task." : "Compact its context.",
+    });
+    if (no) return failureJson(no);
+    const error = await openThread(target.id);
+    if (error) return failureJson(failure("failed", error));
+  }
+  if (!canCompact(useApp.getState(), target.id))
+    return failureJson(failure("not_allowed", "this harness does not support native compaction"));
+  if (!requestCompaction(target.id, resume))
+    return failureJson(failure("not_allowed", "a compaction is already requested for this thread"));
+  return { session_id: target.id, status: "scheduled", resume };
 }
 
 export async function updateSession(

@@ -537,6 +537,26 @@ pub const LIST_WORKTREES: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+pub const COMPACT_SESSION: Tool = Tool {
+    name: crate::orchestration::COMPACT_SESSION,
+    description: "Request native context compaction in the app. Omit session_id to compact yourself. Other threads require permission. Runs after the active turn. Set resume: true to continue the task afterward.",
+    arguments: r#"{"resume": false}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "resume": {"type": "boolean", "default": false}
+            },
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 pub const UPDATE_SESSION: Tool = Tool {
     name: crate::orchestration::UPDATE_SESSION,
     description: "Rename, pin, mark unread (true) or read (false), snooze or change the status of a thread. Omit session_id for this thread; changing another asks the user first. Name this thread once when you start its task, with a short title of 6 words or fewer; a title the user chose stays, and title_kept says so. Status: active (back in the list), review (needs a look), settled (done; what \"settle\" asks; the app closes it). snoozed_until: how long it leaves the list: 1h, evening, tomorrow, next_week or an ISO 8601 time; null brings it back.",

@@ -951,6 +951,7 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::SEARCH_SESSIONS,
     crate::orchestration::LIST_WORKTREES,
     crate::orchestration::UPDATE_SESSION,
+    crate::orchestration::COMPACT_SESSION,
     crate::orchestration::INTERRUPT_SESSION,
     crate::orchestration::CONFIGURE_SESSION,
     crate::orchestration::LIST_PROJECTS,
@@ -1029,6 +1030,8 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_v11_tool(tool.name) && !policy.include_orchestration_v11_tools)
         || (crate::orchestration::is_v12_tool(tool.name) && !policy.include_orchestration_v12_tools)
         || (crate::orchestration::is_v13_tool(tool.name) && !policy.include_orchestration_v13_tools)
+        || (tool.name == crate::orchestration::COMPACT_SESSION
+            && policy.orchestration_version < crate::orchestration::COMPACT_VERSION)
         || (tool.name == crate::orchestration::CREATE_LOOP && !policy.include_orchestration_loops)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)

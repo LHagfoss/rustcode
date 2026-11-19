@@ -8,6 +8,7 @@ import { MockTransport } from "../acp/mock";
 import type { SessionSummary, SessionUsage } from "../acp/types";
 import { DEFAULT_AUTO_COMPACT } from "./autoCompact";
 import {
+  requestCompaction,
   scheduleAutoCompact,
   setAutoCompactForThread,
   setAutoCompactMode,
@@ -93,6 +94,43 @@ async function openClaudeThread(delayMs = 0) {
 }
 
 beforeEach(() => resetForTests());
+
+describe("requested compaction", () => {
+  test("waits for the current turn and leaves the thread idle by default", async () => {
+    const id = await openClaudeThread(10);
+    const before = useApp.getState().threads[id]!.items.length;
+    const turn = runPrompt(id, "yolo, finish this task first", emptyExtras);
+    expect(isRunning(useApp.getState().threads[id])).toBe(true);
+    expect(requestCompaction(id, false)).toBe(true);
+    expect(requestCompaction(id, true)).toBe(false);
+
+    await turn;
+    const thread = useApp.getState().threads[id]!;
+    const items = thread.items.slice(before);
+    const compact = items.findIndex(
+      (item) => item.kind === "notice" && item.text.startsWith("Context compacted"),
+    );
+    const end = items.findIndex((item) => item.kind === "turnEnd");
+    expect(end).toBeGreaterThanOrEqual(0);
+    expect(compact).toBeGreaterThan(end);
+    expect(isRunning(thread)).toBe(false);
+  });
+
+  test("continues once when requested", async () => {
+    const id = await openClaudeThread(10);
+    expect(requestCompaction(id, true)).toBe(true);
+    await until(
+      () =>
+        useApp.getState().threads[id]?.items.some((item) => item.kind === "user" && item.continued) ?? false,
+    );
+    const thread = useApp.getState().threads[id]!;
+    expect(thread.items.filter((item) => item.kind === "user" && item.continued)).toHaveLength(1);
+    expect(
+      thread.items.some((item) => item.kind === "notice" && item.text.startsWith("Context compacted")),
+    ).toBe(true);
+    await cancel(id);
+  });
+});
 
 describe("auto-compaction in the store", () => {
   test("a user who never picked a mode gets no automatic compaction", async () => {
