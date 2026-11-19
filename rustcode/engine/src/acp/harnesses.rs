@@ -423,6 +423,10 @@ pub(crate) async fn new_session(
     if let Some((parent, relationship)) = crate::thread_parent::requested(request.meta.as_ref()) {
         crate::thread_parent::record(&session_id, &parent, relationship);
     }
+    // A scheduled job's run: its thread lives in the job's view, not the list.
+    if let Some(job) = crate::config::requested_scheduled_job(request.meta.as_ref()) {
+        crate::config::save_session_scheduled_job(&session_id, &job);
+    }
     let mut record = store::HarnessRecord::new(&resolved.id, cwd.clone());
     record.account = account.as_ref().map(|account| account.id.clone());
     record.model = model;

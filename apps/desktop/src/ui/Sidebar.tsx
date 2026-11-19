@@ -22,6 +22,7 @@ import { type DelegateOrigin, detachedDelegates, originFrom, sameProject } from 
 import { sessionsListed } from "../state/engine";
 import { addDroppedFolders } from "../state/folders";
 import { stateOf } from "../state/host";
+import { isJobRunThread, useLoopThreads } from "../state/loops";
 import { useMachines } from "../state/machines";
 import { projectLabel } from "../state/projectBook";
 import {
@@ -87,7 +88,13 @@ import {
   wakeSnoozed,
 } from "../state/store";
 import { idleSettled, isRunning } from "../state/thread";
-import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
+import {
+  listedSinceOf,
+  openChain,
+  parentOf as parentOfThread,
+  type SubRow,
+  topLevel,
+} from "../state/topLevel";
 import { useWaitingIds } from "../state/waiting";
 import { CustomSnooze } from "./CustomSnooze";
 import { FOLDER_DROP_ATTR, overFolderDrop } from "./folderDropTarget";
@@ -314,7 +321,23 @@ const NO_PICKS: ReadonlySet<string> = new Set();
 export function Sidebar() {
   const mac = appPlatform() === "mac";
   const TitlebarControls = mac ? Cluster : "div";
-  const sessions = useApp((s) => s.sessions);
+  const listedSessions = useApp((s) => s.sessions);
+  // A scheduled job's run lives in the Scheduled Jobs view, never in the thread list.
+  const jobRuns = useLoopThreads((s) => s.runs);
+  const sessions = useMemo(
+    () => listedSessions.filter((s) => !isJobRunThread(s, jobRuns)),
+    [listedSessions, jobRuns],
+  );
+  // The list stops at a page cap: a parent older than its oldest thread is past it, not gone.
+  const sessionsCapped = useApp((s) => s.sessionsCapped);
+  const listedSince = useMemo(
+    () =>
+      listedSinceOf(
+        listedSessions.filter((s) => !s.host).map((s) => s.id),
+        sessionsCapped,
+      ),
+    [listedSessions, sessionsCapped],
+  );
   // Paired computers' threads are rows of the one list, each tagged with where it runs.
   const machines = useMachines((s) => s.machines);
   const pending = useApp((s) => s.pendingSetup);
@@ -498,19 +521,25 @@ export function Sidebar() {
         },
         links,
         known,
+        s.host ? undefined : listedSince,
       );
       const parent = parentOfThread(s, links);
       if (placement === "nested" && parent) parentOf.set(s.id, parent);
     }
     return parentOf;
-  }, [sessions, links, pinned, messaged]);
+  }, [sessions, links, pinned, messaged, listedSince]);
   // A delegate started from another project, with the list filtered to its own: its parent's row is
   // not drawn, so it takes a row of its own here, marked with where it came from, rather than
   // vanishing from the project it works in (state/delegateOrigin.ts). With no filter its parent
   // is drawn and it nests there, never twice in one list.
   const detached = useMemo(
-    () => detachedDelegates(new Set(filtered.map((s) => s.id)), ownerOf),
-    [filtered, ownerOf],
+    () =>
+      detachedDelegates(
+        new Set(filtered.map((s) => s.id)),
+        ownerOf,
+        new Set(listedSessions.map((s) => s.id)),
+      ),
+    [filtered, ownerOf, listedSessions],
   );
   // The parents the list draws its rows under: every nested thread's, but a detached one's.
   const parentOf = useMemo(() => {

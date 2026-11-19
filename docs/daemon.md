@@ -131,7 +131,11 @@ the scheduler machine’s time zone when they omit it.
 
 A named account applies to fresh threads on its harness. Selecting one in the
 editor also saves the harness. A loop aimed at an existing thread uses that
-thread's account.
+thread's account. A job with no account runs on the one a new thread would
+get: the editor shows and saves it, and for a job saved without one the run
+takes the named account the user's turns on that harness last ran on, else
+its first named account. It never falls back to the harness's bare default
+login while named accounts exist.
 
 - **One thread per run.** The daemon opens the ACP endpoint the app's engine
   publishes (`run/engine.json`, else a shared server's) and sends the same
@@ -192,6 +196,13 @@ thread's account.
 - **Three failures pause it.** When the last three settled runs all failed
   (or ended ambiguous), the scheduler pauses the Loop; the page shows the last
   error as the reason. Resuming starts counting again.
+- **A signed-out login pauses it at once.** A run whose harness answers that
+  it is not signed in fails with an error naming the login, its folder and
+  the command that signs it in, and the job pauses after that one run.
+- **Run threads stay out of the thread list.** Each fresh thread a run starts
+  carries `scheduledJob` in its metadata (`_meta.rustcode.scheduledJob` in
+  `session/list`); the sidebar leaves it to the Scheduled Jobs page, which
+  opens it from the run.
 - A run's agent turn may take 25 minutes before it is stopped.
 
 Editing a job (`DaemonRequest::Update`) keeps its id, creation time, paused

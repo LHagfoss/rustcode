@@ -740,6 +740,11 @@ pub struct SessionMetadata {
     /// renaming its own thread (issue 3599). False for older threads.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub user_titled: bool,
+    /// The scheduled job whose run started this thread (`docs/daemon.md` ›
+    /// Scheduled jobs). Such a thread belongs to the job's own view, never to
+    /// the thread list. Absent for every other thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_job: Option<String>,
 }
 
 /// The thread above a related one. `id` is absent for a thread an older
@@ -845,6 +850,7 @@ impl SessionMetadata {
             parent: None,
             repo: None,
             user_titled: false,
+            scheduled_job: None,
         }
     }
 }
@@ -1521,6 +1527,15 @@ impl SessionStore {
         self.update_session_metadata(session_id, |metadata| {
             let changed = metadata.parent.as_ref() != Some(&parent);
             metadata.parent = Some(parent);
+            changed
+        })
+    }
+
+    /// Record the scheduled job whose run started this thread.
+    pub fn save_session_scheduled_job(&self, session_id: &str, job: &str) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            let changed = metadata.scheduled_job.as_deref() != Some(job);
+            metadata.scheduled_job = Some(job.to_owned());
             changed
         })
     }

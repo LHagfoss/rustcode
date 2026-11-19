@@ -150,6 +150,7 @@ fn run_json(run: &JobRunRecord) -> Value {
         "quiet": output.get("quiet").and_then(Value::as_bool).unwrap_or(false),
         "silent": output.get("silent").and_then(Value::as_bool).unwrap_or(false),
         "skipped": output.get("skipped"),
+        "signedOut": output.get("signed_out").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 

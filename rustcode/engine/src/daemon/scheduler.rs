@@ -236,6 +236,8 @@ impl Scheduler {
 
     /// A Loop whose last [`LOOP_FAILURE_LIMIT`] runs all failed is paused, so
     /// a broken prompt or harness stops spending runs until the user looks.
+    /// A run on a signed-out login pauses it at once: every run fails the same
+    /// way until the user signs in, and the run's error says which login.
     /// The failed runs stay in its history and say why.
     fn pause_failing_loop(&self, job_id: &str) {
         let mut store = self.store.lock().unwrap();
@@ -245,11 +247,11 @@ impl Scheduler {
         if job.paused || !matches!(job.action, super::model::JobAction::Loop { .. }) {
             return;
         }
-        if store
-            .failed_in_a_row(job_id, super::model::LOOP_FAILURE_LIMIT)
-            .unwrap_or(false)
-            && let Err(error) = store.set_paused(job_id, true, self.clock.now())
-        {
+        let failing = store.last_run_signed_out(job_id).unwrap_or(false)
+            || store
+                .failed_in_a_row(job_id, super::model::LOOP_FAILURE_LIMIT)
+                .unwrap_or(false);
+        if failing && let Err(error) = store.set_paused(job_id, true, self.clock.now()) {
             crate::dbg_log!("[daemon] could not pause failing loop {job_id}: {error}");
         }
     }
@@ -790,6 +792,58 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(paused, "a loop with three failed runs keeps running");
+        scheduler.shutdown();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_loop_on_a_signed_out_login_pauses_after_its_first_run() {
+        use crate::daemon::model::JobRunState;
+        let clock = TestClock::new(at(0));
+        let mut store = JobStore::in_memory().unwrap();
+        let mut record = job("loop", at(0), None);
+        record.action = JobAction::Loop {
+            prompt: "Check CI".into(),
+            workspace: "/tmp".into(),
+            harness: Some("claude-code".into()),
+            account: None,
+            model: None,
+            effort: None,
+            read_only: true,
+            thread_id: None,
+            script: None,
+            webhook: None,
+        };
+        store.create(record).unwrap();
+        let scheduler = Scheduler::new(
+            Arc::new(Mutex::new(store)),
+            Arc::new(clock.clone()),
+            Arc::new(OutcomeExecutor(crate::daemon::executor::loop_outcome(
+                crate::orchestration::local_threads::LoopRunEnd::SignedOut {
+                    thread_id: Some("t-1".into()),
+                    error: "Claude Code is not signed in on its default login (~/.claude)".into(),
+                },
+            ))),
+            "owner",
+            1,
+        );
+        let task = tokio::spawn(scheduler.clone().run());
+        let mut paused = false;
+        for _ in 0..400 {
+            let store = scheduler.store();
+            let store = store.lock().unwrap();
+            let runs = store.history("loop", 10).unwrap();
+            if store.get("loop").unwrap().paused {
+                assert_eq!(runs.len(), 1);
+                assert_eq!(runs[0].state, JobRunState::Failed);
+                assert!(store.last_run_signed_out("loop").unwrap());
+                paused = true;
+                break;
+            }
+            drop(store);
+            tokio::task::yield_now().await;
+        }
+        assert!(paused, "a run on a signed-out login did not pause the loop");
         scheduler.shutdown();
         task.await.unwrap().unwrap();
     }

@@ -77,6 +77,16 @@ describe("delegates started from another project", () => {
     expect(detachedDelegates(new Set(all.map((s) => s.id)), parentOf).size).toBe(0);
   });
 
+  test("a parent the app does not list at all (past the list's cap) detaches nothing", () => {
+    const drawn = inProject("/Users/me/code/rustcode");
+    const listedWithoutParent = new Set(all.map((s) => s.id).filter((id) => id !== "parent"));
+    expect(detachedDelegates(drawn, parentOf, listedWithoutParent).size).toBe(0);
+    expect([...detachedDelegates(drawn, parentOf, new Set(all.map((s) => s.id)))].sort()).toEqual([
+      "delegate",
+      "worktree-delegate",
+    ]);
+  });
+
   test("the open grandchild hangs under its detached parent's row", () => {
     const drawn = inProject("/Users/me/code/rustcode");
     const detached = detachedDelegates(drawn, parentOf);
