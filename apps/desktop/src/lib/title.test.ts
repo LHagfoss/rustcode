@@ -14,6 +14,13 @@ test("a message that opens with a blank line still names its thread", () => {
   expect(titleFrom("\n   \n", 60)).toBe("");
 });
 
+test("automatic titles use heading text and preserve issue numbers", () => {
+  expect(titleFrom("# Check ParalX Problems\nDetails", 60)).toBe("Check ParalX Problems");
+  expect(titleFrom("## Overview ##", 60)).toBe("Overview");
+  expect(titleFrom("###\n#123 Follow up", 60)).toBe("#123 Follow up");
+  expect(childTitle("# Named by hand", "# Prompt")).toBe("# Named by hand");
+});
+
 test("a cut inside an emoji drops it whole, so a title never ends in half a character", () => {
   const family = "👨‍👩‍👧‍👦";
   // 58 units, then an 11-unit family: the cut at 59 lands inside it.

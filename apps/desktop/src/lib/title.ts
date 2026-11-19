@@ -7,7 +7,14 @@ import { clip } from "./clip";
  * empty — no thread is left to be named by the message it is sent later.
  */
 export function titleFrom(text: string, max: number): string {
-  const line = (text.split("\n").find((l) => l.trim()) ?? text.split("\n")[0] ?? "").trim();
+  const line =
+    text
+      .split("\n")
+      .map((line) => {
+        const heading = /^ {0,3}#{1,6}(?=[ \t]|$)(.*)$/.exec(line.trimEnd());
+        return (heading ? (heading[1] ?? "").replace(/[ \t]+#+$/, "") : line).trim();
+      })
+      .find(Boolean) ?? "";
   if (line.length <= max) return line;
   // A character (an emoji, an accented letter) is never cut in half by the "…".
   const cut = clip(line, max - 1);
