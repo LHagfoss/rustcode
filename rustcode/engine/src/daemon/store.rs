@@ -465,7 +465,11 @@ impl JobStore {
                 result_summary: None,
                 error_class: None,
                 output: None,
+                input: job.pending_input.take(),
             };
+            if run.input.is_some() {
+                save_job(&tx, &job)?;
+            }
             tx.execute("INSERT INTO job_runs(id,job_id,revision,scheduled_at,scheduled_order,active,payload) VALUES(?1,?2,?3,?4,?5,1,?6)",
                 params![run.id, run.job_id, run.schedule_revision, run.scheduled_at.to_rfc3339(), run.scheduled_at.timestamp_millis(), encode(&run)?]).map_err(storage)?;
             claims.push(run);
@@ -512,6 +516,18 @@ impl JobStore {
     }
 
     pub fn run_now(&mut self, id: &str, now: DateTime<Utc>) -> Result<()> {
+        self.run_now_with(id, now, None)
+    }
+
+    /// Run now, with what started the run (a Loop's webhook body). Calls that
+    /// arrive before the run is claimed collapse into one, with the latest
+    /// input; a call while a run is active is refused like Run now.
+    pub fn run_now_with(
+        &mut self,
+        id: &str,
+        now: DateTime<Utc>,
+        input: Option<String>,
+    ) -> Result<()> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -535,6 +551,7 @@ impl JobStore {
             .ok_or_else(|| storage("schedule revision exhausted"))?;
         job.next_due_at = now;
         job.updated_at = now;
+        job.pending_input = input;
         save_job(&tx, &job)?;
         tx.commit().map_err(storage)
     }
@@ -762,6 +779,7 @@ mod tests {
             schedule_revision: 1,
             created_at: at(-10),
             updated_at: at(-10),
+            pending_input: None,
         }
     }
 
@@ -877,6 +895,35 @@ mod tests {
             store.update(busy, at(1)),
             Err(DaemonError::Conflict(_))
         ));
+    }
+
+    #[test]
+    fn a_run_started_with_input_carries_it_and_the_job_lets_it_go() {
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("hook", at(10))).unwrap();
+        store
+            .run_now_with("hook", at(0), Some("first".into()))
+            .unwrap();
+        // A second call before the run is claimed collapses into it.
+        store
+            .run_now_with("hook", at(0), Some("second".into()))
+            .unwrap();
+        let claimed = store
+            .claim_due(at(0), "daemon-a", Duration::minutes(5), 10)
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].input.as_deref(), Some("second"));
+        assert_eq!(store.get("hook").unwrap().pending_input, None);
+        assert_eq!(
+            store.history("hook", 1).unwrap()[0].input.as_deref(),
+            Some("second")
+        );
+        // A call while the run is active is refused, and leaves nothing behind.
+        assert!(matches!(
+            store.run_now_with("hook", at(1), Some("third".into())),
+            Err(DaemonError::Conflict(_))
+        ));
+        assert_eq!(store.get("hook").unwrap().pending_input, None);
     }
 
     #[test]

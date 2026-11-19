@@ -73,7 +73,15 @@ impl Scheduler {
         *self.status.lock().unwrap()
     }
     pub fn run_now(&self, id: &str) -> Result<()> {
-        self.store.lock().unwrap().run_now(id, self.clock.now())?;
+        self.run_now_with(id, None)
+    }
+
+    /// Run now with what started the run (a Loop's webhook body).
+    pub fn run_now_with(&self, id: &str, input: Option<String>) -> Result<()> {
+        self.store
+            .lock()
+            .unwrap()
+            .run_now_with(id, self.clock.now(), input)?;
         self.notify_changed();
         Ok(())
     }
@@ -312,8 +320,8 @@ impl super::server::SchedulerControl for Scheduler {
     fn notify_changed(&self) {
         Scheduler::notify_changed(self);
     }
-    fn run_now(&self, id: &str) -> Result<super::protocol::DaemonResponse> {
-        Scheduler::run_now(self, id)?;
+    fn run_now(&self, id: &str, input: Option<String>) -> Result<super::protocol::DaemonResponse> {
+        Scheduler::run_now_with(self, id, input)?;
         Ok(super::protocol::DaemonResponse::Ack)
     }
     fn snapshot(&self) -> (usize, Option<String>) {
@@ -414,6 +422,7 @@ mod tests {
             schedule_revision: 1,
             created_at: at(-10),
             updated_at: at(-10),
+            pending_input: None,
         }
     }
 
@@ -727,6 +736,7 @@ mod tests {
             read_only: true,
             thread_id: None,
             script: None,
+            webhook: None,
         };
         store.create(record).unwrap();
         let scheduler = Scheduler::new(

@@ -93,6 +93,11 @@ pub enum JobAction {
         /// workspace; the agent turn starts only when it prints something.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         script: Option<String>,
+        /// Webhook trigger (issue 3937): the SHA-256 of the secret in the
+        /// Loop's webhook URL, in hex. Only the hash is kept, so listing jobs
+        /// never shows a secret that starts a run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        webhook: Option<String>,
     },
     Poll {
         action: Box<JobAction>,
@@ -131,6 +136,9 @@ pub enum ScheduleSpec {
     Once {
         at: DateTime<Utc>,
     },
+    /// Never due on its own: runs only when started (Run now, or a Loop's
+    /// webhook).
+    Manual,
 }
 
 impl ScheduleSpec {
@@ -195,7 +203,7 @@ impl ScheduleSpec {
             Self::Cron { misfire_policy, .. }
             | Self::Daily { misfire_policy, .. }
             | Self::Monthly { misfire_policy, .. } => *misfire_policy,
-            Self::Once { .. } => MisfirePolicy::RunOnce,
+            Self::Once { .. } | Self::Manual => MisfirePolicy::RunOnce,
         }
     }
 }
@@ -214,6 +222,10 @@ pub struct JobRecord {
     pub schedule_revision: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// What started the next run from outside (a Loop's webhook body), moved
+    /// onto that run when it is claimed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_input: Option<String>,
 }
 
 impl JobRecord {
@@ -256,6 +268,9 @@ pub struct JobRunRecord {
     pub result_summary: Option<String>,
     pub error_class: Option<String>,
     pub output: Option<String>,
+    /// What started this run from outside (a Loop's webhook body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

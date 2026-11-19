@@ -164,6 +164,21 @@ thread's account.
   every permission request is declined, so edits, commands that ask, commits
   and pushes do not happen. Turned off, the run is at Full access, as a
   delegate is.
+- **Webhook.** A Loop with its webhook on also runs when
+  `POST /hooks/<loop-id>/<secret>` (or `/hooks/<loop-id>` with
+  `Authorization: Bearer <secret>`) reaches the outside-agent listener: on
+  this computer's loopback port, and through the public address when
+  `[outside] public_url` is set. The request body (up to 64 KB) is kept on
+  the run and added to the prompt, fenced and marked as outside data the
+  agent must not take instructions from. The daemon stores only the secret's
+  SHA-256, so the URL is shown once, when the webhook is turned on or its
+  secret replaced; `rustcode cron list` and agents never see it, and an
+  agent's `create_loop` cannot turn a webhook on. An unknown Loop, one
+  without a webhook and a wrong secret all answer 404; a paused Loop or one
+  with a run going answers 409, and calls that arrive before a run starts
+  collapse into one with the latest body. A Loop saved with
+  `{ "kind": "manual" }` has no schedule and runs only from its webhook or
+  Run now.
 - **The app must be open.** With no engine to reach, the run is recorded as
   cancelled with `{"skipped": …}` and does not count as a failure. (A
   headless engine the daemon starts itself would lift this; not built yet,

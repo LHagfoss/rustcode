@@ -40,6 +40,9 @@ const REFRESH_MS = 30_000;
 
 type Tab = "loops" | "review";
 
+/** A loop that is not paused and has a webhook: a call can start it at any time. */
+const listening = (loop: Loop) => !loop.paused && loop.webhook;
+
 const STATE_BADGE: Record<ReturnType<typeof loopState>, { label: string; tint: string }> = {
   running: { label: "Running", tint: "bg-accent" },
   failing: { label: "Paused", tint: "bg-danger" },
@@ -129,8 +132,11 @@ function LoopRow({
   const reason = pauseReason(loop);
   const running = state === "running";
   const next = !loop.paused && loop.nextDueAt !== undefined ? loop.nextDueAt : undefined;
-  const badgeLabel =
-    state === "active" && next === undefined
+  // A loop with no schedule but a webhook is waiting for a call, not unscheduled.
+  const waiting = state === "active" && next === undefined && listening(loop);
+  const badgeLabel = waiting
+    ? "On webhook"
+    : state === "active" && next === undefined
       ? loop.schedule.kind === "once"
         ? "Completed"
         : "Unscheduled"
@@ -156,7 +162,7 @@ function LoopRow({
                   aria-hidden
                   className={cx(
                     "size-1.5 rounded-full",
-                    next === undefined && state === "active" ? "bg-fg-faint" : badge.tint,
+                    next === undefined && state === "active" && !waiting ? "bg-fg-faint" : badge.tint,
                   )}
                 />
                 {badgeLabel}
@@ -164,6 +170,7 @@ function LoopRow({
             </span>
             <span className="truncate text-caption text-fg-muted">
               {projectName(loop.workspace)} · {scheduleInWords(loop.schedule)}
+              {loop.webhook && loop.schedule.kind !== "manual" && " · Webhook"}
             </span>
           </span>
         </button>
@@ -377,10 +384,14 @@ export function Loops() {
   const upcoming: Loop[] = [];
   const inactive: Loop[] = [];
   for (const loop of loops) {
-    if (loopState(loop) === "running" || (!loop.paused && loop.nextDueAt !== undefined)) upcoming.push(loop);
+    if (loopState(loop) === "running" || (!loop.paused && loop.nextDueAt !== undefined) || listening(loop))
+      upcoming.push(loop);
     else inactive.push(loop);
   }
-  upcoming.sort((a, b) => (a.nextDueAt ?? 0) - (b.nextDueAt ?? 0));
+  // Loops that only wait for their webhook go after the ones with a time.
+  upcoming.sort(
+    (a, b) => (a.nextDueAt ?? Infinity) - (b.nextDueAt ?? Infinity) || a.name.localeCompare(b.name),
+  );
   inactive.sort((a, b) => Number(b.paused) - Number(a.paused) || a.name.localeCompare(b.name));
   // Open: still in the list and not archived. `statusMarks` changes when the user archives one.
   // biome-ignore lint/correctness/useExhaustiveDependencies: statusMarks is what statusOf reads

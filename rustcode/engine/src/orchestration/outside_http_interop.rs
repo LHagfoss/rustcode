@@ -654,6 +654,25 @@ async fn a_hosted_agent_registers_signs_in_with_a_code_and_refreshes() {
     assert_eq!(outside::list_at(&f.server.settings.grants).len(), 1);
 }
 
+#[tokio::test]
+async fn a_loop_webhook_takes_only_a_post_from_the_public_host() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let f = Fixture::start_with(dir.path(), Some("https://rustcode.example.com")).await;
+    let public = "rustcode.example.com";
+    assert_eq!(
+        f.request_to(public, "GET", "/hooks/loop-1/secret", "", "")
+            .await
+            .0,
+        405
+    );
+    assert_eq!(
+        f.request_to("evil.example.com", "POST", "/hooks/loop-1/secret", "", "{}")
+            .await
+            .0,
+        403
+    );
+}
+
 #[test]
 fn public_url_must_be_a_bare_https_origin() {
     assert_eq!(

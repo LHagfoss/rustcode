@@ -19,7 +19,7 @@ use tokio::{io::BufReader, sync::Notify};
 /// pass through RequestHandler; run-now never invents a second execution path.
 pub trait SchedulerControl: Send + Sync {
     fn notify_changed(&self);
-    fn run_now(&self, job_id: &str) -> super::Result<DaemonResponse>;
+    fn run_now(&self, job_id: &str, input: Option<String>) -> super::Result<DaemonResponse>;
     fn snapshot(&self) -> (usize, Option<String>);
 }
 
@@ -93,14 +93,14 @@ impl RequestHandler {
                     Err(DaemonError::Conflict("daemon instance changed".into()))
                 };
             }
-            DaemonRequest::RunNow { job_id } => {
+            DaemonRequest::RunNow { job_id, input } => {
                 // Release the store lock before handing control to the scheduler.
                 self.store
                     .try_lock()
                     .map_err(|_| DaemonError::Conflict("store is busy".into()))?
                     .get(&job_id)?;
                 return match &self.scheduler {
-                    Some(scheduler) => scheduler.run_now(&job_id),
+                    Some(scheduler) => scheduler.run_now(&job_id, input),
                     None => Ok(DaemonResponse::error(
                         "scheduler_unavailable",
                         "scheduler execution is not installed",
@@ -375,6 +375,7 @@ mod tests {
             schedule_revision: 1,
             created_at: now,
             updated_at: now,
+            pending_input: None,
         }
     }
 
@@ -475,7 +476,7 @@ mod tests {
             DaemonResponse::History { runs: vec![] }
         );
         assert!(
-            matches!(client.request(DaemonRequest::RunNow { job_id: job.id.clone() }).await.unwrap(), DaemonResponse::Error { code, .. } if code == "scheduler_unavailable")
+            matches!(client.request(DaemonRequest::RunNow { job_id: job.id.clone(), input: None }).await.unwrap(), DaemonResponse::Error { code, .. } if code == "scheduler_unavailable")
         );
         assert_eq!(
             client

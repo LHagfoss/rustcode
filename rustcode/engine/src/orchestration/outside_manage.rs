@@ -135,6 +135,9 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
         read_only: args["read_only"].as_bool().unwrap_or(true),
         thread_id,
         script: None,
+        // A webhook is turned on in the app, where its URL is shown once.
+        webhook: false,
+        rotate_webhook: false,
     };
     match crate::acp::loops::save(request).await {
         Ok(value) => {

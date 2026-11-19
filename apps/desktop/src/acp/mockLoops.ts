@@ -124,8 +124,17 @@ export class MockLoops {
     switch (method) {
       case "_rustcode/loops/list":
         return { daemonRunning: true, loops: this.loops };
-      case "_rustcode/loops/save":
-        return { loop: this.save(params) };
+      case "_rustcode/loops/save": {
+        const id = str(params.id);
+        const before = this.loops.find((loop) => loop.id === id);
+        const saved = this.save(params);
+        // A new webhook secret is answered once, as the engine does.
+        const made = params.webhook === true && (before?.webhook !== true || params.rotateWebhook === true);
+        if (!made) return { loop: saved };
+        const secret = "5e3c".repeat(16);
+        const url = `http://127.0.0.1:43871/hooks/${str(saved.id)}/${secret}`;
+        return { loop: saved, webhook: { url, localUrl: url, public: false, secret } };
+      }
       case "_rustcode/loops/set_paused": {
         const id = str(params.id) ?? "";
         const paused = params.paused === true;
@@ -183,7 +192,8 @@ export class MockLoops {
       model: str(params.model) ?? null,
       effort: str(params.effort) ?? null,
       readOnly: params.readOnly !== false,
-      nextDueAt: ahead(4),
+      webhook: params.webhook === true,
+      nextDueAt: (schedule as JsonObject).kind === "manual" ? null : ahead(4),
     };
     this.loops = existing
       ? this.loops.map((loop) => (loop.id === id ? saved : loop))

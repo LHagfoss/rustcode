@@ -20,6 +20,7 @@ import {
   reviewItems,
   saveParams,
   scheduleInWords,
+  webhookOf,
 } from "./loops";
 
 const NOW = Date.parse("2026-11-17T12:00:00Z");
@@ -39,6 +40,7 @@ function loop(extra: Partial<Loop> = {}): Loop {
     workspace: "/code/app",
     prompt: "Check CI on main",
     readOnly: true,
+    webhook: false,
     nextDueAt: NOW + 2 * HOUR,
     runs: [],
     ...extra,
@@ -313,6 +315,40 @@ describe("loop follow-ups (issue 3937)", () => {
     });
     expect(parsed.loops[0]?.threadId).toBe("t-own");
     expect(parsed.loops[0]?.runs[0]?.quiet).toBe(true);
+  });
+
+  test("a webhook-only loop saves a manual schedule and says it waits for its webhook", () => {
+    const base = { name: "Triage", workspace: "/code/app", prompt: "Triage", cron: "", readOnly: true };
+    const params = saveParams({ ...base, manual: true, webhook: true }, "Europe/Oslo");
+    expect(params.schedule).toEqual({ kind: "manual" });
+    expect(params.webhook).toBe(true);
+    expect("rotateWebhook" in params).toBe(false);
+    expect(saveParams({ ...base, webhook: true, rotateWebhook: true }, "Europe/Oslo").rotateWebhook).toBe(
+      true,
+    );
+    // Turning the webhook off sends nothing, which drops it; a stale rotate is not sent either.
+    const off = saveParams({ ...base, webhook: false, rotateWebhook: true }, "Europe/Oslo");
+    expect("webhook" in off || "rotateWebhook" in off).toBe(false);
+
+    const parsed = parseLoops({
+      daemonRunning: true,
+      loops: [{ id: "l", name: "L", schedule: { kind: "manual" }, webhook: true, nextDueAt: null, runs: [] }],
+    });
+    const manual = parsed.loops[0];
+    expect(manual?.schedule).toEqual({ kind: "manual" });
+    expect(manual && scheduleInWords(manual.schedule)).toBe("No schedule");
+    expect(manual && nextRunText(manual, NOW)).toBe("On webhook");
+    expect(nextRunText(loop({ schedule: { kind: "manual" }, nextDueAt: undefined }), NOW)).toBe(
+      "Run by hand",
+    );
+  });
+
+  test("a save shows the webhook URL only when it made one", () => {
+    expect(webhookOf({ loop: {} })).toBeNull();
+    expect(
+      webhookOf({ loop: {}, webhook: { url: "https://h.example/hooks/l/s", public: true, secret: "s" } }),
+    ).toEqual({ url: "https://h.example/hooks/l/s", public: true, secret: "s" });
+    expect(webhookOf({ webhook: { url: null, localUrl: null, secret: "s" } })).toBeNull();
   });
 
   test("every thread a loop ran in carries its name for the sidebar badge", () => {

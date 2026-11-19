@@ -8,8 +8,14 @@
 //!
 //! Unlike the scheduled methods, `start_daemon` starts the scheduler: the
 //! Loops page offers it as a button the user presses.
+//!
+//! A Loop can also have a webhook: `POST /hooks/<loop-id>/<secret>` on the
+//! outside-agent listener ([`trigger`]) starts a run with the request body.
+//! The daemon keeps only the secret's hash; the URL is shown once, when the
+//! webhook is turned on or its secret is replaced.
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::daemon::model::{JobAction, JobRecord, JobRunRecord, MisfirePolicy, ScheduleSpec};
 use crate::daemon::{
@@ -69,6 +75,13 @@ pub(crate) struct LoopsSaveRequest {
     /// Set from the app's editor only, never by an agent's `create_loop`.
     #[serde(default)]
     pub script: Option<String>,
+    /// Start a run when the Loop's webhook URL is called. Set from the app's
+    /// editor only, never by an agent's `create_loop`.
+    #[serde(default)]
+    pub webhook: bool,
+    /// Replace the webhook's secret, so the old URL stops working.
+    #[serde(default)]
+    pub rotate_webhook: bool,
 }
 
 fn read_only_default() -> bool {
@@ -152,10 +165,12 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         read_only,
         thread_id,
         script,
+        webhook,
     } = &job.action
     else {
         return None;
     };
+    let manual = matches!(job.schedule, ScheduleSpec::Manual);
     Some(json!({
         "id": job.id,
         "name": job.name,
@@ -170,7 +185,9 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         "readOnly": read_only,
         "threadId": thread_id,
         "script": script,
-        "nextDueAt": job.next_due_at,
+        "webhook": webhook.is_some(),
+        // A Loop run only by hand or by its webhook is never due.
+        "nextDueAt": (!manual).then_some(job.next_due_at),
         "createdAt": job.created_at,
         "runs": runs.iter().map(run_json).collect::<Vec<_>>(),
     }))
@@ -210,6 +227,9 @@ async fn list_with(client: &DaemonClient) -> Result<Value, String> {
 /// The schedule a Loop runs on: what `schedule_task` takes, with a missed
 /// cron run firing once when the machine wakes instead of being skipped.
 pub(crate) fn loop_schedule(value: &Value) -> Result<ScheduleSpec, String> {
+    if value.get("kind").and_then(Value::as_str) == Some("manual") {
+        return Ok(ScheduleSpec::Manual);
+    }
     let mut spec = super::scheduled::schedule_spec(value)?;
     if let ScheduleSpec::Cron { misfire_policy, .. } = &mut spec {
         *misfire_policy = MisfirePolicy::RunOnce;
@@ -223,8 +243,55 @@ fn trimmed(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// A new webhook secret: 256 random bits, in hex.
+fn webhook_secret() -> String {
+    hex::encode(rand::random::<[u8; 32]>())
+}
+
+/// What the daemon keeps of a webhook secret.
+pub(crate) fn webhook_hash(secret: &str) -> String {
+    hex::encode(Sha256::digest(secret.as_bytes()))
+}
+
+/// Whether `presented` is the secret `stored` is the hash of. Both sides are
+/// hashed first, so the comparison time says nothing about the secret.
+fn webhook_matches(stored: &str, presented: &str) -> bool {
+    let presented = webhook_hash(presented);
+    stored.len() == presented.len()
+        && stored
+            .bytes()
+            .zip(presented.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+}
+
+/// A Loop's webhook after a save: the hash to keep, and the secret when a new
+/// one was made (it is shown to the user once). `kept` is the hash the Loop
+/// had before the edit.
+fn webhook_for(
+    enabled: bool,
+    rotate: bool,
+    kept: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if !enabled {
+        return (None, None);
+    }
+    match kept {
+        Some(hash) if !rotate => (Some(hash), None),
+        _ => {
+            let secret = webhook_secret();
+            (Some(webhook_hash(&secret)), Some(secret))
+        }
+    }
+}
+
 /// The job a save request describes, checked before the daemon sees it.
-pub(crate) fn job_from(request: LoopsSaveRequest, id: &str) -> Result<JobRecord, String> {
+/// `webhook` is the hash of the Loop's webhook secret, if it has one.
+pub(crate) fn job_from(
+    request: LoopsSaveRequest,
+    id: &str,
+    webhook: Option<String>,
+) -> Result<JobRecord, String> {
     let prompt = request.prompt.trim().to_owned();
     if prompt.is_empty() {
         return Err("a scheduled job needs a prompt".to_owned());
@@ -251,6 +318,7 @@ pub(crate) fn job_from(request: LoopsSaveRequest, id: &str) -> Result<JobRecord,
             .script
             .map(|script| script.trim().to_owned())
             .filter(|script| !script.is_empty()),
+        webhook,
     };
     let schedule_json =
         serde_json::to_string(&schedule).map_err(|error| format!("schedule: {error}"))?;
@@ -268,7 +336,14 @@ pub(crate) fn job_from(request: LoopsSaveRequest, id: &str) -> Result<JobRecord,
 }
 
 pub(crate) async fn save(request: LoopsSaveRequest) -> Result<Value, String> {
-    save_with(&client()?, request).await
+    let mut answer = save_with(&client()?, request).await?;
+    if let (Some(id), Some(secret)) = (
+        answer["loop"]["id"].as_str(),
+        answer["webhook"]["secret"].as_str(),
+    ) {
+        answer["webhook"] = webhook_urls(id, secret).await;
+    }
+    Ok(answer)
 }
 
 async fn save_with(client: &DaemonClient, request: LoopsSaveRequest) -> Result<Value, String> {
@@ -280,15 +355,116 @@ async fn save_with(client: &DaemonClient, request: LoopsSaveRequest) -> Result<V
             rand::random::<u16>()
         )
     });
-    let job = job_from(request, &id)?;
+    // An edit keeps the webhook's secret unless it is turned off or replaced.
+    let kept = match &existing {
+        Some(id) if request.webhook && !request.rotate_webhook => {
+            match ask(client, DaemonRequest::Get { job_id: id.clone() }).await? {
+                DaemonResponse::Job {
+                    job:
+                        JobRecord {
+                            action: JobAction::Loop { webhook, .. },
+                            ..
+                        },
+                } => webhook,
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let (webhook, secret) = webhook_for(request.webhook, request.rotate_webhook, kept);
+    let job = job_from(request, &id, webhook)?;
     let request = match existing {
         Some(_) => DaemonRequest::Update { job },
         None => DaemonRequest::Create { job },
     };
     match ask(client, request).await? {
-        DaemonResponse::Job { job } => Ok(json!({ "loop": loop_json(&job, &[]) })),
+        DaemonResponse::Job { job } => {
+            let mut answer = json!({ "loop": loop_json(&job, &[]) });
+            if let Some(secret) = secret {
+                answer["webhook"] = json!({ "secret": secret });
+            }
+            Ok(answer)
+        }
         DaemonResponse::Error { message, .. } => Err(message),
         other => Err(format!("the scheduler answered {other:?}")),
+    }
+}
+
+/// Where a Loop's webhook answers: through the public address when one is
+/// set (`[outside] public_url`), and on this computer's loopback port.
+async fn webhook_urls(id: &str, secret: &str) -> Value {
+    use crate::orchestration::outside_http;
+    let path = format!("{}{id}/{secret}", outside_http::HOOKS_PATH);
+    let local = outside_http::ensure()
+        .await
+        .ok()
+        .and_then(|url| url.strip_suffix("/mcp").map(|base| format!("{base}{path}")));
+    let public = outside_http::configured_public_base()
+        .and_then(Result::ok)
+        .map(|base| format!("{base}{path}"));
+    json!({
+        "url": public.clone().or(local.clone()),
+        "localUrl": local,
+        "public": public.is_some(),
+        "secret": secret,
+    })
+}
+
+/// A call to a Loop's webhook (`POST /hooks/<id>/<secret>`): start a run
+/// whose prompt carries `body`. Answers an HTTP status and its JSON. An
+/// unknown Loop, a Loop without a webhook and a wrong secret all answer 404,
+/// so a caller cannot tell which Loops exist.
+pub(crate) async fn trigger(id: &str, secret: &str, body: &[u8]) -> (u16, Value) {
+    match client() {
+        Ok(client) => trigger_with(&client, id, secret, body).await,
+        Err(_) => (503, json!({ "error": "scheduler_off" })),
+    }
+}
+
+async fn trigger_with(client: &DaemonClient, id: &str, secret: &str, body: &[u8]) -> (u16, Value) {
+    let not_found = (404, json!({ "error": "not_found" }));
+    if id.is_empty() || secret.is_empty() {
+        return not_found;
+    }
+    let job = match client
+        .request(DaemonRequest::Get {
+            job_id: id.to_owned(),
+        })
+        .await
+    {
+        Ok(DaemonResponse::Job { job }) => job,
+        Ok(_) => return not_found,
+        Err(_) => return (503, json!({ "error": "scheduler_off" })),
+    };
+    let JobAction::Loop {
+        webhook: Some(hash),
+        ..
+    } = &job.action
+    else {
+        return not_found;
+    };
+    if !webhook_matches(hash, secret) {
+        return not_found;
+    }
+    if job.paused {
+        return (409, json!({ "error": "paused" }));
+    }
+    let input = String::from_utf8_lossy(body).into_owned();
+    match client
+        .request(DaemonRequest::RunNow {
+            job_id: job.id.clone(),
+            input: Some(input),
+        })
+        .await
+    {
+        Ok(DaemonResponse::Ack | DaemonResponse::RunAccepted { .. }) => {
+            (202, json!({ "accepted": true }))
+        }
+        // The Loop's previous run is still going; a run never overlaps.
+        Ok(DaemonResponse::Error { code, .. }) if code == "conflict" => {
+            (409, json!({ "error": "busy" }))
+        }
+        _ => (503, json!({ "error": "scheduler_off" })),
     }
 }
 
@@ -350,6 +526,8 @@ mod tests {
             read_only: true,
             thread_id: None,
             script: None,
+            webhook: false,
+            rotate_webhook: false,
         }
     }
 
@@ -366,7 +544,7 @@ mod tests {
     fn a_saved_loop_is_a_trimmed_read_only_loop_job() {
         let folder = tempfile::tempdir().unwrap();
         let workspace = folder.path().to_string_lossy().into_owned();
-        let job = job_from(request(&workspace), "loop-1").unwrap();
+        let job = job_from(request(&workspace), "loop-1", None).unwrap();
         assert_eq!(job.id, "loop-1");
         assert_eq!(job.name, "CI watch");
         match &job.action {
@@ -397,7 +575,7 @@ mod tests {
         let workspace = folder.path().to_string_lossy().into_owned();
         let mut saved = request(&workspace);
         saved.thread_id = Some(" thread-7 ".into());
-        let job = job_from(saved, "loop-1").unwrap();
+        let job = job_from(saved, "loop-1", None).unwrap();
         assert!(matches!(
             &job.action,
             JobAction::Loop { thread_id: Some(id), .. } if id == "thread-7"
@@ -411,15 +589,51 @@ mod tests {
         let workspace = folder.path().to_string_lossy().into_owned();
         let mut saved = request(&workspace);
         saved.script = Some("  gh run list --status failure  ".into());
-        let job = job_from(saved, "loop-1").unwrap();
+        let job = job_from(saved, "loop-1", None).unwrap();
         assert_eq!(
             loop_json(&job, &[]).unwrap()["script"],
             "gh run list --status failure"
         );
         let mut blank = request(&workspace);
         blank.script = Some("   ".into());
-        let job = job_from(blank, "loop-2").unwrap();
+        let job = job_from(blank, "loop-2", None).unwrap();
         assert!(matches!(&job.action, JobAction::Loop { script: None, .. }));
+    }
+
+    #[test]
+    fn a_webhook_secret_is_kept_replaced_or_dropped() {
+        let (hash, secret) = webhook_for(true, false, None);
+        let (hash, secret) = (hash.unwrap(), secret.unwrap());
+        assert_eq!(secret.len(), 64);
+        assert_ne!(hash, secret, "only the hash is kept");
+        assert!(webhook_matches(&hash, &secret));
+        assert!(!webhook_matches(&hash, "wrong"));
+        assert!(!webhook_matches(&hash, ""));
+
+        assert_eq!(
+            webhook_for(true, false, Some(hash.clone())),
+            (Some(hash.clone()), None),
+            "an edit keeps the URL"
+        );
+        let (rotated, new_secret) = webhook_for(true, true, Some(hash.clone()));
+        assert_ne!(rotated.as_deref(), Some(hash.as_str()));
+        assert!(!webhook_matches(&rotated.unwrap(), &secret));
+        assert!(new_secret.is_some());
+        assert_eq!(webhook_for(false, false, Some(hash)), (None, None));
+    }
+
+    #[test]
+    fn a_manual_loop_with_a_webhook_is_never_due() {
+        let folder = tempfile::tempdir().unwrap();
+        let workspace = folder.path().to_string_lossy().into_owned();
+        let mut saved = request(&workspace);
+        saved.schedule = json!({"kind": "manual"});
+        let job = job_from(saved, "loop-1", Some(webhook_hash("s"))).unwrap();
+        assert_eq!(job.schedule, ScheduleSpec::Manual);
+        let shown = loop_json(&job, &[]).unwrap();
+        assert_eq!(shown["webhook"], true);
+        assert!(shown["nextDueAt"].is_null());
+        assert!(!shown.to_string().contains(&webhook_hash("s")));
     }
 
     #[test]
@@ -428,11 +642,11 @@ mod tests {
         let workspace = folder.path().to_string_lossy().into_owned();
         let mut empty = request(&workspace);
         empty.prompt = "  ".into();
-        assert!(job_from(empty, "x").is_err());
+        assert!(job_from(empty, "x", None).is_err());
         let mut nameless = request(&workspace);
         nameless.name = String::new();
-        assert!(job_from(nameless, "x").is_err());
-        assert!(job_from(request("relative/path"), "x").is_err());
+        assert!(job_from(nameless, "x", None).is_err());
+        assert!(job_from(request("relative/path"), "x", None).is_err());
     }
 
     #[test]
@@ -454,6 +668,7 @@ mod tests {
             result_summary: Some("The run's thread finished".into()),
             error_class: None,
             output: Some(r#"{"thread_id":"t-1"}"#.into()),
+            input: None,
         };
         let shown = run_json(&run);
         assert_eq!(shown["threadId"], "t-1");
@@ -539,6 +754,43 @@ mod tests {
             assert_eq!(loops[0]["paused"], true);
             assert_eq!(loops[0]["name"], "Nightly CI");
             assert!(loops[0]["runs"].as_array().unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_webhook_call_needs_the_loops_secret() {
+            let running = Running::new();
+            let client = running.client();
+            let folder = tempfile::tempdir().unwrap();
+            let workspace = folder.path().to_string_lossy().into_owned();
+            let mut saved = request(&workspace);
+            saved.webhook = true;
+            let created = save_with(&client, saved).await.unwrap();
+            let id = created["loop"]["id"].as_str().unwrap().to_owned();
+            assert_eq!(created["loop"]["webhook"], true);
+            let secret = created["webhook"]["secret"].as_str().unwrap().to_owned();
+            assert_eq!(secret.len(), 64, "{created}");
+
+            assert_eq!(trigger_with(&client, &id, "wrong", b"{}").await.0, 404);
+            assert_eq!(
+                trigger_with(&client, "loop-none", &secret, b"{}").await.0,
+                404
+            );
+            // The right secret reaches the scheduler, which this test does not run.
+            assert_eq!(trigger_with(&client, &id, &secret, b"{}").await.0, 503);
+
+            // An edit keeps the secret and shows no URL again.
+            let mut edit = request(&workspace);
+            edit.id = Some(id.clone());
+            edit.webhook = true;
+            let edited = save_with(&client, edit).await.unwrap();
+            assert!(edited.get("webhook").is_none());
+            assert_eq!(trigger_with(&client, &id, &secret, b"{}").await.0, 503);
+
+            // Turned off, the old URL is unknown.
+            let mut off = request(&workspace);
+            off.id = Some(id.clone());
+            save_with(&client, off).await.unwrap();
+            assert_eq!(trigger_with(&client, &id, &secret, b"{}").await.0, 404);
         }
 
         #[tokio::test]

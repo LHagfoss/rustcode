@@ -101,6 +101,7 @@ pub(crate) fn manage_scheduled_jobs_with_client(
         },
         "run" => DaemonRequest::RunNow {
             job_id: required_string(args, "job_id")?.to_owned(),
+            input: None,
         },
         "history" => DaemonRequest::History {
             job_id: required_string(args, "job_id")?.to_owned(),
