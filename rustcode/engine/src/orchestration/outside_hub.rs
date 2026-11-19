@@ -132,6 +132,11 @@ pub(super) async fn forward(caller: &str, tool: &str, args: &Value) -> Option<Ca
     if !HubConfig::load(&config_dir).hub {
         return None;
     }
+    // A Loop for a member is kept here, where the clock runs while the
+    // member sleeps; each run is then sent to it ([`hub_loop_machine`]).
+    if tool == super::CREATE_LOOP {
+        return None;
+    }
     let mut arguments = args.clone();
     arguments.as_object_mut()?.remove("machine");
     let who = outside::name_of_caller(caller).unwrap_or_else(|| "an outside agent".to_owned());
@@ -154,6 +159,16 @@ pub(super) async fn forward(caller: &str, tool: &str, args: &Value) -> Option<Ca
             "error: the hub could not reach its remote gateway to forward {tool} to {machine}: {error:#}. Nothing was sent."
         ))),
     }
+}
+
+/// On the hub: the member a call's `machine` names, when it names one. A
+/// Loop saved for it runs on this hub's schedule and is sent there.
+pub(super) fn hub_loop_machine(args: &Value) -> Option<String> {
+    let machine = named_machine(args)?;
+    let config_dir = crate::config::get_config_dir()?;
+    (HubConfig::load(&config_dir).hub
+        && crate::remote_gateway::hub_link::Members::new(&config_dir).knows(machine))
+    .then(|| machine.to_owned())
 }
 
 /// On the hub: `list_machines` with the members added, each saying whether

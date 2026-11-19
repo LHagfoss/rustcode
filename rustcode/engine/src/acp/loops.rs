@@ -82,6 +82,10 @@ pub(crate) struct LoopsSaveRequest {
     /// Replace the webhook's secret, so the old URL stops working.
     #[serde(default)]
     pub rotate_webhook: bool,
+    /// Hub Loops: the member of this hub each run goes to. `workspace` is
+    /// then that machine's folder, and the Loop takes no script.
+    #[serde(default)]
+    pub machine: Option<String>,
 }
 
 fn read_only_default() -> bool {
@@ -151,6 +155,10 @@ fn run_json(run: &JobRunRecord) -> Value {
         "silent": output.get("silent").and_then(Value::as_bool).unwrap_or(false),
         "skipped": output.get("skipped"),
         "signedOut": output.get("signed_out").and_then(Value::as_bool).unwrap_or(false),
+        // Hub Loops: the member the run was sent to, and whether it waits
+        // there for that machine to come back.
+        "machine": output.get("machine"),
+        "queued": output.get("queued").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -167,6 +175,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         thread_id,
         script,
         webhook,
+        machine,
     } = &job.action
     else {
         return None;
@@ -187,6 +196,7 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
         "threadId": thread_id,
         "script": script,
         "webhook": webhook.is_some(),
+        "machine": machine,
         // A Loop run only by hand or by its webhook is never due.
         "nextDueAt": (!manual).then_some(job.next_due_at),
         "createdAt": job.created_at,
@@ -301,9 +311,31 @@ pub(crate) fn job_from(
     if name.is_empty() {
         return Err("a scheduled job needs a name".to_owned());
     }
+    let machine = trimmed(request.machine);
+    let script = request
+        .script
+        .map(|script| script.trim().to_owned())
+        .filter(|script| !script.is_empty());
     let workspace = std::path::Path::new(&request.workspace);
-    if !workspace.is_absolute() || !workspace.is_dir() {
-        return Err(format!("{} is not a project folder", request.workspace));
+    match machine.as_deref() {
+        // The folder is on the member, so only its shape is checked here.
+        Some(machine) => {
+            if !crate::orchestration::absolute_on_any_machine(&request.workspace) {
+                return Err(format!(
+                    "{} is not an absolute folder on {machine}",
+                    request.workspace
+                ));
+            }
+            if script.is_some() {
+                return Err(format!(
+                    "a Loop that runs on {machine} takes no script: the script would run on this computer"
+                ));
+            }
+        }
+        None if !workspace.is_absolute() || !workspace.is_dir() => {
+            return Err(format!("{} is not a project folder", request.workspace));
+        }
+        None => {}
     }
     let schedule = loop_schedule(&request.schedule)?;
     let action = JobAction::Loop {
@@ -315,11 +347,9 @@ pub(crate) fn job_from(
         effort: trimmed(request.effort),
         read_only: request.read_only,
         thread_id: trimmed(request.thread_id),
-        script: request
-            .script
-            .map(|script| script.trim().to_owned())
-            .filter(|script| !script.is_empty()),
+        script,
         webhook,
+        machine,
     };
     let schedule_json =
         serde_json::to_string(&schedule).map_err(|error| format!("schedule: {error}"))?;
@@ -337,6 +367,9 @@ pub(crate) fn job_from(
 }
 
 pub(crate) async fn save(request: LoopsSaveRequest) -> Result<Value, String> {
+    if let Some(machine) = trimmed(request.machine.clone()) {
+        member_of_this_hub(&machine)?;
+    }
     let mut answer = save_with(&client()?, request).await?;
     if let (Some(id), Some(secret)) = (
         answer["loop"]["id"].as_str(),
@@ -389,6 +422,25 @@ async fn save_with(client: &DaemonClient, request: LoopsSaveRequest) -> Result<V
         DaemonResponse::Error { message, .. } => Err(message),
         other => Err(format!("the scheduler answered {other:?}")),
     }
+}
+
+/// A Loop runs on another machine only from the fleet's hub, which keeps
+/// time while that machine sleeps and holds each run until it is back.
+fn member_of_this_hub(machine: &str) -> Result<(), String> {
+    use crate::remote_gateway::hub_link::{HubConfig, Members};
+    let config_dir =
+        crate::config::get_config_dir().ok_or("error: config directory unavailable")?;
+    if !HubConfig::load(&config_dir).hub {
+        return Err(format!(
+            "this computer is not the fleet's hub, so it cannot run a Loop on {machine}; save the Loop on {machine}, or make this computer the hub (rustcode machines hub on)"
+        ));
+    }
+    if !Members::new(&config_dir).knows(machine) {
+        return Err(format!(
+            "{machine} has not joined this hub; on {machine}, run rustcode machines hub join with this computer's name"
+        ));
+    }
+    Ok(())
 }
 
 /// Where a Loop's webhook answers: through the public address when one is
@@ -539,6 +591,7 @@ mod tests {
             script: None,
             webhook: false,
             rotate_webhook: false,
+            machine: None,
         }
     }
 

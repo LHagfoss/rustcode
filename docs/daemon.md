@@ -205,6 +205,28 @@ login while named accounts exist.
   opens it from the run.
 - A run's agent turn may take 25 minutes before it is stopped.
 
+### On another machine, from the hub
+
+On the fleet's hub (`docs/remote.md` › The hub), a job may name a member in
+`machine` (the editor's *Machine* choice, or `machine` on an outside agent's
+`create_loop`). The hub keeps the schedule, so a run is due while that machine
+sleeps, and `daemon/hub_run.rs` sends each run over the hub link: a fresh
+thread is `start_session` there (standalone, in the folder `workspace` names
+on that machine), a job with a thread is `message_session` to it. While the
+machine is offline the hub's mailbox holds the run, for up to seven days.
+
+- The run ends once the member has the thread (*Started on laptop*) or the
+  hub holds it (*Waiting for laptop*). The thread runs on there, and the hub
+  does not see whether it found anything to report.
+- The member answers at the access it granted the hub when it joined. A
+  read-only job asks for `access: "ask"`, which `start_session` takes as a
+  ceiling, so it never runs with more than that.
+- A job for another machine takes no script (the script would run on the
+  hub). The editor sends no account, so the member uses its own default
+  login; an agent may name one of the member's.
+- A hub with no remote gateway running skips the run, like a local run while
+  the app is closed.
+
 Editing a job (`DaemonRequest::Update`) keeps its id, creation time, paused
 state and history, moves its next run to what the new schedule says, and is
 refused while a run is going.

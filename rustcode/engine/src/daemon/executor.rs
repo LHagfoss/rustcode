@@ -471,7 +471,24 @@ impl ActionBackend for ProductionActions {
                     thread_id,
                     script,
                     webhook: _,
+                    machine,
                 } => {
+                    // A hub Loop runs on a member; the hub only sends it.
+                    if let Some(machine) = machine {
+                        return super::hub_run::run(super::hub_run::MemberRun {
+                            machine,
+                            name: session,
+                            prompt,
+                            workspace,
+                            harness,
+                            account,
+                            model,
+                            effort,
+                            read_only,
+                            thread_id,
+                        })
+                        .await;
+                    }
                     // Script mode: the script runs first, and only what it
                     // prints wakes the agent.
                     let prompt = match script.filter(|script| !script.trim().is_empty()) {

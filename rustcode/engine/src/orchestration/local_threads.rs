@@ -175,7 +175,8 @@ fn not_allowed(message: impl Into<String>) -> Value {
 // ----------------------------------------------------------------- policy
 
 /// What this engine can tell about a thread's access without the app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Ordered from least to most a thread may do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Access {
     Ask,
     Edits,
@@ -376,6 +377,8 @@ struct Ask<'a> {
     worktree: Option<bool>,
     standalone: bool,
     fan_out: Option<&'a str>,
+    /// The most the thread may do (`ask`, `edits`, `full`); never widens it.
+    access: Option<Access>,
 }
 
 fn ask_of(args: &Value) -> Ask<'_> {
@@ -390,6 +393,15 @@ fn ask_of(args: &Value) -> Ask<'_> {
         worktree: args.get("worktree").and_then(Value::as_bool),
         standalone: args.get("standalone").and_then(Value::as_bool) == Some(true),
         fan_out: None,
+        access: args
+            .get("access")
+            .and_then(Value::as_str)
+            .and_then(|mode| match mode {
+                "ask" => Some(Access::Ask),
+                "edits" => Some(Access::Edits),
+                "full" => Some(Access::Full),
+                _ => None,
+            }),
     }
 }
 
@@ -480,6 +492,7 @@ pub(crate) async fn fan_out(
             worktree: base.worktree,
             standalone: base.standalone,
             fan_out: Some(&fan_id),
+            access: base.access,
         };
         match start_one(caller, &ask, reservation.as_ref(), asker, cancel).await {
             Ok(answer) => {
@@ -618,6 +631,11 @@ async fn start_one(
         }
     } else {
         Access::Full
+    };
+    // `access` only narrows it: a hub's read-only Loop asks for `ask`.
+    let thread_access = match ask.access {
+        Some(ceiling) => thread_access.min(ceiling),
+        None => thread_access,
     };
     let engine = Engine::open(thread_access).await?;
     let mut request = NewSessionRequest::new(PathBuf::from(&project));

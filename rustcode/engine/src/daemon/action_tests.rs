@@ -868,6 +868,7 @@ fn loop_action() -> JobAction {
         thread_id: None,
         script: None,
         webhook: None,
+        machine: None,
     }
 }
 

@@ -202,7 +202,8 @@ function LoopRow({
               </span>
             </span>
             <span className="truncate text-caption text-fg-muted">
-              {projectName(loop.workspace)} · {scheduleInWords(loop.schedule)}
+              {projectName(loop.workspace)}
+              {loop.machine && ` on ${loop.machine}`} · {scheduleInWords(loop.schedule)}
               {loop.webhook && loop.schedule.kind !== "manual" && (
                 <span className="ml-2 inline-flex items-center gap-1 align-[-2px] text-fg-faint">
                   <Webhook size={12} />
@@ -315,9 +316,13 @@ function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: stri
               run.state === "succeeded"
                 ? run.silent
                   ? "The script printed nothing"
-                  : run.quiet
-                    ? "Nothing to report"
-                    : "Finished"
+                  : run.queued
+                    ? `Waiting for ${run.machine ?? "its machine"}, which is offline`
+                    : run.machine
+                      ? `Started on ${run.machine}`
+                      : run.quiet
+                        ? "Nothing to report"
+                        : "Finished"
                 : run.state === "running" || run.state === "claimed"
                   ? "Running"
                   : run.state === "cancelled"
@@ -325,7 +330,8 @@ function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: stri
                       ? `Skipped: ${run.skipped}`
                       : "Stopped"
                     : `Failed${run.error ? `: ${run.error}` : ""}`;
-            const threadId = run.threadId;
+            // A hub Loop's thread is on its member, not in this computer's list.
+            const threadId = run.machine ? undefined : run.threadId;
             return (
               <li key={run.id} className="flex min-w-0 items-center gap-3 py-1 text-caption">
                 <span className="w-20 shrink-0 text-fg-faint">{agoText(at, now)}</span>
@@ -372,7 +378,7 @@ function ReviewList({
     <ul className="flex flex-col gap-2">
       {items.map(({ loop, run, kind }) => {
         const at = run.finishedAt ?? run.startedAt ?? run.scheduledAt;
-        const threadId = run.threadId;
+        const threadId = run.machine ? undefined : run.threadId;
         return (
           <li key={run.id} className={cx("flex items-center gap-3 rounded-lg bg-surface", cardInset)}>
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">

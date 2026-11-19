@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { effortLabel, projectName } from "../acp/types";
 import { concreteModels, defaultEffort, firstModel, listedModel, restoreChoice } from "../state/harness";
 import { ensureHarnessModels, lastAccountFor } from "../state/harnessActions";
+import { refreshHub, useHub } from "../state/hub";
 import { newThreadAccountOn } from "../state/logins";
 import {
   cronInWords,
@@ -93,8 +94,12 @@ function draftOf(loop: Loop | null, project: string): LoopDraft {
     threadId: loop.threadId,
     script: loop.script,
     webhook: loop.webhook,
+    machine: loop.machine,
   };
 }
+
+/** A folder path as another machine would read it: absolute on macOS, Linux or Windows. */
+const absoluteOnAnyMachine = (path: string) => /^(\/|[A-Za-z]:[\\/])/.test(path.trim());
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -235,6 +240,36 @@ export function LoopDialog({
   // The webhook URL a save just made: shown once, in place of the form, until the dialog closes.
   const [madeWebhook, setMadeWebhook] = useState<LoopWebhook | null>(null);
   const fallbackProject = projectCwd || projects[0]?.path || "";
+  // On the fleet's hub, a Loop may run on a member: the hub keeps time and holds runs while it sleeps.
+  const hub = useHub((s) => s.status);
+  useEffect(() => {
+    if (open) void refreshHub();
+  }, [open]);
+  const members = hub?.hub ? (hub.members ?? []) : [];
+  const remote = Boolean(draft.machine);
+  const machineOptions = [
+    { value: "", label: "This computer" },
+    ...members.map((member) => ({
+      value: member.name,
+      label: member.online ? member.name : `${member.name} (offline)`,
+    })),
+  ];
+  if (draft.machine && !machineOptions.some((option) => option.value === draft.machine)) {
+    machineOptions.push({ value: draft.machine, label: `${draft.machine} (not a member)` });
+  }
+  const chooseMachine = (machine: string) => {
+    patch({
+      machine: machine || undefined,
+      workspace: machine ? "" : fallbackProject,
+      threadId: undefined,
+      script: undefined,
+      account: "",
+    });
+    if (machine) {
+      setTarget("fresh");
+      setScriptOpen(false);
+    }
+  };
 
   // Each opening starts from the loop being edited, or a fresh draft in the current project, once:
   // the thread list and the loops page refresh while the dialog is open, and must not wipe what
@@ -341,6 +376,7 @@ export function LoopDialog({
     draft.name.trim() &&
     draft.prompt.trim() &&
     draft.workspace &&
+    (!remote || absoluteOnAnyMachine(draft.workspace)) &&
     !cronError &&
     (target === "fresh" || threadId);
 
@@ -385,10 +421,25 @@ export function LoopDialog({
                   <Dialog.Title className="font-semibold text-title3">
                     {loop ? "Edit scheduled job" : "New scheduled job"}
                   </Dialog.Title>
-                  <p className="text-caption text-fg-muted">Runs while RustCode is open.</p>
+                  <p className="text-caption text-fg-muted">
+                    {remote
+                      ? `This hub keeps the schedule and sends each run to ${draft.machine}. While it’s offline, runs wait here.`
+                      : "Runs while RustCode is open."}
+                  </p>
                 </div>
                 <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-4">
                   <Section title="Task">
+                    {machineOptions.length > 1 && (
+                      <Field label="Machine">
+                        <Select
+                          label="Machine"
+                          value={draft.machine ?? ""}
+                          options={machineOptions}
+                          onChange={chooseMachine}
+                          className="h-8 max-w-full justify-between self-start rounded-md bg-fill-subtle"
+                        />
+                      </Field>
+                    )}
                     <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] items-start gap-3">
                       <Field label="Name">
                         <input
@@ -401,15 +452,28 @@ export function LoopDialog({
                         />
                       </Field>
                       <Field label="Project">
-                        <Select
-                          label="Project"
-                          value={draft.workspace}
-                          options={
-                            projectOptions.length ? projectOptions : [{ value: "", label: "No projects yet" }]
-                          }
-                          onChange={(workspace) => patch({ workspace, threadId: undefined })}
-                          className="h-8 max-w-full justify-between rounded-md bg-fill-subtle"
-                        />
+                        {remote ? (
+                          <input
+                            value={draft.workspace}
+                            onChange={(e) => patch({ workspace: e.target.value })}
+                            placeholder={`Absolute folder on ${draft.machine}`}
+                            aria-label="Project"
+                            {...noTextHelpers}
+                            className={cx(inputClass, "font-mono")}
+                          />
+                        ) : (
+                          <Select
+                            label="Project"
+                            value={draft.workspace}
+                            options={
+                              projectOptions.length
+                                ? projectOptions
+                                : [{ value: "", label: "No projects yet" }]
+                            }
+                            onChange={(workspace) => patch({ workspace, threadId: undefined })}
+                            className="h-8 max-w-full justify-between rounded-md bg-fill-subtle"
+                          />
+                        )}
                       </Field>
                     </div>
                     <Field label="Prompt">
@@ -423,7 +487,7 @@ export function LoopDialog({
                         className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
                       />
                     </Field>
-                    {scriptOpen ? (
+                    {remote ? null : scriptOpen ? (
                       <Field label="Script (optional)">
                         <textarea
                           value={draft.script ?? ""}
@@ -615,31 +679,33 @@ export function LoopDialog({
                     )}
                   </Section>
                   <Section title="How it runs">
-                    <Field label="Each run">
-                      <Segments
-                        label="Each run"
-                        value={target}
-                        options={TARGETS.map((t) => ({ value: t.value, label: t.label }))}
-                        onChange={setTarget}
-                      />
-                      {target === "one" &&
-                        (threadOptions.length ? (
-                          <Select
-                            label="Thread"
-                            value={threadId ?? ""}
-                            options={threadOptions}
-                            onChange={(id) => patch({ threadId: id })}
-                            className="max-w-full self-start"
-                          />
-                        ) : (
-                          <p className="text-caption text-danger">This project has no threads yet.</p>
-                        ))}
-                      <p className="text-caption text-fg-muted">
-                        {target === "one"
-                          ? "Sends the prompt to this thread when it’s idle."
-                          : "Archives the thread when there’s nothing to report."}
-                      </p>
-                    </Field>
+                    {!remote && (
+                      <Field label="Each run">
+                        <Segments
+                          label="Each run"
+                          value={target}
+                          options={TARGETS.map((t) => ({ value: t.value, label: t.label }))}
+                          onChange={setTarget}
+                        />
+                        {target === "one" &&
+                          (threadOptions.length ? (
+                            <Select
+                              label="Thread"
+                              value={threadId ?? ""}
+                              options={threadOptions}
+                              onChange={(id) => patch({ threadId: id })}
+                              className="max-w-full self-start"
+                            />
+                          ) : (
+                            <p className="text-caption text-danger">This project has no threads yet.</p>
+                          ))}
+                        <p className="text-caption text-fg-muted">
+                          {target === "one"
+                            ? "Sends the prompt to this thread when it’s idle."
+                            : "Archives the thread when there’s nothing to report."}
+                        </p>
+                      </Field>
+                    )}
                     {target === "fresh" && (
                       <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
                         <Field label="Harness">
@@ -650,7 +716,7 @@ export function LoopDialog({
                             onChange={(harness) => patch({ harness, account: "", model: "", effort: "" })}
                           />
                         </Field>
-                        {accountOptions.length > 0 && (
+                        {!remote && accountOptions.length > 0 && (
                           <Field label="Account">
                             <Select
                               label="Account"

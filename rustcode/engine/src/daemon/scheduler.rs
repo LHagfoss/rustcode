@@ -739,6 +739,7 @@ mod tests {
             thread_id: None,
             script: None,
             webhook: None,
+            machine: None,
         };
         store.create(record).unwrap();
         let scheduler = Scheduler::new(
@@ -813,6 +814,7 @@ mod tests {
             thread_id: None,
             script: None,
             webhook: None,
+            machine: None,
         };
         store.create(record).unwrap();
         let scheduler = Scheduler::new(
