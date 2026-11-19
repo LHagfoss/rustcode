@@ -26,10 +26,14 @@ import {
   toggleFavourite,
   writeModelHistory,
 } from "../lib/modelHistory";
+import { usageModelId } from "../lib/modelNames";
 import { matchModels } from "../lib/modelSearch";
 import {
+  concreteModels,
   controlDisabledReason,
   defaultEffort,
+  firstModel,
+  listedModel,
   normalizeDefault,
   rememberedEffort,
   selectOption,
@@ -59,7 +63,7 @@ import { isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
-import { Check, ChevronUp, Lock, RotateCcw, Star, UserRound, Zap } from "./icons";
+import { Check, ChevronUp, Lock, Star, UserRound, Zap } from "./icons";
 import { cx, MenuSearchField, menuLabel, menuSeparator, Skeleton, Switch, Tooltip } from "./primitives";
 
 interface Choice {
@@ -312,7 +316,7 @@ export function panelHeight(groups: { models: unknown[] }[]): number {
 
 /**
  * The card's right column: the current model's effort levels from lowest to highest with the
- * default marked, a reset, Fast mode when the model has it, and the harness's logins with what is
+ * Fast mode when the model has it, and the harness's logins with what is
  * left of each one's plan. It sits beside the model list, so the model, its effort and its account
  * are chosen in one card with no step between them. A harness without an effort control says why in
  * the levels' place. ↑↓ walk its rows, ← returns to the search, and a printed character goes back to
@@ -322,7 +326,6 @@ function TraitsColumn({
   model,
   levels,
   effort,
-  defaultLevel,
   effortReason,
   fast,
   fastOn,
@@ -338,7 +341,6 @@ function TraitsColumn({
   model: string;
   levels: string[];
   effort?: string | null;
-  defaultLevel: string | null;
   effortReason?: string;
   fast: boolean;
   fastOn: boolean;
@@ -400,38 +402,23 @@ function TraitsColumn({
             <span>{effortReason}</span>
           </p>
         )}
-        {showLevels && (
-          <>
-            {levels.map((level) => (
-              <CardMenuItem
-                key={level}
-                role="menuitemradio"
-                aria-checked={level === effort}
-                close={false}
-                onSelect={() => onEffort(level)}
-              >
-                <span className="min-w-0 flex-1 truncate">{effortLabel(level)}</span>
-                {level === defaultLevel && (
-                  <span className="shrink-0 text-caption text-fg-faint">Default</span>
-                )}
-                <Check
-                  size={13}
-                  strokeWidth={2.5}
-                  className={cx("shrink-0 text-accent", level !== effort && "invisible")}
-                />
-              </CardMenuItem>
-            ))}
+        {showLevels &&
+          levels.map((level) => (
             <CardMenuItem
+              key={level}
+              role="menuitemradio"
+              aria-checked={level === effort}
               close={false}
-              disabled={!defaultLevel || defaultLevel === effort}
-              onSelect={() => defaultLevel && onEffort(defaultLevel)}
-              className="text-fg-muted disabled:cursor-default disabled:opacity-40"
+              onSelect={() => onEffort(level)}
             >
-              <RotateCcw size={12} className="shrink-0" />
-              Reset to default
+              <span className="min-w-0 flex-1 truncate">{effortLabel(level)}</span>
+              <Check
+                size={13}
+                strokeWidth={2.5}
+                className={cx("shrink-0 text-accent", level !== effort && "invisible")}
+              />
             </CardMenuItem>
-          </>
-        )}
+          ))}
         {fast && (
           <div data-menu-static className="flex min-h-7 items-center gap-2 px-2 py-1 text-body">
             <Zap size={13} className="shrink-0 text-fg-muted" />
@@ -870,7 +857,7 @@ export function filterModelRows(groups: ModelGroup[], provider: string, filter: 
 
 /** The model pill's name: the model's, clipped in a compact composer. The effort has its own pill. */
 export function pillLabel(model?: string | null, compact = false): string {
-  const name = model || "Default model";
+  const name = model && model !== "default" ? model : "Model";
   return compact && name.length > 14 ? `${clip(name, 13)}…` : name;
 }
 
@@ -921,27 +908,43 @@ export function pickerModels(
       efforts = listed?.efforts ?? [];
       effort = defaultEffort(listed, efforts);
     }
-    models = models.map((choice) => ({
-      ...choice,
-      name: harness?.models.find((entry) => entry.id === choice.value)?.name || choice.name || choice.value,
-    }));
-    return { models, model: m?.current, efforts: orderEfforts(efforts), effort };
+    const id = harness?.id ?? thread.harness?.id ?? "";
+    const visible = concreteModels(
+      id,
+      models.map((choice) => ({
+        id: choice.value,
+        name: harness?.models.find((entry) => entry.id === choice.value)?.name || choice.name || choice.value,
+        description: choice.description,
+      })),
+    );
+    return {
+      models: visible.map(({ id, name, description }) => ({ value: id, name, description })),
+      model: listedModel(id, visible, m?.current)?.id ?? m?.current,
+      efforts: orderEfforts(efforts),
+      effort,
+    };
   }
   if (harness?.models.length) {
     // A stale default (a model the harness no longer lists) falls back to the model an open
     // built-in thread is on, else the harness's first.
-    const listed = harness.models.some((m) => m.id === effective.model);
+    const visible = concreteModels(harness.id, harness.models);
     const current = harness.builtin ? selectOption(knownConfig, "model")?.current : undefined;
-    const model = listed
-      ? effective.model
-      : (harness.models.find((m) => m.id === current)?.id ?? harness.models[0]?.id);
-    const entry = harness.models.find((m) => m.id === model);
+    const entry =
+      listedModel(harness.id, visible, effective.model) ??
+      listedModel(harness.id, visible, current) ??
+      firstModel(harness.id, visible);
+    const model = entry?.id;
     const efforts = entry?.efforts ?? [];
     const effort =
       effective.effort && efforts.includes(effective.effort)
         ? effective.effort
         : defaultEffort(entry, efforts);
-    return { models: listedModels(harness), model, efforts: orderEfforts(efforts), effort };
+    return {
+      models: visible.map((m) => ({ value: m.id, name: m.name })),
+      model,
+      efforts: orderEfforts(efforts),
+      effort,
+    };
   }
   // A new thread on an external harness that has not listed its models yet: its own choice, never
   // another thread's. `knownConfig` is whichever thread happens to be open, so it can only speak for
@@ -1024,9 +1027,6 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const engineReady = useApp((s) => (host ? s.connectedHosts.includes(host) : s.engine.phase === "ready"));
 
   const { models, efforts, model, effort } = pickerModels(thread, harness, effective, knownConfig);
-  // The model's own entry: what its effort levels are, and where the reset returns to.
-  const modelEntry = harness?.models.find((m) => m.id === model);
-  const defaultLevel = defaultEffort(modelEntry, efforts);
   const fast = thread?.configOptions.find((o) => o.id === "fast" && o.type === "boolean");
   const harnessName = harness?.name ?? "This harness";
   const effortReason = controlDisabledReason("effort", caps, harnessName);
@@ -1101,7 +1101,9 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   ];
   const groups: ModelGroup[] = ordered.map((h) => {
     const isCurrent = h.id === providerId;
-    const listed = isCurrent ? models : h.models.map((m) => ({ value: m.id, name: m.name }));
+    const listed = isCurrent
+      ? models
+      : concreteModels(h.id, h.models).map((m) => ({ value: m.id, name: m.name }));
     return {
       harness: h,
       blocked: unavailableReason(h) ?? (isCurrent || canSwitch ? undefined : "Stop the turn to switch"),
@@ -1183,8 +1185,11 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   };
 
   // A catalog name is shown as it is; a bare id reads without its `provider/` prefix.
-  const catalogName = modelEntry?.name || models.find((item) => item.value === model)?.name;
-  const displayName = catalogName && catalogName !== model ? catalogName : modelName(model ?? undefined);
+  const catalogName = models.find((item) => item.value === model)?.name;
+  const displayName =
+    catalogName && catalogName !== model
+      ? catalogName
+      : modelName(usageModelId(providerId, model ?? undefined));
   const label = pillLabel(displayName, compact);
   // Why the current harness's model is not this card's to change (one that picks its own).
   const modelReason = controlDisabledReason("model", caps, harnessName);
@@ -1270,7 +1275,6 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
             model={displayName ?? label}
             levels={efforts}
             effort={effort}
-            defaultLevel={defaultLevel}
             effortReason={effortReason}
             fast={!!fast}
             fastOn={!!fast?.currentBool}

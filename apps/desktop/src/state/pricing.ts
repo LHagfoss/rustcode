@@ -27,7 +27,7 @@
 // Pure (no React, no store), so the page and its tests share one answer.
 
 import type { UsageCounts, UsageRow } from "../acp/rustcode";
-import { MODEL_ALIASES } from "../lib/modelNames";
+import { MODEL_ALIASES, usageModelId } from "../lib/modelNames";
 
 /** The day the prices below were last checked against the providers' list prices. */
 export const PRICE_DATE = "2026-11-12";
@@ -168,7 +168,7 @@ export function estimateUsd(
   model: string | undefined,
   counts: UsageCounts,
 ): number | undefined {
-  const price = priceOf(model);
+  const price = priceOf(usageModelId(harness, model));
   if (!price) return undefined;
   const tokens = normalize(harness, counts);
   if (!tokens) return undefined;

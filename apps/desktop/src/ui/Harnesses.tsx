@@ -17,8 +17,12 @@ import {
   accountSignIn,
   capabilityRows,
   commandLine,
+  concreteModels,
+  defaultEffort,
+  firstModel,
   groupHarnesses,
   harnessStatus,
+  listedModel,
   normalizeDefault,
   orderHarnesses,
   selectOption,
@@ -721,18 +725,22 @@ export function DefaultsForm({
     [threads],
   );
   const models = harness?.models.length
-    ? harness.models.map((m) => ({ value: m.id, label: m.name, efforts: m.efforts }))
+    ? concreteModels(harness.id, harness.models)
     : harness?.builtin
       ? (selectOption(known, "model")?.choices ?? []).map((c) => ({
-          value: c.value,
-          label: c.name,
+          id: c.value,
+          name: c.name,
           efforts: selectOption(known, "effort")?.choices.map((e) => e.value) ?? [],
         }))
       : [];
-  const efforts = models.find((m) => m.value === value.model)?.efforts ?? models[0]?.efforts ?? [];
+  const model = listedModel(value.harness, models, value.model) ?? firstModel(value.harness, models);
+  const efforts = model?.efforts ?? [];
+  const effort =
+    value.effort && efforts.includes(value.effort) ? value.effort : defaultEffort(model, efforts);
+  const effortOptions = efforts.map((e) => ({ value: e, label: effortLabel(e) }));
   const problem = validateDefault(snapshot, value);
   const set = (next: Partial<NewThreadChoice>) => {
-    const merged = { ...value, ...next };
+    const merged = { ...value, model: model?.id ?? value.model, ...next };
     onChange(harness?.models.length || next.harness ? normalizeDefault(snapshot, merged) : merged);
   };
   return (
@@ -750,50 +758,43 @@ export function DefaultsForm({
         />
         <SelectRow
           label="Model"
-          value={value.model ?? ""}
+          value={model?.id ?? ""}
           disabled={!models.length}
-          onChange={(model) => set({ model: model || null })}
-          options={[
-            {
-              value: "",
-              label: models.length
-                ? "Harness default"
-                : listing
-                  ? "Loading models…"
-                  : harness?.builtin
-                    ? "Open a thread to list models"
-                    : "Harness default",
-            },
-            ...models.map((m) => ({ value: m.value, label: m.label })),
-          ]}
+          onChange={(model) => set({ model })}
+          options={
+            models.length
+              ? models.map((m) => ({ value: m.id, label: m.name }))
+              : [
+                  {
+                    value: "",
+                    label: listing
+                      ? "Loading models…"
+                      : (value.model !== "default" && value.model) || "Managed by harness",
+                  },
+                ]
+          }
         />
         <div className="flex items-center justify-between gap-4 px-4 py-3">
           <span className="text-body">Effort</span>
           {harness && !harness.capabilities.effort ? (
             <span className="text-callout text-fg-faint">{harness.name} has no effort setting</span>
-          ) : efforts.length && (value.effort ? efforts.length <= 4 : efforts.length < 4) ? (
+          ) : efforts.length > 0 && efforts.length <= 4 ? (
             // Two to four efforts are all named at once, so the choice reads without a menu.
             <Choice
               label="Effort"
-              value={value.effort ?? ""}
-              onChange={(effort) => set({ effort: effort || null })}
-              options={[
-                ...(value.effort ? [] : [{ value: "", label: "Default" }]),
-                ...efforts.map((e) => ({ value: e, label: effortLabel(e) })),
-              ]}
+              value={effort ?? ""}
+              onChange={(effort) => set({ effort })}
+              options={effortOptions}
             />
           ) : efforts.length ? (
             <Select
               label="Effort"
-              value={value.effort ?? ""}
-              onChange={(effort) => set({ effort: effort || null })}
-              options={[
-                ...(value.effort ? [] : [{ value: "", label: "Default" }]),
-                ...efforts.map((e) => ({ value: e, label: effortLabel(e) })),
-              ]}
+              value={effort ?? ""}
+              onChange={(effort) => set({ effort })}
+              options={effortOptions}
             />
           ) : (
-            <span className="text-callout text-fg-faint">Model default</span>
+            <span className="text-callout text-fg-faint">Managed by model</span>
           )}
         </div>
       </div>
