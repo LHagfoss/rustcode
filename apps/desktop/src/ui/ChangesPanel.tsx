@@ -13,7 +13,7 @@ import { useApp } from "../state/store";
 import { isRunning } from "../state/thread";
 import { Patch } from "./DiffView";
 import { ChevronRight, CircleCheck, RefreshCw } from "./icons";
-import { Cluster, ClusterButton, cx, Segments, Spinner, Tooltip } from "./primitives";
+import { ClusterButton, cx, Segments, Spinner } from "./primitives";
 import { DiffCount } from "./Rows";
 
 const STATUS_TINT: Record<string, string> = {
@@ -88,13 +88,13 @@ function FileSection({
   const [collapsed, setCollapsed] = useState(false);
   const lines = useMemo(() => parsePatch(chunk ?? []), [chunk]);
   return (
-    <section className="mb-3">
+    <section className="mb-1">
       <button
         type="button"
         aria-expanded={!collapsed}
         onClick={() => setCollapsed(!collapsed)}
         // Full-bleed while it holds its place: nothing of the file above shows beside it.
-        className="sticky top-0 z-10 -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-2 bg-surface-2 px-4 py-1.5 text-left hover:bg-fill-subtle"
+        className="sticky top-0 z-10 -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-2 bg-bg px-4 py-1.5 text-left hover:bg-fill-subtle"
       >
         <ChevronRight
           size={12}
@@ -116,11 +116,11 @@ function FileSection({
       </button>
       {!collapsed &&
         (lines.length ? (
-          <div className="mb-2 ml-2">
+          <div className="mb-2">
             <Patch lines={lines} path={file.path} mode={mode} />
           </div>
         ) : (
-          <p className="mb-2 ml-2 px-2 py-1 text-caption text-fg-faint">
+          <p className="mb-2 px-2 py-1 text-caption text-fg-faint">
             {file.binary ? "A binary file: no lines to show." : "No text diff to show."}
           </p>
         ))}
@@ -149,7 +149,7 @@ export function ChangesPanel() {
   // Split is measured on this pane's own column, not the window: a wide window
   // with a narrow panel still has no room for two columns.
   const [bodyRef, bodyWidth] = useDiffWidth<HTMLDivElement>();
-  const { mode, picked, wide } = useDiffLayout(bodyWidth);
+  const { mode, wide } = useDiffLayout(bodyWidth);
 
   const load = useCallback(async () => {
     if (!cwd) return;
@@ -197,55 +197,48 @@ export function ChangesPanel() {
     [data],
   );
 
+  const readAt = loadedAt
+    ? new Date(loadedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : undefined;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 px-3">
-        <span className="font-semibold text-body">Uncommitted</span>
+      {/* One bar: what changed, the layout when there is room for two columns, and a reload. The
+          panel's tab already says "Changes", and the branch is on the Details card. */}
+      <div className="flex h-9 shrink-0 items-center gap-2 px-3 text-callout tabular">
+        {data && !error ? (
+          <>
+            <span className="font-semibold">
+              {data.files.length} file{data.files.length === 1 ? "" : "s"}
+            </span>
+            <span className="text-success">+{totals.added}</span>
+            <span className="text-danger">−{totals.removed}</span>
+          </>
+        ) : null}
         <span className="flex-1" />
-        <Tooltip label={wide ? "Unified or side by side" : "Side by side needs a wider view"}>
-          <span>
-            <Segments
-              label="Layout"
-              value={mode}
-              onChange={(v) => setDiffMode(v)}
-              options={[
-                { value: "unified", label: "Unified" },
-                { value: "split", label: "Split", disabled: !wide },
-              ]}
-            />
-          </span>
-        </Tooltip>
-        <Cluster>
-          <ClusterButton label="Reload" onClick={() => void load()}>
-            {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}
-          </ClusterButton>
-        </Cluster>
-      </div>
-      <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {error && <p className="text-callout text-fg-muted">{error}</p>}
-        {!wide && picked === "split" && (
-          <p className="mb-3 text-caption text-fg-faint">
-            Side by side needs 900px of width here; these files read unified until then.
-          </p>
+        {wide && (
+          <Segments
+            label="Layout"
+            value={mode}
+            onChange={(v) => setDiffMode(v)}
+            options={[
+              { value: "unified", label: "Unified" },
+              { value: "split", label: "Split" },
+            ]}
+          />
         )}
+        <ClusterButton
+          label="Reload"
+          tooltip={readAt ? `Reload (read at ${readAt})` : "Reload"}
+          onClick={() => void load()}
+        >
+          {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}
+        </ClusterButton>
+      </div>
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        {error && <p className="text-callout text-fg-muted">{error}</p>}
         {!error && data && (
           <>
-            <div className="mb-0.5 flex items-baseline gap-2 text-callout tabular">
-              <span className="font-semibold">
-                {data.files.length} file{data.files.length === 1 ? "" : "s"}
-              </span>
-              <span className="text-success">+{totals.added}</span>
-              <span className="text-danger">−{totals.removed}</span>
-              <span className="flex-1" />
-              {loadedAt && (
-                <span className="text-fg-faint">
-                  {new Date(loadedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
-                </span>
-              )}
-            </div>
-            <p className="mb-3 text-caption text-fg-muted">
-              Uncommitted and untracked changes{data.branch ? ` on ${data.branch}` : ""}.
-            </p>
             {!data.files.length && (
               <div className="flex flex-col items-center gap-2 py-10 text-callout text-fg-muted">
                 <CircleCheck size={18} />

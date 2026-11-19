@@ -1255,25 +1255,27 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   requests, Thread). Overview uses a 280px card sized to its contents, with workspace actions,
   branch, Changes, delegates and context usage. It previews up to three active delegates, with
   the remaining agents available on demand. The detailed sections are under More thread details.
-  The other views use a card **docked** at the window's right edge, beside the chat
-  column and inside the chat view's row (`ui/ChatView.tsx`), so it is never drawn
-  over the board, the review or the compare view. It is the card it always was —
-  `rounded-2xl` in the same glass and elevation as every other card (`.rc-glass` +
-  `-strong` + `shadow-2`), inset 12px from the header's foot and from the window's
-  right and bottom edges — and now it runs the full height between them, so
-  nothing about its size depends on the composer. The chat column is `flex-1` and
-  narrows by the card: the lane re-centres in the room that is left and the
-  transcript stops at the card's edge rather than scrolling under it. The header
-  floats above both, and the card draws above the header's glass (the card's
-  `z-20` against the header's `z-10`): the glass fades 24px past its foot, and
-  that fade stops at the card's top edge instead of washing over it. The card
-  itself starts `HEADER_HEIGHT` down, so it never covers the header's controls,
-  and the dock around it carries no z-index of its own, so the empty room above
-  the card never takes a click meant for them.
-  A pane's header row is a `HEADER_HEIGHT` band inside the card
-  with a segmented switch between the views and a close button, divided from the
-  view by a hairline; views add a slim toolbar (`h-9`) under it. The card draws
-  520px wide by default and never wider than 760, 70% of the window, or the row
+  The other views use a card **floating** over the chat view's row at the window's
+  right edge (`ui/ChatView.tsx`), so it is never drawn over the board, the review or
+  the compare view. Every view draws on one surface, the Details card's: the chat's
+  own `bg-bg` with a hairline `border-border` and `rounded-2xl`, inset 12px from the
+  header's foot and the window's right edge. It is as tall as its content, up to
+  12px above the window's bottom edge; nothing in the chat (the composer included)
+  sets that cap. The chat column keeps the row's whole
+  width, so the transcript's scrollbar stays at the window's edge; the card
+  publishes the room it takes as `--rc-panel-room` on the row, and the lane pads by
+  it (`.rc-lane-pad` on a scroller, `.rc-lane-inset` on an absolute box, index.css),
+  so the lane re-centres in the room that is left. The header floats above both,
+  and the card draws above the header's glass (`z-20` against the header's
+  `z-10`). The card starts `HEADER_HEIGHT` down, so it never covers the header's
+  controls, and the dock around it takes no pointer and carries no z-index, so the
+  chat under it still scrolls and the room above the card never takes a click
+  meant for the header.
+  A pane's header row is a 44px band with a segmented switch between the views and
+  a close button, with no rule under it; a view adds one slim toolbar (`h-9`):
+  Changes says the file count and `+/−` lines, the Unified/Split switch when the
+  pane is wide enough for split, and a reload. The card draws
+  520px wide by default and never wider than 640, 70% of the window, or the row
   less the 360px the chat column always keeps, nor narrower than 360; it is
   fitted down when the window or the row cannot hold what was asked and comes back
   when it can. The width is kept per thread, with the last one used as what a

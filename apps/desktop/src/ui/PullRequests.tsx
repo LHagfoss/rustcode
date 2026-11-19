@@ -79,7 +79,6 @@ import { Markdown } from "./Markdown";
 import { addFeedbackToThread, PullDiff } from "./PullDiff";
 import {
   Callout,
-  Cluster,
   ClusterButton,
   cx,
   MenuContent,
@@ -742,7 +741,7 @@ export function PullsPanel() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* The panel's tab already says "Pull requests": the bar holds the state filter or the way back. */}
-      <div className="flex h-9 shrink-0 items-center gap-2 px-3 pt-2">
+      <div className="flex h-9 shrink-0 items-center gap-2 px-3">
         {viewing !== null && cwd ? (
           <button
             type="button"
@@ -767,11 +766,9 @@ export function PullsPanel() {
           />
         )}
         <span className="flex-1" />
-        <Cluster>
-          <ClusterButton label="Reload" onClick={reload}>
-            {asked ? <Spinner size={12} /> : <RefreshCw size={13} />}
-          </ClusterButton>
-        </Cluster>
+        <ClusterButton label="Reload" onClick={reload}>
+          {asked ? <Spinner size={12} /> : <RefreshCw size={13} />}
+        </ClusterButton>
       </div>
       {viewing !== null && cwd ? (
         <PullView key={`${scope}#${viewing}`} cwd={cwd} host={host} number={viewing} />

@@ -1,6 +1,11 @@
 // Thread Details is a compact, content-height card. Changes, Pull requests and
-// the beside thread share the wider resizable pane. Both share a row with the
-// chat on wide windows and use an overlay when the window is narrow.
+// the beside thread share the wider resizable pane. Every view draws on one
+// surface, the chat's own dark ground with a hairline edge, and is only as tall
+// as its content. On a wide window the card floats over the chat's row: the
+// transcript keeps the row's full width (its scrollbar stays at the window's
+// edge) and pads its lane by the room the card takes, published on the row as
+// `--rc-panel-room`, so the lane stays centred in what is left. A narrow window
+// opens it as a sheet over a scrim instead.
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
@@ -38,7 +43,7 @@ type Kind = NonNullable<AppState["panel"]>;
 
 /** The card's own bounds, in px, and the width it starts with. */
 export const MIN = 360;
-export const MAX = 760;
+export const MAX = 640;
 export const DEFAULT_WIDTH = 520;
 /** The room the chat column always keeps of the row, however wide the card asks to be. */
 export const CHAT_MIN = 360;
@@ -52,11 +57,12 @@ const KEY = "rustcode.rightPanelWidth";
 /** The gap the card keeps from the header's foot and from the window's right and bottom edges. */
 const CARD_GAP = 12;
 const DETAILS_WIDTH = 280;
-const DETAILS_SURFACE = "rounded-2xl border border-border bg-bg";
 /** The strip the resize edge straddles: a `-left-1 w-2` handle, half either side of the card's edge. */
 const HANDLE = 8;
 /** The surface a card of the right panel is drawn on: the details card and a pane alike. */
-const CARD_SURFACE = "rc-glass rc-glass-strong rounded-2xl shadow-2";
+const CARD_SURFACE = "rounded-2xl border border-border bg-bg";
+/** The row is told when the card's width moves with it, so the lane's padding follows in step. */
+const MOVING = "rc-panel-moving";
 /**
  * A sheet is opaque: it opens over a scrim that is already blurred, and one filter never stacks on
  * another. It sits on the chat's own `bg-bg`, as the settings panel does, so a card or a picture
@@ -165,6 +171,8 @@ export function RightPanel() {
   // until the first measurement, when the stored width stands as it is.
   const [row, setRow] = useState(0);
   const dock = useRef<HTMLDivElement>(null);
+  // The row the card floats over, which carries `--rc-panel-room` for the chat's lane.
+  const rowEl = useRef<HTMLElement | null>(null);
   const stopRow = useRef<(() => void) | null>(null);
   // The surface that is showing, and the element that had the focus before it opened.
   const surface = useRef<HTMLElement>(null);
@@ -208,7 +216,8 @@ export function RightPanel() {
   // re-applied after any other render, so a streaming thread mid-drag does not
   // snap the card back to the width it started from.
   useLayoutEffect(() => {
-    dock.current?.style.setProperty("--rc-panel-width", `${drag.current?.live ?? card}px`);
+    publish(drag.current?.live ?? card);
+    rowEl.current?.classList.toggle(MOVING, motion.enabled && !drag.current);
   });
 
   // The card and the chat share the row: the panel draws no wider than the room
@@ -218,7 +227,13 @@ export function RightPanel() {
     dock.current = el;
     stopRow.current?.();
     stopRow.current = null;
+    // A sheet takes no room from the row: the lane gets its whole width back.
+    if (!el) {
+      rowEl.current?.style.removeProperty("--rc-panel-room");
+      rowEl.current?.classList.remove(MOVING);
+    }
     const parent = el?.parentElement;
+    rowEl.current = parent ?? null;
     if (!parent) return;
     const measure = () => setRow(parent.clientWidth);
     measure();
@@ -246,6 +261,13 @@ export function RightPanel() {
     restoreTo.current = null;
   }, [open, kind]);
 
+  // The card's width, and the room it takes from the chat's lane: the card, its gap and the strip
+  // its resize edge straddles, or nothing while it is closed.
+  function publish(width: number) {
+    dock.current?.style.setProperty("--rc-panel-width", `${width}px`);
+    rowEl.current?.style.setProperty("--rc-panel-room", open ? `${width + HANDLE + CARD_GAP}px` : "0px");
+  }
+
   const commit = (next: number) => {
     setWidth(next);
     persist(threadId, next);
@@ -266,7 +288,9 @@ export function RightPanel() {
     if (!d) return;
     d.moved = d.moved || e.clientX !== d.startX;
     d.live = Math.min(Math.max(MIN, Math.round(card - (e.clientX - d.startX))), widest);
-    dock.current?.style.setProperty("--rc-panel-width", `${d.live}px`);
+    // A drag is followed frame by frame, not eased after.
+    rowEl.current?.classList.remove(MOVING);
+    publish(d.live);
   };
 
   const onResizeEnd = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -275,7 +299,7 @@ export function RightPanel() {
     if (!d) return;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     if (d.moved) commit(d.live);
-    else dock.current?.style.setProperty("--rc-panel-width", `${card}px`);
+    else publish(card);
   };
 
   const onResizeKey = (e: React.KeyboardEvent) => {
@@ -326,11 +350,7 @@ export function RightPanel() {
   const contents = kind && (
     <>
       {!compact && (
-        <div
-          data-tauri-drag-region
-          style={{ height: HEADER_HEIGHT }}
-          className="flex shrink-0 items-center gap-2 border-border border-b px-2"
-        >
+        <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 px-2">
           {/* The views keep their labels and scroll before the close button leaves the row. */}
           <div className="flex min-w-0 items-center overflow-x-auto">
             <div className="flex shrink-0 items-center">
@@ -393,7 +413,7 @@ export function RightPanel() {
             if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
           }}
           className={cx(
-            compact ? DETAILS_SURFACE : SHEET_SURFACE,
+            compact ? CARD_SURFACE : SHEET_SURFACE,
             "absolute right-0 flex flex-col overflow-hidden outline-none transition-[opacity,translate] duration-200 ease-snappy",
             compact
               ? "top-14 right-3 max-h-[calc(100%_-_4.25rem)] w-[min(88vw,280px)]"
@@ -412,13 +432,11 @@ export function RightPanel() {
       ref={attachDock}
       aria-hidden={!open}
       inert={!open}
-      // The dock is a spacer, not a surface: it carries no z-index, so the transparent room above
-      // the card stays under the header (`z-10`, ui/MainHeader.tsx) and never takes a click meant
-      // for the header's right-hand controls. The card inside it is the part that rises.
-      className={cx(
-        "relative flex min-h-0 shrink-0 justify-end overflow-clip",
-        !open && "pointer-events-none",
-      )}
+      // The dock floats over the row's right edge and takes no pointer itself: the transcript under
+      // it still scrolls, and it carries no z-index, so the room above the card stays under the
+      // header (`z-10`, ui/MainHeader.tsx) and never takes a click meant for the header's
+      // right-hand controls. The card inside it is the part that rises and takes the pointer.
+      className="pointer-events-none absolute inset-y-0 right-0 flex min-h-0 justify-end overflow-clip"
       style={
         {
           // The card's width and the 12px gap and the strip its resize edge straddles.
@@ -439,19 +457,23 @@ export function RightPanel() {
           if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
         }}
         className={cx(
-          compact ? cx("self-start", DETAILS_SURFACE) : CARD_SURFACE,
+          CARD_SURFACE,
+          // As tall as what it shows, up to the room the row gives it.
+          "self-start",
           // Above the header's glass (`z-10`): the header spans the whole view and fades 24px past
           // its foot, which would otherwise wash over the card's top 12px. The card starts below
           // the header's band, so nothing of it covers the header's own controls.
           "relative z-20 flex flex-col overflow-hidden outline-none transition-opacity duration-200",
-          open ? "opacity-100" : "opacity-0",
+          open ? "pointer-events-auto opacity-100" : "opacity-0",
         )}
         style={{
           width: "var(--rc-panel-width)",
           marginTop: HEADER_HEIGHT + CARD_GAP,
           marginRight: CARD_GAP,
-          marginBottom: compact ? CARD_GAP : `max(${CARD_GAP}px, 20dvh)`,
-          maxHeight: compact ? `calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px)` : undefined,
+          // Fit to the content, capped by the window alone: the card may run down to 12px above the
+          // window's bottom edge, whatever the composer or anything else in the chat is doing.
+          marginBottom: CARD_GAP,
+          maxHeight: `calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px)`,
         }}
       >
         {contents}

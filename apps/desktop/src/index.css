@@ -1292,6 +1292,39 @@
 /* The chat's bottom edge: a short fade to the pane, pinned behind the composer (ui/ChatView.tsx).
    The card floats over it, so text shows through its glass higher up and fades at the very bottom
    rather than stopping on a hard edge. */
+/* The chat lane's side gutters (`px-3 sm:px-12`), less the room the right panel's card takes from
+   the row it floats over (`--rc-panel-room`, ui/RightPanel.tsx). The transcript keeps the row's
+   whole width, so its scrollbar stays at the window's edge, and the lane centres in what is left.
+   `rc-lane-pad` pads a scroller, `rc-lane-inset` places an absolute box. */
+.rc-lane-pad,
+.rc-lane-inset {
+  --rc-lane-gutter: 0.75rem;
+}
+@media (width >= 40rem) {
+  .rc-lane-pad,
+  .rc-lane-inset {
+    --rc-lane-gutter: 3rem;
+  }
+}
+.rc-lane-pad {
+  padding-left: var(--rc-lane-gutter);
+  padding-right: calc(var(--rc-lane-gutter) + var(--rc-panel-room, 0px));
+}
+.rc-lane-inset {
+  left: var(--rc-lane-gutter);
+  right: calc(var(--rc-lane-gutter) + var(--rc-panel-room, 0px));
+}
+/* The room that is the lane's, measured for the composer's width and the toasts' centre. */
+.rc-lane-room {
+  right: var(--rc-panel-room, 0px);
+}
+/* Opening or closing the card eases the lane with it, on the card's own 200ms. */
+.rc-panel-moving .rc-lane-pad {
+  transition: padding-right 200ms var(--ease-snappy);
+}
+.rc-panel-moving .rc-lane-inset {
+  transition: right 200ms var(--ease-snappy);
+}
 .rc-composer-fade {
   height: 56px;
   background: linear-gradient(to bottom, transparent 0, var(--rc-bg) 56px);
