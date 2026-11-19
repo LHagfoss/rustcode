@@ -1105,6 +1105,32 @@ pub enum OutsideCommands {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// The machine owner's passkeys, which approve a sign-in on the public
+    /// sign-in page without a code
+    Owner {
+        #[command(subcommand)]
+        command: OwnerCommands,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum OwnerCommands {
+    /// Print a link that adds a passkey on the public sign-in page. Open it
+    /// on the device that keeps the passkey; it works once, for 10 minutes
+    AddPasskey {
+        /// What RustCode calls the passkey, such as the device it is on
+        #[arg(long, default_value = "Passkey")]
+        name: String,
+    },
+    /// List the owner's passkeys
+    Passkeys {
+        /// Print them as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a passkey by its id, a prefix of it, or its name; it stops
+    /// approving sign-ins at once
+    RemovePasskey { passkey: String },
 }
 
 #[derive(clap::Subcommand, Debug)]

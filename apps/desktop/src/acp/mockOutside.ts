@@ -68,8 +68,10 @@ export class MockOutside {
     recent: Array<Record<string, Json>>;
     /** Hosted agents waiting on the public sign-in page (`_mock/outside/signin` stages one). */
     signIns: Array<Record<string, Json>>;
+    /** The owner's passkeys; a link "opened" by the mock adds one. */
+    passkeys: Array<Record<string, Json>>;
     next: number;
-  } = { grants: [], pending: [], recent: [], signIns: [], next: 1 };
+  } = { grants: [], pending: [], recent: [], signIns: [], passkeys: [], next: 1 };
 
   private list(): JsonObject {
     return {
@@ -86,6 +88,7 @@ export class MockOutside {
       publicError: null,
       machineName: "Mock Mac",
       levels: MOCK_OUTSIDE_LEVELS,
+      passkeys: this.outside.passkeys,
     } as unknown as JsonObject;
   }
 
@@ -189,6 +192,26 @@ export class MockOutside {
       }
       case "_rustcode/outside/code":
         return { code: "K7QM-4XPD", scope: str(params.scope) ?? "read_only", minutes: 10 };
+      case "_rustcode/outside/passkey/add": {
+        // The mock has no browser to finish the ceremony: the link adds the
+        // passkey at once, as opening it on a phone would.
+        const id = `pk${this.outside.next++}`;
+        this.outside.passkeys.push({
+          id,
+          name: str(params.name) ?? "Passkey",
+          host: "rc.example.com",
+          createdAt: new Date().toISOString(),
+          lastUsedAt: null,
+        });
+        return { link: `https://rc.example.com/owner/passkey?ticket=${id}`, minutes: 10 };
+      }
+      case "_rustcode/outside/passkey/remove": {
+        const id = str(params.id);
+        const item = this.outside.passkeys.find((passkey) => passkey.id === id);
+        if (!item) throw Object.assign(new Error(`no passkey matches ${id}`), { code: -32602 });
+        this.outside.passkeys = this.outside.passkeys.filter((passkey) => passkey !== item);
+        return { removed: item };
+      }
       // Mock-window hook: a hosted agent waits on the public sign-in page.
       case "_mock/outside/signin": {
         const id = `signin${this.outside.next++}`;

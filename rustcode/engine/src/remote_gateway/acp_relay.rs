@@ -468,6 +468,8 @@ mod tests {
             "_rustcode/outside/list",
             "_rustcode/outside/signin",
             "_rustcode/outside/code",
+            "_rustcode/outside/passkey/add",
+            "_rustcode/outside/passkey/remove",
         ] {
             assert!(allowed(method), "{method}");
         }
