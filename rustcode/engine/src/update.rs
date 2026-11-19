@@ -20,6 +20,9 @@ const GITHUB_REPO: &str = "LHagfoss/rustcode";
 const GITHUB_API_LATEST_RELEASE: &str =
     "https://api.github.com/repos/LHagfoss/rustcode/releases/latest";
 const SHA256_MANIFEST_NAME: &str = "SHA256SUMS";
+/// The web app a hub serves to a browser (`bun run build:hub`), one archive
+/// for every platform: its files sit at the archive's root.
+const WEB_ASSET_NAME: &str = "rustcode-web.tar.gz";
 
 /// Fallback formula URLs in the tap repo.
 const FORMULA_URLS: [&str; 2] = [
@@ -277,6 +280,100 @@ pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> 
     #[cfg(target_os = "macos")]
     sign_with_local_identity(&current_exe);
 
+    if let Err(error) = refresh_web_build(client, expected, &manifest, &current_exe).await {
+        println!("The web app was not updated: {error}");
+    }
+
+    Ok(())
+}
+
+/// `share/rustcode/web` beside the binary's `bin/`, where
+/// `orchestration::outside_web::web_dir` looks for the web app.
+fn web_install_dir(current_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    Some(current_exe.parent()?.parent()?.join("share/rustcode/web"))
+}
+
+/// Replace the web app beside the binary with this release's, so a hub
+/// serves the app that matches its engine. A release without the archive
+/// (every release before it was published) leaves the folder as it was.
+async fn refresh_web_build(
+    client: &reqwest::Client,
+    expected: Version,
+    manifest: &str,
+    current_exe: &std::path::Path,
+) -> Result<(), String> {
+    if checksum_for_asset(manifest, WEB_ASSET_NAME).is_err() {
+        return Ok(());
+    }
+    let target = web_install_dir(current_exe)
+        .ok_or_else(|| "no folder beside the binary for it".to_string())?;
+    let url = format!(
+        "https://github.com/{GITHUB_REPO}/releases/download/v{}/{WEB_ASSET_NAME}",
+        format_version(expected)
+    );
+    println!("Downloading {WEB_ASSET_NAME}...");
+    let _ = std::io::stdout().flush();
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "rustcode")
+        .send()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("download failed with HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("failed to read the download: {e}"))?;
+    verify_checksum_manifest(manifest, WEB_ASSET_NAME, &bytes)?;
+    install_web_build(&bytes, &target)?;
+    println!("Installed the web app in {}.", target.display());
+    Ok(())
+}
+
+/// Unpack the web archive into a folder beside `target`, then swap it in,
+/// so a hub never serves half of one build and half of another.
+fn install_web_build(bytes: &[u8], target: &std::path::Path) -> Result<(), String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("{} has no parent folder", target.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    let staging = tempfile::Builder::new()
+        .prefix(".web-update-")
+        .tempdir_in(parent)
+        .map_err(|e| format!("could not create a folder in {}: {e}", parent.display()))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("invalid tar archive: {e}"))?
+    {
+        let mut entry = entry.map_err(|e| format!("invalid tar entry: {e}"))?;
+        // `unpack_in` refuses entries that would land outside the folder.
+        entry
+            .unpack_in(staging.path())
+            .map_err(|e| format!("could not unpack the web app: {e}"))?;
+    }
+    if !staging.path().join("index.html").is_file() {
+        return Err(format!("{WEB_ASSET_NAME} has no index.html"));
+    }
+    let old = parent.join(".web-old");
+    let _ = std::fs::remove_dir_all(&old);
+    let had_old = target.exists();
+    if had_old {
+        std::fs::rename(target, &old)
+            .map_err(|e| format!("could not move {} aside: {e}", target.display()))?;
+    }
+    let staged = staging.keep();
+    if let Err(e) = std::fs::rename(&staged, target) {
+        let _ = std::fs::remove_dir_all(&staged);
+        if had_old {
+            let _ = std::fs::rename(&old, target);
+        }
+        return Err(format!("could not install {}: {e}", target.display()));
+    }
+    let _ = std::fs::remove_dir_all(&old);
     Ok(())
 }
 
@@ -580,6 +677,72 @@ mod tests {
             Some((0, 29, 6))
         );
         assert_eq!(installed_brew_version_from_output(""), None);
+    }
+
+    fn web_archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        for (path, data) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, *data).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn the_web_app_is_installed_beside_the_binary() {
+        assert_eq!(
+            web_install_dir(std::path::Path::new("/opt/rc/bin/rustcode")),
+            Some(std::path::PathBuf::from("/opt/rc/share/rustcode/web"))
+        );
+    }
+
+    #[test]
+    fn the_web_app_replaces_the_old_build_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("share/rustcode/web");
+        std::fs::create_dir_all(target.join("assets")).unwrap();
+        std::fs::write(target.join("assets/old.js"), "old").unwrap();
+        std::fs::write(target.join("index.html"), "old").unwrap();
+
+        let bytes = web_archive(&[("./index.html", b"new"), ("./assets/app-1234.js", b"js")]);
+        install_web_build(&bytes, &target).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("index.html")).unwrap(),
+            "new"
+        );
+        assert!(target.join("assets/app-1234.js").is_file());
+        assert!(!target.join("assets/old.js").exists());
+        let left: Vec<_> = std::fs::read_dir(target.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("web")]);
+    }
+
+    #[test]
+    fn a_web_archive_without_index_html_leaves_the_old_build() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("web");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("index.html"), "old").unwrap();
+
+        let bytes = web_archive(&[("./assets/app.js", b"js")]);
+        assert!(
+            install_web_build(&bytes, &target)
+                .unwrap_err()
+                .contains("index.html")
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("index.html")).unwrap(),
+            "old"
+        );
     }
 
     #[test]

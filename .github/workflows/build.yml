@@ -345,11 +345,40 @@ jobs:
                   name: rustcode-desktop-${{ runner.os }}
                   path: desktop-assets/*
 
+    # The web app a hub serves to a browser (`bun run build:hub`), the same
+    # for every platform. Installed as `share/rustcode/web` beside the CLI by
+    # install.sh, Homebrew and `rustcode update`.
+    web:
+        needs: verify-tag
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.3.14
+
+            - name: Build the web app
+              working-directory: apps/desktop
+              run: |
+                  bun install --frozen-lockfile
+                  bun run build:hub
+                  test -f dist-hub/index.html
+                  tar czf "$GITHUB_WORKSPACE/rustcode-web.tar.gz" -C dist-hub .
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: rustcode-web
+                  path: rustcode-web.tar.gz
+
     # Published as soon as the macOS CLI and app are ready: Homebrew and the
     # updaters need only those. release-rest attaches the other platforms.
     release:
         if: startsWith(github.ref, 'refs/tags/v')
-        needs: [build-macos, desktop-macos]
+        needs: [build-macos, desktop-macos, web]
         runs-on: ubuntu-latest
         steps:
             - name: Download macOS artifacts
@@ -358,6 +387,12 @@ jobs:
                   path: artifacts
                   pattern: rustcode-macos-*
                   merge-multiple: true
+
+            - name: Download the web app
+              uses: actions/download-artifact@v8
+              with:
+                  path: artifacts
+                  name: rustcode-web
 
             - name: Generate SHA256 manifest
               shell: bash
@@ -368,6 +403,7 @@ jobs:
                   files=(
                       "RustCode-${version}-macos-aarch64.app.zip"
                       rustcode-macos-aarch64.tar.gz
+                      rustcode-web.tar.gz
                   )
                   for file in "${files[@]}"; do
                       test -f "$file"
@@ -399,6 +435,8 @@ jobs:
                   ARM_SHA256=$(awk '$2 == "rustcode-macos-aarch64.tar.gz" {print $1}' artifacts/SHA256SUMS)
                   test -n "$ARM_SHA256"
                   echo "Computed ARM64 SHA256: $ARM_SHA256"
+                  WEB_SHA256=$(awk '$2 == "rustcode-web.tar.gz" {print $1}' artifacts/SHA256SUMS)
+                  test -n "$WEB_SHA256"
 
                   # 2. Clone your tap repository
                   git clone "https://x-access-token:${TAP_TOKEN}@github.com/${GH_USER}/homebrew-tap.git" tap-repo
@@ -418,8 +456,16 @@ jobs:
 
                       version "${TAG/v/}"
 
+                      # The web app a hub serves, found by the engine in
+                      # share/rustcode/web beside its bin/.
+                      resource "web" do
+                          url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-web.tar.gz"
+                          sha256 "${WEB_SHA256}"
+                      end
+
                       def install
                           bin.install "rustcode-macos-aarch64" => "rustcode"
+                          (pkgshare/"web").install resource("web")
                       end
                   end
                   EOF
@@ -459,6 +505,7 @@ jobs:
                       rustcode-linux-aarch64.tar.gz
                       rustcode-linux-x86_64.tar.gz
                       rustcode-macos-aarch64.tar.gz
+                      rustcode-web.tar.gz
                       rustcode-windows-x86_64.zip
                   )
                   for file in "${files[@]}"; do

@@ -87,8 +87,12 @@ routes, and the cookie on `/mcp`. Sessions are listed and signed out in
 Settings › Outside agents and with `rustcode outside owner sessions` /
 `sign-out`.
 
-Not yet: shipping the web build in the release archives (it is built and
-copied by hand), and per-session access levels (a session can do what a
+Each release publishes the web build as `rustcode-web.tar.gz`; `install.sh`,
+the Homebrew formula and `rustcode update` install it as `share/rustcode/web`
+beside the CLI.
+
+Not yet: the desktop app's own engine has no copy (a desktop hub uses
+`<config>/web`), and per-session access levels (a session can do what a
 paired desktop can).
 
 ## Phase 5 in practice

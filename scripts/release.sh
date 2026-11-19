@@ -1122,6 +1122,7 @@ phase_verify_release() {
         "RustCode-$VERSION-linux-x86_64.deb"
         "RustCode-$VERSION-linux-x86_64.tar.gz"
         "rustcode-windows-x86_64.zip"
+        "rustcode-web.tar.gz"
         "SHA256SUMS"
     )
     # A beta ships the macOS CLI and app only (build.yml).
@@ -1129,7 +1130,8 @@ phase_verify_release() {
         expected_assets=(
             "rustcode-macos-aarch64.tar.gz"
             "RustCode-$VERSION-macos-aarch64.app.zip"
-                "SHA256SUMS"
+            "rustcode-web.tar.gz"
+            "SHA256SUMS"
         )
     fi
 
