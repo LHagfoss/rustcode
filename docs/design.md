@@ -1252,7 +1252,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   When the control stacks under the text, the icon leaves the flow for the
   row's top right, so stacked controls share one left edge.
 - **Right panel:** one `RightPanel` for every side view (Details, Changes, Pull
-  requests, Thread): a card **docked** at the window's right edge, beside the chat
+  requests, Thread). Overview uses a 280px card sized to its contents, with workspace actions,
+  branch, Changes, delegates and context usage. It previews up to three active delegates, with
+  the remaining agents available on demand. The detailed sections are under More thread details.
+  The other views use a card **docked** at the window's right edge, beside the chat
   column and inside the chat view's row (`ui/ChatView.tsx`), so it is never drawn
   over the board, the review or the compare view. It is the card it always was —
   `rounded-2xl` in the same glass and elevation as every other card (`.rc-glass` +
@@ -1288,17 +1291,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   pointer, so nothing it draws can be reached. The panel belongs to the
   thread: each thread keeps the view it was last showing, and opening a thread
   restores exactly that (`state/store.ts` `panelByThread`, next to the width it
-  keeps in `ui/RightPanel.tsx`). A thread never seen opens closed, and nothing
-  ever opens the panel on its own — the header's buttons, the palette, a link
-  that peeks a thread and ⌘⌥B do. A view the thread cannot show when it comes
+  keeps in `ui/RightPanel.tsx`). A thread never seen opens on Overview in a wide window and closed in a narrow one. A view the thread cannot show when it comes
   back (Pull requests in a project without them, the Thread tab with nothing
-  peeked) opens nothing rather than a view the user did not pick. ⌘⌥B toggles
+  peeked) opens nothing rather than a view the user did not pick. ⌘⇧B toggles
   it, opening the thread's own view when it has one, else its overview
   (Details); closing it by hand is kept on that thread alone, so picking it
   again leaves it closed and another thread comes back to its own. Opening the
   thread its Thread tab shows ends the peek and returns the panel to that
   thread's own view, and a new thread ends it too. The new-thread screen opens
-  without a panel, though ⌘⌥B still opens one there. Settling the selected
+  without a panel, though ⌘⇧B still opens one there. Settling the selected
   thread while the chat is showing (its menu, the palette, the sidebar) closes
   the panel and leaves it for the new-thread screen in the same folder, with
   the same Undo the sidebar offers; settling from the board, review or compare

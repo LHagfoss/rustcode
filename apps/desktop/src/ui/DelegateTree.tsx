@@ -28,7 +28,7 @@ import { type CostTotals, costOf } from "../state/pricing";
 import { selectThread, useApp } from "../state/store";
 import { isRunning, stripHarnessMarkup } from "../state/thread";
 import { AgentAvatar, AgentTip } from "./AgentViews";
-import { ChevronRight, ListTree, MessageSquareText } from "./icons";
+import { Bot, ChevronRight, ListTree, MessageSquareText } from "./icons";
 import { Markdown } from "./Markdown";
 import { cx, Tooltip } from "./primitives";
 import { useEngineData } from "./settingsKit";
@@ -372,6 +372,62 @@ export function DelegateTree({
 export function DelegatedThreads({ threadId }: { threadId: string }) {
   const costs = useDelegateCosts();
   return <DelegateTree key={threadId} threadId={threadId} costs={costs} />;
+}
+
+export function DelegatePreview({
+  threadId,
+  expanded,
+  onToggle,
+}: {
+  threadId: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const views = useDelegateViews(threadId, undefined);
+  const agents: DelegateView[] = [];
+  const visit = (view: DelegateView) => {
+    agents.push(view);
+    view.children.forEach(visit);
+  };
+  views.forEach(visit);
+  const active = agents
+    .filter((view) => view.state === "needs" || view.state === "working")
+    .sort((a, b) => Number(b.state === "needs") - Number(a.state === "needs"));
+  const previous = agents.filter((view) => view.state !== "needs" && view.state !== "working");
+  const visible = active.slice(0, 3);
+  const remaining = [...active.slice(3), ...previous];
+  const row =
+    "flex min-h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout hover:bg-fill-subtle";
+  const renderAgent = (view: DelegateView) => (
+    <Tooltip key={view.id} label={view.title}>
+      <button type="button" className={row} onClick={() => selectThread(view.id)}>
+        <AgentAvatar harness={view.harness} state={view.state} className="size-5" />
+        <span className="min-w-0 flex-1 truncate">{view.title}</span>
+        <span className={cx("shrink-0 text-caption", STATE_TINT[view.state] ?? "text-fg-muted")}>
+          {AGENT_WORD[view.state]}
+        </span>
+      </button>
+    </Tooltip>
+  );
+  return (
+    <section aria-label="Delegates" className="flex flex-col gap-1">
+      <h3 className="px-2 font-medium text-caption text-fg-muted">Delegates</h3>
+      {visible.map(renderAgent)}
+      {remaining.length > 0 && (
+        <>
+          <button type="button" aria-expanded={expanded} className={row} onClick={onToggle}>
+            <Bot size={16} className="shrink-0 text-fg-muted" />
+            <span className="flex-1">
+              {active.length > visible.length ? "More delegates" : "Previous agents"}
+            </span>
+            <span className="tabular text-fg-muted">{remaining.length}</span>
+            <ChevronRight size={12} className={cx("text-fg-faint", expanded && "rotate-90")} />
+          </button>
+          {expanded && <div className="max-h-36 overflow-y-auto">{remaining.map(renderAgent)}</div>}
+        </>
+      )}
+    </section>
+  );
 }
 
 /** A thread's delegates, named for a `Started` heading: one count for the whole branch. */

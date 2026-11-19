@@ -149,9 +149,11 @@ export type PanelKind = NonNullable<AppState["panel"]>;
 
 /**
  * The view a thread with no panel open might show: its own overview. Changes,
- * Pull requests and the Thread tab are a tab away. It is only what ⌘⌥B opens on
+ * Pull requests and the Thread tab are a tab away. It is only what ⌘⇧B opens on
  * a thread whose own panel was never opened; nothing opens it on its own.
  */
+export const PANEL_SHEET_AT = 980;
+
 export const DEFAULT_PANEL: PanelKind = "details";
 
 /** The memory without the oldest entries past `MAX_PANELS` (the map keeps insertion order). */
@@ -173,13 +175,15 @@ export function parsePanels(raw: unknown): Record<string, PanelKind | null> {
 
 /**
  * The panel a thread opens with: the view it was last showing, or none when it
- * was closed by hand — and none for a thread never seen. A view this project or
+ * was closed by hand. A new thread selection defaults to details when it fits. A view this project or
  * thread cannot show right now (Pull requests in a project without them, the
  * Thread tab with nothing peeked) opens nothing rather than something else.
  */
 function panelForThread(s: AppState, id: string | null): AppState["panel"] {
   if (!id) return null;
   const kept = s.panelByThread[id];
+  if (kept === undefined && typeof window !== "undefined" && window.innerWidth > PANEL_SHEET_AT)
+    return DEFAULT_PANEL;
   if (!kept) return null;
   if (kept === "pulls" && !s.agent?.pullRequests) return null;
   if (kept === "peek" && !s.peekId) return null;
@@ -201,7 +205,7 @@ function keptPanels(id: string | null, panel: AppState["panel"]): Record<string,
 
 /**
  * The state a thread opens with: selected, on the panel that thread was last
- * showing (none for one never seen, or one whose panel was closed by hand).
+ * showing, with a wide-window default for a thread never seen.
  */
 export function viewingThread(
   s: AppState,
@@ -234,7 +238,7 @@ export function showPanel(panel: PanelKind) {
   set({ panel, panelByThread: keptPanels(s.selectedId, panel) });
 }
 
-/** ⌘⌥B: the right panel open or closed, with this thread's own view, else the overview. */
+/** ⌘⇧B: the right panel open or closed, with this thread's own view, else the overview. */
 export function toggleRightPanel() {
   const s = get();
   const next = s.panel ? null : (panelForThread(s, s.selectedId) ?? DEFAULT_PANEL);

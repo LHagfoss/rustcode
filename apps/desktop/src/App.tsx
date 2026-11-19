@@ -81,7 +81,11 @@ function useShortcuts() {
       // this handler needs no change. A command the panel can change runs here;
       // the transcript matches "find in thread" itself.
       const command = shortcutFor(e);
-      if (command && ((command === "toggle-model-picker" && e.repeat) || runShortcut(command))) {
+      if (
+        command &&
+        ((e.repeat && (command === "toggle-model-picker" || command === "toggle-panel")) ||
+          runShortcut(command))
+      ) {
         e.preventDefault();
         return;
       }

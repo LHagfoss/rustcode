@@ -1,15 +1,6 @@
-// The right panel (docs/design.md, Right panel): one card docked at the window's
-// right edge for the thread's side views (Overview, Changes, Pull requests,
-// Thread). It is a sibling of the chat column inside the chat view's row, so the
-// chat keeps its place on the left and narrows by the card's width; the lane
-// re-centres in the room that is left (ui/ChatView.tsx). The card runs from the
-// header's foot to the window's bottom edge, inset by the same 12px gap on the
-// edges it meets, on the surface it always had. Its left edge drags and answers
-// the keyboard, its width is kept per thread, and it grows from and shrinks to
-// nothing over 200ms when it opens or closes. While it is closed its content
-// stays mounted, inert and unclickable, so nothing it draws can be reached. A
-// window narrower than 980px has no room for both columns: there the panel opens
-// as a sheet over a scrim instead, which Escape or a press on the scrim closes.
+// Thread Details is a compact, content-height card. Changes, Pull requests and
+// the beside thread share the wider resizable pane. Both share a row with the
+// chat on wide windows and use an overlay when the window is narrow.
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
@@ -32,6 +23,7 @@ import { relationshipOf } from "../acp/types";
 import { observeSize } from "../lib/resize";
 import { readStorage, writeStorage } from "../lib/storage";
 import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
+import { PANEL_SHEET_AT } from "../state/viewActions";
 import { X } from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
 import { cx, Segments, Tooltip } from "./primitives";
@@ -54,11 +46,13 @@ export const CHAT_MIN = 360;
 const STEP = 24;
 const STEP_LARGE = 96;
 /** A window no wider than this has no room for both columns: the panel opens as a sheet. */
-export const SHEET_AT = 980;
+export const SHEET_AT = PANEL_SHEET_AT;
 /** The width the card is kept under, per thread; the shared key is what a thread with none starts at. */
 const KEY = "rustcode.rightPanelWidth";
 /** The gap the card keeps from the header's foot and from the window's right and bottom edges. */
 const CARD_GAP = 12;
+const DETAILS_WIDTH = 280;
+const DETAILS_SURFACE = "rounded-2xl border border-border bg-bg";
 /** The strip the resize edge straddles: a `-left-1 w-2` handle, half either side of the card's edge. */
 const HANDLE = 8;
 /** The surface a card of the right panel is drawn on: the details card and a pane alike. */
@@ -196,7 +190,8 @@ export function RightPanel() {
   const open = !!panel;
   const kind = panel ?? shown;
   const sheet = panelIsSheet(viewport);
-  const card = panelWidth(width, viewport, row);
+  const compact = kind === "details";
+  const card = compact ? DETAILS_WIDTH : panelWidth(width, viewport, row);
   const widest = panelMax(viewport, row);
 
   // Width animates only for an open or a close: any other change (a tab, a
@@ -322,9 +317,7 @@ export function RightPanel() {
   }, [open, sheet]);
 
   const tabs: { value: Kind; label: string }[] = [
-    // The panel's first view is the overview: Properties, pulls, deliverables,
-    // the execution log and the rest of the details in one column (ui/ThreadDetails.tsx).
-    { value: "details", label: "Overview" },
+    { value: "details", label: "Details" },
     { value: "changes", label: "Changes" },
     ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
     ...(peekOn ? [{ value: "peek" as const, label: peekIsSideChat ? "Side chat" : "Thread" }] : []),
@@ -332,33 +325,35 @@ export function RightPanel() {
 
   const contents = kind && (
     <>
-      <div
-        data-tauri-drag-region
-        style={{ height: HEADER_HEIGHT }}
-        className="rule-b [--rc-rule-inset:0.5rem] flex shrink-0 items-center gap-2 pr-2 pl-2"
-      >
-        {/* The views keep their labels and scroll before the close button leaves the row. */}
-        <div className="flex min-w-0 items-center overflow-x-auto">
-          <div className="flex shrink-0 items-center">
-            {tabs.length > 1 ? (
-              <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
-            ) : (
-              <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
-            )}
+      {!compact && (
+        <div
+          data-tauri-drag-region
+          style={{ height: HEADER_HEIGHT }}
+          className="flex shrink-0 items-center gap-2 border-border border-b px-2"
+        >
+          {/* The views keep their labels and scroll before the close button leaves the row. */}
+          <div className="flex min-w-0 items-center overflow-x-auto">
+            <div className="flex shrink-0 items-center">
+              {tabs.length > 1 ? (
+                <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
+              ) : (
+                <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
+              )}
+            </div>
           </div>
+          <span className="flex-1" data-tauri-drag-region />
+          <Tooltip label={`Close (${panelKey})`}>
+            <button
+              type="button"
+              aria-label="Close panel"
+              onClick={() => setPanel(null)}
+              className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+            >
+              <X size={14} />
+            </button>
+          </Tooltip>
         </div>
-        <span className="flex-1" data-tauri-drag-region />
-        <Tooltip label={`Close (${panelKey})`}>
-          <button
-            type="button"
-            aria-label="Close panel"
-            onClick={() => setPanel(null)}
-            className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-          >
-            <X size={14} />
-          </button>
-        </Tooltip>
-      </div>
+      )}
       <Suspense fallback={<div className="flex-1" />}>
         {kind === "details" && <ThreadDetails />}
         {kind === "changes" && <ChangesPanel />}
@@ -398,8 +393,11 @@ export function RightPanel() {
             if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
           }}
           className={cx(
-            SHEET_SURFACE,
-            "absolute inset-y-0 right-0 flex w-[min(88vw,380px)] flex-col overflow-hidden rounded-l-2xl outline-none transition-[opacity,translate] duration-200 ease-snappy",
+            compact ? DETAILS_SURFACE : SHEET_SURFACE,
+            "absolute right-0 flex flex-col overflow-hidden outline-none transition-[opacity,translate] duration-200 ease-snappy",
+            compact
+              ? "top-14 right-3 max-h-[calc(100%_-_4.25rem)] w-[min(88vw,280px)]"
+              : "inset-y-0 w-[min(88vw,380px)] rounded-l-2xl",
             open ? "translate-x-0 opacity-100" : "translate-x-4 opacity-0",
           )}
         >
@@ -441,7 +439,7 @@ export function RightPanel() {
           if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
         }}
         className={cx(
-          CARD_SURFACE,
+          compact ? cx("self-start", DETAILS_SURFACE) : CARD_SURFACE,
           // Above the header's glass (`z-10`): the header spans the whole view and fades 24px past
           // its foot, which would otherwise wash over the card's top 12px. The card starts below
           // the header's band, so nothing of it covers the header's own controls.
@@ -452,11 +450,12 @@ export function RightPanel() {
           width: "var(--rc-panel-width)",
           marginTop: HEADER_HEIGHT + CARD_GAP,
           marginRight: CARD_GAP,
-          marginBottom: `max(${CARD_GAP}px, 20dvh)`,
+          marginBottom: compact ? CARD_GAP : `max(${CARD_GAP}px, 20dvh)`,
+          maxHeight: compact ? `calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px)` : undefined,
         }}
       >
         {contents}
-        {open && (
+        {open && !compact && (
           <div
             role="separator"
             aria-orientation="vertical"

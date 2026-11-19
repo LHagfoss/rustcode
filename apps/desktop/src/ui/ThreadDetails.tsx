@@ -1,30 +1,17 @@
-// The overview: the thread's right panel as one scrolling column of sections —
-// what it is (Properties), the pull requests its branches have, what it
-// delivered, what its turns cost, and the rare facts behind Details — each one
-// foldable from its own header, separated by room rather than cards
-// (docs/design.md › Right panel). A thread opens on this; Changes, Pull
-// requests and a beside thread stay their own views of the panel, reachable
-// from the header and from the rows here.
+// Compact workspace actions, lineage, and context usage.
 
 import { useEffect, useMemo, useState } from "react";
-import { modelName } from "../acp/types";
-import { type GitChanges, gitChangeSummary } from "../lib/native";
-import { selectOption } from "../state/harness";
-import { useApp, worktreeOf } from "../state/store";
-import { isRunning } from "../state/thread";
+import { type GitChanges, gitChangeSummary, openPath } from "../lib/native";
+import { appPlatform, fileManagerName } from "../lib/platform";
+import { contextPercent } from "../state/details";
+import { showPanel, useApp, worktreeOf } from "../state/store";
+import { formatTokens, isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
-import { delegateBranchCount } from "./DelegateTree";
-import { DelegatesSection } from "./OverviewDelegates";
-import { DeliverablesSection } from "./OverviewDeliverables";
-import { DetailsSection } from "./OverviewDetails";
-import { ExecutionLogSection } from "./OverviewLog";
-import { PropertiesSection } from "./OverviewProperties";
-import { PullRequestsSection } from "./OverviewPulls";
+import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
+import { ChevronRight, FileDiff, FolderOpen, GitBranch, GitPullRequest, Laptop } from "./icons";
 import {
-  delegatedIds,
   FOLDED_EVENT,
   isFolded as isFoldedOf,
-  pullBranches,
   readFolded,
   type OverviewSection as SectionId,
   toggleFolded,
@@ -58,21 +45,9 @@ export function ThreadDetails() {
   const worktree = useApp((s) => (s.selectedId ? worktreeOf(s, s.selectedId) : undefined));
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const links = useApp((s) => s.links.links);
-  const sessions = useApp((s) => s.sessions);
-  const threads = useApp((s) => s.threads);
-  // A delegate's branch is what its pull requests are opened from, so the panel
-  // reads the threads it started as well as the one it opens.
-  const delegatedBranches = useMemo(
-    () =>
-      id
-        ? delegatedIds(id, links).map(
-            (child) =>
-              threads[child]?.worktree?.branch ?? sessions.find((x) => x.id === child)?.worktree?.branch,
-          )
-        : [],
-    [id, links, sessions, threads],
-  );
-  const changes = useChanges(thread?.cwd, isRunning(thread));
+  const host = id ? splitThreadKey(id).host : "";
+  const machine = useApp((s) => s.machineNames[host]);
+  const changes = useChanges(host ? undefined : thread?.cwd, isRunning(thread));
   // Which sections are folded away: the reader's habit, kept for every thread.
   const [folded, setFolded] = useState<SectionId[]>(readFolded);
   // A row elsewhere (`+2 nested` in the strip's popover) opens a section: the fold is read again.
@@ -92,12 +67,7 @@ export function ThreadDetails() {
   };
   const isFolded = (section: SectionId) => isFoldedOf(folded, section);
 
-  const model = useMemo(
-    () => modelName(thread ? selectOption(thread.configOptions, "model")?.current : undefined),
-    [thread],
-  );
   const branch = worktree?.branch ?? changes?.branch;
-  const branches = useMemo(() => pullBranches(branch, delegatedBranches), [branch, delegatedBranches]);
 
   if (!id || !thread) {
     return (
@@ -105,58 +75,81 @@ export function ThreadDetails() {
     );
   }
 
-  // A worktree is the project's, checked out from the repository: the card names the project.
-  const project = worktree?.repo ?? thread.cwd;
+  const usage = thread.usage;
+  const used = contextPercent(usage);
+  const row = "flex min-h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout";
+  const action = `${row} hover:bg-fill-subtle`;
+  const icon = "shrink-0 text-fg-muted";
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3">
-      <div className="flex flex-col gap-4">
-        <PropertiesSection
-          thread={thread}
-          branch={branch}
-          project={project}
-          folded={isFolded("properties")}
-          onToggle={() => toggle("properties")}
-        />
-        {delegates > 0 && (
-          <DelegatesSection
-            threadId={id}
-            count={delegates}
-            folded={isFolded("delegates")}
-            onToggle={() => toggle("delegates")}
-          />
+    <div className="min-h-0 overflow-y-auto">
+      <div className="px-2 py-1">
+        <div className={row}>
+          <Laptop size={16} className={icon} />
+          <span className="min-w-0 truncate font-medium">
+            {machine ?? (host ? "Paired computer" : appPlatform() === "mac" ? "This Mac" : "This computer")}
+          </span>
+        </div>
+        {!host && (
+          <button type="button" className={action} onClick={() => openPath(thread.cwd)}>
+            <FolderOpen size={16} className={icon} />
+            <span className="flex-1">Open in {fileManagerName(appPlatform())}</span>
+            <ChevronRight size={12} className="text-fg-faint" />
+          </button>
+        )}
+      </div>
+      <div className="rule-t [--rc-rule-inset:1rem] px-2 py-1">
+        {branch && (
+          <div className={row} title={branch}>
+            <GitBranch size={16} className={icon} />
+            <span className="truncate rounded-md bg-fill-subtle px-2 py-0.5 font-mono text-caption">
+              {branch}
+            </span>
+          </div>
+        )}
+        {!host && (
+          <button type="button" className={action} onClick={() => showPanel("changes")}>
+            <FileDiff size={16} className={icon} />
+            <span className="flex-1">Changes</span>
+            {!!changes?.files.length && <span className="tabular text-fg-muted">{changes.files.length}</span>}
+            <ChevronRight size={12} className="text-fg-faint" />
+          </button>
         )}
         {pullsOn && (
-          <PullRequestsSection
-            cwd={project}
-            host={splitThreadKey(id).host}
-            branches={branches}
-            branch={branch}
-            folded={isFolded("pulls")}
-            onToggle={() => toggle("pulls")}
-          />
+          <button type="button" className={action} onClick={() => showPanel("pulls")}>
+            <GitPullRequest size={16} className={icon} />
+            <span className="flex-1">Pull requests</span>
+            <ChevronRight size={12} className="text-fg-faint" />
+          </button>
         )}
-        <DeliverablesSection
-          items={thread.items}
-          cwd={thread.cwd}
-          folded={isFolded("deliverables")}
-          onToggle={() => toggle("deliverables")}
-        />
-        <ExecutionLogSection
-          items={thread.items}
-          usage={thread.usage}
-          harness={thread.harness?.id}
-          model={model}
-          folded={isFolded("log")}
-          onToggle={() => toggle("log")}
-        />
-        <DetailsSection
-          thread={thread}
-          changes={changes}
-          folded={isFolded("details")}
-          onToggle={() => toggle("details")}
-        />
       </div>
+      {delegates > 0 && (
+        <div className="rule-t [--rc-rule-inset:1rem] px-2 py-2">
+          <DelegatePreview
+            threadId={id}
+            expanded={!isFolded("delegates")}
+            onToggle={() => toggle("delegates")}
+          />
+        </div>
+      )}
+      {usage && used !== undefined && (
+        <div className="rule-t [--rc-rule-inset:1rem] flex items-center gap-2 px-4 py-3 text-caption text-fg-muted">
+          Context
+          <div
+            role="meter"
+            aria-label="Context used"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={used}
+            className="h-1 flex-1 overflow-hidden rounded-full bg-fill"
+          >
+            <div className="h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
+          </div>
+          <span className="shrink-0 tabular">
+            {formatTokens(usage.used)} / {formatTokens(usage.size)}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

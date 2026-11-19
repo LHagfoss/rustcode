@@ -29,7 +29,7 @@ export type OverviewSection = (typeof OVERVIEW_SECTIONS)[number];
  * facts. A section folded away is kept folded for every thread, not per thread:
  * it is the reader's habit, not the thread's state.
  */
-export const FOLDED_BY_DEFAULT: readonly OverviewSection[] = ["details"];
+export const FOLDED_BY_DEFAULT: readonly OverviewSection[] = ["delegates", "details"];
 
 /** Where the folded sections are kept: the app's storage, so every window agrees. */
 export const FOLDED_KEY = "rustcode.overview.folded";

@@ -278,10 +278,11 @@ function TerminalHeaderButton() {
 // else focused hands the keyboard back to one of them (ui/RightPanel.tsx).
 function DetailsHeaderButton() {
   const on = useApp((s) => s.panel === "details");
+  const key = useShortcutHint("toggle-panel");
   return (
     <ClusterButton
       label="Thread details"
-      tooltip="Thread details"
+      tooltip={on ? `Close thread details (${key})` : `Thread details (${key})`}
       data-panel-toggle
       on={on}
       onClick={() => setPanel("details")}
