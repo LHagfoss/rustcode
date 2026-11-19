@@ -56,7 +56,7 @@ import {
   MOCK_VIZ,
   mockLinkMeta,
 } from "./mockSmartUi";
-import { mockUsage } from "./mockUsage";
+import { mockAntigravityPlan, mockUsage } from "./mockUsage";
 import type { HarnessSnapshot } from "./types";
 
 export {
@@ -1244,7 +1244,13 @@ export class MockEngine {
       case "_rustcode/usage/plans": {
         const at = (h: number) => Math.floor(Date.now() / 1000) + h * 3600;
         const p = params as
-          | { claude?: boolean; claudeAccounts?: boolean; claudeAccount?: string; force?: boolean }
+          | {
+              antigravity?: boolean;
+              claude?: boolean;
+              claudeAccounts?: boolean;
+              claudeAccount?: string;
+              force?: boolean;
+            }
           | undefined;
         // `?claudeUsage=expired|refused|denied` stages a sign-in RustCode could
         // not read, so Settings › Usage's expired and denied rows can be seen
@@ -1326,6 +1332,7 @@ export class MockEngine {
                 { label: "Weekly", usedPercent: 71, windowMinutes: 10080, resetsAt: at(72) },
               ],
             },
+            ...(p?.antigravity ? [mockAntigravityPlan(at)] : []),
           ],
         };
       }

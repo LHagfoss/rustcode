@@ -81,7 +81,11 @@ export function UsagePage() {
       // never read from the Keychain.
       const ask = asked ? { claude: true, claudeAccounts: true } : backgroundPlansAsk();
       const plans = parsePlans(
-        await request(Method.usagePlans, { ...ask, ...(force ? { force: true } : {}) }, 20_000),
+        await request(
+          Method.usagePlans,
+          { ...ask, antigravity: true, ...(force ? { force: true } : {}) },
+          20_000,
+        ),
       );
       // A whole read (every login) replaces the list; the interval's partial read
       // keeps the rows it did not ask, so a named login's numbers stay on
@@ -105,7 +109,11 @@ export function UsagePage() {
       // here is what lets the background poll read Claude again after a pause.
       // A background read never clears a pause (`asked`), or a Deny would stop
       // holding.
-      commitPlansAnswer(plans, whole);
+      // Antigravity's quota groups apply to different sets of models.
+      commitPlansAnswer(
+        plans.filter((plan) => plan.harness !== "antigravity"),
+        whole,
+      );
       // An answer equal to what is drawn keeps its list and rows, so the bars do
       // not re-animate; only the foot's read time changes.
       setAnswer((current) =>
