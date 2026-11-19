@@ -5,23 +5,40 @@
 # block a merge: the portability jobs (Windows and macOS compile coverage,
 # `continue-on-error` in ci.yml). Late-registering, path-filtered jobs are
 # caught by waiting until a pass finds nothing pending twice in a row.
+#
+# A check GitHub still lists as pending but that has a completion time counts
+# as finished: GitHub sometimes leaves a finished job's status at
+# `in_progress`, and the script then waited out its whole limit (#4049).
+# While waiting, it prints the checks it waits on whenever that list changes.
 set -euo pipefail
 
 pr="${1:?usage: scripts/pr-merge.sh <pr-number>}"
 # Desktop shell (Linux/Windows) checks are required; only the root workspace's
 # explicitly named advisory jobs are excluded.
-advisory='^(macOS|Windows) portability coverage[[:space:]]'
+advisory='^(macOS|Windows) portability coverage$'
+# One `bucket<TAB>name` line per check. A pending check with a real completion
+# time (not GitHub's 0001-01-01 placeholder) is reported as passed.
+query='.[] | select(.name | test("'"$advisory"'") | not)
+  | (.completedAt // "") as $done
+  | [ (if .bucket == "pending" and $done != "" and ($done | startswith("0001") | not)
+       then "pass" else .bucket end), .name ] | @tsv'
 quiet=0
+waiting=""
 for _ in $(seq 1 240); do
-    checks="$(gh pr checks "$pr" 2>/dev/null | grep -Ev "$advisory" || true)"
+    checks="$(gh pr checks "$pr" --json name,bucket,completedAt --jq "$query" 2>/dev/null || true)"
     if [[ -z "$checks" ]]; then
         quiet=0
-    elif grep -q $'\tfail\t' <<<"$checks"; then
+    elif grep -q '^fail'$'\t' <<<"$checks"; then
         echo "PR #$pr has a failing check:" >&2
-        grep $'\tfail\t' <<<"$checks" >&2
+        grep '^fail'$'\t' <<<"$checks" | cut -f2- >&2
         exit 1
-    elif grep -q $'\tpending\t' <<<"$checks"; then
+    elif grep -q '^pending'$'\t' <<<"$checks"; then
         quiet=0
+        now="$(grep '^pending'$'\t' <<<"$checks" | cut -f2- | paste -sd ',' - | sed 's/,/, /g')"
+        if [[ "$now" != "$waiting" ]]; then
+            echo "PR #$pr: waiting on $now"
+            waiting="$now"
+        fi
     else
         quiet=$((quiet + 1))
         if ((quiet >= 2)); then
