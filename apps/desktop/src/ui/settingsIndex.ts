@@ -361,10 +361,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Font",
     keywords: "font inter system rounded sf pro typeface typography",
   },
+  { section: "appearance", title: "UI scale", keywords: "zoom interface size percentage 100%" },
   {
     section: "appearance",
     title: "Text size",
-    keywords: "text size bigger larger smaller zoom readability",
+    keywords: "text size bigger larger smaller readability",
   },
   {
     section: "appearance",

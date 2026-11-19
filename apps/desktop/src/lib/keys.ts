@@ -112,9 +112,9 @@ export const APP_COMMANDS: readonly AppCommand[] = [
     group: "View",
     remappable: true,
   },
-  { id: "zoom-in", label: "Text larger", binding: "mod+=", group: "Text", remappable: true },
-  { id: "zoom-out", label: "Text smaller", binding: "mod+-", group: "Text", remappable: true },
-  { id: "zoom-actual", label: "Text at its actual size", binding: "mod+0", group: "Text", remappable: true },
+  { id: "zoom-in", label: "Increase UI scale", binding: "mod+=", group: "Text", remappable: true },
+  { id: "zoom-out", label: "Decrease UI scale", binding: "mod+-", group: "Text", remappable: true },
+  { id: "zoom-actual", label: "Reset UI scale", binding: "mod+0", group: "Text", remappable: true },
   {
     id: "dictate",
     label: "Dictate into the composer (press again to finish)",

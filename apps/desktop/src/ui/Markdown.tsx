@@ -33,10 +33,12 @@ export function CopyButton({
   text,
   label = "Copy",
   iconOnly,
+  size = "sm",
 }: {
   text: string;
   label?: string;
   iconOnly?: boolean;
+  size?: "sm" | "md";
 }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -47,15 +49,18 @@ export function CopyButton({
   // The label it says, on the button and for a screen reader: "Copied" for a moment.
   const said = copied ? "Copied" : label;
   const copy = () => void copyText(text).then(() => setCopied(true));
-  const icon = copied ? <Check size={12} className="text-success" /> : <Copy size={12} />;
-  // The icon-only square in a row of 22px actions stays as it is; the labelled one is a pill.
+  const iconSize = iconOnly && size === "md" ? 14 : 12;
+  const icon = copied ? <Check size={iconSize} className="text-success" /> : <Copy size={iconSize} />;
   if (iconOnly)
     return (
       <button
         type="button"
         aria-label={said}
         onClick={copy}
-        className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+        className={cx(
+          "inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg",
+          size === "md" ? "size-7" : "size-[22px]",
+        )}
       >
         {icon}
       </button>
