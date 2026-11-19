@@ -585,6 +585,26 @@ async fn pump(
                         }
                         SessionControl::Malformed => return Some(ErrorCode::InvalidFrame),
                     }
+                    if let Some((access, ask)) = super::hub_link::MemberFrame::parse_join(&text) {
+                        let (host_id, name) = match shared.hub_member(&connection.context.device_id) {
+                            Ok(member) => member,
+                            Err(why) => {
+                                let error = HandshakeResponse::error(ErrorCode::UnauthorizedAccess, why);
+                                write(writer, Message::text(error.to_text()), limits.write_timeout).await?;
+                                continue;
+                            }
+                        };
+                        // The link carries the hub's frames from here on.
+                        shared.router.disconnected(&connection.context);
+                        let joined = super::hub_link::Joined { host_id, name, access, ask };
+                        let times = super::hub_link::LinkTimes {
+                            write_timeout: limits.write_timeout,
+                            ping_interval: limits.ping_interval,
+                            idle_timeout: limits.idle_timeout,
+                        };
+                        super::hub_link::serve(&shared.members, joined, writer, reader, times).await;
+                        return None;
+                    }
                     if serde_json::from_str::<crate::remote::protocol::AcpClientFrame>(&text).is_ok() {
                         if !shared.acp_allowed(&connection.context.device_id) {
                             let error = HandshakeResponse::error(ErrorCode::UnauthorizedAccess, "ACP access requires approval from the host owner");

@@ -488,6 +488,9 @@ pub fn is_caller(caller: &str) -> bool {
 /// caller or its grant is gone.
 pub fn scope_of_caller(caller: &str) -> Option<Scope> {
     let id = caller.strip_prefix(CALLER_PREFIX)?;
+    if id.starts_with(super::outside_hub::HUB_GRANT_PREFIX) {
+        return super::outside_hub::membership_of(id).map(|member| member.access);
+    }
     list()
         .into_iter()
         .find(|grant| grant.id == id)
@@ -497,6 +500,10 @@ pub fn scope_of_caller(caller: &str) -> Option<Scope> {
 /// The name of the app behind `caller`, for the header of a message it sends.
 pub fn name_of_caller(caller: &str) -> Option<String> {
     let id = caller.strip_prefix(CALLER_PREFIX)?;
+    if id.starts_with(super::outside_hub::HUB_GRANT_PREFIX) {
+        return super::outside_hub::membership_of(id)
+            .map(|member| format!("the hub {}", member.name));
+    }
     list()
         .into_iter()
         .find(|grant| grant.id == id)
@@ -745,6 +752,10 @@ impl Runner for EngineRunner {
         args: &'a Value,
     ) -> BoxFuture<'a, CallAnswer> {
         Box::pin(async move {
+            // A call that names a machine linked to this hub runs there.
+            if let Some(answer) = super::outside_hub::forward(caller, tool, args).await {
+                return answer;
+            }
             let mut args = args.clone();
             match tool {
                 // An outside agent has no project of its own: list everything,
@@ -779,9 +790,14 @@ impl Runner for EngineRunner {
                     None => super::local::answer(caller, cancel, tool, &args).await,
                 },
             };
+            let content = if tool == super::LIST_MACHINES && output.success {
+                super::outside_hub::with_members(output.content).await
+            } else {
+                output.content
+            };
             CallAnswer {
                 success: output.success,
-                content: output.content,
+                content,
             }
         })
     }
@@ -971,14 +987,12 @@ pub(super) async fn answer_transport_with(
     cancel: &CancellationToken,
     http: bool,
 ) -> CallAnswer {
-    let started = Instant::now();
     let Some(grant) = authenticate_transport_at(&settings.grants, &request.token, http) else {
         return refusal(
             "error: RustCode did not accept this token. It may have been revoked; create a new one in RustCode › Settings › Outside agents. Nothing was sent.",
         );
     };
     let tool = request.tool.as_str();
-    let caller = caller_of(&grant.id);
     match tool {
         CONTROL_INSTRUCTIONS => {
             return CallAnswer {
@@ -994,9 +1008,43 @@ pub(super) async fn answer_transport_with(
         }
         _ => {}
     }
+    let token = request.token.as_str();
+    let grants = settings.grants.as_path();
+    let still_allowed = move |needed: Scope| {
+        authenticate_transport_at(grants, token, http)
+            .is_some_and(|current| current.scope >= needed)
+    };
+    answer_granted(
+        settings,
+        runner,
+        &grant,
+        tool,
+        &request.args,
+        cancel,
+        &still_allowed,
+    )
+    .await
+}
+
+/// The gate after the caller is known: its scope, validation, asking the user
+/// and the audit row, then the call. `still_allowed` says whether the caller
+/// still holds a scope after the user was asked, since the grant (or a hub
+/// membership) may have changed or gone while they decided.
+pub(super) async fn answer_granted(
+    settings: &Settings,
+    runner: &dyn Runner,
+    grant: &Grant,
+    tool: &str,
+    args: &Value,
+    cancel: &CancellationToken,
+    still_allowed: &(dyn Fn(Scope) -> bool + Sync),
+) -> CallAnswer {
+    let started = Instant::now();
+    let caller = caller_of(&grant.id);
+    let grant = grant.clone();
     // The scope is checked before anything else about the call, so a call the
     // grant may not make never reaches validation, the app, or a thread.
-    let Some(needed) = required_scope_for(tool, &request.args) else {
+    let Some(needed) = required_scope_for(tool, args) else {
         record(
             settings,
             &grant,
@@ -1041,16 +1089,16 @@ pub(super) async fn answer_transport_with(
         };
     }
     let checked = if crate::manage::is_tool(tool) {
-        crate::manage::validate(tool, &request.args)
+        crate::manage::validate(tool, args)
     } else {
-        super::validate(tool, &request.args)
+        super::validate(tool, args)
     };
     if let Err(reason) = checked {
         return refusal(format!(
             "error: invalid {tool} call: {reason}. Nothing was sent."
         ));
     }
-    if grant.ask && changes_things(tool, &request.args) {
+    if grant.ask && changes_things(tool, args) {
         if settings.needs_approver && !approver_connected() {
             record(
                 settings,
@@ -1062,7 +1110,7 @@ pub(super) async fn answer_transport_with(
             );
             return refusal(no_approver(&grant, tool));
         }
-        match ask_user(settings, &grant, tool, &request.args, cancel).await {
+        match ask_user(settings, &grant, tool, args, cancel).await {
             Approval::Allowed => {}
             Approval::Declined => {
                 record(settings, &grant, tool, "declined", started, None);
@@ -1096,25 +1144,22 @@ pub(super) async fn answer_transport_with(
             }
         }
         // The grant may have been changed or revoked while the user decided.
-        match authenticate_transport_at(&settings.grants, &request.token, http) {
-            Some(current) if current.scope >= needed => {}
-            _ => {
-                record(
-                    settings,
-                    &grant,
-                    tool,
-                    "denied",
-                    started,
-                    Some("changed while asking".into()),
-                );
-                return refusal(format!(
-                    "error: this connection's access changed while {tool} was waiting. Nothing was sent."
-                ));
-            }
+        if !still_allowed(needed) {
+            record(
+                settings,
+                &grant,
+                tool,
+                "denied",
+                started,
+                Some("changed while asking".into()),
+            );
+            return refusal(format!(
+                "error: this connection's access changed while {tool} was waiting. Nothing was sent."
+            ));
         }
     }
     touch_at(&settings.grants, &grant.id, tool);
-    let answer = runner.run(&caller, cancel, tool, &request.args).await;
+    let answer = runner.run(&caller, cancel, tool, args).await;
     record(
         settings,
         &grant,
@@ -1148,6 +1193,11 @@ fn approver_connected() -> bool {
 /// The refusal for a call that would ask on a machine where no app can
 /// answer (a headless server): say how to stop asking, rather than time out.
 fn no_approver(grant: &Grant, tool: &str) -> String {
+    if let Some(hub) = grant.id.strip_prefix(super::outside_hub::HUB_GRANT_PREFIX) {
+        return format!(
+            "error: {tool} needs the user's approval in the RustCode app on this machine, and no RustCode app is connected to it to ask. Nothing was sent. Tell the user: open the RustCode app there and retry, or let the hub act without asking by running `rustcode machines hub join {hub} --ask false` on that machine."
+        );
+    }
     format!(
         "error: {tool} needs the user's approval in the RustCode app, and no RustCode app is connected to this machine to ask. Nothing was sent. Tell the user: open the RustCode app (on this machine or one paired with it) and retry, or let “{}” act without asking by running `rustcode outside update {} --ask false` on this machine.",
         grant.name, grant.id

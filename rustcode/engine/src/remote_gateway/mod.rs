@@ -27,6 +27,7 @@ pub mod gateway;
 pub mod handshake;
 pub mod host;
 pub mod hub;
+pub mod hub_link;
 pub mod lifecycle;
 pub mod local_socket;
 pub mod orphan;

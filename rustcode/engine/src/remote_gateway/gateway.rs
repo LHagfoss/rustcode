@@ -335,6 +335,8 @@ pub(super) struct Shared {
     /// no device got as far as connecting: the wrong network or address, not a
     /// wrong code. Owner-facing only, never part of a security decision.
     reached_since_challenge: AtomicBool,
+    /// The members linked to this machine while it is the fleet's hub.
+    pub(super) members: super::hub_link::Members,
 }
 
 /// One of the bounded slots for sockets that have not authenticated.
@@ -1308,6 +1310,29 @@ impl Shared {
         Ok((record, closed))
     }
 
+    /// Who may join this hub on the connection of device `id`: another
+    /// computer (a desktop or command line with its machine's identifier),
+    /// never a phone, and only while this machine is the hub. The identity is
+    /// the device record's, never what the join frame says.
+    pub(super) fn hub_member(&self, id: &str) -> Result<(String, String), &'static str> {
+        if !self.members.is_hub() {
+            return Err(
+                "this machine is not the fleet's hub; turn it on with `rustcode machines hub on`",
+            );
+        }
+        let state = self.state();
+        let record = state
+            .devices
+            .select(id)
+            .map_err(|_| "this device is no longer paired")?;
+        match (&record.kind, &record.host_id) {
+            (DeviceKind::Desktop | DeviceKind::Cli, Some(host_id)) => {
+                Ok((host_id.clone(), record.name.clone()))
+            }
+            _ => Err("only another computer running RustCode can join the hub"),
+        }
+    }
+
     pub(super) fn acp_allowed(&self, id: &str) -> bool {
         self.state()
             .devices
@@ -1717,6 +1742,7 @@ impl Gateway {
             unauthenticated: Mutex::new(Unauthenticated::default()),
             refusals: Mutex::new(Refusals::default()),
             reached_since_challenge: AtomicBool::new(false),
+            members: super::hub_link::Members::new(&lifecycle.config_directory()),
         });
         Ok(Self {
             listener,
@@ -2074,9 +2100,18 @@ async fn apply_plan(
 }
 
 async fn serve_control(shared: Arc<Shared>, started: Instant, stream: LocalStream) {
+    let (reader, mut writer) = stream.into_split();
+    let request = match tokio::time::timeout(
+        CONTROL_TIMEOUT,
+        read_async_frame::<_, ControlRequest>(&mut BufReader::new(reader)),
+    )
+    .await
+    {
+        Ok(Ok(request)) => request,
+        _ => return,
+    };
+    let deadline = super::control::timeout_for(&request);
     let exchange = async {
-        let (reader, mut writer) = stream.into_split();
-        let request: ControlRequest = read_async_frame(&mut BufReader::new(reader)).await?;
         let mut stop = false;
         let response = match request {
             ControlRequest::Status => ControlResponse::Status {
@@ -2116,6 +2151,21 @@ async fn serve_control(shared: Arc<Shared>, started: Instant, stream: LocalStrea
                     Err(message) => ControlResponse::Error { message },
                 }
             }
+            ControlRequest::HubCall {
+                machine,
+                tool,
+                arguments,
+                caller,
+            } => ControlResponse::HubAnswer {
+                answer: shared
+                    .members
+                    .call(&machine, &tool, arguments, &caller)
+                    .await,
+            },
+            ControlRequest::HubMembers => ControlResponse::HubMembers {
+                is_hub: shared.members.is_hub(),
+                members: shared.members.list(),
+            },
             ControlRequest::Shutdown { instance_id } => {
                 if instance_id == shared.instance_id {
                     stop = true;
@@ -2130,7 +2180,7 @@ async fn serve_control(shared: Arc<Shared>, started: Instant, stream: LocalStrea
         write_async_frame(&mut writer, &response).await?;
         anyhow::Ok(stop)
     };
-    if let Ok(Ok(true)) = tokio::time::timeout(CONTROL_TIMEOUT, exchange).await {
+    if let Ok(Ok(true)) = tokio::time::timeout(deadline, exchange).await {
         shared.shutdown.cancel();
     }
 }
