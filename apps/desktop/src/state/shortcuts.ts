@@ -7,7 +7,7 @@
 
 import { toggleDictation } from "../lib/dictation";
 import { cycleFocusArea } from "../lib/focusAreas";
-import { stepZoom } from "../lib/zoom";
+import { stepZoom, zoomLabel } from "../lib/zoom";
 import { chooseFolder } from "./folders";
 import {
   cancel,
@@ -26,7 +26,10 @@ import { HOME_FOLDER, startNewThreadFromContext } from "./threadOpen";
 import { leaveSettledThreads, statusOf } from "./threadStatus";
 
 function zoom(direction: 1 | -1 | 0) {
-  void stepZoom(direction).then((level) => toast(`Zoom ${Math.round(level * 100)}%`, "info"));
+  void stepZoom(direction).then(
+    (level) => toast(`UI scale ${zoomLabel(level)}`, "info"),
+    () => toast("Could not change UI scale", "error"),
+  );
 }
 
 /** Runs a shortcut's command; false when this module does not own it. */

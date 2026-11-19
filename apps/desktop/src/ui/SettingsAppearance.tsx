@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { revealPath } from "../lib/native";
 import { dirname } from "../lib/paths";
 import { appPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
+import { getZoom, stepZoom, subscribeZoom, ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, zoomLabel } from "../lib/zoom";
 import {
   createTheme,
   SETTINGS_DEFAULTS,
@@ -17,7 +18,7 @@ import {
   useApp,
 } from "../state/store";
 import { ChatBackgroundGroup } from "./ChatBackgroundGroup";
-import { Check, FolderOpen, Plus } from "./icons";
+import { Check, FolderOpen, Minus, Plus } from "./icons";
 import { LiveBackgroundGroup } from "./LiveBackgroundGroup";
 import { cx, noTextHelpers, Switch } from "./primitives";
 import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
@@ -148,6 +149,32 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
   );
 }
 
+function UIScaleSetting() {
+  const scale = useSyncExternalStore(subscribeZoom, getZoom);
+  const change = (direction: -1 | 0 | 1) => {
+    void stepZoom(direction).catch(() => toast("Could not change UI scale", "error"));
+  };
+  return (
+    <Row
+      title="UI scale"
+      subtitle="Resizes the whole interface, including text, panels, and controls."
+      reset={scale === ZOOM_DEFAULT ? undefined : () => change(0)}
+    >
+      <div role="group" aria-label="UI scale" className="flex items-center gap-2">
+        <Action aria-label="Decrease UI scale" disabled={scale === ZOOM_MIN} onClick={() => change(-1)}>
+          <Minus size={14} />
+        </Action>
+        <output className="w-10 text-center font-medium text-callout text-fg tabular">
+          {zoomLabel(scale)}
+        </output>
+        <Action aria-label="Increase UI scale" disabled={scale === ZOOM_MAX} onClick={() => change(1)}>
+          <Plus size={14} />
+        </Action>
+      </div>
+    </Row>
+  );
+}
+
 export function AppearancePage() {
   const mode = useApp((s) => s.theme);
   const font = useApp((s) => s.font);
@@ -200,6 +227,7 @@ export function AppearancePage() {
             ]}
           />
         </Row>
+        <UIScaleSetting />
         <Row
           title="Text size"
           reset={

@@ -76,7 +76,7 @@ import {
   MoveRight,
   Paperclip,
   Pencil,
-  RotateCcw,
+  RefreshCw,
   Search,
   Shield,
   SquareStop,
@@ -178,7 +178,7 @@ function StoredImage({ threadId, path, all }: { threadId: string; path: string; 
  * turn runs (`aria-disabled` keeps the tooltip that says why).
  */
 const MESSAGE_ACTION =
-  "inline-flex size-[22px] items-center justify-center rounded-md text-fg-muted opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 aria-disabled:cursor-default aria-disabled:text-fg-faint aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-faint";
+  "inline-flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg aria-disabled:cursor-default aria-disabled:text-fg-faint aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-faint";
 
 export const UserRow = memo(function UserRow({
   item,
@@ -237,7 +237,7 @@ export const UserRow = memo(function UserRow({
     return <NoticeRow item={{ kind: "notice", id: item.id, text: noticeLine(item.text), tone: "info" }} />;
   }
   return (
-    <div className="group flex flex-col items-end">
+    <div className="group ml-auto flex w-fit max-w-[80%] flex-col items-end">
       {(attachments.length > 0 || stored.length > 0 || gone > 0) && (
         <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
           {attachments.map((a, i) =>
@@ -289,7 +289,7 @@ export const UserRow = memo(function UserRow({
         className={cx(
           // A card a step off the pane, not a fill that moves with the text colour. Messages sent
           // one after another soften the corners they share, so they read as one run.
-          "relative max-w-[80%] selectable rounded-2xl bg-message p-3",
+          "relative max-w-full selectable rounded-2xl bg-message p-3",
           // A message after this one continues the run: the bottom-right corner joins it.
           after && "rounded-br-md",
           before && "rounded-tr-md",
@@ -330,56 +330,54 @@ export const UserRow = memo(function UserRow({
           </Pill>
         )}
       </div>
-      {/* Time and actions show on hover, clipped to the bubble's width; `.rc-meta-reveal` is the
-          same reveal the queued row's foot uses. */}
-      <div className="rc-meta-reveal mt-0.5 flex h-[22px] max-w-[80%] min-w-0 select-none items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular">
-        {/* The actions show on hover only, all three together: a steer holds the line open for its
-            badge and time, and must not leave Copy showing alone beside them. They come first, so
-            at rest their room is on the far side of the line from the bubble's edge and the badge
-            and time end flush with it instead of before an empty gap. */}
-        <span className="inline-flex opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          <CopyButton text={item.text} iconOnly label="Copy message" />
-        </span>
-        {threadId && (
-          <>
-            <Tooltip
-              label={
-                busy
-                  ? "Stop the turn to edit"
-                  : rewind
-                    ? "Edit and resend: the thread goes back to this message"
-                    : "Edit in the composer"
-              }
-            >
-              <button
-                type="button"
-                aria-label="Edit message"
-                aria-disabled={busy || undefined}
-                onClick={() => !busy && editMessage(threadId, item.id)}
-                className={MESSAGE_ACTION}
+      <div className="rc-meta-reveal mt-0.5 flex h-7 max-w-full min-w-0 select-none items-center gap-1 whitespace-nowrap text-sub text-fg-faint tabular">
+        <div className="pointer-events-none inline-flex shrink-0 gap-0.5 opacity-0 transition-opacity focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
+          <CopyButton text={item.text} iconOnly size="md" label="Copy message" />
+          {threadId && (
+            <>
+              <Tooltip
+                label={
+                  busy
+                    ? "Stop the turn to edit"
+                    : rewind
+                      ? "Edit and resend: the thread goes back to this message"
+                      : "Edit in the composer"
+                }
               >
-                <Pencil size={12} />
-              </button>
-            </Tooltip>
-            <Tooltip
-              label={
-                busy ? "Stop the turn to retry" : rewind ? "Retry: send it again from here" : "Send it again"
-              }
-            >
-              <button
-                type="button"
-                aria-label="Retry message"
-                aria-disabled={busy || undefined}
-                onClick={() => !busy && retryMessage(threadId, item.id)}
-                className={MESSAGE_ACTION}
+                <button
+                  type="button"
+                  aria-label="Edit message"
+                  aria-disabled={busy || undefined}
+                  onClick={() => !busy && editMessage(threadId, item.id)}
+                  className={MESSAGE_ACTION}
+                >
+                  <Pencil size={14} />
+                </button>
+              </Tooltip>
+              <Tooltip
+                label={
+                  busy
+                    ? "Stop the turn to retry"
+                    : rewind
+                      ? "Retry: send it again from here"
+                      : "Send it again"
+                }
               >
-                <RotateCcw size={12} />
-              </button>
-            </Tooltip>
-          </>
-        )}
-        {item.steered && <span className="rc-keep text-accent">Steered</span>}
-        {item.fromView && <span className="rc-keep text-accent">From view</span>}
+                <button
+                  type="button"
+                  aria-label="Retry message"
+                  aria-disabled={busy || undefined}
+                  onClick={() => !busy && retryMessage(threadId, item.id)}
+                  className={MESSAGE_ACTION}
+                >
+                  <RefreshCw size={14} />
+                </button>
+              </Tooltip>
+            </>
+          )}
+        </div>
+        {item.steered && <span className="rc-keep truncate text-accent">Steered</span>}
+        {item.fromView && <span className="rc-keep truncate text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
           <span className={cx("truncate tabular", newDay && "rc-keep")}>
             {/* `messageTime` names the day from yesterday on; a day that starts today says so too. */}
