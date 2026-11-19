@@ -444,7 +444,7 @@ describe("engine controller with the mock engine", () => {
     const items = selected()!.items.length;
 
     expect(await submit("/model")).toBe(true);
-    expect(useApp.getState().modelPickerAsk).toBe(1);
+    expect(useApp.getState().modelPickerAsk).toEqual({ toggle: false });
     expect(await submit("/resume")).toBe(true);
     expect(useApp.getState().switcherOpen).toBe(true);
 

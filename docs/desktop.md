@@ -549,7 +549,7 @@ Every key above except the composer's is a command in one table
 (`src/lib/keys.ts`) with an id, a label and a default binding, and Settings ›
 Keyboard rebinds it: click the key, press the new combination, Esc cancels;
 a row whose binding differs from its default offers a reset. A binding needs
-⌘ (or ⌥) unless it is a function key; ⌘Q, ⌘H, ⌘M and ⌘Tab are refused
+⌘ (or ⌥) unless it is a function key; ⌘Q, ⌘H and ⌘Tab are refused
 because macOS keeps them, and so are the editing keys (⌘C, ⌘V, ⌘X, ⌘A, ⌘Z,
 ⌘⇧Z) that the window's menu answers before the page sees the keydown. A key
 another command already answers is refused with its name, so two commands
@@ -559,6 +559,8 @@ value or a binding equal to the default is dropped, and the rest of the table
 stays the default it ships with. `state/shortcuts.ts` runs a matched command;
 the transcript matches "find in thread" against the same table. ⌘W (Ctrl+W elsewhere) settles the current thread with Undo and keeps the window
 open, including from the terminal; with no selected thread it does nothing.
+⌘M (Ctrl+M elsewhere) opens the composer's model picker and focuses its search.
+Press it again to close the picker. On macOS, Window › Minimize remains available.
 On macOS the native menu (`src-tauri/src/lib.rs`) keeps the default editing
 and app items but removes Close so its accelerator cannot hide the window; Linux and Windows
 get no menu bar at all; ⌘R (reload the view, `ui/Recover.tsx`) and the

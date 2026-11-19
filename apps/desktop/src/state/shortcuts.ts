@@ -93,6 +93,11 @@ export function runShortcut(command: string): boolean {
     case "zoom-actual":
       zoom(0);
       return true;
+    case "toggle-model-picker":
+      if (s.view.kind !== "chat" || s.settings || s.switcherOpen || s.confirm || s.grant || s.onboardingOpen)
+        return false;
+      useApp.setState({ modelPickerAsk: { toggle: true } });
+      return true;
     case "dictate":
       // The composer in view records; with none (Settings open, no chat) the key does nothing.
       return toggleDictation();

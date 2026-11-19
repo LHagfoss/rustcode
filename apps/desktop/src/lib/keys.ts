@@ -116,6 +116,13 @@ export const APP_COMMANDS: readonly AppCommand[] = [
   { id: "zoom-out", label: "Decrease UI scale", binding: "mod+-", group: "Text", remappable: true },
   { id: "zoom-actual", label: "Reset UI scale", binding: "mod+0", group: "Text", remappable: true },
   {
+    id: "toggle-model-picker",
+    label: "Toggle model picker",
+    binding: "mod+m",
+    group: "Composer",
+    remappable: true,
+  },
+  {
     id: "dictate",
     label: "Dictate into the composer (press again to finish)",
     binding: "mod+shift+d",
@@ -342,7 +349,7 @@ export function commandHint(binding: string, command?: AppCommand): string {
 }
 
 /** System shortcuts and the fixed Settle shortcut; a remap may not take them. */
-export const RESERVED_BINDINGS: readonly string[] = ["mod+q", "mod+w", "mod+h", "mod+m", "mod+tab"];
+export const RESERVED_BINDINGS: readonly string[] = ["mod+q", "mod+w", "mod+h", "mod+tab"];
 
 /** Editing keys owned by text fields; an app shortcut would consume them first. */
 export const RESERVED_EDITING: readonly string[] = [

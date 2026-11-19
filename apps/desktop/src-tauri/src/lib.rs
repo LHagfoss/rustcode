@@ -150,27 +150,44 @@ pub fn run() {
             webview::webview_blur,
         ])
         .setup(|app| {
-            // Release Cmd+W to Settle, preserving the native editing and app menus.
+            // Release Cmd+W to Settle and Cmd+M to the model picker.
             // Tauri puts Close in both File and Window. Only macOS has an app menu by
             // default; setting one on Linux and Windows adds a File/Edit bar to the window,
             // and there Ctrl+W reaches the webview without a menu.
             #[cfg(target_os = "macos")]
             {
-                let menu = tauri::menu::Menu::default(app.handle())?;
-                let close_text =
-                    tauri::menu::PredefinedMenuItem::close_window(app, None)?.text()?;
+                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+
+                const MINIMIZE_ID: &str = "minimize-window";
+                let menu = Menu::default(app.handle())?;
+                let close_text = PredefinedMenuItem::close_window(app, None)?.text()?;
+                let minimize_text = PredefinedMenuItem::minimize(app, None)?.text()?;
+                let minimize =
+                    MenuItem::with_id(app, MINIMIZE_ID, &minimize_text, true, None::<&str>)?;
                 for item in menu.items()? {
                     if let Some(submenu) = item.as_submenu() {
-                        for child in submenu.items()? {
+                        for (position, child) in submenu.items()?.into_iter().enumerate().rev() {
                             if let Some(predefined) = child.as_predefined_menuitem() {
-                                if predefined.text()? == close_text {
+                                let text = predefined.text()?;
+                                if text == close_text {
                                     submenu.remove(&child)?;
+                                } else if text == minimize_text {
+                                    submenu.remove(&child)?;
+                                    submenu.insert(&minimize, position)?;
                                 }
                             }
                         }
                     }
                 }
                 app.set_menu(menu)?;
+                app.on_menu_event(|app, event| {
+                    if event.id() != MINIMIZE_ID {
+                        return;
+                    }
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.minimize();
+                    }
+                });
             }
             // The engine starts with the app, in parallel with the webview loading the UI.
             app.state::<EngineState>().prestart();

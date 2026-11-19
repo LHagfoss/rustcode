@@ -99,6 +99,7 @@ describe("shortcut bindings", () => {
       "toggle-sidebar": "mod+b",
       "find-in-thread": "mod+f",
       "toggle-terminal": "mod+j",
+      "toggle-model-picker": "mod+m",
       "stop-turn": "mod+.",
       "pin-thread": "p",
       "settle-thread": "d",
@@ -112,6 +113,7 @@ describe("shortcut bindings", () => {
 describe("matching", () => {
   test("a keydown runs the command it is bound to", () => {
     expect(commandFor({}, cmd("b"))).toBe("toggle-sidebar");
+    expect(commandFor({}, cmd("m"))).toBe("toggle-model-picker");
     expect(commandFor({}, cmd("O", { shiftKey: true }))).toBe("default-folder");
     expect(commandFor({}, press("b", { ctrlKey: true }))).toBeNull();
     expect(commandFor({}, cmd("Enter"))).toBeNull();
@@ -125,6 +127,13 @@ describe("matching", () => {
     expect(commandFor(overrides, cmd("b"))).toBeNull();
     expect(bindingOf(overrides, "toggle-sidebar")).toBe("mod+alt+s");
     expect(bindingOf(overrides, "new-thread")).toBe("mod+n");
+  });
+
+  test("the model picker can be rebound and its default restored", () => {
+    const overrides = parseOverrides(JSON.stringify({ "toggle-model-picker": "mod+d" }));
+    expect(commandFor(overrides, cmd("d"))).toBe("toggle-model-picker");
+    expect(commandFor(overrides, cmd("m"))).toBeNull();
+    expect(bindingProblem(overrides, "toggle-model-picker", "mod+m")).toBeNull();
   });
 
   test("the list's marking keys are answered by the list, never by the window", () => {
@@ -201,7 +210,7 @@ describe("what a binding may be", () => {
     for (const binding of RESERVED_BINDINGS) {
       expect(bindingProblem({}, "new-thread", binding)).toContain("reserved by the system");
     }
-    expect(RESERVED_BINDINGS).toEqual(["mod+q", "mod+w", "mod+h", "mod+m", "mod+tab"]);
+    expect(RESERVED_BINDINGS).toEqual(["mod+q", "mod+w", "mod+h", "mod+tab"]);
   });
 
   test("refuses the editing keys a field owns", () => {
