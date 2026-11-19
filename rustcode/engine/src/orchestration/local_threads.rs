@@ -545,7 +545,13 @@ async fn start_one(
     let project = project_for(caller, caller_meta.as_ref(), ask.project)?;
     let harness = harness_for(ask.harness)?;
     let model = model_for(&harness, ask.model)?;
-    let account = account_for(&harness, ask.account)?;
+    // A delegate on the caller's own harness runs on the caller's own login
+    // unless it names another: that is the usage the user already chose to
+    // spend on this work, so it needs no second approval.
+    let own_account = crate::harness::store::load(caller)
+        .filter(|record| record.harness == harness.id)
+        .and_then(|record| record.account);
+    let account = account_for(&harness, ask.account)?.or_else(|| own_account.clone());
     let account_dir = crate::harness::config::config_dir()
         .map_err(|error| unavailable(format!("harness configuration is unavailable: {error}")))?;
     let has_accounts = !crate::harness::config::accounts_of(
@@ -554,6 +560,7 @@ async fn start_one(
     )
     .is_empty();
     if has_accounts
+        && !is_own_account(own_account.as_deref(), account.as_deref())
         && !(account.is_some()
             && crate::acp::settings::value("trust-delegate-accounts") == Some(json!(true)))
     {
@@ -1442,6 +1449,13 @@ fn authorize_account(
         return Ok(());
     }
     Err(not_allowed(account_refusal(harness, account, false)))
+}
+
+/// Whether a delegate runs on the named login its caller already runs on.
+/// The default sign-in is not "own": a caller on it says nothing about which
+/// login the user meant to spend.
+fn is_own_account(own: Option<&str>, account: Option<&str>) -> bool {
+    own.is_some() && own == account
 }
 
 /// The link-book key an account approval is filed under (`delegateAccountKey`
@@ -2390,6 +2404,14 @@ mod tests {
             let _ =
                 crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
         }
+    }
+
+    #[test]
+    fn a_delegate_on_its_callers_own_login_needs_no_approval() {
+        assert!(is_own_account(Some("paral-2"), Some("paral-2")));
+        assert!(!is_own_account(Some("paral-2"), Some("personal-1")));
+        assert!(!is_own_account(None, None));
+        assert!(!is_own_account(None, Some("paral-2")));
     }
 
     #[test]
