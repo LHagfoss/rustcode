@@ -334,7 +334,10 @@ The same public address serves the RustCode app itself to a browser, so you
 can use the machine (a VPS hub, a desktop that stays on) from any computer
 with no app installed. You sign in with the owner's passkey (above).
 
-1. Build the web app once and put it where the engine looks:
+1. Install the web app. `install.sh`, Homebrew and `rustcode update` put
+   each release's in `share/rustcode/web` next to the binary's `bin/` (it is
+   the `rustcode-web.tar.gz` release asset). The desktop app's own engine
+   has none, so on a desktop, or from a checkout, build it instead:
 
    ```sh
    cd apps/desktop && bun run build:hub
@@ -343,7 +346,8 @@ with no app installed. You sign in with the owner's passkey (above).
 
    The engine serves `$RUSTCODE_WEB_DIR` if set, else `<config>/web`, else
    `share/rustcode/web` next to the binary's `bin/`. Settings › Outside agents
-   says when none is there.
+   says when none is there. A copy in `<config>/web` wins over the installed
+   one and is not updated with it.
 2. Add a passkey for the public address, if you have none yet.
 3. Open `https://rustcode.example.com`. It sends you to `/login`; press
    *Sign in with passkey*.

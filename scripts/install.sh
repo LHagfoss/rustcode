@@ -388,6 +388,32 @@ select_cli_directory() {
     TARGET_EXE="${INSTALL_DIR}/rustcode"
 }
 
+# The web app a hub serves to a browser, in share/rustcode/web beside the
+# CLI's bin/, where the engine looks for it. Releases before it was published
+# have no entry, and a failure here leaves the CLI installed.
+install_web() {
+    local share target stage
+    manifest_asset '^rustcode-web\.tar\.gz$' >/dev/null || return 0
+    if ! fetch_verified rustcode-web.tar.gz; then
+        warn "Could not download the web app; a hub will not serve it in a browser."
+        return 0
+    fi
+    share="$(dirname "$INSTALL_DIR")/share/rustcode"
+    target="${share}/web"
+    if ! mkdir -p "$share" 2>/dev/null || ! stage="$(mktemp -d "${share}/.web.XXXXXX" 2>/dev/null)"; then
+        warn "Could not write ${share}; a hub will not serve the web app in a browser."
+        return 0
+    fi
+    if ! tar -xzf "$VERIFIED_PATH" -C "$stage" || [ ! -f "${stage}/index.html" ]; then
+        rm -rf "$stage"
+        warn "Could not extract the web app."
+        return 0
+    fi
+    chmod 755 "$stage"
+    rm -rf "$target"
+    mv "$stage" "$target"
+}
+
 install_cli() {
     local archive extracted
     if ! fetch_verified "$ASSET_NAME"; then
@@ -427,6 +453,7 @@ install_cli() {
     fi
 
     success "RustCode ${LATEST_TAG} installed successfully to ${TARGET_EXE}!"
+    install_web
 
     # Check PATH
     case ":$PATH:" in
