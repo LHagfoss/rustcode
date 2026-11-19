@@ -351,8 +351,8 @@ off"; reads always work. An older engine answers `unknown method` and the app
 keeps its web-view copy as before.
 
 Not yet: replicating a machine's raw `history.json`, `performance.json` and
-usage rows (the remote protocol has no call that reads them; the mirror holds
-what `session/load` replays); mirroring from a computer that has no app or
+usage rows (the mirror holds what `session/load` replays; Statistics reads a
+connected machine's totals live over `_rustcode/data/usage` instead); mirroring from a computer that has no app or
 terminal client paired with the others (every computer mirrors the machines it
 is paired with, so a fleet where each pair is paired both ways holds every copy
 on every computer); a "Continue here as a fork" action on a mirrored thread;

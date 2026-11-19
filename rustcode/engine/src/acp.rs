@@ -1334,6 +1334,15 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |_request: usage::UsageSharedRequest, responder, connection| {
+                connection.spawn(async move {
+                    responder.respond(usage::shared_plans().await)?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             {
                 let server = server.clone();
                 async move |request: usage::UsageLimitsRequest, responder, connection| {

@@ -1442,13 +1442,19 @@ Client requests and notifications are restricted to these exact methods:
 - `_rustcode/usage/limits`: a thread's plan usage windows (percent used and
   reset time) for the account it runs on here, which the paired app's composer
   meter shows. Numbers only; no sign-in leaves this machine.
+- `_rustcode/usage/shared` and `_rustcode/data/usage`: this machine's
+  subscriptions (its Codex login, and its Claude Code logins where reading
+  them asks nothing, that is, not from a macOS Keychain) and its turns' token
+  and cost totals, which the paired app's Settings › Usage and Statistics show
+  beside its own. Numbers and the thread titles a paired device already lists;
+  no sign-in or token leaves this machine.
 
 The only allowed prefixes are `session/`, `_rustcode/pulls` and
 `_rustcode/capabilities` (which includes adding an MCP server, that is, running
 a command on this machine: consistent with "can see and run all threads").
 Everything else is denied, including provider credentials and login, pairing
-and remote management, `_rustcode/server/*`, data-store SQL and usage totals,
-every subscription's plans (`_rustcode/usage/plans`),
+and remote management, `_rustcode/server/*`, data-store SQL,
+the full plans read (`_rustcode/usage/plans`, which can raise a Keychain prompt),
 and worktree handoff. Denied requests receive a JSON-RPC
 error with the same `id`, numeric code `-32601` and
 `data: {"code":"unauthorized_access"}`. Denied notifications are dropped.

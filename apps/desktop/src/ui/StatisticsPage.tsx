@@ -1,5 +1,6 @@
-// Settings › Statistics: what the local data store recorded of every turn, by
-// harness and model and by thread (`_rustcode/data/usage`, docs/data-store.md).
+// Settings › Statistics: what the data stores recorded of every turn, by
+// harness and model and by thread (`_rustcode/data/usage`, docs/data-store.md):
+// this computer's and, under "All machines", each connected machine's added up.
 // A thread's total includes the threads it started, so a parent shows the work
 // it delegated without the same tokens being counted twice. A count a harness
 // never reported stays blank. A cost is the USD a harness reported or, where it
@@ -15,11 +16,18 @@
 // breakdown's bar and table share the model rows.
 
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
-import { parseUsageReport, type UsageRow, type UsageTotals, windowTitle } from "../acp/rustcode";
+import {
+  parseUsageReport,
+  type UsageReport,
+  type UsageRow,
+  type UsageTotals,
+  windowTitle,
+} from "../acp/rustcode";
 import { type Harness, Method } from "../acp/types";
 import { modelTitle } from "../lib/modelNames";
 import { count } from "../lib/plural";
 import { useClock } from "../lib/useNow";
+import { type MachineScope, mergeUsageReports, scopeHosts } from "../state/fleetUsage";
 import {
   dailySeries,
   previousRows,
@@ -90,6 +98,10 @@ function rankGroups(groups: HarnessTotal[], costs: Map<string, CostTotals>): Har
     );
 }
 
+/** Each machine's report as one, for "All machines" (`state/fleetUsage.ts`). */
+const combineReports = (parts: { host: string; data: UsageReport }[]): UsageReport =>
+  mergeUsageReports(parts.map(({ host, data }) => ({ host, report: data })));
+
 /** The period's models by harness, the cost of each harness, and its models ordered by cost. */
 function useUsage(rows: UsageRow[] | undefined) {
   return useMemo(() => {
@@ -110,27 +122,38 @@ export function StatisticsPage() {
   const [all, setAll] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const range = useMemo(() => statsRange(period, new Date()), [period]);
+  // Every connected machine's store by default: a thread run on a server
+  // records its turns there, not here.
+  const [scope, setScope] = useState<MachineScope>("all");
+  const connected = useApp((s) => s.connectedHosts);
+  const machineNames = useApp((s) => s.machineNames);
+  const hosts = useMemo(() => scopeHosts(scope, connected), [scope, connected]);
+  const fleet = { hosts, combine: combineReports };
 
   // The period, and the same-length period before it, each read on its own so
   // their totals are the store's own sums rather than a page slicing.
-  const current = useEngineData(Method.dataUsage, parseUsageReport, {
-    groupBy: "model",
-    ...(range.since ? { since: range.since } : {}),
-  });
+  const current = useEngineData(
+    Method.dataUsage,
+    parseUsageReport,
+    { groupBy: "model", ...(range.since ? { since: range.since } : {}) },
+    fleet,
+  );
   const before = useEngineData(
     Method.dataUsage,
     parseUsageReport,
     { groupBy: "model", ...(range.previousSince ? { since: range.previousSince } : {}) },
-    { skip: period === "all" },
+    { skip: period === "all", ...fleet },
   );
   // One day read covers both periods: the sparklines and the daily chart draw
   // the current period's days, and the previous period's days count for its
   // change. "All" asks for every day the store recorded.
-  const days = useEngineData(Method.dataUsage, parseUsageReport, {
-    groupBy: "day",
-    ...(range.previousSince ? { since: range.previousSince } : {}),
-  });
-  const threads = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "thread" });
+  const days = useEngineData(
+    Method.dataUsage,
+    parseUsageReport,
+    { groupBy: "day", ...(range.previousSince ? { since: range.previousSince } : {}) },
+    fleet,
+  );
+  const threads = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "thread" }, fleet);
 
   const sessions = useApp((s) => s.sessions);
   const sessionsCapped = useApp((s) => s.sessionsCapped);
@@ -209,6 +232,18 @@ export function StatisticsPage() {
           title="Totals"
           action={
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {connected.length > 0 && (
+                <Choice<MachineScope>
+                  label="Machines"
+                  value={connected.includes(scope) || scope === "" ? scope : "all"}
+                  options={[
+                    { value: "all", label: "All machines" },
+                    { value: "", label: "This computer" },
+                    ...connected.map((host) => ({ value: host, label: machineNames[host] ?? host })),
+                  ]}
+                  onChange={setScope}
+                />
+              )}
               <Choice<StatsPeriod>
                 label="Period"
                 value={period}

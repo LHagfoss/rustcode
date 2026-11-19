@@ -473,3 +473,26 @@ export function mockAntigravityPlan(at: (hours: number) => number): JsonObject {
     ],
   };
 }
+
+/** A paired machine's subscriptions (`_rustcode/usage/shared`), for Settings › Usage › On <machine>. */
+export function mockSharedPlans(): JsonObject {
+  const at = (h: number) => Math.floor(Date.now() / 1000) + h * 3600;
+  return {
+    plans: [
+      {
+        id: "claude",
+        name: "Claude",
+        via: "Claude Code",
+        harness: "claude-code",
+        account: null,
+        status: "ok",
+        plan: "max",
+        windows: [
+          { label: "5-hour", usedPercent: 62, windowMinutes: 300, resetsAt: at(2) },
+          { label: "Weekly", usedPercent: 38, windowMinutes: 10_080, resetsAt: at(80) },
+        ],
+      },
+      { id: "codex", name: "ChatGPT", via: "Codex CLI", status: "signedOut", windows: [] },
+    ],
+  };
+}
