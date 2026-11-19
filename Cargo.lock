@@ -3564,6 +3564,7 @@ version = "1.43.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
+ "aws-lc-rs",
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
@@ -3631,6 +3632,7 @@ name = "rustcode-client"
 version = "1.43.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "base64 0.22.1",
  "chrono",
  "futures-util",

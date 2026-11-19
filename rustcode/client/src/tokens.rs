@@ -95,6 +95,14 @@ pub const TOKEN_STORE_ENV: &str = "RUSTCODE_MACHINE_TOKEN_STORE";
 const MAX_TOKENS_BYTES: u64 = 128 * 1024;
 const MAX_TOKENS: usize = 256;
 
+/// What the slot of a machine that took this install's key holds instead of
+/// a token (`crate::device_key`). It is stored where the token was, by the
+/// same write that drops the token, so every connection reads the two facts
+/// together: a machine is either one this computer signs in to, or one it
+/// presents a token to, never both and never neither. It is not a secret,
+/// and nothing presents it.
+pub const SIGNS_WITH_KEY: &str = "rustcode-signs-with-device-key-v1";
+
 /// How long one credential-store call may take before it is given up on. A
 /// keyring waiting for a person to unlock it never answers on its own; ten
 /// seconds is generous for an unlock that is happening and short enough that a
@@ -368,6 +376,19 @@ impl TokenStore {
         // Only a stored token makes the access token before it stale.
         self.forget_access(host_id);
         Ok(())
+    }
+
+    /// Whether `host_id` takes this install's key instead of a token.
+    pub fn signs(&self, host_id: &str) -> Result<bool> {
+        Ok(self
+            .get(host_id)?
+            .is_some_and(|stored| stored.expose() == SIGNS_WITH_KEY))
+    }
+
+    /// Record that `host_id` took this install's key and dropped the token:
+    /// the token is replaced, so it is never presented again.
+    pub fn set_signs(&self, host_id: &str) -> Result<()> {
+        self.set(host_id, &Secret::new(SIGNS_WITH_KEY))
     }
 
     pub fn remove(&self, host_id: &str) -> Result<()> {

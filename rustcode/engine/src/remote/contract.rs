@@ -104,6 +104,9 @@ pub fn schema_documents() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// An example device key: unpadded base64url of 32 bytes, no device's own.
+const GOLDEN_PUBLIC_KEY: &str = "3q2-796tvu_erb7v3q2-796tvu_erb7v3q2-796tvu8";
+
 /// The first frame a device sends, one example per shape. The secrets are
 /// examples; no gateway ever issued them.
 pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
@@ -121,6 +124,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 platform: Some("ios".to_owned()),
                 host_id: None,
                 capabilities: None,
+                public_key: None,
             },
         ),
         (
@@ -136,6 +140,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 platform: None,
                 host_id: None,
                 capabilities: None,
+                public_key: None,
             },
         ),
         (
@@ -170,6 +175,8 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 access_token: None,
                 wire_names: None,
                 capabilities: None,
+                public_key: None,
+                signature: None,
             },
         ),
         (
@@ -182,6 +189,8 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 access_token: None,
                 wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
                 capabilities: None,
+                public_key: None,
+                signature: None,
             },
         ),
         (
@@ -194,6 +203,8 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 access_token: None,
                 wire_names: None,
                 capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+                public_key: None,
+                signature: None,
             },
         ),
         (
@@ -206,6 +217,42 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 access_token: Some(Secret::new("ZXhhbXBsZS1hY2Nlc3MtdG9rZW4tbm90LXJlYWw")),
                 wire_names: None,
                 capabilities: None,
+                public_key: None,
+                signature: None,
+            },
+        ),
+        (
+            // A device paired before keys: its token, and the key it signs in
+            // with from now on.
+            "authenticate_register_key",
+            HandshakeRequest::Authenticate {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                device_id: "0011223344556677".to_owned(),
+                token: None,
+                refresh_token: Some(Secret::new("ZXhhbXBsZS1yZWZyZXNoLXRva2VuLW5vdC1yZWFs")),
+                access_token: None,
+                wire_names: None,
+                capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+                public_key: Some(GOLDEN_PUBLIC_KEY.to_owned()),
+                signature: None,
+            },
+        ),
+        (
+            // A device with a key: the signature of this socket's challenge,
+            // and no token.
+            "authenticate_signed",
+            HandshakeRequest::Authenticate {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                device_id: "0011223344556677".to_owned(),
+                token: None,
+                refresh_token: None,
+                access_token: None,
+                wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
+                capabilities: None,
+                public_key: None,
+                signature: Some(
+                    "x0O1YqvVbH9n2l4mJk8sZr3tWc6eAd5fGh7iUj0pQy2wEo9vRb1nTs4uMx3kLz8aCd6fHg2jKl5mNo7pQr0sTu".to_owned(),
+                ),
             },
         ),
         (
@@ -227,6 +274,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 platform: Some("linux".to_owned()),
                 host_id: Some("3f9a1c7e5b2d4086".to_owned()),
                 capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+                public_key: Some(GOLDEN_PUBLIC_KEY.to_owned()),
             },
         ),
         (
@@ -254,6 +302,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                     .iter()
                     .map(|capability| (*capability).to_owned())
                     .collect(),
+                challenge: Some("n3Vd0lq9YzN8cBf2kX7tR4wJ1eHs6uAa5oPiGmLy0Zc".to_owned()),
             },
         ),
         (
@@ -297,6 +346,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 version: Some(CONTRACT_VERSION.to_owned()),
                 platform: Some(CONTRACT_PLATFORM.to_owned()),
                 routes: Vec::new(),
+                key_registered: false,
             },
         ),
         (
@@ -319,6 +369,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 version: None,
                 platform: None,
                 routes: Vec::new(),
+                key_registered: false,
             },
         ),
         (
@@ -355,6 +406,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                         provider: None,
                     },
                 ],
+                key_registered: false,
             },
         ),
         (
@@ -375,6 +427,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 version: None,
                 platform: None,
                 routes: Vec::new(),
+                key_registered: false,
             },
         ),
         (
@@ -397,6 +450,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 version: None,
                 platform: None,
                 routes: Vec::new(),
+                key_registered: false,
             },
         ),
         (
@@ -419,6 +473,30 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 version: None,
                 platform: None,
                 routes: Vec::new(),
+                key_registered: false,
+            },
+        ),
+        (
+            // The device sent its key with its token: the key is stored, the
+            // token is spent, and nothing new is handed out.
+            "authenticated_key_registered".to_owned(),
+            HandshakeResponse::Authenticated {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                gateway_id: GATEWAY.to_owned(),
+                instance_id: INSTANCE.to_owned(),
+                device_id: "0011223344556677".to_owned(),
+                device_name: "Lars's Windows PC".to_owned(),
+                host_name: Some("studio".to_owned()),
+                expires_at: None,
+                refresh_token: None,
+                access_token: None,
+                access_expires_at: None,
+                rotation_id: None,
+                wire_names: None,
+                version: None,
+                platform: None,
+                routes: Vec::new(),
+                key_registered: true,
             },
         ),
     ];
@@ -432,6 +510,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
         ErrorCode::Unauthorized,
         ErrorCode::TokenReplayed,
         ErrorCode::AccessExpired,
+        ErrorCode::KeyRequired,
         ErrorCode::UnauthorizedAccess,
         ErrorCode::Busy,
         ErrorCode::ConnectBusy,

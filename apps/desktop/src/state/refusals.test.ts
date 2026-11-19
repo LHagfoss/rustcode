@@ -64,6 +64,7 @@ describe("a refused connection", () => {
       "rate_limited",
       "unauthorized",
       "token_replayed",
+      "key_required",
       "unexpected_origin",
       "secure_connection",
       "unrecognized_request",

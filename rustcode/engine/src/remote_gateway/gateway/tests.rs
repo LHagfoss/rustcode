@@ -1878,3 +1878,269 @@ async fn a_relayed_connection_is_reported_as_the_tunnel() {
     );
     harness.stop().await;
 }
+
+mod device_keys {
+    //! Key-pair authentication (#3956): a device signs its socket's
+    //! challenge, a signature is worth nothing on another socket, and once a
+    //! key is registered the token is refused.
+
+    use super::*;
+    use crate::remote_gateway::device_key::test_keys::TestKey;
+
+    /// Ask who answers; the `described` frame's challenge and gateway id.
+    async fn described(client: &mut Client) -> (String, String) {
+        client
+            .send(json!({"type": "describe", "protocol_version": 1}))
+            .await;
+        let described = client.next_json().await;
+        assert_eq!(described["type"], "described", "{described}");
+        assert!(
+            described["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("key_auth")),
+            "{described}"
+        );
+        (
+            described["gateway_id"].as_str().unwrap().to_owned(),
+            described["challenge"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    /// A signed `authenticate` on a fresh socket, as a device with `key` does.
+    async fn sign_in(addr: SocketAddr, device_id: &str, key: &TestKey) -> (Client, Value) {
+        let mut client = Client::connect(addr).await;
+        let (gateway_id, challenge) = described(&mut client).await;
+        client
+            .send(json!({
+                "type": "authenticate",
+                "protocol_version": 1,
+                "device_id": device_id,
+                "signature": key.sign(&gateway_id, &challenge, device_id),
+            }))
+            .await;
+        let frame = client.next_json().await;
+        (client, frame)
+    }
+
+    #[tokio::test]
+    async fn a_device_that_pairs_with_a_key_gets_no_token_and_signs_in() {
+        let harness = Harness::start().await;
+        let key = TestKey::new();
+        let offer = harness.offer().await;
+        let mut client = Client::connect(harness.addr).await;
+        client
+            .send(json!({
+                "type": "pair",
+                "protocol_version": 1,
+                "method": "credential",
+                "secret": offer.credential.expose(),
+                "device_name": "laptop",
+                "capabilities": ["token_rotation"],
+                "public_key": key.public_key(),
+            }))
+            .await;
+        let paired = client.next_json().await;
+        assert_eq!(paired["type"], "paired", "{paired}");
+        assert_eq!(paired["key_registered"], true, "{paired}");
+        for absent in ["token", "refresh_token", "access_token", "expires_at"] {
+            assert!(paired.get(absent).is_none(), "{absent} in {paired}");
+        }
+        let device_id = paired["device_id"].as_str().unwrap().to_owned();
+
+        let (_signed, frame) = sign_in(harness.addr, &device_id, &key).await;
+        assert_eq!(frame["type"], "authenticated", "{frame}");
+        assert_eq!(frame["device_id"], device_id.as_str());
+        assert!(frame.get("refresh_token").is_none(), "{frame}");
+        assert!(frame.get("expires_at").is_none(), "{frame}");
+
+        // Another key does not sign in as this device.
+        let (mut client, frame) = sign_in(harness.addr, &device_id, &TestKey::new()).await;
+        assert_eq!(frame["code"], "unauthorized", "{frame}");
+        client.expect_closed().await;
+
+        let stored = fs::read_to_string(harness.lifecycle.devices_path()).unwrap();
+        assert!(stored.contains(&key.public_key()));
+        assert!(!stored.contains("token_sha256"), "{stored}");
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_signature_is_spent_with_its_socket() {
+        let harness = Harness::start().await;
+        let key = TestKey::new();
+        let (_paired, device_id, token) = harness.paired_device("laptop").await;
+        let (_first, frame) =
+            Client::authenticate_with_key(harness.addr, &device_id, &token, &key).await;
+        assert_eq!(frame["key_registered"], true, "{frame}");
+
+        // A signature captured on one socket, replayed on another: that
+        // socket's challenge is a new one, so the signature does not match.
+        let mut first = Client::connect(harness.addr).await;
+        let (gateway_id, challenge) = described(&mut first).await;
+        let captured = key.sign(&gateway_id, &challenge, &device_id);
+        let mut replay = Client::connect(harness.addr).await;
+        let _ = described(&mut replay).await;
+        replay
+            .send(json!({
+                "type": "authenticate",
+                "protocol_version": 1,
+                "device_id": device_id,
+                "signature": captured,
+            }))
+            .await;
+        replay.expect_error("unauthorized").await;
+
+        // Without `describe` there is no challenge to sign.
+        let mut bare = Client::connect(harness.addr).await;
+        bare.send(json!({
+            "type": "authenticate",
+            "protocol_version": 1,
+            "device_id": device_id,
+            "signature": captured,
+        }))
+        .await;
+        bare.expect_error("invalid_frame").await;
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_device_paired_with_a_token_moves_to_its_key_without_pairing_again() {
+        let harness = Harness::start().await;
+        let key = TestKey::new();
+        let (_paired, device_id, token) = harness.paired_device("laptop").await;
+
+        // Its token still works the old way until it sends a key.
+        let (_old, frame) = Client::authenticate(harness.addr, &device_id, &token).await;
+        assert_eq!(frame["type"], "authenticated", "{frame}");
+        assert!(frame.get("key_registered").is_none(), "{frame}");
+
+        // The next connection sends the key with the token.
+        let (_migrated, frame) =
+            Client::authenticate_with_key(harness.addr, &device_id, &token, &key).await;
+        assert_eq!(frame["type"], "authenticated", "{frame}");
+        assert_eq!(frame["key_registered"], true, "{frame}");
+        assert!(frame.get("expires_at").is_none(), "{frame}");
+
+        // From now on the token is refused, and the owner hears about it.
+        let (mut client, frame) = Client::authenticate(harness.addr, &device_id, &token).await;
+        assert_eq!(frame["code"], "key_required", "{frame}");
+        client.expect_closed().await;
+        let refused = refusals_with(&harness, RefusalReason::KeyRequired).await;
+        assert_eq!(
+            refused
+                .iter()
+                .filter(|entry| entry.reason == RefusalReason::KeyRequired)
+                .count(),
+            1,
+            "{refused:?}"
+        );
+
+        // A second key cannot take over the record with the old token either.
+        let (mut client, frame) =
+            Client::authenticate_with_key(harness.addr, &device_id, &token, &TestKey::new()).await;
+        assert_eq!(frame["code"], "key_required", "{frame}");
+        client.expect_closed().await;
+
+        let (_signed, frame) = sign_in(harness.addr, &device_id, &key).await;
+        assert_eq!(frame["type"], "authenticated", "{frame}");
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_rotating_device_moves_to_its_key_and_its_tokens_are_gone() {
+        let harness = Harness::start().await;
+        let key = TestKey::new();
+        let offer = harness.offer().await;
+        let mut client = Client::connect(harness.addr).await;
+        client
+            .send(json!({
+                "type": "pair",
+                "protocol_version": 1,
+                "method": "credential",
+                "secret": offer.credential.expose(),
+                "device_name": "laptop",
+                "capabilities": ["token_rotation"],
+            }))
+            .await;
+        let paired = client.next_json().await;
+        let device_id = paired["device_id"].as_str().unwrap().to_owned();
+        let refresh = paired["refresh_token"].as_str().unwrap().to_owned();
+        let access = paired["access_token"].as_str().unwrap().to_owned();
+
+        let mut migrate = Client::connect(harness.addr).await;
+        migrate
+            .send(json!({
+                "type": "authenticate",
+                "protocol_version": 1,
+                "device_id": device_id,
+                "refresh_token": refresh,
+                "capabilities": ["token_rotation"],
+                "public_key": key.public_key(),
+            }))
+            .await;
+        let frame = migrate.next_json().await;
+        assert_eq!(frame["key_registered"], true, "{frame}");
+        // Nothing it could rotate to is handed out.
+        for absent in ["refresh_token", "access_token", "rotation_id"] {
+            assert!(frame.get(absent).is_none(), "{absent} in {frame}");
+        }
+
+        // Neither the refresh token nor the access token works now.
+        let mut client = Client::connect(harness.addr).await;
+        client
+            .send(json!({"type": "authenticate", "protocol_version": 1, "device_id": device_id, "access_token": access}))
+            .await;
+        client.expect_error("key_required").await;
+        let mut client = Client::connect(harness.addr).await;
+        client
+            .send(json!({"type": "authenticate", "protocol_version": 1, "device_id": device_id, "refresh_token": refresh}))
+            .await;
+        client.expect_error("key_required").await;
+        let (_signed, frame) = sign_in(harness.addr, &device_id, &key).await;
+        assert_eq!(frame["type"], "authenticated", "{frame}");
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn revoking_a_device_removes_its_key() {
+        let harness = Harness::start().await;
+        let key = TestKey::new();
+        let (_paired, device_id, token) = harness.paired_device("phone").await;
+        let (mut live, frame) =
+            Client::authenticate_with_key(harness.addr, &device_id, &token, &key).await;
+        assert_eq!(frame["key_registered"], true, "{frame}");
+
+        bounded(harness.lifecycle.revoke("phone")).await.unwrap();
+        live.expect_error("revoked").await;
+        let (mut client, frame) = sign_in(harness.addr, &device_id, &key).await;
+        assert_eq!(frame["code"], "unauthorized", "{frame}");
+        client.expect_closed().await;
+        let stored = fs::read_to_string(harness.lifecycle.devices_path()).unwrap();
+        assert!(!stored.contains(&key.public_key()), "{stored}");
+        harness.stop().await;
+    }
+
+    impl Client {
+        /// `authenticate` with a static token and the key to register.
+        async fn authenticate_with_key(
+            addr: SocketAddr,
+            device_id: &str,
+            token: &str,
+            key: &TestKey,
+        ) -> (Self, Value) {
+            let mut client = Self::connect(addr).await;
+            client
+                .send(json!({
+                    "type": "authenticate",
+                    "protocol_version": 1,
+                    "device_id": device_id,
+                    "token": token,
+                    "public_key": key.public_key(),
+                }))
+                .await;
+            let frame = client.next_json().await;
+            (client, frame)
+        }
+    }
+}

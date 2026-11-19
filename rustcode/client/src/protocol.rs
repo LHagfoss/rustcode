@@ -33,6 +33,11 @@ pub const GATEWAY_CAPABILITY_DESCRIBE: &str = "describe";
 /// What a `described` frame lists when the gateway redeems connect codes.
 pub const GATEWAY_CAPABILITY_MACHINE_CODES: &str = "machine_codes";
 
+/// What a gateway lists when it takes device keys: its `described` frame
+/// carries a `challenge`, `authenticate` may carry `public_key` with a token
+/// to register this install's key, and then a `signature` instead of a token.
+pub const GATEWAY_CAPABILITY_KEY_AUTH: &str = "key_auth";
+
 /// Digits in the pairing code a machine shows and the owner types, as the
 /// gateway issues it. A `connect_approved` frame reports the same number.
 pub const PAIRING_CODE_DIGITS: u32 = 8;
@@ -128,6 +133,9 @@ pub enum HandshakeRequest {
         /// the static device token and its expiry.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capabilities: Option<Vec<String>>,
+        /// This install's public key, for a gateway that lists `key_auth`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
     },
     /// Present a device token obtained from an earlier `paired` frame.
     Authenticate {
@@ -151,6 +159,14 @@ pub enum HandshakeRequest {
         /// Optional features the device understands, as in `pair`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capabilities: Option<Vec<String>>,
+        /// With a token: this install's public key, which the machine keeps
+        /// from then on instead of the token (`key_registered`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
+        /// Instead of a token: this install's signature of the socket's
+        /// challenge ([`crate::device_key`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     /// The device stored the refresh token from the `authenticated` frame that
     /// named `rotation_id`, so the machine may retire the token before it. A
@@ -188,9 +204,13 @@ pub enum HandshakeResponse {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         platform: Option<String>,
         /// What the gateway takes beyond v1's first frames:
-        /// [`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`].
+        /// [`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`],
+        /// [`GATEWAY_CAPABILITY_KEY_AUTH`].
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         capabilities: Vec<String>,
+        /// This socket's challenge, which a device with a key signs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        challenge: Option<String>,
     },
     /// The request is in front of the machine's owner. Wait on the same socket.
     ConnectPending {
@@ -250,6 +270,9 @@ pub enum HandshakeResponse {
         /// gateway sends them; an older one leaves the field out.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         routes: Vec<HostRoute>,
+        /// The machine stored the public key the `pair` frame sent.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        key_registered: bool,
     },
     /// The presented credential was accepted.
     Authenticated {
@@ -287,6 +310,10 @@ pub enum HandshakeResponse {
         /// `paired`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         routes: Vec<HostRoute>,
+        /// The machine stored the public key this frame answered: sign in
+        /// with the key from now on, and drop the token.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        key_registered: bool,
     },
     Error {
         code: ErrorCode,
@@ -328,6 +355,9 @@ pub enum ErrorCode {
     /// The access token expired or was replaced. The pairing is still valid:
     /// authenticate with the refresh token.
     AccessExpired,
+    /// A token was presented for a device that signs in with its key: the
+    /// token is worthless now. Pair again if this install lost its key.
+    KeyRequired,
     /// The authenticated device cannot perform this operation.
     UnauthorizedAccess,
     Busy,
@@ -350,7 +380,7 @@ impl ErrorCode {
     pub fn needs_new_pairing(self) -> bool {
         matches!(
             self,
-            Self::Unauthorized | Self::Revoked | Self::TokenReplayed
+            Self::Unauthorized | Self::Revoked | Self::TokenReplayed | Self::KeyRequired
         )
     }
 
@@ -358,7 +388,10 @@ impl ErrorCode {
     /// credential. The saved token is worthless after one of these, so the
     /// client drops it instead of presenting it again.
     pub fn revoked_pairing(self) -> bool {
-        matches!(self, Self::Revoked | Self::TokenReplayed)
+        matches!(
+            self,
+            Self::Revoked | Self::TokenReplayed | Self::KeyRequired
+        )
     }
 }
 
@@ -426,6 +459,8 @@ mod tests {
                 "authenticate.json".to_owned(),
                 "authenticate_access.json".to_owned(),
                 "authenticate_refresh.json".to_owned(),
+                "authenticate_register_key.json".to_owned(),
+                "authenticate_signed.json".to_owned(),
                 "authenticate_thread_names.json".to_owned(),
                 "connect_request.json".to_owned(),
                 "connect_request_desktop.json".to_owned(),
@@ -662,6 +697,8 @@ mod tests {
             access_token: Some(Secret::new(needle)),
             wire_names: None,
             capabilities: None,
+            public_key: None,
+            signature: None,
         };
         assert!(!format!("{frame:?}").contains(needle));
         assert!(!format!("{:?}", Secret::new(needle)).contains(needle));

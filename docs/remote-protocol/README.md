@@ -194,6 +194,44 @@ Host → client:
   access. A gateway that records them lists `desktops` in its Bonjour `caps`
   and in the `sessions` result's `capabilities`; an older one ignores them.
 
+### Device keys
+
+A gateway that lists `key_auth` in its `described` capabilities lets a device
+sign in with an Ed25519 key pair instead of a token. The point is the public
+address: a token that crosses a tunnel can be read at the tunnel's edge and
+used again, and a signature cannot, because it is good for one socket only.
+
+- Every `described` frame from such a gateway carries `challenge`: 32 random
+  bytes, unpadded base64url, made for that socket and spent on its first
+  `authenticate`.
+- The device sends its public key once, as `public_key` (unpadded base64url
+  of the raw 32 bytes): in `pair`, or, for a device paired before keys, in
+  the next `authenticate` next to the token it holds. The answer carries
+  `"key_registered": true`. From then on the record has no token at all: the
+  host drops its digests, and a token for it is refused with `key_required`.
+- After that the device authenticates with `signature` and no token:
+
+```json
+{"type": "describe", "protocol_version": 1}
+{"type": "described", "protocol_version": 1, "gateway_id": "…", "capabilities": ["describe", "machine_codes", "key_auth"], "challenge": "<32 bytes, base64url>"}
+{"type": "authenticate", "protocol_version": 1, "device_id": "0011223344556677", "signature": "<64 bytes, base64url>"}
+```
+
+- What is signed is the bytes of `rustcode-remote-auth-v1`, the
+  `gateway_id`, the `challenge` and the `device_id`, each followed by a zero
+  byte. Naming the gateway keeps a signature from being accepted by another
+  machine; naming the device keeps it from authenticating another record.
+- A `signature` is accepted only after `describe` on the same socket, and
+  only once. A signature on a socket that sent no `describe` is
+  `invalid_frame`; a wrong signature or a device with no key is
+  `unauthorized`.
+- The private key never leaves the device, and the host stores the public
+  key only. The owner's device list shows which devices sign
+  (`signs_with_key`).
+- Until every client signs, the gateway keeps taking tokens from devices that
+  have not registered a key. An older gateway ignores `public_key`, sends no
+  `challenge`, and a device keeps its token there.
+
 ### Rotating tokens, no expiry
 
 A device that names `"capabilities": ["token_rotation"]` in `pair` gets no
@@ -306,6 +344,7 @@ optional and absent otherwise.
 | Handshake (`pair`) | `rate_limited` | Too many failed pairings on the host; `retry_after_secs` says when to try again. |
 | Handshake (`authenticate`) | `unauthorized` | Unknown or revoked device, or wrong token. Stop reconnecting; pair again. |
 | Handshake (`authenticate`) | `access_expired` | The access token has expired or was replaced. The pairing is still valid: authenticate with the refresh token. |
+| Handshake (`authenticate`) | `key_required` | A token was presented for a device that signs in with its key. Sign the socket's `challenge`; a client that has no key for it pairs again. |
 | Handshake (`authenticate`) | `token_replayed` | A retired refresh token was presented; the pairing was revoked. Stop, drop the tokens, pair again. |
 | After authentication | `invalid_frame` | A frame tagged `token_ack` without a `rotation_id`. A bug. |
 | Handshake | `busy` | Connection or device limit reached. Retry later. |

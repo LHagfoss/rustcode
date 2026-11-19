@@ -211,6 +211,7 @@ mod tests {
                 kind: Default::default(),
                 platform: "ios".into(),
                 host_id: None,
+                signs_with_key: false,
             })
             .collect();
         status

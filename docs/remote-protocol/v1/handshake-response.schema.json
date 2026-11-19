@@ -47,6 +47,11 @@
           "type": "string"
         },
         {
+          "const": "key_required",
+          "description": "A token was presented for a device that signs in with its key. The\ntoken is no longer accepted: sign the challenge, or pair again if this\ninstall lost its key.",
+          "type": "string"
+        },
+        {
           "const": "unauthorized_access",
           "description": "The authenticated device cannot perform this operation.",
           "type": "string"
@@ -162,11 +167,18 @@
       "description": "The answer to `describe`: who this gateway is, and nothing secret. The\nsocket stays open for the next first frame.",
       "properties": {
         "capabilities": {
-          "description": "What this gateway takes beyond protocol v1's first frames:\n[`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`].",
+          "description": "What this gateway takes beyond protocol v1's first frames:\n[`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`],\n[`GATEWAY_CAPABILITY_KEY_AUTH`].",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "challenge": {
+          "description": "A random value for this socket only, which a device with a key\nsigns in its `authenticate` frame. Spent by that frame.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "gateway_id": {
           "type": "string"
@@ -340,6 +352,10 @@
         "instance_id": {
           "type": "string"
         },
+        "key_registered": {
+          "description": "True when the gateway stored the `public_key` the device sent: the\ndevice signs in with it from now on, and its token stops working.",
+          "type": "boolean"
+        },
         "platform": {
           "description": "What this host runs: `macos`, `linux` or `windows`. The device's\nmachine list shows it; absent from an older host, whose platform\nstays `unknown`.",
           "type": [
@@ -455,6 +471,10 @@
         },
         "instance_id": {
           "type": "string"
+        },
+        "key_registered": {
+          "description": "As in `paired`: the gateway stored the `public_key` this frame\nanswered, and takes only signatures from this device from now on.",
+          "type": "boolean"
         },
         "platform": {
           "description": "What this host runs, as in `paired`.",

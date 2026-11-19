@@ -50,6 +50,9 @@ path = "rustcode/engine/tests/daemon_windows.rs"
 [dependencies]
 anyhow = "1.0.97"
 agent-client-protocol = "2.0.0"
+# Ed25519 for key-pair authentication of paired devices (#3956); already
+# built for rustls and jsonwebtoken.
+aws-lc-rs = "1"
 base64 = "0.22.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }

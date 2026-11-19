@@ -83,7 +83,7 @@ pub(super) async fn serve_connection(
         )),
         Ok(Err(None)) => return,
         Ok(Err(Some(rejection))) => Err(rejection),
-        Ok(Ok(text)) => match HandshakeRequest::parse(&text) {
+        Ok(Ok((text, issued))) => match HandshakeRequest::parse(&text) {
             Ok(HandshakeRequest::ConnectRequest {
                 device_name,
                 platform,
@@ -116,7 +116,9 @@ pub(super) async fn serve_connection(
             }
             parsed => {
                 thread_names = parsed.is_ok_and(|request| request.wants_thread_names());
-                shared.admit_device(slot.ip(), &text)
+                // The challenge is spent by this one frame, accepted or not:
+                // the socket closes after a refusal.
+                shared.admit_device(slot.ip(), &text, issued.as_deref())
             }
         },
     };
@@ -269,15 +271,20 @@ async fn first_frame(socket: &mut Socket) -> Result<String, Option<HandshakeResp
 /// The first frame that is not `describe`. A socket may ask who answers
 /// once, before anything secret: it is told `described` and its next frame is
 /// the real first frame, under the same deadline. Asking twice is refused.
+///
+/// With the frame comes the challenge the `described` frame carried, which a
+/// device with a key signs in that next frame. It lives only in this socket's
+/// task, so it can be spent once and on this connection only.
 async fn first_frame_after_describe(
     shared: &Shared,
     socket: &mut Socket,
-) -> Result<String, Option<HandshakeResponse>> {
+) -> Result<(String, Option<String>), Option<HandshakeResponse>> {
     let text = first_frame(socket).await?;
     if !is_describe(&text) {
-        return Ok(text);
+        return Ok((text, None));
     }
-    send_frame(shared, socket, &shared.describe())
+    let challenge = super::device_key::new_challenge();
+    send_frame(shared, socket, &shared.describe(&challenge))
         .await
         .ok_or(None)?;
     let text = first_frame(socket).await?;
@@ -287,7 +294,7 @@ async fn first_frame_after_describe(
             "describe is answered once per connection",
         )));
     }
-    Ok(text)
+    Ok((text, Some(challenge)))
 }
 
 fn is_describe(text: &str) -> bool {

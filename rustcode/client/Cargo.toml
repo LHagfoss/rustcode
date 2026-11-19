@@ -7,6 +7,9 @@ description = "The machine client: saved machines, pairing, the WebSocket transp
 
 [dependencies]
 anyhow = "1.0.97"
+# This install's Ed25519 key for signing in to machines (#3956); already
+# built for rustls.
+aws-lc-rs = "1"
 base64 = "0.22.1"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 futures-util = "0.3.32"

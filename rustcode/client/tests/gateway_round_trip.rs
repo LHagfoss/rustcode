@@ -16,6 +16,7 @@ use rustcode::remote_gateway::address::plan_listen;
 use rustcode::remote_gateway::gateway::{Gateway, GatewayConfig, Limits};
 use rustcode::remote_gateway::hub::{HubLimits, SessionHub};
 use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
+use rustcode_client::device_key::DeviceKey;
 use rustcode_client::machine::machine_from_pairing;
 use rustcode_client::{
     Access, ClientKind, Connector, Machine, MachineRegistry, Paired, Route, RouteKind, Secret,
@@ -438,7 +439,11 @@ async fn pair(
 async fn a_rotating_pairing_reconnects_with_access_then_rotates() {
     let host = Host::start().await;
     let config = tempfile::tempdir_in("/tmp").unwrap();
-    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    // Token rotation is what is under test: a client that offered its key
+    // would leave tokens behind on the first reconnect.
+    let connector = Connector::new(config.path(), ClientKind::Desktop)
+        .unwrap()
+        .without_key();
     let (machine, tokens, paired) = pair(&host, &connector, config.path()).await;
 
     // The client asked for rotation, so it got a refresh token and a
@@ -995,5 +1000,82 @@ async fn a_stranger_on_a_saved_address_gets_no_token_and_cannot_unpair() {
         .await
         .expect("the pairing survived");
     stranger.stop().await;
+    host.stop().await;
+}
+
+/// A machine paired with a token moves to this install's key on the next
+/// connection (#3956): the token goes, the machine is marked as signing, and
+/// every connection after that signs the socket's challenge instead.
+#[tokio::test]
+async fn the_token_gives_way_to_this_installs_key() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let ask = connector.ask(&host.address()).await.unwrap();
+    let code = host.accept_connect_request().await;
+    let approved = ask.wait(WAIT).await.unwrap().unwrap();
+    let paired = approved.pair(&code).await.unwrap();
+    let mut registry = MachineRegistry::load(config.path()).unwrap();
+    let machine = machine_from_pairing(paired.session.welcome(), Route::new(host.address()), None);
+    registry.insert(machine.clone()).unwrap();
+    let tokens = TokenStore::in_file(config.path()).unwrap();
+    tokens.set(&machine.host_id, &paired.secret).unwrap();
+    let paired_secret = paired.secret.clone();
+    drop(paired);
+    assert!(!machine.signs);
+
+    // The first connection presents the token with the key.
+    let (session, _) = connector.connect(&machine, &tokens).await.unwrap();
+    drop(session);
+    let machine = MachineRegistry::load(config.path())
+        .unwrap()
+        .get(&machine.host_id)
+        .cloned()
+        .unwrap();
+    assert!(machine.signs, "the machine took the key");
+    assert!(
+        tokens.signs(&machine.host_id).unwrap(),
+        "the key marker replaced the token"
+    );
+    assert_ne!(
+        tokens.get(&machine.host_id).unwrap(),
+        Some(paired_secret.clone()),
+        "the token is dropped once the key replaced it"
+    );
+    assert!(DeviceKey::load(&tokens).unwrap().is_some());
+
+    // Later connections sign, with no token at all.
+    let (session, _) = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the key signs in");
+    assert_eq!(session.welcome().device_id, machine.device_id);
+    drop(session);
+
+    // A copy of the machine saved before the key was taken signs too: the
+    // token store is what says so.
+    let mut stale = machine.clone();
+    stale.signs = false;
+    let (session, _) = connector
+        .connect(&stale, &tokens)
+        .await
+        .expect("a stale copy signs in");
+    drop(session);
+
+    // Another key is not this computer.
+    tokens
+        .remove(rustcode_client::device_key::KEY_SLOT)
+        .unwrap();
+    let other = DeviceKey::load_or_create(&tokens, WAIT).await.unwrap();
+    assert!(other.public_key().len() == 43);
+    let error = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect_err("a key the machine does not hold is refused");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("unauthorized") || message.contains("refused"),
+        "{message}"
+    );
     host.stop().await;
 }

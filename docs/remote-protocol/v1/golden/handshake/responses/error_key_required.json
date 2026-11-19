@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "key_required",
+  "message": "why the connection is being closed"
+}

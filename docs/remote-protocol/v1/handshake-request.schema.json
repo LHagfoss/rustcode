@@ -163,6 +163,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "public_key": {
+          "description": "The device's Ed25519 public key, unpadded base64url of its 32\nbytes. A gateway that lists `key_auth` stores it, answers\n`key_registered`, and from then on takes only a `signature` from\nthis device. An older gateway ignores it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "secret": {
           "$ref": "#/$defs/Secret"
         },
@@ -219,6 +226,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "public_key": {
+          "description": "With a token: the device's public key, for a device paired before\nkeys. A gateway that lists `key_auth` accepts the token, stores\nthe key when the record has none, and answers `key_registered`;\nthe token is refused from then on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "refresh_token": {
           "anyOf": [
             {
@@ -229,6 +243,13 @@
             }
           ],
           "description": "The refresh token of a device that rotates its tokens: the same\nslot as `token`, under the name such a device uses."
+        },
+        "signature": {
+          "description": "Instead of a token: the device key's signature of the challenge\nin this socket's `described` frame, over\n`rustcode-remote-auth-v1 NUL gateway_id NUL challenge NUL device_id NUL`,\nunpadded base64url. Only valid after `describe` on the same socket.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "token": {
           "anyOf": [

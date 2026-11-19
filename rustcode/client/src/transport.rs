@@ -81,9 +81,23 @@ pub fn is_tls(address: &str) -> bool {
 /// An open WebSocket to a machine's gateway, before or after authentication.
 pub struct Connection {
     socket: Socket,
+    /// The challenge this socket's `described` frame carried, for a machine
+    /// that takes device keys; spent by the next `authenticate`.
+    challenge: Option<String>,
 }
 
 impl Connection {
+    /// Keep the challenge the machine's `described` frame carried.
+    pub fn set_challenge(&mut self, challenge: Option<String>) {
+        self.challenge = challenge;
+    }
+
+    /// The challenge from this socket's `described` frame, if the machine
+    /// takes device keys.
+    pub fn challenge(&self) -> Option<&str> {
+        self.challenge.as_deref()
+    }
+
     /// Dial `address` and complete the WebSocket upgrade.
     ///
     /// `address` is `host:port`, a bare host (the default port), `[v6]:port`
@@ -121,7 +135,10 @@ impl Connection {
                 .await
                 .with_context(|| format!("{address} did not answer the WebSocket upgrade in time"))?
                 .with_context(|| format!("{address} refused the WebSocket upgrade"))?;
-        Ok(Self { socket })
+        Ok(Self {
+            socket,
+            challenge: None,
+        })
     }
 
     /// Send one handshake frame.
