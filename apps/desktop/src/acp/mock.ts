@@ -56,7 +56,7 @@ import {
   MOCK_VIZ,
   mockLinkMeta,
 } from "./mockSmartUi";
-import { mockAntigravityPlan, mockUsage } from "./mockUsage";
+import { mockAntigravityPlan, mockSharedPlans, mockUsage } from "./mockUsage";
 import type { HarnessSnapshot } from "./types";
 
 export {
@@ -1241,6 +1241,8 @@ export class MockEngine {
         this.linkBook = book as JsonObject;
         return { saved: true };
       }
+      case "_rustcode/usage/shared":
+        return mockSharedPlans();
       case "_rustcode/usage/plans": {
         const at = (h: number) => Math.floor(Date.now() / 1000) + h * 3600;
         const p = params as

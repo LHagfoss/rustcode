@@ -413,6 +413,39 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
     serde_json::json!({ "plans": plans })
 }
 
+/// `_rustcode/usage/shared`: the plans a paired computer may read here, so
+/// its app shows this machine's subscriptions while their own copy of the
+/// sign-in has lapsed (a server where every thread runs keeps its tokens fresh,
+/// a Mac that only drives it does not). Numbers only: no token or sign-in
+/// leaves this machine. Claude Code's logins are read only where that asks
+/// nothing of the user (`claude_limits_without_asking`): on macOS the Keychain
+/// can prompt, and a prompt nobody at that Mac asked for must never appear.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/usage/shared", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageSharedRequest {}
+
+/// Answer `_rustcode/usage/shared`: the `_rustcode/usage/plans` rows for the
+/// Codex login and, where reading asks nothing, every Claude login, from the
+/// engine's minute of cache.
+pub(crate) async fn shared_plans() -> serde_json::Value {
+    plans(shared_request(claude_limits_without_asking())).await
+}
+
+/// What a paired computer's read asks of `plans`: never forced, never
+/// Antigravity, and Claude only when `claude` (no Keychain behind it).
+fn shared_request(claude: bool) -> UsagePlansRequest {
+    UsagePlansRequest {
+        antigravity: false,
+        claude,
+        claude_accounts: claude,
+        claude_account: None,
+        force: false,
+    }
+}
+
 async fn subscription_plans(request: &UsagePlansRequest) -> Vec<serde_json::Value> {
     let window = |label: &str, window: &crate::provider_auth::RateLimitWindow| {
         serde_json::json!({
@@ -1174,5 +1207,19 @@ mod harness_tests {
             message: "expired".into(),
         };
         assert_eq!(claude_limits(&failed), None);
+    }
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+
+    #[test]
+    fn shared_read_never_forces_and_skips_claude_behind_a_keychain() {
+        let asks = shared_request(false);
+        assert!(!asks.claude && !asks.claude_accounts && !asks.force && !asks.antigravity);
+        assert!(asks.claude_account.is_none());
+        let reads = shared_request(true);
+        assert!(reads.claude && reads.claude_accounts && !reads.force && !reads.antigravity);
     }
 }

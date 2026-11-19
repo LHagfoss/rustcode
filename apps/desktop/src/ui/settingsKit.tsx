@@ -47,7 +47,7 @@ import {
   rememberPage,
   sameValue,
 } from "../state/pageCache";
-import { request, useApp } from "../state/store";
+import { connectionFor, request, useApp } from "../state/store";
 import { Check, ChevronDown, Info, RotateCcw } from "./icons";
 import { cx, menuItem, rowInset, Skeleton, Switch, Tooltip } from "./primitives";
 
@@ -737,6 +737,30 @@ export function Loading({ error, onRetry }: { error: string | null; onRetry?: ()
   );
 }
 
+/** One answer from several computers: this one's failure fails it, a paired machine's drops out. */
+async function readFleet<T>(
+  hosts: readonly string[],
+  method: string,
+  params: JsonObject,
+  parse: (v: Json) => T,
+  combine: (parts: { host: string; data: T }[]) => T,
+): Promise<T> {
+  const reads = await Promise.allSettled(
+    hosts.map(async (host) => {
+      if (!host) return { host, data: parse(await request(method, params)) };
+      const conn = connectionFor(host);
+      if (!conn) throw new Error("that machine is not connected");
+      return { host, data: parse(await conn.request(method, params, 20_000)) };
+    }),
+  );
+  const local = hosts.indexOf("");
+  const failed = local >= 0 ? reads[local] : undefined;
+  if (failed?.status === "rejected") throw failed.reason;
+  const parts = reads.flatMap((read) => (read.status === "fulfilled" ? [read.value] : []));
+  if (!parts.length) throw new Error("no machine answered");
+  return combine(parts);
+}
+
 /**
  * A page's engine data: the last answer for this ask (`state/pageCache.ts`)
  * draws at once, and the page reads again on open, behind it. A read that
@@ -748,16 +772,30 @@ export function useEngineData<T>(
   method: string,
   parse: (v: Json) => T,
   params: JsonObject = {},
-  { skip = false }: { skip?: boolean } = {},
+  {
+    skip = false,
+    hosts,
+    combine,
+  }: {
+    skip?: boolean;
+    /**
+     * The computers to ask (`""` is this one), each over its own connection,
+     * with `combine` making one answer of theirs. A paired machine that does
+     * not answer is left out; only this computer's failure is the page's.
+     */
+    hosts?: readonly string[];
+    combine?: (parts: { host: string; data: T }[]) => T;
+  } = {},
 ) {
   const status = useApp((s) => s.engine.phase);
-  const key = pageKey(method, params);
+  const fleet = hosts && combine && !(hosts.length === 1 && hosts[0] === "") ? hosts : undefined;
+  const key = fleet ? `${pageKey(method, params)} @${fleet.join(",")}` : pageKey(method, params);
   const [data, setDataState] = useState<T | null>(() => cachedPage<T>(key)?.data ?? null);
   const [error, setError] = useState<string | null>(null);
   // The latest render's ask: a stable `load` reads it, so an inline params
   // object or parser does not restart the effect on every render.
-  const ask = useRef({ method, params, parse, key });
-  ask.current = { method, params, parse, key };
+  const ask = useRef({ method, params, parse, key, fleet, combine });
+  ask.current = { method, params, parse, key, fleet, combine };
   const skipped = useRef(skip);
   skipped.current = skip;
   const setData = useCallback((value: T | null) => {
@@ -768,10 +806,13 @@ export function useEngineData<T>(
   }, []);
   const load = useCallback(async () => {
     if (skipped.current) return;
-    const { method, params, parse } = ask.current;
+    const { method, params, parse, fleet, combine } = ask.current;
     const token = beginPageRead(key);
     try {
-      const answer = parse(await request(method, params));
+      const answer =
+        fleet && combine
+          ? await readFleet(fleet, method, params, parse, combine)
+          : parse(await request(method, params));
       const stored = commitPage(key, token, answer);
       if (!stored) return;
       setDataState((shown) => (sameValue(shown, stored.data) ? shown : stored.data));

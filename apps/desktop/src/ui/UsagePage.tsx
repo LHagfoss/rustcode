@@ -8,11 +8,13 @@
 // default login and the account of the thread on screen, never a login nothing
 // was read for or one a failed read paused — and it waits longer after a read
 // that failed. Claude's numbers come from Claude Code's sign-in in the macOS
-// Keychain; opening this page reads each login.
+// Keychain; opening this page reads each login. Below them, each connected
+// machine's own subscriptions (`MachinePlans`), read there and shown here.
 
 import { useCallback, useEffect, useState } from "react";
 import { parsePlans, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
+import { sharedPlans } from "../state/fleetUsage";
 import { usageRows } from "../state/logins";
 import {
   beginPageRead,
@@ -26,6 +28,7 @@ import {
   accountOn,
   backgroundPlansAsk,
   commitPlansAnswer,
+  connectionFor,
   harnessOf,
   PLAN_CACHE_POLL_MS,
   request,
@@ -179,10 +182,37 @@ export function UsagePage() {
   const rows = usageRows(view.plans, keepOwnLogin);
   return (
     <>
-      {groupPlans(rows.plans).map(({ harness, plans }) => {
+      <PlanSections plans={rows.plans} />
+      <div className="flex items-center gap-2 px-3 text-caption text-fg-muted sm:px-4">
+        <span className="flex-1">
+          {view.note ? (
+            <span className="text-warning">Could not refresh: {view.note}</span>
+          ) : view.readAt ? (
+            `${Date.now() - view.readAt < 60_000 ? "Read just now" : `Read ${relativeAge(view.readAt)}`} · this page refreshes every ${
+              PLAN_CACHE_POLL_MS / 60_000
+            } minutes. ${soonestReset(view.plans) ?? ""}`
+          ) : null}
+        </span>
+        <Action onClick={() => void load(true)} disabled={loading}>
+          {loading ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
+        </Action>
+      </div>
+      <p className="px-4 text-caption text-fg-muted">
+        Your system may ask once to allow RustCode to read Claude Code’s sign-in for usage.
+      </p>
+      <MachinePlans />
+    </>
+  );
+}
+
+/** Each subscription's card, grouped by harness: this computer's, or a paired machine's (`where`). */
+function PlanSections({ plans, where = "on this computer" }: { plans: UsagePlan[]; where?: string }) {
+  return (
+    <>
+      {groupPlans(plans).map(({ harness, plans }) => {
         const name = plans[0]?.via ?? harness;
         return (
-          <section key={harness}>
+          <section key={`${where}:${harness}`}>
             <SectionTitle
               title={
                 <>
@@ -207,7 +237,7 @@ export function UsagePage() {
                     {p.asOf !== undefined && (
                       <p className="text-caption text-fg-muted">
                         as of {relativeAge(p.asOf)} · the last numbers RustCode read for this login; run a
-                        Claude Code thread on it to refresh them.
+                        Claude Code thread on it {where} to refresh them.
                       </p>
                     )}
                     {p.windows.map((w) => (
@@ -229,9 +259,9 @@ export function UsagePage() {
                       p.error ??
                       failureText(p).subtitle ??
                       (p.status === "signedOut"
-                        ? `Sign in with ${p.via ?? p.name} on this computer to see this plan here.`
+                        ? `Sign in with ${p.via ?? p.name} ${where} to see this plan here.`
                         : p.status === "notInstalled"
-                          ? `Install ${p.via ?? p.name} and sign in to see this plan here.`
+                          ? `Install ${p.via ?? p.name} ${where} and sign in to see this plan here.`
                           : undefined)
                     }
                   />
@@ -241,23 +271,65 @@ export function UsagePage() {
           </section>
         );
       })}
-      <div className="flex items-center gap-2 px-3 text-caption text-fg-muted sm:px-4">
-        <span className="flex-1">
-          {view.note ? (
-            <span className="text-warning">Could not refresh: {view.note}</span>
-          ) : view.readAt ? (
-            `${Date.now() - view.readAt < 60_000 ? "Read just now" : `Read ${relativeAge(view.readAt)}`} · this page refreshes every ${
-              PLAN_CACHE_POLL_MS / 60_000
-            } minutes. ${soonestReset(view.plans) ?? ""}`
-          ) : null}
-        </span>
-        <Action onClick={() => void load(true)} disabled={loading}>
-          {loading ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
-        </Action>
-      </div>
-      <p className="px-4 text-caption text-fg-muted">
-        Your system may ask once to allow RustCode to read Claude Code’s sign-in for usage.
-      </p>
+    </>
+  );
+}
+
+/**
+ * The subscriptions of each connected machine (`_rustcode/usage/shared`): a
+ * server that runs the threads holds fresh sign-ins, while this computer's own
+ * copy of the same login may have lapsed. Numbers only; read on open and every
+ * poll interval while the window is visible. A machine whose engine predates the
+ * read, or that answers nothing, is not drawn.
+ */
+function MachinePlans() {
+  const hosts = useApp((s) => s.connectedHosts);
+  const names = useApp((s) => s.machineNames);
+  const [byHost, setByHost] = useState<Record<string, { plans: UsagePlan[]; readAt: number }>>({});
+  useEffect(() => {
+    if (!hosts.length) return;
+    let live = true;
+    const read = () => {
+      if (document.visibilityState !== "visible") return;
+      for (const host of hosts) {
+        const conn = connectionFor(host);
+        if (!conn) continue;
+        conn
+          .request(Method.usageShared, {}, 20_000)
+          .then((result) => {
+            const plans = sharedPlans(result);
+            if (live) setByHost((was) => ({ ...was, [host]: { plans, readAt: Date.now() } }));
+          })
+          .catch(() => {});
+      }
+    };
+    read();
+    const timer = setInterval(read, PLAN_CACHE_POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [hosts]);
+  return (
+    <>
+      {hosts.map((host) => {
+        const shown = byHost[host];
+        if (!shown?.plans.length) return null;
+        const name = names[host] ?? host;
+        return (
+          <section key={host} className="mt-6">
+            <SectionTitle
+              title={`On ${name}`}
+              action={
+                <span className="text-caption text-fg-muted">
+                  {Date.now() - shown.readAt < 60_000 ? "Read just now" : `Read ${relativeAge(shown.readAt)}`}
+                </span>
+              }
+            />
+            <PlanSections plans={shown.plans} where={`on ${name}`} />
+          </section>
+        );
+      })}
     </>
   );
 }
