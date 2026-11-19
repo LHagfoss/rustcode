@@ -5,6 +5,7 @@ import {
   accountSignIn,
   capabilityRows,
   commandLine,
+  concreteModels,
   controlDisabledReason,
   defaultEffort,
   groupHarnesses,
@@ -117,6 +118,23 @@ describe("harness logic", () => {
     expect(
       normalizeDefault(noEffort, { harness: "codex", model: "gpt-6-luna", effort: "low" }).effort,
     ).toBeNull();
+  });
+
+  test("uses Claude's concrete Opus entry for a saved default or a fresh choice", () => {
+    const legacy = { id: "default", name: "Default", efforts: ["high"] };
+    const sonnet = { id: "sonnet", name: "Sonnet", efforts: [] };
+    const opus = { id: "opus", name: "Opus", efforts: ["high"] };
+    const claude = { ...base, id: "claude-code", models: [legacy, sonnet, opus] };
+    expect(concreteModels(claude.id, claude.models)).toEqual([sonnet, opus]);
+    expect(concreteModels(claude.id, [legacy])).toEqual([{ ...legacy, name: "Opus 5.5" }]);
+    expect(concreteModels("opencode", [legacy])).toEqual([]);
+    for (const model of [null, "default"]) {
+      expect(normalizeDefault(snapshot([claude]), { harness: claude.id, model, effort: null })).toEqual({
+        harness: claude.id,
+        model: "opus",
+        effort: "high",
+      });
+    }
   });
 
   test("greys out controls by capability, never by id", () => {

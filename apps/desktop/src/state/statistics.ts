@@ -15,6 +15,7 @@
 
 import type { UsageCounts, UsageReport, UsageRow, UsageTotals } from "../acp/rustcode";
 import { delegateParent, type SessionSummary } from "../acp/types";
+import { usageModelId } from "../lib/modelNames";
 import type { Link } from "./orchestration";
 import { addCost, type CostTotals, costOf, emptyCost } from "./pricing";
 import { parentOf } from "./topLevel";
@@ -80,6 +81,7 @@ export function usedTokens(counts: UsageCounts): number {
 export interface ModelTotal {
   model: string;
   totals: UsageTotals;
+  cost: CostTotals;
 }
 
 /** One harness and the models it ran, from a `group_by=model` report. */
@@ -87,6 +89,7 @@ export interface HarnessTotal {
   harness: string;
   totals: UsageTotals;
   models: ModelTotal[];
+  cost: CostTotals;
 }
 
 const byUse = (one: { totals: UsageTotals }, other: { totals: UsageTotals }) =>
@@ -94,21 +97,29 @@ const byUse = (one: { totals: UsageTotals }, other: { totals: UsageTotals }) =>
 
 /** The model rows grouped by harness, both ordered by tokens used. */
 export function harnessTotals(rows: UsageRow[]): HarnessTotal[] {
-  const groups = new Map<string, { totals: UsageTotals; models: Map<string, UsageTotals> }>();
+  const groups = new Map<string, { totals: UsageTotals; models: Map<string, ModelTotal> }>();
   for (const row of rows) {
     const harness = groups.get(row.harness) ?? { totals: emptyTotals(), models: new Map() };
-    harness.totals = addTotals(harness.totals, totalsOf(row));
-    const model = row.model ?? "";
-    harness.models.set(model, addTotals(harness.models.get(model) ?? emptyTotals(), totalsOf(row)));
+    const totals = totalsOf(row);
+    harness.totals = addTotals(harness.totals, totals);
+    const model = usageModelId(row.harness, row.model) ?? "";
+    const previous = harness.models.get(model);
+    // Price each recorded row before combining aliases so reported cost and estimates both survive.
+    harness.models.set(model, {
+      model,
+      totals: addTotals(previous?.totals ?? emptyTotals(), totals),
+      cost: addCost(previous?.cost ?? emptyCost(), costOf({ harness: row.harness, model, totals })),
+    });
     groups.set(row.harness, harness);
   }
   return [...groups.entries()]
     .map(([harness, group]) => ({
       harness,
       totals: group.totals,
-      models: [...group.models.entries()]
-        .map(([model, totals]) => ({ model, totals }))
-        .sort((one, other) => byUse(one, other) || one.model.localeCompare(other.model)),
+      cost: [...group.models.values()].reduce((sum, model) => addCost(sum, model.cost), emptyCost()),
+      models: [...group.models.values()].sort(
+        (one, other) => byUse(one, other) || one.model.localeCompare(other.model),
+      ),
     }))
     .sort((one, other) => byUse(one, other) || one.harness.localeCompare(other.harness));
 }

@@ -25,6 +25,8 @@ import { scheduleAutoCompact } from "./autoCompactRun";
 import { refreshCheckpoints } from "./checkpointActions";
 import { type ComposeExtras, carriesExtras, emptyExtras, hasExtras } from "./compose";
 import {
+  concreteModels,
+  listedModel,
   normalizeDefault,
   preferredDefault,
   restoreChoice,
@@ -815,14 +817,17 @@ export function newThreadChoice(
     // exactly what ⏎ starts (`startSetup` reads the same two functions).
     return (
       projectDefaultChoice(s, s.projectCwd) ??
-      restoreChoice(snapshot, snapshot.default.harness, appChoices(snapshot), effortMemory())
+      normalizeDefault(
+        snapshot,
+        restoreChoice(snapshot, snapshot.default.harness, appChoices(snapshot), effortMemory()),
+      )
     );
   }
   // A kept draft can name a harness that is gone, or one that cannot run now (turned off, signed
   // out in Settings): then the screen falls back to the harness a new thread would start on, never
   // to this draft. One that can run is normalized as the picker normalizes it.
   const harness = snapshot.harnesses.find((h) => h.id === s.newThread?.harness);
-  if (!harness || unavailableReason(harness)) return preferredDefault(snapshot);
+  if (!harness || unavailableReason(harness)) return normalizeDefault(snapshot, preferredDefault(snapshot));
   const choice = normalizeDefault(snapshot, s.newThread);
   // A machine's `_rustcode/harnesses` lists only the models a harness has already learned there
   // (the picker asks for the rest, `ensureHarnessModels`): with none listed yet, keep no model, so
@@ -860,8 +865,10 @@ function projectDefaultChoice(
   const found = s.harnesses.harnesses.find((h) => h.id === harness);
   if (!found || unavailableReason(found)) return null;
   const restored = restoreChoice(s.harnesses, harness);
-  const offered = !!model && (!found.models.length || found.models.some((m) => m.id === model));
-  return { ...restored, model: offered ? model : restored.model, effort: restored.effort };
+  const offered =
+    !!model &&
+    (!found.models.length || !!listedModel(found.id, concreteModels(found.id, found.models), model));
+  return normalizeDefault(s.harnesses, { ...restored, model: offered ? model : restored.model });
 }
 
 /**

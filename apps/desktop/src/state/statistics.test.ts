@@ -100,6 +100,24 @@ describe("by harness and model", () => {
     expect(usedTokens(groups[0]!.totals)).toBe(165);
   });
 
+  test("Opus aliases share one row with both reported and estimated costs", () => {
+    const groups = harnessTotals(
+      report([
+        row({ harness: "claude-code", model: "default", cost_usd: 1, turns_without_cost: 0 }),
+        row({ harness: "claude-code", model: "opus", cost_usd: 2, turns_without_cost: 0 }),
+        row({ harness: "claude-code", model: "claude-opus-5-5", cache_write_tokens: 0 }),
+        row({ harness: "claude-code", model: "claude-opus-4-8" }),
+        row({ harness: "codex", model: "default" }),
+      ]).rows,
+    );
+    const claude = groups.find((group) => group.harness === "claude-code");
+    expect(claude?.models.map((model) => model.model)).toEqual(["claude-opus-5-5", "claude-opus-4-8"]);
+    expect(claude?.models[0]?.totals).toMatchObject({ input: 300, output: 30, cached: 150, turns: 3 });
+    expect(claude?.models[0]?.cost).toMatchObject({ reportedUsd: 3, unknownTurns: 0 });
+    expect(claude?.models[0]?.cost.estimatedUsd).toBeGreaterThan(0);
+    expect(groups.find((group) => group.harness === "codex")?.models[0]?.model).toBe("default");
+  });
+
   test("a turn with no model is its own row, never dropped", () => {
     const groups = harnessTotals(report([row({ model: null })]).rows);
     expect(groups[0]!.models).toHaveLength(1);
