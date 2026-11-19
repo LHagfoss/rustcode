@@ -497,6 +497,22 @@ describe("engine controller with the mock engine", () => {
     expect(commandsFor(useApp.getState(), first.id).map((c) => c.name)).toContain("/status");
   });
 
+  test("Codex offers compact before and after its session advertises commands", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().engine.phase === "ready");
+    switchNewThreadHarness("codex");
+    const compact = commandsFor(useApp.getState()).find((c) => c.name === "/compact");
+    expect(compact).toMatchObject({ action: "execute", takesArguments: false });
+
+    threadCreated({ sessionId: "codex-test", cwd: "/tmp/project", harness: "codex" });
+    const state = useApp.getState();
+    const session = { ...state, sessionCommands: { "codex-test": [] } };
+    expect(commandsFor(session, "codex-test")).toContainEqual(compact!);
+    const advertised = { ...compact!, description: "Compact with Codex" };
+    const updated = { ...state, sessionCommands: { "codex-test": [advertised] } };
+    expect(commandsFor(updated, "codex-test").filter((c) => c.name === "/compact")).toEqual([advertised]);
+  });
+
   test("a chip of another harness moves the new thread there, on that account", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().engine.phase === "ready");

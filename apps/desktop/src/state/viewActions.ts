@@ -24,6 +24,7 @@ import {
 } from "./store";
 import { isRunning, localId } from "./thread";
 import { askConfirm } from "./threadActions";
+import { splitThreadKey } from "./threadKeys";
 import { openThread } from "./threadOpen";
 import { sessionById } from "./threadStatus";
 
@@ -300,6 +301,14 @@ export function accountOn(
   return s.sessions.find((x) => x.id === threadId)?.account ?? null;
 }
 
+const CODEX_COMPACT: SlashCommand = {
+  name: "/compact",
+  description: "Compact thread history to free context space",
+  takesArguments: false,
+  report: false,
+  action: "execute",
+};
+
 /** The state `commandsFor` reads. */
 type CommandsSource = Pick<
   AppState,
@@ -314,18 +323,22 @@ type CommandsSource = Pick<
  */
 export function commandsFor(s: CommandsSource, threadId?: string | null): SlashCommand[] {
   const own = threadId ? s.sessionCommands[threadId] : undefined;
-  // A session's own list is the harness's, which leaves out the skills RustCode discovered itself.
-  if (own) return withSkills(own, s.baseCommands);
   const harness = harnessOf(s, threadId ?? undefined);
-  const known = harnessesOn(s, threadId ? undefined : s.newThreadHost)?.harnesses.find(
-    (h) => h.id === harness,
-  );
-  return menuCommands({
-    base: s.baseCommands,
-    seen: harness ? s.harnessCommands[harness] : undefined,
-    // Before the harnesses are listed the engine answers the thread, so its catalog applies.
-    builtin: known?.builtin ?? (!s.harnesses || harness === undefined || harness === "rustcode"),
-  });
+  const host = threadId ? splitThreadKey(threadId).host : s.newThreadHost;
+  const known = harnessesOn(s, host)?.harnesses.find((h) => h.id === harness);
+  const commands = own
+    ? withSkills(own, s.baseCommands)
+    : menuCommands({
+        base: s.baseCommands,
+        seen: harness ? s.harnessCommands[harness] : undefined,
+        // Before the harnesses are listed the engine answers the thread, so its catalog applies.
+        builtin: known?.builtin ?? (!s.harnesses || harness === undefined || harness === "rustcode"),
+      });
+  // The Codex adapter handles /compact directly without advertising it through ACP.
+  return (known?.kind === "codex" || harness === "codex") &&
+    !commands.some((command) => command.name === CODEX_COMPACT.name)
+    ? [...commands, CODEX_COMPACT]
+    : commands;
 }
 
 /**
