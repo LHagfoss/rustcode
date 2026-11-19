@@ -439,7 +439,11 @@ async fn pair(
 async fn a_rotating_pairing_reconnects_with_access_then_rotates() {
     let host = Host::start().await;
     let config = tempfile::tempdir_in("/tmp").unwrap();
-    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    // Token rotation is what is under test: a client that offered its key
+    // would leave tokens behind on the first reconnect.
+    let connector = Connector::new(config.path(), ClientKind::Desktop)
+        .unwrap()
+        .without_key();
     let (machine, tokens, paired) = pair(&host, &connector, config.path()).await;
 
     // The client asked for rotation, so it got a refresh token and a

@@ -275,6 +275,9 @@ pub struct Connector {
     credentials: tokio::sync::Mutex<()>,
     /// Where `machines.json` is, to remember that a machine proves who it is.
     config_dir: PathBuf,
+    /// Offer this install's key to a machine that takes keys. On by default;
+    /// off keeps presenting tokens, as a client from before keys does.
+    offer_key: bool,
 }
 
 /// What a socket proved about who answers it before a credential was sent.
@@ -296,7 +299,15 @@ impl Connector {
             timeout: crate::transport::CONNECT_TIMEOUT,
             route_timeout: ROUTE_TIMEOUT,
             credentials: tokio::sync::Mutex::new(()),
+            offer_key: true,
         })
+    }
+
+    /// The same connector, never offering this install's key: it keeps
+    /// signing in with tokens, as a client from before device keys does.
+    pub fn without_key(mut self) -> Self {
+        self.offer_key = false;
+        self
     }
 
     /// The same connector with other timeouts, for a glance like
@@ -538,7 +549,7 @@ impl Connector {
         let offered = first
             .as_ref()
             .is_some_and(|(connection, _)| connection.challenge().is_some());
-        if !offered {
+        if !offered || !self.offer_key {
             return None;
         }
         DeviceKey::load_or_create(tokens, self.timeout)
