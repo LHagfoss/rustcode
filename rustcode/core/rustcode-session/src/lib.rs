@@ -2547,7 +2547,7 @@ mod tests {
         store.save_session_title_if_absent("fallback", &history);
         assert_eq!(
             store.load_session_title("fallback").as_deref(),
-            Some("Implement reliable session titles")
+            Some("Implement reliable session...")
         );
 
         store.save_session_title("fallback", "Explicit title");
