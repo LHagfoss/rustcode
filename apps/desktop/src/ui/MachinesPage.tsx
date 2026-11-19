@@ -59,6 +59,7 @@ import { refreshRemote } from "../state/remoteAccess";
 import { openMachineSettings, useApp } from "../state/store";
 import { AddMachineDialog } from "./AddMachineDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
+import { HubGroup } from "./HubGroup";
 import { Plus, RefreshCw, Server } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
@@ -163,6 +164,8 @@ export function MachinesPage() {
       </Group>
 
       {machines.length > 0 && <ThreadMirrorGroup />}
+
+      <HubGroup />
 
       <AddMachineDialog open={addOpen} onOpenChange={setAddMachineOpen} local={local} />
     </>

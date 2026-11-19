@@ -106,8 +106,10 @@ allowed 5 minutes), down the link, and through the member's gate
 (`orchestration/outside_hub.rs`) at the membership's ceiling. The member side
 of the gate is the same `answer_granted` the hub's own grants pass through.
 
-Not yet: Settings › Machines in the app (the CLI is the only way to set the
-role), and Loops on the hub for other machines.
+Settings › Machines › *Hub* sets the role in the app, through the same CLI
+commands (`apps/desktop/src-tauri/src/hub.rs`).
+
+Not yet: Loops on the hub for other machines.
 
 ## Phase 3 in practice
 
