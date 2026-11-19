@@ -104,7 +104,8 @@ const NATIVE_TITLE_ALLOWED: Record<string, number> = {
   "ui/Review.tsx": 1,
   "ui/Rows.tsx": 4,
   "ui/ScheduledMessages.tsx": 1,
-  "ui/Sidebar.tsx": 3,
+  "ui/Sidebar.tsx": 1,
+  "ui/SidebarThreadRow.tsx": 2,
   "ui/StatisticsCharts.tsx": 1,
   "ui/WorkflowRuns.tsx": 1,
 };

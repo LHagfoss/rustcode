@@ -19,7 +19,6 @@ const OVERSIZED: Record<string, number> = {
   "acp/mock.ts": 4900,
   "state/host.ts": 2100,
   "state/orchestration.ts": 2240,
-  "ui/Sidebar.tsx": 2600,
   "ui/Composer.tsx": 2200,
   "ui/Settings.tsx": 2200,
   "state/thread.ts": 1800,
