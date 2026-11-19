@@ -40,7 +40,6 @@ import {
   emptyExtras,
   hasExtras,
   hashToken,
-  hasTokens,
   insertCommand,
   insertMention,
   type Mention,
@@ -49,7 +48,6 @@ import {
   rankThreads,
   sentMessages,
   slashToken,
-  splitTokens,
   type ThreadChoice,
   trackPastes,
 } from "../state/compose";
@@ -111,6 +109,7 @@ import {
   projectKeyOf,
 } from "./composerMentions";
 import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
+import { draftMirror } from "./DraftMirror";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
 import { ArrowUp, Check, GitBranch, ListEnd, Pencil, Square } from "./icons";
 import { LinkChip } from "./LinkChip";
@@ -435,10 +434,7 @@ export const Composer = memo(function Composer({
   const drawerRef = useRef<HTMLDivElement>(null);
   // Where the field is in what ↑/↓ walks (`sentMessages`), and the draft the walk started from.
   const history = useRef<{ draft: string; index: number } | null>(null);
-  // Anything the mirror has to draw: a URL, a `@file` reference, or a `#thread` mention
-  // (state/compose.ts `splitTokens`).
-  const mentions = extras.mentions;
-  const tokenized = useMemo(() => hasTokens(draft, mentions), [draft, mentions]);
+  const highlightedDraft = useMemo(() => draftMirror(draft, extras.mentions), [draft, extras.mentions]);
   // Which edges of the scrolled field fade (lib/fade.ts); nothing to fade while the draft fits.
   const [fade, setFade] = useState<FieldFade>("none");
   // Carried by the field and the mirror alike: the mask (`.rc-field-fade`) takes its two depths.
@@ -1205,40 +1201,14 @@ export const Composer = memo(function Composer({
                   the same mask, so neither drifts from the other; a token's span adds no horizontal
                   padding, which is what keeps the caret on its character. */}
             <div ref={fieldBox} className="relative min-w-[160px] flex-1 basis-[160px]">
-              {tokenized && (
+              {highlightedDraft && (
                 <div
                   ref={mirror}
                   aria-hidden
                   className="rc-field-fade pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-1.5 text-body text-fg leading-normal"
                   style={fadeStyle}
                 >
-                  {splitTokens(draft, mentions).map((part, i) =>
-                    part.url ? (
-                      <span
-                        key={i}
-                        className="rounded-xs bg-accent/15 text-accent [box-decoration-break:clone]"
-                      >
-                        {part.url}
-                      </span>
-                    ) : part.mention ? (
-                      // A thread's name, exactly as the field holds it: the pill adds no character.
-                      <span
-                        key={i}
-                        className="rounded-xs bg-fill-strong text-fg [box-decoration-break:clone]"
-                      >
-                        {part.mention}
-                      </span>
-                    ) : part.ref ? (
-                      <span
-                        key={i}
-                        className="rounded-xs bg-fill-strong text-fg [box-decoration-break:clone]"
-                      >
-                        @{part.ref}
-                      </span>
-                    ) : (
-                      part.text
-                    ),
-                  )}
+                  {highlightedDraft}
                   {"\u200b"}
                 </div>
               )}
@@ -1279,7 +1249,7 @@ export const Composer = memo(function Composer({
                 style={fadeStyle}
                 className={cx(
                   "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-normal outline-none transition-[height] duration-150 ease-snappy placeholder:text-fg-faint",
-                  tokenized && "text-transparent caret-fg selection:bg-accent/30",
+                  highlightedDraft && "text-transparent caret-fg selection:bg-accent/30",
                 )}
               />
               {suggestion && (

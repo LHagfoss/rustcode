@@ -320,7 +320,7 @@ export const UserRow = memo(function UserRow({
         >
           <Markdown
             text={markdown}
-            className="text-fg [&_li]:whitespace-pre-wrap [&_p]:whitespace-pre-wrap"
+            className="text-fg [&>:is(h1,h2,h3,h4):first-child]:mt-0 [&_li]:whitespace-pre-wrap [&_p]:whitespace-pre-wrap"
           />
         </div>
         {long && (
