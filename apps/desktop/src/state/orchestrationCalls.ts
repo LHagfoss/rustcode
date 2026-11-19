@@ -170,6 +170,7 @@ export type Call =
       text?: string;
       machine?: string;
     }
+  | { tool: "compact_session"; target?: string; resume: boolean }
   | { tool: "thread_status"; target?: string; machine?: string }
   | { tool: "merge_when_green"; target: string; number?: number; timeoutMs: number; callId?: string }
   | { tool: "cleanup_worktree"; target: string; settle: boolean }
@@ -457,6 +458,14 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (!sql) return failure("invalid", "sql is required");
       const asked = typeof args.limit === "number" ? Math.floor(args.limit) : MAX_DATA_ROWS;
       return { tool: "query_data", sql, limit: Math.min(Math.max(asked, 1), MAX_DATA_ROWS) };
+    }
+    case "compact_session": {
+      const target = sessionReference(args.session_id)?.trim();
+      if (args.session_id != null && !target)
+        return failure("invalid", "session_id must be a non-empty thread id");
+      if (args.resume !== undefined && typeof args.resume !== "boolean")
+        return failure("invalid", "resume must be true or false");
+      return { tool: "compact_session", target, resume: args.resume === true };
     }
     case "thread_status": {
       const target = sessionReference(args.session_id)?.trim() || undefined;

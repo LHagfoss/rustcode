@@ -116,7 +116,7 @@ export function autoCompactThresholdFor(s: AppState, id: string): number | undef
 }
 
 /** Whether the harness runs its own compaction. An ACP agent says so by advertising `/compact`. */
-function canCompact(s: AppState, id: string): boolean {
+export function canCompact(s: AppState, id: string): boolean {
   const harness = harnessOf(s, id);
   const known = s.harnesses?.harnesses.find((h) => h.id === harness);
   if (!known) return false;
@@ -229,6 +229,66 @@ function compactedNotice() {
     tone: "info",
     setting: "auto-compact",
   } as const;
+}
+
+// A self-request must return to the harness before the current turn can end.
+const requestedCompactions = new Map<string, boolean>();
+const requestedCompactionsRunning = new Set<string>();
+
+export function requestCompaction(id: string, resume: boolean): boolean {
+  if (requestedCompactions.has(id) || requestedCompactionsRunning.has(id) || autoCompactInFlight.has(id))
+    return false;
+  requestedCompactions.set(id, resume);
+  if (!isRunning(get().threads[id])) {
+    void runRequestedCompaction(id).catch(() => undefined);
+  }
+  return true;
+}
+
+export async function runRequestedCompaction(id: string): Promise<void> {
+  const resume = requestedCompactions.get(id);
+  if (resume === undefined || isRunning(get().threads[id])) return;
+  requestedCompactions.delete(id);
+  requestedCompactionsRunning.add(id);
+  clearAutoCompactTimer(id);
+  autoCompactedIdle.add(id);
+  const itemsBefore = get().threads[id]?.items.length ?? 0;
+  const outcome = await runPrompt(id, "/compact", emptyExtras, {
+    automatic: true,
+    autoCompact: true,
+    requestedCompaction: true,
+  }).finally(() => requestedCompactionsRunning.delete(id));
+  const after = get();
+  const thread = after.threads[id];
+  const items = thread?.items.slice(itemsBefore) ?? [];
+  const failed = items.some(
+    (item) => item.kind === "notice" && item.id.startsWith("compaction-") && item.tone === "error",
+  );
+  if (
+    resume &&
+    outcome === "completed" &&
+    !failed &&
+    !items.some((item) => item.kind === "turnEnd") &&
+    !isRunning(thread) &&
+    !thread?.queue.length &&
+    !thread?.queueHeld &&
+    !after.limitWaits[id] &&
+    !after.internetWaits[id] &&
+    !after.drafts[id]?.trim() &&
+    !hasExtras(after.extras[id]) &&
+    !(id in after.snoozed) &&
+    statusOf(after, id) !== "done"
+  ) {
+    // Starting synchronously reserves the turn before the caller drains the queue.
+    void runPrompt(id, CONTINUE_AFTER_COMPACTION_TEXT, emptyExtras, {
+      automatic: true,
+      continued: true,
+    }).catch(() => undefined);
+  }
+}
+
+export function cancelRequestedCompaction(id: string): void {
+  requestedCompactions.delete(id);
 }
 
 function runAutoCompact(id: string): void {
@@ -382,6 +442,8 @@ export function forgetAutoCompact(id?: string): void {
   if (id === undefined) {
     for (const timer of autoCompactTimers.values()) clearTimeout(timer);
     for (const timer of autoCompactNoticeTimers) clearTimeout(timer);
+    requestedCompactions.clear();
+    requestedCompactionsRunning.clear();
     autoCompactTimers.clear();
     autoCompactNoticeTimers.clear();
     autoCompactedIdle.clear();
@@ -393,6 +455,7 @@ export function forgetAutoCompact(id?: string): void {
   }
   clearAutoCompactTimer(id);
   autoCompactedIdle.delete(id);
+  cancelRequestedCompaction(id);
   autoCompactInFlight.delete(id);
   autoCompactCardSeen.delete(id);
   autoCompactPendingNotice.delete(id);

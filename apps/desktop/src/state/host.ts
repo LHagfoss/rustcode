@@ -47,6 +47,7 @@ import { readStorage, writeStorage } from "../lib/storage";
 import { cleanupWorktree, handoffWorktree, mergeWhenGreen, worktreeStatus } from "./hostDelegates";
 import {
   answerRequest,
+  compactSession,
   configureSession,
   interruptSession,
   listPendingRequests,
@@ -915,6 +916,8 @@ async function perform(
       if (isFailure(machine)) return failureJson(machine);
       return listPullRequests(caller, call.state, machine);
     }
+    case "compact_session":
+      return compactSession(caller, call.target, call.resume);
     case "update_session": {
       const on = managedOn(call.machine, call.target);
       if (isFailure(on)) return failureJson(on);

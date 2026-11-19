@@ -402,7 +402,7 @@ describe("orchestration rules", () => {
     // `steer` below 14, `standalone` below 15, `wait` below 17 and transfer `account`/`model`
     // below 18, and refuses a call that
     // carries one: the app speaks the newest, so it is offered all of them.
-    expect(CAPABILITY_VERSION).toBe(19);
+    expect(CAPABILITY_VERSION).toBe(20);
   });
 
   test("message_session defaults to one-way and can request a reply", () => {

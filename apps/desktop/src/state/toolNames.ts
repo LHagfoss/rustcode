@@ -35,6 +35,7 @@ export const ORCHESTRATION_TOOLS = [
   "cleanup_worktree",
   "worktree_status",
   "handoff_worktree",
+  "compact_session",
   "read_project",
   "create_project",
   "clone_project",
@@ -58,6 +59,7 @@ const THREAD_TOOLS = new Map([
   ["start_thread", "start_session"],
   ["message_thread", "message_session"],
   ["wait_thread", "wait_session"],
+  ["compact_thread", "compact_session"],
   ["update_thread", "update_session"],
   ["configure_thread", "configure_session"],
   ["transfer_thread", "transfer_session"],
@@ -253,6 +255,8 @@ function orchestrationLabel(
       const state = text(args.state) || "open";
       return { title: "Listed pull requests", summary: state };
     }
+    case "compact_session":
+      return { title: running(status) ? "Requesting compaction" : "Requested compaction" };
     case "thread_status":
       return { title: "Checked delegate pull requests" };
     case "merge_when_green":

@@ -274,6 +274,7 @@ const LISTING: &[(&str, &str, Effect)] = &[
         Effect::Adds,
     ),
     (super::ask_user::TOOL_NAME, "Ask the user", Effect::Adds),
+    (super::COMPACT_SESSION, "Compact a thread", Effect::Adds),
     (super::UPDATE_SESSION, "Update a thread", Effect::Sets),
     (super::CONFIGURE_SESSION, "Configure a thread", Effect::Sets),
     (super::ORGANIZE_THREADS, "Organize threads", Effect::Sets),

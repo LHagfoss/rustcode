@@ -1543,6 +1543,7 @@ pub const TOOLS: &[Tool] = &[
     misc::SEARCH_SESSIONS,
     misc::LIST_WORKTREES,
     misc::UPDATE_SESSION,
+    misc::COMPACT_SESSION,
     misc::INTERRUPT_SESSION,
     misc::CONFIGURE_SESSION,
     misc::LIST_PROJECTS,

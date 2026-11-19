@@ -1682,6 +1682,13 @@ stayed the same can include both field names for calls without an ID argument.
 Built-in tools and the engine-to-app ACP route use the legacy names documented
 above.
 
+With the desktop app attached, `compact_thread` requests native context
+compaction. Omit `thread_id` to compact the calling thread, or pass the ID of
+another thread reachable through the usual thread management rules. Compaction
+waits for an active turn to finish and leaves the thread idle by default. Pass
+`resume: true` to continue the task after compaction, for example between pull
+requests. Queued work takes priority over the continuation.
+
 The same environment carries `RUSTCODE_ORCHESTRATION_VERSION` (the client's
 version), so the server lists exactly that version's tools and prompt hint — a
 v3 app is never offered `thread_usage` or `query_data`, which it could not

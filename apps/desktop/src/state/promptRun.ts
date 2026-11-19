@@ -13,7 +13,12 @@ import { titleFrom } from "../lib/title";
 import { refreshAgents } from "./agentActions";
 import { permissionModeOf } from "./approvals";
 import { uploadPromptImages } from "./attachmentTransfer";
-import { beginAutoCompactIdle, scheduleAutoCompact } from "./autoCompactRun";
+import {
+  beginAutoCompactIdle,
+  cancelRequestedCompaction,
+  runRequestedCompaction,
+  scheduleAutoCompact,
+} from "./autoCompactRun";
 import { refreshCheckpoints } from "./checkpointActions";
 import {
   type ComposeExtras,
@@ -62,6 +67,7 @@ import {
   isWakeMessage,
   localId,
   requeueSteers,
+  settleCompaction,
   settleEveryWait,
   startCompaction,
   withContinueMark,
@@ -110,6 +116,8 @@ export async function runPrompt(
     automatic?: boolean;
     /** A `/compact` the app sent because the context or the cache said so. */
     autoCompact?: boolean;
+    /** The MCP tool requested this quiet compaction, even on a settled thread. */
+    requestedCompaction?: boolean;
     /** What the "Compacting context…" divider says for that `/compact` (`autoCompactingText`). */
     autoCompactText?: string;
     /**
@@ -137,6 +145,7 @@ export async function runPrompt(
 ): Promise<TurnOutcome> {
   // Check again when a queued notice starts: settling may have happened after delivery.
   if (
+    !options.requestedCompaction &&
     (options.automatic ||
       options.autoCompact ||
       options.autoResume ||
@@ -197,6 +206,7 @@ export async function runPrompt(
   // that just ran would let a harness whose compaction left the context over the threshold compact
   // and continue for ever.
   if (!options.autoCompact && !options.continued) beginAutoCompactIdle(id);
+  const previousQueueHold = thread?.queueHeld;
   // Writing in a thread brings it back from a snooze, as it always has: that is the user asking for
   // it (`submit` and `steerOrSubmit` have already done it for a message they took). A turn the app
   // starts — a delegate's wake, a resume after a restart, the next row of the queue (`queued`), the
@@ -228,7 +238,11 @@ export async function runPrompt(
   updateThread(id, (t) =>
     options.autoCompact
       ? // The turn writes no rows, so "Compacting context…" is the one sign the thread is busy.
-        startCompaction(beginQuietTurn(t), options.autoCompactText, "auto-compact")
+        startCompaction(
+          beginQuietTurn(t),
+          options.autoCompactText,
+          options.requestedCompaction ? undefined : "auto-compact",
+        )
       : beginTurn(
           t,
           shown,
@@ -320,8 +334,10 @@ export async function runPrompt(
     failure = readableTurnError(failure, contextPercent(useApp.getState().threads[id]?.usage));
   updateThread(id, (t) => ({
     ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
+    ...(options.requestedCompaction && previousQueueHold ? { queueHeld: true } : {}),
     ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
   }));
+  if (options.requestedCompaction) updateThread(id, (t) => settleCompaction(t, null));
   // Steers the turn never read wait as turns of their own, and carry the links they came from.
   if (!options.autoCompact) requeueUnreadSteers(id, unused);
   // The stop is settled first: a turn it stopped is reported as the stop, not twice.
@@ -331,7 +347,8 @@ export async function runPrompt(
     : // The stop is read from what the harness said, not the words the thread shows.
       settleStopWait(id, outcome, rawFailure, startIndex, [options.link, ...(options.resumeLinks ?? [])]);
   // A thread waiting for the internet is held, not dead: it says so in the composer's row.
-  const offline = options.autoCompact ? undefined : useApp.getState().internetWaits[id];
+  const offline =
+    options.autoCompact && !options.requestedCompaction ? undefined : useApp.getState().internetWaits[id];
   // An automatic compaction is not a turn the user waits for: it is not "Done"
   // news, and it must not wake the thread's parent as if its work finished.
   if (!options.autoCompact) {
@@ -399,12 +416,18 @@ export async function runPrompt(
   ) {
     finishToast(id, outcome, { waiting, offline, link: options.link });
   }
+  if (outcome === "completed" && !waiting && !moved && !offline && !options.autoCompact) {
+    await runRequestedCompaction(id);
+  } else if (!options.autoCompact) {
+    cancelRequestedCompaction(id);
+  }
   // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
   // stopped or failed leaves the queue held instead (thread.ts `holdsQueue`): the rows read Held and
   // Resume starts them.
   // Nor does one go out into a wait: it waits for the turn that continues.
   const after = useApp.getState().threads[id];
-  const next = after && !waiting && !moved && !offline ? nextQueued(after.queue, after) : undefined;
+  const next =
+    after && !isRunning(after) && !waiting && !moved && !offline ? nextQueued(after.queue, after) : undefined;
   if (next) {
     removeQueued(id, next.id);
     await runPrompt(id, next.text, next.extras, {
