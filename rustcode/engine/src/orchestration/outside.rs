@@ -1284,6 +1284,19 @@ pub fn tools_for(scope: Scope) -> Vec<Value> {
                 properties.remove(super::CLIENT_REQUEST_ID);
                 properties["project"]["description"] =
                     json!("Absolute project folder on this computer");
+                // On the fleet's hub a Loop may run on a member (#3957).
+                if crate::remote_gateway::hub_link::HubConfig::current().hub {
+                    properties["project"]["description"] = json!(
+                        "Absolute project folder on this computer, or on the machine named in machine"
+                    );
+                    properties.insert(
+                        "machine".to_owned(),
+                        json!({
+                            "type": "string",
+                            "description": "A member of this hub from list_machines to run each run on. The hub keeps the schedule and holds a run while that machine is offline; omit for this computer"
+                        }),
+                    );
+                }
             }
             if let Some(required) = schema["required"].as_array_mut() {
                 required.push(json!("project"));

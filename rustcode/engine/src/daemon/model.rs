@@ -98,6 +98,11 @@ pub enum JobAction {
         /// never shows a secret that starts a run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         webhook: Option<String>,
+        /// Hub Loops (#3957): run each turn on this member of the hub, by
+        /// its name or host id, instead of on this computer. `workspace` is
+        /// then a folder on that machine.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     Poll {
         action: Box<JobAction>,

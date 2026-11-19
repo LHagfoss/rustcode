@@ -894,7 +894,7 @@ fn optional_title(args: &Value) -> Result<(), String> {
 /// `Path::is_absolute` on macOS calls that relative. The machine that gets
 /// the call matches it against its own projects, so only the shape is checked
 /// here: `/…`, a drive (`C:\` or `C:/`), or a UNC or verbatim path (`\\…`).
-fn absolute_on_any_machine(path: &str) -> bool {
+pub(crate) fn absolute_on_any_machine(path: &str) -> bool {
     if path.starts_with('/') || path.starts_with(r"\\") {
         return true;
     }

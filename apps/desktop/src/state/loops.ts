@@ -42,6 +42,10 @@ export interface LoopRun {
   silent?: boolean;
   /** The harness's login was signed out; `error` names the login and how to sign in. */
   signedOut?: boolean;
+  /** A hub Loop: the machine the run was sent to; `threadId` is a thread there. */
+  machine?: string;
+  /** That machine was offline, so the hub holds the run until it connects again. */
+  queued?: boolean;
 }
 
 export interface Loop {
@@ -62,6 +66,8 @@ export interface Loop {
   script?: string;
   /** Calling the loop's webhook URL starts a run (its URL is shown once, when made). */
   webhook: boolean;
+  /** A hub Loop: each run goes to this member of the hub, and `workspace` is a folder there. */
+  machine?: string;
   nextDueAt?: number;
   /** Newest first. */
   runs: LoopRun[];
@@ -130,6 +136,8 @@ function runOf(value: Json): LoopRun | null {
     skipped: str(raw.skipped),
     silent: bool(raw.silent) ?? false,
     signedOut: bool(raw.signedOut) ?? false,
+    machine: str(raw.machine),
+    queued: bool(raw.queued) ?? false,
   };
 }
 
@@ -152,6 +160,7 @@ function loopOf(value: Json): Loop | null {
     threadId: str(raw.threadId),
     script: str(raw.script),
     webhook: bool(raw.webhook) ?? false,
+    machine: str(raw.machine),
     nextDueAt: time(raw.nextDueAt),
     runs: arr(raw.runs).flatMap((run) => runOf(run) ?? []),
   };
@@ -471,6 +480,10 @@ export function lastResult(loop: Loop, now = Date.now()): { text: string; tone: 
   switch (run.state) {
     case "succeeded":
       if (run.silent) return { text: `Script printed nothing ${when}`, tone: "ok" };
+      // A hub Loop's run ends once its machine has the thread (or the hub holds it for that machine).
+      if (run.queued)
+        return { text: `Waiting for ${run.machine ?? "its machine"} (queued ${when})`, tone: "muted" };
+      if (run.machine) return { text: `Started on ${run.machine} ${when}`, tone: "ok" };
       return run.quiet
         ? { text: `Nothing to report ${when}`, tone: "ok" }
         : { text: `Finished ${when}`, tone: "ok" };
@@ -577,6 +590,8 @@ export interface LoopDraft {
   webhook?: boolean;
   /** Replace the webhook's secret, so the old URL stops working. */
   rotateWebhook?: boolean;
+  /** On the hub: run each turn on this member instead of this computer. */
+  machine?: string;
 }
 
 /** A loop's webhook as saving it answers, once, when its secret is new. */
@@ -609,7 +624,8 @@ export function withRunAccount(
   harness: string | undefined,
   account: string | null,
 ): LoopDraft {
-  if (draft.threadId || draft.account?.trim() || !account || !harness) return draft;
+  // A hub Loop's run starts on its member, whose logins this computer does not know.
+  if (draft.machine || draft.threadId || draft.account?.trim() || !account || !harness) return draft;
   return { ...draft, account, harness: draft.harness?.trim() || harness };
 }
 
@@ -633,7 +649,10 @@ export function saveParams(draft: LoopDraft, timezone = draft.timezone ?? userTi
   if (draft.id) params.id = draft.id;
   if (draft.webhook) params.webhook = true;
   if (draft.webhook && draft.rotateWebhook) params.rotateWebhook = true;
-  const script = draft.script?.trim();
+  const machine = draft.machine?.trim();
+  if (machine) params.machine = machine;
+  // A script runs on this computer, so a Loop for another machine takes none.
+  const script = machine ? undefined : draft.script?.trim();
   if (script) params.script = script;
   for (const key of draft.threadId
     ? (["threadId"] as const)

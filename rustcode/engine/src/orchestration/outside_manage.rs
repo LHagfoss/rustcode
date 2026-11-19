@@ -84,7 +84,12 @@ pub(crate) async fn answer(
 
 /// Save a Loop on this computer using the same scheduler as the desktop.
 async fn create_loop(caller: &str, args: &Value) -> Value {
-    if let Err(refusal) = super::local::local_machine(args) {
+    // On the hub, a Loop may name a member: it is kept here and each run is
+    // sent there, so its thread, harness and account are that machine's.
+    let machine = super::outside_hub::hub_loop_machine(args);
+    if machine.is_none()
+        && let Err(refusal) = super::local::local_machine(args)
+    {
         return refusal;
     }
     let field = |key: &str| args[key].as_str().map(|value| value.trim().to_owned());
@@ -95,7 +100,7 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
         );
     };
     let thread_id = field("thread_id");
-    if let Some(id) = thread_id.as_deref() {
+    if let Some(id) = thread_id.as_deref().filter(|_| machine.is_none()) {
         let Some(meta) = crate::config::session_meta_by_id(id) else {
             return error("not_found", "no local thread has that id");
         };
@@ -111,7 +116,7 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
     }
     let mut harness = field("harness");
     let mut account = field("account");
-    if harness.is_some() {
+    if harness.is_some() && machine.is_none() {
         let resolved = match super::local_threads::harness_for(harness.as_deref()) {
             Ok(resolved) => resolved,
             Err(refusal) => return refusal,
@@ -138,6 +143,7 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
         // A webhook is turned on in the app, where its URL is shown once.
         webhook: false,
         rotate_webhook: false,
+        machine: machine.clone(),
     };
     match crate::acp::loops::save(request).await {
         Ok(value) => {
@@ -147,6 +153,7 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
                 "name": saved["name"],
                 "schedule": saved["schedule"],
                 "next_due_at": saved["nextDueAt"],
+            "machine": saved["machine"],
             })
         }
         Err(reason) => error("target_unavailable", reason),

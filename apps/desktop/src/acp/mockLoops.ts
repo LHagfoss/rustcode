@@ -208,6 +208,7 @@ export class MockLoops {
       effort: str(params.effort) ?? null,
       readOnly: params.readOnly !== false,
       webhook: params.webhook === true,
+      machine: str(params.machine) ?? null,
       nextDueAt: (schedule as JsonObject).kind === "manual" ? null : ahead(4),
     };
     this.loops = existing

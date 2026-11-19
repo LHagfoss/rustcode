@@ -425,3 +425,34 @@ describe("a job's account", () => {
     expect(withRunAccount(draft, "pi", null)).toBe(draft);
   });
 });
+
+describe("hub Loops (#3957)", () => {
+  const base = { name: "CI", workspace: "/home/me/app", prompt: "Check", cron: "0 9 * * *", readOnly: true };
+
+  test("a Loop for a member saves its machine, no script, and no account of this computer's", () => {
+    const params = saveParams({ ...base, machine: " laptop ", script: "gh run list" }, "Europe/Oslo");
+    expect(params.machine).toBe("laptop");
+    expect("script" in params).toBe(false);
+    const draft = withRunAccount({ ...base, machine: "laptop" }, "codex", "work");
+    expect(draft.account).toBeUndefined();
+  });
+
+  test("its runs say where they went, and a held run waits for the machine", () => {
+    const parsed = parseLoops({
+      loops: [
+        {
+          id: "l",
+          name: "L",
+          machine: "laptop",
+          runs: [{ id: "r", state: "succeeded", machine: "laptop", queued: true }],
+        },
+      ],
+    });
+    expect(parsed.loops[0]?.machine).toBe("laptop");
+    expect(parsed.loops[0]?.runs[0]?.queued).toBe(true);
+    const held = loop({ runs: [run("r1", "succeeded", 1, { machine: "laptop", queued: true })] });
+    expect(lastResult(held, NOW)).toEqual({ text: "Waiting for laptop (queued 1 h ago)", tone: "muted" });
+    const started = loop({ runs: [run("r1", "succeeded", 1, { machine: "laptop", threadId: "t-1" })] });
+    expect(lastResult(started, NOW)).toEqual({ text: "Started on laptop 1 h ago", tone: "ok" });
+  });
+});

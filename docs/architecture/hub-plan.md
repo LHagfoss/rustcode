@@ -113,7 +113,10 @@ of the gate is the same `answer_granted` the hub's own grants pass through.
 Settings › Machines › *Hub* sets the role in the app, through the same CLI
 commands (`apps/desktop/src-tauri/src/hub.rs`).
 
-Not yet: Loops on the hub for other machines.
+A Loop saved on the hub may name a member: the hub keeps its schedule and
+sends each run there as `start_session`, held in the mailbox while the member
+is offline (`daemon/hub_run.rs`, `docs/daemon.md` › On another machine, from
+the hub).
 
 ## Phase 3 in practice
 
