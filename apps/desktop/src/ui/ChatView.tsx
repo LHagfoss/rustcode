@@ -648,7 +648,7 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
     // taking it out of the flow keeps it that way, so no sibling that mounts during a send can push
     // the message down. `overflow-anchor: none` and `overscroll-contain` are the transcript's own
     // scroller settings: nothing here may scroll or be scrolled by the browser on our behalf.
-    <div className="absolute inset-0 overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges] sm:px-12">
+    <div className="rc-lane-pad absolute inset-0 overflow-y-auto overscroll-contain [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]">
       <div
         // The row takes the place the transcript's first row keeps — the lane's cap, the same 20px
         // under the glass header (`FIRST_ROW_PAD`), so the thread takes the screen over without
@@ -817,7 +817,7 @@ export function ChatView() {
   const [width, setWidth] = useState(1000);
   const [height, setHeight] = useState(800);
   const banner = useBanner();
-  const rootRef = useRef<HTMLDivElement>(null);
+  const laneRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = stackRef.current;
@@ -827,7 +827,9 @@ export function ChatView() {
   }, []);
 
   useEffect(() => {
-    const el = rootRef.current;
+    // The lane's box, not the column's: the right panel's card floats over the column and takes
+    // its room from the lane, which is what the composer and the toasts are sized and centred on.
+    const el = laneRef.current;
     if (!el) return;
     const measure = () => {
       setWidth(el.offsetWidth);
@@ -882,7 +884,7 @@ export function ChatView() {
   // Toasts sit centred at the top of the chat column, under its header (ui/Toaster.tsx).
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-place when the column resizes, which opening the right panel also does
   useEffect(() => {
-    const root = rootRef.current;
+    const root = laneRef.current;
     if (!root) return;
     const r = root.getBoundingClientRect();
     const doc = document.documentElement.style;
@@ -907,9 +909,9 @@ export function ChatView() {
   const report = useApp((s) => s.report);
   const failure = openError(thread) ?? thread?.error;
   const error = failure && failure !== dismissed ? failure : undefined;
-  // The lane's gutter sits outside the cap: `px-3 sm:px-12` on the transcript's scroller (its rows
-  // carry the cap alone) and `inset-x-3 sm:inset-x-12` here, so the field's edges and a message's
-  // edges are one line at every width.
+  // The lane's gutter sits outside the cap: `rc-lane-pad` on the transcript's scroller (its rows
+  // carry the cap alone) and `rc-lane-inset` here, so the field's edges and a message's edges are
+  // one line at every width, with the right panel's card open or not (index.css).
   // The new-thread screen always has the picture; an open thread has it when Settings says so.
   const showsBanner = !!banner.name && (isNew || banner.inThreads);
   const veil = showsBanner ? darkenOverlay(banner.darken) : null;
@@ -957,18 +959,24 @@ export function ChatView() {
       {!showsBanner && (isNew || (showsPending && !thread)) && <NewThreadLight />}
       <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />
       {/*
-        The chat column and the right panel share one row, so the panel is docked beside
-        the chat rather than floating over it: the column is `flex-1` and narrows by the
-        card's width, and the lane re-centres in what is left (`mx-auto` on the stack).
+        The right panel's card floats over the chat's row: the column keeps the row's whole
+        width, so the transcript's scrollbar stays at the window's edge, and the lane pads by
+        the room the card takes (`--rc-panel-room`) and re-centres in what is left.
         The header floats above both, over the row.
       */}
-      <div className="flex min-h-0 min-w-0 flex-1">
-        <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* The part of the column that is the lane's, for its width and centre. */}
+          <div
+            ref={laneRef}
+            aria-hidden
+            className="rc-lane-room pointer-events-none absolute inset-y-0 left-0"
+          />
           {thread && !isNew && !showsPending && (
             <ThreadLight threadId={thread.id} stack={stackRef} stackHeight={stackHeight} />
           )}
           <div
-            className="pointer-events-none absolute inset-x-3 z-20 mx-auto max-w-[var(--rc-chat-content-max-width)] sm:inset-x-12"
+            className="rc-lane-inset pointer-events-none absolute z-20 mx-auto max-w-[var(--rc-chat-content-max-width)]"
             style={{ top: HEADER_HEIGHT + 8 }}
           >
             <WhileAwayCard className="pointer-events-auto" />
@@ -1003,7 +1011,7 @@ export function ChatView() {
               ...(isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined),
             }}
             className={cx(
-              "absolute inset-x-3 bottom-4 mx-auto flex flex-col gap-2 sm:inset-x-12",
+              "rc-lane-inset absolute bottom-4 mx-auto flex flex-col gap-2",
               // An empty thread's cards are a dashboard, not a lane: they take the wider measure
               // (up to 1100px) while the field and everything over it keep the chat's own.
               isNew ? "max-w-[1100px]" : "max-w-[var(--rc-chat-content-max-width)]",
@@ -1106,7 +1114,7 @@ export function ChatView() {
           </div>
           {isNew && height >= NEW_THREAD_WIDGETS_MIN_HEIGHT && (
             <div
-              className="absolute inset-x-3 bottom-0 mx-auto flex max-w-[1100px] flex-col items-center gap-2 pt-2 sm:inset-x-12"
+              className="rc-lane-inset absolute bottom-0 mx-auto flex max-w-[1100px] flex-col items-center gap-2 pt-2"
               style={{ top: `calc(50% + ${Math.round(stackHeight / 2)}px)` }}
             >
               <button

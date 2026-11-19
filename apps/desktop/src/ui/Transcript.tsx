@@ -984,8 +984,16 @@ export function Transcript({
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    setSize({ width: el.clientWidth, height: el.clientHeight });
-    return observeSize(el, () => setSize({ width: el.clientWidth, height: el.clientHeight }));
+    // The lane's own width: the right panel's card pads the scroller's right side by the room it
+    // takes (`rc-lane-pad`), and the rail centres on the lane, so that extra padding is not counted.
+    // A padding change resizes the content box, which the observer sees.
+    const measure = () => {
+      const pad = getComputedStyle(el);
+      const room = Number.parseFloat(pad.paddingRight) - Number.parseFloat(pad.paddingLeft);
+      setSize({ width: el.clientWidth - Math.max(0, room || 0), height: el.clientHeight });
+    };
+    measure();
+    return observeSize(el, measure);
   }, []);
 
   const onScroll = () => {
@@ -1193,7 +1201,7 @@ export function Transcript({
         ref={attachScroll}
         onScroll={onScroll}
         onWheel={onWheel}
-        className="h-full overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges] sm:px-12"
+        className="rc-lane-pad h-full overflow-y-auto overscroll-contain [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
         role="log"
         data-focus-area="main"
         tabIndex={-1}
