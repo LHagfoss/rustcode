@@ -85,6 +85,7 @@ export type RemoteRefusalReason =
   | "rate_limited"
   | "unauthorized"
   | "token_replayed"
+  | "key_required"
   | "unexpected_origin"
   | "secure_connection"
   | "unrecognized_request"
@@ -96,6 +97,7 @@ const REFUSAL_REASONS: readonly RemoteRefusalReason[] = [
   "rate_limited",
   "unauthorized",
   "token_replayed",
+  "key_required",
   "unexpected_origin",
   "secure_connection",
   "unrecognized_request",

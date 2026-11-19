@@ -44,10 +44,17 @@ pub const GATEWAY_CAPABILITY_DESCRIBE: &str = "describe";
 /// `method: "machine"`).
 pub const GATEWAY_CAPABILITY_MACHINE_CODES: &str = "machine_codes";
 
+/// What a gateway lists when it takes device keys (issue #3956): `pair` and
+/// `authenticate` may carry `public_key`, its `described` frame carries a
+/// `challenge`, and `authenticate` may carry a `signature` of it instead of a
+/// token. See [`super::device_key`].
+pub const GATEWAY_CAPABILITY_KEY_AUTH: &str = "key_auth";
+
 /// Everything a `described` frame lists, in that order.
-pub const GATEWAY_CAPABILITIES: [&str; 2] = [
+pub const GATEWAY_CAPABILITIES: [&str; 3] = [
     GATEWAY_CAPABILITY_DESCRIBE,
     GATEWAY_CAPABILITY_MACHINE_CODES,
+    GATEWAY_CAPABILITY_KEY_AUTH,
 ];
 
 /// A pairing credential, manual code or device token. Serializes as a plain
@@ -164,6 +171,12 @@ pub enum HandshakeRequest {
         /// A gateway ignores a capability it does not know.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capabilities: Option<Vec<String>>,
+        /// The device's Ed25519 public key, unpadded base64url of its 32
+        /// bytes. A gateway that lists `key_auth` stores it, answers
+        /// `key_registered`, and from then on takes only a `signature` from
+        /// this device. An older gateway ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
     },
     /// Present a device token obtained from an earlier `paired` frame.
     Authenticate {
@@ -191,6 +204,18 @@ pub enum HandshakeRequest {
         /// named on `pair` too, or the pairing keeps its static token.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capabilities: Option<Vec<String>>,
+        /// With a token: the device's public key, for a device paired before
+        /// keys. A gateway that lists `key_auth` accepts the token, stores
+        /// the key when the record has none, and answers `key_registered`;
+        /// the token is refused from then on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
+        /// Instead of a token: the device key's signature of the challenge
+        /// in this socket's `described` frame, over
+        /// `rustcode-remote-auth-v1 NUL gateway_id NUL challenge NUL device_id NUL`,
+        /// unpadded base64url. Only valid after `describe` on the same socket.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     /// The device stored the refresh token from the `authenticated` frame it
     /// just received, so the host may retire the token before it. Only valid
@@ -336,6 +361,24 @@ impl HandshakeRequest {
         })
     }
 
+    /// The signature an `authenticate` presents instead of a token.
+    pub fn signature(&self) -> Option<&str> {
+        match self {
+            Self::Authenticate { signature, .. } => signature.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The public key a `pair` or `authenticate` offers, if any.
+    pub fn public_key(&self) -> Option<&str> {
+        match self {
+            Self::Pair { public_key, .. } | Self::Authenticate { public_key, .. } => {
+                public_key.as_deref()
+            }
+            _ => None,
+        }
+    }
+
     /// What a `connect_request` or `pair` frame says the device is, kept to
     /// what is usable. An `authenticate` frame says nothing: the device was
     /// recorded when it paired.
@@ -392,7 +435,10 @@ impl HandshakeRequest {
         // serde_json errors can quote input; never forward them to the peer or a log.
         let request: Self = serde_json::from_value(value).map_err(|_| invalid())?;
         // An `authenticate` without a credential is a bug, not a request.
-        if request.presented().is_none() && matches!(request, Self::Authenticate { .. }) {
+        if matches!(request, Self::Authenticate { .. })
+            && request.presented().is_none()
+            && request.signature().is_none()
+        {
             return Err(invalid());
         }
         Ok(request)
@@ -421,9 +467,14 @@ pub enum HandshakeResponse {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         platform: Option<String>,
         /// What this gateway takes beyond protocol v1's first frames:
-        /// [`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`].
+        /// [`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`],
+        /// [`GATEWAY_CAPABILITY_KEY_AUTH`].
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         capabilities: Vec<String>,
+        /// A random value for this socket only, which a device with a key
+        /// signs in its `authenticate` frame. Spent by that frame.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        challenge: Option<String>,
     },
     /// The connection request is in front of the host's owner. Wait on the
     /// same socket, sending nothing but pings, for the answer.
@@ -499,6 +550,10 @@ pub enum HandshakeResponse {
         /// an older gateway and when the listener is loopback only.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         routes: Vec<HostRoute>,
+        /// True when the gateway stored the `public_key` the device sent: the
+        /// device signs in with it from now on, and its token stops working.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        key_registered: bool,
     },
     /// The device token was accepted, or, for a rotating device, the access
     /// token or refresh token it presented was.
@@ -541,6 +596,10 @@ pub enum HandshakeResponse {
         /// The addresses this host answers on right now, as in `paired`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         routes: Vec<HostRoute>,
+        /// As in `paired`: the gateway stored the `public_key` this frame
+        /// answered, and takes only signatures from this device from now on.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        key_registered: bool,
     },
     Error {
         code: ErrorCode,
@@ -612,6 +671,10 @@ pub enum ErrorCode {
     /// The access token has expired or was replaced. The pairing is still
     /// valid: authenticate with the refresh token instead.
     AccessExpired,
+    /// A token was presented for a device that signs in with its key. The
+    /// token is no longer accepted: sign the challenge, or pair again if this
+    /// install lost its key.
+    KeyRequired,
     /// The authenticated device cannot perform this operation.
     UnauthorizedAccess,
     /// The gateway is at its connection or device limit.
@@ -702,10 +765,11 @@ mod tests {
                 .iter()
                 .map(|c| (*c).to_owned())
                 .collect(),
+            challenge: None,
         };
         assert_eq!(
             described.to_text(),
-            r#"{"type":"described","protocol_version":1,"gateway_id":"gw","instance_id":"inst","host_name":"studio","platform":"macos","capabilities":["describe","machine_codes"]}"#
+            r#"{"type":"described","protocol_version":1,"gateway_id":"gw","instance_id":"inst","host_name":"studio","platform":"macos","capabilities":["describe","machine_codes","key_auth"]}"#
         );
         // A connect code is `pair` with the machine method.
         let pair = HandshakeRequest::parse(
@@ -771,6 +835,7 @@ mod tests {
             platform: None,
             host_id: None,
             capabilities: None,
+            public_key: None,
         };
         assert_eq!(
             serde_json::to_string(&pair).unwrap(),
@@ -784,6 +849,8 @@ mod tests {
             access_token: None,
             wire_names: None,
             capabilities: None,
+            public_key: None,
+            signature: None,
         };
         assert_eq!(
             serde_json::to_string(&authenticate).unwrap(),
@@ -880,6 +947,7 @@ mod tests {
             version: None,
             platform: None,
             routes: Vec::new(),
+            key_registered: false,
         };
         assert_eq!(
             paired.to_text(),
@@ -901,6 +969,7 @@ mod tests {
             version: None,
             platform: None,
             routes: Vec::new(),
+            key_registered: false,
         };
         assert_eq!(
             rotating.to_text(),
@@ -922,6 +991,7 @@ mod tests {
             version: None,
             platform: None,
             routes: Vec::new(),
+            key_registered: false,
         };
         assert_eq!(
             authenticated.to_text(),
@@ -943,6 +1013,7 @@ mod tests {
             version: None,
             platform: None,
             routes: Vec::new(),
+            key_registered: false,
         };
         assert_eq!(
             rotated.to_text(),
@@ -1098,6 +1169,7 @@ mod tests {
             platform: None,
             host_id: None,
             capabilities: None,
+            public_key: None,
         };
         let paired = HandshakeResponse::Paired {
             protocol_version: 1,
@@ -1115,6 +1187,7 @@ mod tests {
             version: None,
             platform: None,
             routes: Vec::new(),
+            key_registered: false,
         };
         assert!(!format!("{pair:?}").contains(needle));
         assert!(!format!("{paired:?}").contains(needle));

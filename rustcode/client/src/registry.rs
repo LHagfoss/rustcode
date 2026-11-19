@@ -487,6 +487,11 @@ pub struct Machine {
     /// old handshake until it updates.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub describes: bool,
+    /// The machine holds this install's public key for `device_id` and takes
+    /// only its signature from now on; no token is kept for it (#3956).
+    /// Cleared by pairing again, which makes a new device record.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub signs: bool,
 }
 
 fn unknown_platform() -> String {
@@ -520,6 +525,7 @@ impl Machine {
             probes: Vec::new(),
             paused: false,
             describes: false,
+            signs: false,
         };
         machine.normalize_routes();
         machine
@@ -766,6 +772,12 @@ impl MachineRegistry {
                     if machine.version.is_some() {
                         existing.version = machine.version;
                     }
+                    // A new device record (pairing again) holds no key yet.
+                    if existing.device_id == machine.device_id {
+                        existing.signs |= machine.signs;
+                    } else {
+                        existing.signs = machine.signs;
+                    }
                     existing.device_id = machine.device_id;
                     existing.describes |= machine.describes;
                     for route in machine.routes {
@@ -876,6 +888,22 @@ impl MachineRegistry {
             };
             let changed = !machine.describes;
             machine.describes = true;
+            Ok(changed)
+        })
+    }
+
+    /// Remember that `host_id` holds this install's key and takes only its
+    /// signature. True when that changed.
+    pub fn set_signs(&mut self, host_id: &str) -> Result<bool> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            let changed = !machine.signs;
+            machine.signs = true;
             Ok(changed)
         })
     }

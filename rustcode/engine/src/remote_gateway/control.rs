@@ -183,6 +183,10 @@ pub struct DeviceSummary {
     /// The paired machine's own identifier, for a desktop or command line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_id: Option<String>,
+    /// The device signs in with its key rather than a token (#3956). False
+    /// from an older gateway.
+    #[serde(default)]
+    pub signs_with_key: bool,
 }
 
 fn unknown_platform() -> String {
@@ -198,6 +202,7 @@ impl From<&DeviceRecord> for DeviceSummary {
             kind: device.kind,
             platform: device.platform.clone(),
             host_id: device.host_id.clone(),
+            signs_with_key: device.has_key(),
         }
     }
 }
@@ -378,6 +383,9 @@ pub enum RefusalReason {
     /// A retired refresh token was presented; the gateway therefore removed the
     /// whole pairing. The device has to pair again.
     TokenReplayed,
+    /// A token was presented for a device that signs in with its key: an old
+    /// copy of the device's token, which the key replaced.
+    KeyRequired,
     /// The WebSocket upgrade carried an `Origin` no native app sends, so it was
     /// refused before a single frame arrived: a browser, or an app build older
     /// than the one that sends the native app origin.
@@ -400,6 +408,7 @@ impl RefusalReason {
             Self::RateLimited => "pairing locked after too many wrong codes",
             Self::Unauthorized => "unknown or revoked device",
             Self::TokenReplayed => "pairing revoked (a retired token was used)",
+            Self::KeyRequired => "token used for a device that signs in with its key",
             Self::UnexpectedOrigin => "unexpected app origin, refused before any frame",
             Self::SecureConnection => "TLS (wss://) dial to a plain WebSocket gateway",
             Self::UnrecognizedRequest => "first frame not understood (different app version?)",
@@ -416,6 +425,7 @@ impl RefusalReason {
             ErrorCode::RateLimited => Self::RateLimited,
             ErrorCode::Unauthorized => Self::Unauthorized,
             ErrorCode::TokenReplayed => Self::TokenReplayed,
+            ErrorCode::KeyRequired => Self::KeyRequired,
             // A first frame that is not the handshake is what an app build with
             // a different handshake sends, and its owner can update it. Binary,
             // oversized and doubled frames are refused before they get here.

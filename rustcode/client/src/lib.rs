@@ -32,6 +32,7 @@
 
 pub mod config;
 pub mod connect_code;
+pub mod device_key;
 pub mod discovery;
 pub mod machine;
 pub mod protocol;

@@ -20,7 +20,7 @@ use super::control::{
 };
 use super::devices::{
     Acknowledgement, AuthenticateError, Credential, DeviceError, DeviceKind, DeviceProfile,
-    DeviceRecord, DeviceStore, Devices, RevocationNotes, apply_revocation_notes,
+    DeviceRecord, DeviceStore, Devices, KeyRegistration, RevocationNotes, apply_revocation_notes,
 };
 use super::handshake::{
     DeviceHint, ErrorCode, GATEWAY_CAPABILITIES, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
@@ -533,22 +533,31 @@ impl Shared {
 
     /// Decide a first frame and, when it is refused for a reason its owner can
     /// act on, keep that refusal for the desktop and `remote status`.
+    ///
+    /// `challenge` is what this socket's `described` frame carried, if it
+    /// asked; a signed `authenticate` must sign it.
     pub(super) fn admit_device(
         self: &Arc<Self>,
         remote_addr: IpAddr,
         text: &str,
+        challenge: Option<&str>,
     ) -> Result<Admitted, HandshakeResponse> {
-        let outcome = self.decide_device(text);
+        let outcome = self.decide_device(text, challenge);
         if let Err(rejection) = &outcome {
             self.record_handshake_refusal(remote_addr, rejection, text);
         }
         outcome
     }
 
-    fn decide_device(self: &Arc<Self>, text: &str) -> Result<Admitted, HandshakeResponse> {
+    fn decide_device(
+        self: &Arc<Self>,
+        text: &str,
+        challenge: Option<&str>,
+    ) -> Result<Admitted, HandshakeResponse> {
         let request = HandshakeRequest::parse(text)?;
         let profile = request.device_profile();
         let rotate = request.wants_token_rotation();
+        let public_key = request.public_key().map(str::to_owned);
         match request {
             // The transport keeps a socket that asks to connect open
             // ([`Self::open_connect_request`]); it never reaches here.
@@ -576,7 +585,13 @@ impl Shared {
                 install_id.as_deref(),
                 profile,
                 rotate,
+                public_key.as_deref(),
             ),
+            HandshakeRequest::Authenticate {
+                device_id,
+                signature: Some(signature),
+                ..
+            } => self.authenticate_signed(&device_id, challenge, &signature),
             HandshakeRequest::Authenticate {
                 device_id,
                 token,
@@ -594,7 +609,9 @@ impl Shared {
                             .map(|refresh| Credential::Refresh(refresh.expose()))
                     });
                 match credential {
-                    Some(credential) => self.authenticate(&device_id, credential),
+                    Some(credential) => {
+                        self.authenticate(&device_id, credential, public_key.as_deref())
+                    }
                     None => Err(HandshakeResponse::error(
                         ErrorCode::InvalidFrame,
                         "authenticate needs a token, refresh_token or access_token",
@@ -634,6 +651,7 @@ impl Shared {
         let parsed = HandshakeRequest::parse(text)?;
         let profile = parsed.device_profile();
         let rotate = parsed.wants_token_rotation();
+        let public_key = parsed.public_key().map(str::to_owned);
         let HandshakeRequest::Pair {
             method,
             secret,
@@ -655,6 +673,7 @@ impl Shared {
             install_id.as_deref(),
             profile,
             rotate,
+            public_key.as_deref(),
         );
         let mut state = self.state();
         let now = Instant::now();
@@ -798,7 +817,8 @@ impl Shared {
     /// device is then recorded as that request described it, which is what
     /// the owner accepted, rather than as its `pair` frame says. `rotate`
     /// enrolls a device that asked for rotating tokens instead of a static
-    /// one.
+    /// one. `public_key`, when the device sent one, becomes the record's key
+    /// and replaces its tokens.
     #[allow(clippy::too_many_arguments)]
     fn pair(
         self: &Arc<Self>,
@@ -809,6 +829,7 @@ impl Shared {
         install_id: Option<&str>,
         profile: DeviceProfile,
         rotate: bool,
+        public_key: Option<&str>,
     ) -> Result<Admitted, HandshakeResponse> {
         let mut state = self.state();
         let profile = request
@@ -850,6 +871,19 @@ impl Shared {
         if owner_granted {
             enrolled.record = devices.set_acp(&enrolled.record.id, true).unwrap();
         }
+        let key_registered = public_key.is_some_and(|key| {
+            devices.register_key(&enrolled.record.id, key) == KeyRegistration::Stored
+        });
+        if key_registered {
+            // The key replaced the tokens just minted: none of them is
+            // handed out, and the record is the one without them.
+            enrolled.token = None;
+            enrolled.issued = None;
+            enrolled.record = devices
+                .select(&enrolled.record.id)
+                .expect("the record was just enrolled")
+                .clone();
+        }
         if let Err(error) = self.persist(&mut state, devices) {
             crate::dbg_log!("remote gateway: device store write failed: {error:#}");
             return Err(HandshakeResponse::error(
@@ -887,17 +921,72 @@ impl Shared {
             version: Some(host_version()),
             platform: Some(host_platform().to_owned()),
             routes: routes_now(self),
+            key_registered,
+        };
+        Ok(self.register(&mut state, &record, welcome))
+    }
+
+    /// Accept an `authenticate` that signs this socket's challenge with the
+    /// device's key. Nothing rotates and nothing is handed out: the key is
+    /// the credential, and it never leaves the device.
+    fn authenticate_signed(
+        self: &Arc<Self>,
+        device_id: &str,
+        challenge: Option<&str>,
+        signature: &str,
+    ) -> Result<Admitted, HandshakeResponse> {
+        let Some(challenge) = challenge else {
+            return Err(HandshakeResponse::error(
+                ErrorCode::InvalidFrame,
+                "a signed authenticate signs the challenge from describe on the same connection",
+            ));
+        };
+        let mut state = self.state();
+        let now = chrono::Utc::now();
+        if state.live.len() >= self.limits.max_authenticated {
+            return Err(busy("the gateway is at its connection limit"));
+        }
+        let record = state
+            .devices
+            .accept_signature(device_id, &self.gateway_id, challenge, signature)
+            .map_err(|_| {
+                HandshakeResponse::error(
+                    ErrorCode::Unauthorized,
+                    "unknown device or key; pair this device again",
+                )
+            })?;
+        self.mark_seen(&mut state, &record.id, now);
+        let welcome = HandshakeResponse::Authenticated {
+            protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+            gateway_id: self.gateway_id.clone(),
+            instance_id: self.instance_id.clone(),
+            device_id: record.id.clone(),
+            device_name: record.name.clone(),
+            host_name: self.host_name.clone(),
+            expires_at: None,
+            refresh_token: None,
+            access_token: None,
+            access_expires_at: None,
+            rotation_id: None,
+            wire_names: None,
+            version: Some(host_version()),
+            platform: Some(host_platform().to_owned()),
+            routes: routes_now(self),
+            key_registered: false,
         };
         Ok(self.register(&mut state, &record, welcome))
     }
 
     /// Accept an `authenticate`: a static token, a rotating refresh token or an
     /// access token. A replayed refresh token revokes the whole family, live
-    /// connections included, and is reported as such.
+    /// connections included, and is reported as such. `public_key`, sent by a
+    /// device paired before keys, becomes the record's key once the token is
+    /// accepted, and the token stops working.
     fn authenticate(
         self: &Arc<Self>,
         device_id: &str,
         credential: Credential<'_>,
+        public_key: Option<&str>,
     ) -> Result<Admitted, HandshakeResponse> {
         let mut state = self.state();
         let now = chrono::Utc::now();
@@ -947,15 +1036,39 @@ impl Shared {
                     "unknown device or token; pair this device again",
                 ));
             }
+            Err(AuthenticateError::KeyRequired) => {
+                return Err(HandshakeResponse::error(
+                    ErrorCode::KeyRequired,
+                    "this device signs in with its key, and its token is no longer accepted; pair it again if it lost its key",
+                ));
+            }
         };
-        if accepted.issued.is_some() {
+        let mut accepted = accepted;
+        let key_registered = public_key.is_some_and(|key| {
+            devices.register_key(&accepted.record.id, key) == KeyRegistration::Stored
+        });
+        if key_registered {
+            // The token that got the device here was its last: nothing it
+            // rotated to is handed out, and the record no longer holds one.
+            accepted.issued = None;
+            accepted.access_expires_at = None;
+            accepted.record = devices
+                .select(&accepted.record.id)
+                .expect("the record was just accepted")
+                .clone();
+        }
+        if accepted.issued.is_some() || key_registered {
             // A rotation is on disk before its token is handed out, so the
             // device it reaches is never one the host forgot.
             if let Err(error) = self.persist(&mut state, devices) {
                 crate::dbg_log!("remote gateway: device store write failed: {error:#}");
                 return Err(HandshakeResponse::error(
                     ErrorCode::Internal,
-                    "the host could not store the rotated token",
+                    if key_registered {
+                        "the host could not store the device's key"
+                    } else {
+                        "the host could not store the rotated token"
+                    },
                 ));
             }
         } else {
@@ -988,6 +1101,7 @@ impl Shared {
             version: Some(host_version()),
             platform: Some(host_platform().to_owned()),
             routes: routes_now(self),
+            key_registered,
         };
         Ok(self.register(&mut state, &record, welcome))
     }
@@ -1212,8 +1326,9 @@ impl Shared {
         Ok(())
     }
 
-    /// Who this gateway is, for a `describe`: nothing secret.
-    pub(super) fn describe(&self) -> HandshakeResponse {
+    /// Who this gateway is, for a `describe`: nothing secret. `challenge` is
+    /// the socket's own, for a device that signs in with its key.
+    pub(super) fn describe(&self, challenge: &str) -> HandshakeResponse {
         HandshakeResponse::Described {
             protocol_version: HANDSHAKE_PROTOCOL_VERSION,
             gateway_id: self.gateway_id.clone(),
@@ -1225,6 +1340,7 @@ impl Shared {
                 .iter()
                 .map(|capability| (*capability).to_owned())
                 .collect(),
+            challenge: Some(challenge.to_owned()),
         }
     }
 

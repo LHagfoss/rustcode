@@ -64,6 +64,12 @@ export function refusalCopy(refused: RemoteRefusedConnection): { title: string; 
         detail:
           "Two copies of the device's key were in use, so its pairing was removed to keep it safe. If that was your device, pair it again.",
       };
+    case "key_required":
+      return {
+        title: `${who} tried to connect with a token this computer no longer accepts`,
+        detail:
+          "That device signs in with its own key now, so its old token was refused. If that was your device, update the RustCode app on it; if not, remove the device and pair it again.",
+      };
     case "pairing_failed":
       return {
         title: `${who} tried to pair with a code that did not work`,

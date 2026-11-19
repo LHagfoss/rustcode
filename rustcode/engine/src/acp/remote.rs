@@ -1382,7 +1382,8 @@ fn connection_routes_json(connections: &[ConnectionSummary], device_id: &str) ->
 }
 
 /// A paired device as the apps read it: what it is, where it runs and when
-/// it was last connected. Never a token or its digest. `connected` is
+/// it was last connected, and whether it signs in with its key. Never a token,
+/// a key or a digest. `connected` is
 /// `None` where the answer cannot tell.
 fn device_json(device: &DeviceSummary, connected: Option<bool>) -> Value {
     json!({
@@ -1393,6 +1394,7 @@ fn device_json(device: &DeviceSummary, connected: Option<bool>) -> Value {
         "hostId": device.host_id,
         "lastSeenAt": device.last_seen_at,
         "connected": connected,
+        "signsInWithKey": device.signs_with_key,
     })
 }
 
@@ -2439,6 +2441,7 @@ mod tests {
             kind: DeviceKind::Desktop,
             platform: "windows".into(),
             host_id: Some("host-0123456789abcdef".into()),
+            signs_with_key: false,
         };
         assert_eq!(
             device_json(&summary, Some(true)),
@@ -2450,6 +2453,7 @@ mod tests {
                 "hostId": "host-0123456789abcdef",
                 "lastSeenAt": "2026-11-08T09:30:00Z",
                 "connected": true,
+                "signsInWithKey": false,
             })
         );
         // A record from before devices said what they are reads as a phone.
@@ -2519,6 +2523,7 @@ mod tests {
             kind: Default::default(),
             platform: "ios".into(),
             host_id: None,
+            signs_with_key: false,
         }
     }
 

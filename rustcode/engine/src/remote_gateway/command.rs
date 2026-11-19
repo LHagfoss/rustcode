@@ -516,7 +516,8 @@ fn format_devices_at(devices: &[DeviceRecord], now: chrono::DateTime<chrono::Utc
     )];
     for device in devices {
         let expires = match device.expires_at() {
-            // A device that rotates its tokens lasts until it is revoked.
+            // A device that rotates its tokens or signs in with its key
+            // lasts until it is revoked.
             None => "until revoked".to_owned(),
             Some(at) if now >= at => "expired".to_owned(),
             Some(at) => at.format("%Y-%m-%d %H:%M").to_string(),
@@ -566,6 +567,7 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
                 "last_seen_at": device.last_seen_at,
                 "expires_at": device.expires_at(),
                 "rotates": device.rotates(),
+                "signs_with_key": device.has_key(),
                 "kind": device.kind,
                 "platform": device.platform,
                 "host_id": device.host_id,
@@ -1134,6 +1136,7 @@ mod tests {
                     kind: DeviceKind::Phone,
                     platform: "ios".into(),
                     host_id: None,
+                    signs_with_key: false,
                 },
                 DeviceSummary {
                     id: "bb".into(),
@@ -1142,6 +1145,7 @@ mod tests {
                     kind: DeviceKind::Desktop,
                     platform: "windows".into(),
                     host_id: Some("host-0123456789abcdef".into()),
+                    signs_with_key: false,
                 },
             ],
             pairing: Some(PairingStatus {

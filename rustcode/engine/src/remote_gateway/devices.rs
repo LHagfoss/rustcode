@@ -209,6 +209,11 @@ pub struct DeviceRecord {
     /// `token_rotation`. `None` for the static token of an older client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rotation: Option<TokenFamily>,
+    /// The device's Ed25519 public key (unpadded base64url), once it gave one.
+    /// A record with a key has no token: it signs in only by signing its
+    /// socket's challenge ([`super::device_key`]), and never expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
 }
 
 /// One device's rotating credentials: digests only.
@@ -403,11 +408,16 @@ impl DeviceRecord {
             .map(|family| family.family_id.as_str())
     }
 
+    /// Whether the device signs in with its key instead of a token.
+    pub fn has_key(&self) -> bool {
+        self.public_key.is_some()
+    }
+
     /// When the pairing stops being accepted: [`DEVICE_LIFETIME`] after
-    /// pairing, or never for a device that rotates its tokens.
+    /// pairing, or never for a device that rotates its tokens or signs in
+    /// with its key.
     pub fn expires_at(&self) -> Option<DateTime<Utc>> {
-        self.rotation
-            .is_none()
+        (self.rotation.is_none() && self.public_key.is_none())
             .then(|| self.paired_at + DEVICE_LIFETIME)
     }
 
@@ -429,6 +439,7 @@ impl fmt::Debug for DeviceRecord {
             .field("platform", &self.platform)
             .field("host_id", &self.host_id)
             .field("rotates", &self.rotates())
+            .field("has_key", &self.has_key())
             .finish_non_exhaustive()
     }
 }
@@ -522,6 +533,20 @@ pub enum AuthenticateError {
     /// A refresh token this family retired for good: the whole family was
     /// revoked by this call.
     Replayed,
+    /// The device signs in with its key; a token means nothing for it.
+    KeyRequired,
+}
+
+/// What [`Devices::register_key`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyRegistration {
+    /// The key is the record's now, and its tokens are gone.
+    Stored,
+    /// The record already holds this key.
+    Unchanged,
+    /// Not stored: no such record, it holds another key, or the value is not
+    /// a key.
+    Refused,
 }
 
 /// What `Devices::acknowledge` did.
@@ -635,6 +660,7 @@ impl Devices {
             platform: profile.platform.clone(),
             host_id: profile.host_id.clone(),
             rotation,
+            public_key: None,
         };
         let replaced = replaced.map(|index| self.devices.remove(index).id);
         self.devices.push(record.clone());
@@ -724,6 +750,12 @@ impl Devices {
         if record.is_expired(now) {
             return Err(AuthenticateError::Unauthorized);
         }
+        if record.has_key() {
+            // Its tokens were dropped when the key was registered, so there
+            // is nothing to compare: whatever was presented is a token this
+            // record no longer takes.
+            return Err(AuthenticateError::KeyRequired);
+        }
         let presented = match credential {
             Credential::Refresh(token) => digest(token.as_bytes()),
             Credential::Access(token) => digest(token.as_bytes()),
@@ -812,6 +844,59 @@ impl Devices {
             access_expires_at: Some(access_expires_at),
             issued: Some(issued),
         })
+    }
+
+    /// Accept an `authenticate` that signs instead of presenting a token:
+    /// `signature` must be the record's key signing
+    /// [`super::device_key::signed_message`] for this gateway and the socket's
+    /// `challenge`. An unknown device, one without a key and a wrong signature
+    /// are all [`AuthenticateError::Unauthorized`].
+    pub fn accept_signature(
+        &self,
+        device_id: &str,
+        gateway_id: &str,
+        challenge: &str,
+        signature: &str,
+    ) -> Result<DeviceRecord, AuthenticateError> {
+        let record = self
+            .devices
+            .iter()
+            .find(|record| record.id == device_id)
+            .ok_or(AuthenticateError::Unauthorized)?;
+        let key = record
+            .public_key
+            .as_deref()
+            .ok_or(AuthenticateError::Unauthorized)?;
+        let message = super::device_key::signed_message(gateway_id, challenge, device_id);
+        if super::device_key::verify(key, &message, signature) {
+            Ok(record.clone())
+        } else {
+            Err(AuthenticateError::Unauthorized)
+        }
+    }
+
+    /// Give `device_id` the public key `public_key`, after the device proved
+    /// itself with a token or a pairing secret on the same connection. The
+    /// record's tokens go with it: from now on the key is the only way in. A
+    /// record that already holds a key keeps it; replacing a key is pairing
+    /// again.
+    pub fn register_key(&mut self, device_id: &str, public_key: &str) -> KeyRegistration {
+        let Some(key) = super::device_key::normalize_public_key(public_key) else {
+            return KeyRegistration::Refused;
+        };
+        let Some(record) = self.devices.iter_mut().find(|r| r.id == device_id) else {
+            return KeyRegistration::Refused;
+        };
+        match record.public_key.as_deref() {
+            Some(stored) if stored == key => KeyRegistration::Unchanged,
+            Some(_) => KeyRegistration::Refused,
+            None => {
+                record.public_key = Some(key);
+                record.token_sha256 = None;
+                record.rotation = None;
+                KeyRegistration::Stored
+            }
+        }
     }
 
     /// Retire the previous refresh token after the device acknowledged the

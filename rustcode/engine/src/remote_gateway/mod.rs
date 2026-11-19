@@ -20,6 +20,7 @@ pub mod command;
 pub mod connect;
 pub mod connect_code;
 pub mod control;
+pub mod device_key;
 pub mod devices;
 pub mod discovery;
 pub mod gateway;

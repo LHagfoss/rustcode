@@ -71,6 +71,15 @@ Authentication is two-way in intent and one-way in proof:
   15-minute access token; presenting a retired refresh token revokes the whole
   pairing (`token_replayed`). Rotation shortens how long a token lifted off a
   plain network stays useful, but does not stop its use within that window.
+- **Device keys.** A gateway that lists `key_auth` gives every socket a fresh
+  challenge, and a device that registered an Ed25519 public key signs it
+  instead of sending a token (`docs/remote-protocol/README.md` › Device
+  keys). A signature is bound to the gateway, the socket's challenge and the
+  device, and is spent on first use, so one read at a tunnel's edge or off a
+  plain network cannot be used again. Registering the key drops the record's
+  token digests, and a token for that device is refused with `key_required`.
+  The computer's client registers its key on its next sign-in to a machine
+  that offers it.
 
 ## Encryption per route
 
@@ -178,6 +187,7 @@ below.
 | Host: `remote/revocations.json` | Revoked device families that could not be removed from the store yet | Same permissions; the gateway refuses to start if it cannot read it rather than readmit a revoked family |
 | Host: control and owner sockets | Who may ask for a pairing challenge or share a session | `0600` Unix sockets in a `0700` directory; on Windows, loopback ports with a per-start 256-bit token |
 | Computer as a client: machine tokens | The token this computer holds for each machine it connects to | The operating system credential store (Keychain, Credential Manager, Secret Service) under `rustcode-machines`; `machines/tokens.json` (`0600`) only when `RUSTCODE_MACHINE_TOKEN_STORE=file` is set |
+| Computer as a client: device key | This install's Ed25519 private key | The same credential store as the machine tokens, under the slot `device-key`; never sent, never logged. Machines store only its public key. |
 | Computer as a client: `machines.json` | Routes, host ids and device ids, no secrets | `0600` |
 | Phone | The phone's token and refresh token | Held by the mobile app (`rustcode-mobile`); not verified by this repository |
 
@@ -267,7 +277,14 @@ Today's behavior is the baseline everything below must keep working:
 4. **QR and connect codes** gain a fingerprint field, additively. A client
    that does not read it ignores it; a client that does verifies the
    certificate against it.
-5. **Version.** Adding the TLS listener is a minor protocol change if the
+5. **Device keys.** The engine takes both a signature and a token today: a
+   device that has registered a key can only sign, and every other device
+   keeps its token. The computer's client moves itself over on its next
+   sign-in. The phone app (`rustcode-mobile`) moves when it ships key
+   support; only after that does the gateway stop accepting tokens from
+   devices without a key, and until then a phone's token is as exposed on the
+   public address as it was before.
+6. **Version.** Adding the TLS listener is a minor protocol change if the
    handshake frames stay as they are; a mandatory-TLS mode is a new protocol
    version, and the host's `supported_versions` list tells a client which it
    may use.
@@ -283,6 +300,11 @@ Covered in CI (not by this page):
 - Browser `Origin` refusal; a TLS ClientHello refused as `secure_connection`;
   version mismatch reported as `unsupported_version` (`transport.rs`,
   `handshake.rs`, `e2e_tests.rs`).
+- Device keys: pairing and a token sign-in that register a key, a signature
+  accepted once per socket, a token refused with `key_required` after the
+  key, wrong and missing signatures refused (`gateway/tests.rs`), and a
+  token-paired machine moved over to the install's key by the client
+  (`rustcode/client/tests/gateway_round_trip.rs`).
 - Identity before credentials: a token is not sent to an address that
   answers as another machine, and a public address never receives a secret
   (`rustcode/client/src/machine.rs`).
@@ -322,4 +344,6 @@ Not covered, and listed so nobody assumes otherwise:
 - Per-connection route in the phone app (`rustcode machines list` and the
   desktop show it today).
 - A device-test checklist for an iPhone on LAN, NetBird and cellular.
+- Key support in the phone app (`rustcode-mobile`), then refusing tokens from
+  devices without a key.
 - Optional hosted relay: #3199, opt-in.

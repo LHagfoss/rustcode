@@ -36,6 +36,7 @@
 //! enough to reach the machine on another network.
 
 use crate::connect_code::ConnectCode;
+use crate::device_key::DeviceKey;
 use crate::protocol::{
     CAPABILITY_TOKEN_ROTATION, DEVICE_KIND_CLI, DEVICE_KIND_DESKTOP,
     GATEWAY_CAPABILITY_MACHINE_CODES, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
@@ -402,8 +403,10 @@ impl Connector {
             HandshakeResponse::Described {
                 gateway_id,
                 host_name,
+                challenge,
                 ..
             } => {
+                connection.set_challenge(challenge);
                 if gateway_id != machine.host_id {
                     return Err(anyhow::Error::new(NotThisMachine {
                         address: address.to_owned(),
@@ -453,6 +456,9 @@ impl Connector {
         let _presenting = tokens
             .presentation_lock(&machine.host_id, self.timeout)
             .await?;
+        if machine.signs {
+            return self.sign_in(first, address, machine, tokens).await;
+        }
         let stored = tokens
             .get(&machine.host_id)?
             .ok_or_else(|| PairingLost::new(machine, PairingLostReason::NoToken))?;
@@ -471,6 +477,70 @@ impl Connector {
         result
     }
 
+    /// Sign this socket's challenge with this install's key: the only way in
+    /// to a machine that holds the key ([`Machine::signs`]). Nothing is
+    /// stored or rotated. The caller holds the presentation lock.
+    async fn sign_in(
+        &self,
+        first: Option<(Connection, Proof)>,
+        address: &str,
+        machine: &Machine,
+        tokens: &TokenStore,
+    ) -> Result<Session> {
+        let key = DeviceKey::load(tokens)?
+            .ok_or_else(|| PairingLost::new(machine, PairingLostReason::NoToken))?;
+        let (mut connection, proved) = match first {
+            Some(opened) => opened,
+            None => {
+                self.open_proven(address, machine, Some(Proof::Described))
+                    .await?
+            }
+        };
+        let Some(challenge) = connection.challenge().map(str::to_owned) else {
+            // It took this key before, and now offers nothing to sign: an
+            // older RustCode there, or not the machine. No token is left to
+            // fall back on, and none should be sent.
+            bail!(
+                "{} no longer offers key sign-in, so this computer cannot prove who it is                  there; update RustCode on {} and connect again",
+                machine.name,
+                machine.name
+            );
+        };
+        let signature = key.sign(&machine.host_id, &challenge, &machine.device_id);
+        connection
+            .send_handshake(&authenticate_signed(machine, signature))
+            .await?;
+        let answer = connection.next_handshake(self.timeout).await?;
+        match answer {
+            HandshakeResponse::Authenticated { .. } => {
+                self.accept(machine, tokens, connection, answer, None, Some(proved))
+                    .await
+            }
+            other => Err(handshake_failure("authenticate", other)),
+        }
+    }
+
+    /// This install's public key, to send with a token to a machine that
+    /// takes keys (its `described` frame carried a challenge). `None` when the
+    /// machine does not, or the key cannot be made or stored here: the token
+    /// keeps working, and the next connection tries again.
+    async fn key_to_register(
+        &self,
+        first: &Option<(Connection, Proof)>,
+        tokens: &TokenStore,
+    ) -> Option<String> {
+        let offered = first
+            .as_ref()
+            .is_some_and(|(connection, _)| connection.challenge().is_some());
+        if !offered {
+            return None;
+        }
+        DeviceKey::load_or_create(tokens, self.timeout)
+            .await
+            .map(|key| key.public_key())
+            .ok()
+    }
+
     /// Present the access token, then `stored`, on `address`. The caller holds
     /// the presentation lock.
     async fn present(
@@ -483,6 +553,7 @@ impl Connector {
     ) -> Result<Session> {
         let mut first = first;
         let mut proof = first.as_ref().map(|(_, proof)| *proof);
+        let public_key = self.key_to_register(&first, tokens).await;
 
         // 1. The access token from the last connection, while it is valid. A
         //    reconnect inside its 15 minutes rotates nothing.
@@ -496,7 +567,7 @@ impl Connector {
                     &mut proof,
                     address,
                     machine,
-                    &authenticate_access(machine, access.token()),
+                    &authenticate_access(machine, access.token(), public_key.clone()),
                 )
                 .await?;
             match answer {
@@ -529,7 +600,7 @@ impl Connector {
                 &mut proof,
                 address,
                 machine,
-                &authenticate_refresh(machine, stored),
+                &authenticate_refresh(machine, stored, public_key.clone()),
             )
             .await?;
         if let HandshakeResponse::Error {
@@ -545,7 +616,7 @@ impl Connector {
                     &mut proof,
                     address,
                     machine,
-                    &authenticate_static(machine, stored),
+                    &authenticate_static(machine, stored, public_key.clone()),
                 )
                 .await?;
             return match answer {
@@ -618,6 +689,7 @@ impl Connector {
             version,
             platform,
             routes,
+            key_registered,
             ..
         } = answer
         else {
@@ -628,6 +700,19 @@ impl Connector {
         // told the rotation landed. Dropping the connection leaves the stored
         // token untouched.
         check_identity(machine, &gateway_id, &device_id)?;
+        if key_registered {
+            // The machine took this install's key and dropped the token: say
+            // so before the token goes, so the next connection signs.
+            MachineRegistry::load(&self.config_dir)
+                .and_then(|mut registry| registry.set_signs(&machine.host_id))
+                .with_context(|| {
+                    format!(
+                        "{} now takes this computer's key instead of its token, but that could                          not be saved; pair it again if the next connection is refused",
+                        machine.name
+                    )
+                })?;
+            let _ = tokens.remove(&machine.host_id);
+        }
         if let Some(refresh) = &refresh_token {
             // Durable first: until this write lands, the answer is not
             // acknowledged and the token before it stays valid at the machine.
@@ -987,6 +1072,7 @@ impl Connector {
             platform: Some(platform().to_owned()),
             host_id: Some(self.identity.host_id.clone()),
             capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+            public_key: None,
         };
         connection.send_handshake(&request).await?;
         let answer = connection
@@ -1300,6 +1386,7 @@ impl Approved {
             // Ask for a refresh token instead of the static token: the pairing
             // then lasts until it is revoked, and reconnect does not expire.
             capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+            public_key: None,
         };
         self.connection.send_handshake(&request).await?;
         let answer = self
@@ -1559,7 +1646,11 @@ const OLDER_MACHINE: &str = "that machine runs an older RustCode without connect
 
 /// The `authenticate` frame that reconnects with an access token: no
 /// capability, because nothing is asked for and nothing rotates.
-fn authenticate_access(machine: &Machine, token: &Secret) -> HandshakeRequest {
+fn authenticate_access(
+    machine: &Machine,
+    token: &Secret,
+    public_key: Option<String>,
+) -> HandshakeRequest {
     HandshakeRequest::Authenticate {
         protocol_version: HANDSHAKE_PROTOCOL_VERSION,
         device_id: machine.device_id.clone(),
@@ -1568,13 +1659,35 @@ fn authenticate_access(machine: &Machine, token: &Secret) -> HandshakeRequest {
         access_token: Some(token.clone()),
         wire_names: None,
         capabilities: None,
+        public_key,
+        signature: None,
+    }
+}
+
+/// The `authenticate` frame of a machine that holds this install's key: the
+/// socket's challenge signed, and no token.
+fn authenticate_signed(machine: &Machine, signature: String) -> HandshakeRequest {
+    HandshakeRequest::Authenticate {
+        protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+        device_id: machine.device_id.clone(),
+        token: None,
+        refresh_token: None,
+        access_token: None,
+        wire_names: None,
+        capabilities: None,
+        public_key: None,
+        signature: Some(signature),
     }
 }
 
 /// The `authenticate` frame that exchanges the durable token for a new pair.
 /// It is the refresh token of a rotating device, and the static token of a
 /// pairing the machine does not rotate.
-fn authenticate_refresh(machine: &Machine, token: &Secret) -> HandshakeRequest {
+fn authenticate_refresh(
+    machine: &Machine,
+    token: &Secret,
+    public_key: Option<String>,
+) -> HandshakeRequest {
     HandshakeRequest::Authenticate {
         protocol_version: HANDSHAKE_PROTOCOL_VERSION,
         device_id: machine.device_id.clone(),
@@ -1583,12 +1696,18 @@ fn authenticate_refresh(machine: &Machine, token: &Secret) -> HandshakeRequest {
         access_token: None,
         wire_names: None,
         capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+        public_key,
+        signature: None,
     }
 }
 
 /// The pre-rotation form of `authenticate`: the token under `token` and no
 /// capability, which a gateway from before rotating tokens understands.
-fn authenticate_static(machine: &Machine, token: &Secret) -> HandshakeRequest {
+fn authenticate_static(
+    machine: &Machine,
+    token: &Secret,
+    public_key: Option<String>,
+) -> HandshakeRequest {
     HandshakeRequest::Authenticate {
         protocol_version: HANDSHAKE_PROTOCOL_VERSION,
         device_id: machine.device_id.clone(),
@@ -1597,6 +1716,8 @@ fn authenticate_static(machine: &Machine, token: &Secret) -> HandshakeRequest {
         access_token: None,
         wire_names: None,
         capabilities: None,
+        public_key,
+        signature: None,
     }
 }
 
@@ -1992,15 +2113,15 @@ mod tests {
         };
         let token = Secret::new("the-token");
         assert_eq!(
-            serde_json::to_value(authenticate_access(&machine, &token)).unwrap(),
+            serde_json::to_value(authenticate_access(&machine, &token, None)).unwrap(),
             expected("access_token", false)
         );
         assert_eq!(
-            serde_json::to_value(authenticate_refresh(&machine, &token)).unwrap(),
+            serde_json::to_value(authenticate_refresh(&machine, &token, None)).unwrap(),
             expected("refresh_token", true)
         );
         assert_eq!(
-            serde_json::to_value(authenticate_static(&machine, &token)).unwrap(),
+            serde_json::to_value(authenticate_static(&machine, &token, None)).unwrap(),
             expected("token", false)
         );
     }
