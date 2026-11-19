@@ -17,6 +17,7 @@
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { parseUsageReport, type UsageRow, type UsageTotals, windowTitle } from "../acp/rustcode";
 import { type Harness, Method } from "../acp/types";
+import { modelTitle } from "../lib/modelNames";
 import { count } from "../lib/plural";
 import { useClock } from "../lib/useNow";
 import {
@@ -29,22 +30,10 @@ import {
   sumRows,
   trend,
 } from "../state/period";
-import {
-  bestCost,
-  type CostInput,
-  type CostTotals,
-  costLine,
-  costOf,
-  costOfRows,
-  formatCost,
-  PRICE_DATE,
-  priceOf,
-  rollUpCosts,
-} from "../state/pricing";
+import { type CostTotals, costLine, costOfRows, formatCost, PRICE_DATE } from "../state/pricing";
 import {
   type HarnessTotal,
   harnessTotals,
-  type ModelTotal,
   type ThreadReport,
   type ThreadTotal,
   threadReport,
@@ -78,12 +67,6 @@ const DEFAULT_PERIOD: StatsPeriod = "30d";
 /** The cost of a set of rows, each row's reported number or its estimate. */
 const costsOf = costOfRows;
 
-const modelInput = (harness: string, model: ModelTotal): CostInput => ({
-  harness,
-  model: model.model,
-  totals: model.totals,
-});
-
 /** A row's best known cost, or -1 so an unknown row ranks after every known one. */
 const rankOf = (cost: CostTotals | undefined): number => cost?.usd ?? -1;
 
@@ -94,7 +77,7 @@ function rankGroups(groups: HarnessTotal[], costs: Map<string, CostTotals>): Har
       ...group,
       models: [...group.models].sort(
         (one, other) =>
-          rankOf(costOf(modelInput(group.harness, other))) - rankOf(costOf(modelInput(group.harness, one))) ||
+          rankOf(other.cost) - rankOf(one.cost) ||
           usedTokens(other.totals) - usedTokens(one.totals) ||
           one.model.localeCompare(other.model),
       ),
@@ -113,7 +96,7 @@ function useUsage(rows: UsageRow[] | undefined) {
     const groups = harnessTotals(rows ?? []);
     const costs = new Map<string, CostTotals>();
     for (const group of groups) {
-      costs.set(group.harness, rollUpCosts(group.models.map((model) => modelInput(group.harness, model))));
+      costs.set(group.harness, group.cost);
     }
     return { groups, costs, total: costsOf(rows ?? []), ranked: rankGroups(groups, costs) };
   }, [rows]);
@@ -454,10 +437,6 @@ function costExact(cost: CostTotals): string {
 }
 
 /** A single row's value: ≈ for an estimate, `unknown` when neither number exists. */
-function bestValue(usd: number | undefined, estimated: boolean): string {
-  if (usd === undefined) return "unknown";
-  return `${estimated ? "≈" : ""}${formatCost(usd)}`;
-}
 
 /** The exact count of a token, for a cell's tooltip. */
 const exact = (count: number | undefined) =>
@@ -577,7 +556,6 @@ function UsageTable({
                   <td className="px-4 py-2 text-right text-fg-muted tabular">{group.totals.turns}</td>
                 </tr>
                 {group.models.map((model) => {
-                  const input = modelInput(group.harness, model);
                   return (
                     <tr
                       key={model.model || "unknown"}
@@ -592,7 +570,9 @@ function UsageTable({
                     >
                       <td className="min-w-0 px-4 py-2 pl-9 text-fg-muted">
                         <span className="flex min-w-0 items-center gap-2">
-                          <span className="truncate">{model.model || "Unknown model"}</span>
+                          <span className="truncate">
+                            {model.model ? modelTitle(model.model) : "Unknown model"}
+                          </span>
                         </span>
                       </td>
                       <NumberCell
@@ -617,7 +597,7 @@ function UsageTable({
                         missing={model.totals.turnsWithoutCacheWriteTokens}
                         label="cache write"
                       />
-                      <CostCell input={input} />
+                      <CostCell cost={model.cost} />
                       <td className="px-4 py-2 text-right text-fg-muted tabular">{model.totals.turns}</td>
                     </tr>
                   );
@@ -660,38 +640,20 @@ const countTitle = (count: number | undefined, missing: number, label: string) =
     ? `No turn in this row reported ${label} tokens`
     : `${exact(count)}${missing ? `; ${missing} turns reported no ${label} tokens` : ""}`;
 
-/** A model row's cost: its reported USD, else its estimate, else `unknown`. */
-function CostCell({ input }: { input: CostInput }) {
-  const best = bestCost(input);
-  const estimated = best.source === "estimated";
-  const partial = input.totals.cost !== undefined && (input.totals.turnsWithoutCost ?? 0) > 0;
+/** A model row can combine reported cost and estimates when its aliases are merged. */
+function CostCell({ cost }: { cost: CostTotals }) {
   return (
-    <td className="px-2 py-2 text-right tabular" title={costCellTitle(input)}>
-      {bestValue(best.usd, estimated)}
-      {partial && <span className="text-fg-faint">†</span>}
+    <td className="px-2 py-2 text-right tabular" title={costTotalsTitle(cost)}>
+      {costValue(cost)}
+      {cost.usd !== undefined && cost.unknownTurns > 0 && <span className="text-fg-faint">†</span>}
     </td>
   );
-}
-
-function costCellTitle(input: CostInput): string {
-  const best = bestCost(input);
-  if (best.source === "reported" && best.usd !== undefined) {
-    const turnsWithoutCost = input.totals.turnsWithoutCost ?? 0;
-    const left = turnsWithoutCost ? `; ${turnsWithoutCost} turns reported none` : "";
-    return `${exactUsd(best.usd)} USD reported${left}`;
-  }
-  if (best.source === "estimated" && best.usd !== undefined) {
-    return `${exactUsd(best.usd)} USD estimated at API list prices on ${PRICE_DATE}, not necessarily what a subscription bills; no turn in this row reported a cost`;
-  }
-  return priceOf(input.model) !== undefined
-    ? `${input.harness} records token counts this page cannot split into input, cache read and cache write; no turn in this row reported a cost`
-    : `No list price for ${input.model || "a model the store did not record"}; no turn in this row reported a cost`;
 }
 
 /** A harness row's cost: the sum of its model rows, ≈ when any part is estimated. */
 function costTotalsTitle(cost: CostTotals): string {
   if (cost.usd === undefined) {
-    return "No model this harness ran has a reported cost or a list price this page can apply; not priced";
+    return "No reported cost or applicable list price";
   }
   const parts = [
     cost.reportedUsd !== undefined ? `${exactUsd(cost.reportedUsd)} reported` : "",

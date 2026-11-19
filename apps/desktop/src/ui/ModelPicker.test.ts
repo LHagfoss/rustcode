@@ -455,7 +455,7 @@ describe("model picker navigation", () => {
     expect(movePickerIndex(0, -1, 3)).toBe(0);
     expect(movePickerIndex(2, 1, 3)).toBe(2);
     expect(pillLabel("Sonnet 5.5")).toBe("Sonnet 5.5");
-    expect(pillLabel(null)).toBe("Default model");
+    expect(pillLabel(null)).toBe("Model");
     expect(pillLabel("claude-sonnet-5-5-long", true)).toBe("claude-sonnet…");
   });
 });

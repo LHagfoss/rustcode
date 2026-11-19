@@ -133,8 +133,8 @@ function loopAgent(loop: Loop, harnesses: HarnessSnapshot | null): string {
   const account = harness?.accounts?.find((item) => item.id === loop.account);
   const model = harness?.models.find((item) => item.id === loop.model);
   return [
-    harness?.name ?? loop.harness ?? "Default harness",
-    account?.name ?? loop.account ?? "Default account",
+    harness?.name ?? loop.harness,
+    account?.name ?? loop.account,
     model?.name ?? loop.model,
     loop.effort && `${loop.effort} effort`,
   ]

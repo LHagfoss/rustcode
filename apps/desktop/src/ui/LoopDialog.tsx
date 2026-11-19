@@ -7,8 +7,9 @@
 
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { projectName } from "../acp/types";
-import { lastAccountFor } from "../state/harnessActions";
+import { effortLabel, projectName } from "../acp/types";
+import { concreteModels, defaultEffort, firstModel, listedModel, restoreChoice } from "../state/harness";
+import { ensureHarnessModels, lastAccountFor } from "../state/harnessActions";
 import { newThreadAccountOn } from "../state/logins";
 import {
   cronInWords,
@@ -87,7 +88,7 @@ function draftOf(loop: Loop | null, project: string): LoopDraft {
     harness: loop.harness,
     account: loop.account,
     model: loop.model,
-    effort: loop.effort?.toLowerCase() === "default" ? undefined : loop.effort,
+    effort: loop.effort,
     readOnly: loop.readOnly,
     threadId: loop.threadId,
     script: loop.script,
@@ -294,16 +295,17 @@ export function LoopDialog({
   if (draft.workspace && !projectOptions.some((option) => option.value === draft.workspace)) {
     projectOptions.unshift({ value: draft.workspace, label: projectName(draft.workspace) });
   }
-  const harnessOptions = [
-    { value: "", label: "Default" },
-    ...(harnesses?.harnesses ?? [])
-      .filter((harness) => harness.enabled || harness.id === draft.harness)
-      .map((harness) => ({ value: harness.id, label: harness.name })),
-  ];
-  // The models of the harness a run starts on: the chosen one, else the default harness.
-  const runHarness = harnesses?.harnesses.find(
-    (harness) => harness.id === (draft.harness || harnesses.default.harness),
-  );
+  const runHarnessId = draft.harness || harnesses?.default.harness;
+  const runHarness = harnesses?.harnesses.find((harness) => harness.id === runHarnessId);
+  const harnessOptions = (harnesses?.harnesses ?? [])
+    .filter((harness) => harness.enabled || harness.id === runHarnessId)
+    .map((harness) => ({ value: harness.id, label: harness.name }));
+  if (runHarnessId && !runHarness) {
+    harnessOptions.push({ value: runHarnessId, label: `${runHarnessId} (unavailable)` });
+  }
+  useEffect(() => {
+    if (open && target === "fresh" && runHarnessId) void ensureHarnessModels(runHarnessId);
+  }, [open, target, runHarnessId]);
   const accounts = runHarness?.accounts ?? [];
   // A job with no account runs on the one a new thread would get, never on the bare default login
   // while named accounts exist; the picker shows it, and saving keeps it.
@@ -311,33 +313,29 @@ export function LoopDialog({
   const runAccount = runHarness
     ? newThreadAccountOn(runHarness, lastAccountFor(runHarness.id), signedOut)
     : null;
-  const accountOptions = [
-    ...(runAccount ? [] : [{ value: "", label: "Default account" }]),
-    ...accounts.map((account) => ({ value: account.id, label: account.name })),
-  ];
+  const accountOptions = accounts.map((account) => ({ value: account.id, label: account.name }));
   if (draft.account && !accounts.some((account) => account.id === draft.account)) {
     accountOptions.push({ value: draft.account, label: `${draft.account} (unavailable)` });
   }
-  const models = runHarness?.models ?? [];
-  const modelOptions = [
-    { value: "", label: "Default model" },
-    ...models.map((model) => ({ value: model.id, label: model.name || model.id })),
-  ];
-  if (draft.model && !models.some((model) => model.id === draft.model)) {
-    modelOptions.push({ value: draft.model, label: draft.model });
+  const models = runHarness ? concreteModels(runHarness.id, runHarness.models) : [];
+  const remembered = harnesses && runHarness ? restoreChoice(harnesses, runHarness.id) : null;
+  const modelId = draft.model || remembered?.model;
+  const chosenModel =
+    listedModel(runHarnessId ?? "", models, modelId) ??
+    (!draft.model || draft.model === "default" ? firstModel(runHarnessId ?? "", models) : undefined);
+  const runModel = chosenModel?.id ?? (draft.model === "default" ? undefined : draft.model);
+  const modelOptions = models.map((model) => ({ value: model.id, label: model.name || model.id }));
+  if (runModel && !chosenModel) {
+    modelOptions.push({ value: runModel, label: runModel });
   }
-  const defaultModel =
-    harnesses?.default.harness === runHarness?.id ? harnesses?.default.model : runHarness?.last?.model;
-  const chosenModel = models.find((model) => model.id === (draft.model || defaultModel));
-  const effortValues = [...new Set(chosenModel?.efforts.length ? chosenModel.efforts : EFFORTS)].filter(
-    (effort) => effort.toLowerCase() !== "default",
-  );
-  const effortOptions = [
-    { value: "", label: "Default" },
-    ...effortValues.map((effort) => ({ value: effort, label: effort[0]?.toUpperCase() + effort.slice(1) })),
-  ];
-  if (draft.effort && !effortValues.includes(draft.effort)) {
-    effortOptions.push({ value: draft.effort, label: draft.effort });
+  const effortValues = chosenModel?.efforts ?? (runHarness?.capabilities.effort ? EFFORTS : []);
+  const runEffort =
+    draft.effort ||
+    (chosenModel && remembered?.model === chosenModel.id ? remembered.effort : undefined) ||
+    (chosenModel ? defaultEffort(chosenModel, effortValues) : undefined);
+  const effortOptions = effortValues.map((effort) => ({ value: effort, label: effortLabel(effort) }));
+  if (runEffort && !effortValues.includes(runEffort)) {
+    effortOptions.push({ value: runEffort, label: effortLabel(runEffort) });
   }
   const ready =
     draft.name.trim() &&
@@ -351,8 +349,11 @@ export function LoopDialog({
     setSaving(true);
     setError(null);
     try {
+      const agent = threadId
+        ? {}
+        : { harness: runHarnessId, model: runModel ?? draft.model, effort: runEffort ?? undefined };
       const made = await saveLoop({
-        ...withRunAccount({ ...draft, threadId }, runHarness?.id, runAccount),
+        ...withRunAccount({ ...draft, ...agent, threadId }, runHarness?.id, runAccount),
         cron,
         once: once ?? undefined,
         manual,
@@ -644,30 +645,27 @@ export function LoopDialog({
                         <Field label="Harness">
                           <Select
                             label="Harness"
-                            value={draft.harness ?? ""}
+                            value={runHarnessId ?? ""}
                             options={harnessOptions}
                             onChange={(harness) => patch({ harness, account: "", model: "", effort: "" })}
                           />
                         </Field>
-                        <Field label="Account">
-                          <Select
-                            label="Account"
-                            value={draft.account || runAccount || ""}
-                            options={accountOptions}
-                            disabled={accountOptions.length === 1}
-                            onChange={(account) =>
-                              patch({
-                                account,
-                                harness: account ? runHarness?.id : draft.harness,
-                              })
-                            }
-                          />
-                        </Field>
+                        {accountOptions.length > 0 && (
+                          <Field label="Account">
+                            <Select
+                              label="Account"
+                              value={draft.account || runAccount || ""}
+                              options={accountOptions}
+                              disabled={accountOptions.length === 1}
+                              onChange={(account) => patch({ account })}
+                            />
+                          </Field>
+                        )}
                         <Field label="Model">
                           {models.length ? (
                             <Select
                               label="Model"
-                              value={draft.model ?? ""}
+                              value={runModel ?? ""}
                               options={modelOptions}
                               onChange={(model) => patch({ model, effort: "" })}
                             />
@@ -675,21 +673,27 @@ export function LoopDialog({
                             <input
                               value={draft.model ?? ""}
                               onChange={(e) => patch({ model: e.target.value, effort: "" })}
-                              placeholder="Default model"
+                              placeholder="Model ID"
                               aria-label="Model"
                               {...noTextHelpers}
                               className={cx(inputClass, "h-[26px] min-w-0")}
                             />
                           )}
                         </Field>
-                        <Field label="Effort">
-                          <Select
-                            label="Effort"
-                            value={draft.effort ?? ""}
-                            options={effortOptions}
-                            onChange={(effort) => patch({ effort })}
-                          />
-                        </Field>
+                        {effortOptions.length > 0 && (
+                          <Field label="Effort">
+                            <Select
+                              label="Effort"
+                              value={runEffort ?? ""}
+                              options={
+                                runEffort
+                                  ? effortOptions
+                                  : [{ value: "", label: "Choose effort", disabled: true }, ...effortOptions]
+                              }
+                              onChange={(effort) => patch({ effort })}
+                            />
+                          </Field>
+                        )}
                       </div>
                     )}
                     <ToggleRow

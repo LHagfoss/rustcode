@@ -10,6 +10,7 @@ import type {
   HarnessModel,
   HarnessSnapshot,
 } from "../acp/types";
+import { CLAUDE_OPUS_MODEL, modelTitle, usageModelId } from "../lib/modelNames";
 
 export type HarnessStatus =
   | { tone: "ok"; label: string }
@@ -161,6 +162,32 @@ export function validateDefault(
   return undefined;
 }
 
+/** A harness can report a legacy "default" model ID alongside its concrete choices. */
+export function concreteModels<T extends { id: string; name: string }>(harness: string, models: T[]): T[] {
+  const concrete = models.filter((model) => model.id !== "default");
+  if (harness !== "claude-code") return concrete;
+  const legacy = models.find((model) => model.id === "default");
+  // Some Claude Code versions expose Opus only under the legacy ID. Keep the ID for writes.
+  return legacy && !concrete.some((model) => usageModelId(harness, model.id) === CLAUDE_OPUS_MODEL)
+    ? [{ ...legacy, name: modelTitle(CLAUDE_OPUS_MODEL) }, ...concrete]
+    : concrete;
+}
+
+export function listedModel<T extends { id: string }>(
+  harness: string,
+  models: T[],
+  id: string | null | undefined,
+): T | undefined {
+  const exact = models.find((model) => model.id === id);
+  if (exact || harness !== "claude-code" || !id) return exact;
+  return models.find((model) => usageModelId(harness, model.id) === usageModelId(harness, id));
+}
+
+/** The starting model when there is no usable saved choice. */
+export function firstModel<T extends { id: string }>(harness: string, models: T[]): T | undefined {
+  return listedModel(harness, models, harness === "claude-code" ? CLAUDE_OPUS_MODEL : null) ?? models[0];
+}
+
 /** Fix a default choice after the harness or model changed: keep what still fits, else fall back. */
 export function normalizeDefault(
   snapshot: HarnessSnapshot,
@@ -168,14 +195,13 @@ export function normalizeDefault(
 ): { harness: string; model: string | null; effort: string | null } {
   const h = snapshot.harnesses.find((x) => x.id === choice.harness);
   if (!h) return { harness: "rustcode", model: null, effort: null };
-  const model =
-    h.models.find((m) => m.id === choice.model) ??
-    (choice.model && !h.models.length ? undefined : h.models[0]);
+  const models = concreteModels(h.id, h.models);
+  const model = listedModel(h.id, models, choice.model) ?? firstModel(h.id, models);
   const modelId = model?.id ?? (h.models.length ? null : choice.model);
   let effort = choice.effort;
   if (!h.capabilities.effort) effort = null;
   else if (model?.efforts.length && (!effort || !model.efforts.includes(effort))) {
-    effort = model.default_effort ?? model.efforts[0] ?? null;
+    effort = defaultEffort(model, model.efforts);
   }
   return { harness: h.id, model: modelId, effort };
 }
@@ -216,11 +242,12 @@ export function restoreChoice(
   if (!h) return { harness: "rustcode", model: null, effort: null };
   const last = h.last ?? local?.[id] ?? null;
   const fallback = snapshot.default.harness === id ? snapshot.default : null;
+  const models = concreteModels(h.id, h.models);
   const listed = (model: string | null) =>
-    !!model && (!h.models.length || h.models.some((m) => m.id === model));
+    !!model && (!h.models.length || !!listedModel(h.id, models, model));
   const candidates = [last, fallback].filter((c): c is HarnessLast => !!c);
   const model = candidates.map((c) => c.model).find(listed) ?? null;
-  const known = h.models.find((m) => m.id === model);
+  const known = listedModel(h.id, models, model);
   const offers = (effort: string | null) =>
     !!effort && h.capabilities.effort && (!known?.efforts.length || known.efforts.includes(effort));
   const own = rememberedEffort(memory, h.id, model);

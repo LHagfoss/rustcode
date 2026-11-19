@@ -1,10 +1,12 @@
+export const CLAUDE_OPUS_MODEL = "claude-opus-5-5";
+
 /**
  * The model a short name stands for: Claude Code records its `opus`, `sonnet`, `fable` and `haiku`
  * aliases, and Pi and the built-in harness write some ids their own way. Pricing reads the model
  * these name, and labels show it.
  */
 export const MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-5-5",
+  opus: CLAUDE_OPUS_MODEL,
   sonnet: "claude-sonnet-5",
   fable: "claude-fable-5-2",
   haiku: "claude-haiku-5-5",
@@ -30,4 +32,11 @@ export function modelTitle(model: string): string {
   const version = match[3] ? `${match[2]}.${match[3]}` : match[2];
   const name = `${family[0]?.toUpperCase()}${family.slice(1)} ${version}`;
   return context ? `${name} ${context[1]}M` : name;
+}
+
+/** The model a Claude Code usage row recorded, including its older shorthand. */
+export function usageModelId(harness: string, model: string | undefined): string | undefined {
+  if (harness !== "claude-code" || !model) return model;
+  const id = model.toLowerCase();
+  return MODEL_ALIASES[id === "default" ? "opus" : id] ?? model;
 }

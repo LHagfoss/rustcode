@@ -119,20 +119,15 @@ export async function createLoop(
   if (threadId && (!target || projectPath(target.cwd) !== workspace)) {
     return failureJson(failure("invalid", "thread_id must name a local thread in the job's project"));
   }
-  const runHarness = state.harnesses?.harnesses.find((entry) => entry.id === harness);
+  const runHarness = state.harnesses?.harnesses.find(
+    (entry) => entry.id === (harness ?? state.harnesses?.default.harness),
+  );
   const account = runHarness?.accounts?.find((entry) => entry.id === call.account);
-  if (call.account && !account) {
+  if (call.account && (!harness || !account)) {
     return failureJson(failure("invalid", "choose an account ID for this harness from list_harnesses"));
   }
   const schedule = localSchedule(call.schedule);
-  const agent = [
-    runHarness?.name ?? harness ?? "Default harness",
-    account?.name ?? "Default account",
-    model ?? "Default model",
-    effort,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const agent = [runHarness?.name ?? harness, account?.name, model, effort].filter(Boolean).join(" · ");
   const no = await permitted(caller, "loop:create", {
     kind: "schedule",
     onceOnly: true,
