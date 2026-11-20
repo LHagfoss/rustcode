@@ -105,7 +105,7 @@ import { HiddenDot, ProjectHeader } from "./ProjectHeader";
 import { Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
 import { PendingRow, ROW_HEIGHT, ThreadRow } from "./SidebarThreadRow";
-import { SidebarToolbar } from "./SidebarToolbar";
+import { SidebarToolbar, ThreadSectionLabel } from "./SidebarToolbar";
 import { useThreadDrag } from "./sidebarDrag";
 import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
@@ -301,15 +301,6 @@ function SectionHeader({
         )}
       </span>
     </button>
-  );
-}
-
-/** The heading of Pinned or Threads: it names the group, sits close to its rows, and never folds. */
-function SectionLabel({ section }: { section: Section }) {
-  return (
-    <div className="flex h-5 w-full items-start px-2 font-medium text-caption text-fg-faint">
-      <span className="min-w-0 flex-1 truncate">{section.label}</span>
-    </div>
   );
 }
 
@@ -746,7 +737,7 @@ export function Sidebar() {
         })),
       );
     }
-    return all.filter((g) => g.items.length);
+    return all.filter((g) => g.id === "threads" || g.items.length);
   }, [
     filtered,
     flags,
@@ -774,8 +765,7 @@ export function Sidebar() {
   // The first shelf starts the foot of the list; Pinned and Threads name themselves (`sectionLabelled`).
   const firstShelf = sections.find((g) => isShelf(g.id, layoutMode))?.id;
   const shownIds = sections.map((g) => g.id);
-  const labelled = (id: SectionId) =>
-    sectionLabelled(id, shownIds, layoutMode) || (toolbarOn && id === "threads"); // under the hairline
+  const labelled = (id: SectionId) => id === "threads" || sectionLabelled(id, shownIds, layoutMode);
   // The open delegate's parent may have been settled: the shelf opens for it and its slice of the
   // shelf grows to hold the row, so the row it hangs under is reachable rather than out of sight.
   const settledAt = settledSection
@@ -1321,11 +1311,6 @@ export function Sidebar() {
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
           {listing && <ThreadRowsSkeleton />}
-          {!listing && !filtered.length && (
-            <div className="px-2 py-3 text-callout text-fg-muted">
-              {onlyProject ? "No threads in this project yet." : "No threads yet."}
-            </div>
-          )}
           <div className="flex min-h-full flex-col">
             {sections.map((section) => {
               const open = isOpen(section.id);
@@ -1341,12 +1326,22 @@ export function Sidebar() {
                     aria-label={section.label}
                     data-shelf={shelf ? section.id : undefined}
                   >
-                    {/* Pinned and Threads carry a label (they never fold) while there is another
-                    list beside them; a shelf's header folds it. */}
+                    {/* Shelves fold. The Threads label also holds the list controls. */}
                     {shelf ? (
                       <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
                     ) : (
-                      labelled(section.id) && <SectionLabel section={section} />
+                      labelled(section.id) && (
+                        <ThreadSectionLabel
+                          label={section.label}
+                          threads={section.id === "threads"}
+                          filtering={onlyProject && !!projectCwd}
+                        />
+                      )
+                    )}
+                    {section.id === "threads" && !listing && !filtered.length && (
+                      <div className="px-2 py-3 text-callout text-fg-muted">
+                        {onlyProject ? "No threads in this project yet." : "No threads yet."}
+                      </div>
                     )}
                     <Fold open={open}>
                       {section.projects
