@@ -189,7 +189,13 @@ mistake each other; ⌘O with no thread open starts here in the folder it picks.
 its composer keep that thread's machine and folder.
 
 **Settings on one machine or all.** Settings is not synced from a main machine
-(user decision, #3202). A server-setting page — General's server rows,
+unless you ask for it (#3202): each paired machine's Settings page has **Use
+<this computer>'s settings**, off by default (`src/state/settingsFollow.ts`).
+Turned on, this computer's shared server settings are copied to that machine
+at once, again each time its connection opens, and whenever they change here
+(from the app, the CLI or an agent). A value changed on that machine itself is
+put back on its next connection. Only the Shared rows move; credentials,
+accounts, local paths and app preferences stay put. A server-setting page — General's server rows,
 Harnesses and Capabilities — starts with **Applying to**: This machine (the
 default), one paired machine, or All machines, and the choice persists across
 pages (`src/state/settingsScope.ts`). A row whose connected machines disagree

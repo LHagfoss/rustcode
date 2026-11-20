@@ -1246,6 +1246,7 @@ export function removeMachine(machine: Machine, onRemoved?: () => void): void {
       void shellCall("machines_remove", { id: machine.id }).then(
         async () => {
           detach(machine.id);
+          void import("./settingsFollow").then((follow) => follow.forgetFollower(machine.id));
           toast(`Removed ${name}.`, "success");
           await refreshMachines();
           onRemoved?.();
