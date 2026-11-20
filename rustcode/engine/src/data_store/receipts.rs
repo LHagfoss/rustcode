@@ -79,7 +79,7 @@ pub fn check_receipt(
 /// [`record_receipt`] against one store file, so a test can use a temporary one.
 pub fn record_receipt_at(path: &Path, receipt: &ReceiptRow) -> Result<(), String> {
     let connection = open(path)?;
-    write_receipt(&connection, receipt)
+    write_receipt(&connection, receipt).map(|_| ())
 }
 
 /// [`record_receipt`] against the store this machine uses.
@@ -88,7 +88,51 @@ pub fn record_receipt(receipt: &ReceiptRow) -> Result<(), String> {
     record_receipt_at(&path, receipt)
 }
 
-pub(super) fn write_receipt(connection: &Connection, receipt: &ReceiptRow) -> Result<(), String> {
+/// Claim a retry key before creating a thread. Only the insert winner may start it.
+pub(crate) fn claim_start_receipt(receipt: &ReceiptRow) -> Result<bool, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    write_receipt(&open(&path)?, receipt)
+}
+
+/// Advance a claimed start from unknown outcome to known thread, then to an
+/// accepted start. Match the original result as well as the key and hash.
+pub(crate) fn advance_start_receipt(
+    receipt: &mut ReceiptRow,
+    result: &Value,
+) -> Result<(), String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    advance_start_receipt_at(&path, receipt, result)
+}
+
+pub(super) fn advance_start_receipt_at(
+    path: &Path,
+    receipt: &mut ReceiptRow,
+    result: &Value,
+) -> Result<(), String> {
+    let result_json = result.to_string();
+    let updated = open(path)?
+        .execute(
+            "UPDATE command_receipts SET result_json = ?6
+             WHERE caller = ?1 AND client_request_id = ?2 AND action = ?3
+               AND args_hash = ?4 AND result_json = ?5",
+            params![
+                receipt.caller,
+                receipt.client_request_id,
+                receipt.action,
+                receipt.args_hash,
+                receipt.result_json,
+                result_json,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    if updated != 1 {
+        return Err("the start receipt changed or expired".to_owned());
+    }
+    receipt.result_json = result_json;
+    Ok(())
+}
+
+pub(super) fn write_receipt(connection: &Connection, receipt: &ReceiptRow) -> Result<bool, String> {
     if receipt.caller.trim().is_empty() || receipt.client_request_id.trim().is_empty() {
         return Err("a receipt needs a caller and a client_request_id".to_owned());
     }
@@ -117,8 +161,8 @@ pub(super) fn write_receipt(connection: &Connection, receipt: &ReceiptRow) -> Re
                 created_at,
             ],
         )
-        .map_err(|error| error.to_string())?;
-    Ok(())
+        .map(|inserted| inserted == 1)
+        .map_err(|error| error.to_string())
 }
 
 /// Drops receipts past the retry window, then the oldest until at most
