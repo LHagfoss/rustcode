@@ -583,13 +583,18 @@ impl AcpAdapter {
         // This harness has no `use_skill`, so it is told where the skills are
         // and which ones the user turned off (#2898). The note is an input:
         // the thread computed it when it started this process. Its own sandbox
-        // is not Codex's Windows one, so there is no sandbox note to add.
+        // is not Codex's Windows one, so there is no sandbox note to add;
+        // Antigravity hears how it cuts long tool output instead (#4098).
         let instructions = crate::tools::schema::harness_instructions(
             &harness.name,
             options.client_display.visualization_level,
             options.client_display.smart_ui,
             options.skills_note.as_deref(),
-            "",
+            if harness.id == "antigravity" {
+                crate::tools::schema::ANTIGRAVITY_OUTPUT_NOTE
+            } else {
+                ""
+            },
         );
         // An agent that takes a client system prompt (Claude Code's adapter)
         // gets where it runs and how RustCode draws replies appended to its own.
@@ -1156,6 +1161,55 @@ fn prompt_error(error: &RpcError) -> String {
 }
 
 /// Project a failed call's output onto the existing activity card fields.
+/// Antigravity cuts a long tool result down to a preview and saves the rest
+/// in its own folder, naming the file in the preview's first line (#4098).
+/// The path goes on the tool row as `_meta.rustcode.fullOutputArtifact`, so
+/// the app can open the whole output.
+fn mark_saved_output(update: &mut Value) {
+    if !matches!(
+        update["sessionUpdate"].as_str(),
+        Some("tool_call" | "tool_call_update")
+    ) {
+        return;
+    }
+    let from_content = update["content"].as_array().and_then(|blocks| {
+        blocks.iter().find_map(|block| {
+            block
+                .pointer("/content/text")
+                .and_then(Value::as_str)
+                .and_then(super::transcript::saved_output_path)
+        })
+    });
+    let Some(path) = from_content.or_else(|| {
+        let raw = &update["rawOutput"];
+        raw.as_str()
+            .or_else(|| raw["content"].as_str())
+            .or_else(|| raw["output"].as_str())
+            .and_then(super::transcript::saved_output_path)
+    }) else {
+        return;
+    };
+    let Some(object) = update.as_object_mut() else {
+        return;
+    };
+    let meta = object.entry("_meta").or_insert_with(|| json!({}));
+    if !meta.is_object() {
+        *meta = json!({});
+    }
+    let rustcode = meta
+        .as_object_mut()
+        .expect("meta is an object")
+        .entry("rustcode")
+        .or_insert_with(|| json!({}));
+    if !rustcode.is_object() {
+        *rustcode = json!({});
+    }
+    rustcode
+        .as_object_mut()
+        .expect("rustcode meta is an object")
+        .insert("fullOutputArtifact".to_owned(), Value::String(path));
+}
+
 fn normalize_tool_failure(update: &mut Value) {
     if !matches!(
         update["sessionUpdate"].as_str(),
@@ -1262,6 +1316,7 @@ async fn relay(
                 }
                 if antigravity {
                     normalize_tool_failure(&mut update);
+                    mark_saved_output(&mut update);
                 }
                 let update = match serde_json::from_value::<SessionUpdate>(update) {
                     Ok(update) => update,

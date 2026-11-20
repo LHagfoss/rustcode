@@ -1542,6 +1542,32 @@ fn an_answer_without_usage_counts_changes_nothing() {
 }
 
 #[test]
+fn antigravity_saved_output_path_rides_on_the_tool_row() {
+    let preview = "The tool's output was truncated due to being too long. You can find the full \
+                   output in a file at file:///home/u/.gemini/antigravity-cli/brain/7a/.system_generated/steps/18/output.txt.\n\n\
+                   Here is a preview with the middle of the output truncated:\nok";
+    let mut update = json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed",
+        "content": [{"type": "content", "content": {"type": "text", "text": preview}}],
+        "_meta": {"other": 1}
+    });
+    mark_saved_output(&mut update);
+    assert_eq!(
+        update["_meta"]["rustcode"]["fullOutputArtifact"],
+        "/home/u/.gemini/antigravity-cli/brain/7a/.system_generated/steps/18/output.txt"
+    );
+    assert_eq!(update["_meta"]["other"], 1);
+    assert!(serde_json::from_value::<SessionUpdate>(update).is_ok());
+
+    let mut plain = json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "completed",
+        "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}]
+    });
+    mark_saved_output(&mut plain);
+    assert!(plain.get("_meta").is_none());
+}
+
+#[test]
 fn failed_acp_tool_keeps_operation_and_supplied_diagnostics() {
     let mut update = json!({
         "sessionUpdate": "tool_call_update", "toolCallId": "t1",

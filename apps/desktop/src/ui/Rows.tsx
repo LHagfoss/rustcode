@@ -7,6 +7,7 @@ import type { Json } from "../acp/jsonrpc";
 import { effortLabel, type HarnessDenial, modelName } from "../acp/types";
 import { type AnsiLine, ansiClass } from "../lib/ansi";
 import { displayCommand } from "../lib/command";
+import { openPath } from "../lib/native";
 import { observeSize } from "../lib/resize";
 import { type ArgRow, type ToolBody, toolBody } from "../lib/toolBody";
 import { hasTimeline } from "../lib/trace";
@@ -40,6 +41,7 @@ import {
   toolInFlight,
   wakeLine,
 } from "../state/thread";
+import { isRemoteThread } from "../state/threadKeys";
 import {
   displayTool,
   failureReason,
@@ -763,7 +765,25 @@ export function ToolDetail({
           {!body.args.length && !body.output && <span className="text-caption text-fg-faint">No output</span>}
         </>
       )}
+      {item.fullOutput && <FullOutput path={item.fullOutput} />}
     </div>
+  );
+}
+
+/** The harness showed a preview and saved the whole output to a file (Antigravity). */
+function FullOutput({ path }: { path: string }) {
+  // A paired machine's file is not on this computer to open or reveal.
+  const remote = useApp((s) => !!s.selectedId && isRemoteThread(s.selectedId));
+  return (
+    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-fg-faint">
+      <span>Preview only; full output saved to</span>
+      <span className="selectable min-w-0 break-all font-mono">{path}</span>
+      {!remote && (
+        <Pill quiet size="sm" onClick={() => openPath(path)}>
+          Open
+        </Pill>
+      )}
+    </span>
   );
 }
 

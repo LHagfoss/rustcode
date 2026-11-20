@@ -2735,8 +2735,8 @@ pub(crate) fn harness_output_style(smart_ui: crate::app::SmartUi) -> String {
 /// link what it makes so the app opens it, that RustCode is what owns its threads and projects, then
 /// either Smart UI when the user has it on or the `rustcode-viz` types the connected client draws (none
 /// at level 0), then `skills` ([`crate::skills::harness_skills_note`], because this harness has no
-/// `use_skill`), what its own sandbox blocks on this platform (`sandbox_note`, empty when it blocks
-/// nothing the model would reach for), then [`harness_output_style`]. Codex takes this as
+/// `use_skill`), what this harness does that the model must work around (`harness_note`: what its
+/// sandbox blocks on this platform, how it cuts tool output; empty when nothing), then [`harness_output_style`]. Codex takes this as
 /// `developerInstructions` and Claude Code's adapter as its `systemPrompt`: it goes in every prompt,
 /// so every byte here is paid on every turn.
 pub(crate) fn harness_instructions(
@@ -2744,7 +2744,7 @@ pub(crate) fn harness_instructions(
     visualization_level: u8,
     smart_ui: crate::app::SmartUi,
     skills: Option<&str>,
-    sandbox_note: &str,
+    harness_note: &str,
 ) -> String {
     let harness = harness.split_whitespace().collect::<Vec<_>>().join(" ");
     format!(
@@ -2762,7 +2762,7 @@ pub(crate) fn harness_instructions(
         taught_visualization_hint(visualization_level, smart_ui),
         harness_smart_ui_hint(smart_ui),
         skills.unwrap_or_default(),
-        sandbox_note,
+        harness_note,
         harness_output_style(smart_ui)
     )
 }
@@ -2774,6 +2774,14 @@ pub(crate) const CODEX_WINDOWS_SANDBOX_NOTE: &str = r#"# Sandbox on Windows
 This thread's shell runs in Codex's Windows sandbox unless the user picks Full access. WMI answers out of process, so the sandbox denies it and `Get-CimInstance`, `Get-WmiObject`, `wmic` and `systeminfo` fail with `Access denied` (0x80041003); retrying or wrapping it does not help. Read the same facts without WMI: `Get-ItemProperty HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0` and `HKLM:\HARDWARE\DESCRIPTION\System\BIOS` for the CPU and board, `[System.Environment]::ProcessorCount` and `[System.Environment]::OSVersion` for counts and version, `[System.IO.DriveInfo]::GetDrives()` for disks, and `Get-Counter` (performance counters, not WMI) for load and memory. Registry and .NET reads are not restricted.
 
 "#;
+
+/// Antigravity cuts a long tool result down to its head and tail and saves the rest in its own
+/// folder (#4098). Models acted on the preview and missed the middle, so it is told to bound what a
+/// command prints and to read the saved file when the middle matters.
+pub(crate) const ANTIGRAVITY_OUTPUT_NOTE: &str = "# Long command output
+This harness cuts a long tool result down to a preview with the middle removed, and saves the whole output to a file it names in the result (\"You can find the full output in a file at …\"). Bound what a command prints so the answer fits: `| head -n 100`, `rg -m 20`, `git diff --stat`, `wc -l` before reading, or a narrower path. When a result says it was truncated and the part you need is in the middle, read that saved file (with a line range or `rg`) instead of acting on the preview.
+
+";
 
 /// [`CODEX_WINDOWS_SANDBOX_NOTE`] on Windows, where Codex sandboxes the shell at all.
 pub(crate) fn codex_windows_sandbox_note() -> &'static str {

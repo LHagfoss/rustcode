@@ -272,7 +272,13 @@ impl Transcript {
             })
             .flatten();
         let exit_code = exit_code.or_else(|| failure_text.as_deref().and_then(text_exit_code));
+        let saved_output = saved_output_path(&message.content);
         let record = message.tool_result.get_or_insert_with(Default::default);
+        if let Some(path) = saved_output {
+            // The row holds only the harness's preview; the rest is in a file.
+            record.truncated = true;
+            record.full_output_artifact = Some(path);
+        }
         let title_is_command =
             slot.title_is_command || meta.is_some_and(|meta| meta.contains_key("terminal_info"));
         let input_command = fields.raw_input.as_ref().and_then(|input| {
@@ -564,6 +570,55 @@ fn text_exit_code(text: &str) -> Option<i64> {
         .ok()
 }
 
+/// Where Antigravity saved a tool's whole output when it cut the result down
+/// to a preview (#4098): "The tool's output was truncated due to being too
+/// long. You can find the full output in a file at file:///…/output.txt."
+pub(crate) fn saved_output_path(text: &str) -> Option<String> {
+    const MARKER: &str = "You can find the full output in a file at ";
+    let head = text.get(..text.len().min(1024))?;
+    let start = head.find(MARKER)? + MARKER.len();
+    let rest = &text[start..];
+    let line = rest.lines().next()?.trim_end();
+    let line = line.strip_suffix('.').unwrap_or(line);
+    let path = line.strip_prefix("file://").unwrap_or(line);
+    let path = percent_decode(path);
+    // `file:///C:/…` on Windows leaves `/C:/…`.
+    let path = match path.as_bytes() {
+        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => path[1..].to_owned(),
+        _ => path,
+    };
+    (path.starts_with('/') || std::path::Path::new(&path).is_absolute()).then_some(path)
+}
+
+/// `_meta.rustcode.fullOutputArtifact`: where the app opens a tool's whole
+/// output from, when the row holds only a preview.
+pub(crate) fn full_output_meta(path: &str) -> Meta {
+    Meta::from_iter([(
+        "rustcode".to_owned(),
+        serde_json::json!({ "fullOutputArtifact": path }),
+    )])
+}
+
+/// `%20` and the like in a `file://` URL, back to the bytes they stand for.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let Some(hex) = text.get(index + 1..index + 3)
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            out.push(byte);
+            index += 3;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| text.to_owned())
+}
+
 /// The exit code a structured `rawOutput` carries (`exitCode` or
 /// `exit_code`), for a harness that does not use terminal meta.
 pub(super) fn raw_exit_code(raw: &Value) -> Option<i64> {
@@ -796,6 +851,9 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
                 if let Some(code) = record.exit_code {
                     call = call.raw_output(serde_json::json!({"exitCode": code}));
                 }
+                if let Some(path) = &record.full_output_artifact {
+                    call = call.meta(full_output_meta(path));
+                }
                 let text = if record.error_kind.as_deref() == Some("interrupted") {
                     format!("{}\n{INTERRUPTED_TOOL_DETAIL}", message.content)
                         .trim_start()
@@ -837,6 +895,64 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antigravity_saved_output_is_kept_on_the_tool_row() {
+        let text = "The tool's output was truncated due to being too long. You can find the full \
+                    output in a file at file:///home/u/.gemini/antigravity-cli/brain/7a/.system_generated/steps/18/output.txt.\n\n\
+                    Here is a preview with the middle of the output truncated:\nCommand output:\nok";
+        assert_eq!(
+            saved_output_path(text).as_deref(),
+            Some("/home/u/.gemini/antigravity-cli/brain/7a/.system_generated/steps/18/output.txt")
+        );
+        assert_eq!(
+            saved_output_path("You can find the full output in a file at file:///a%20b/out.txt.")
+                .as_deref(),
+            Some("/a b/out.txt")
+        );
+        assert_eq!(saved_output_path("plain output"), None);
+        assert_eq!(
+            saved_output_path("You can find the full output in a file at relative.txt."),
+            None
+        );
+
+        let mut transcript = Transcript::default();
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("big", "ls -la")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress),
+        ));
+        transcript.observe(&SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "big",
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .content(vec![ToolCallContent::from(ContentBlock::Text(
+                    TextContent::new(text),
+                ))]),
+        )));
+        transcript.end_reply();
+        let record = transcript
+            .history
+            .iter()
+            .find_map(|message| message.tool_result.as_ref())
+            .expect("tool row");
+        assert!(record.truncated);
+        assert_eq!(
+            record.full_output_artifact.as_deref(),
+            Some("/home/u/.gemini/antigravity-cli/brain/7a/.system_generated/steps/18/output.txt")
+        );
+        let updates = serde_json::to_value(replay(&transcript.history, None)).unwrap();
+        let update = updates
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|update| update["sessionUpdate"] == "tool_call")
+            .expect("replayed update");
+        assert_eq!(
+            update["_meta"]["rustcode"]["fullOutputArtifact"],
+            "/home/u/.gemini/antigravity-cli/brain/7a/.system_generated/steps/18/output.txt"
+        );
+    }
 
     #[test]
     fn interruption_closes_only_unfinished_tools_without_an_exit_code() {
