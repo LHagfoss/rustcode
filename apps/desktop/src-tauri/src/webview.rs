@@ -137,6 +137,13 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
     // back. Cmd+Q does not pass through here (it ends the app directly), so it still quits.
     let handle = app.handle().clone();
     window.on_window_event(move |event| {
+        // Paired machines retry sooner while someone is looking at the window.
+        if let tauri::WindowEvent::Focused(focused) = event {
+            if let Some(machines) = handle.try_state::<std::sync::Arc<crate::machines::Machines>>()
+            {
+                machines.set_foreground(*focused);
+            }
+        }
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             remember_size(&handle);
             if cfg!(target_os = "macos") {

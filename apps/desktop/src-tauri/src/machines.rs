@@ -21,7 +21,7 @@ use anyhow::Error;
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
-    backoff_delay, browse_async, Approved, Cause, ClientKind, DiscoveredMachine, Machine,
+    backoff_delay_for, browse_async, Approved, Cause, ClientKind, DiscoveredMachine, Machine,
     MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteChange, RouteProbe, TokenStore,
     Unreachable,
 };
@@ -29,6 +29,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
@@ -46,8 +47,6 @@ pub const STABLE_AFTER: Duration = Duration::from_secs(30);
 /// so a network change (a VPN up, another Wi-Fi) is acted on in seconds instead
 /// of at the end of the backoff.
 pub const NETWORK_POLL: Duration = Duration::from_secs(5);
-/// Probe quiet links before the hard timeout. Healthy gateways ping every 30 seconds.
-const IDLE_PROBE_AFTER: Duration = Duration::from_secs(35);
 
 /// How long one write to a connected machine may take. A peer that vanished
 /// without a reset leaves a full send buffer, and a write to it would block
@@ -354,6 +353,10 @@ pub struct Machines {
     /// The steps of the connection over SSH in progress, or of the last one,
     /// for the page to poll (`machines_ssh_progress`).
     ssh: Mutex<SshRun>,
+    /// Whether the app's window has focus. While it does, a machine that went
+    /// away is retried within [`rustcode_client::FOREGROUND_BACKOFF_MAX`]
+    /// rather than after up to a minute.
+    foreground: AtomicBool,
 }
 
 /// One connection over SSH, as the page shows it.
@@ -407,6 +410,19 @@ impl Machines {
             .into_iter()
             .map(|machine| view(machine, live.get(&machine.host_id)))
             .collect())
+    }
+
+    /// The window gained or lost focus. Gaining it also ends every wait, so a
+    /// machine that is away is tried again at once.
+    pub fn set_foreground(&self, focused: bool) {
+        let was = self.foreground.swap(focused, Ordering::Relaxed);
+        if focused && !was {
+            self.retry(None);
+        }
+    }
+
+    fn foreground(&self) -> bool {
+        self.foreground.load(Ordering::Relaxed)
     }
 
     /// Wake the supervisors waiting out a backoff: one machine's, or every
@@ -632,7 +648,7 @@ async fn supervise(
         if started.elapsed() >= STABLE_AFTER {
             attempt = 0;
         }
-        let delay = backoff_delay(attempt, jitter());
+        let delay = backoff_delay_for(attempt, jitter(), machines.foreground());
         attempt = attempt.saturating_add(1);
         let secs = delay.as_secs().max(1);
         set_failure(&machines, &id, cause, answered);
@@ -927,7 +943,8 @@ async fn relay_once(
                 let walled = clocks.1.duration_since(wall).unwrap_or_default();
                 let woke = rustcode_client::slept(started.elapsed(), walled);
                 let moved = network_moved(&mut network);
-                if (woke || moved || idle >= IDLE_PROBE_AFTER) && pinged.is_none() {
+                if (woke || moved || idle >= rustcode_client::IDLE_PROBE_AFTER) && pinged.is_none()
+                {
                     if let Err(error) = within_send_timeout(acp.ping()).await {
                         return End::Failed(error, Some(route.clone()));
                     }
