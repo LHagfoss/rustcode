@@ -125,12 +125,12 @@ fn is_program(path: &Path) -> bool {
     }
 }
 
-/// `rustcode` on `path`, trying each of `exts`. The name is fixed, so no
+/// `rc` on `path`, trying each of `exts`. The name is fixed, so no
 /// shell syntax or folders can come in through it.
 fn find_on(path: &std::ffi::OsStr, exts: &[String]) -> Option<PathBuf> {
     for directory in std::env::split_paths(path) {
         for ext in exts {
-            let candidate = directory.join(format!("rustcode{ext}"));
+            let candidate = directory.join(format!("rc{ext}"));
             if is_program(&candidate) {
                 return Some(candidate);
             }
@@ -139,10 +139,14 @@ fn find_on(path: &std::ffi::OsStr, exts: &[String]) -> Option<PathBuf> {
     None
 }
 
-/// `rustcode 1.28.0` → `1.28.0`; anything else is no version.
+/// `rc 1.28.0` or `rustcode 1.28.0` → `1.28.0`; anything else is no version.
 fn version_from(output: &str) -> Option<String> {
     let line = output.lines().next()?.trim();
-    let version = line.strip_prefix("rustcode").map(str::trim).unwrap_or(line);
+    let version = line
+        .strip_prefix("rc")
+        .or_else(|| line.strip_prefix("rustcode"))
+        .map(str::trim)
+        .unwrap_or(line);
     (!version.is_empty() && version.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .then(|| version.to_owned())
 }
@@ -315,7 +319,7 @@ fn advice(
 ) -> String {
     let path = found.path.display();
     let who = format!(
-        "`rustcode` on PATH is {found_version} ({path}), but this engine is {this_version} ({}).",
+        "`rc` on PATH is {found_version} ({path}), but this engine is {this_version} ({}).",
         this.display()
     );
     let direction = direction(found_version, this_version);
@@ -438,7 +442,7 @@ fn dangling(path: &Path) -> bool {
 /// `~/.local/bin`). Windows has the one copy the script and the app write,
 /// `%USERPROFILE%\.rustcode\bin`.
 fn install_copies(home: Option<&Path>, windows: bool) -> Vec<PathBuf> {
-    let name = if windows { "rustcode.exe" } else { "rustcode" };
+    let name = if windows { "rc.exe" } else { "rc" };
     let mut dirs = Vec::new();
     if let Some(home) = home {
         dirs.push(home.join(".rustcode").join("bin"));
@@ -773,8 +777,10 @@ mod tests {
 
     #[test]
     fn versions_are_read_from_the_binarys_own_answer() {
+        assert_eq!(version_from("rc 1.28.0\n").as_deref(), Some("1.28.0"));
         assert_eq!(version_from("rustcode 1.28.0\n").as_deref(), Some("1.28.0"));
         assert_eq!(version_from("1.2.3").as_deref(), Some("1.2.3"));
+        assert_eq!(version_from("rc\n"), None);
         assert_eq!(version_from("rustcode\n"), None);
         assert_eq!(version_from("error: not found"), None);
         assert_eq!(version_from(""), None);
@@ -798,14 +804,14 @@ mod tests {
         #[cfg(not(unix))]
         let executable = |path: &Path| std::fs::write(path, "").unwrap();
         executable(&first.join("rustcode-tui"));
-        executable(&second.join("rustcode"));
+        executable(&second.join("rc"));
         let path = std::env::join_paths([&first, &second]).unwrap();
         let exts = vec![String::new()];
-        assert_eq!(find_on(&path, &exts), Some(second.join("rustcode")));
+        assert_eq!(find_on(&path, &exts), Some(second.join("rc")));
         // On Windows the resolved name carries its extension.
-        executable(&first.join("rustcode.exe"));
+        executable(&first.join("rc.exe"));
         let with_exe = vec![String::new(), ".exe".to_owned()];
-        assert_eq!(find_on(&path, &with_exe), Some(first.join("rustcode.exe")));
+        assert_eq!(find_on(&path, &with_exe), Some(first.join("rc.exe")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -962,16 +968,12 @@ mod tests {
         std::fs::create_dir_all(&real).unwrap();
         // A copy that is there but cannot be run, as an interrupted install
         // leaves it.
-        std::fs::write(shadow.join("rustcode"), "").unwrap();
-        std::fs::write(real.join("rustcode"), "").unwrap();
-        std::fs::set_permissions(
-            real.join("rustcode"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
+        std::fs::write(shadow.join("rc"), "").unwrap();
+        std::fs::write(real.join("rc"), "").unwrap();
+        std::fs::set_permissions(real.join("rc"), std::fs::Permissions::from_mode(0o755)).unwrap();
         let path = std::env::join_paths([&shadow, &real]).unwrap();
         let exts = vec![String::new()];
-        assert_eq!(find_on(&path, &exts), Some(real.join("rustcode")));
+        assert_eq!(find_on(&path, &exts), Some(real.join("rc")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1096,20 +1098,20 @@ mod tests {
         assert_eq!(
             install_copies(Some(Path::new("/Users/ada")), false),
             vec![
-                PathBuf::from("/Users/ada/.rustcode/bin/rustcode"),
-                PathBuf::from("/Users/ada/.local/bin/rustcode"),
-                PathBuf::from("/usr/local/bin/rustcode"),
+                PathBuf::from("/Users/ada/.rustcode/bin/rc"),
+                PathBuf::from("/Users/ada/.local/bin/rc"),
+                PathBuf::from("/usr/local/bin/rc"),
             ]
         );
         // Windows has the one the script and the app write, with its extension.
         assert_eq!(
             install_copies(Some(Path::new("C:\\Users\\ada")), true),
-            vec![PathBuf::from("C:\\Users\\ada/.rustcode/bin/rustcode.exe")]
+            vec![PathBuf::from("C:\\Users\\ada/.rustcode/bin/rc.exe")]
         );
         // No home folder: only the system one is left.
         assert_eq!(
             install_copies(None, false),
-            vec![PathBuf::from("/usr/local/bin/rustcode")]
+            vec![PathBuf::from("/usr/local/bin/rc")]
         );
     }
 
@@ -1120,19 +1122,14 @@ mod tests {
     #[test]
     fn only_the_install_scripts_copy_is_this_apps_to_replace() {
         let home = Path::new("/Users/ada");
-        let engine = Path::new("/Applications/RustCode.app/Contents/MacOS/rustcode");
+        let engine = Path::new("/Applications/RustCode.app/Contents/MacOS/rc");
         assert_eq!(
-            owner(
-                Path::new("/opt/homebrew/bin/rustcode"),
-                Some(home),
-                false,
-                engine
-            ),
+            owner(Path::new("/opt/homebrew/bin/rc"), Some(home), false, engine),
             Owner::Homebrew
         );
         assert_eq!(
             owner(
-                Path::new("/Users/ada/.cargo/bin/rustcode"),
+                Path::new("/Users/ada/.cargo/bin/rc"),
                 Some(home),
                 false,
                 engine
@@ -1141,7 +1138,7 @@ mod tests {
         );
         assert_eq!(
             owner(
-                Path::new("/Users/ada/code/rustcode/target/debug/rustcode"),
+                Path::new("/Users/ada/code/rustcode/target/debug/rc"),
                 Some(home),
                 false,
                 engine
@@ -1149,9 +1146,9 @@ mod tests {
             Owner::Development
         );
         for path in [
-            "/Users/ada/.rustcode/bin/rustcode",
-            "/Users/ada/.local/bin/rustcode",
-            "/usr/local/bin/rustcode",
+            "/Users/ada/.rustcode/bin/rc",
+            "/Users/ada/.local/bin/rc",
+            "/usr/local/bin/rc",
         ] {
             assert_eq!(
                 owner(Path::new(path), Some(home), false, engine),
@@ -1164,7 +1161,7 @@ mod tests {
         // Windows has no Homebrew, and its one install folder is the app's.
         assert_eq!(
             owner(
-                &home.join(".rustcode").join("bin").join("rustcode.exe"),
+                &home.join(".rustcode").join("bin").join("rc.exe"),
                 Some(home),
                 true,
                 engine
@@ -1175,9 +1172,9 @@ mod tests {
         // version: their own build in `~/bin`, a `cargo install --root`, a
         // tarball under `/opt`.
         for path in [
-            "/Users/ada/bin/rustcode",
-            "/Users/ada/.local/rustcode/bin/rustcode",
-            "/opt/rustcode/bin/rustcode",
+            "/Users/ada/bin/rc",
+            "/Users/ada/.local/rustcode/bin/rc",
+            "/opt/rustcode/bin/rc",
         ] {
             assert_eq!(
                 owner(Path::new(path), Some(home), false, engine),
@@ -1266,21 +1263,21 @@ mod tests {
     #[test]
     fn windows_paths_compare_without_case() {
         let home = Path::new("C:\\Users\\Ada");
-        let engine = Path::new("C:\\Program Files\\RustCode\\rustcode.exe");
-        let spelled = home.join(".RUSTCODE").join("BIN").join("RUSTCODE.EXE");
+        let engine = Path::new("C:\\Program Files\\RustCode\\rc.exe");
+        let spelled = home.join(".RUSTCODE").join("BIN").join("RC.EXE");
         assert_eq!(owner(&spelled, Some(home), true, engine), Owner::Ours);
         // On other platforms a different case is a different file.
         assert_eq!(
             owner(
-                &Path::new("/Users/ada").join(".RUSTCODE/bin/rustcode"),
+                &Path::new("/Users/ada").join(".RUSTCODE/bin/rc"),
                 Some(Path::new("/Users/ada")),
                 false,
-                Path::new("/Applications/rustcode")
+                Path::new("/Applications/rc")
             ),
             Owner::Foreign
         );
         // And cargo's folder, however it is spelled on Windows.
-        let cargo = home.join(".CARGO").join("BIN").join("rustcode.exe");
+        let cargo = home.join(".CARGO").join("BIN").join("rc.exe");
         assert_eq!(owner(&cargo, Some(home), true, engine), Owner::Cargo);
     }
 

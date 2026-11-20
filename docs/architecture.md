@@ -2,9 +2,9 @@
 
 This repository is a Rust workspace with a root application crate and small
 domain crates. The extracted crates keep frequently edited functionality from
-forcing unrelated heavyweight dependencies to rebuild. The product is the
-orchestrator app in `apps/desktop`; the TUI in `rustcode/tui` is a second front
-end over the same engine.
+forcing unrelated heavyweight dependencies to rebuild. The product is the orchestrator app in `apps/desktop` paired with the lean `rc`
+CLI/sidecar in `rustcode/cli`; the standalone terminal harness (`rustcode`)
+lives separately under top-level `harness/`.
 
 ## Repository layout
 
@@ -21,25 +21,30 @@ rustcode/
 │   └── rustcode-loop-detect/  semantic loop and progress guards
 ├── client/     `rustcode-client`, the machine client: saved machines, pairing
 │               and the WebSocket to another machine's gateway.
-├── engine/     Sources of the root `rustcode` crate (library only): agent
-│               loop (the built-in harness), tools, config, session state, ACP,
-│               daemon, controller.
-└── tui/        `rustcode-tui`, the terminal frontend. Owns the `rustcode`
-                binary (TUI + headless/ACP/daemon CLI modes); depends on the
-                root library, never the reverse.
+├── cli/        `rustcode-cli`, the orchestrator CLI and desktop app sidecar.
+│               Owns the `rc` binary (ACP server, `server`, `threads`, `config`,
+│               `machines`, `remote`, `usage`, `data`, MCP bridges); zero TUI deps.
+└── engine/     Sources of the root `rustcode` crate (library only): ACP,
+                harness orchestration, config, session state, daemon, controller,
+                and the opt-in built-in agent loop.
+
+harness/        `rustcode-harness`, the standalone terminal harness. Owns the
+                `rustcode` binary (interactive TUI, `-p`/`--loop`, standalone
+                ACP mode); depends on the root library, never the reverse.
 ```
 
 The desktop app in `apps/desktop` (Tauri + React, see [desktop](desktop.md))
-runs the engine over ACP. The SwiftUI macOS app it replaced was removed;
+runs the `rc` sidecar over ACP. The SwiftUI macOS app it replaced was removed;
 [macOS app architecture](architecture/macos-app.md) maps it for history.
 
 The root `Cargo.toml` is both the workspace manifest and the `rustcode`
 package manifest; the engine lives in `rustcode/engine/src` and is declared
 with `[lib] path`. There are no Cargo features left: the terminal stack
-(ratatui, crossterm, syntect, pulldown-cmark) lives only in `rustcode/tui`.
-Nothing under `rustcode/core` or `rustcode/engine` may reference it;
-`cargo tree -p rustcode -i ratatui` must match nothing. See `docs/frontends.md` for the frontend contract and
-`docs/mobile.md` for the remote-only mobile decision.
+(ratatui, crossterm, syntect, pulldown-cmark) lives only in `harness/`.
+Nothing under `rustcode/core`, `rustcode/engine`, or `rustcode/cli` may reference
+it; `cargo tree -p rustcode-cli -i ratatui` must match nothing. See
+`docs/frontends.md` for the frontend contract and `docs/mobile.md` for the
+remote-only mobile decision.
 
 ## Workspace crates
 

@@ -9,4 +9,4 @@ set -euo pipefail
 # engine's wire types, so editing it must run the engine's drift check. The
 # manual evals under scripts/evals/ run against a built binary, never in CI.
 paths="$(grep -Ev '^scripts/evals/' || true)"
-grep -Eq '^(docs/remote-protocol/v1/|Cargo\.toml|Cargo\.lock|build\.rs$|src/|tests/|benches/|examples/|scripts/|install\.sh$|install\.ps1$|rust-toolchain[^/]*$|\.cargo/|\.github/workflows/|(crates|rustcode)/.*/(Cargo\.toml|build\.rs|src/|tests/|benches/|examples/)|(apps|packages)/.*/(package\.json|src/|app/|tsconfig\.json))' <<<"$paths"
+grep -Eq '^(docs/remote-protocol/v1/|Cargo\.toml|Cargo\.lock|build\.rs$|src/|tests/|benches/|examples/|scripts/|install\.sh$|install\.ps1$|rust-toolchain[^/]*$|\.cargo/|\.github/workflows/|harness/(Cargo\.toml|build\.rs|src/|tests/|benches/|examples/)|(crates|rustcode)/.*/(Cargo\.toml|build\.rs|src/|tests/|benches/|examples/)|(apps|packages)/.*/(package\.json|src/|app/|tsconfig\.json))' <<<"$paths"

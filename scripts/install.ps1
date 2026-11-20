@@ -2,12 +2,14 @@
 # Usage: irm https://rustcode.lhagfoss.com/install.ps1 | iex
 #        & ([scriptblock]::Create((irm https://rustcode.lhagfoss.com/install.ps1))) -NoApp
 #
-# Installs the rustcode CLI to %USERPROFILE%\.rustcode\bin and the RustCode
-# desktop app with its per-user installer (Start menu entry, no admin rights).
-# Every download is checked against the release SHA256SUMS.
+# Installs the RustCode orchestrator CLI (`rc`) to %USERPROFILE%\.rustcode\bin
+# and the RustCode desktop app with its per-user installer (Start menu entry,
+# no admin rights). Every download is checked against the release SHA256SUMS.
 #
-#   -NoApp   install only the CLI      (or $env:RUSTCODE_NO_APP = "1")
-#   -NoCli   install only the app      (or $env:RUSTCODE_NO_CLI = "1")
+#   -NoApp       install only the CLI      (or $env:RUSTCODE_NO_APP = "1")
+#   -NoCli       install only the app      (or $env:RUSTCODE_NO_CLI = "1")
+#   -WithHarness also install the standalone `rustcode` TUI/harness binary
+#                (or $env:RUSTCODE_WITH_HARNESS = "1")
 #   -Version 1.31.4  install that release instead of the latest one
 #                    (or $env:RUSTCODE_VERSION = "1.31.4")
 #   $env:RUSTCODE_INSTALL_ARTIFACTS = "<dir>" installs from a directory of
@@ -16,15 +18,18 @@
 param(
     [switch]$NoApp,
     [switch]$NoCli,
+    [switch]$WithHarness,
     [string]$Version = $env:RUSTCODE_VERSION
 )
 
 $ErrorActionPreference = 'Stop'
 
 $Repo = "LHagfoss/rustcode"
-$AssetName = "rustcode-windows-x86_64.zip"
+$CliAssetName = "rc-windows-x86_64.zip"
+$HarnessAssetName = "rustcode-windows-x86_64.zip"
 $InstallCli = -not ($NoCli -or $env:RUSTCODE_NO_CLI -eq "1")
 $InstallApp = -not ($NoApp -or $env:RUSTCODE_NO_APP -eq "1")
+$InstallHarness = $WithHarness -or ($env:RUSTCODE_WITH_HARNESS -eq "1")
 $Artifacts = $env:RUSTCODE_INSTALL_ARTIFACTS
 
 function Write-Info ($Message) {
@@ -48,8 +53,8 @@ function Write-Err ($Message) {
     exit 1
 }
 
-if (-not $InstallCli -and -not $InstallApp) {
-    Write-Err "Nothing to install: -NoApp and -NoCli together."
+if (-not $InstallCli -and -not $InstallApp -and -not $InstallHarness) {
+    Write-Err "Nothing to install: -NoApp and -NoCli together without -WithHarness."
 }
 if ($Version) {
     $Version = $Version -replace '^v', ''
@@ -188,40 +193,75 @@ try {
         return $Path
     }
 
-    if ($InstallCli) {
-        $ZipPath = Get-VerifiedAsset $AssetName
+    $InstallDir = Join-Path $env:USERPROFILE ".rustcode\bin"
+    $PathUpdated = $false
 
-        Write-Info "Extracting archive..."
-        $CliDir = Join-Path $TempDir "cli"
-        Expand-Archive -Path $ZipPath -DestinationPath $CliDir -Force
-
-        $ExeFile = Get-ChildItem -Path $CliDir -Filter "rustcode*.exe" -Recurse | Select-Object -First 1
-        if (-not $ExeFile) {
-            Write-Err "Could not find rustcode.exe inside downloaded archive."
-        }
-
-        $InstallDir = Join-Path $env:USERPROFILE ".rustcode\bin"
-        if (-not (Test-Path $InstallDir)) {
-            New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        }
-
-        $DestExe = Join-Path $InstallDir "rustcode.exe"
-        Write-Info "Installing to $DestExe..."
-        Copy-Item -Path $ExeFile.FullName -Destination $DestExe -Force
-
-        Write-Success "RustCode $LatestTag successfully installed to $DestExe!"
-
-        # Check and update PATH environment variable
+    function Add-InstallDirToPath {
+        if ($script:PathUpdated) { return }
         $UserPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
         $PathParts = ($UserPath -split ';') | Where-Object { $_ -ne "" }
 
         if ($PathParts -notcontains $InstallDir) {
             Write-Info "Adding $InstallDir to your user PATH..."
-            $NewUserPath = "$UserPath;$InstallDir"
+            $NewUserPath = if ($UserPath) { "$UserPath;$InstallDir" } else { $InstallDir }
             [Environment]::SetEnvironmentVariable("Path", $NewUserPath, [EnvironmentVariableTarget]::User)
             $env:Path = "$env:Path;$InstallDir"
             Write-Success "Updated PATH. You may need to restart existing terminal windows for PATH to take effect."
         }
+        $script:PathUpdated = $true
+    }
+
+    if ($InstallCli) {
+        $ManifestNames = @(Get-ManifestNames)
+        $SelectedCliAsset = if ($ManifestNames -ccontains $CliAssetName) { $CliAssetName } else { $HarnessAssetName }
+        $ZipPath = Get-VerifiedAsset $SelectedCliAsset
+
+        Write-Info "Extracting archive..."
+        $CliDir = Join-Path $TempDir "cli"
+        Expand-Archive -Path $ZipPath -DestinationPath $CliDir -Force
+
+        $ExeFile = Get-ChildItem -Path $CliDir -Filter "rc*.exe" -Recurse | Select-Object -First 1
+        if (-not $ExeFile) {
+            $ExeFile = Get-ChildItem -Path $CliDir -Filter "rustcode*.exe" -Recurse | Select-Object -First 1
+        }
+        if (-not $ExeFile) {
+            Write-Err "Could not find rc.exe inside downloaded archive."
+        }
+
+        if (-not (Test-Path $InstallDir)) {
+            New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        }
+
+        $DestExe = Join-Path $InstallDir "rc.exe"
+        Write-Info "Installing to $DestExe..."
+        Copy-Item -Path $ExeFile.FullName -Destination $DestExe -Force
+
+        Write-Success "RustCode CLI $LatestTag successfully installed to $DestExe!"
+        Add-InstallDirToPath
+    }
+
+    if ($InstallHarness) {
+        $HarnessZipPath = Get-VerifiedAsset $HarnessAssetName
+
+        Write-Info "Extracting standalone harness archive..."
+        $HarnessDir = Join-Path $TempDir "harness"
+        Expand-Archive -Path $HarnessZipPath -DestinationPath $HarnessDir -Force
+
+        $HarnessExeFile = Get-ChildItem -Path $HarnessDir -Filter "rustcode*.exe" -Recurse | Select-Object -First 1
+        if (-not $HarnessExeFile) {
+            Write-Err "Could not find rustcode.exe inside downloaded archive."
+        }
+
+        if (-not (Test-Path $InstallDir)) {
+            New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        }
+
+        $DestHarnessExe = Join-Path $InstallDir "rustcode.exe"
+        Write-Info "Installing to $DestHarnessExe..."
+        Copy-Item -Path $HarnessExeFile.FullName -Destination $DestHarnessExe -Force
+
+        Write-Success "RustCode standalone harness $LatestTag successfully installed to $DestHarnessExe!"
+        Add-InstallDirToPath
     }
 
     if ($InstallApp) {
@@ -245,9 +285,14 @@ try {
         }
     }
 
-    if ($InstallCli) {
+    if ($InstallCli -or $InstallHarness) {
         Write-Host ""
-        Write-Host "Run 'rustcode' to start pair programming!" -ForegroundColor Cyan
+        if ($InstallCli) {
+            Write-Host "Run 'rc --help' to get started!" -ForegroundColor Cyan
+        }
+        if ($InstallHarness) {
+            Write-Host "Run 'rustcode' to start the standalone terminal harness!" -ForegroundColor Cyan
+        }
     }
 } finally {
     if (Test-Path $TempDir) {

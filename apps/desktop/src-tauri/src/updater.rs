@@ -1041,13 +1041,19 @@ fn replace_tarball(exe: &Path, bytes: &[u8], work: &Path) -> Result<(), String> 
         Ok(output.stdout)
     };
     let desktop = extract("rustcode-desktop")?;
-    let engine = extract("rustcode")?;
-    let engine_path = exe.with_file_name("rustcode");
-    let previous = std::fs::read(&engine_path).map_err(|e| e.to_string())?;
+    let (engine_name, engine) = match extract("rc") {
+        Ok(bytes) => ("rc", bytes),
+        Err(_) => ("rustcode", extract("rustcode")?),
+    };
+    let engine_path = exe.with_file_name(engine_name);
+    let previous = std::fs::read(&engine_path).ok();
     replace_appimage(&engine_path, &engine)?;
     if let Err(error) = replace_appimage(exe, &desktop) {
-        replace_appimage(&engine_path, &previous)
-            .map_err(|rollback| format!("{error}; restoring the engine also failed: {rollback}"))?;
+        if let Some(previous) = previous {
+            replace_appimage(&engine_path, &previous).map_err(|rollback| {
+                format!("{error}; restoring the engine also failed: {rollback}")
+            })?;
+        }
         return Err(error);
     }
     Ok(())
@@ -1550,7 +1556,7 @@ fn local_signing_targets(
     let desktop = "com.lhagfoss.rustcode.desktop";
     vec![
         (
-            bundle.join("Contents/MacOS/rustcode"),
+            bundle.join("Contents/MacOS/rc"),
             local_signing::CLI_IDENTIFIER,
         ),
         (bundle.join("Contents/MacOS/rustcode-desktop"), desktop),
@@ -2528,7 +2534,7 @@ mod local_signing_tests {
         assert_eq!(
             local_signing_targets(bundle, true, true),
             vec![
-                (bundle.join("Contents/MacOS/rustcode"), "org.rustcode.cli"),
+                (bundle.join("Contents/MacOS/rc"), "org.rustcode.cli"),
                 (
                     bundle.join("Contents/MacOS/rustcode-desktop"),
                     "com.lhagfoss.rustcode.desktop"

@@ -13,6 +13,7 @@ const LOGIN_TOOLS: &[&str] = &[
     "claude-agent-acp",
     "codex-acp",
     "gh",
+    "rc",
     "rustcode",
 ];
 

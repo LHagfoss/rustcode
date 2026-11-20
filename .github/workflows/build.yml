@@ -19,6 +19,8 @@ on:
             - Cargo.lock
             - rustcode/**
             - "!rustcode/**/*.md"
+            - harness/**
+            - "!harness/**/*.md"
     workflow_dispatch:
 
 concurrency:
@@ -115,8 +117,8 @@ jobs:
               working-directory: apps/desktop
               run: |
                   mkdir -p src-tauri/binaries
-                  printf '#!/bin/sh\n' > src-tauri/binaries/rustcode-aarch64-apple-darwin
-                  chmod 755 src-tauri/binaries/rustcode-aarch64-apple-darwin
+                  printf '#!/bin/sh\n' > src-tauri/binaries/rc-aarch64-apple-darwin
+                  chmod 755 src-tauri/binaries/rc-aarch64-apple-darwin
                   bun install --frozen-lockfile
                   bun run bundle:app --no-bundle
 
@@ -145,8 +147,8 @@ jobs:
 
             - name: Place the engine sidecar
               run: |
-                  tar xzf engine/rustcode-macos-aarch64.tar.gz -C engine
-                  install -m 755 engine/rustcode-macos-aarch64 apps/desktop/src-tauri/binaries/rustcode-aarch64-apple-darwin
+                  tar xzf engine/rc-macos-aarch64.tar.gz -C engine
+                  install -m 755 engine/rc-macos-aarch64 apps/desktop/src-tauri/binaries/rc-aarch64-apple-darwin
 
             # Without the MACOS_* secrets the app stays ad-hoc signed and
             # unnotarized (docs/macos-release-signing.md).
@@ -280,7 +282,7 @@ jobs:
               working-directory: apps/desktop
               run: |
                   mkdir -p src-tauri/binaries
-                  sidecar=src-tauri/binaries/rustcode-${{ matrix.triple }}
+                  sidecar=src-tauri/binaries/rc-${{ matrix.triple }}
                   if [ "$RUNNER_OS" = Windows ]; then sidecar="$sidecar.exe"; fi
                   printf 'placeholder\n' > "$sidecar"
                   chmod 755 "$sidecar"
@@ -313,12 +315,14 @@ jobs:
             - name: Place the engine sidecar
               shell: bash
               run: |
+                  rc_engine="rc-${{ matrix.engine }}"
+                  rc_engine="rc-${rc_engine#rc-rustcode-}"
                   if [ "$RUNNER_OS" = Windows ]; then
-                      7z x -oengine engine/${{ matrix.engine }}.zip
-                      cp engine/${{ matrix.engine }}.exe apps/desktop/src-tauri/binaries/rustcode-${{ matrix.triple }}.exe
+                      7z x -oengine engine/${rc_engine}.zip
+                      cp engine/${rc_engine}.exe apps/desktop/src-tauri/binaries/rc-${{ matrix.triple }}.exe
                   else
-                      tar xzf engine/${{ matrix.engine }}.tar.gz -C engine
-                      install -m 755 engine/${{ matrix.engine }} apps/desktop/src-tauri/binaries/rustcode-${{ matrix.triple }}
+                      tar xzf engine/${rc_engine}.tar.gz -C engine
+                      install -m 755 engine/${rc_engine} apps/desktop/src-tauri/binaries/rc-${{ matrix.triple }}
                   fi
 
             - name: Build the installer
@@ -402,6 +406,7 @@ jobs:
                   version="${GITHUB_REF_NAME#v}"
                   files=(
                       "RustCode-${version}-macos-aarch64.app.zip"
+                      rc-macos-aarch64.tar.gz
                       rustcode-macos-aarch64.tar.gz
                       rustcode-web.tar.gz
                   )
@@ -432,9 +437,11 @@ jobs:
                   GH_USER: "lhagfoss"
               run: |
                   # 1. Read the platform-specific hashes from the published manifest.
+                  RC_SHA256=$(awk '$2 == "rc-macos-aarch64.tar.gz" {print $1}' artifacts/SHA256SUMS)
+                  test -n "$RC_SHA256"
                   ARM_SHA256=$(awk '$2 == "rustcode-macos-aarch64.tar.gz" {print $1}' artifacts/SHA256SUMS)
                   test -n "$ARM_SHA256"
-                  echo "Computed ARM64 SHA256: $ARM_SHA256"
+                  echo "Computed ARM64 SHA256: rc=$RC_SHA256 rustcode=$ARM_SHA256"
                   WEB_SHA256=$(awk '$2 == "rustcode-web.tar.gz" {print $1}' artifacts/SHA256SUMS)
                   test -n "$WEB_SHA256"
 
@@ -448,13 +455,18 @@ jobs:
                   # 4. Overwrite the formula file with the latest release info
                   cat <<EOF > Formula/rustcode.rb
                   class Rustcode < Formula
-                      desc "Local LLM Agent Harness"
+                      desc "RustCode orchestrator CLI (rc) and standalone terminal harness (rustcode)"
                       homepage "https://github.com/${GH_USER}/rustcode"
-                      url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
-                      sha256 "${ARM_SHA256}"
+                      url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rc-macos-aarch64.tar.gz"
+                      sha256 "${RC_SHA256}"
                       depends_on arch: :arm64
 
                       version "${TAG/v/}"
+
+                      resource "harness" do
+                          url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
+                          sha256 "${ARM_SHA256}"
+                      end
 
                       # The web app a hub serves, found by the engine in
                       # share/rustcode/web beside its bin/.
@@ -464,7 +476,10 @@ jobs:
                       end
 
                       def install
-                          bin.install "rustcode-macos-aarch64" => "rustcode"
+                          bin.install "rc-macos-aarch64" => "rc"
+                          resource("harness").stage do
+                              bin.install "rustcode-macos-aarch64" => "rustcode"
+                          end
                           (pkgshare/"web").install resource("web")
                       end
                   end
@@ -502,6 +517,10 @@ jobs:
                       "RustCode-${version}-linux-x86_64.tar.gz"
                       "RustCode-${version}-macos-aarch64.app.zip"
                       "RustCode-${version}-windows-x64-setup.exe"
+                      rc-linux-aarch64.tar.gz
+                      rc-linux-x86_64.tar.gz
+                      rc-macos-aarch64.tar.gz
+                      rc-windows-x86_64.zip
                       rustcode-linux-aarch64.tar.gz
                       rustcode-linux-x86_64.tar.gz
                       rustcode-macos-aarch64.tar.gz
@@ -522,6 +541,8 @@ jobs:
                   cd artifacts
                   gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
                       SHA256SUMS \
+                      rc-linux-aarch64.tar.gz rc-linux-x86_64.tar.gz \
+                      rc-windows-x86_64.zip \
                       rustcode-linux-aarch64.tar.gz rustcode-linux-x86_64.tar.gz \
                       rustcode-windows-x86_64.zip \
                       "RustCode-${TAG#v}-windows-x64-setup.exe" \

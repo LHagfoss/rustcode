@@ -78,8 +78,8 @@ pub const STEPS: &[Step] = &[
     },
     Step {
         id: "cli-link",
-        title: "Put `rustcode` on your PATH",
-        about: "Links `rustcode` into ~/.local/bin when no copy is on your PATH, so a terminal runs the same version as the app.",
+        title: "Put `rc` on your PATH",
+        about: "Links `rc` (the RustCode orchestrator CLI) into ~/.local/bin when no copy is on your PATH, so a terminal runs the same version as the app.",
         os: UNIX,
         auto: true,
     },
@@ -93,7 +93,7 @@ pub const STEPS: &[Step] = &[
     Step {
         id: "user-path",
         title: "Add RustCode to your PATH",
-        about: "Adds the folder with `rustcode.exe` to your user PATH (no administrator needed), keeping the entries you have. New terminals pick it up.",
+        about: "Adds the folder with `rc.exe` to your user PATH (no administrator needed), keeping the entries you have. New terminals pick it up.",
         os: &[Os::Windows],
         auto: true,
     },
@@ -462,17 +462,17 @@ fn apply_quarantine() -> Result<String, String> {
     }
 }
 
-// macOS and Linux: the shell's `rustcode`
+// macOS and Linux: the shell's `rc`
 
 fn local_bin() -> Option<PathBuf> {
     Some(home()?.join(".local").join("bin"))
 }
 
 fn check_cli_link() -> Check {
-    if let Some(found) = find_in_dirs(&rustcode_dirs(), "rustcode") {
-        return Check::Satisfied(format!("`rustcode` is at {}.", found.display()));
+    if let Some(found) = find_in_dirs(&rustcode_dirs(), "rc") {
+        return Check::Satisfied(format!("`rc` is at {}.", found.display()));
     }
-    Check::Missing("No `rustcode` is on your PATH for a terminal.".into())
+    Check::Missing("No `rc` is on your PATH for a terminal.".into())
 }
 
 #[cfg(unix)]
@@ -480,7 +480,7 @@ fn apply_cli_link() -> Result<String, String> {
     let dir = local_bin().ok_or("No home folder to link into.")?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-    let link = dir.join("rustcode");
+    let link = dir.join("rc");
     match link.symlink_metadata() {
         // A link to nothing: the engine moved. Anything else is the user's.
         Ok(meta) if meta.file_type().is_symlink() => {
@@ -506,7 +506,7 @@ fn apply_cli_link() -> Result<String, String> {
 
 #[cfg(not(unix))]
 fn apply_cli_link() -> Result<String, String> {
-    Err("Linking `rustcode` is for macOS and Linux.".into())
+    Err("Linking `rc` is for macOS and Linux.".into())
 }
 
 /// The login shell's PATH: what a terminal opened later finds. The last line of
@@ -556,9 +556,9 @@ fn check_path_hint() -> Check {
         return Check::Unsupported("No home folder.".into());
     };
     // Only the link this app makes needs the folder on the PATH.
-    if local.join("rustcode").symlink_metadata().is_err() {
+    if local.join("rc").symlink_metadata().is_err() {
         return Check::Unsupported(
-            "`rustcode` is not linked into ~/.local/bin, so there is nothing to add.".into(),
+            "`rc` is not linked into ~/.local/bin, so there is nothing to add.".into(),
         );
     }
     let Some(path) = login_shell_path() else {
@@ -569,7 +569,7 @@ fn check_path_hint() -> Check {
     }
     let shell = std::env::var("SHELL").unwrap_or_default();
     Check::Manual(format!(
-        "~/.local/bin is not on your shell's PATH, so a terminal will not find `rustcode`. Run: {}",
+        "~/.local/bin is not on your shell's PATH, so a terminal will not find `rc`. Run: {}",
         path_hint_command(&shell)
     ))
 }

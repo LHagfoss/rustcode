@@ -67,9 +67,14 @@ pub fn is_brew_install() -> bool {
     false
 }
 
-/// Expected asset name for the current platform/architecture.
+/// Expected harness (`rustcode`) asset name for the current platform/architecture.
 pub fn target_asset_name() -> Option<&'static str> {
     target_asset_name_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// Expected orchestrator CLI (`rc`) asset name for the current platform/architecture.
+pub fn target_cli_asset_name() -> Option<&'static str> {
+    target_cli_asset_name_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
 fn target_asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
@@ -78,6 +83,16 @@ fn target_asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
         ("linux", "aarch64") => Some("rustcode-linux-aarch64.tar.gz"),
         ("macos", "aarch64") => Some("rustcode-macos-aarch64.tar.gz"),
         ("windows", "x86_64") => Some("rustcode-windows-x86_64.zip"),
+        _ => None,
+    }
+}
+
+fn target_cli_asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("linux", "x86_64") => Some("rc-linux-x86_64.tar.gz"),
+        ("linux", "aarch64") => Some("rc-linux-aarch64.tar.gz"),
+        ("macos", "aarch64") => Some("rc-macos-aarch64.tar.gz"),
+        ("windows", "x86_64") => Some("rc-windows-x86_64.zip"),
         _ => None,
     }
 }

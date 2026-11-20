@@ -1351,12 +1351,19 @@ pub(super) fn harness_for(asked: Option<&str>) -> Result<crate::harness::Resolve
         .map_err(|error| unavailable(format!("harness configuration is unavailable: {error}")))?;
     let (defaults, entries) = crate::harness::config::load_in(&dir);
     let all = crate::harness::resolve_all(&entries);
-    let id = asked
+    let id = match asked
         .map(str::trim)
         .filter(|asked| !asked.is_empty())
         .map(str::to_owned)
-        .or_else(|| defaults.harness.clone())
-        .unwrap_or_else(|| crate::harness::BUILTIN_ID.to_owned());
+        .or_else(|| crate::harness::default_harness_id(&defaults, &entries))
+    {
+        Some(id) => id,
+        None => {
+            return Err(not_allowed(
+                "no default harness is configured; enable a harness and set a default in Settings › Harnesses or with `rc config harness default <id>`",
+            ));
+        }
+    };
     let resolved = all
         .iter()
         .find(|harness| harness.id.eq_ignore_ascii_case(&id))

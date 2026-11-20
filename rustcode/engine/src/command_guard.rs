@@ -757,7 +757,10 @@ pub fn claude_code_settings(thread_id: Option<&str>) -> Option<Value> {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
-    if exe.file_stem().and_then(|stem| stem.to_str()) != Some("rustcode") {
+    if !matches!(
+        exe.file_stem().and_then(|stem| stem.to_str()),
+        Some("rc" | "rustcode")
+    ) {
         return None;
     }
     let mut command = String::new();

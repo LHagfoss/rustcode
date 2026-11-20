@@ -1,5 +1,5 @@
-// Builds the engine and puts it where Tauri bundles a sidecar:
-// src-tauri/binaries/rustcode-<target triple>. `bun run bundle` then runs
+// Builds the orchestrator CLI (`rc`) and puts it where Tauri bundles a sidecar:
+// src-tauri/binaries/rc-<target triple>. `bun run bundle` then runs
 // `tauri build` with src-tauri/tauri.bundle.conf.json, which names it in
 // `externalBin`; the app finds it next to its own binary.
 //
@@ -16,15 +16,15 @@ const triple =
   /host: (\S+)/.exec(Bun.spawnSync(["rustc", "-vV"]).stdout.toString())?.[1];
 if (!triple) throw new Error("Could not read the target triple from `rustc -vV`.");
 
-const args = ["cargo", "build", "-p", "rustcode-tui", "--bin", "rustcode", ...(release ? ["--release"] : [])];
+const args = ["cargo", "build", "-p", "rustcode-cli", "--bin", "rc", ...(release ? ["--release"] : [])];
 console.log(`$ ${args.join(" ")}`);
 const build = Bun.spawnSync(args, { cwd: repo, stdout: "inherit", stderr: "inherit" });
 if (build.exitCode !== 0) process.exit(build.exitCode ?? 1);
 
 const exe = triple.includes("windows") ? ".exe" : "";
-const from = resolve(repo, "target", release ? "release" : "debug", `rustcode${exe}`);
+const from = resolve(repo, "target", release ? "release" : "debug", `rc${exe}`);
 const dir = resolve(import.meta.dir, "../src-tauri/binaries");
-const to = resolve(dir, `rustcode-${triple}${exe}`);
+const to = resolve(dir, `rc-${triple}${exe}`);
 mkdirSync(dir, { recursive: true });
 copyFileSync(from, to);
 chmodSync(to, 0o755);

@@ -311,6 +311,15 @@ describe("the desktop app's preferred harness", () => {
       "codex",
     );
     expect(preferredDefault(snapshot([rustcode, { ...base, auth: "needs_login" }])).harness).toBe("rustcode");
+    // When the opt-in built-in harness is off (the default), first run does not select it.
+    expect(
+      preferredDefault(
+        snapshot([
+          { ...rustcode, enabled: false },
+          { ...base, auth: "needs_login" },
+        ]),
+      ).harness,
+    ).toBe("");
     // A harness whose own login is missing but whose account is signed in can run.
     const withAccount = {
       ...claude,

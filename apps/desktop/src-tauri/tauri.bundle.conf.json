@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "identifier": "com.lhagfoss.rustcode.desktop",
   "bundle": {
-    "externalBin": ["binaries/rustcode"],
+    "externalBin": ["binaries/rc"],
     "targets": ["app", "nsis", "appimage", "deb"],
     "publisher": "RustCode",
     "homepage": "https://github.com/LHagfoss/rustcode",

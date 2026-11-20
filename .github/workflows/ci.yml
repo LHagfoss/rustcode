@@ -16,6 +16,8 @@ on:
             - rust-toolchain*
             - rustcode/**
             - "!rustcode/**/*.md"
+            - harness/**
+            - "!harness/**/*.md"
     workflow_dispatch:
 
 concurrency:
