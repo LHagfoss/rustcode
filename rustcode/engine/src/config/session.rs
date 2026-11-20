@@ -487,6 +487,13 @@ pub fn save_user_session_title(session_id: &str, title: &str) {
     }
 }
 
+/// Whether the user named the session themselves (`/change_title`), so an
+/// agent leaves the title alone (issue 3599).
+pub fn session_user_titled(session_id: &str) -> bool {
+    rustcode_session::valid_session_id(session_id)
+        && store().is_some_and(|session_store| session_store.session_user_titled(session_id))
+}
+
 /// The most a title a `session/new` asked for may be: the app's own titles are
 /// short, and a request is trimmed to this rather than trusted whole.
 pub const MAX_REQUESTED_TITLE_CHARS: usize = 200;

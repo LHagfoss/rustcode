@@ -362,9 +362,12 @@ is on) and that machine's engine attaches its own tools:
 | `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a link the app started while the app is closed, so a wait can time out where an open app would have answered; a link the engine started itself settles when its turn ends. |
 | `thread_status` with a `session_id` | The same reach a read needs: a thread in the caller's project, one the caller started, or any thread when "Let agents read threads in other projects" is on (the app's `checkManage`); otherwise `not_allowed`. |
 | `start_session`, `fan_out` | The engine starts the thread itself (below), only when the caller runs at Full access. |
-| `update_session` on the caller's own thread | Its `status` (settling it) and `pinned`, stored and told to every client. A title, a read mark, a snooze or another thread needs the app, and then nothing changes. |
+| `update_session` on the caller's own thread | Its `status` (settling it), `pinned` and `title`, stored and told to every client; a title the user chose stays, and the answer says `title_kept` (#4094). A read mark, a snooze or another thread needs the app, and then nothing changes. |
+| `thread_usage`, `query_data` | This machine's data store through `_rustcode/data/usage` / `_rustcode/data/query`'s readers, the ones `rc usage` and `rc data query` use, under the app's cross-project rule below (#4094). |
 | `merge_when_green` | An engine-hosted harness validates the PR against the target thread’s branch and asks through its permission channel. A numbered own-PR merge returns `watching` after approval; the engine waits for CI and delivers the outcome as a follow-up turn. The outcome is also saved as `merge-<number>.json` in the thread folder. With no permission channel, nothing is merged. |
 | `message_session` (incl. `steer`) | The engine opens the target thread and runs the message as its next turn (below), only at Full access, and only for a thread the caller reaches (same rule as `thread_status`). |
+
+Any other tool says it needs the app, and names the shell command that answers it where there is one (`rc worktree` for `list_worktrees` and `worktree_status`, `rc data query` for `read_activity`, `gh pr list` for `list_pull_requests`).
 
 `start_session`, `message_session` and `fan_out` open a loopback ACP connection
 to the endpoint this same engine published (`run/engine.json`) and send the
