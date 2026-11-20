@@ -2241,11 +2241,12 @@ New non-interactive engine process launches must use `platform::command` or `pla
 
 ### Text generation
 
-Settings › Harnesses › Text generation adds, selects or removes a separate
-model for small texts. Enter the provider, model ID and write-only key; custom
-OpenAI-compatible providers also need a base URL. Select the saved generator
-to enable it, or select the existing behavior to disable it. This is a
-machine-only setting, available locally.
+Settings › Harnesses › Text generation picks the model that writes thread
+titles and git drafts: the thread's own model by default, or a separate one.
+**Add model** opens a short form (provider, model ID, write-only key; an
+OpenAI-compatible server needs its base URL instead of a key). Saved models
+list under the picker, each with a remove icon. This is a machine-only
+setting, available locally.
 
 Commit opens immediately with the existing draft and selected files. A
 background request replaces the message only if you have not edited it.

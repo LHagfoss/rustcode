@@ -50,7 +50,7 @@ import {
 } from "../state/store";
 import { HarnessCommandFields } from "./AddHarness";
 import { HarnessIcon } from "./HarnessIcon";
-import { Check, ChevronRight, Minus, Plus, SquareTerminal, X } from "./icons";
+import { Check, ChevronRight, Minus, Plus, RefreshCw, SquareTerminal, X } from "./icons";
 import { CopyButton } from "./Markdown";
 import { cx, noTextHelpers, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, Chip, Choice, ErrorDetails, PathText, Select, type SelectOption } from "./settingsKit";
@@ -521,10 +521,18 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         </button>
         {signIn && <SignIn harness={harness} />}
         {!local && (
-          <Action quiet size="sm" onClick={check} disabled={checking}>
-            {checking && <Spinner size={10} />}
-            {entry && "running" in entry ? CHECK_STEP_LABEL[entry.running] : "Check"}
-          </Action>
+          // Check is routine and every row has one, so it is an icon; the status line says the step.
+          <Tooltip label={checking ? "Checking…" : "Check: runs it and lists its models"}>
+            <button
+              type="button"
+              aria-label={`Check ${harness.name}`}
+              onClick={check}
+              disabled={checking}
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-60"
+            >
+              {checking ? <Spinner size={12} /> : <RefreshCw size={14} />}
+            </button>
+          </Tooltip>
         )}
         <Tooltip
           label={
@@ -556,7 +564,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           <code className="selectable flex-1 truncate font-mono text-callout" title={harness.install_hint}>
             {harness.install_hint}
           </code>
-          <CopyButton text={harness.install_hint} />
+          <CopyButton text={harness.install_hint} label="Copy install command" iconOnly />
         </div>
       )}
       {/* A failure's own words; every other end is already the status line. */}
