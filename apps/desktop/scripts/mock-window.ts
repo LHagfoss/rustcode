@@ -3,10 +3,11 @@
 //   drag "<from css>" "<to css>" [--from <x>,<y>] [--to <x>,<y>] [--steps <n>] |
 //   scroll "<css>" <dy> | move <x>,<y> |
 //   type "<text>" | press <key> [--shift] [--ctrl] [--alt] [--meta] |
-//   screenshot <file.png> | close>`:
+//   screenshot <file.png> [--selector "<css>" | --clip <x>,<y>,<w>,<h>] | close>`:
 // One shared Chrome at native scale, with a tab and mock server per checkout.
 // `open --show` starts visible Chrome if the browser is not running yet.
 // `close` releases this checkout's tab and server. Chrome stays available for reuse.
+// `eval` runs in REPL mode, so top-level `await` and `await import(...)` work.
 // MOCK_WINDOW_CDP_PORT and MOCK_WINDOW_PROFILE isolate tests of the helper.
 
 import { spawn } from "node:child_process";
@@ -60,7 +61,8 @@ const USAGE =
   'dblclick "<css>" [--at <x>,<y>] | hover "<css>" [--at <x>,<y>] [--wait <ms>] | ' +
   'drag "<from css>" "<to css>" [--from <x>,<y>] [--to <x>,<y>] [--steps <n>] | ' +
   'scroll "<css>" <dy> | move <x>,<y> | type "<text>" | ' +
-  "press <key> [--shift] [--ctrl] [--alt] [--meta] | screenshot <file> | close>";
+  "press <key> [--shift] [--ctrl] [--alt] [--meta] | " +
+  'screenshot <file> [--selector "<css>" | --clip <x>,<y>,<w>,<h>] | close>';
 
 type Point = { x: number; y: number };
 type Flags = Map<string, string | true>;
@@ -333,6 +335,28 @@ function pageValue(r: Cdp) {
   );
 }
 
+/** CDP's `clip` is in document coordinates, so a viewport rectangle adds the page scroll. */
+async function viewportClip(send: (method: string, params?: object) => Promise<Cdp>, text: string) {
+  const [x, y, width, height] = text.split(",").map(Number);
+  if (![x, y, width, height].every(Number.isFinite) || !(width! > 0) || !(height! > 0))
+    throw new Error(`--clip needs <x>,<y>,<w>,<h> in viewport pixels, got "${text}"`);
+  const scroll = pageValue(await evaluate(send, "({ x: window.scrollX, y: window.scrollY })")) as Point;
+  return { x: x! + scroll.x, y: y! + scroll.y, width: width!, height: height! };
+}
+
+/** The first element matching `selector`, scrolled into view, as a document-coordinate clip. */
+async function elementClip(send: (method: string, params?: object) => Promise<Cdp>, selector: string) {
+  const expression = `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) throw new Error("Nothing matches the selector " + ${JSON.stringify(selector)});
+    el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const b = el.getBoundingClientRect();
+    if (b.width <= 0 || b.height <= 0) throw new Error("The element " + ${JSON.stringify(selector)} + " has no size");
+    return { x: b.x + window.scrollX, y: b.y + window.scrollY, width: b.width, height: b.height };
+  })()`;
+  return pageValue(await evaluate(send, expression)) as Point & { width: number; height: number };
+}
+
 /** `document.activeElement` as `tag [aria-label]`, printed after every input. */
 async function focused(send: (method: string, params?: object) => Promise<Cdp>) {
   const expression = `(() => {
@@ -345,7 +369,7 @@ async function focused(send: (method: string, params?: object) => Promise<Cdp>) 
 }
 
 /** Flags that take the word after them; every other `--flag` is a switch. */
-const VALUED = new Set(["--at", "--from", "--to", "--wait", "--steps"]);
+const VALUED = new Set(["--at", "--from", "--to", "--wait", "--steps", "--selector", "--clip"]);
 
 /** `<x>,<y>`, taken from the element's top-left as `--at`, `--from` and `--to` do. */
 function parsePoint(text: string, flag: string): Point {
@@ -708,8 +732,9 @@ async function main() {
   } else if (command === "eval") {
     const expression = rest.join(" ");
     if (!expression) throw new Error('Usage: bun run mock-window eval "location.href"');
+    // REPL mode allows top-level `await`, so `await import("/src/state/store.ts")` works as written.
     const r = await withPage((send) =>
-      send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }),
+      send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true, replMode: true }),
     );
     if (r.exceptionDetails) {
       console.error(r.exceptionDetails.exception?.description ?? JSON.stringify(r.exceptionDetails));
@@ -764,11 +789,23 @@ async function main() {
     if (!words) throw new Error("Usage: bun run mock-window press <key> [--shift] [--ctrl] [--alt] [--meta]");
     await press(words, modifiers);
   } else if (command === "screenshot") {
-    const file = rest[0];
-    if (!file) throw new Error("Usage: bun run mock-window screenshot <file.png>");
+    const { list, flags } = parseArgs(rest);
+    const file = list[0];
+    const selector = flags.get("--selector");
+    const clipText = flags.get("--clip");
+    if (!file || list.length > 1 || selector === true || clipText === true || (selector && clipText))
+      throw new Error(
+        'Usage: bun run mock-window screenshot <file.png> [--selector "<css>" | --clip <x>,<y>,<w>,<h>]',
+      );
     const data = await withPage(async (send) => {
       await send("Page.enable");
-      return (await send("Page.captureScreenshot", { format: "png" })).data as string;
+      const clip = selector
+        ? await elementClip(send, selector)
+        : clipText
+          ? await viewportClip(send, clipText)
+          : null;
+      const params = clip ? { format: "png", clip: { ...clip, scale: 1 } } : { format: "png" };
+      return (await send("Page.captureScreenshot", params)).data as string;
     });
     await Bun.write(file, Buffer.from(data, "base64"));
     console.log(`Saved ${resolve(file)}`);
