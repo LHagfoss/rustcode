@@ -1,14 +1,15 @@
-// Compact workspace actions, lineage, and context usage.
+// The side panel's Details tab: where the thread runs, its branch, lineage and context usage.
+// Changes and Pull requests are the panel's other tabs (ui/RightPanel.tsx).
 
 import { useEffect, useMemo, useState } from "react";
 import { type GitChanges, gitChangeSummary, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { contextPercent } from "../state/details";
-import { showPanel, useApp, worktreeOf } from "../state/store";
+import { useApp, worktreeOf } from "../state/store";
 import { formatTokens, isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
-import { ChevronRight, FileDiff, FolderOpen, GitBranch, GitPullRequest, Laptop } from "./icons";
+import { ChevronRight, FolderOpen, GitBranch, Laptop } from "./icons";
 import {
   FOLDED_EVENT,
   isFolded as isFoldedOf,
@@ -43,7 +44,6 @@ export function ThreadDetails() {
   const id = useApp((s) => s.selectedId);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
   const worktree = useApp((s) => (s.selectedId ? worktreeOf(s, s.selectedId) : undefined));
-  const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const links = useApp((s) => s.links.links);
   const host = id ? splitThreadKey(id).host : "";
   const machine = useApp((s) => s.machineNames[host]);
@@ -98,31 +98,16 @@ export function ThreadDetails() {
           </button>
         )}
       </div>
-      <div className="rule-t [--rc-rule-inset:1rem] px-2 py-1">
-        {branch && (
+      {branch && (
+        <div className="rule-t [--rc-rule-inset:1rem] px-2 py-1">
           <div className={row} title={branch}>
             <GitBranch size={16} className={icon} />
             <span className="truncate rounded-md bg-fill-subtle px-2 py-0.5 font-mono text-caption">
               {branch}
             </span>
           </div>
-        )}
-        {!host && (
-          <button type="button" className={action} onClick={() => showPanel("changes")}>
-            <FileDiff size={16} className={icon} />
-            <span className="flex-1">Changes</span>
-            {!!changes?.files.length && <span className="tabular text-fg-muted">{changes.files.length}</span>}
-            <ChevronRight size={12} className="text-fg-faint" />
-          </button>
-        )}
-        {pullsOn && (
-          <button type="button" className={action} onClick={() => showPanel("pulls")}>
-            <GitPullRequest size={16} className={icon} />
-            <span className="flex-1">Pull requests</span>
-            <ChevronRight size={12} className="text-fg-faint" />
-          </button>
-        )}
-      </div>
+        </div>
+      )}
       {delegates > 0 && (
         <div className="rule-t [--rc-rule-inset:1rem] px-2 py-2">
           <DelegatePreview

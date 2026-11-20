@@ -35,11 +35,11 @@ import {
   retryPendingSetup,
   runPrompt,
   seeFailure,
-  setPanel,
   setTerminalOpen,
   setThreadStatus,
   setView,
   statusOf,
+  toggleRightPanel,
   useApp,
   useMachineOfThread,
   useShortcutHint,
@@ -65,7 +65,6 @@ import {
   Eye,
   FileDiff,
   GitBranch,
-  GitPullRequest,
   Laptop,
   ListChecks,
   type LucideIcon,
@@ -184,8 +183,9 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
                 <span className="truncate">{wt.branch}</span>
               </span>
             )}
-            {/* Idle still presents an action menu; other states keep their status marker. */}
-            {status === "idle" ? (
+            {/* The menu's own icon while idle or running (the thread list already shows a running
+                thread); review and done keep their marker. */}
+            {status === "idle" || status === "running" ? (
               <SlidersHorizontal size={14} />
             ) : (
               <StatusChip status={status} compact className="-mx-1" />
@@ -243,23 +243,6 @@ function PlanHeaderButton({ thread }: { thread?: ThreadState }) {
   return thread ? <PlanButton thread={thread} /> : null;
 }
 
-/** The pull requests panel, where the harness reports pull requests. */
-function PullsHeaderButton() {
-  const on = useApp((s) => s.panel === "pulls");
-  const available = useApp((s) => !!s.agent?.pullRequests);
-  if (!available) return null;
-  return (
-    <ClusterButton
-      label="Pull requests"
-      tooltip="Pull requests of this project"
-      on={on}
-      onClick={() => setPanel("pulls")}
-    >
-      <GitPullRequest size={14} />
-    </ClusterButton>
-  );
-}
-
 function TerminalHeaderButton() {
   const open = useApp((s) => s.terminalOpen);
   const key = useShortcutHint("toggle-terminal");
@@ -275,36 +258,21 @@ function TerminalHeaderButton() {
   );
 }
 
-// Both panel buttons carry `data-panel-toggle`: a panel that closes with nothing
-// else focused hands the keyboard back to one of them (ui/RightPanel.tsx).
+// The side panel's toggle: it opens the panel on this thread's last tab (Details, Changes, Pull
+// requests) and closes whichever is showing. It carries `data-panel-toggle`: a panel that closes
+// with nothing else focused hands the keyboard back to it (ui/RightPanel.tsx).
 function DetailsHeaderButton() {
-  const on = useApp((s) => s.panel === "details");
+  const on = useApp((s) => !!s.panel);
   const key = useShortcutHint("toggle-panel");
   return (
     <ClusterButton
-      label="Thread details"
-      tooltip={on ? `Close thread details (${key})` : `Thread details (${key})`}
+      label="Side panel"
+      tooltip={on ? `Close side panel (${key})` : `Side panel (${key})`}
       data-panel-toggle
       on={on}
-      onClick={() => setPanel("details")}
+      onClick={toggleRightPanel}
     >
       <PanelRight size={14} />
-    </ClusterButton>
-  );
-}
-
-function ChangesHeaderButton() {
-  const on = useApp((s) => s.panel === "changes");
-  const key = useShortcutHint("toggle-panel");
-  return (
-    <ClusterButton
-      label="Changes"
-      tooltip={`Changes in the working tree (${key} toggles the panel)`}
-      data-panel-toggle
-      on={on}
-      onClick={() => setPanel("changes")}
-    >
-      <FileDiff size={14} />
     </ClusterButton>
   );
 }
@@ -314,19 +282,9 @@ export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
   plan: { label: "Plan", icon: ListChecks, Button: PlanHeaderButton },
   git: { label: "Git", icon: GitBranch, Button: GitHeaderButton },
   actions: { label: "Project actions", icon: Zap, Button: ProjectActionsButton },
-  pulls: { label: "Pull requests", icon: GitPullRequest, Button: PullsHeaderButton },
   terminal: { label: "Terminal", icon: SquareTerminal, Button: TerminalHeaderButton },
-  details: { label: "Thread details", icon: PanelRight, Button: DetailsHeaderButton },
-  changes: { label: "Changes", icon: FileDiff, Button: ChangesHeaderButton },
+  details: { label: "Side panel", icon: PanelRight, Button: DetailsHeaderButton },
 };
-
-/**
- * The buttons that toggle the side panel. They always draw after the rest of
- * the header's buttons, in their kept order, except that "details" is forced
- * last: the panel's control is the last, rightmost one the user can reach, and
- * no saved order puts it before "changes".
- */
-const PANEL_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["details", "changes"]);
 
 /**
  * The header's controls that read this computer: git, the working tree, and a shell in the thread's
@@ -337,8 +295,6 @@ const LOCAL_ONLY_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(
   "git",
   "actions",
   "terminal",
-  "pulls",
-  "changes",
 ]);
 
 function Header({
@@ -369,17 +325,12 @@ function Header({
   const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
   const newThreadHost = useApp((s) => s.newThreadHost);
   const moveBlocked = useMoveBlockedReason(pending ? undefined : thread);
-  // The buttons the user keeps, in their order, with the panel's toggles last:
-  // the panel is the last thing beside the chat, so its controls are the last
-  // controls too, and "details" is the rightmost of them whatever order the
-  // user saved. Each one decides whether this thread shows it; labelled and
-  // icon buttons share one cluster in that order.
+  // The buttons the user keeps, in their order, with the panel's toggle last:
+  // the panel is the last thing beside the chat, so its control is the
+  // rightmost one whatever order the user saved. Each one decides whether this
+  // thread shows it; labelled and icon buttons share one cluster in that order.
   const right: ReactNode[] = [];
-  const kept = [
-    ...shown.filter((id) => !PANEL_BUTTONS.has(id)),
-    ...shown.filter((id) => PANEL_BUTTONS.has(id) && id !== "details"),
-    ...shown.filter((id) => id === "details"),
-  ];
+  const kept = [...shown.filter((id) => id !== "details"), ...shown.filter((id) => id === "details")];
   for (const id of kept) {
     const entry = HEADER_BUTTONS[id];
     const Icon = entry.icon;

@@ -8,16 +8,11 @@
 // default, after the buttons the user arranged.
 
 /** The header's buttons, in the order a fresh install shows them. */
-export const HEADER_BUTTON_IDS = [
-  "status",
-  "plan",
-  "git",
-  "actions",
-  "pulls",
-  "terminal",
-  "details",
-  "changes",
-] as const;
+//
+// Changes and Pull requests are not header buttons: they are tabs of the side
+// panel, beside Details, and the panel's toggle opens them. An id a saved
+// layout still names from before is dropped by `sanitizeHeaderButtons`.
+export const HEADER_BUTTON_IDS = ["status", "plan", "git", "actions", "terminal", "details"] as const;
 
 export type HeaderButtonId = (typeof HEADER_BUTTON_IDS)[number];
 
@@ -25,16 +20,10 @@ export type HeaderButtonId = (typeof HEADER_BUTTON_IDS)[number];
  * What a fresh install and a reset start from: status, plan, terminal and the
  * panel. The buttons for driving git by hand stay one click away in Settings ›
  * Chat › Thread header buttons: Git (commit, push, open a pull request: agents
- * do that), Project actions, Changes (the panel's Changes tab holds them) and
- * Pull requests (⌘K "Open Git", and the panel's tab). A layout the user saved
- * is never touched by this: `sanitizeHeaderButtons` keeps what was stored.
+ * do that) and Project actions. A layout the user saved is never touched by
+ * this: `sanitizeHeaderButtons` keeps what was stored.
  */
-export const HIDDEN_BY_DEFAULT: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>([
-  "git",
-  "actions",
-  "pulls",
-  "changes",
-]);
+export const HIDDEN_BY_DEFAULT: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["git", "actions"]);
 
 export const DEFAULT_HEADER_BUTTONS: readonly HeaderButtonId[] = HEADER_BUTTON_IDS.filter(
   (id) => !HIDDEN_BY_DEFAULT.has(id),
