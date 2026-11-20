@@ -50,7 +50,7 @@ pub(crate) fn schema() -> Value {
         "properties": {
             "html": {
                 "type": "string",
-                "description": "The block's body: the self-contained HTML that goes between the ```rustcode-ui v1 fences."
+                "description": "The block's body: what goes between the ```rustcode-ui v1 fences, HTML and `::` shorthand lines."
             }
         },
         "required": ["html"],
@@ -123,6 +123,42 @@ fn line_problem(line: &str, in_script: bool) -> Option<String> {
         }
     }
     None
+}
+
+/// A line without the links it names: a link opens in the browser on a click
+/// and loads nothing, so only a URL outside one is a network load. The
+/// shorthand's `:: sources` items are links as a whole.
+fn without_links(line: &str, in_sources: bool) -> String {
+    if in_sources && line.trim_start().starts_with("- ") {
+        return String::new();
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.to_ascii_lowercase().find("href=") {
+        out.push_str(&rest[..at]);
+        let value = &rest[at + "href=".len()..];
+        let quote = value.chars().next().filter(|c| *c == '"' || *c == '\'');
+        rest = match quote {
+            Some(quote) => value[1..]
+                .find(quote)
+                .map_or("", |end| &value[1 + end + 1..]),
+            None => value
+                .find(|c: char| c.is_whitespace() || c == '>')
+                .map_or("", |end| &value[end..]),
+        };
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The title a `:: title` shorthand line gives the view.
+fn shorthand_title(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("::")?.trim_start();
+    let title = rest.strip_prefix("title")?;
+    title
+        .starts_with(char::is_whitespace)
+        .then(|| title.trim())
+        .filter(|title| !title.is_empty())
 }
 
 /// The value of `name` in one tag, unquoted when it is quoted.
@@ -331,9 +367,20 @@ pub(crate) fn check(args: &Value) -> ToolExecutionOutput {
     let mut in_script = false;
     let mut in_style = false;
     let mut divs: Vec<bool> = Vec::new();
+    let mut in_sources = false;
+    let mut shorthand_titled = None;
     for (index, line) in html.lines().enumerate() {
         let lower = line.to_ascii_lowercase();
-        if let Some(problem) = line_problem(line, in_script) {
+        let trimmed = line.trim_start();
+        if !in_script && !in_style {
+            if trimmed.starts_with("::") {
+                in_sources = trimmed[2..].trim_start().starts_with("sources");
+                shorthand_titled = shorthand_titled.or_else(|| shorthand_title(line));
+            } else if trimmed.is_empty() || trimmed.starts_with('<') {
+                in_sources = false;
+            }
+        }
+        if let Some(problem) = line_problem(&without_links(line, in_sources), in_script) {
             problems.push(format!("line {}: {problem}", index + 1));
         }
         for problem in kit_problems(line) {
@@ -406,7 +453,8 @@ pub(crate) fn check(args: &Value) -> ToolExecutionOutput {
         .and_then(|rest| rest.split('>').nth(1))
         .and_then(|rest| rest.split("</title").next())
         .map(|title| one_line(title.trim()))
-        .filter(|title| !title.is_empty());
+        .filter(|title| !title.is_empty())
+        .or_else(|| shorthand_titled.map(one_line));
     if title.is_none() {
         problems.push(
             "no <title>: the card would be titled \u{201c}Interactive view\u{201d}, and the reply would not say what it shows"
@@ -817,6 +865,34 @@ mod tests {
         assert!(text.contains("network"), "{text}");
         assert!(text.contains("line 4:"), "{text}");
         assert!(text.contains("fetch"), "{text}");
+    }
+
+    #[test]
+    fn a_link_is_not_a_network_load_and_the_shorthand_is_read() {
+        let output = checked(
+            ":: title Reconnect timing\n:: bars\n- Drop | 75 | up to 75 s\n\
+             :: sources\n- Docs | https://example.com/docs\n\
+             <details class=\"rc-sources\"><summary>More</summary><ol><li><a href=\"https://example.com\">x</a></li></ol></details>",
+        );
+        assert!(
+            output.content.starts_with("No problems found"),
+            "{}",
+            output.content
+        );
+        assert!(
+            output
+                .content
+                .contains("titled \u{201c}Reconnect timing\u{201d}")
+        );
+        // A URL that loads is still one, after a link on the same line too.
+        let text = checked(
+            ":: title X\n<a href=\"https://a.example\">a</a><img src=\"https://b.example/i.png\">",
+        )
+        .content;
+        assert!(
+            text.contains("line 2:") && text.contains("network"),
+            "{text}"
+        );
     }
 
     #[test]

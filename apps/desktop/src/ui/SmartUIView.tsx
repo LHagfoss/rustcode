@@ -43,6 +43,7 @@ import {
   MIN_HEIGHT,
   viewMessage,
 } from "../smartui/parse";
+import { expandShorthand } from "../smartui/shorthand";
 import { sendFromView, setSmartUi, toast, useApp } from "../state/store";
 import { Check, Code, Copy, Download, Play, Square } from "./icons";
 import { CodeBlock } from "./Markdown";
@@ -324,7 +325,7 @@ export function SmartUIView({
   // Each new fragment goes to the streaming frame, the last one winning (throttled by `StreamPump`).
   useEffect(() => {
     latest.current = source;
-    if (page?.stream) pump.current?.push(closeOpenTags(source));
+    if (page?.stream) pump.current?.push(closeOpenTags(expandShorthand(source)));
   }, [source, page]);
 
   // The fence closed: the finished page replaces the preview, and its script runs once.
@@ -363,7 +364,7 @@ export function SmartUIView({
       switch (data.type) {
         case "stream-ready":
           // The preview frame can take the fragment now, including the part it was built after.
-          pump.current?.push(closeOpenTags(latest.current));
+          pump.current?.push(closeOpenTags(expandShorthand(latest.current)));
           break;
         case "hover": {
           // Track whether measurements should be ignored while the pointer is inside.

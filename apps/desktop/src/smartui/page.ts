@@ -6,6 +6,7 @@
 
 import { KIT_SCRIPT } from "./kit";
 import { stripEmptyTags } from "./parse";
+import { expandShorthand } from "./shorthand";
 
 export const PAGE_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; " +
@@ -253,6 +254,9 @@ tr:is([data-rc-send], [data-rc-copy]):hover > td { background: color-mix(in srgb
   background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-sm); pointer-events: none;
   visibility: hidden; opacity: 0; transition: opacity 80ms ease-out; }
 .rc-bar[data-rc-tip]:hover::after { visibility: visible; opacity: 1; }
+/* Above the first bar is the view's heading and, at its right, the copy and save buttons the app
+   draws over the view: that tip opens below its bar instead, where the next bar is. */
+.rc-bar[data-rc-tip]:first-child::after { bottom: auto; top: calc(100% + 2px); }
 
 /* A table wraps its prose at spaces only (anywhere would let the layout squeeze a column to one
    letter), but code, keys and links break anywhere: one long path or URL is the widest thing in
@@ -1051,7 +1055,7 @@ export function buildStreamPage(token: string, theme: PageTheme): string {
 /** The page for a block: CSP, theme, base CSS, runtime, then the block with Chart.js inlined once. */
 export function buildPage(source: string, token: string, theme: PageTheme, chartJs?: string): string {
   let first = true;
-  const body = source.replace(CHART_TAG, () => {
+  const body = expandShorthand(source).replace(CHART_TAG, () => {
     if (!first || !chartJs) return "";
     first = false;
     return `<script>${scriptSafe(chartJs)}</script><script>${CHART_THEME_SCRIPT}</script>`;

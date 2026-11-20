@@ -29,13 +29,40 @@ hovering a column shows that column.
 
 ````markdown
 ```rustcode-ui v1
-<title>Test runs</title>
-<div class="rc-stats"><div class="rc-stat"><span class="rc-stat-value">128</span><span class="rc-stat-label">Runs</span></div></div>
+:: title Test runs
+:: stats
+- 128 | Runs | +12 today {ok}
+- 3 | Failed {bad}
+:: bars Slowest crates
+- engine | 42 | 42 s | 7 tests over 1 s
+- tui | 10.5 | 10.5 s
 ```
 ````
 
-`<title>` labels the view; do not repeat it. Optional inline `<script>`, data
-embedded. No network, imports or storage; a link opens in the browser, never in the view. Limits: 64 KB, 5,000
+The title labels the view; do not repeat it. Write the kit in shorthand, which
+the app turns into the kit's own markup: fewer tokens, and every view of a kind
+alike. HTML (below) is for the rest, and the two mix freely.
+
+## Shorthand
+
+A `::` line opens a block; its `- ` lines are items, cells split at `|`
+(outside backticks; `\|` keeps one); a blank line, the next `::` or a line
+that starts with `<` ends it. An item may end `{ok}`, `{warn}`, `{bad}` or
+`{info}`. In text, `code`, **bold** and inline HTML work. A name after the
+block (`:: bars Slowest crates`) is an `h3` over it.
+
+- `:: title Text` the view's title · `:: h Text` a heading · `:: p` text (on its line or below)
+- `:: bars` `- label | value | shown | tip`: widths scale to the largest value
+  (all `%` values are widths as written); `shown` defaults to the value; `tip` shows on hover.
+- `:: stats` `- value | label | note`
+- `:: steps` `- [x] done`, `[>] active`, `[!] failed`, `[ ] to do`
+- `:: list` `- Title | detail` (or one line of prose) · `:: cards` `- Title | body`
+- `:: table` then `a | b` rows, the first the heading (Markdown divider rows are
+  skipped); sortable past eight rows.
+- `:: callout info|ok|warn|bad [lead]` then its text
+- `:: sources` `- Title | url`, folded, last in the view
+
+Optional inline `<script>`, data embedded. No network, imports or storage; a link opens in the browser, never in the view. Limits: 64 KB, 5,000
 elements. The app draws it as it streams: lead with the part worth reading.
 
 ## Theme
@@ -67,16 +94,15 @@ so leave out margins (16 px; 28 px inside `.rc-dash`). A `.rc-card` is already a
 - Status: `.rc-badge .rc-callout`, tinted by `.rc-ok .rc-warn .rc-bad .rc-info`
   (also on a stat, a bar or a line in `.rc-term`);
   `<div class="rc-progress"><span style="width:72%"></span></div>`
-- Bars: `<div class="rc-bars"><div class="rc-bar" data-rc-tip="7 failed"><span>Name</span><i style="width:40%"></i><b>40</b></div></div>`
-  Each bar highlights and shows its `data-rc-tip` on hover.
+- Bars (`:: bars`): `.rc-bars > .rc-bar[data-rc-tip] > span, i[style=width:40%], b`; each highlights and shows its tip on hover.
 - Rows: `<table class="rc-table" data-rc-sort>` sorts on a click or Enter in a
   heading (`data-rc-sort="text"` on one `th` compares it as text) and
   highlights the row under the pointer; in `.rc-scroll` its header sticks.
   An item is a label row with an optional trailing value and may carry a description block (`div` or `p`).
   `<ul class="rc-list"><li class="rc-item"><span>Name</span><span class="rc-badge rc-ok">Ready</span></li></ul>`
-- Plans: `<ol class="rc-steps"><li class="rc-step rc-done">Built</li></ol>`, also `rc-active rc-failed rc-todo`.
+- Plans (`:: steps`): `ol.rc-steps > li.rc-step.rc-done`, also `rc-active rc-failed rc-todo`.
 - Review: `.rc-findings > .rc-finding[data-severity=high|medium|low]` holding `<div><code>a.ts:21</code> · Codex</div><p>…</p><p class="rc-finding-note rc-ok">Fixed</p>`; a set-aside note drops `rc-ok` and ends with a `data-rc-send` Reopen chip.
-- Sources: `<details class="rc-details rc-sources"><summary>Sources</summary><ol><li><a href="https://…">Title</a></li></ol></details>`; a link opens in the browser.
+- Sources (`:: sources`): `details.rc-details.rc-sources > summary + ol > li > a[href]`; a link opens in the browser.
 - Folding: `<details class="rc-details"><summary>Files</summary>…</details>`,
   `.rc-tree` around nested ones, `.rc-file` rows of name and value.
 - Output: `<div class="rc-term"><div>$ cargo test</div><div class="rc-ok">ok</div></div>`
@@ -128,13 +154,6 @@ one `.rc-hero` (the value, its multiplier or delta, one or two plain
 sentences with the key figures in `<b>`), an `hr`, a `.rc-stats.rc-flat` of
 three or four stats whose `.rc-stat-note` is the comparison, then a `.rc-head`
 and a large `data-size="xl"` line chart with `rcMarks`. All in one `.rc-dash`.
-
-## One example per intent
-
-All kit, no CSS: the same intent reads the same way in every turn.
-
-- Ranking: `<div class="rc-bars"><div class="rc-bar"><span>engine</span><i style="width:100%"></i><b>42 s</b></div><div class="rc-bar rc-bad"><span>auth</span><i style="width:25%"></i><b>10.5 s</b></div></div>`
-- A point and its why: `<li class="rc-item"><b>Two tools</b><p>Extend the old one.</p></li>`
 
 ## Design
 

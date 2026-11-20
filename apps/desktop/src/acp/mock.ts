@@ -50,6 +50,8 @@ import {
   MOCK_HEADINGS,
   MOCK_KIT,
   MOCK_PROPOSAL,
+  MOCK_RECONNECT_HTML,
+  MOCK_RECONNECT_SHORTHAND,
   MOCK_REVIEW,
   MOCK_TABLE,
   MOCK_VIEW,
@@ -65,6 +67,8 @@ export {
   MOCK_HEADINGS,
   MOCK_KIT,
   MOCK_PROPOSAL,
+  MOCK_RECONNECT_HTML,
+  MOCK_RECONNECT_SHORTHAND,
   MOCK_REVIEW,
   MOCK_TABLE,
   MOCK_VIEW,
@@ -3233,34 +3237,38 @@ export class MockEngine {
           ],
         });
       }
-      const reply = /\breview\b/i.test(prompt)
-        ? MOCK_REVIEW
-        : /\bheadings?\b/i.test(prompt)
-          ? MOCK_HEADINGS
-          : /\bdashboard\b/i.test(prompt)
-            ? MOCK_DASH
-            : /\bkit\b/i.test(prompt)
-              ? MOCK_KIT
-              : /\bproposal\b/i.test(prompt)
-                ? MOCK_PROPOSAL
-                : /\b(hover|trend|graph)\b/i.test(prompt)
-                  ? MOCK_CHARTS
-                  : /\btable\b/i.test(prompt)
-                    ? MOCK_TABLE
-                    : /\bview\b/i.test(prompt)
-                      ? MOCK_VIEW
-                      : /\bcharts?\b/i.test(prompt)
-                        ? MOCK_VIZ
-                        : [
-                            "Done. ",
-                            "I updated the greeting in `src/app.ts` ",
-                            "and the tests pass.\n\n",
-                            "```ts\n",
-                            'const greeting = "hello, world";\n',
-                            "export default greeting;\n",
-                            "```\n\n",
-                            "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-                          ];
+      const reply = /\bshorthand\b/i.test(prompt)
+        ? MOCK_RECONNECT_SHORTHAND
+        : /\breconnect\b/i.test(prompt)
+          ? MOCK_RECONNECT_HTML
+          : /\breview\b/i.test(prompt)
+            ? MOCK_REVIEW
+            : /\bheadings?\b/i.test(prompt)
+              ? MOCK_HEADINGS
+              : /\bdashboard\b/i.test(prompt)
+                ? MOCK_DASH
+                : /\bkit\b/i.test(prompt)
+                  ? MOCK_KIT
+                  : /\bproposal\b/i.test(prompt)
+                    ? MOCK_PROPOSAL
+                    : /\b(hover|trend|graph)\b/i.test(prompt)
+                      ? MOCK_CHARTS
+                      : /\btable\b/i.test(prompt)
+                        ? MOCK_TABLE
+                        : /\bview\b/i.test(prompt)
+                          ? MOCK_VIEW
+                          : /\bcharts?\b/i.test(prompt)
+                            ? MOCK_VIZ
+                            : [
+                                "Done. ",
+                                "I updated the greeting in `src/app.ts` ",
+                                "and the tests pass.\n\n",
+                                "```ts\n",
+                                'const greeting = "hello, world";\n',
+                                "export default greeting;\n",
+                                "```\n\n",
+                                "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+                              ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();

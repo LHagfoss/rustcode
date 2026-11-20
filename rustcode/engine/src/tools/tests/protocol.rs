@@ -2251,9 +2251,13 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         "as little CSS as you can",
         ".rc-stat-value",
         ".rc-badge",
-        ".rc-bar",
-        ".rc-table",
-        ".rc-steps",
+        ":: bars",
+        ":: stats",
+        ":: steps",
+        ":: table",
+        ":: cards",
+        ":: sources",
+        "{ok|warn|bad|info}",
         ".rc-findings",
         ".rc-details",
         ".rc-term",
@@ -2315,9 +2319,12 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // review findings class adds about 80 more (its markup is in the smart-ui
     // skill, not here), so the cap was 2,300. Answering visually by default
     // (data, results and 4+ items in a view, no Markdown tables, brief text)
-    // adds about 30, so it is 2,350.
+    // adds about 30, so it was 2,350. The `::` shorthand adds about 160 and
+    // the kit list it replaces gives back what it can: a view in shorthand is
+    // about a third shorter (600 bytes on the reconnect fixture), so it pays
+    // for itself in the first view of a thread. The cap is 2,500.
     assert!(
-        SMART_UI_HARNESS_HINT.len() < 2_350,
+        SMART_UI_HARNESS_HINT.len() < 2_500,
         "{}",
         SMART_UI_HARNESS_HINT.len()
     );

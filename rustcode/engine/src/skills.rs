@@ -1201,7 +1201,9 @@ mod tests {
         // dashboard layout (headline, context, stats, chart) and the chart
         // marks add about 150 more once three examples are cut, so the
         // ceiling is 2,400. A review's findings (`.rc-findings`) add one
-        // line of about 70, so it is 2,500.
+        // line of about 70, so it is 2,500. The `::` shorthand adds about
+        // 175, paid back by the first view written in it, and its HTML
+        // examples are cut to stay under the same ceiling.
         assert!(tokens < 2_500, "the smart-ui skill is {tokens} tokens");
         // The runtime the clients inject (docs/smart-ui.md), named exactly.
         for name in [
@@ -1210,6 +1212,8 @@ mod tests {
             "rustcode-lib:chart.js",
             "window.rustcode?.send",
             "onThemeChange",
+            ":: bars",
+            ":: sources",
         ] {
             assert!(content.contains(name), "the skill names {name}");
         }
