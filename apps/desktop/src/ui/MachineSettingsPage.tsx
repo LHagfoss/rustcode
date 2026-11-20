@@ -42,6 +42,7 @@ import {
   useMachines,
 } from "../state/machines";
 import { revokeRemoteDevice } from "../state/remoteAccess";
+import { setFollowsThisComputer, useSettingsFollow } from "../state/settingsFollow";
 import { SERVER_SETTINGS } from "../state/settingsRegistry";
 import {
   checkMachineHarnesses,
@@ -52,7 +53,7 @@ import {
   useServerValues,
   useSettingsScope,
 } from "../state/settingsScope";
-import { openSettings, useApp } from "../state/store";
+import { errorText, openSettings, toast, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
 import { ArrowLeft, Plus, RefreshCw, Trash2, Unplug } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
@@ -520,6 +521,41 @@ function harnessStatus(harness: Harness): string {
  * mark where this machine's value differs from this Mac's. A row opens its own
  * page with Applying to set to this machine.
  */
+/** One switch: this machine takes this computer's shared settings and keeps them (state/settingsFollow.ts). */
+function FollowSettings({ machine, online }: { machine: Machine; online: boolean }) {
+  const follows = useSettingsFollow((state) => state.ids.includes(machine.id));
+  const name = machineName(machine);
+  const here = selfName();
+  const toggle = (next: boolean) => {
+    void setFollowsThisComputer(machine.id, next).then(
+      (count) => {
+        if (next && online)
+          toast(
+            count
+              ? `Copied ${count} ${count === 1 ? "setting" : "settings"} from ${here} to ${name}.`
+              : `${name} already has ${here}'s settings.`,
+            "success",
+          );
+      },
+      (error) => toast(errorText(error), "error"),
+    );
+  };
+  return (
+    <Group title="Settings">
+      <Row
+        title={`Use ${here}'s settings`}
+        subtitle={
+          follows
+            ? `${name} uses ${here}'s shared settings. A change on ${name} itself is put back when it next connects.`
+            : `${name} keeps its own shared settings. Turn this on to copy ${here}'s to it now and keep them the same.`
+        }
+      >
+        <Switch label={`Use ${here}'s settings on ${name}`} checked={follows} onChange={toggle} />
+      </Row>
+    </Group>
+  );
+}
+
 function WhatSyncs({ machine, online }: { machine: Machine; online: boolean }) {
   const values = useServerValues();
   const local = localServerSettingValues();
@@ -541,6 +577,7 @@ function WhatSyncs({ machine, online }: { machine: Machine; online: boolean }) {
 
   return (
     <>
+      <FollowSettings machine={machine} online={online} />
       <SectionTitle title="What syncs" />
       <div className="mb-6 overflow-hidden rounded-xl bg-surface">
         <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 border-border border-b px-4 py-2 font-medium text-caption text-fg-muted">

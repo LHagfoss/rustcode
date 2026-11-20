@@ -394,7 +394,11 @@ export function onServerSettingsChanged(host: string, params: JsonObject): void 
   }
   settingsRevision.set(host, (settingsRevision.get(host) ?? 0) + 1);
   remember(host, settled);
-  if (host === LOCAL_HOST) void applyLocalSettings(settled);
+  if (host === LOCAL_HOST) {
+    void applyLocalSettings(settled);
+    // A machine that follows this computer's settings gets the change too (state/settingsFollow.ts).
+    void import("./settingsFollow").then((follow) => follow.followLocalChange());
+  }
 }
 
 let hydration: Promise<void> | null = null;
@@ -408,6 +412,8 @@ export function hydrateLocalServerSettings(): Promise<void> {
   hydration ??= (async () => {
     const connection = connectionFor(LOCAL_HOST);
     if (!connection) return;
+    // Machines that follow this computer's settings get them as each one connects.
+    void import("./settingsFollow").then((follow) => follow.startSettingsFollow());
     try {
       await seedLocalSettings(LOCAL_HOST);
       const answer = await machineRequest(LOCAL_HOST, "_rustcode/settings/get", {}, 10_000);
