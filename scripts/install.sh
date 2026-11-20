@@ -525,6 +525,17 @@ install_harness() {
     select_cli_directory
     harness_exe="${INSTALL_DIR}/rustcode"
 
+    # The harness takes the name the server CLI had before 1.45.0. A service
+    # still running that CLI would fail at its next start once the harness is
+    # there: point it at rc first, and never write over it while it runs it.
+    migrate_server_service "${TARGET_EXE:-}"
+    if service_runs "$harness_exe" && is_server_cli "$harness_exe"; then
+        warn "NOT installing the standalone harness to ${harness_exe}."
+        warn "The RustCode server service still runs ${harness_exe}, the server CLI from before 1.45.0. The harness has no 'server' command, so the service would fail at its next start."
+        warn "Install rc (run this installer without --no-cli), or run 'rc server install', then install the harness again."
+        return 0
+    fi
+
     if ! run_with_spinner "Installing to ${harness_exe}..." cp "$extracted" "$harness_exe"; then
         error "Could not install standalone harness to ${harness_exe}."
     fi
@@ -537,6 +548,154 @@ install_harness() {
     fi
 
     success "RustCode standalone harness ${LATEST_TAG} installed successfully to ${harness_exe}!"
+}
+
+# --- The server service an older release installed --------------------------
+#
+# Before 1.45.0 the app's CLI was `rustcode`, and `rustcode server install`
+# wrote a service that runs `rustcode server run --service`. Since 1.45.0
+# `rustcode` is the standalone harness, which has no `server` command: once
+# the harness (or nothing) is at that path, the service fails at its next
+# start with "unrecognized subcommand 'server'", and until then the old server
+# keeps running from the deleted file, too old for the apps that talk to it.
+# After installing `rc`, such a service is pointed at it and restarted.
+
+# The program a systemd unit's `ExecStart=` runs: its first word, unquoted.
+unit_program() {
+    local line command
+    line="$(grep -m1 '^[[:space:]]*ExecStart=' "$1" 2>/dev/null)" || return 1
+    command="${line#*ExecStart=}"
+    case "$command" in
+        \"*)
+            command="${command#\"}"
+            command="${command%%\"*}"
+            command="${command//%%/%}"
+            printf '%s\n' "${command//\$\$/\$}"
+            ;;
+        *) printf '%s\n' "${command%%[[:space:]]*}" ;;
+    esac
+}
+
+# The arguments after the program on a unit's `ExecStart=` line.
+unit_arguments() {
+    local line command
+    line="$(grep -m1 '^[[:space:]]*ExecStart=' "$1" 2>/dev/null)" || return 1
+    command="${line#*ExecStart=}"
+    case "$command" in
+        \"*)
+            command="${command#\"}"
+            printf '%s\n' "${command#*\"}"
+            ;;
+        *[[:space:]]*) printf ' %s\n' "${command#*[[:space:]]}" ;;
+        *) printf '\n' ;;
+    esac
+}
+
+# One word of a systemd command line, quoted as `rc server install` writes it.
+systemd_word() {
+    local value="$1"
+    case "$value" in
+        ''|*[!A-Za-z0-9_./:=@+,-]*)
+            value="${value//\\/\\\\}"
+            value="${value//\"/\\\"}"
+            value="${value//\%/%%}"
+            value="${value//\$/\$\$}"
+            printf '"%s"' "$value"
+            ;;
+        *) printf '%s' "$value" ;;
+    esac
+}
+
+# Whether a service running `$1` must be pointed at the `rc` in `$2`: a
+# `rustcode` from before the rename, or a program that is gone.
+legacy_service_program() {
+    [ -n "$1" ] && [ "$1" != "$2" ] || return 1
+    [ "$(basename "$1")" = rustcode ] || [ ! -e "$1" ]
+}
+
+# Whether `$1` is the app's CLI from before the rename, which still serves:
+# the harness has no `server` command.
+is_server_cli() {
+    [ -x "$1" ] && "$1" server --help >/dev/null 2>&1
+}
+
+systemd_unit_dir() {
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+}
+
+# Point every RustCode server unit that runs a legacy program at `$1`, and
+# restart it onto `rc`: now when the old program cannot serve any more (the
+# server it started is already lost), else through `rc server restart
+# --when-idle` in the background, so no running turn is cut off.
+migrate_systemd_units() {
+    local rc="$1" unit program arguments name stage
+    for unit in "$(systemd_unit_dir)"/rustcode-server*.service; do
+        [ -f "$unit" ] || continue
+        program="$(unit_program "$unit")" || continue
+        legacy_service_program "$program" "$rc" || continue
+        arguments="$(unit_arguments "$unit")"
+        name="$(basename "$unit")"
+        stage="$(mktemp "${unit}.XXXXXX")" || { warn "Could not rewrite ${unit}."; continue; }
+        if ! EXEC_START="ExecStart=$(systemd_word "$rc")${arguments}" awk '
+                !done && /^[[:space:]]*ExecStart=/ { print ENVIRON["EXEC_START"]; done = 1; next }
+                { print }' "$unit" > "$stage" \
+            || ! chmod 600 "$stage" || ! mv -f "$stage" "$unit"; then
+            rm -f "$stage"
+            warn "Could not rewrite ${unit}; run 'rc server install' to repair it."
+            continue
+        fi
+        warn "The RustCode server service ${name} ran ${program}, which is no longer the server CLI (since 1.45.0 it is rc). It now runs ${rc}."
+        if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user daemon-reload >/dev/null 2>&1; then
+            warn "Could not reach the systemd user manager. Run: systemctl --user daemon-reload && systemctl --user restart ${name}"
+            continue
+        fi
+        if is_server_cli "$program"; then
+            nohup "$rc" server restart --when-idle --yes >/dev/null 2>&1 &
+            success "The server restarts onto rc once no turn is running."
+        elif systemctl --user restart "$name" >/dev/null 2>&1; then
+            success "Restarted ${name} on rc."
+        else
+            warn "Could not restart ${name}. Run: systemctl --user restart ${name}"
+        fi
+    done
+}
+
+# Point a server service an older release installed at the `rc` in `$1`.
+migrate_server_service() {
+    local rc="${1:-}"
+    [ -n "$rc" ] && [ -x "$rc" ] || return 0
+    case "$(uname -s)" in
+        Linux) migrate_systemd_units "$rc" ;;
+        Darwin)
+            # launchd agents are rc's to rewrite: it reads and reloads them
+            # the way it wrote them. An rc without the command says so.
+            local agent found=0
+            for agent in "$HOME"/Library/LaunchAgents/no.rustcode.server*.plist; do
+                [ -f "$agent" ] && grep -q '/rustcode</string>' "$agent" && found=1
+            done
+            if [ "$found" = 1 ] && ! "$rc" server repair; then
+                warn "Could not repair the RustCode server service; run 'rc server install'."
+            fi
+            ;;
+    esac
+}
+
+# Whether a RustCode server service still runs the program at `$1`.
+service_runs() {
+    local unit agent
+    case "$(uname -s)" in
+        Linux)
+            for unit in "$(systemd_unit_dir)"/rustcode-server*.service; do
+                [ -f "$unit" ] && [ "$(unit_program "$unit")" = "$1" ] && return 0
+            done
+            ;;
+        Darwin)
+            for agent in "$HOME"/Library/LaunchAgents/no.rustcode.server*.plist; do
+                [ -f "$agent" ] && grep -qF "<string>$1</string>" "$agent" && return 0
+            done
+            ;;
+    esac
+    return 1
 }
 
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
@@ -806,6 +965,9 @@ if [ "$INSTALL_APP" = 1 ] && [ "$TARGET_OS" = linux ]; then
 fi
 if [ "$INSTALL_CLI" = 1 ] && [ "$CLI_SHARED" = 0 ]; then
     install_cli
+fi
+if [ "$INSTALL_CLI" = 1 ]; then
+    migrate_server_service "${TARGET_EXE:-}"
 fi
 if [ "$INSTALL_HARNESS" = 1 ]; then
     install_harness

@@ -80,6 +80,7 @@ start when you log in, and come back after a crash, install it as a service:
 rustcode server install     # write the service, start it, wait for the socket
 rustcode server status      # installed? running? clients, turns, problems
 rustcode server restart     # now; --when-idle waits until no turn is running
+rc server repair            # point a pre-1.45.0 `rustcode` service at rc
 rustcode server link-path   # point the rustcode on PATH at this one
 rustcode server update-cli  # update the rustcode in ~/.rustcode/bin, if older
 rustcode server logs -f     # the server's log
@@ -401,6 +402,36 @@ start right after a turn ends). While it waits `status` reports
 is. On Windows stopping a server is a hard kill (no signal reaches a process
 without a window), so harness processes it started can outlive it until they
 end themselves.
+
+### `repair`: services from before the `rc` rename
+
+Before 1.45.0 the server CLI was `rustcode`, and `server install` wrote a
+service that runs `rustcode server run --service`. Since 1.45.0 `rustcode` is
+the standalone harness, which has no `server` command. Once the harness, or
+nothing, is at that path (an installer, Homebrew, or a 1.44 server updating
+itself to the `rustcode-*` asset, which is now the harness), the service fails
+at its next start with `unrecognized subcommand 'server'`. Until then the old
+server keeps running from the deleted file, and a newer app sees it as
+outdated ("no longer offers key sign-in").
+
+`rc` repairs this itself. A definition (systemd unit, LaunchAgent, logon task
+or Run entry) whose program is named `rustcode`, or no longer exists, is
+pointed at the running `rc`:
+
+- at every `rc` start (on Windows only for `rc server` commands, where reading
+  the task asks Task Scheduler). The restart onto `rc` goes to a helper that
+  waits until no turn is running, so the command is not held up;
+- by `rc server install` and `rc up`, which restart at once when no turn runs;
+- by `rc server repair`, which says what it did (`--yes` restarts even with
+  turns running);
+- by `scripts/install.sh` (systemd units, in the script itself; LaunchAgents
+  through `rc server repair`) and `scripts/install.ps1` after they install
+  `rc`. With `--with-harness`, the installers refuse to write the harness over
+  a `rustcode` that a service still runs as its server CLI.
+
+A development build never rewrites a service, and a service that runs another
+`rc` that still exists is left alone: several copies are normal, and
+`rc server install` is how a person chooses between them.
 
 ### Staying up to date
 
