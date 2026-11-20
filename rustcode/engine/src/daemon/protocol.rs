@@ -55,7 +55,15 @@ pub struct DaemonStatus {
     pub database_path: String,
     pub active_runs: usize,
     pub next_wake_at: Option<String>,
+    /// The RustCode version the daemon runs. A daemon outlives app updates,
+    /// and one from before this field answers `None`: an older build drops
+    /// the job fields it does not know (a Loop's account) on every save.
+    #[serde(default)]
+    pub version: Option<String>,
 }
+
+/// The version a daemon started from this binary reports.
+pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

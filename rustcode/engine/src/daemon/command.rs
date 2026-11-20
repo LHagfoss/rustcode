@@ -240,6 +240,7 @@ mod tests {
                 database_path: "/tmp/jobs.sqlite".into(),
                 active_runs: 2,
                 next_wake_at: Some("2026-09-22T10:00:00Z".into()),
+                version: Some("1.0.0".into()),
             },
         };
         let human = format_response("status", &response, false).unwrap();

@@ -13,6 +13,7 @@ import {
   type Loop,
   type LoopRun,
   lastResult,
+  loopIdsByThread,
   loopRunThreads,
   loopState,
   loopThreadNames,
@@ -381,6 +382,14 @@ describe("loop follow-ups (issue 3937)", () => {
       loop({ id: "loop-2", name: "Triage", threadId: "t-own", runs: [] }),
     ];
     expect(loopThreadNames(loops)).toEqual({ "t-1": "CI", "t-own": "Triage" });
+  });
+
+  test("a run's thread leads back to its job by id", () => {
+    const loops = [
+      loop({ runs: [run("r1", "succeeded", 1, { threadId: "t-1" }), run("r2", "cancelled", 2)] }),
+      loop({ id: "loop-2", threadId: "t-own", runs: [] }),
+    ];
+    expect(loopIdsByThread(loops)).toEqual({ "t-1": "loop-1", "t-own": "loop-2" });
   });
 
   test("a run's fresh thread stays out of the thread list, a loop's own thread stays in", () => {

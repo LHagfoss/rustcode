@@ -75,6 +75,7 @@ import {
   SquareTerminal,
   Zap,
 } from "./icons";
+import { JobRunBar, useJobRun } from "./JobRunBar";
 import { LinkedThreads } from "./Links";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
@@ -698,6 +699,9 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
  */
 function SettledBar({ threadId }: { threadId: string }) {
   const status = useThreadStatus(threadId);
+  // A scheduled job's run settles on its own; its own bar says so.
+  const jobRun = useJobRun(threadId);
+  if (jobRun) return <JobRunBar threadId={threadId} />;
   if (status !== "done") return null;
   return (
     <div
