@@ -2018,7 +2018,7 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 17}})), 17);
         assert_eq!(version(json!({"rustcode": {"orchestration": 18}})), 18);
         assert_eq!(version(json!({"rustcode": {"orchestration": 19}})), 19);
-        assert_eq!(version(json!({"rustcode": {"orchestration": 20}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 20}})), 20);
         assert_eq!(version(json!({"rustcode": {"orchestration": 99}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
