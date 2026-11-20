@@ -653,8 +653,6 @@ export const ThreadRow = memo(function ThreadRow({
   onClearSelection?: () => void;
   /** The sidebar's compact density: one line, the rest on the hover card. */
   compact?: boolean;
-  /** Under its project's heading. The row names its computer either way. */
-  grouped?: boolean;
 }) {
   const host = useMachines((s) => s.machines.find((m) => m.id === session.host));
   const machine = host ? machineName(host) : undefined;
