@@ -166,6 +166,8 @@ export function networkFailure(raw: string | undefined): boolean {
  */
 export function readableTurnError(raw: string, contextPercent?: number): string {
   const text = raw.trim();
+  // ACP error codes and data belong to the harness's JSON-RPC response.
+  if (text.startsWith("Antigravity ACP error (")) return clipped(text, MAX_DISPLAY_ERROR_CHARS);
   // `Codex: …`, `Claude Code: …`: the harness the engine says it came from.
   const prefixed = /^([A-Z][\w .-]{0,30}?):\s+([\s\S]+)$/.exec(text);
   const who = prefixed?.[1];

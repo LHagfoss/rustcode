@@ -1540,3 +1540,57 @@ fn an_answer_without_usage_counts_changes_nothing() {
     assert!(fold_prompt_usage(&mut state, &json!({"usage": {"totalTokens": 5}})).is_none());
     assert!(state.totals.is_none());
 }
+
+#[test]
+fn failed_acp_tool_keeps_operation_and_supplied_diagnostics() {
+    let mut update = json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": "t1",
+        "kind": "execute", "title": "Run checks", "status": "failed",
+        "rawOutput": {"error": {"message": "permission denied, password=example-secret"},
+                      "exit_code": 13}
+    });
+    normalize_tool_failure(&mut update);
+    assert_eq!(update["kind"], "execute");
+    assert_eq!(update["title"], "Run checks");
+    assert_eq!(update["rawOutput"]["exitCode"], 13);
+    let reason = update["rawOutput"]["content"].as_str().unwrap();
+    assert!(reason.contains("permission denied"));
+    assert!(!reason.contains("example-secret"));
+    assert!(serde_json::from_value::<SessionUpdate>(update).is_ok());
+}
+
+#[test]
+fn failed_acp_tool_keeps_missing_diagnostics_missing() {
+    let mut update = json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "failed"
+    });
+    let original = update.clone();
+    normalize_tool_failure(&mut update);
+    assert_eq!(update, original);
+
+    let mut update = json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "failed",
+        "content": [{"type": "content", "content": {"type": "text", "text": "猫".repeat(1000)}}]
+    });
+    normalize_tool_failure(&mut update);
+    let reason = update["content"][0]["content"]["text"].as_str().unwrap();
+    assert!(reason.len() <= FAILURE_DETAIL_BYTES);
+    assert!(update.get("rawOutput").is_none());
+}
+
+#[test]
+fn acp_prompt_errors_keep_wire_code_and_optional_redacted_data() {
+    let mut error = RpcError {
+        code: -32603,
+        message: "Request failed".to_owned(),
+        data: None,
+    };
+    assert_eq!(
+        prompt_error(&error),
+        "Antigravity ACP error (-32603): Request failed"
+    );
+    error.data = Some(json!({"status": "UNAVAILABLE", "accessToken": "example-secret"}));
+    let displayed = prompt_error(&error);
+    assert!(displayed.contains("UNAVAILABLE"));
+    assert!(!displayed.contains("example-secret"));
+}
