@@ -1447,7 +1447,7 @@ mod tests {
         // The gateway is on loopback: the panel says what that means and
         // what to run instead.
         assert!(report.contains("a phone cannot reach it"), "{report}");
-        assert!(report.contains("rustcode remote serve"));
+        assert!(report.contains("rc remote serve"));
         assert!(report.contains("[remote]"));
         // A scannable code, as marked rows the panel paints black on white.
         assert!(
@@ -1584,7 +1584,7 @@ mod tests {
         // stops and says what to run.
         enter(&mut runtime, "/remote").await;
         let stopped = panel_until(&mut runtime, |report| report.contains("stopped")).await;
-        assert!(stopped.contains("rustcode remote serve"), "{stopped}");
+        assert!(stopped.contains("rc remote serve"), "{stopped}");
         assert!(stopped.contains("This thread is private"), "{stopped}");
         assert!(runtime.remote.registration().is_none());
         let _ = std::fs::remove_dir_all(&dir);
