@@ -26,7 +26,7 @@ import {
   toggleFavourite,
   writeModelHistory,
 } from "../lib/modelHistory";
-import { usageModelId } from "../lib/modelNames";
+import { modelIconHarness, modelTitle, usageModelId } from "../lib/modelNames";
 import { matchModels } from "../lib/modelSearch";
 import {
   concreteModels,
@@ -203,13 +203,14 @@ function chipPressable(chip: AccountChip, disabled: boolean): boolean {
   return !disabled && !chip.gone && !chip.signedOut;
 }
 
-/**
- * A model row's own name: the catalog's when it has one, else its id. Whitespace is collapsed, so
- * two listings of one name compare as one.
- */
+function catalogModelName(model: Choice): string {
+  return (model.name || model.value).trim().replace(/\s+/g, " ") || model.value;
+}
+
+/** Clean up known ids while respecting model names supplied by the catalog. */
 export function modelDisplayName(model: Choice): string {
-  const name = (model.name || model.value).trim().replace(/\s+/g, " ");
-  return name || model.value;
+  const name = catalogModelName(model);
+  return name === model.value ? (modelName(name) ?? name) : modelTitle(name);
 }
 
 /**
@@ -241,7 +242,7 @@ export function dedupeModels(models: Choice[], recommended?: string | null): Cho
   for (const model of models) {
     if (seen.has(model.value)) continue;
     seen.add(model.value);
-    const key = `${modelProviderOf(model.value) ?? ""}\u0000${modelDisplayName(model).toLowerCase()}`;
+    const key = `${modelProviderOf(model.value) ?? ""}\u0000${catalogModelName(model).toLowerCase()}`;
     const at = byName.get(key);
     if (at === undefined) {
       byName.set(key, rows.length);
@@ -762,6 +763,7 @@ function ModelPanel({
           >
             {rows.map((item, i) => {
               const name = modelDisplayName(item.model);
+              const iconHarness = modelIconHarness(item.model.value);
               // A name the list holds twice is only told apart by the provider behind it.
               const providerName = shared.get(item.group.harness.id)?.has(name.toLowerCase())
                 ? modelProviderOf(item.model.value)
@@ -793,9 +795,11 @@ function ModelPanel({
                       item.group.blocked && "opacity-45",
                     )}
                   >
-                    {(searching || item.section === "Favourites" || item.section === "Recent") && (
-                      <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
-                    )}
+                    <HarnessIcon
+                      id={iconHarness ?? item.group.harness.id}
+                      name={iconHarness ? undefined : item.group.harness.name}
+                      size={14}
+                    />
                     <span className="min-w-0 flex-1 truncate text-body">{name}</span>
                     <Tooltip label={`${starred ? "Unstar" : "Star"} model (⌘D / Ctrl+D)`}>
                       <button
@@ -873,8 +877,8 @@ export function filterModelRows(groups: ModelGroup[], provider: string, filter: 
         (searching
           ? matchModels(
               filter,
-              group.models.map((model) => ({ ...model, id: model.value })),
-            ).shown
+              group.models.map((model) => ({ name: modelDisplayName(model), id: model.value, model })),
+            ).shown.map(({ model }) => model)
           : group.models
         ).map((model) => ({ group, model }))
       : [],
@@ -1227,7 +1231,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const catalogName = models.find((item) => item.value === model)?.name;
   const displayName =
     catalogName && catalogName !== model
-      ? catalogName
+      ? modelTitle(catalogName)
       : modelName(usageModelId(providerId, model ?? undefined));
   const label = pillLabel(displayName, compact);
   // Why the current harness's model is not this card's to change (one that picks its own).

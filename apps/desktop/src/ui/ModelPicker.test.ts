@@ -283,7 +283,7 @@ describe("one row per model", () => {
   });
 
   test("a row with no name reads by its id", () => {
-    expect(modelDisplayName({ value: "chatgpt/gpt-6-luna", name: "  " })).toBe("chatgpt/gpt-6-luna");
+    expect(modelDisplayName({ value: "chatgpt/gpt-6-luna", name: "  " })).toBe("GPT 6 Luna");
     expect(modelDisplayName({ value: "luna", name: " GPT  6 Luna " })).toBe("GPT 6 Luna");
   });
 

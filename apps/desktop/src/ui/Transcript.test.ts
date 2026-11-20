@@ -68,23 +68,10 @@ describe("the height a row is reserved at", () => {
     expect(estimatedRowHeight({ key: "activity", activity: "Reading files" })).toBe(24);
   });
 
-  test("a live thought shows the tail a finished one drops", () => {
-    expect(estimatedRowHeight(thought("t", "one line", true))).toBe(17);
-    const live = estimatedRowHeight(thought("t", "x".repeat(110), false));
-    // A label line, its air, and the two lines of tail it has so far.
-    expect(live).toBe(25 + 2 * 17);
-    expect(estimatedRowHeight(thought("t", "x".repeat(2_000), false))).toBe(25 + 5 * 17);
-  });
-
-  test("a live thought is reserved for the text it is drawing, chunk by chunk", () => {
-    // A harness streams its thinking in pieces, and the row grows with them. The estimate grows the
-    // same amount, so the growth is the new text and never a correction on top of it.
-    const first = estimatedRowHeight(thought("t", "**Reading the request**\n", false));
-    const second = estimatedRowHeight(
-      thought("t", "**Reading the request**\nChecking which files are involved ", false),
-    );
-    expect(first).toBe(17 + 8 + 17);
-    expect(second - first).toBe(17);
+  test("keeps the height of a collapsed thought stable as its text streams", () => {
+    expect(estimatedRowHeight(thought("t", "one line", false))).toBe(17);
+    expect(estimatedRowHeight(thought("t", "x".repeat(2_000), false))).toBe(17);
+    expect(estimatedRowHeight(thought("t", "x".repeat(2_000), true))).toBe(17);
   });
 
   test("a row's estimate and its gap are the whole size it mounts at", () => {

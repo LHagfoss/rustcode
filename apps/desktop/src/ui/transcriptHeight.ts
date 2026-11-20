@@ -4,8 +4,7 @@ import type { Row } from "./Transcript";
 
 /**
  * The pieces an estimate is made of, in the sizes the rows are drawn at: a sent bubble's padding and
- * the line it sits on, the time line under it, the chips above it when it carries pictures or files,
- * and how much of a live thought's tail shows (`ThoughtRow`'s `line-clamp-5`).
+ * the line it sits on, the time line under it, and the chips above it when it carries pictures or files.
  */
 const BUBBLE_PADDING = 12;
 const BODY_LINE = 23;
@@ -16,7 +15,6 @@ const THUMBNAIL_ROW = 126;
 /** A reply's picture while it loads (ui/MarkdownMedia.tsx, 240px) and the paragraph gap after it. */
 const PICTURE_PLACEHOLDER = 256;
 const MARKDOWN_PICTURE = /!\[[^\]\n]*\]\([^)\n]+\)/g;
-const THOUGHT_TAIL_LINES = 5;
 /** The "Show full message" pill a folded bubble ends with, and its air above it. */
 const SHOW_FULL_PILL = 30;
 
@@ -41,9 +39,8 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (item.kind === "tool" || item.kind === "turnEnd") return 26;
   // The status card: a header line, then two lines a delegate.
   if (item.kind === "status") return 34 + item.rows.length * 44;
-  // A live thought shows its last lines; a finished one is its one line.
-  if (item.kind === "thought")
-    return item.done ? 17 : 25 + Math.min(THOUGHT_TAIL_LINES, lines(item.text, 55)) * 17;
+  // Thoughts start collapsed; the virtualizer measures the row when expanded.
+  if (item.kind === "thought") return 17;
   // A sent bubble: its pictures and files above it, 12px of padding each way, its text, and the
   // 22px line under it that holds the time (shown on hover, laid out always). A long one folds at
   // `COLLAPSED_MESSAGE_HEIGHT` and keeps its "Show full message" pill, so its estimate never

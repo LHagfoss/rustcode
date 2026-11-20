@@ -760,7 +760,6 @@ export const ThreadRow = memo(function ThreadRow({
   const modelMark = (model || harnessName) && (
     <span className="ml-auto flex shrink-0 items-center gap-1" title={harnessName ?? model}>
       <HarnessIcon id={session.harness || "rustcode"} name={harness?.name} size={12} className="opacity-70" />
-      {/* Normal figures: a tabular face (Inter) gives a model name's hyphens a digit's width. */}
       <span className="normal-nums">{model || harnessName}</span>
     </span>
   );
