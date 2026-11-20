@@ -47,7 +47,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, isRunning, type ThreadState } from "../state/thread";
-import { retryThread } from "../state/threadActions";
+import { retryStalledFirstMessage, retryThread } from "../state/threadActions";
 import { splitThreadKey } from "../state/threadKeys";
 import { failureHarness, turnErrorAdvice } from "../state/turnError";
 import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
@@ -526,6 +526,35 @@ function ErrorFixes({ thread }: { thread: ThreadState }) {
 }
 
 /** Where an opening thread's transcript will be: a sent message, then reply lines, twice. */
+function StalledFirstMessage({ thread }: { thread: ThreadState }) {
+  const first = thread.items.find((item) => item.kind === "user");
+  const [retrying, setRetrying] = useState(false);
+  return (
+    <LaneItem over>
+      <Callout
+        floating
+        action={
+          first && (
+            <button
+              type="button"
+              className="font-medium text-accent"
+              disabled={retrying}
+              onClick={() => {
+                setRetrying(true);
+                void retryStalledFirstMessage(thread.id, first.id).finally(() => setRetrying(false));
+              }}
+            >
+              Retry first message
+            </button>
+          )
+        }
+      >
+        The first message received no response.
+      </Callout>
+    </LaneItem>
+  );
+}
+
 function TranscriptSkeleton() {
   const reply = [96, 88, 92, 54];
   // A thread that opens quickly never shows it: it appears only after 200 ms, so it does not flash.
@@ -745,6 +774,7 @@ function NewThreadHeading({
 
 export function ChatView() {
   const selectedId = useApp((s) => s.selectedId);
+  const stalled = useApp((s) => !!s.selectedId && statusOf(s, s.selectedId) === "stalled");
   const projectCwd = useApp((s) => s.projectCwd);
   const pending = useApp((s) => s.pendingSetup);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
@@ -983,6 +1013,7 @@ export function ChatView() {
                   showTip={height >= NEW_THREAD_WIDGETS_MIN_HEIGHT}
                 />
               )}
+              {stalled && thread && !offline && <StalledFirstMessage thread={thread} />}
               {thread && offline && (
                 <LaneItem over>
                   <Callout floating>

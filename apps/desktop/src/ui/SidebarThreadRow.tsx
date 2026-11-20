@@ -691,7 +691,8 @@ export const ThreadRow = memo(function ThreadRow({
   // (state/sidebarRows.ts `rowStatus`).
   const chip = rowStatus({
     request,
-    running,
+    running: running || status === "running",
+    stalled: status === "stalled",
     // A settled thread is done by the user's word: what it handed out may still run, but the row
     // does not say it waits (it would read as work the user has to come back to).
     waiting: status !== "done" && wait ? { label: waitingLabel(wait), title: waitingTitle(wait) } : undefined,

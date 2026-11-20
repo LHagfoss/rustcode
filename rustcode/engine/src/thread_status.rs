@@ -1,5 +1,5 @@
 //! Thread status (`docs/orchestrator.md`, *Thread status*):
-//! `idle | running | needs_input | review | done`.
+//! `idle | running | needs_input | stalled | review | done`.
 //!
 //! `running` and `needs_input` are derived from what the engine is doing now
 //! and never stored: a [`TurnGuard`] marks a turn, a [`WaitGuard`] an
@@ -27,6 +27,7 @@ pub(crate) enum Status {
     Idle,
     Running,
     NeedsInput,
+    Stalled,
     Review,
     Done,
 }
@@ -37,6 +38,7 @@ impl Status {
             Self::Idle => "idle",
             Self::Running => "running",
             Self::NeedsInput => "needs_input",
+            Self::Stalled => "stalled",
             Self::Review => "review",
             Self::Done => "done",
         }
@@ -80,7 +82,10 @@ fn stored(session_id: &str) -> Option<Status> {
     let dir = crate::config::get_active_session_dir(session_id)?;
     let text = std::fs::read_to_string(dir.join(STATUS_FILE)).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
-    Status::storable(value.get("status")?.as_str()?)
+    match value.get("status")?.as_str()? {
+        "stalled" => Some(Status::Stalled),
+        status => Status::storable(status),
+    }
 }
 
 fn store(session_id: &str, status: Status) -> Result<(), String> {
@@ -142,6 +147,10 @@ pub(crate) fn start_watching() {
 
 /// The thread's status now.
 pub(crate) fn current(session_id: &str) -> Status {
+    snapshot(session_id).0
+}
+
+pub(crate) fn snapshot(session_id: &str) -> (Status, bool) {
     watched()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -155,15 +164,54 @@ pub(crate) fn current(session_id: &str) -> Status {
     // Settling is an explicit decision even when the agent's final turn is still running.
     // Keep execution liveness separate (`is_active`) so this does not cancel that turn.
     let stored = stored(session_id);
-    if stored == Some(Status::Done) {
-        return Status::Done;
-    }
-    if live.waits > 0 {
+    let working = live.turns > 0 || live.waits > 0;
+    let status = if stored == Some(Status::Done) {
+        Status::Done
+    } else if live.waits > 0 {
         Status::NeedsInput
     } else if live.turns > 0 {
         Status::Running
     } else {
-        stored.unwrap_or(Status::Idle)
+        stored.unwrap_or_else(|| {
+            if unanswered_first_prompt(session_id) {
+                Status::Stalled
+            } else {
+                Status::Idle
+            }
+        })
+    };
+    (status, working)
+}
+
+pub(crate) const FIRST_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Older engines left only the user message if an external harness never answered.
+fn unanswered_first_prompt(session_id: &str) -> bool {
+    let Some(dir) = crate::config::get_active_session_dir(session_id) else {
+        return false;
+    };
+    let old_enough = dir
+        .join("history.json")
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age >= FIRST_RESPONSE_TIMEOUT);
+    old_enough
+        && crate::harness::store::load(session_id).is_some_and(|record| {
+            record.harness != crate::harness::BUILTIN_ID && record.usage.is_none()
+        })
+        && has_only_first_prompt(&crate::config::load_session_history_direct(session_id))
+}
+
+pub(crate) fn has_only_first_prompt(history: &[crate::app::ChatMessage]) -> bool {
+    matches!(history, [message] if message.role == "user" && !message.content.trim().is_empty())
+}
+
+pub(crate) fn first_response_timed_out(session_id: &str) {
+    // A user can settle the thread while its turn is winding down.
+    if stored(session_id).is_none() {
+        let _ = store(session_id, Status::Stalled);
     }
 }
 
@@ -482,6 +530,21 @@ mod tests {
         assert_eq!(current(&id), Status::Done);
         set(&id, "idle").unwrap();
         assert_eq!(current(&id), Status::Idle);
+    }
+
+    #[test]
+    fn first_response_timeout_stops_working_and_can_be_retried() {
+        let id = crate::config::create_detached_session();
+        let first_turn = turn(&id);
+        assert_eq!(snapshot(&id), (Status::Running, true));
+        first_response_timed_out(&id);
+        drop(first_turn);
+        assert_eq!(snapshot(&id), (Status::Stalled, false));
+
+        let retry = turn(&id);
+        assert_eq!(snapshot(&id), (Status::Running, true));
+        drop(retry);
+        assert_eq!(snapshot(&id), (Status::Idle, false));
     }
 
     #[test]
