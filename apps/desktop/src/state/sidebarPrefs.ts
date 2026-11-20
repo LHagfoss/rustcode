@@ -12,35 +12,32 @@ export const PREF = {
   folded: "rustcode.sidebar.folded",
   density: "rustcode.sidebar.density",
   toolbar: "rustcode.sidebar.toolbar",
-  sort: "rustcode.sidebar.sort",
   settleAfterDays: "rustcode.sidebar.settleAfterDays",
 } as const;
 
-/**
- * How the Threads list orders the rows nobody arranged: `activity` puts what runs, then what asks
- * you, then what came back unseen first (rows move as turns start and end); `recent` is by when
- * each thread last changed; `title` is A–Z and never moves on its own, so it is the default.
- */
-export type SidebarSort = "activity" | "recent" | "title";
+export type SidebarSort = "manual" | "activity" | "recent" | "title";
 
 export const SIDEBAR_SORTS: readonly { id: SidebarSort; label: string }[] = [
+  { id: "manual", label: "Manual" },
   { id: "title", label: "Title" },
   { id: "activity", label: "Activity" },
   { id: "recent", label: "Last updated" },
 ];
 
-/** The sort a new sidebar starts with: rows stay where they are while threads work and finish. */
-export const DEFAULT_SIDEBAR_SORT: SidebarSort = "title";
+export const DEFAULT_SIDEBAR_SORT: SidebarSort = "manual";
+let sort: SidebarSort = DEFAULT_SIDEBAR_SORT;
 
-/** A stored sort, read leniently: anything unknown is the default. */
-export function sidebarSort(raw: unknown): SidebarSort {
-  return raw === "activity" || raw === "recent" || raw === "title" ? raw : DEFAULT_SIDEBAR_SORT;
+export function sidebarSort(): SidebarSort {
+  return sort;
 }
 
-/** The sidebar's sort and its setter, shared by the toolbar's menu and ⌘K. */
+export function applySidebarSort(next: SidebarSort) {
+  sort = next;
+  for (const listener of listeners) listener();
+}
+
 export function useSidebarSort() {
-  const [raw, set] = usePref<string>(PREF.sort, DEFAULT_SIDEBAR_SORT);
-  return [sidebarSort(raw), set as (next: SidebarSort) => void] as const;
+  return [useSyncExternalStore(subscribe, sidebarSort, () => DEFAULT_SIDEBAR_SORT)] as const;
 }
 
 /** How many idle days settle a thread on its own; 0 never does. */

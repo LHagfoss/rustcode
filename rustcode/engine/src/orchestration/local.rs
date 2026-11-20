@@ -463,11 +463,12 @@ fn list_sessions(session_id: &str, args: &Value) -> Value {
             continue;
         }
         let updated = updated_at(&meta);
+        let (status, working) = crate::thread_status::snapshot(&id);
         let mut row = json!({
             "session_id": id,
             "title": meta.title.clone(),
-            "working": false,
-            "status": crate::thread_status::current(&id).as_str(),
+            "working": working,
+            "status": status.as_str(),
             "harness": crate::harness::store::load(&id)
                 .map(|record| record.harness)
                 .unwrap_or_else(|| crate::harness::BUILTIN_ID.to_owned()),
@@ -1169,10 +1170,12 @@ fn delegates(targets: &[String]) -> Value {
         .filter_map(|target| {
             let meta = crate::config::session_meta_by_id(target)?;
             let worktree = crate::worktrees::list_meta(target);
+            let (status, working) = crate::thread_status::snapshot(target);
             let mut row = json!({
                 "session_id": target,
                 "title": meta.title,
-                "status": crate::thread_status::current(target).as_str(),
+                "status": status.as_str(),
+                "working": working,
                 "project": project_of(target, &meta),
                 "pull": Value::Null,
             });

@@ -23,19 +23,25 @@ export const V2Method = {
 
 // ---------------------------------------------------------------- status
 
-export type ThreadStatus = "idle" | "running" | "needs_input" | "review" | "done";
+export type ThreadStatus = "idle" | "running" | "needs_input" | "stalled" | "review" | "done";
 
 export const STATUS_LABEL: Record<ThreadStatus, string> = {
   idle: "Idle",
   running: "Running",
   needs_input: "Needs input",
+  stalled: "Stalled",
   review: "Review",
   done: "Settled",
 };
 
 export function parseStatus(value: unknown): ThreadStatus | undefined {
   const s = str(value);
-  return s === "idle" || s === "running" || s === "needs_input" || s === "review" || s === "done"
+  return s === "idle" ||
+    s === "running" ||
+    s === "needs_input" ||
+    s === "stalled" ||
+    s === "review" ||
+    s === "done"
     ? s
     : undefined;
 }

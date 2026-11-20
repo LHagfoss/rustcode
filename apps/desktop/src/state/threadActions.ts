@@ -15,8 +15,7 @@ import type { InboxItem } from "./inbox";
 import { dismissRows, restoreRows } from "./inboxDismissed";
 import { forgetThreadOutbox, queueChange } from "./machineOutbox";
 import { forget } from "./orchestration";
-import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
-import { PREF, type SidebarSort, writePref } from "./sidebarPrefs";
+import { keepThreads, rememberOrder, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import {
   type AppState,
   applySnooze,
@@ -44,8 +43,8 @@ import {
   without,
 } from "./store";
 import { isRunning, localId, messagesAfter, type ThreadState, truncateBefore, userIndexOf } from "./thread";
-import { splitThreadKey } from "./threadKeys";
-import { clearStatusMark } from "./threadStatus";
+import { isRemoteThread, splitThreadKey } from "./threadKeys";
+import { clearStatusMark, statusOf } from "./threadStatus";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
 // while this one loads.
@@ -65,7 +64,12 @@ export function canRewind(thread: ThreadState): boolean {
   return !!get().agent?.rewind && (thread.harness?.capabilities.rewind ?? true) && !isRunning(thread);
 }
 
-export async function rewindTo(id: string, itemId: string, text: string): Promise<boolean> {
+export async function rewindTo(
+  id: string,
+  itemId: string,
+  text: string,
+  firstOnly = false,
+): Promise<boolean> {
   const thread = get().threads[id];
   if (!thread) return false;
   const userIndex = userIndexOf(thread, itemId);
@@ -73,13 +77,27 @@ export async function rewindTo(id: string, itemId: string, text: string): Promis
   try {
     const conn = connectionForThread(id);
     if (!conn) throw new Error("That computer is not connected.");
-    await conn.request(Method.rewind, { sessionId: splitThreadKey(id).id, userIndex, text }, 10_000);
+    await conn.request(
+      Method.rewind,
+      { sessionId: splitThreadKey(id).id, userIndex, text, ...(firstOnly && { firstOnly }) },
+      10_000,
+    );
   } catch (error) {
     toast(`Could not rewind: ${errorText(error)}`, "error");
     return false;
   }
   updateThread(id, (t) => truncateBefore(t, itemId));
   return true;
+}
+
+/** Resend a stalled first message after the owner verifies it is still the only message. */
+export async function retryStalledFirstMessage(id: string, itemId: string) {
+  const state = get();
+  if (statusOf(state, id) !== "stalled") return;
+  const item = state.threads[id]?.items.find((item) => item.id === itemId);
+  if (item?.kind !== "user" || !(await rewindTo(id, itemId, item.text, true))) return;
+  const attachments = pastesOf(item.attachments, item.text);
+  await runPrompt(id, item.text, { ...emptyExtras, attachments });
 }
 
 /** Retry: the thread goes back to just before the message and sends it again (after a confirm when later messages go too). */
@@ -280,12 +298,17 @@ export function setSectionOrder(key: string, ids: string[]) {
   store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
 }
 
-/** Applying a sort replaces manual project and thread arrangements, even for the current sort. */
-export function applySidebarSort(sort: SidebarSort) {
-  const sidebarOrder = {};
-  set({ sidebarOrder });
-  store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
-  writePref(PREF.sort, sort);
+/** Remember newly seen rows while retaining positions for currently hidden rows. */
+export function rememberSidebarOrder(seen: SidebarOrder) {
+  const before = get().sidebarOrder;
+  let next = before;
+  for (const [key, ids] of Object.entries(seen)) {
+    const order = rememberOrder(before[key], ids, key !== "projects");
+    if (!order.length || order === before[key]) continue;
+    if (next === before) next = { ...before };
+    next[key] = order;
+  }
+  saveSidebarOrder(next, before);
 }
 
 /** The arrangement, written only when it changed (`state/sidebarOrder.ts`). */
@@ -311,7 +334,7 @@ export function forgetSidebarOrder(ids: readonly string[]) {
 export function pruneSidebarOrder(known: readonly string[]) {
   const ids = new Set(known);
   saveSidebarOrder(
-    keepThreads(get().sidebarOrder, (id) => ids.has(id)),
+    keepThreads(get().sidebarOrder, (id) => isRemoteThread(id) || ids.has(id)),
     get().sidebarOrder,
   );
 }
