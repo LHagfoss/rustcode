@@ -172,6 +172,7 @@ export interface RowStatusRead {
   waiting?: { label: string; title: string };
   /** Its last turn failed while the row was not open. */
   failed?: boolean;
+  stalled?: boolean;
   /** Its last turn finished while the row was not open, and it has not been opened since. */
   fresh?: boolean;
   /** The thread is listed as waiting for review. */
@@ -196,6 +197,8 @@ export function rowStatus(read: RowStatusRead): RowStatus | undefined {
     };
   }
   if (read.running) return { kind: "working", label: "Working" };
+  if (read.stalled)
+    return { kind: "failed", label: "Stalled", title: "The first message received no response" };
   if (read.waiting) {
     const waiting = read.waiting;
     return {

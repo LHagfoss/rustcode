@@ -55,9 +55,10 @@ export function statusOf(s: AppState, id: string): ThreadStatus {
   const t = s.threads[id];
   if (t?.permissions.length) return "needs_input";
   if (isRunning(t)) return "running";
+  const listed = sessionById(s, id)?.status;
+  if (listed === "stalled") return listed;
   // The engine's list says it works and this window has no turn for it (`reconcileRunState`).
   if (s.engineRunning[id]) return "running";
-  const listed = sessionById(s, id)?.status;
   // A remote turn belongs to its owner, even if this window never sent a
   // prompt or missed its activity notification before subscribing.
   if (threadIsRemote(id) && connectionForThread(id) && engineBusy(listed)) return listed as ThreadStatus;

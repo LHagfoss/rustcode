@@ -18,7 +18,7 @@ import { useClock } from "../lib/useNow";
 import type { StackAgent } from "../state/agentStack";
 import { type BranchRow, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
-import { type DelegateOrigin, detachedDelegates, originFrom, sameProject } from "../state/delegateOrigin";
+import { type DelegateOrigin, detachedDelegates, originFrom } from "../state/delegateOrigin";
 import { sessionsListed } from "../state/engine";
 import { addDroppedFolders } from "../state/folders";
 import { stateOf } from "../state/host";
@@ -1182,10 +1182,9 @@ export function Sidebar() {
     window.addEventListener("pointerup", up);
   };
 
-  const rowFor = (s: SessionSummary, grouped: boolean, hint = true, nested = false) => (
+  const rowFor = (s: SessionSummary, hint = true, nested = false) => (
     <ThreadRow
       session={s}
-      grouped={grouped}
       selected={!loopsOpen && s.id === selectedId}
       context={!loopsOpen && s.id === contextSelected && s.id !== selectedId}
       // A row being dragged shows no hover card and takes no pointer.
@@ -1205,23 +1204,20 @@ export function Sidebar() {
   );
   // The open delegate and its descendants, each an indented row under the one above it. The last
   // one drawn under a row is kept while it folds away (`OpenChild` holds it for the animation).
-  const openBelow = (parentId: string, grouped: boolean, depth = 0): React.ReactNode => {
+  const openBelow = (parentId: string, depth = 0): React.ReactNode => {
     const sub = subOf.get(parentId);
     const current = sub ? byId.get(sub.id) : undefined;
     if (current && sub) lastSubs.current.set(parentId, current);
     const child = current ?? lastSubs.current.get(parentId);
     if (!child || depth > 8) return null;
-    // A delegate in another project than the heading it hangs under names its own project.
-    const above = byId.get(parentId);
-    const ownHeading = grouped && (!above || sameProject(child, above));
     return (
       <OpenChild
-        row={current ? rowFor(current, ownHeading, false, true) : null}
-        deeper={openBelow(child.id, ownHeading, depth + 1)}
+        row={current ? rowFor(current, false, true) : null}
+        deeper={openBelow(child.id, depth + 1)}
       />
     );
   };
-  const rows = (items: SessionSummary[], grouped: boolean) => (
+  const rows = (items: SessionSummary[]) => (
     <div className={cx("flex flex-col", !compact && "gap-0.5")}>
       {items.map((s) => (
         <Fragment key={s.id}>
@@ -1233,12 +1229,12 @@ export function Sidebar() {
               compact={compact}
             />
           ) : (
-            rowFor(s, grouped)
+            rowFor(s)
           )}
-          {openBelow(s.id, grouped)}
+          {openBelow(s.id)}
           <BranchRows
             under={branchesUnder(s.id)}
-            render={(kid) => rowFor(kid, grouped, false)}
+            render={(kid) => rowFor(kid, false)}
             onMore={() => setAllBranches((prev) => new Set(prev).add(s.id))}
           />
         </Fragment>
@@ -1372,15 +1368,13 @@ export function Sidebar() {
                                 />
                                 {/* Only delegates are indented; project threads keep the full row width. */}
                                 <Fold open={projectOpen}>
-                                  <div className={cx(!compact && "pt-0.5")}>{rows(p.items, true)}</div>
+                                  <div className={cx(!compact && "pt-0.5")}>{rows(p.items)}</div>
                                 </Fold>
                               </div>
                             );
                           })
                         : rows(
                             section.id === "settled" ? section.items.slice(0, settledLimit) : section.items,
-                            // Under its project's heading the row drops the mark and the name.
-                            !!section.projects,
                           )}
                       {section.id === "settled" && section.items.length > settledLimit && (
                         <button

@@ -474,8 +474,9 @@ pub(crate) async fn run_prompt(
                 });
             }
         };
-        let is_first_prompt = {
+        let (is_first_prompt, first_response) = {
             let mut state = state.lock().await;
+            let first_response = state.history.is_empty();
             let is_first = !crate::config::session_has_content(&state.history)
                 && crate::config::load_session_title(&session_id).is_none()
                 && crate::app::actions::wants_generated_title(&text);
@@ -484,7 +485,10 @@ pub(crate) async fn run_prompt(
             if let Some(message) = state.history.last_mut() {
                 message.origin = origin.clone();
             }
-            is_first
+            if first_response {
+                crate::config::save_session_history(&session_id, &state.history);
+            }
+            (is_first, first_response)
         };
         if is_first_prompt {
             spawn_session_title(&state, &client, &clients, &session_id, &text);
@@ -518,6 +522,7 @@ pub(crate) async fn run_prompt(
             &session_id,
             &mut event_stream,
             remote.as_ref(),
+            first_response,
         )
         .await?;
 
@@ -799,6 +804,7 @@ async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
     session_id: &str,
     event_stream: &mut AcpEventStream,
     remote: Option<&super::remote::RemoteManager>,
+    first_response: bool,
 ) -> Result<crate::network::TurnContext, agent_client_protocol::Error> {
     forward_prompt_run(
         crate::network::ui_adapter::run_agent_turn_with_events_for_acp(
@@ -817,6 +823,7 @@ async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
         state,
         cancel_token,
         remote,
+        first_response,
     )
     .await
 }
@@ -854,6 +861,7 @@ async fn run_prompt_continuation<P: crate::network::policy::TurnPolicy + 'static
         state,
         cancel_token,
         remote,
+        false,
     )
     .await
 }
@@ -867,18 +875,39 @@ async fn forward_prompt_run<F>(
     state: &Arc<Mutex<crate::app::AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     remote: Option<&super::remote::RemoteManager>,
+    mut first_response: bool,
 ) -> Result<crate::network::TurnContext, agent_client_protocol::Error>
 where
     F: std::future::Future<Output = crate::network::TurnContext>,
 {
+    use crate::network::AgentUiEvent;
     let mut run = Box::pin(run);
+    let deadline = tokio::time::sleep(crate::thread_status::FIRST_RESPONSE_TIMEOUT);
+    tokio::pin!(deadline);
+    let mut timed_out = false;
     let mut title_tracker = SessionTitleTracker::new(crate::config::load_session_title(session_id));
     let asked = super::questions::AskedQuestions::default();
     let context = loop {
         tokio::select! {
             context = &mut run => break context,
+            () = &mut deadline, if timed_out || (first_response && !cancel_token.is_cancelled()) => {
+                if timed_out {
+                    break crate::network::TurnContext::default();
+                }
+                timed_out = true;
+                cancel_token.cancel();
+                deadline.as_mut().reset(tokio::time::Instant::now() + std::time::Duration::from_secs(5));
+            }
             event = receiver.recv() => {
                 let Some(event) = event else { continue };
+                if matches!(&event, AgentUiEvent::TextDelta { text } if !text.is_empty())
+                    || matches!(&event, AgentUiEvent::ToolStarted { .. }
+                        | AgentUiEvent::ApprovalRequested { .. }
+                        | AgentUiEvent::QuestionRequested { .. }
+                        | AgentUiEvent::RoundCompleted { .. })
+                {
+                    first_response = false;
+                }
                 let abort_background = matches!(
                     &event,
                     crate::network::AgentUiEvent::Cancelled { ..}
@@ -909,6 +938,11 @@ where
             }
         }
     };
+    if timed_out {
+        crate::thread_status::first_response_timed_out(session_id);
+        return Err(agent_client_protocol::Error::internal_error()
+            .data("No response to the first message within two minutes."));
+    }
     while let Ok(event) = receiver.try_recv() {
         if matches!(
             &event,

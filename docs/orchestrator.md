@@ -121,10 +121,12 @@ are untouched.
 
 ## Thread status
 
-`_meta.rustcode.status` on a thread: `"idle" | "running" | "needs_input" | "review" | "done"`.
+`_meta.rustcode.status` on a thread: `"idle" | "running" | "needs_input" | "stalled" | "review" | "done"`.
 
 - `running` while a turn runs, `needs_input` while it waits on an approval or
   question (engine-derived, not stored).
+- `stalled` marks a saved first message that did not receive a response.
+  The desktop offers to retry the first message in the same thread.
 - `review` and `done` are set by the user or automatically, and stored with the
   thread: `_rustcode/session/status` `{ "session_id", "status": "review" | "done" | "idle" }` → `{}`.
 - A thread whose worktree branch has a PR that merges becomes `done`

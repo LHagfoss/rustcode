@@ -653,8 +653,6 @@ export const ThreadRow = memo(function ThreadRow({
   onClearSelection?: () => void;
   /** The sidebar's compact density: one line, the rest on the hover card. */
   compact?: boolean;
-  /** Under its project's heading. The row names its computer either way. */
-  grouped?: boolean;
 }) {
   const host = useMachines((s) => s.machines.find((m) => m.id === session.host));
   const machine = host ? machineName(host) : undefined;
@@ -693,7 +691,8 @@ export const ThreadRow = memo(function ThreadRow({
   // (state/sidebarRows.ts `rowStatus`).
   const chip = rowStatus({
     request,
-    running,
+    running: running || status === "running",
+    stalled: status === "stalled",
     // A settled thread is done by the user's word: what it handed out may still run, but the row
     // does not say it waits (it would read as work the user has to come back to).
     waiting: status !== "done" && wait ? { label: waitingLabel(wait), title: waitingTitle(wait) } : undefined,

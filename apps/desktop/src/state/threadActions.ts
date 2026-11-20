@@ -44,7 +44,7 @@ import {
 } from "./store";
 import { isRunning, localId, messagesAfter, type ThreadState, truncateBefore, userIndexOf } from "./thread";
 import { isRemoteThread, splitThreadKey } from "./threadKeys";
-import { clearStatusMark } from "./threadStatus";
+import { clearStatusMark, statusOf } from "./threadStatus";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
 // while this one loads.
@@ -64,7 +64,12 @@ export function canRewind(thread: ThreadState): boolean {
   return !!get().agent?.rewind && (thread.harness?.capabilities.rewind ?? true) && !isRunning(thread);
 }
 
-export async function rewindTo(id: string, itemId: string, text: string): Promise<boolean> {
+export async function rewindTo(
+  id: string,
+  itemId: string,
+  text: string,
+  firstOnly = false,
+): Promise<boolean> {
   const thread = get().threads[id];
   if (!thread) return false;
   const userIndex = userIndexOf(thread, itemId);
@@ -72,13 +77,27 @@ export async function rewindTo(id: string, itemId: string, text: string): Promis
   try {
     const conn = connectionForThread(id);
     if (!conn) throw new Error("That computer is not connected.");
-    await conn.request(Method.rewind, { sessionId: splitThreadKey(id).id, userIndex, text }, 10_000);
+    await conn.request(
+      Method.rewind,
+      { sessionId: splitThreadKey(id).id, userIndex, text, ...(firstOnly && { firstOnly }) },
+      10_000,
+    );
   } catch (error) {
     toast(`Could not rewind: ${errorText(error)}`, "error");
     return false;
   }
   updateThread(id, (t) => truncateBefore(t, itemId));
   return true;
+}
+
+/** Resend a stalled first message after the owner verifies it is still the only message. */
+export async function retryStalledFirstMessage(id: string, itemId: string) {
+  const state = get();
+  if (statusOf(state, id) !== "stalled") return;
+  const item = state.threads[id]?.items.find((item) => item.id === itemId);
+  if (item?.kind !== "user" || !(await rewindTo(id, itemId, item.text, true))) return;
+  const attachments = pastesOf(item.attachments, item.text);
+  await runPrompt(id, item.text, { ...emptyExtras, attachments });
 }
 
 /** Retry: the thread goes back to just before the message and sends it again (after a confirm when later messages go too). */
