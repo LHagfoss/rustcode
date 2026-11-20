@@ -495,6 +495,11 @@ export interface UsagePlan {
   status: PlanStatus;
   /** The tier the provider named ("max"). */
   plan?: string;
+  /**
+   * Short opaque hash of the provider's stable account identifier (zero PII),
+   * used to recognize the same subscription across paired machines.
+   */
+  fingerprint?: string;
   error?: string;
   /** Why an `unavailable` row has no numbers; absent from engines before this. */
   reason?: PlanFailure;
@@ -564,6 +569,7 @@ export function parsePlans(result: Json | undefined): UsagePlan[] {
         account: str(o.account),
         status: status as PlanStatus,
         plan: str(o.plan),
+        fingerprint: str(o.fingerprint),
         error: str(o.error),
         reason: planFailure(o.reason),
         asOf: read ? read * 1000 : undefined,
