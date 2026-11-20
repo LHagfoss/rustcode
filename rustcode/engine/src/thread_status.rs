@@ -385,6 +385,18 @@ pub(crate) fn set_pinned(session_id: &str, pinned: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Tell every connected client about one thread's change, as a status or pin
+/// change is told: an engine-side rename (issue 4094).
+pub(crate) fn announce(session_id: &str, update: SessionUpdate) {
+    if let Some(notify) = notifier()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+    {
+        notify(session_id.to_owned(), update);
+    }
+}
+
 /// The `session_info_update` that tells the client a pin changed.
 pub(crate) fn pin_update(pinned: bool) -> SessionUpdate {
     SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().meta(serde_json::Map::from_iter([(

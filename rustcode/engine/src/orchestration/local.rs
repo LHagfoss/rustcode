@@ -111,6 +111,8 @@ pub(crate) async fn answer_json_with_asker(
             super::local_threads::fan_out(session_id, args, asker.as_ref(), cancel).await
         }
         super::UPDATE_SESSION => update_own_session(session_id, args),
+        super::THREAD_USAGE => thread_usage(session_id, args),
+        super::QUERY_DATA => query_data(args),
         super::MERGE_WHEN_GREEN => {
             super::local_merge::answer(session_id, args, asker, cancel).await
         }
@@ -134,21 +136,126 @@ fn app_required(name: &str) -> Value {
     } else {
         "answer it"
     };
+    let instead = cli_instead(name)
+        .map(|command| format!(" On this machine `{command}` answers it from a shell."))
+        .unwrap_or_default();
     error(
         "unavailable",
         format!(
-            "{name} needs the RustCode app open to {verb}; this thread runs on a machine whose app is not attached. Open the RustCode app and retry. Nothing was sent."
+            "{name} needs the RustCode app open to {verb}; this thread runs on a machine whose app is not attached. Open the RustCode app and retry.{instead} Nothing was sent."
         ),
     )
 }
 
+/// The shell command that answers a tool's question without the app, for the
+/// tools the engine still cannot answer itself (issue 4094).
+fn cli_instead(name: &str) -> Option<&'static str> {
+    Some(match name {
+        super::LIST_WORKTREES => "rc worktree list",
+        super::WORKTREE_STATUS => "rc worktree status <path>",
+        super::READ_ACTIVITY => {
+            "rc data query \"SELECT * FROM operational_events WHERE thread_id = '<id>' ORDER BY at\""
+        }
+        super::LIST_PULL_REQUESTS => "gh pr list",
+        _ => return None,
+    })
+}
+
+/// `thread_usage` from this machine's data store, read as `rc usage` reads it
+/// and scoped as the app scopes it: every project while "Let agents read
+/// threads in other projects" is on, else only the caller's (issue 4094).
+fn thread_usage(session_id: &str, args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    let text = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let asked = text("project");
+    let (project, scope) = if read_across_projects() {
+        let scope = if asked.is_some() {
+            "this project"
+        } else {
+            "every project"
+        };
+        (asked, scope)
+    } else {
+        let own = crate::config::session_meta_by_id(session_id)
+            .map(|meta| project_of(session_id, &meta))
+            .filter(|own| !own.is_empty());
+        let refused = || {
+            error(
+                "not_allowed",
+                "reading usage across projects is off; turn on “Let agents read threads in other projects” in Settings › Orchestration",
+            )
+        };
+        let Some(own) = own else {
+            return refused();
+        };
+        if asked.is_some_and(|asked| clean_path(&asked) != own) {
+            return refused();
+        }
+        (Some(own), "this project")
+    };
+    let request = crate::acp::data::DataUsageRequest {
+        since: text("since"),
+        group_by: text("group_by"),
+        project,
+    };
+    match crate::acp::data::usage(request) {
+        Ok(mut answer) => {
+            if let Some(object) = answer.as_object_mut() {
+                object.insert("scope".to_owned(), json!(scope));
+            }
+            answer
+        }
+        Err(why) => error("failed", format!("the data store did not answer: {why}")),
+    }
+}
+
+/// `query_data` from this machine's data store, through the guards
+/// `rc data query` uses. SQL cannot be narrowed to one project, so it needs
+/// the cross-project setting, as in the app (issue 4094).
+fn query_data(args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    if !read_across_projects() {
+        return error(
+            "not_allowed",
+            "SQL reads every project, so it needs “Let agents read threads in other projects” in Settings › Orchestration",
+        );
+    }
+    let request = crate::acp::data::DataQueryRequest {
+        sql: args
+            .get("sql")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        limit: args
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|limit| u32::try_from(limit).unwrap_or(u32::MAX)),
+    };
+    match crate::acp::data::query(request) {
+        Ok(answer) => answer,
+        Err(why) => error("failed", format!("the data store did not answer: {why}")),
+    }
+}
+
 /// `update_session` on the caller's own thread: its status and pin, stored in
 /// the thread's folder and told to every client (`thread_status`). This is
-/// how an agent settles itself on a machine whose app is not the host. A
-/// title, a read mark or a snooze needs the app: in a call that also sets the
-/// status or pin they are skipped and named in `not_applied` (issue 3921), and
-/// on their own the call fails naming them. Another thread (which asks the
-/// user first) still needs the app, and then nothing is changed.
+/// how an agent settles itself on a machine whose app is not the host. Its
+/// title is saved here too (issue 4094), unless the user named the thread,
+/// which keeps their name as the app does (issue 3599). A read mark or a
+/// snooze needs the app: in a call that also sets the status, pin or title
+/// they are skipped and named in `not_applied` (issue 3921), and on their own
+/// the call fails naming them. Another thread (which asks the user first)
+/// still needs the app, and then nothing is changed.
 fn update_own_session(session_id: &str, args: &Value) -> Value {
     if let Err(remote) = local_machine(args) {
         return remote;
@@ -162,17 +269,34 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
         return app_required(super::UPDATE_SESSION);
     }
     let given = |key: &str| !matches!(args.get(key), None | Some(Value::Null));
-    let not_applied: Vec<&str> = ["title", "unread"]
+    let new_title = args
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+    let not_applied: Vec<&str> = given("unread")
+        .then_some("unread")
         .into_iter()
-        .filter(|key| given(key))
         .chain(
             args.get("snoozed_until")
                 .is_some()
                 .then_some("snoozed_until"),
         )
         .collect();
-    if !not_applied.is_empty() && !given("status") && !given("pinned") {
+    if !not_applied.is_empty() && !given("status") && !given("pinned") && new_title.is_none() {
         return app_only_fields(&not_applied);
+    }
+    let title_kept = new_title.is_some() && user_titled(session_id);
+    if let Some(title) = new_title
+        && !title_kept
+    {
+        crate::config::save_session_title(session_id, title);
+        crate::thread_status::announce(
+            session_id,
+            agent_client_protocol::schema::v1::SessionUpdate::SessionInfoUpdate(
+                agent_client_protocol::schema::v1::SessionInfoUpdate::new().title(title.to_owned()),
+            ),
+        );
     }
     if let Some(pinned) = args.get("pinned").and_then(Value::as_bool)
         && let Err(why) = crate::thread_status::set_pinned(session_id, pinned)
@@ -192,8 +316,9 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
     {
         return error("failed", why);
     }
-    let title = crate::config::session_meta_by_id(session_id).map(|meta| meta.title);
-    json!({
+    let title = crate::config::load_session_title(session_id)
+        .or_else(|| crate::config::session_meta_by_id(session_id).map(|meta| meta.title));
+    let mut answer = json!({
         "session_id": session_id,
         "title": title,
         "pinned": crate::thread_status::pinned(session_id),
@@ -203,7 +328,19 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
         "running": crate::thread_status::is_running(session_id),
         "snoozed_until": Value::Null,
         "not_applied": not_applied,
-    })
+    });
+    if title_kept {
+        answer["title_kept"] = json!("The user named this thread, so its title stays as it is.");
+    }
+    answer
+}
+
+/// Whether the user named the thread themselves: the engine's record of a
+/// `/change_title`, or the marker the app leaves beside it on a rename.
+fn user_titled(session_id: &str) -> bool {
+    crate::config::session_user_titled(session_id)
+        || crate::config::get_active_session_dir(session_id)
+            .is_some_and(|dir| dir.join("user-titled").exists())
 }
 
 /// The refusal for a call that sets only what needs the app, naming it.
@@ -213,7 +350,7 @@ fn app_only_fields(fields: &[&str]) -> Value {
     error(
         "unavailable",
         format!(
-            "{name} cannot set {fields} without the RustCode app attached to this machine; status and pinned work without it. Nothing was changed."
+            "{name} cannot set {fields} without the RustCode app attached to this machine; status, pinned and title work without it. Nothing was changed."
         ),
     )
 }
@@ -1551,31 +1688,101 @@ mod tests {
         )
         .await;
         assert_eq!(answer["status"], "idle", "{answer}");
-        // A rename with a settle settles, and names the title it skipped.
+        // A read mark with a settle settles, and names the mark it skipped.
         let answer = answer_json(
             &caller,
             &CancellationToken::new(),
             super::super::UPDATE_SESSION,
-            &json!({"title": "renamed", "status": "settled"}),
+            &json!({"unread": true, "status": "settled"}),
         )
         .await;
         assert_eq!(answer["status"], "done", "{answer}");
-        assert_eq!(answer["not_applied"], json!(["title"]), "{answer}");
+        assert_eq!(answer["not_applied"], json!(["unread"]), "{answer}");
         assert_eq!(
             crate::thread_status::current(&caller),
             crate::thread_status::Status::Done
         );
-        // A rename on its own fails, naming the field.
+        // A read mark on its own fails, naming the field.
         let answer = answer_json(
             &caller,
             &CancellationToken::new(),
             super::super::UPDATE_SESSION,
-            &json!({"title": "renamed"}),
+            &json!({"unread": true}),
         )
         .await;
         assert_eq!(answer["error"]["code"], "unavailable", "{answer}");
         let message = answer["error"]["message"].as_str().unwrap_or("");
-        assert!(message.contains("title"), "{message}");
+        assert!(message.contains("unread"), "{message}");
+    }
+
+    /// A thread names itself without the app (issue 4094), and a name the
+    /// user chose stays (issue 3599).
+    #[tokio::test]
+    async fn a_thread_renames_itself_without_the_app_unless_the_user_named_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = super::super::local_threads::test_thread(dir.path());
+        let rename = |title: &str| {
+            answer_json(
+                &caller,
+                &CancellationToken::new(),
+                super::super::UPDATE_SESSION,
+                &json!({"title": title}),
+            )
+        };
+        let answer = rename("  Local data tools  ").await;
+        assert!(answer.get("error").is_none(), "{answer}");
+        assert_eq!(answer["title"], "Local data tools", "{answer}");
+        assert_eq!(answer["not_applied"], json!([]), "{answer}");
+        assert_eq!(
+            crate::config::load_session_title(&caller).as_deref(),
+            Some("Local data tools")
+        );
+        crate::config::save_user_session_title(&caller, "Mine");
+        let answer = rename("Agent name").await;
+        assert_eq!(answer["title"], "Mine", "{answer}");
+        assert!(answer["title_kept"].is_string(), "{answer}");
+        assert_eq!(
+            crate::config::load_session_title(&caller).as_deref(),
+            Some("Mine")
+        );
+    }
+
+    /// `thread_usage` and `query_data` read this machine's store without the
+    /// app (issue 4094), under the app's cross-project rule.
+    #[tokio::test]
+    async fn usage_and_queries_answer_without_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = super::super::local_threads::test_thread(dir.path());
+        let call = |name: &'static str, args: Value| {
+            let caller = caller.clone();
+            async move { answer_json(&caller, &CancellationToken::new(), name, &args).await }
+        };
+        set_setting("read-across-projects", json!(true));
+        let usage = call(super::super::THREAD_USAGE, json!({})).await;
+        assert!(usage.get("error").is_none(), "{usage}");
+        assert_eq!(usage["scope"], "every project", "{usage}");
+        let rows = call(
+            super::super::QUERY_DATA,
+            json!({"sql": "SELECT 1 AS one", "limit": 5}),
+        )
+        .await;
+        assert!(rows.get("error").is_none(), "{rows}");
+        assert_eq!(rows["columns"], json!(["one"]), "{rows}");
+        let write = call(
+            super::super::QUERY_DATA,
+            json!({"sql": "DELETE FROM turns"}),
+        )
+        .await;
+        assert_eq!(write["error"]["code"], "failed", "{write}");
+
+        set_setting("read-across-projects", json!(false));
+        let own = call(super::super::THREAD_USAGE, json!({})).await;
+        assert_eq!(own["scope"], "this project", "{own}");
+        let other = call(super::super::THREAD_USAGE, json!({"project": "/elsewhere"})).await;
+        assert_eq!(other["error"]["code"], "not_allowed", "{other}");
+        let sql = call(super::super::QUERY_DATA, json!({"sql": "SELECT 1"})).await;
+        assert_eq!(sql["error"]["code"], "not_allowed", "{sql}");
+        set_setting("read-across-projects", json!(true));
     }
 
     #[tokio::test]
