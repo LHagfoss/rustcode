@@ -46,6 +46,24 @@ pub fn backoff_delay(attempt: u32, jitter: f64) -> Duration {
     Duration::from_secs_f64(half + half * jitter.clamp(0.0, 1.0))
 }
 
+/// The longest wait while the app is in front. Someone looking at the window
+/// is waiting on the machine; a minute of "Waiting 60 s" for a VPS that
+/// dropped for a few seconds is what made reconnecting feel stuck. Dialling
+/// every few seconds while someone watches costs nothing worth saving.
+pub const FOREGROUND_BACKOFF_MAX: Duration = Duration::from_secs(5);
+
+/// [`backoff_delay`], held to [`FOREGROUND_BACKOFF_MAX`] while the app is in
+/// front. In the background the full schedule applies, so a machine that is
+/// off is not dialled in a loop for hours.
+pub fn backoff_delay_for(attempt: u32, jitter: f64, foreground: bool) -> Duration {
+    let delay = backoff_delay(attempt, jitter);
+    if foreground {
+        delay.min(FOREGROUND_BACKOFF_MAX)
+    } else {
+        delay
+    }
+}
+
 /// The routes in the order they should be tried, with `last` — the route this
 /// machine answered on last time — moved to the front of its own class.
 ///
@@ -106,14 +124,21 @@ pub fn network_changed(before: &[IpAddr], after: &[IpAddr]) -> bool {
 pub const SILENCE_LIMIT: Duration = Duration::from_secs(75);
 
 /// How long a connected machine has to answer a ping sent after a wake from
-/// sleep or a network change: a LAN answers in milliseconds, while an overlay
-/// over a relay can take seconds on a live socket.
+/// sleep, a network change or [`IDLE_PROBE_AFTER`] of quiet: a LAN answers in
+/// milliseconds, while an overlay over a relay can take seconds on a live
+/// socket.
 pub fn answer_deadline(route: &Route) -> Duration {
     match route.kind {
         crate::registry::RouteKind::Lan => Duration::from_secs(3),
-        _ => Duration::from_secs(15),
+        _ => Duration::from_secs(10),
     }
 }
+
+/// How long a connected machine may stay quiet before the client asks it for a
+/// ping. With [`answer_deadline`] on top, a link that died without a close is
+/// noticed in about 20 s on an overlay instead of the 50 s it took when the
+/// client only asked after 35 s. A ping is a few bytes every 10 s.
+pub const IDLE_PROBE_AFTER: Duration = Duration::from_secs(10);
 
 /// How much further the wall clock may run than the monotonic one during a
 /// wait before the difference counts as sleep. Generous, so a clock that NTP
@@ -233,11 +258,33 @@ mod tests {
         );
         assert_eq!(
             answer_deadline(&Route::with_kind(RouteKind::Vpn, "100.90.27.158:17879")),
-            Duration::from_secs(15)
+            Duration::from_secs(10)
+        );
+        // A quiet overlay link is asked and judged within about 20 s.
+        assert!(
+            IDLE_PROBE_AFTER
+                + answer_deadline(&Route::with_kind(RouteKind::Vpn, "100.90.27.158:17879"))
+                <= Duration::from_secs(20)
         );
         // Silence is judged against the gateway's 30 s ping, with room for two
         // lost ones.
         assert!(SILENCE_LIMIT > Duration::from_secs(60));
+    }
+
+    #[test]
+    fn the_app_in_front_waits_at_most_five_seconds() {
+        for attempt in 0..20 {
+            for jitter in [0.0, 0.5, 1.0] {
+                let front = backoff_delay_for(attempt, jitter, true);
+                let back = backoff_delay_for(attempt, jitter, false);
+                assert!(front <= FOREGROUND_BACKOFF_MAX);
+                assert_eq!(back, backoff_delay(attempt, jitter));
+                assert!(front <= back);
+            }
+        }
+        // Early attempts are already short and keep their schedule.
+        assert_eq!(backoff_delay_for(1, 1.0, true), Duration::from_secs(2));
+        assert_eq!(backoff_delay_for(6, 1.0, false), Duration::from_secs(60));
     }
 
     #[test]

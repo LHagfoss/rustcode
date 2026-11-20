@@ -935,7 +935,9 @@ are all visible at once.
 
 The app keeps one connection per machine, retried with jittered backoff from a
 second up to a minute (reset after half a minute connected), so a machine that
-is asleep or away comes back on its own. Each attempt tries every known route —
+is asleep or away comes back on its own. While the app's window has focus the
+wait is never longer than 5 seconds: someone looking at the window is waiting
+on the machine, and the full minute applies only in the background. Each attempt tries every known route —
 the LAN, the `.local` name Bonjour gave it, every overlay address — starting
 with the route the machine answered on last time, so a dropped connection comes
 back the way it came. A change to this computer's own network (a VPN coming up
@@ -949,10 +951,11 @@ not serve this computer is not *Offline*: the chip says what it said (its
 RustCode server is not running behind the gateway, another protocol version,
 this device not allowed), the row shows the route that answered, and the app
 keeps trying, since most of these end on that machine's side. While connected,
-the app listens for the machine: nothing at all for 75 seconds (two and a half
-of the gateway's pings) is a dead link, and after a wake from sleep or a
-network change it pings the machine and reconnects if no answer comes within
-3 seconds on the LAN or 15 on an overlay. The first read of the machine list at app start is tried
+the app listens for the machine: after 10 seconds without a frame, a wake
+from sleep or a network change it pings the machine and reconnects if no
+answer comes within 3 seconds on the LAN or 10 on an overlay, so a link that
+died without a close is noticed in about 20 seconds; nothing at all for 75
+seconds is a dead link in any case. The first read of the machine list at app start is tried
 again on a doubling wait too (`state/machines.ts` `startMachines`, 1 s to
 30 s), so a shell that was still starting up does not leave every machine
 without a connection until a page is opened. A pairing that was refused is not retried:
