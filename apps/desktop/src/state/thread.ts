@@ -82,6 +82,8 @@ export type TranscriptItem =
       app?: McpApp;
       diffs: FileDiff[];
       exitCode?: number;
+      /** Where the harness saved the whole output when the row holds only a preview. */
+      fullOutput?: string;
       /** The harness's own tool name, such as Claude Code's `Agent`. */
       toolName?: string;
       /**
@@ -693,6 +695,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         diffs: update.diffs,
         output: update.output,
         exitCode: update.exitCode,
+        fullOutput: update.fullOutput,
         app: update.app,
         toolName: update.toolName,
         parent: update.parent,
@@ -707,6 +710,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           ...tool,
           toolName: tool.toolName ?? before.toolName,
           exitCode: tool.exitCode ?? before.exitCode,
+          fullOutput: tool.fullOutput ?? before.fullOutput,
           app: tool.app ?? before.app,
           parent: tool.parent ?? before.parent,
           startedAt: before.startedAt,
@@ -747,6 +751,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         app: update.app ?? item.app,
         diffs: update.diffs.length ? update.diffs : item.diffs,
         exitCode: update.exitCode ?? item.exitCode,
+        fullOutput: update.fullOutput ?? item.fullOutput,
         denial: update.denial ?? item.denial,
       };
       return { ...state, items: next };

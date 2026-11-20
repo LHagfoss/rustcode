@@ -632,6 +632,8 @@ export type SessionUpdate =
       diffs: FileDiff[];
       output?: string;
       exitCode?: number;
+      /** Where the harness saved the whole output when the row holds only a preview. */
+      fullOutput?: string;
       /** The interactive view (MCP App) the result embeds, drawn next to its text. */
       app?: McpApp;
       /** The harness's own tool name (`_meta.claudeCode.toolName`), such as `Agent`. */
@@ -652,6 +654,8 @@ export type SessionUpdate =
       app?: McpApp;
       diffs: FileDiff[];
       exitCode?: number;
+      /** Where the harness saved the whole output when the row holds only a preview. */
+      fullOutput?: string;
       parent?: string;
       /** The call's work went on in the background (Claude Code's async task marker). */
       backgrounded?: boolean;
@@ -798,6 +802,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         diffs: parseDiffs(update.content),
         output: toolOutput(update),
         exitCode: num(obj(update.rawOutput)?.exitCode),
+        fullOutput: str(meta?.fullOutputArtifact),
         app: toolCallApp(update.content),
         toolName: str(claudeMeta(update)?.toolName),
         parent: str(claudeMeta(update)?.parentToolUseId),
@@ -817,6 +822,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         app: toolCallApp(update.content),
         diffs: parseDiffs(update.content),
         exitCode: num(obj(update.rawOutput)?.exitCode),
+        fullOutput: str(meta?.fullOutputArtifact),
         parent: str(claudeMeta(update)?.parentToolUseId),
         backgrounded:
           bool(obj(obj(obj(obj(update._meta)?.jetbrains)?.air)?.asyncTasks)?.backgrounded) || undefined,
