@@ -1721,13 +1721,17 @@ mod tests {
     async fn a_thread_renames_itself_without_the_app_unless_the_user_named_it() {
         let dir = tempfile::tempdir().unwrap();
         let caller = super::super::local_threads::test_thread(dir.path());
-        let rename = |title: &str| {
-            answer_json(
-                &caller,
-                &CancellationToken::new(),
-                super::super::UPDATE_SESSION,
-                &json!({"title": title}),
-            )
+        let rename = |title: &'static str| {
+            let caller = caller.as_str();
+            async move {
+                answer_json(
+                    caller,
+                    &CancellationToken::new(),
+                    super::super::UPDATE_SESSION,
+                    &json!({"title": title}),
+                )
+                .await
+            }
         };
         let answer = rename("  Local data tools  ").await;
         assert!(answer.get("error").is_none(), "{answer}");
