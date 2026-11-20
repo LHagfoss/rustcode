@@ -4,17 +4,14 @@
 //   scroll "<css>" <dy> | move <x>,<y> |
 //   type "<text>" | press <key> [--shift] [--ctrl] [--alt] [--meta] |
 //   screenshot <file.png> | close>`:
-// one shared headless Chrome on the mock dev server at native scale, so UI checks
-// look like the app, agents do not each launch their own browser, and no window
-// ever steals the user's focus. `open --show` opens a visible window instead, for
-// a person who wants to watch; an already open window is reused in whichever mode
-// it started. `open` leaves the server and window running detached; `close` stops only those
-// two. `scripts/perf.ts` stays headless: it measures performance, not appearance.
-// `MOCK_WINDOW_CDP_PORT` and `MOCK_WINDOW_PROFILE` move this helper to another
-// port and profile, for testing the helper itself; UI checks share the one window.
+// One shared Chrome at native scale, with a tab and mock server per checkout.
+// `open --show` starts visible Chrome if the browser is not running yet.
+// `close` releases this checkout's tab and server. Chrome stays available for reuse.
+// MOCK_WINDOW_CDP_PORT and MOCK_WINDOW_PROFILE isolate tests of the helper.
 
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, existsSync, openSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -30,13 +27,11 @@ const CHROME_PATHS = [
 const chromePath =
   process.env.MOCK_WINDOW_CHROME || CHROME_PATHS.find((path) => existsSync(path)) || CHROME_PATHS[0]!;
 const envPort = Number(process.env.MOCK_WINDOW_CDP_PORT);
-const CDP_PORT = Number.isInteger(envPort) && envPort > 0 ? envPort : 9223; // fixed, so every caller finds the same window
+const CDP_PORT = Number.isInteger(envPort) && envPort > 0 ? envPort : 9223;
 const PORT_FROM = 1421; // 1420 belongs to `bun tauri dev` and its strict port
 const profile = process.env.MOCK_WINDOW_PROFILE || join(tmpdir(), "rustcode-mock-window");
-const record = `${profile}-server.json`; // per profile, so two windows keep their own server
 const cdp = `http://127.0.0.1:${CDP_PORT}`;
 const NOT_UP = "No mock window is open. Run `bun run mock-window open` first.";
-const NO_TAB = "The mock window has no tab. Run `bun run mock-window close`, then `open`.";
 const CDP_TIMEOUT = 30_000; // a wedged renderer must not hang the caller
 
 /** Keys `press` can send: the ones a check needs to move focus and submit. */
@@ -69,8 +64,8 @@ const USAGE =
 
 type Point = { x: number; y: number };
 type Flags = Map<string, string | true>;
-type Server = { pid: number; cwd: string; port: number };
-type Target = { id: string; type: string; url: string; webSocketDebuggerUrl?: string };
+type Server = { pid: number; port: number; tabId?: string };
+type Target = { id: string; type: string; webSocketDebuggerUrl?: string };
 // biome-ignore lint/suspicious/noExplicitAny: DevTools protocol results are untyped here
 type Cdp = any;
 
@@ -120,16 +115,19 @@ const cwdOf = (pid: number) =>
       ?.slice(1) ?? "",
   );
 const here = real(root);
+const checkout = createHash("sha256").update(here).digest("hex").slice(0, 16);
+const record = `${profile}-${CDP_PORT}-${checkout}.json`;
+const serverLog = `${record}.log`;
 const listener = () => Number(sh(["lsof", "-nP", `-iTCP:${CDP_PORT}`, "-sTCP:LISTEN", "-t"]).trim()) || 0;
 /** 9223 is a shared port, so a Chrome there is this helper's only by its profile. */
 const ourChrome = (pid: number) => pid > 0 && commandOf(pid).includes(`--user-data-dir=${profile}`);
 
 /** Leaves the process running after this one exits, in its own process group. */
-function detach(cmd: string[], env: Record<string, string> = {}) {
+function detach(cmd: string[], env: Record<string, string> = {}, output: number | "ignore" = "ignore") {
   const child = spawn(cmd[0]!, cmd.slice(1), {
     cwd: root,
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", output, output],
     env: { ...process.env, ...env },
   });
   child.unref();
@@ -157,58 +155,70 @@ const readRecord = async () => {
   }
 };
 
-/** Only ever stops the vite this helper spawned: a reused pid is left alone. */
-async function stopMockServer() {
-  const saved = await readRecord();
-  if (saved && alive(saved.pid)) {
-    const spawned = join(saved.cwd, "node_modules/.bin/vite");
-    const command = commandOf(saved.pid);
-    if (command.includes(spawned) && command.includes(`--port ${saved.port}`)) await stop(saved.pid);
-  }
+/** Only ever stops the Vite process started from this checkout. */
+async function stopMockServer(saved: Server | null) {
+  if (saved && ownsServer(saved.pid)) await stop(saved.pid);
   rmSync(record, { force: true });
+  rmSync(serverLog, { force: true });
 }
 
-/** Both loopback families: vite binds `localhost` on ::1, so a server of
- * another checkout on the same port went unnoticed by an IPv4-only probe. */
-function freePort() {
-  for (let port = PORT_FROM; port < PORT_FROM + 200; port++) {
-    try {
-      for (const hostname of ["127.0.0.1", "::1"])
-        Bun.listen({ hostname, port, socket: { data() {} } }).stop(true);
-      return port;
-    } catch {}
-  }
-  throw new Error(`No free port from ${PORT_FROM} up`);
+const vite = join(root, "node_modules/.bin/vite");
+const ownsServer = (pid: number) => alive(pid) && cwdOf(pid) === here && commandOf(pid).includes(vite);
+
+async function closeTab(saved: Server | null) {
+  if (!saved?.tabId || !ourChrome(listener())) return;
+  const response = await fetch(`${cdp}/json/close/${saved.tabId}`, {
+    signal: AbortSignal.timeout(CDP_TIMEOUT),
+  });
+  if (!response.ok && response.status !== 404)
+    throw new Error(`Chrome could not close the mock tab (HTTP ${response.status})`);
 }
 
-/** Reuses this checkout's server; one from another checkout would show other code. */
+async function saveRecord(server: Server) {
+  await Bun.write(record, JSON.stringify(server));
+}
+
 async function ensureServer() {
   const saved = await readRecord();
-  if (saved && alive(saved.pid) && cwdOf(saved.pid) === here) {
-    const base = `http://localhost:${saved.port}/`;
-    if (await answers(base)) return base;
+  if (saved && ownsServer(saved.pid) && (await answers(serverUrl(saved)))) return saved;
+
+  await closeTab(saved);
+  await stopMockServer(saved);
+  // Vite selects an available port and reports the one it actually bound.
+  const log = openSync(serverLog, "w", 0o600);
+  let pid: number;
+  try {
+    pid = detach(
+      [vite, "--host", "127.0.0.1", "--port", String(PORT_FROM), "--no-strictPort"],
+      {
+        VITE_TRANSPORT: "mock",
+        NO_COLOR: "1",
+      },
+      log,
+    );
+  } finally {
+    closeSync(log);
   }
-  await stopMockServer();
-  const port = freePort();
-  const base = `http://localhost:${port}/`;
-  const pid = detach([join(root, "node_modules/.bin/vite"), "--port", String(port), "--strictPort"], {
-    VITE_TRANSPORT: "mock",
-  });
-  const up = await waitFor(async () => {
-    if (!alive(pid))
-      throw new Error("The mock dev server exited. Run `bun run dev:mock` by hand to see why.");
-    return answers(base);
-  }, 60_000).catch(async (e) => {
-    await stop(pid); // do not leave a half-started server behind
-    throw e;
-  });
-  if (!up) {
+  let port = 0;
+  try {
+    const up = await waitFor(async () => {
+      const output = await Bun.file(serverLog).text();
+      if (!alive(pid)) throw new Error(output.trim() || "The mock dev server exited.");
+      port = Number(output.match(/Local:\s+http:\/\/127\.0\.0\.1:(\d+)\//)?.[1]);
+      return port > 0 && (await answers(serverUrl({ port })));
+    }, 60_000);
+    if (!up) throw new Error("The mock dev server did not start within 60 seconds.");
+    const server: Server = { pid, port };
+    await saveRecord(server);
+    return server;
+  } catch (e) {
     await stop(pid);
-    throw new Error(`The mock dev server did not answer at ${base}`);
+    rmSync(serverLog, { force: true });
+    throw e;
   }
-  await Bun.write(record, `${JSON.stringify({ pid, cwd: root, port } satisfies Server, null, 2)}\n`);
-  return base;
 }
+
+const serverUrl = ({ port }: Pick<Server, "port">) => `http://127.0.0.1:${port}/`;
 
 /** Reuses the window on 9223 if it is up, so there is only ever one. */
 async function ensureChrome(show: boolean) {
@@ -234,22 +244,13 @@ async function ensureChrome(show: boolean) {
     "about:blank",
   ];
   detach([chromePath, ...flags]);
-  if (!(await waitFor(() => answers(`${cdp}/json/version`, 500), 30_000)))
+  if (!(await waitFor(() => answers(`${cdp}/json/version`, 500), 30_000)) || !ourChrome(listener()))
     throw new Error("Chrome opened but its DevTools port never answered");
 }
 
 async function tabs() {
   if (!(await answers(`${cdp}/json/version`))) throw new Error(NOT_UP);
   return ((await (await fetch(`${cdp}/json`)).json()) as Target[]).filter((t) => t.type === "page");
-}
-
-/** The tab on the server's origin, else the first. */
-const pick = (pages: Target[], base: string) => pages.find((p) => p.url.startsWith(base)) ?? pages[0];
-
-/** The recorded server's origin, so its tab is preferred over one on anything else. */
-async function origin() {
-  const saved = await readRecord();
-  return saved ? `http://localhost:${saved.port}/` : "";
 }
 
 async function connect(url: string) {
@@ -292,18 +293,15 @@ async function connect(url: string) {
   return { send, close: () => ws.close() };
 }
 
-/** Runs fn against one tab and disconnects; only `open` tidies tabs. */
+/** Connects exclusively to the recorded target, even if it navigates away. */
 async function withPage<T>(
-  base: string,
   fn: (send: (method: string, params?: object) => Promise<Cdp>) => Promise<T>,
-  tidy = false,
+  saved = readRecord(),
 ) {
-  const pages = await tabs();
-  const page = pick(pages, base);
-  if (!page?.webSocketDebuggerUrl) throw new Error(NO_TAB);
-  if (tidy)
-    for (const extra of pages)
-      if (extra.id !== page.id) await fetch(`${cdp}/json/close/${extra.id}`).catch(() => {});
+  const tabId = (await saved)?.tabId;
+  if (!tabId || !ourChrome(listener())) throw new Error(NOT_UP);
+  const page = (await tabs()).find((target) => target.id === tabId);
+  if (!page?.webSocketDebuggerUrl) throw new Error(NOT_UP);
   const client = await connect(page.webSocketDebuggerUrl);
   try {
     return await fn(client.send);
@@ -315,7 +313,7 @@ async function withPage<T>(
 /** Real input needs focus: Chrome queues mouse and key events for a window that
  * is behind others, so a page that is not frontmost never receives them. */
 async function withInput<T>(fn: (send: (method: string, params?: object) => Promise<Cdp>) => Promise<T>) {
-  return withPage(await origin(), async (send) => {
+  return withPage(async (send) => {
     await send("Emulation.setFocusEmulationEnabled", { enabled: true });
     return fn(send);
   });
@@ -678,47 +676,39 @@ async function main() {
   const [command, ...rest] = process.argv.slice(2);
   if (command === "open") {
     const { words, flags } = parseArgs(rest);
-    const base = await ensureServer();
     await ensureChrome(flags.has("--show"));
+    const server = await ensureServer();
+    const base = serverUrl(server);
     const url = new URL(words, base).href;
-    await withPage(
-      base,
-      async (send) => {
-        await send("Page.enable");
-        await send("Page.navigate", { url });
-        if (flags.has("--show")) await send("Page.bringToFront");
-        // Let the app paint, but never block on it.
-        await waitFor(async () => {
-          const state = await send("Runtime.evaluate", { expression: "document.readyState" }).catch(
-            () => null,
-          );
-          return state?.result?.value === "complete";
-        }, 15_000);
-      },
-      true,
-    );
+    if (!(await tabs()).some((target) => target.id === server.tabId)) {
+      const response = await fetch(`${cdp}/json/new?about:blank`, {
+        method: "PUT",
+        signal: AbortSignal.timeout(CDP_TIMEOUT),
+      });
+      if (!response.ok) throw new Error(`Chrome could not open a mock tab (HTTP ${response.status})`);
+      const { id } = (await response.json()) as Target;
+      server.tabId = id;
+      await saveRecord(server);
+    }
+    await withPage(async (send) => {
+      await send("Page.enable");
+      await send("Page.navigate", { url });
+      if (flags.has("--show")) await send("Page.bringToFront");
+      await waitFor(async () => {
+        const state = await evaluate(send, "document.readyState").catch(() => null);
+        return state?.result?.value === "complete";
+      }, 15_000);
+    }, Promise.resolve(server));
     console.log(`Open ${url} (server ${base})`);
   } else if (command === "close") {
-    const chromePid = listener();
-    if (chromePid && !ourChrome(chromePid))
-      throw new Error(
-        `Port ${CDP_PORT} belongs to another Chrome, not the mock window (profile ${profile}). Left it alone.`,
-      );
-    if (await answers(`${cdp}/json/version`)) {
-      const { webSocketDebuggerUrl } = (await (await fetch(`${cdp}/json/version`)).json()) as {
-        webSocketDebuggerUrl: string;
-      };
-      const client = await connect(webSocketDebuggerUrl);
-      // The socket dies with the browser, so the reply may never arrive.
-      await Promise.race([client.send("Browser.close").catch(() => {}), sleep(3000)]);
-      await waitFor(async () => !(await answers(`${cdp}/json/version`, 300)), 10_000, 100);
-    }
-    await stopMockServer();
-    console.log("Closed the mock window and its dev server.");
+    const saved = await readRecord();
+    await closeTab(saved);
+    await stopMockServer(saved);
+    console.log("Closed this checkout's mock tab and dev server.");
   } else if (command === "eval") {
     const expression = rest.join(" ");
     if (!expression) throw new Error('Usage: bun run mock-window eval "location.href"');
-    const r = await withPage(await origin(), (send) =>
+    const r = await withPage((send) =>
       send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }),
     );
     if (r.exceptionDetails) {
@@ -776,7 +766,7 @@ async function main() {
   } else if (command === "screenshot") {
     const file = rest[0];
     if (!file) throw new Error("Usage: bun run mock-window screenshot <file.png>");
-    const data = await withPage(await origin(), async (send) => {
+    const data = await withPage(async (send) => {
       await send("Page.enable");
       return (await send("Page.captureScreenshot", { format: "png" })).data as string;
     });
