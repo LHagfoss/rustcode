@@ -42,7 +42,7 @@ fn rewritten(command: &str) -> Option<String> {
 
 #[test]
 fn the_repository_policy_parses_with_every_rule() {
-    assert_eq!(policy().rules.len(), 6);
+    assert_eq!(policy().rules.len(), 7);
 }
 
 #[test]
@@ -266,6 +266,8 @@ fn a_policy_with_a_mistake_is_rejected() {
         "[[rule]]\nname = \"x\"\naction = \"rewrite\"\nprogram = \"cargo\"\n",
         "[[rule]]\nname = \"x\"\naction = \"explode\"\nprogram = \"cargo\"\n",
         "[[rule]]\nname = \"x\"\naction = \"deny\"\nprogram = \"cargo\"\ntypo = 1\n",
+        "[[rule]]\nname = \"x\"\naction = \"hint\"\nprogram = \"git\"\nmessage = \"m\"\n",
+        "[[rule]]\nname = \"x\"\naction = \"hint\"\nprogram = \"git\"\noutput = [\"e\"]\n",
     ] {
         assert!(
             Policy::parse(text, PathBuf::from("p.toml")).is_err(),
@@ -477,4 +479,72 @@ fn command_name_skips_functions_a_sourced_script_defines() {
         name("source lib.sh && parse_args").as_deref(),
         Some("source")
     );
+}
+
+const REF_LOCK: &str =
+    "error: cannot lock ref 'refs/remotes/origin/main': is at d40a7432 but expected 21a9c14f";
+
+#[test]
+fn a_fetch_race_on_a_ref_lock_is_explained_with_a_retry() {
+    for command in [
+        "git fetch origin main",
+        "git pull --ff-only",
+        "cd repo && timeout 120 git -C . fetch -q",
+        "git worktree add -b x ../wt origin/main",
+    ] {
+        let hint = policy().hint(command, REF_LOCK).expect(command);
+        assert!(hint.contains("`git-ref-lock-race`"), "{hint}");
+        assert!(hint.contains("run the same command again"), "{hint}");
+    }
+    // The hint never changes what runs.
+    assert_eq!(verdict("git fetch origin main"), Verdict::Allow);
+    assert_eq!(
+        policy().hint("git fetch origin main", "From github.com:x/y"),
+        None
+    );
+    assert_eq!(policy().hint("echo hi", REF_LOCK), None);
+}
+
+#[test]
+fn the_post_call_hook_adds_the_hint_as_context() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join(".git")).unwrap();
+    std::fs::create_dir_all(root.path().join(".rustcode")).unwrap();
+    std::fs::write(root.path().join(POLICY_PATH), REPO_POLICY).unwrap();
+    let failed = json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "cwd": root.path(),
+        "tool_input": {"command": "git pull --ff-only"},
+        "error": format!("Exit code 1\n{REF_LOCK}"),
+    })
+    .to_string();
+    let response: Value = serde_json::from_str(&hook_response(&failed).unwrap()).unwrap();
+    let output = &response["hookSpecificOutput"];
+    assert_eq!(output["hookEventName"], "PostToolUseFailure");
+    assert!(
+        output["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("run the same command again")
+    );
+    let succeeded = json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "cwd": root.path(),
+        "tool_input": {"command": "git fetch"},
+        "tool_response": {"stdout": "", "stderr": REF_LOCK},
+    })
+    .to_string();
+    assert!(hook_response(&succeeded).is_some());
+    // A post-call hook never denies: a clean run, or a stash, adds nothing.
+    let clean = json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "cwd": root.path(),
+        "tool_input": {"command": "git stash"},
+        "tool_response": {"stdout": "Saved", "stderr": ""},
+    })
+    .to_string();
+    assert_eq!(hook_response(&clean), None);
 }
