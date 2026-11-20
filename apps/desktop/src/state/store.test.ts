@@ -67,6 +67,7 @@ import {
   fetchHarnessModels,
   forgetPlans,
   forkThread,
+  handleInbound,
   hasOwnPermissionMode,
   inheritedModeOf,
   isRepairableOpenError,
@@ -3219,6 +3220,37 @@ describe("engine controller with the mock engine", () => {
     const s = useApp.getState();
     expect(s.selectedId).toBeNull();
     expect(s.projectCwd).toBe(a!.cwd);
+  });
+
+  test("an engine self-settle closes only the thread on screen", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length > 1);
+    const [first, second] = useApp.getState().sessions;
+    selectThread(first!.id);
+    await until(() => isLoaded(useApp.getState().threads[first!.id]));
+    setPanel("changes");
+
+    const selfSettle = (sessionId: string) =>
+      handleInbound({
+        type: "notification",
+        method: Method.sessionUpdate,
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: "session_info_update",
+            _meta: { rustcode: { status: "done", selfSettled: true } },
+          },
+        },
+      });
+    await selfSettle(second!.id);
+    expect(statusOf(useApp.getState(), second!.id)).toBe("done");
+    expect(useApp.getState().selectedId).toBe(first!.id);
+
+    await selfSettle(first!.id);
+    const state = useApp.getState();
+    expect(state.selectedId).toBeNull();
+    expect(state.panel).toBeNull();
+    expect(state.projectCwd).toBe(first!.cwd);
   });
 
   test("settling on the board stays on the board, and its Undo restores every status", async () => {

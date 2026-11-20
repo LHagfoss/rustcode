@@ -188,7 +188,7 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
             other => other,
         });
     if let Some(status) = status
-        && let Err(why) = crate::thread_status::set(session_id, status)
+        && let Err(why) = crate::thread_status::set_own_status(session_id, status)
     {
         return error("failed", why);
     }

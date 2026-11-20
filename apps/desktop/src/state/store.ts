@@ -72,6 +72,7 @@ export {
 import {
   clearSettledNotifications,
   clearStatusMark,
+  leaveSettledThreads,
   reconcileStatusMarks,
   sessionById,
   setThreadStatus,
@@ -1271,6 +1272,7 @@ function onSessionUpdate(params: JsonObject) {
     if (status === "done") clearSettledNotifications([sessionId]);
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, status } : x)) }));
     clearStatusMark(sessionId);
+    if (status === "done" && metadata?.selfSettled === true) leaveSettledThreads([sessionId]);
     // A lost turn on this thread is settled now if the machine says it stopped running there.
     lostTurnStatus(sessionId, status);
     if (status !== "running" && status !== "needs_input") reconcileLinks();

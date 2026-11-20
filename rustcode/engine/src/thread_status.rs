@@ -133,7 +133,7 @@ pub(crate) fn start_watching() {
                 if previous.insert(id.clone(), state) == Some(state) {
                     continue;
                 }
-                notify(&id);
+                notify(&id, false);
                 notify_snooze(&id, state.1);
             }
         }
@@ -185,21 +185,24 @@ pub(crate) fn is_active(session_id: &str) -> bool {
 }
 
 /// The `session_info_update` that tells the client `status`.
-pub(crate) fn update(status: Status) -> SessionUpdate {
-    SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().meta(serde_json::Map::from_iter([(
-        "rustcode".to_owned(),
-        json!({ "status": status.as_str() }),
-    )])))
+fn status_update(status: Status, self_settled: bool) -> SessionUpdate {
+    let mut meta = json!({ "status": status.as_str() });
+    if self_settled && status == Status::Done {
+        meta["selfSettled"] = json!(true);
+    }
+    SessionUpdate::SessionInfoUpdate(
+        SessionInfoUpdate::new().meta(serde_json::Map::from_iter([("rustcode".to_owned(), meta)])),
+    )
 }
 
-fn notify(session_id: &str) {
-    let status = current(session_id);
+fn notify(session_id: &str, own: bool) {
+    let update = status_update(current(session_id), own);
     if let Some(notify) = notifier()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .as_ref()
     {
-        notify(session_id.to_owned(), update(status));
+        notify(session_id.to_owned(), update);
     }
 }
 
@@ -214,7 +217,7 @@ fn change(session_id: &str, edit: impl FnOnce(&mut Live)) {
         }
     }
     if current(session_id) != before {
-        notify(session_id);
+        notify(session_id, false);
     }
 }
 
@@ -253,6 +256,14 @@ impl Drop for WaitGuard {
 
 /// Set a stored status and tell the client.
 pub(crate) fn set(session_id: &str, status: &str) -> Result<(), String> {
+    set_status(session_id, status, false)
+}
+
+pub(crate) fn set_own_status(session_id: &str, status: &str) -> Result<(), String> {
+    set_status(session_id, status, true)
+}
+
+fn set_status(session_id: &str, status: &str, own: bool) -> Result<(), String> {
     if !rustcode_session::valid_session_id(session_id) {
         return Err("invalid session id".to_owned());
     }
@@ -271,7 +282,7 @@ pub(crate) fn set(session_id: &str, status: &str) -> Result<(), String> {
         // The project's settle action (clearing build output) runs in its worktree.
         crate::project_hooks::on_settle(session_id);
     }
-    notify(session_id);
+    notify(session_id, own);
     Ok(())
 }
 
@@ -577,9 +588,17 @@ mod tests {
 
     #[test]
     fn the_update_carries_the_status() {
-        let value = serde_json::to_value(update(Status::NeedsInput)).unwrap();
+        let value = serde_json::to_value(status_update(Status::NeedsInput, false)).unwrap();
         assert_eq!(value["sessionUpdate"], "session_info_update");
         assert_eq!(value["_meta"]["rustcode"]["status"], "needs_input");
+        let self_settle = serde_json::to_value(status_update(Status::Done, true)).unwrap();
+        assert_eq!(self_settle["_meta"]["rustcode"]["selfSettled"], true);
+        let ordinary_settle = serde_json::to_value(status_update(Status::Done, false)).unwrap();
+        assert!(
+            ordinary_settle["_meta"]["rustcode"]
+                .get("selfSettled")
+                .is_none()
+        );
     }
 
     #[test]
