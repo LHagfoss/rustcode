@@ -3,10 +3,10 @@
 //! `list_scheduled_tasks`, `delete_scheduled_task` and
 //! `run_scheduled_task_now`.
 //!
-//! All four go through the same client `rustcode cron` and the engine's
+//! All four go through the same client `rc cron` and the engine's
 //! `manage_scheduled_jobs` tool use: one scheduler, one store, one protocol.
 //! These methods never start the daemon; a call with nothing listening says
-//! so, and `rustcode daemon start` is the user's to run.
+//! so, and `rc daemon start` is the user's to run.
 
 use serde_json::{Value, json};
 
@@ -214,7 +214,7 @@ fn task(job: &JobRecord) -> Value {
     entry
 }
 
-/// The client every method asks: the socket `rustcode cron` uses.
+/// The client every method asks: the socket `rc cron` uses.
 fn client() -> Result<DaemonClient, String> {
     let config_dir =
         crate::config::get_config_dir().ok_or("error: config directory unavailable")?;
@@ -232,7 +232,7 @@ async fn ask(client: &DaemonClient, request: DaemonRequest) -> Result<DaemonResp
 
 /// Why nothing scheduled runs, and how to start it: what a refused call and an
 /// empty list say.
-pub(crate) const DAEMON_STOPPED: &str = "loops cannot run because the RustCode scheduler is stopped; ask the user to start it from Loops in the RustCode app, or run `rustcode daemon start`";
+pub(crate) const DAEMON_STOPPED: &str = "loops cannot run because the RustCode scheduler is stopped; ask the user to start it from Loops in the RustCode app, or run `rc daemon start`";
 
 pub(crate) async fn list() -> Result<Value, String> {
     list_with(&client()?).await
@@ -410,7 +410,7 @@ mod tests {
         use crate::daemon::lifecycle::DaemonLifecycle;
         use std::time::Duration;
 
-        /// A real daemon on a private socket, the way `rustcode daemon start`
+        /// A real daemon on a private socket, the way `rc daemon start`
         /// runs one, with no executor installed (a run is then refused).
         struct Running {
             task: tokio::task::JoinHandle<anyhow::Result<()>>,

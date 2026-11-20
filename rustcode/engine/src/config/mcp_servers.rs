@@ -1,4 +1,4 @@
-//! Edits to the user-level `[[mcp_servers]]` list made by `rustcode mcp` and
+//! Edits to the user-level `[[mcp_servers]]` list made by `rc mcp` and
 //! by the `manage_mcp_servers` tool, which share one validator.
 
 use super::{McpServerConfig, get_config_dir, load_config_from, save_config_to_result};

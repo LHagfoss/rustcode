@@ -172,7 +172,7 @@ pub fn refuse_dev_binary(program: &Path, force_dev: bool) -> Result<()> {
     if !force_dev && is_dev_binary(program, target_dir.as_deref()) {
         anyhow::bail!(
             "{} is a development build (inside a cargo target directory); a service must not run it. \
-             Install RustCode and run `rustcode server install` from that, or pass --force-dev to install it anyway.",
+             Install RustCode and run `rc server install` from that, or pass --force-dev to install it anyway.",
             program.display()
         );
     }

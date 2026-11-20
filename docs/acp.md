@@ -124,7 +124,7 @@ These extension requests back the app's Settings pages:
   fails to start is reported as `failed` in the snapshot.
 - `_rustcode/capabilities/mcp/add` (`{"name", "target": [...], "transport"?:
   "stdio" | "http", "env"?: ["KEY=value"], "headers"?: ["Name: value"]}`)
-  validates the server like `rustcode mcp add`, saves it to the user config,
+  validates the server like `rc mcp add`, saves it to the user config,
   starts it in this engine and answers with the fresh snapshot. A duplicate
   name or a target that does not fit the transport is an `invalid_params`
   error; a server that fails to start is still saved and reported as `failed`.
@@ -168,7 +168,7 @@ client as a `_rustcode/orchestration` request
 result or `{"error": {"code", "message"}}`, and the engine sends
 `_rustcode/orchestration/cancelled` (`{"sessionId", "callId"}`) when it drops
 a call before that answer arrives. With `2`, external harness threads get the
-same tools through the injected `rustcode mcp-orchestrator`, and their
+same tools through the injected `rc mcp-orchestrator`, and their
 calls arrive the same way under the external thread's id; the thread's
 `_meta.rustcode.harness.capabilities.orchestration` says whether it has them.
 

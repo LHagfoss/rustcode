@@ -411,6 +411,12 @@
     color: var(--rc-knob-fg);
     text-shadow: none;
   }
+
+  /* A Smart UI view inside a selection highlights its own words (smartui/selection.ts); the
+     browser's grey wash over the whole frame would cover them. */
+  iframe::selection {
+    background: transparent;
+  }
 }
 
 /* Popovers, menus, dialogs: the raised surface, in glass. */

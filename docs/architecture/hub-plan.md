@@ -48,7 +48,7 @@ machine, and in which order it is built.
 
 | Phase | What | Issue |
 | --- | --- | --- |
-| 1 | Public MCP on one machine: `[outside] public_url`, Host validation for it, client registration, `https` callbacks, refresh tokens (30-day sign-in), sign-in page approved with `rustcode outside code` | this PR |
+| 1 | Public MCP on one machine: `[outside] public_url`, Host validation for it, client registration, `https` callbacks, refresh tokens (30-day sign-in), sign-in page approved with `rc outside code` | this PR |
 | 2 | Approve sign-ins with the owner's passkey | #3954 (built) |
 | 3 | One listener for the gateway (`/ws`) and `/mcp`, so one tunnel serves both; `wss://` routes | #3955 (built) |
 | 4 | Machines and devices authenticate with key pairs instead of bearer tokens | #3956 |
@@ -61,7 +61,7 @@ of the fleet; 2 and 6 replace the terminal code with a login.
 
 ## Phase 2 in practice
 
-`rustcode outside owner add-passkey` (or Settings › Outside agents) writes a
+`rc outside owner add-passkey` (or Settings › Outside agents) writes a
 one-time enrollment ticket to `<config>/owner-passkey-enrollments.json` and
 prints `<public_url>/owner/passkey?ticket=…`; the page there runs WebAuthn
 `create` and posts the result back. The consent page offers *Approve with
@@ -84,7 +84,7 @@ the engine answers itself and relays to the local server through
 `remote_gateway/acp_relay.rs` with a paired desktop's method list; the socket
 closes once the session is signed out. Bearer tokens are refused on these
 routes, and the cookie on `/mcp`. Sessions are listed and signed out in
-Settings › Outside agents and with `rustcode outside owner sessions` /
+Settings › Outside agents and with `rc outside owner sessions` /
 `sign-out`.
 
 Each release publishes the web build as `rustcode-web.tar.gz`; `install.sh`,
@@ -97,9 +97,9 @@ paired desktop can).
 
 ## Phase 5 in practice
 
-`rustcode machines hub on` writes `"hub": true` to `<config>/hub.json`;
-`rustcode machines hub join <machine> --access <level>` writes the membership
-there on the member. The member's gateway process (`rustcode remote serve`)
+`rc machines hub on` writes `"hub": true` to `<config>/hub.json`;
+`rc machines hub join <machine> --access <level>` writes the membership
+there on the member. The member's gateway process (`rc remote serve`)
 runs the link (`tui/src/hub_member.rs`): it connects to the hub with the
 saved machine's routes and credentials and sends `hub_join` on the
 authenticated socket. The hub's gateway (`remote_gateway/hub_link.rs`) admits
@@ -122,7 +122,7 @@ the hub).
 
 The engine's HTTP listener (the `/mcp` one, `43871`) relays a WebSocket
 upgrade at `/ws` to the remote gateway, which may run in another process
-(`rustcode remote`, the server). The gateway binds a loopback-only *ingress*
+(`rc remote`, the server). The gateway binds a loopback-only *ingress*
 listener on an ephemeral port, records it as `ingress_address` in its
 registration, and serves every socket from it as a `tunnel` connection
 (encrypted to the tunnel's edge). The relay checks `Host` exactly as `/mcp`
@@ -136,7 +136,7 @@ the same change.
 
 ## Phase 1 in practice
 
-On a VPS: `rustcode server run` as a systemd user service (`docs/server.md`),
+On a VPS: `rc server run` as a systemd user service (`docs/server.md`),
 `[outside] public_url` in the user `config.toml`, and `cloudflared` forwarding
 the hostname to `127.0.0.1:43871`. The steps are in
 [mcp-outside-agents.md › Hosted agents](../mcp-outside-agents.md#hosted-agents-chatgpt-claude-and-other-cloud-clients).

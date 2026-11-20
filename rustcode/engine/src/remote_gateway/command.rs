@@ -1,4 +1,4 @@
-//! `rustcode remote …` commands: argument handling and terminal output.
+//! `rc remote …` commands: argument handling and terminal output.
 
 use super::address::{candidate_addresses, plan_listen_with_preference};
 use super::control::{GatewayStatus, OfferDetails};
@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// What to do when the gateway only listens on loopback. Shown by `/remote`
-/// and by the `rustcode remote` commands, because a phone cannot reach
+/// and by the `rc remote` commands, because a phone cannot reach
 /// loopback and nothing else tells the user why pairing does not work.
 /// `markdown` is for the terminal UI's panel, which renders Markdown and
 /// would reflow the commands and rewrite their punctuation: there each one
@@ -37,7 +37,7 @@ pub fn loopback_guidance(markdown: bool) -> String {
         "The gateway listens on this machine only (loopback), so a phone cannot reach it."
             .to_owned(),
         "Join the same Wi-Fi as your phone, then restart with automatic LAN selection:".to_owned(),
-        block(&["rustcode remote stop", "rustcode remote serve"]),
+        block(&["rc remote stop", "rc remote serve"]),
         "If config.toml explicitly sets a loopback bind, remove it or use:".to_owned(),
         block(&["[remote]", "bind = \"auto\""]),
     ];
@@ -61,7 +61,7 @@ pub fn loopback_guidance(markdown: bool) -> String {
 }
 
 /// Run the gateway in the foreground until Ctrl-C, SIGTERM or
-/// `rustcode remote stop`.
+/// `rc remote stop`.
 pub async fn serve(
     config_directory: &Path,
     bind: &str,
@@ -204,7 +204,7 @@ pub async fn serve(
         loopback_bind: gateway.local_addr().ip().is_loopback(),
         loopback_advertise: gateway.advertised_address().host().is_loopback(),
     };
-    println!("rustcode remote gateway");
+    println!("rc remote gateway");
     println!("listening on  {}", gateway.local_addr());
     println!("advertised as {}", gateway.advertised_address());
     println!("gateway id    {}", gateway.gateway_id());
@@ -217,7 +217,7 @@ pub async fn serve(
         println!("{}", loopback_guidance(false));
     }
     println!(
-        "Share a session with `/remote` in a terminal session; pair a device with `rustcode remote pair`."
+        "Share a session with `/remote` in a terminal session; pair a device with `rc remote pair`."
     );
 
     let program = super::service::executable_path()?;
@@ -464,7 +464,7 @@ async fn follow_pairing_details(
     }
 }
 
-/// `rustcode remote pair` in a terminal: after the details, one line that
+/// `rc remote pair` in a terminal: after the details, one line that
 /// counts the challenge down and says how it ended. Returns once it ended or
 /// on Ctrl-C.
 pub async fn watch_pairing_in_terminal(
@@ -488,7 +488,7 @@ pub async fn watch_pairing_in_terminal(
             continue;
         };
         let progress = watch.observe(status.as_ref());
-        let Some(line) = format_progress(&progress, "`rustcode remote pair`") else {
+        let Some(line) = format_progress(&progress, "`rc remote pair`") else {
             return;
         };
         // Rewrite the same line: carriage return, then clear it.
@@ -576,7 +576,7 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
         .collect()
 }
 
-/// The answer `rustcode remote accept|deny` gives: on accepting, the code
+/// The answer `rc remote accept|deny` gives: on accepting, the code
 /// the person types on the device that asked.
 pub fn format_connect_answer(answer: &super::control::ConnectAnswer) -> String {
     if !answer.accepted {
@@ -639,7 +639,7 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
             (None, Some(expires), Some(attempts)) => {
                 format!("challenge open ({expires} s left, {attempts} wrong codes allowed)")
             }
-            _ => "closed (run `rustcode remote pair` for a new code)".to_string(),
+            _ => "closed (run `rc remote pair` for a new code)".to_string(),
         },
         None if status.pairing_open => "challenge open".to_string(),
         None => "closed".to_string(),
@@ -731,7 +731,7 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
         .and_then(|offer| offer.open.as_ref())
     {
         lines.push(format!(
-            "  connect code   open for {}:{:02}, {} wrong tries left (withdraw it with `rustcode machines code --cancel`)",
+            "  connect code   open for {}:{:02}, {} wrong tries left (withdraw it with `rc machines code --cancel`)",
             open.expires_in_secs / 60,
             open.expires_in_secs % 60,
             open.attempts_left
@@ -739,7 +739,7 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
     }
     if !status.connect_requests.is_empty() {
         lines.push(format!(
-            "  asking to connect {} (answer in the desktop app, or `rustcode remote accept|deny <id>`)",
+            "  asking to connect {} (answer in the desktop app, or `rc remote accept|deny <id>`)",
             status.connect_requests.len()
         ));
         for request in &status.connect_requests {
@@ -886,7 +886,7 @@ fn stale_address_warnings(status: &GatewayStatus) -> Vec<(String, Vec<String>)> 
                     "{listen} is no longer an address of this machine; the bind is auto, so the gateway moves to a current address within seconds"
                 ),
                 vec![
-                    "if it stays here: `rustcode remote stop`, then `/remote` or `rustcode remote serve`"
+                    "if it stays here: `rc remote stop`, then `/remote` or `rc remote serve`"
                         .to_owned(),
                 ],
             ));
@@ -900,7 +900,7 @@ fn stale_address_warnings(status: &GatewayStatus) -> Vec<(String, Vec<String>)> 
             warnings.push((
                 format!("{listen} is no longer an address of this machine{why}"),
                 vec![
-                    "`rustcode remote stop && rustcode remote serve --bind auto` (follows address changes from now on)".to_owned(),
+                    "`rc remote stop && rc remote serve --bind auto` (follows address changes from now on)".to_owned(),
                     format!("or `--bind {suggestion}` for the address it has now; a `[remote] bind` in config.toml needs the same change"),
                 ],
             ));
@@ -916,7 +916,7 @@ fn stale_address_warnings(status: &GatewayStatus) -> Vec<(String, Vec<String>)> 
             ),
             vec![
                 format!(
-                    "`rustcode remote stop && rustcode remote serve --advertise <stable name or {suggestion}>`"
+                    "`rc remote stop && rc remote serve --advertise <stable name or {suggestion}>`"
                 ),
                 "a `[remote] advertise` in config.toml needs the same change".to_owned(),
             ],
@@ -1084,7 +1084,7 @@ mod tests {
 
         let local = format_offer(&offer("127.0.0.1"), QrStyle::Text);
         assert!(local.starts_with("The gateway listens on this machine only"));
-        assert!(local.contains("rustcode remote serve"));
+        assert!(local.contains("rc remote serve"));
         assert!(local.contains("[remote]"));
         assert!(local.contains("QR payload: "));
 
@@ -1187,7 +1187,7 @@ mod tests {
             "started by     the app",
             "192.168.31.185  (en0)",
             "192.168.31.237 is no longer an address of this machine and the bind is fixed",
-            "recover        `rustcode remote stop && rustcode remote serve --bind auto`",
+            "recover        `rc remote stop && rc remote serve --bind auto`",
             "or `--bind 192.168.31.185` for the address it has now",
             "listening on   192.168.31.237:17879  (fixed bind)",
             "aa  phone  (phone on ios, connected over LAN (not encrypted))",

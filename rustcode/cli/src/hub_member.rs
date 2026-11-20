@@ -1,6 +1,6 @@
 //! A member's side of the hub link (#3957, `remote_gateway/hub_link.rs`).
 //!
-//! A machine that joined a hub (`rustcode machines hub join <machine>`) keeps
+//! A machine that joined a hub (`rc machines hub join <machine>`) keeps
 //! one outbound connection to it from its own gateway process: it connects
 //! to the hub as the paired computer it already is, over whichever saved
 //! route answers first, switches the connection to the hub link and answers

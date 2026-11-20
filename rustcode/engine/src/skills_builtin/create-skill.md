@@ -43,9 +43,9 @@ lines; move long references into files next to `SKILL.md` and name them.
 1. Ask for anything that blocks you: the job, an example request, the
    scope. Do not invent the user's workflow.
 2. Pick a short name that is not taken (`manage_capabilities` with
-   `kind: "skill", action: "list"`, or `rustcode skill list`).
+   `kind: "skill", action: "list"`, or `rc skill list`).
 3. Write it. With the RustCode MCP server, call `manage_capabilities` with
    `kind: "skill", action: "create", name, content` (the whole `SKILL.md`):
    the user approves it and it lands in the user folder. Otherwise write the
    file yourself; a project skill is always a file you write.
-4. Confirm it is listed (`rustcode skill list`) and tell the user its path.
+4. Confirm it is listed (`rc skill list`) and tell the user its path.

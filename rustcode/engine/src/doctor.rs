@@ -251,7 +251,7 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
             ));
         }
     }
-    // Skills outside the config dir are not covered by `rustcode config sync`, which
+    // Skills outside the config dir are not covered by `rc config sync`, which
     // stages `<config dir>/skills` only. Warn rather than silently implying
     // they are synced.
     if crate::skills::discover_skills().iter().any(|skill| {
@@ -261,7 +261,7 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
     }) {
         checks.push(DoctorCheck::pass(
             "skills-sync",
-            "some skills live outside the config dir; `rustcode config sync` covers \
+            "some skills live outside the config dir; `rc config sync` covers \
              `<config dir>/skills` only"
                 .to_string(),
         ));

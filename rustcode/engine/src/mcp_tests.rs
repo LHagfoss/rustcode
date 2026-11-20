@@ -7,7 +7,7 @@ fn stdio(name: &str, command: &str, enabled: bool) -> crate::config::McpServerCo
 
 #[test]
 fn reconcile_starts_a_server_added_after_the_session_began() {
-    // A shell `rustcode mcp add` wrote the config; the running session
+    // A shell `rc mcp add` wrote the config; the running session
     // never started it, so its tools could not be listed.
     let previous = [stdio("mail", "mail_mcp", true)];
     let current = [stdio("mail", "mail_mcp", true), stdio("ftp", "npx", true)];

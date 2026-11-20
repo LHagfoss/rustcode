@@ -14,7 +14,7 @@ import { returnToAttempt, useApp } from "../state/store";
 import type { TranscriptItem } from "../state/thread";
 import { StatusReplyRow } from "./DelegateStatus";
 import { History, TriangleAlert } from "./icons";
-import { Pill } from "./primitives";
+import { Pill, Tooltip } from "./primitives";
 import {
   AssistantRow,
   HandoffRow,
@@ -119,13 +119,11 @@ function AttemptAction({ threadId, attempt }: { threadId: string; attempt: Attem
       </span>
     );
   return (
-    <Pill
-      size="sm"
-      onClick={() => returnToAttempt(threadId, attempt.id)}
-      title="Put the files back where this attempt ended"
-    >
-      Go back to this attempt
-    </Pill>
+    <Tooltip label="Put the files back where this attempt ended">
+      <Pill size="sm" onClick={() => returnToAttempt(threadId, attempt.id)}>
+        Go back to this attempt
+      </Pill>
+    </Tooltip>
   );
 }
 

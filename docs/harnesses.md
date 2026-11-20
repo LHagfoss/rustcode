@@ -72,7 +72,7 @@ to imitate one).
   "slash_commands": true,                    // available_commands_update
   "smart_ui": false,                         // honours rustcode-ui blocks
   "rustcode_extensions": false,              // PRs, usage, preview… (built-in only)
-  "orchestration": true                      // thread tools via rustcode mcp-orchestrator (docs/orchestrator.md)
+  "orchestration": true                      // thread tools via rc mcp-orchestrator (docs/orchestrator.md)
 }
 ```
 

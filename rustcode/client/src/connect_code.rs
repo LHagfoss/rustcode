@@ -1,5 +1,5 @@
 //! Connect codes as a client reads them: what another computer's owner
-//! created there (`rustcode machines code`, Settings › Machines › Create
+//! created there (`rc machines code`, Settings › Machines › Create
 //! connect code) and carried here.
 //!
 //! Two forms of one code, as the gateway writes them
@@ -221,7 +221,7 @@ fn parse_short(compact: &str) -> Result<ConnectCode> {
 }
 
 /// Whether `input` looks like a connect code rather than an address, so
-/// `rustcode machines add` can take either.
+/// `rc machines add` can take either.
 pub fn looks_like_code(input: &str) -> bool {
     let input = input.trim();
     if strip_link_prefix(input).is_some() {

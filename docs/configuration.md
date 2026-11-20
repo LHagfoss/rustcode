@@ -30,10 +30,10 @@ keep the original data until its replacement is in place.
 Inspect the state without changing anything:
 
 ```bash
-rustcode storage status          # pending and completed migrations
-rustcode storage status --json   # the same, for scripts and support tools
-rustcode storage usage           # how much space each store takes
-rustcode storage usage --json    # the same, with each store's paths
+rc storage status          # pending and completed migrations
+rc storage status --json   # the same, for scripts and support tools
+rc storage usage           # how much space each store takes
+rc storage usage --json    # the same, with each store's paths
 ```
 
 `storage usage` reads only. It lists each store of the config directory with
@@ -48,7 +48,7 @@ its size, file count, what it holds and how it is bounded today:
 | workspaces | isolated subagent workspaces | kept |
 | backups | copies of config files taken before a change | kept |
 | logs | `debug.log` and `debug.log.1` | rotation |
-| sync history | the Git history of `rustcode config sync` | kept |
+| sync history | the Git history of `rc config sync` | kept |
 | indexes | the symbol index and saved memory | kept |
 | remote | paired devices and the gateway's state | kept |
 
@@ -60,9 +60,9 @@ No store is cleaned automatically beyond what the table says.
 or pruned. `storage clean` finds them:
 
 ```bash
-rustcode storage clean           # list them; changes nothing
-rustcode storage clean --apply   # move them to storage/removed
-rustcode storage clean --json    # the plan (and result), for scripts
+rc storage clean           # list them; changes nothing
+rc storage clean --apply   # move them to storage/removed
+rc storage clean --json    # the plan (and result), for scripts
 ```
 
 A file is listed only when no file under `threads/` or `history_archive/`
@@ -82,10 +82,10 @@ Registered migrations:
 | Id | What it does |
 | --- | --- |
 | `0001-sessions-folder-to-threads` | Renames `sessions/` to `threads/` and leaves `sessions` as a link to it, so an older RustCode still finds every thread. If an older version created a new `sessions/` after the rename, its threads are moved in; a thread present in both folders is left in `sessions/` and reported, and the step runs again on the next start once one copy is moved aside. Until the step has run, RustCode reads the old folder. |
-| `0002-legacy-thread-layout` | Moves threads that early versions kept directly in `threads/<id>` (or `threads/<id>.json`) to `threads/YYYY/MM/DD/<id>`, as `rustcode threads migrate` does: each is copied, the copy put in place, and only then the original removed. A thread already at its destination is left alone. |
+| `0002-legacy-thread-layout` | Moves threads that early versions kept directly in `threads/<id>` (or `threads/<id>.json`) to `threads/YYYY/MM/DD/<id>`, as `rc threads migrate` does: each is copied, the copy put in place, and only then the original removed. A thread already at its destination is left alone. |
 | `0003-prune-scratch-thread-folders` | Removes the empty folders that title, compaction and recap requests once left in `threads/` (#2562, #2571). Only folders named like those requests and holding no history are removed. Before, this ran on every start of the terminal. |
 
-`rustcode threads migrate [--dry-run]` still runs the thread-layout move by
+`rc threads migrate [--dry-run]` still runs the thread-layout move by
 hand. The legacy configuration conversion above stays where it is: it merges
 into the `config.toml` being saved, and an older RustCode reads the JSON files
 until then. So does the old `fmr` folder rename, which happens before the
@@ -150,16 +150,16 @@ Zen model and valid billing/API credentials for this provider profile.
 Configured MCP servers are started by Rustcode before ACP prompts are handled;
 ACP's optional MCP-over-ACP transport is not required.
 
-Add, list, and remove servers from the command line. `rustcode mcp add` takes
+Add, list, and remove servers from the command line. `rc mcp add` takes
 a name followed by a URL for a remote (Streamable HTTP) server, or by a command
 to spawn over stdio:
 
 ```sh
-rustcode mcp add --transport http api https://mcp.example.com/mcp \
+rc mcp add --transport http api https://mcp.example.com/mcp \
   --header "Authorization: Bearer <token>"
-rustcode mcp add --env API_KEY=<key> files -- npx -y @example/files-mcp
-rustcode mcp list
-rustcode mcp remove api
+rc mcp add --env API_KEY=<key> files -- npx -y @example/files-mcp
+rc mcp list
+rc mcp remove api
 ```
 
 `--transport` is inferred from an `http(s)://` target when omitted. Repeat
@@ -168,11 +168,11 @@ rustcode mcp remove api
 same name. Servers are written to `[[mcp_servers]]` in the user `config.toml`
 and start with the next session. Header and environment values are stored
 there in plain text (the file is created with mode `0600`), and `mcp list`
-prints only their names. `config.toml` is one of the files `rustcode config sync`
+prints only their names. `config.toml` is one of the files `rc config sync`
 pushes, so keep the sync remote private when it holds tokens.
 
 Inside a session the model does the same through the `manage_mcp_servers`
-tool, which applies the validation of `rustcode mcp add`:
+tool, which applies the validation of `rc mcp add`:
 
 | `operation` | Effect |
 | --- | --- |
@@ -188,7 +188,7 @@ answers this prompt like any other. The prompt shows the command or URL and the
 header and environment names; their values are left out of the prompt, the tool
 result and startup errors, as in `mcp list`. The values the model passes are
 still part of its own tool call in the session history, so prefer adding a
-server that needs a real secret with `rustcode mcp add` yourself. A server that
+server that needs a real secret with `rc mcp add` yourself. A server that
 fails to start stays saved, and `start` retries it. In the app, Settings ›
 Capabilities has a Retry action on every server row that reconnects it in place
 without rewriting `config.toml`, so a failed server needs no off-and-on toggle.
@@ -236,9 +236,9 @@ endpoint needs no account or API key and uses Fast mode for search, with lower
 rate limits intended for exploration and light use.
 
 ```sh
-rustcode mcp add --transport http parallel-search https://search.parallel.ai/mcp \
+rc mcp add --transport http parallel-search https://search.parallel.ai/mcp \
   --header "User-Agent: RustCode"
-rustcode mcp list
+rc mcp list
 ```
 
 Start a new session in a workspace without a project `mcp_servers` override,
@@ -249,7 +249,7 @@ then ask, for example:
 
 The server exposes `web_search` and `web_fetch`. Search sends the query to
 Parallel; fetching sends the requested URLs. To remove the saved server, run
-`rustcode mcp remove parallel-search`.
+`rc mcp remove parallel-search`.
 
 ### Local code lookup with Sem
 
@@ -258,8 +258,8 @@ structural diffs and impact analysis over stdio MCP. Install Sem using its
 upstream instructions and ensure `sem --version` works in Rustcode's environment.
 
 ```sh
-rustcode mcp add --env SEM_REPO=/absolute/path/to/checkout sem -- sem mcp
-rustcode mcp list
+rc mcp add --env SEM_REPO=/absolute/path/to/checkout sem -- sem mcp
+rc mcp list
 ```
 
 Replace the path with an existing Git checkout on the machine running Rustcode.
@@ -270,7 +270,7 @@ Start a new session without a project `mcp_servers` override, then ask:
 
 `sem_find` retrieves symbols and context; `sem_grep` searches source text.
 The configured path is fixed, not automatically changed when you switch
-workspaces. Remove it with `rustcode mcp remove sem` before configuring another
+workspaces. Remove it with `rc mcp remove sem` before configuring another
 checkout. The first lookup may build a local index. The full server also exposes
 validation tools that can execute commands: `SEM_REPO` selects a repository, not
 a sandbox. Use trusted checkouts and appropriate process permissions. Source
@@ -292,7 +292,7 @@ prefer_interface = "netbird"         # optional; with an auto bind, try this int
 Everything unset means loopback, which a phone cannot reach; `/remote` then
 explains what to set. The section is read from the user configuration only: a
 project file cannot choose the interface your sessions are exposed on. A
-gateway you start yourself with `rustcode remote serve --bind …` takes its
+gateway you start yourself with `rc remote serve --bind …` takes its
 address from the command line and ignores this section.
 
 A paired device can browse folders and start sessions only inside your home
@@ -317,7 +317,7 @@ public_url = "https://rustcode.example.com"   # a bare https:// origin, no path
 ```
 
 The endpoint then answers requests for that host as well as `127.0.0.1`, and
-signs agents in on its own page with a code from `rustcode outside code`. Read
+signs agents in on its own page with a code from `rc outside code`. Read
 from the user configuration only, and when the server starts. Setup:
 [mcp-outside-agents.md › Hosted agents](mcp-outside-agents.md#hosted-agents-chatgpt-claude-and-other-cloud-clients).
 
@@ -461,12 +461,12 @@ requests `_rustcode/capabilities`, `_rustcode/capabilities/set` and
 From a terminal, the same toggles and the default harness:
 
 ```sh
-rustcode skill list [--json]
-rustcode skill disable cloudflare
-rustcode mcp disable files          # also: enable, restart
-rustcode harness list [--json]      # * marks the default for new threads
-rustcode harness default codex --model gpt-5 --effort high
-rustcode theme set nord
+rc skill list [--json]
+rc skill disable cloudflare
+rc mcp disable files          # also: enable, restart
+rc harness list [--json]      # * marks the default for new threads
+rc harness default codex --model gpt-5 --effort high
+rc theme set nord
 ```
 
 They go through the running server when there is one (it runs the MCP
@@ -567,7 +567,7 @@ a response streams; the transcript never leaves the view (#1595).
 (default `rustcode` for new configs). Themes are TOML files in
 `<config>/themes/` (or a project's `.rustcode/themes/`); each has the terminal
 keys and an optional `[desktop]` table of app tokens derived from them when
-left out. Manage them with `rustcode theme list | show | new | set | validate |
+left out. Manage them with `rc theme list | show | new | set | validate |
 path`; [themes.md](themes.md) has the format, the token table and derivation,
 validation, and the ACP methods.
 
@@ -647,14 +647,14 @@ without a restart.
 
 ### From a terminal or an agent
 
-`rustcode settings` reads and changes the same values:
+`rc settings` reads and changes the same values:
 
 ```sh
-rustcode settings list [--project <folder>] [--json]
-rustcode settings get auto-compact-threshold [--json]
-rustcode settings set continue-after-limit false
-rustcode settings set default-permission-mode edits --project ~/code/app
-rustcode settings reset auto-compact-threshold
+rc settings list [--project <folder>] [--json]
+rc settings get auto-compact-threshold [--json]
+rc settings set continue-after-limit false
+rc settings set default-permission-mode edits --project ~/code/app
+rc settings reset auto-compact-threshold
 ```
 
 `list` and `get` show each key's value, where it comes from (`default`,
@@ -664,7 +664,7 @@ it accepts (`default-permission-mode` is `ask`, `edits` or `full`;
 key's type (`true`/`false`, a number, a choice, or JSON for a list), refuses a
 wrong one with what the key accepts, and prints `before → after`. `reset`
 removes the machine's value, or with `--project` the project's override. The
-command goes through the running server when there is one (`rustcode server`),
+command goes through the running server when there is one (`rc server`),
 so the server stays the only writer of the file; without one it reads and
 writes the file itself.
 
@@ -674,28 +674,28 @@ the `rustcode` MCP server, which external harnesses and outside agents get: `{ "
 `set` and `reset` show the thread's approval card, titled with the value
 before and after (`Change setting auto-compact-threshold: 150000 → 200000`),
 and change nothing unless the user allows it; with no window to show the card
-in, the call is refused and names the `rustcode settings` command to run
+in, the call is refused and names the `rc settings` command to run
 instead. An outside agent needs Admin access to write
 ([mcp-outside-agents.md](mcp-outside-agents.md)).
 
-`settings.json` is deliberately not part of `rustcode config sync`: it is one
+`settings.json` is deliberately not part of `rc config sync`: it is one
 machine's behaviour, not a shared configuration.
 
 ## Syncing config, skills, and themes
 
 Initialize a config sync repository with a remote Git URL, then choose a
-direction explicitly or run the default pull-then-push sync (`rustcode sync` still works):
+direction explicitly or run the default pull-then-push sync (`rc sync` still works):
 
 ```bash
-rustcode config sync init <remote-git-url>
-rustcode config sync --pull   # or: rustcode config sync pull
-rustcode config sync --push   # or: rustcode config sync push
-rustcode config sync          # pull, then push
+rc config sync init <remote-git-url>
+rc config sync --pull   # or: rc config sync pull
+rc config sync --push   # or: rc config sync push
+rc config sync          # pull, then push
 ```
 
 `--pull` and `--push` cannot be used together.
 
-`rustcode config sync` stages only files inside the RustCode config directory:
+`rc config sync` stages only files inside the RustCode config directory:
 `.gitignore`, `config.toml`, `skills/`, `themes/`, and `commands/`. Skills in
 `~/.agents/skills`, a workspace `.rustcode/skills`, or any
 `extra_skill_dirs` entry are **not** synced — the universal root is shared
@@ -727,7 +727,7 @@ Then run `/prompt review the current diff`, review or edit the staged text, and
 press Enter to submit it. Templates are limited to 64 KiB and expanded prompts
 to 256 KiB; empty, invalid UTF-8, symlink, and slash-command expansions are
 rejected. Listing does not create command directories. User templates are
-included in `rustcode config sync`; workspace templates remain with the project.
+included in `rc config sync`; workspace templates remain with the project.
 
 ### Text generators
 

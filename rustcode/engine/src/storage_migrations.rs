@@ -69,7 +69,7 @@ pub const MIGRATIONS: &[Migration] = &[
 
 /// Threads that early versions kept directly in `threads/<id>` (or as
 /// `threads/<id>.json`) move to `threads/YYYY/MM/DD/<id>`, as
-/// `rustcode threads migrate` does. Each is copied, the copy renamed into
+/// `rc threads migrate` does. Each is copied, the copy renamed into
 /// place, and only then the original removed; a thread already at its
 /// destination is left where it is. Any failure keeps the step pending.
 fn legacy_thread_layout(config_dir: &Path) -> Result<(), String> {
@@ -78,7 +78,7 @@ fn legacy_thread_layout(config_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "{} of {} legacy thread(s) could not be moved, for example {}; run `rustcode threads migrate --dry-run` to inspect",
+        "{} of {} legacy thread(s) could not be moved, for example {}; run `rc threads migrate --dry-run` to inspect",
         report.errors.len(),
         report.found,
         report.errors[0]
@@ -256,7 +256,7 @@ pub struct MigrationEntry {
     pub state: MigrationState,
 }
 
-/// Read-only report for `rustcode storage status`.
+/// Read-only report for `rc storage status`.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MigrationStatus {
     pub config_dir: PathBuf,
@@ -574,7 +574,7 @@ pub fn run_at_startup() {
         RunOutcome::Applied(applied) => serde_json::json!({"applied": applied}),
         RunOutcome::Failed { applied, id, error } => {
             eprintln!(
-                "RustCode: user-data migration `{id}` failed: {error}. RustCode will retry it on the next start; run `rustcode storage status` to inspect."
+                "RustCode: user-data migration `{id}` failed: {error}. RustCode will retry it on the next start; run `rc storage status` to inspect."
             );
             serde_json::json!({"applied": applied, "failed": id, "error": error})
         }

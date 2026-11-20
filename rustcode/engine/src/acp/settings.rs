@@ -14,7 +14,7 @@
 //!
 //! Offline machines keep their file; a client writes to a machine only while
 //! its connection is open. `_rustcode/settings/changed` is sent when the file
-//! changes, whoever wrote it: the app, `rustcode settings set`, an agent's
+//! changes, whoever wrote it: the app, `rc settings set`, an agent's
 //! `manage_settings` or an edit by hand ([`start_watching`]).
 
 use serde::{Deserialize, Serialize};
@@ -444,7 +444,7 @@ fn type_name(kind: SettingType) -> &'static str {
 }
 
 /// Every key with its type, default, label, accepted values and whether a
-/// project may override it: what `rustcode settings list` and
+/// project may override it: what `rc settings list` and
 /// `manage_settings` show beside the values.
 pub(crate) fn describe() -> Vec<Value> {
     registry()

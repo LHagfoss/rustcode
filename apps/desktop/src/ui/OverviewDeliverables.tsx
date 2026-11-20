@@ -18,7 +18,7 @@ import {
   readDeliverableMode,
   writeDeliverableMode,
 } from "./overview";
-import { cx, Pill } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
 /** How many deliveries show before the rest wait behind one press. */
@@ -30,12 +30,11 @@ const PICTURE_FILL =
 
 function PictureTile({ picture }: { picture: DeliverablePicture }) {
   return (
-    <span
-      title={picture.label}
-      className={cx("block size-full overflow-hidden rounded-md bg-fill-subtle", PICTURE_FILL)}
-    >
-      <MarkdownImage src={picture.src} alt={picture.label} />
-    </span>
+    <Tooltip label={picture.label}>
+      <span className={cx("block size-full overflow-hidden rounded-md bg-fill-subtle", PICTURE_FILL)}>
+        <MarkdownImage src={picture.src} alt={picture.label} />
+      </span>
+    </Tooltip>
   );
 }
 
@@ -44,15 +43,16 @@ function FileTile({ file, onOpen }: { file: DeliverableFile; onOpen: () => void 
   // a file and a screenshot sit in the same quiet square.
   return (
     <div className="aspect-square rounded-md bg-fill-subtle">
-      <button
-        type="button"
-        onClick={onOpen}
-        title={`${file.path} — show in the file manager`}
-        className="flex size-full flex-col items-center justify-center gap-1 rounded-md px-1 py-1.5 text-fg-muted hover:bg-fill hover:text-fg"
-      >
-        <FileText size={16} className="shrink-0" />
-        <span className="line-clamp-2 w-full break-all text-center text-caption">{file.label}</span>
-      </button>
+      <Tooltip label={`${file.path} — show in the file manager`}>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex size-full flex-col items-center justify-center gap-1 rounded-md px-1 py-1.5 text-fg-muted hover:bg-fill hover:text-fg"
+        >
+          <FileText size={16} className="shrink-0" />
+          <span className="line-clamp-2 w-full break-all text-center text-caption">{file.label}</span>
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -83,20 +83,17 @@ function DeliverableRow({
   const shape = "flex h-8 w-full items-center gap-2 rounded-md px-2 text-body";
   if (!onOpen) {
     return (
-      <div className={shape} title={label}>
-        {body}
-      </div>
+      <Tooltip label={label}>
+        <div className={shape}>{body}</div>
+      </Tooltip>
     );
   }
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      title={kind === "picture" ? `Open ${label}` : `${label} — show in the file manager`}
-      className={cx(shape, "hover:bg-fill-subtle")}
-    >
-      {body}
-    </button>
+    <Tooltip label={kind === "picture" ? `Open ${label}` : `${label} — show in the file manager`}>
+      <button type="button" onClick={onOpen} className={cx(shape, "hover:bg-fill-subtle")}>
+        {body}
+      </button>
+    </Tooltip>
   );
 }
 

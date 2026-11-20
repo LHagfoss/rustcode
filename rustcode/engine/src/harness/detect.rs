@@ -349,11 +349,16 @@ fn probe_cwd() -> Option<PathBuf> {
         .filter(|home| home.is_dir())
 }
 
-/// The `PATH` a harness is looked up on and started with: the engine's own,
-/// then the login shell's, so an app started from the Dock finds the same
-/// commands as the terminal, then the well-known install directories the
-/// shell adds (Homebrew's prefixes, `path_helper`'s files, `~/.local/bin`,
+/// The `PATH` a harness is looked up on and started with: the login shell's,
+/// then the engine's own, then the well-known install directories the shell
+/// adds (Homebrew's prefixes, `path_helper`'s files, `~/.local/bin`,
 /// `~/.bun/bin`, `~/.cargo/bin`).
+///
+/// The login shell's order wins so a harness installed twice runs the copy
+/// the terminal runs: with `agy` in both `~/.local/bin` and
+/// `/opt/homebrew/bin`, the engine's inherited `PATH` found Homebrew's
+/// first, whose quota read failed its TLS check while the terminal's copy
+/// read the quota.
 ///
 /// The last group matters on its own: when the shell probe fails or times out
 /// -- likely at app launch, or with several harness checks starting at once --
@@ -361,22 +366,34 @@ fn probe_cwd() -> Option<PathBuf> {
 /// not mention `/opt/homebrew/bin`. A `brew`-installed harness is then not
 /// found at all, and one found through `npx` cannot start the binary it
 /// spawns. Well-known directories are appended rather than prepended, so the
-/// process's own order still wins, and Windows is left as it was.
+/// shell's and the process's order still win, and Windows is left as it was.
 pub(crate) fn search_path() -> std::ffi::OsString {
-    #[cfg_attr(test, allow(unused_mut))]
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).collect())
-        .unwrap_or_default();
     #[cfg(not(test))]
-    if let Some(login) = crate::shell_env::login_shell_var("PATH") {
-        for dir in std::env::split_paths(&login) {
+    let login = crate::shell_env::login_shell_var("PATH");
+    #[cfg(test)]
+    let login: Option<String> = None;
+    let mut dirs = merge_path_dirs(
+        login.as_deref().map(std::ffi::OsStr::new),
+        std::env::var_os("PATH").as_deref(),
+    );
+    crate::shell_env::add_well_known_path_dirs(&mut dirs);
+    std::env::join_paths(dirs).unwrap_or_default()
+}
+
+/// `login`'s directories, then `process`'s that it does not already list.
+fn merge_path_dirs(
+    login: Option<&std::ffi::OsStr>,
+    process: Option<&std::ffi::OsStr>,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for path in [login, process].into_iter().flatten() {
+        for dir in std::env::split_paths(path) {
             if !dirs.contains(&dir) {
                 dirs.push(dir);
             }
         }
     }
-    crate::shell_env::add_well_known_path_dirs(&mut dirs);
-    std::env::join_paths(dirs).unwrap_or_default()
+    dirs
 }
 
 /// The names one configured program becomes, platform by platform: as written
@@ -597,6 +614,31 @@ mod tests {
         assert!(!detect_uncached_with(&required, no_probe_answer).installed);
         // The case the report was about.
         assert_eq!(crate::harness::known("pi").unwrap().requires, Some("pi"));
+    }
+
+    #[test]
+    fn the_login_shells_order_wins_over_the_engines() {
+        // The report: `agy` in both `~/.local/bin` (first on the terminal's
+        // PATH) and `/opt/homebrew/bin` (first on launchd's). The engine ran
+        // Homebrew's, whose quota read failed TLS while the terminal's worked.
+        let login =
+            std::env::join_paths(["/Users/a/.local/bin", "/opt/homebrew/bin", "/usr/bin"]).unwrap();
+        let process = std::env::join_paths(["/opt/homebrew/bin", "/usr/bin", "/bin"]).unwrap();
+        assert_eq!(
+            merge_path_dirs(Some(&login), Some(&process)),
+            [
+                "/Users/a/.local/bin",
+                "/opt/homebrew/bin",
+                "/usr/bin",
+                "/bin"
+            ]
+            .map(PathBuf::from)
+        );
+        // Without a login shell answer, the process's own order is kept.
+        assert_eq!(
+            merge_path_dirs(None, Some(&process)),
+            ["/opt/homebrew/bin", "/usr/bin", "/bin"].map(PathBuf::from)
+        );
     }
 
     #[test]

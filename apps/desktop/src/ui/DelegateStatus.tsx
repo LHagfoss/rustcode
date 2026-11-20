@@ -70,27 +70,28 @@ function StatusLine({
   const detail = detailOf(row, stop !== undefined);
   return (
     <div className="flex min-w-0 items-center gap-0.5">
-      <button
-        type="button"
-        onClick={() => onOpen(row.id)}
-        title={`Open ${row.title}`}
-        className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-2 py-1 text-left hover:bg-fill-subtle active:bg-fill-strong"
-      >
-        <span className="flex min-w-0 items-center gap-2 text-callout">
-          <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", TINT[row.state])} />
-          <span className="min-w-0 truncate">{row.title}</span>
-          <span
-            className={cx(
-              "ml-auto shrink-0 text-caption",
-              row.state === "needs" ? "text-warning" : "text-fg-muted",
-            )}
-          >
-            {AGENT_WORD[row.state]}
-            {idle ? ` · ${idle}` : ""}
+      <Tooltip label={`Open ${row.title}`}>
+        <button
+          type="button"
+          onClick={() => onOpen(row.id)}
+          className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-2 py-1 text-left hover:bg-fill-subtle active:bg-fill-strong"
+        >
+          <span className="flex min-w-0 items-center gap-2 text-callout">
+            <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", TINT[row.state])} />
+            <span className="min-w-0 truncate">{row.title}</span>
+            <span
+              className={cx(
+                "ml-auto shrink-0 text-caption",
+                row.state === "needs" ? "text-warning" : "text-fg-muted",
+              )}
+            >
+              {AGENT_WORD[row.state]}
+              {idle ? ` · ${idle}` : ""}
+            </span>
           </span>
-        </span>
-        {detail && <span className="truncate pl-4 text-caption text-fg-faint">{detail}</span>}
-      </button>
+          {detail && <span className="truncate pl-4 text-caption text-fg-faint">{detail}</span>}
+        </button>
+      </Tooltip>
       {stop && canStop(row) && (
         <Tooltip label="Stop this work in that thread">
           <button

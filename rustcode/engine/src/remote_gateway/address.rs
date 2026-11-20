@@ -649,7 +649,7 @@ impl HostRouteKind {
         }
     }
 
-    /// The word `rustcode remote status` uses for this kind of network.
+    /// The word `rc remote status` uses for this kind of network.
     pub fn label(self) -> &'static str {
         match self {
             Self::Lan => "lan",
@@ -661,7 +661,7 @@ impl HostRouteKind {
 }
 
 /// One address a WebSocket listener is bound to, with the interface that
-/// carries it, as `rustcode remote status` lists them.
+/// carries it, as `rc remote status` lists them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListenAddress {
     /// `host:port`, as a device dials it.

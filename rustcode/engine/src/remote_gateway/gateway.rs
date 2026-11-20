@@ -1317,7 +1317,7 @@ impl Shared {
     pub(super) fn hub_member(&self, id: &str) -> Result<(String, String), &'static str> {
         if !self.members.is_hub() {
             return Err(
-                "this machine is not the fleet's hub; turn it on with `rustcode machines hub on`",
+                "this machine is not the fleet's hub; turn it on with `rc machines hub on`",
             );
         }
         let state = self.state();
@@ -1479,7 +1479,7 @@ impl Shared {
 
 /// Tell the owner that a retired refresh token was presented and its whole
 /// family revoked: in the gateway log and as an operational event, next to
-/// what `rustcode remote revoke` reports.
+/// what `rc remote revoke` reports.
 fn report_family_revocation(
     device_id: &str,
     device_name: Option<&str>,

@@ -304,7 +304,7 @@ async fn run_remote_command(
     Ok(())
 }
 
-/// Run `rustcode mcp …`. Edits go to the user config; the workspace's merged
+/// Run `rc mcp …`. Edits go to the user config; the workspace's merged
 /// view is consulted only to say when a project file hides the change.
 fn run_mcp_command(
     command: &crate::cli::McpCommands,
@@ -333,7 +333,7 @@ fn run_mcp_command(
         crate::cli::McpCommands::List => {
             let (_, _, config) = rustcode::config::load_config_for_workspace(workspace);
             if config.mcp_servers.is_empty() {
-                println!("No MCP servers configured. Add one with `rustcode mcp add`.");
+                println!("No MCP servers configured. Add one with `rc mcp add`.");
             }
             for server in &config.mcp_servers {
                 println!("{}", crate::cli::mcp_server_summary(server));
@@ -357,7 +357,7 @@ fn run_mcp_command(
     Ok(())
 }
 
-/// `rustcode theme ...`: print the result, or the error and exit 1.
+/// `rc theme ...`: print the result, or the error and exit 1.
 fn run_theme_command(command: &crate::cli::ThemeCommands) {
     use crate::cli::ThemeCommands;
     use rustcode::controller::themes::cli;
@@ -381,7 +381,7 @@ fn run_theme_command(command: &crate::cli::ThemeCommands) {
     match result {
         Ok(text) => print!("{text}"),
         Err(message) => {
-            eprintln!("rustcode theme: {message}");
+            eprintln!("rc theme: {message}");
             std::process::exit(1);
         }
     }
@@ -446,7 +446,7 @@ fn run_storage_command(
     Ok(())
 }
 
-/// `rustcode usage --pull-requests`: the `pr_outcomes_by_model` view (#3907).
+/// `rc usage --pull-requests`: the `pr_outcomes_by_model` view (#3907).
 /// With `prices`, an opt-in estimate (#3934) is added next to, never into,
 /// the reported cost.
 fn run_pull_request_usage_command(
@@ -556,7 +556,7 @@ fn run_pull_request_usage_command(
     Ok(())
 }
 
-/// `rustcode usage`: tokens per harness and model from the local data store.
+/// `rc usage`: tokens per harness and model from the local data store.
 /// Disk usage is `storage usage`; this never prices requests.
 fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
     let since = match since {
@@ -768,7 +768,7 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// `rustcode data ...`: read-only access to the local data store.
+/// `rc data ...`: read-only access to the local data store.
 fn run_data_command(command: &crate::cli::DataCommands) -> Result<(), String> {
     use crate::cli::DataCommands;
     rustcode::data_store::ensure_ready()?;
@@ -959,7 +959,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Err(error) =
             rustcode::run_mcp_orchestrator(session.clone(), socket.clone(), token).await
         {
-            eprintln!("rustcode mcp-orchestrator: {error}");
+            eprintln!("rc mcp-orchestrator: {error}");
             std::process::exit(1);
         }
         return Ok(());
@@ -972,7 +972,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .or_else(|| std::env::var(rustcode::MCP_CONNECT_TOKEN_ENV).ok())
             .unwrap_or_default();
         if let Err(error) = rustcode::run_mcp_connect(token).await {
-            eprintln!("rustcode mcp-connect: {error}");
+            eprintln!("rc mcp-connect: {error}");
             std::process::exit(1);
         }
         return Ok(());
@@ -1023,14 +1023,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             run_usage_command(since.as_deref(), *json)
         };
         if let Err(error) = result {
-            eprintln!("rustcode usage: {error}");
+            eprintln!("rc usage: {error}");
             std::process::exit(1);
         }
         return Ok(());
     }
     if let Some(crate::cli::Commands::Data { command }) = cli_args.command.as_ref() {
         if let Err(error) = run_data_command(command) {
-            eprintln!("rustcode data: {error}");
+            eprintln!("rc data: {error}");
             std::process::exit(1);
         }
         return Ok(());
@@ -1057,14 +1057,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(crate::cli::Commands::Worktree { command }) = cli_args.command.as_ref() {
         if let Err(error) = crate::manage_command::worktree(command) {
-            eprintln!("rustcode worktree: {error}");
+            eprintln!("rc worktree: {error}");
             std::process::exit(1);
         }
         return Ok(());
     }
     if let Some(crate::cli::Commands::Settings { command }) = cli_args.command.as_ref() {
         if let Err(error) = crate::manage_command::settings(command).await {
-            eprintln!("rustcode settings: {error}");
+            eprintln!("rc settings: {error}");
             std::process::exit(1);
         }
         return Ok(());
@@ -1074,7 +1074,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(crate::cli::Commands::Machines { command }) = cli_args.command.as_ref() {
         if let Err(error) = crate::machines::run(command).await {
-            eprintln!("rustcode machines: {error:#}");
+            eprintln!("rc machines: {error:#}");
             std::process::exit(1);
         }
         return Ok(());
@@ -1108,7 +1108,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let code = match result {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("rustcode server connect: {error:#}");
+                eprintln!("rc server connect: {error:#}");
                 1
             }
         };
@@ -1205,11 +1205,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 | crate::cli::SessionCommands::Unpin { .. }),
             ) => {
                 if let Err(error) = crate::manage_command::thread(command).await {
-                    eprintln!("rustcode threads: {error}");
+                    eprintln!("rc threads: {error}");
                     std::process::exit(1);
                 }
             }
-            // `rustcode sessions` with no subcommand lists sessions, scoped
+            // `rc sessions` with no subcommand lists sessions, scoped
             // to the current workspace by default (`list --all` shows every
             // workspace with its path per entry).
             Some(crate::cli::SessionCommands::List { all }) => {
@@ -1306,7 +1306,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Err(error) =
             rustcode::model_defaults::save(&mut config, model.as_deref(), effort.as_deref())
         {
-            eprintln!("rustcode defaults: {error}");
+            eprintln!("rc defaults: {error}");
             std::process::exit(1);
         }
         println!(
@@ -1408,11 +1408,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
                 println!(
-                    "Sync repository setup complete! You can now run `rustcode config sync` anytime."
+                    "Sync repository setup complete! You can now run `rc config sync` anytime."
                 );
             }
             crate::cli::SyncAction::PullThenPush => {
-                // Default behavior for `rustcode config sync` (pull then push)
+                // Default behavior for `rc config sync` (pull then push)
                 println!(
                     "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
                 );
@@ -1561,7 +1561,7 @@ fn run_session_export(id: Option<&str>, out: Option<&std::path::Path>) {
     }
 }
 
-/// What `rustcode threads settle|unsettle|review` stores, and the word it
+/// What `rc threads settle|unsettle|review` stores, and the word it
 /// prints: the app's Settled, Active and Review over the engine's `done`,
 /// `idle` and `review` (`docs/orchestrator.md`, *Thread status*).
 #[derive(Clone, Copy)]
@@ -1591,7 +1591,7 @@ impl ThreadStatusChange {
     }
 }
 
-/// `rustcode threads settle|unsettle|review <id>...`: store each thread's
+/// `rc threads settle|unsettle|review <id>...`: store each thread's
 /// status through the engine's store, so the app's next `session/list` and the
 /// terminal picker read the same `status.json`. One line per thread, an
 /// unknown or ambiguous id on stderr, and a non-zero exit if any failed.
@@ -1708,7 +1708,7 @@ fn run_sessions_list(show_all: bool) {
     }
 }
 
-/// `rustcode sessions search`: sessions whose messages contain `query`, newest
+/// `rc sessions search`: sessions whose messages contain `query`, newest
 /// first. `--json` prints an array the desktop app reads.
 fn run_sessions_search(query: &str, show_all: bool, limit: usize, json: bool) {
     let scope = if show_all {

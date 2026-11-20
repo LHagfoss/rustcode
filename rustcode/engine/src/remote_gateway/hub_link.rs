@@ -1,8 +1,8 @@
 //! The hub role (#3957, `docs/architecture/hub-plan.md` phase 5).
 //!
 //! A hub is an ordinary machine with `"hub": true` in `<config>/hub.json`
-//! (`rustcode machines hub on`). Another machine joins it with
-//! `rustcode machines hub join <machine>`: that machine's gateway keeps an
+//! (`rc machines hub on`). Another machine joins it with
+//! `rc machines hub join <machine>`: that machine's gateway keeps an
 //! outbound WebSocket to the hub's gateway, the device connection it already
 //! has as a paired desktop or command line, and switches it to the hub link
 //! with a `hub_join` frame. The hub can then reach it without any inbound

@@ -891,7 +891,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
     let _kill_harnesses = KillHarnesses;
     // Another local process — the remote gateway relaying a paired desktop —
     // reaches this engine only through a description it publishes here: there
-    // is no `rustcode server run` behind `--acp` (`server/engine_endpoint.rs`,
+    // is no `rc server run` behind `--acp` (`server/engine_endpoint.rs`,
     // #3341). stdio keeps its one client either way.
     let published = publish_endpoint(&engine);
     // Over stdio the engine has this one client and ends with it.
@@ -956,13 +956,13 @@ impl AcpEngine {
         // After that first run it reads one `store_meta` row and returns.
         crate::thread_parent::ensure_ready();
         crate::thread_index::warm();
-        // Metadata for `rustcode usage` and `rustcode data query`; a background
+        // Metadata for `rc usage` and `rc data query`; a background
         // backfill of the existing threads runs once, on first open.
         crate::data_store::warm();
         // Links an earlier engine was running when it died are not running now.
         tokio::task::spawn_blocking(crate::data_store::interrupt_orphaned_links);
         let server = AcpServer::new(auto_approve)?;
-        // Apps connected through `rustcode mcp-connect` find this engine by its
+        // Apps connected through `rc mcp-connect` find this engine by its
         // hub, so it listens from the start when any are connected.
         tokio::spawn(crate::orchestration::outside::bind_hub_when_connected());
         // Linked pull requests from before a restart carry on from here, and

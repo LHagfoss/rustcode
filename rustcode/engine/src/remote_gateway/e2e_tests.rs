@@ -1338,7 +1338,7 @@ async fn remote_acp_relays_to_an_engine_started_by_a_client() {
     let published = crate::server::engine_endpoint::publish(&run, &engine).expect("publish");
     assert!(
         !run.join("server.json").exists(),
-        "nothing runs `rustcode server run` behind the app"
+        "nothing runs `rc server run` behind the app"
     );
     let described = crate::server::engine_endpoint::published(&run).expect("a description");
     assert_eq!(described.endpoint, published.endpoint());
@@ -1993,7 +1993,7 @@ async fn the_gateway_refuses_to_start_on_unreadable_revocation_notes() {
     let error = host.bind_error().await;
     let message = format!("{error:#}");
     assert!(message.contains("revocations.json"), "{message}");
-    assert!(message.contains("rustcode remote revoke"), "{message}");
+    assert!(message.contains("rc remote revoke"), "{message}");
     // Nothing ran and nothing was changed: the store still lists the device.
     assert!(
         host.lifecycle

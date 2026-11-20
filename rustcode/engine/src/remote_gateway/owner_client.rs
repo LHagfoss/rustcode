@@ -441,7 +441,7 @@ impl Client {
         }
         let Some(launcher) = self.connector.launcher.as_ref().filter(|_| first) else {
             return Err(
-                "no remote gateway is running; start one with `rustcode remote serve`".to_owned(),
+                "no remote gateway is running; start one with `rc remote serve`".to_owned(),
             );
         };
         let mut launcher = launcher.clone();

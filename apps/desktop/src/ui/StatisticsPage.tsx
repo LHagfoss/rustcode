@@ -52,7 +52,7 @@ import { formatTokens as compactTokens, relativeAge } from "../state/thread";
 import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
 import { ChevronRight, RefreshCw } from "./icons";
-import { cx, Skeleton, Spinner } from "./primitives";
+import { cx, Skeleton, Spinner, Tooltip } from "./primitives";
 import {
   ChartSkeleton,
   CostShare,
@@ -585,9 +585,9 @@ function UsageTable({
                     missing={group.totals.turnsWithoutCacheWriteTokens}
                     label="cache write"
                   />
-                  <td className="px-2 py-2 text-right tabular" title={costTotalsTitle(groupCost)}>
-                    {costValue(groupCost)}
-                  </td>
+                  <Tooltip label={costTotalsTitle(groupCost)}>
+                    <td className="px-2 py-2 text-right tabular">{costValue(groupCost)}</td>
+                  </Tooltip>
                   <td className="px-4 py-2 text-right text-fg-muted tabular">{group.totals.turns}</td>
                 </tr>
                 {group.models.map((model) => {
@@ -660,13 +660,14 @@ function NumberCell({
 }) {
   const partial = count !== undefined && missing > 0;
   return (
-    <td
-      className={narrow ? `px-2 py-2 text-right tabular ${NARROW_COLUMN}` : "px-2 py-2 text-right tabular"}
-      title={countTitle(count, missing, label)}
-    >
-      {tokensLabel(count)}
-      {partial && <MissingMark label={`${missing} turns reported no ${label} tokens`} />}
-    </td>
+    <Tooltip label={countTitle(count, missing, label)}>
+      <td
+        className={narrow ? `px-2 py-2 text-right tabular ${NARROW_COLUMN}` : "px-2 py-2 text-right tabular"}
+      >
+        {tokensLabel(count)}
+        {partial && <MissingMark label={`${missing} turns reported no ${label} tokens`} />}
+      </td>
+    </Tooltip>
   );
 }
 
@@ -678,10 +679,12 @@ const countTitle = (count: number | undefined, missing: number, label: string) =
 /** A model row can combine reported cost and estimates when its aliases are merged. */
 function CostCell({ cost }: { cost: CostTotals }) {
   return (
-    <td className="px-2 py-2 text-right tabular" title={costTotalsTitle(cost)}>
-      {costValue(cost)}
-      {cost.usd !== undefined && cost.unknownTurns > 0 && <span className="text-fg-faint">†</span>}
-    </td>
+    <Tooltip label={costTotalsTitle(cost)}>
+      <td className="px-2 py-2 text-right tabular">
+        {costValue(cost)}
+        {cost.usd !== undefined && cost.unknownTurns > 0 && <span className="text-fg-faint">†</span>}
+      </td>
+    </Tooltip>
   );
 }
 
@@ -698,10 +701,10 @@ function costTotalsTitle(cost: CostTotals): string {
   return `${exactUsd(cost.usd)} USD: ${parts.join(" + ")}${left}`;
 }
 
-/** A small mark after a number that covers only the turns that reported it. */
+/** A small mark after a number that covers only the turns that reported it; its cell's tip says why. */
 function MissingMark({ label }: { label: string }) {
   return (
-    <span role="img" aria-label={label} title={label} className="shrink-0 text-fg-faint">
+    <span role="img" aria-label={label} className="shrink-0 text-fg-faint">
       *
     </span>
   );
@@ -796,12 +799,12 @@ function ThreadRow({ thread, harness }: { thread: ThreadTotal; harness: string }
       status={notes.length ? notes.join(" · ") : undefined}
     >
       <div className="text-right leading-tight">
-        <div className="font-medium text-body tabular" title={exact(total)}>
-          {tokensLabel(total)}
-        </div>
-        <div className="text-caption text-fg-faint tabular" title={costExact(thread.cost)}>
-          {costLine(thread.cost)}
-        </div>
+        <Tooltip label={exact(total)}>
+          <div className="font-medium text-body tabular">{tokensLabel(total)}</div>
+        </Tooltip>
+        <Tooltip label={costExact(thread.cost)}>
+          <div className="text-caption text-fg-faint tabular">{costLine(thread.cost)}</div>
+        </Tooltip>
       </div>
     </Row>
   );
@@ -900,7 +903,7 @@ function UsageFootnote({
           that count. Cost is the USD a harness reported, or the same tokens at API list prices on{" "}
           {PRICE_DATE} where it reported none; a reported number is never altered. The total adds each row's
           reported cost or its estimate, never both, and shows the two parts beneath it. Estimates are not a
-          bill: a subscription can charge differently. The CLI's rustcode usage is still reported-only.
+          bill: a subscription can charge differently. The CLI's rc usage is still reported-only.
         </span>
         {totals.turnsWithoutAnyTokens > 0 && (
           <span className="block">

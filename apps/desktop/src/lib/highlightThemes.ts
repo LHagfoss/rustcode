@@ -3,7 +3,7 @@
 // (CodeStyle.swift); CSS picks light or dark per token. Shared by the
 // highlighter worker (lib/highlight.worker.ts).
 
-import type { ThemeRegistration } from "shiki";
+import type { ThemeRegistration } from "shiki/core";
 
 const scopes = (light: string, dark: string, scope: string[]) => ({ light, dark, scope });
 

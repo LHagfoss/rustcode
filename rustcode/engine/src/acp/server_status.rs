@@ -1,4 +1,4 @@
-//! `_rustcode/server/status`: what `rustcode server status` and
+//! `_rustcode/server/status`: what `rc server status` and
 //! `restart --when-idle` ask a running server. The caller need not have sent
 //! `initialize`, and then it is not counted among the clients.
 

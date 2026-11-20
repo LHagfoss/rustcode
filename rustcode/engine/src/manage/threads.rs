@@ -1,4 +1,4 @@
-//! `rustcode threads move|rename|pin|unpin` and `rustcode worktree …`
+//! `rc threads move|rename|pin|unpin` and `rc worktree …`
 //! (#3821): the thread and worktree operations the app's own controls use,
 //! from a terminal. Moving a thread needs the running server, which owns the
 //! thread's harness process; the rest change the files the app watches.
@@ -24,7 +24,7 @@ pub async fn move_thread(
         crate::server::Asked::Answer(answer) => Ok(answer),
         crate::server::Asked::Refused(message) => Err(message),
         crate::server::Asked::NoServer(_) => Err(
-            "no RustCode server is running, and a thread moves in the server that runs it; start the app or `rustcode server install`, then retry".to_owned(),
+            "no RustCode server is running, and a thread moves in the server that runs it; start the app or `rc server install`, then retry".to_owned(),
         ),
     }
 }

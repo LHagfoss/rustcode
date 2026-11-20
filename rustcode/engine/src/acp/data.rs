@@ -19,7 +19,7 @@ use serde_json::Value;
 pub(crate) const DATA_METHOD_VERSION: u32 = 1;
 
 /// `_rustcode/data/usage`: tokens and reported cost by harness, model, day,
-/// project or thread, from the store `rustcode usage` reads.
+/// project or thread, from the store `rc usage` reads.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
 )]
@@ -38,7 +38,7 @@ pub(crate) struct DataUsageRequest {
 }
 
 /// `_rustcode/data/query`: one read-only statement through the same guards
-/// `rustcode data query` uses.
+/// `rc data query` uses.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
 )]

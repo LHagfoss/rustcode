@@ -43,7 +43,7 @@ import {
   History,
   type LucideIcon,
 } from "./icons";
-import { cx, Pill, Skeleton } from "./primitives";
+import { cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";
 
@@ -110,14 +110,15 @@ function Nothing({ children }: { children: ReactNode }) {
 /** A row in a card's list: a control, so the card is walkable with the keyboard. */
 function CardRow({ onClick, title, children }: { onClick: () => void; title: string; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className="-mx-1 flex h-6 min-w-0 shrink-0 items-center gap-1.5 rounded-sm px-1 text-left text-callout hover:bg-fill-subtle"
-    >
-      {children}
-    </button>
+    <Tooltip label={title}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="-mx-1 flex h-6 min-w-0 shrink-0 items-center gap-1.5 rounded-sm px-1 text-left text-callout hover:bg-fill-subtle"
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }
 

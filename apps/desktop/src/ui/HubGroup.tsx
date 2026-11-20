@@ -1,7 +1,7 @@
 // Settings › Machines › Hub: make this computer the fleet's hub, or join one
 // (docs/remote.md › The hub). A hub is a machine that stays on; the others keep
 // an outbound link to it, so outside agents reach them through it with no open
-// port. The shell runs `rustcode machines hub …` (`state/hub.ts`).
+// port. The shell runs `rc machines hub …` (`state/hub.ts`).
 
 import { useEffect, useState } from "react";
 import { OUTSIDE_SCOPES, type OutsideScope, SCOPE_HELP, SCOPE_LABEL } from "../acp/outside";

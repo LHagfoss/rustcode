@@ -18,6 +18,7 @@ import {
   toggleFolded,
   writeFolded,
 } from "./overview";
+import { Tooltip } from "./primitives";
 
 /**
  * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
@@ -100,12 +101,14 @@ export function ThreadDetails() {
       </div>
       {branch && (
         <div className="rule-t [--rc-rule-inset:1rem] px-2 py-1">
-          <div className={row} title={branch}>
-            <GitBranch size={16} className={icon} />
-            <span className="truncate rounded-md bg-fill-subtle px-2 py-0.5 font-mono text-caption">
-              {branch}
-            </span>
-          </div>
+          <Tooltip label={branch}>
+            <div className={row}>
+              <GitBranch size={16} className={icon} />
+              <span className="truncate rounded-md bg-fill-subtle px-2 py-0.5 font-mono text-caption">
+                {branch}
+              </span>
+            </div>
+          </Tooltip>
         </div>
       )}
       {delegates > 0 && (

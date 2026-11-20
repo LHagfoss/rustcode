@@ -92,7 +92,7 @@ pub struct HubIdentity {
     pub loopback_only: bool,
 }
 
-/// One row of `rustcode remote status`.
+/// One row of `rc remote status`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SessionSummary {
     pub session_id: String,

@@ -4,14 +4,14 @@ One theme system colours both the terminal UI and the desktop app. A theme is
 a TOML file; the engine (`rustcode/engine/src/themes/`) parses, derives and
 validates it, the terminal UI renders its terminal keys, and the desktop app
 gets its desktop tokens over ACP. Users edit theme files by hand, with
-`rustcode theme`, or by asking an agent (the built-in `rustcode-themes` skill).
+`rc theme`, or by asking an agent (the built-in `rustcode-themes` skill).
 
 ## Where themes come from
 
 | Source | Location | Notes |
 | --- | --- | --- |
 | `builtin` | compiled in (`rustcode/engine/src/themes/builtin/`) | also copied to the user directory on first run |
-| `user` | `<config>/themes/*.toml` (`rustcode theme path`) | synced by `rustcode config sync` |
+| `user` | `<config>/themes/*.toml` (`rc theme path`) | synced by `rc config sync` |
 | `project` | `.rustcode/themes/*.toml` in the workspace or an ancestor | closer directory wins |
 
 Themes are matched by `name`, case-insensitively: a project theme overrides a
@@ -20,9 +20,9 @@ byte-identical to a built-in is reported as `builtin`. A copy of a built-in
 written by an older release (the terminal keys alone, or an earlier version of
 the whole file, unedited) is upgraded to the current built-in at startup; an
 edited copy is never touched. Files that do not parse are left out of the
-list; `rustcode theme validate` says why.
+list; `rc theme validate` says why.
 
-The active theme is `theme` in the config (`/theme`, `rustcode theme set`,
+The active theme is `theme` in the config (`/theme`, `rc theme set`,
 `_rustcode/themes/set`). The default is `rustcode`, a neutral graphite dark
 (new configs only: an existing config keeps the theme it names). Built-ins:
 `rustcode`, `catppuccin-mocha`, `default`, `rain`, `cozy-rain`, `light`,
@@ -59,7 +59,7 @@ bg = "#0b0b0c"
 # ... any of the tokens below, "#rrggbb" (or [r, g, b]) only
 ```
 
-`rustcode theme new <name> [--from <theme>]` writes a file like this with every
+`rc theme new <name> [--from <theme>]` writes a file like this with every
 key and token filled in from the base theme and a comment on each.
 
 ### Terminal keys
@@ -120,7 +120,7 @@ to `default`.
 
 ## Validation
 
-`rustcode theme validate [<name>|<path>]` (no argument: every built-in, user
+`rc theme validate [<name>|<path>]` (no argument: every built-in, user
 and project file) prints each file's problems and exits 1 on any error.
 
 - Errors: invalid TOML, a missing or mistyped terminal key, an empty `name`,
@@ -134,12 +134,12 @@ and project file) prints each file's problems and exits 1 on any error.
 ## CLI
 
 ```bash
-rustcode theme list                         # * marks the active theme
-rustcode theme show <name> [--json]         # resolved tokens; --json as ACP reports it
-rustcode theme new <name> [--from <theme>]  # commented file in the user directory
-rustcode theme set <name>                   # make it active in the user config
-rustcode theme validate [<name>|<path>]
-rustcode theme path [<name>]                # user directory, or the theme's file
+rc theme list                         # * marks the active theme
+rc theme show <name> [--json]         # resolved tokens; --json as ACP reports it
+rc theme new <name> [--from <theme>]  # commented file in the user directory
+rc theme set <name>                   # make it active in the user config
+rc theme validate [<name>|<path>]
+rc theme path [<name>]                # user directory, or the theme's file
 ```
 
 ## ACP
@@ -190,5 +190,5 @@ The built-in skill `rustcode-themes`
 (`rustcode/engine/src/skills_builtin/rustcode-themes.md`) teaches agents the
 format, tokens, derivation, CLI and design rules (neutral palette, contrast,
 no pure black, a restrained accent). An agent edits the file, runs
-`rustcode theme validate`, and the desktop app restyles on save through
+`rc theme validate`, and the desktop app restyles on save through
 `_rustcode/themes/changed`.

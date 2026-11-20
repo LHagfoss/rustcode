@@ -9,7 +9,7 @@
 //! request with a five-second deadline, an owner connection lives as long as
 //! the session is shared, carries frames both ways and has its own liveness
 //! rules. Keeping them apart leaves the control protocol untouched and means
-//! a stuck owner cannot get in the way of `rustcode remote revoke`.
+//! a stuck owner cannot get in the way of `rc remote revoke`.
 //!
 //! Frames are newline-delimited JSON with the daemon's 1 MiB bound. They
 //! carry the [`crate::remote::owner`] seam: [`OwnerFrame`] is
@@ -175,7 +175,7 @@ mod server {
             } => {
                 if ipc_version != OWNER_IPC_VERSION {
                     let reason = format!(
-                        "this gateway speaks owner protocol {OWNER_IPC_VERSION}; restart it with `rustcode remote stop` after updating"
+                        "this gateway speaks owner protocol {OWNER_IPC_VERSION}; restart it with `rc remote stop` after updating"
                     );
                     write(&mut writer, &GatewayFrame::Closed { reason }).await;
                     return;
@@ -202,7 +202,7 @@ mod server {
             } => {
                 if ipc_version != OWNER_IPC_VERSION {
                     let reason = format!(
-                        "this gateway speaks owner protocol {OWNER_IPC_VERSION}; restart it with `rustcode remote stop` after updating"
+                        "this gateway speaks owner protocol {OWNER_IPC_VERSION}; restart it with `rc remote stop` after updating"
                     );
                     write(&mut writer, &GatewayFrame::Closed { reason }).await;
                     return;

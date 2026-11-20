@@ -1,7 +1,7 @@
-//! `rustcode up`: make this computer one another computer can pair with, in
+//! `rc up`: make this computer one another computer can pair with, in
 //! one command. It installs (or repairs) the server as a background service,
 //! switches remote access on, waits until the gateway answers and creates a
-//! connect code. `rustcode machines add-ssh` runs it over SSH as `rustcode up
+//! connect code. `rc machines add-ssh` runs it over SSH as `rc up
 //! --yes --json` and reads the JSON; a person runs it on a headless machine
 //! and types the code it prints on the other one (`docs/remote.md` › One
 //! command for a headless machine).
@@ -19,7 +19,7 @@ use std::time::Duration;
 /// gateway takes a moment to bind.
 const GATEWAY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// What `rustcode up --json` prints. `rustcode_client::ssh::UpReport` reads
+/// What `rc up --json` prints. `rustcode_client::ssh::UpReport` reads
 /// it on the other computer; the test below keeps the two in step.
 #[derive(Debug, Serialize)]
 pub struct UpReport {
@@ -83,7 +83,7 @@ pub async fn run(yes: bool, json: bool, no_service: bool) -> ! {
             if json {
                 match serde_json::to_string_pretty(&report) {
                     Ok(text) => println!("{text}"),
-                    Err(error) => eprintln!("rustcode up: {error}"),
+                    Err(error) => eprintln!("rc up: {error}"),
                 }
             } else {
                 print!("{}", human(&report));
@@ -91,7 +91,7 @@ pub async fn run(yes: bool, json: bool, no_service: bool) -> ! {
             0
         }
         Err(error) => {
-            eprintln!("rustcode up: {error:#}");
+            eprintln!("rc up: {error:#}");
             1
         }
     };
@@ -119,7 +119,7 @@ async fn up(yes: bool, no_service: bool) -> Result<UpReport> {
     if offer.loopback_only {
         problems.push(ProblemPart::new(
             "loopback-only",
-            "Remote access listens on this computer only (`remote.bind`), so no other computer can use the code. Set `remote.bind` to `auto` and run `rustcode up` again.",
+            "Remote access listens on this computer only (`remote.bind`), so no other computer can use the code. Set `remote.bind` to `auto` and run `rc up` again.",
         ));
     }
     Ok(UpReport {
@@ -187,7 +187,7 @@ async fn ensure_server(
             Err(error) => problems.push(ProblemPart::new(
                 "no-service",
                 format!(
-                    "The server could not be installed as a service ({error:#}), so it runs in the background until this computer restarts. Run `rustcode up` again after a restart."
+                    "The server could not be installed as a service ({error:#}), so it runs in the background until this computer restarts. Run `rc up` again after a restart."
                 ),
             )),
         }
@@ -219,7 +219,7 @@ async fn replace_old_server(
         problems.push(ProblemPart::new(
             "restart-pending",
             format!(
-                "The server running is version {} and has turns running. `rustcode server restart --when-idle` moves it to {}.",
+                "The server running is version {} and has turns running. `rc server restart --when-idle` moves it to {}.",
                 current.version,
                 env!("CARGO_PKG_VERSION")
             ),
@@ -276,13 +276,13 @@ async fn ensure_gateway(
             return Ok(status);
         }
         bail!(
-            "the server did not start remote access within {}s; see `rustcode server logs`",
+            "the server did not start remote access within {}s; see `rc server logs`",
             GATEWAY_TIMEOUT.as_secs()
         );
     }
     if cfg!(windows) {
         bail!(
-            "the RustCode server is not running. On Windows it runs in your desktop session: sign in on this PC, then run `rustcode up` again"
+            "the RustCode server is not running. On Windows it runs in your desktop session: sign in on this PC, then run `rc up` again"
         );
     }
     rustcode::remote_gateway::host::request_start(config_dir)?;
@@ -310,7 +310,7 @@ where
     }
 }
 
-/// What `rustcode up` prints for a person.
+/// What `rc up` prints for a person.
 pub fn human(report: &UpReport) -> String {
     let mut text = String::new();
     let name = report.host_name.as_deref().unwrap_or("This computer");
@@ -330,7 +330,7 @@ pub fn human(report: &UpReport) -> String {
     }
     let minutes = report.connect_code.expires_in_secs.div_ceil(60);
     text.push_str(&format!(
-        "\nConnect code: {}\nWorks once, for {minutes} minutes. Anyone who has it can see and run all threads here.\n\nOn the other computer:\n  rustcode machines connect {}\n\nOr, from a computer that reaches this one over SSH:\n  rustcode machines add-ssh <user@host>\n",
+        "\nConnect code: {}\nWorks once, for {minutes} minutes. Anyone who has it can see and run all threads here.\n\nOn the other computer:\n  rc machines connect {}\n\nOr, from a computer that reaches this one over SSH:\n  rc machines add-ssh <user@host>\n",
         report.connect_code.code, report.connect_code.link
     ));
     for problem in &report.problems {
@@ -390,7 +390,7 @@ mod tests {
         let text = human(&report());
         assert!(text.contains("box is up"));
         assert!(text.contains("K7MQ-29XH-TP4W-NRD6"));
-        assert!(text.contains("rustcode machines connect rustcode://connect/abc"));
+        assert!(text.contains("rc machines connect rustcode://connect/abc"));
         assert!(text.contains("10 minutes"));
         assert!(text.contains("linger-disabled: sudo loginctl enable-linger ada"));
     }

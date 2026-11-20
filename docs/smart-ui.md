@@ -84,7 +84,7 @@ Copy keep what the agent wrote.
 - [>] **Fast reconnect.** Ping every 10 s.
 - [ ] **Settings follow the MacBook.**
 :: callout info
-MCP is already in the CLI: `rustcode mcp add|list`.
+MCP is already in the CLI: `rc mcp add|list`.
 :: sources
 - rustcode | https://github.com/LHagfoss/rustcode
 ```

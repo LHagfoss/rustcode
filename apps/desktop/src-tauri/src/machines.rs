@@ -367,7 +367,7 @@ pub struct SshRun {
     pub steps: Vec<rustcode_client::ssh::Progress>,
 }
 
-/// The configuration directory the engine and `rustcode machines` use, so the
+/// The configuration directory the engine and `rc machines` use, so the
 /// app and the command line see one set of saved machines.
 fn config_dir() -> Result<PathBuf, String> {
     rustcode_client::config::config_dir().map_err(chain)
@@ -1562,7 +1562,7 @@ pub async fn machines_connect_code(
 
 /// Connect over SSH (`Settings › Machines › Connect over SSH`): sign in to
 /// `target`, install RustCode there at this version when `allow_install` and
-/// it is missing or older, start its server with `rustcode up` and pair with
+/// it is missing or older, start its server with `rc up` and pair with
 /// the code it printed. The page polls `machines_ssh_progress` for the steps;
 /// a failure's message names its step.
 #[tauri::command]
@@ -2364,7 +2364,7 @@ mod tests {
     }
 
     /// A machine reachable over the LAN whose overlay route does not answer
-    /// carries the words to act on: the same hint `rustcode machines list`
+    /// carries the words to act on: the same hint `rc machines list`
     /// prints (#3202).
     #[test]
     fn a_machine_reachable_one_way_says_why_the_other_route_is_not_used() {

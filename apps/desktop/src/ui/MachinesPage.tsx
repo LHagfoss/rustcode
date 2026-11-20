@@ -47,6 +47,7 @@ import {
   threadLabel,
   useLocalIdentity,
   useMachines,
+  versionSkew,
 } from "../state/machines";
 import { refreshRemote } from "../state/remoteAccess";
 import { openMachineSettings, useApp } from "../state/store";
@@ -65,7 +66,7 @@ import {
 } from "./machineLabels";
 import { ChromeButton, Spinner } from "./primitives";
 import { ServerProblems } from "./ServerProblems";
-import { Action, Chip, Group, Row } from "./settingsKit";
+import { Action, Chip, Group, Row, withCode } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
 
 /** How often the page asks the shell where the machines stand. */
@@ -307,8 +308,13 @@ export function MachineRow({
     machine.version ? `RustCode ${machine.version}` : undefined,
     machine.lastConnectedAt ? `Last seen ${lastSeen(machine.lastConnectedAt, now)}` : "Not reached yet",
     threads,
-    machine.route?.probe?.latencyMs != null ? `Route latency ${machine.route.probe.latencyMs} ms` : undefined,
+    // A probe from before the link dropped says nothing about the route now.
+    connected && machine.route?.probe?.latencyMs != null
+      ? `Route latency ${machine.route.probe.latencyMs} ms`
+      : undefined,
   ].filter(Boolean);
+  // What to do about another version, in the row itself rather than behind the chip.
+  const skew = versionSkew(machine.version, local, machine.platform);
   return (
     <Row
       title={
@@ -333,13 +339,18 @@ export function MachineRow({
         )
       }
       subtitle={<span className="selectable break-words">{machineRoute(machine)}</span>}
-      status={facts.join(" · ")}
+      status={
+        <>
+          <span className="tabular">{facts.join(" · ")}</span>
+          {skew && <span className="mt-1 block text-warning">{withCode(skew)}</span>}
+        </>
+      }
     >
       {recovery === "pair" ? (
         <PairAgainAction machine={machine} />
       ) : recovery ? (
         <Action onClick={() => reconnectMachine(machine)}>
-          <RefreshCw size={12} /> {recoveryLabel(recovery)}
+          <RefreshCw size={12} /> {status.kind === "connecting" ? "Retry now" : recoveryLabel(recovery)}
         </Action>
       ) : null}
       <MachineSettingsButton name={name} onClick={() => openMachineSettings(machine.id)} />

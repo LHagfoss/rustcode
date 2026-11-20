@@ -38,7 +38,7 @@ import {
   SquareTerminal,
 } from "./icons";
 import { OverviewSection } from "./OverviewSection";
-import { cx, Pill } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 import { StatusChip } from "./Status";
 
@@ -66,29 +66,32 @@ function CardRow({
     </>
   );
   const shape = "flex h-8 w-full items-center gap-2 rounded-md px-2 text-body";
-  return onClick ? (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className={cx(shape, "font-medium text-fg enabled:hover:bg-fill-subtle")}
-    >
-      {body}
-    </button>
-  ) : (
-    <div title={title} className={cx(shape, "text-fg-muted")}>
-      {body}
-    </div>
+  return (
+    <Tooltip label={title}>
+      {onClick ? (
+        <button
+          type="button"
+          onClick={onClick}
+          className={cx(shape, "font-medium text-fg enabled:hover:bg-fill-subtle")}
+        >
+          {body}
+        </button>
+      ) : (
+        <div className={cx(shape, "text-fg-muted")}>{body}</div>
+      )}
+    </Tooltip>
   );
 }
 
 /** A fact the section only states: its name on the left, its value at the right. */
 function Fact({ label, value, title }: { label: ReactNode; value: ReactNode; title?: string }) {
   return (
-    <div title={title} className="flex h-8 w-full items-center gap-2 px-2 text-body">
-      <span className="min-w-0 shrink-0 text-fg-muted">{label}</span>
-      <span className="min-w-0 flex-1 truncate text-right text-fg tabular">{value}</span>
-    </div>
+    <Tooltip label={title}>
+      <div className="flex h-8 w-full items-center gap-2 px-2 text-body">
+        <span className="min-w-0 shrink-0 text-fg-muted">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-right text-fg tabular">{value}</span>
+      </div>
+    </Tooltip>
   );
 }
 

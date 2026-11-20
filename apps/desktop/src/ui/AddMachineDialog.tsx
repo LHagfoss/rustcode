@@ -406,7 +406,7 @@ function OfferView({ offer, now }: { offer: ConnectOffer; now: number }) {
       </div>
       <p className="m-0 text-callout text-fg-muted leading-normal">
         On the other computer: Add machine › Connect code, or{" "}
-        <code className="font-mono">rustcode machines connect {offer.code}</code>. {where}
+        <code className="font-mono">rc machines connect {offer.code}</code>. {where}
       </p>
       {offer.loopbackOnly && (
         <p className="m-0 text-callout text-warning leading-normal">
@@ -429,7 +429,7 @@ function OfferView({ offer, now }: { offer: ConnectOffer; now: number }) {
 /**
  * `user@host` or an alias from `~/.ssh/config`. The native side signs in without prompting (the
  * key must be in the agent), installs RustCode there at this version when allowed and needed, runs
- * `rustcode up` there and pairs with the code it printed, which never leaves SSH.
+ * `rc up` there and pairs with the code it printed, which never leaves SSH.
  */
 function SshPane() {
   const run = useMachines((s) => s.ssh.data);

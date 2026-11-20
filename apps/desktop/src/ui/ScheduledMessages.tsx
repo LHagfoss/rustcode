@@ -39,15 +39,13 @@ function ScheduledCard({
           Sends {countdown(item.due, now)} · {whenText(item.due, now)}
         </p>
       </div>
-      <Pill
-        quiet
-        size="sm"
-        disabled={!ready}
-        onClick={() => void sendScheduledNow(threadId, item.id)}
-        title={ready ? undefined : "Not connected"}
-      >
-        Send now
-      </Pill>
+      <Tooltip label={ready ? undefined : "Not connected"}>
+        <span className="inline-flex shrink-0">
+          <Pill quiet size="sm" disabled={!ready} onClick={() => void sendScheduledNow(threadId, item.id)}>
+            Send now
+          </Pill>
+        </span>
+      </Tooltip>
       <Tooltip label="Delete">
         <button
           type="button"

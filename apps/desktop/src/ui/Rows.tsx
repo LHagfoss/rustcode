@@ -301,14 +301,15 @@ export const UserRow = memo(function UserRow({
         {sender && (
           <div className="mb-1 text-callout text-fg-muted">
             From thread{" "}
-            <button
-              type="button"
-              title="Open thread"
-              onClick={() => selectThread(sender.session)}
-              className="rounded-sm text-fg underline decoration-fg-faint underline-offset-2 hover:decoration-fg"
-            >
-              {sender.title || "untitled"}
-            </button>{" "}
+            <Tooltip label="Open thread">
+              <button
+                type="button"
+                onClick={() => selectThread(sender.session)}
+                className="rounded-sm text-fg underline decoration-fg-faint underline-offset-2 hover:decoration-fg"
+              >
+                {sender.title || "untitled"}
+              </button>
+            </Tooltip>{" "}
             (agent)
           </div>
         )}
@@ -1019,51 +1020,53 @@ export function WakeRow({ text, flat }: { text: string; flat?: boolean }) {
   const askingMarks = notice.asking.filter((d) => d.harness).slice(0, 3);
   const icons = marks.length ? marks : askingMarks;
   return (
-    <div
-      title={text}
-      role="separator"
-      className={cx("flex items-center gap-3 text-caption text-fg-muted", flat ? "py-0" : "py-1")}
-    >
-      <span className="h-px flex-1 bg-border" />
-      <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-        {icons.length ? (
-          icons.map((d, i) => (
-            <HarnessIcon key={d.linkId ?? i} id={harnessId(d.harness ?? "")} name={d.harness} size={13} />
-          ))
-        ) : notice.asking.length && !notice.finished.length ? (
-          <MessageCircleQuestion size={12} className="shrink-0 text-fg-faint" aria-hidden />
-        ) : (
-          <Layers size={12} className="shrink-0 text-fg-faint" aria-hidden />
-        )}
-        {notice.failed && <CircleX size={12} className="shrink-0 text-danger" aria-hidden />}
-        <span className="shrink-0">{notice.label}</span>
-        {notice.titles && (
-          <>
-            <span aria-hidden className="text-fg-faint">
-              ·
-            </span>
-            <span className="min-w-0 truncate">{notice.titles}</span>
-          </>
-        )}
-        {notice.harness && (
-          <>
-            <span aria-hidden className="text-fg-faint">
-              ·
-            </span>
-            <span className="shrink-0">{notice.harness}</span>
-          </>
-        )}
-        {notice.worked && (
-          <>
-            <span aria-hidden className="text-fg-faint">
-              ·
-            </span>
-            <span className="shrink-0 tabular">{notice.worked}</span>
-          </>
-        )}
-      </span>
-      <span className="h-px flex-1 bg-border" />
-    </div>
+    <Tooltip label={text}>
+      <div
+        role="separator"
+        aria-label={text}
+        className={cx("flex items-center gap-3 text-caption text-fg-muted", flat ? "py-0" : "py-1")}
+      >
+        <span className="h-px flex-1 bg-border" />
+        <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+          {icons.length ? (
+            icons.map((d, i) => (
+              <HarnessIcon key={d.linkId ?? i} id={harnessId(d.harness ?? "")} name={d.harness} size={13} />
+            ))
+          ) : notice.asking.length && !notice.finished.length ? (
+            <MessageCircleQuestion size={12} className="shrink-0 text-fg-faint" aria-hidden />
+          ) : (
+            <Layers size={12} className="shrink-0 text-fg-faint" aria-hidden />
+          )}
+          {notice.failed && <CircleX size={12} className="shrink-0 text-danger" aria-hidden />}
+          <span className="shrink-0">{notice.label}</span>
+          {notice.titles && (
+            <>
+              <span aria-hidden className="text-fg-faint">
+                ·
+              </span>
+              <span className="min-w-0 truncate">{notice.titles}</span>
+            </>
+          )}
+          {notice.harness && (
+            <>
+              <span aria-hidden className="text-fg-faint">
+                ·
+              </span>
+              <span className="shrink-0">{notice.harness}</span>
+            </>
+          )}
+          {notice.worked && (
+            <>
+              <span aria-hidden className="text-fg-faint">
+                ·
+              </span>
+              <span className="shrink-0 tabular">{notice.worked}</span>
+            </>
+          )}
+        </span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+    </Tooltip>
   );
 }
 
@@ -1221,9 +1224,6 @@ export const TurnFoldRow = memo(function TurnFoldRow({
       type="button"
       aria-expanded={fold.open}
       onClick={() => onToggle(fold.key)}
-      title={
-        fold.open ? "Hide the work" : `Show the work: ${fold.steps} ${fold.steps === 1 ? "step" : "steps"}`
-      }
       className={cx(
         "group flex w-full items-center gap-1.5 pt-0 pb-2 text-left text-body text-fg-muted hover:text-fg",
         rule && "border-border/60 border-b",
@@ -1265,7 +1265,6 @@ export const ToolGroupRow = memo(function ToolGroupRow({
         type="button"
         aria-expanded={group.open}
         onClick={() => onToggle(group.key)}
-        title={group.open ? "Hide these steps" : `Show ${group.count} steps`}
         data-kind={group.kind}
         className="group -mx-0.5 flex min-h-6 w-fit max-w-[calc(100%+4px)] items-center gap-1.5 rounded-sm px-0.5 text-left leading-relaxed hover:bg-fill-subtle"
       >

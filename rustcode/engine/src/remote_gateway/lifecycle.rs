@@ -27,7 +27,7 @@ use std::time::Duration;
 
 /// Why a control request the gateway should know went unanswered: the running
 /// gateway predates it.
-const OLD_GATEWAY: &str = "the running remote gateway did not answer; it may be from an older RustCode. Restart it with `rustcode remote stop` and `rustcode remote start`, then try again";
+const OLD_GATEWAY: &str = "the running remote gateway did not answer; it may be from an older RustCode. Restart it with `rc remote stop` and `rc remote start`, then try again";
 
 const OWNER: &str = "remote gateway";
 
@@ -49,7 +49,7 @@ pub enum GatewayOwner {
     Server,
     /// The desktop app, or a terminal asking for the app's gateway.
     App,
-    /// A `rustcode remote serve` someone ran by hand.
+    /// A `rc remote serve` someone ran by hand.
     #[default]
     Terminal,
 }
@@ -60,7 +60,7 @@ impl GatewayOwner {
     pub const ENV: &str = "RUSTCODE_REMOTE_OWNER";
 
     /// The owner the launcher of this process named, `Terminal` when it did
-    /// not name one (`rustcode remote serve` from a shell).
+    /// not name one (`rc remote serve` from a shell).
     pub fn from_env() -> Self {
         match std::env::var(Self::ENV).ok().as_deref() {
             Some("server") => Self::Server,
@@ -457,7 +457,7 @@ impl RemoteLifecycle {
 
     /// Start a gateway in the background and wait until it answers, unless
     /// one is already running. `command` is the complete foreground command
-    /// (`rustcode remote serve …`); nothing goes through a shell. The child
+    /// (`rc remote serve …`); nothing goes through a shell. The child
     /// gets its own session, so it outlives the terminal that started it,
     /// and writes to [`RemoteLifecycle::log_path`].
     pub async fn start(&self, mut command: tokio::process::Command) -> Result<GatewayStatus> {
@@ -579,7 +579,7 @@ impl RemoteLifecycle {
     pub async fn pair(&self) -> Result<OfferDetails> {
         ensure!(
             self.status().await?.is_some(),
-            "the remote gateway is not running; start it with `rustcode remote serve`"
+            "the remote gateway is not running; start it with `rc remote serve`"
         );
         match control::request(&self.socket_path(), &ControlRequest::Pair).await? {
             ControlResponse::Offer { offer } => Ok(offer),
@@ -593,7 +593,7 @@ impl RemoteLifecycle {
     pub async fn machine_offer(&self) -> Result<MachineOfferDetails> {
         ensure!(
             self.status().await?.is_some(),
-            "the remote gateway is not running; start it with `rustcode remote start`"
+            "the remote gateway is not running; start it with `rc remote start`"
         );
         let response = control::request(&self.socket_path(), &ControlRequest::MachineOffer)
             .await

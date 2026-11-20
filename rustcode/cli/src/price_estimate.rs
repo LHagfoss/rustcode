@@ -1,4 +1,4 @@
-//! An opt-in cost estimate for `rustcode usage --pull-requests --prices`
+//! An opt-in cost estimate for `rc usage --pull-requests --prices`
 //! (#3934). RustCode ships no prices: the user's file names its source and
 //! date, and the estimate is printed apart from the cost the harness
 //! reported, which it never replaces.

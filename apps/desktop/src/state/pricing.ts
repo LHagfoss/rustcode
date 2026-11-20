@@ -30,7 +30,7 @@ import type { UsageCounts, UsageRow } from "../acp/rustcode";
 import { MODEL_ALIASES, usageModelId } from "../lib/modelNames";
 
 /** The day the prices below were last checked against the providers' list prices. */
-export const PRICE_DATE = "2026-11-12";
+export const PRICE_DATE = "2026-11-20";
 
 /** USD per million tokens. */
 export interface Price {
@@ -72,6 +72,11 @@ const PRICES: Record<string, Price> = {
   "deepseek/deepseek-flash": price(0.3, 0.006, 0, 1.2),
   "deepseek/deepseek-v4-pro": price(1.32, 0.132, 0, 3.96),
   "deepseek/deepseek-v4.1-flash": price(0.3, 0.007, 0, 1.2),
+  // Google, as Antigravity runs it. Implicit caching bills no cache write.
+  // Gemini 4 Argon doubles on 2026-12-01 and Gemini 3.8 Flash on 2027-01-01.
+  "gemini-4-neon": price(3, 0.15, 0, 15),
+  "gemini-4-argon": price(2, 0.1, 0, 10),
+  "gemini-3.8-flash": price(0.75, 0.075, 0, 3.75),
 };
 
 const known = (id: string): Price | undefined => PRICES[MODEL_ALIASES[id] ?? id];
@@ -98,17 +103,20 @@ export function priceOf(model: string | undefined): Price | undefined {
  *   (`harness/codex.rs:817`);
  * - `outside`: Claude Code's and Pi's logs keep cache reads and writes in
  *   their own fields, next to an `input_tokens` that already excludes them
- *   (`harness_usage.rs:271`, `:283`).
+ *   (`harness_usage.rs:271`, `:283`), and so does Antigravity's ACP `usage`
+ *   (`inputTokens` beside `cachedReadTokens`, `harness/acp_child.rs:110`):
+ *   its recorded turns often cache more than their whole input.
  *
  * A harness not listed here records turns whose meaning this page cannot
- * establish (Gemini and OpenCode report no token totals of their own), so it
- * is never priced.
+ * establish (Gemini CLI's convention is unchecked, and OpenCode reports no
+ * token totals of its own), so it is never priced.
  */
 const CACHE_INSIDE: Record<string, boolean> = {
   rustcode: true,
   codex: true,
   "claude-code": false,
   pi: false,
+  antigravity: false,
 };
 
 /** The four counts a price applies to, once a harness's own convention is undone. */

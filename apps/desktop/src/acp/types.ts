@@ -106,7 +106,7 @@ export const Method = {
   projectBrowse: "_rustcode/project/browse",
   projectCreate: "_rustcode/project/create",
   projectClone: "_rustcode/project/clone",
-  /** The scheduler daemon's work, as `rustcode cron` asks it (`docs/daemon.md`). */
+  /** The scheduler daemon's work, as `rc cron` asks it (`docs/daemon.md`). */
   scheduledList: "_rustcode/scheduled/list",
   scheduledCreate: "_rustcode/scheduled/create",
   scheduledDelete: "_rustcode/scheduled/delete",

@@ -1,6 +1,6 @@
 //! Thread actions the engine has no ACP method for, done as the SwiftUI app
 //! does them (`RustCodeApp.swift`, `rename` and `trash`): the thread's
-//! folder comes from `rustcode threads path <id>` and is accepted only when
+//! folder comes from `rc threads path <id>` and is accepted only when
 //! it is that thread's folder inside the thread store. Rename writes the
 //! folder's `title.txt`; Trash moves the folder to the user's Trash; Open
 //! thread log opens its `logs/debug.log`.

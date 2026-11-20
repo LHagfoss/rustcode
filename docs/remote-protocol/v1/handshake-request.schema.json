@@ -15,7 +15,7 @@
         },
         {
           "const": "machine",
-          "description": "A connect code the host's owner created for another computer\n(`rustcode machines code`, Settings › Machines › Create connect code):\nthe short code's secret or the long form's credential. It pairs a\ndesktop with full thread access, since creating it was the owner's\nconsent; the phone challenge and its code are a separate slot.",
+          "description": "A connect code the host's owner created for another computer\n(`rc machines code`, Settings › Machines › Create connect code):\nthe short code's secret or the long form's credential. It pairs a\ndesktop with full thread access, since creating it was the owner's\nconsent; the phone challenge and its code are a separate slot.",
           "type": "string"
         }
       ]

@@ -17,7 +17,7 @@ import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { HarnessIcon } from "./HarnessIcon";
 import { Copy, Folder, Gauge, GitBranch, ShieldCheck, UserRound } from "./icons";
 import { OverviewSection } from "./OverviewSection";
-import { copyText, cx } from "./primitives";
+import { copyText, cx, Tooltip } from "./primitives";
 import { StatusChip, StatusIcon } from "./Status";
 
 /** One fact of the thread: a mark, the word for it, and what it is. */
@@ -51,30 +51,35 @@ function Property({
   );
   if (!onClick) {
     return (
-      <div title={title} className="flex h-8 w-full items-center gap-2 px-2 text-body">
-        {body}
-      </div>
+      <Tooltip label={title}>
+        <div className="flex h-8 w-full items-center gap-2 px-2 text-body">{body}</div>
+      </Tooltip>
     );
   }
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-body hover:bg-fill-subtle"
-    >
-      {body}
-    </button>
+    <Tooltip label={title}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-body hover:bg-fill-subtle"
+      >
+        {body}
+      </button>
+    </Tooltip>
   );
 }
 
 /** A fact under the fact it belongs to: `Based on` under the branch. */
 function SubFact({ label, value, title }: { label: string; value: ReactNode; title?: string }) {
   return (
-    <div title={title} className="flex h-8 w-full items-center gap-2 pr-2 pl-8 text-body">
-      <span className="shrink-0 text-fg-muted">{label}</span>
-      <span className="min-w-0 flex-1 truncate text-right font-mono text-caption text-fg-faint">{value}</span>
-    </div>
+    <Tooltip label={title}>
+      <div className="flex h-8 w-full items-center gap-2 pr-2 pl-8 text-body">
+        <span className="shrink-0 text-fg-muted">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-right font-mono text-caption text-fg-faint">
+          {value}
+        </span>
+      </div>
+    </Tooltip>
   );
 }
 

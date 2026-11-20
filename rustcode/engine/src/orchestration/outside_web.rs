@@ -6,7 +6,7 @@
 //!   checks the answer and sets a session cookie (`__Host-`, `HttpOnly`,
 //!   `Secure`, `SameSite=Strict`, 30 days). Only its hash is kept, in
 //!   `<config>/owner-web-sessions.json`, where Settings › Outside agents and
-//!   `rustcode outside owner sessions` list it and sign it out.
+//!   `rc outside owner sessions` list it and sign it out.
 //! - **The app.** The production web build (`bun run build:hub`) is served
 //!   from [`web_dir`] to a signed-in browser only.
 //! - **ACP.** The page trades its cookie for a ticket (`POST /app/ticket`,
@@ -368,7 +368,7 @@ pub(super) fn login_page(machine: &str, passkeys: &Path, base: &str) -> (String,
             message_page(
                 "Add a passkey first",
                 &format!(
-                    "RustCode on {machine} signs you in with your passkey. Add one with `rustcode outside owner add-passkey` on that machine, or in RustCode › Settings › Outside agents, then come back."
+                    "RustCode on {machine} signs you in with your passkey. Add one with `rc outside owner add-passkey` on that machine, or in RustCode › Settings › Outside agents, then come back."
                 ),
             ),
             super::outside_signin::PAGE_HEADERS.to_owned(),

@@ -697,7 +697,7 @@ describe("the RustCode server in the background", () => {
     );
     // No server installed: nothing restarts it, so the line must not say one does.
     expect(gatewayLine({ ...server, running: false, address: null }, false)).toBe(
-      "Not running · `rustcode remote start` starts it on port 17879",
+      "Not running · `rc remote start` starts it on port 17879",
     );
     expect(gatewayLine({ ...gatewayOff(), port: null })).toBe("Off");
     expect(gatewayLine(undefined)).toBe("Not checked yet");
@@ -732,7 +732,7 @@ describe("the RustCode server in the background", () => {
 
   test("an install that fails says why, and leaves the page without a server", async () => {
     shell.serverInstalled = false;
-    shell.installError = new Error("a development build; run `rustcode server install` from a release");
+    shell.installError = new Error("a development build; run `rc server install` from a release");
     expect(await installServer()).toBe(false);
     expect(useMachines.getState().serverInstall.status === "running").toBe(false);
     // Nothing is claimed installed that the shell never confirmed.

@@ -6,7 +6,7 @@ an access level of its own. This is separate from the tools RustCode injects
 into its own harness threads (`docs/orchestrator.md`): an outside agent is not
 a thread, has no thread's token, and its token opens nothing else.
 
-Connections on this computer use stdio (`rustcode mcp-connect`) or localhost
+Connections on this computer use stdio (`rc mcp-connect`) or localhost
 HTTP with OAuth. Hosted agents (ChatGPT, Claude.ai, other cloud MCP clients)
 reach the same endpoint through a public HTTPS address that a tunnel serves;
 see [Hosted agents](#hosted-agents-chatgpt-claude-and-other-cloud-clients).
@@ -23,7 +23,7 @@ Settings › Outside agents › Connect an app:
 3. Paste it where the app says (Claude Desktop's `claude_desktop_config.json`,
    `~/.cursor/mcp.json`, `~/.codex/config.toml`) and restart that app.
 
-The snippet runs `rustcode mcp-connect` with the token in
+The snippet runs `rc mcp-connect` with the token in
 `RUSTCODE_MCP_TOKEN` (not in the arguments, so it is not in `ps`). RustCode
 keeps only the token's SHA-256, in `<config>/outside-agents.json` (mode 0600).
 
@@ -84,7 +84,7 @@ act without asking.
 When no RustCode app is connected to the machine to show the card (a headless
 server, or the app closed), such a call is refused at once instead of waiting
 two minutes for nobody, and the agent is told to open the app or run
-`rustcode outside update <id> --ask false` there. A paired app that has the
+`rc outside update <id> --ask false` there. A paired app that has the
 machine online counts as connected.
 
 ## What the agent is told
@@ -101,14 +101,14 @@ Every outside call is recorded in the data store (`outside_agent_calls`): time,
 app, level, tool, outcome (`ok`, `error`, `denied`, `declined`,
 `unavailable`), duration and a short reason. Arguments and answers are never
 stored. Rows are kept 90 days. The newest show in Settings › Outside agents ›
-Recent activity, and `rustcode data query "select * from outside_agent_calls"`
+Recent activity, and `rc data query "select * from outside_agent_calls"`
 reads them.
 
 ## Failure recovery
 
 | You see | Do |
 | --- | --- |
-| "RustCode is not running" | Open the RustCode app (or start `rustcode server run`). The app publishes its socket in `<config>/run/orchestrator.json`. |
+| "RustCode is not running" | Open the RustCode app (or start `rc server run`). The app publishes its socket in `<config>/run/orchestrator.json`. |
 | "did not accept this token" | The app was revoked or the token was mistyped. Connect it again for a new one. |
 | "needs Delegate access" | Raise its access in Settings › Outside agents. |
 | "the user did not answer" | Open RustCode, then ask the agent to try again. |
@@ -203,7 +203,7 @@ the internet. RustCode does not listen on the internet itself: a tunnel such
 as Cloudflare Tunnel (`cloudflared`) forwards one hostname to the loopback
 endpoint, and RustCode answers requests for that hostname as well as its
 loopback one. Run it on a machine that stays on, such as a VPS running
-`rustcode server run` (`docs/server.md`).
+`rc server run` (`docs/server.md`).
 
 1. Tell RustCode its public address, in the user `config.toml` (a project
    config cannot set it):
@@ -240,7 +240,7 @@ loopback one. Run it on a machine that stays on, such as a VPS running
 
    The same hostname also serves `/ws`, the remote gateway's WebSocket, so
    paired phones and machines can use `wss://rustcode.example.com` away from
-   home without a VPN. It needs remote access on (`rustcode remote start`);
+   home without a VPN. It needs remote access on (`rc remote start`);
    without it `/ws` answers 503. What the tunnel provider can see is in
    [remote-security.md › The public address](remote-security.md#the-public-address).
 3. In Settings › Outside agents, pick the machine (the page shows every
@@ -268,7 +268,7 @@ loopback one. Run it on a machine that stays on, such as a VPS running
      code*, or on the machine
 
      ```sh
-     rustcode outside code --access delegate
+     rc outside code --access delegate
      ```
 
      Type the `XXXX-XXXX` code under *Have a sign-in code?*. It works once,
@@ -287,7 +287,7 @@ any device, with no code and no RustCode window. To add one, on the machine
 (or Settings › Outside agents › *Add a passkey* for that machine):
 
 ```sh
-rustcode outside owner add-passkey --name "My phone"
+rc outside owner add-passkey --name "My phone"
 ```
 
 It prints a link to `https://rustcode.example.com/owner/passkey?ticket=…`.
@@ -304,7 +304,7 @@ sign-in page shows *Approve with passkey*.
   was made on: a new `public_url` needs new passkeys.
 - Failed passkey answers count with wrong codes towards locking the page for
   a while.
-- `rustcode outside owner passkeys` lists them; `rustcode outside owner
+- `rc outside owner passkeys` lists them; `rc outside owner
   remove-passkey <name or id>`, or *Remove* in Settings › Outside agents,
   stops one approving sign-ins at once. Agents it approved stay connected
   until you revoke them.
@@ -317,7 +317,7 @@ decline a card whose words you did not see. After ten wrong codes in ten
 minutes the page stops checking codes for a while. Hosted agents show in
 Settings › Outside agents as signed in from the web, with the date their
 sign-in lasts until, and revoke like any other connection
-(`rustcode outside list`).
+(`rc outside list`).
 
 **What the tunnel sees.** TLS ends at the tunnel's edge, so the tunnel
 provider can read the traffic between the hosted agent and RustCode: prompts,
@@ -368,7 +368,7 @@ How it is guarded:
   `/login`, `/logout` and `/app/*`, and a request with the app's cookie is
   refused on `/mcp`, both with `wrong_audience`.
 - **Signing out.** *Sign out* on a browser's row in Settings › Outside agents,
-  or `rustcode outside owner sign-out <id or all>` (`rustcode outside owner
+  or `rc outside owner sign-out <id or all>` (`rc outside owner
   sessions` lists them), ends the session; its open socket closes within ten
   seconds. Removing a passkey signs out every browser it signed in. The row
   marked *this browser* signs the browser you are in out and returns to the
@@ -394,7 +394,7 @@ Use the copied connection URL if its port differs from these examples.
 
 ChatGPT desktop also documents local MCP servers under Settings › MCP servers:
 Add server, choose STDIO or Streamable HTTP, enter the command or URL, save
-and restart. For stdio use `rustcode mcp-connect` and supply the generated
+and restart. For stdio use `rc mcp-connect` and supply the generated
 `RUSTCODE_MCP_TOKEN` in the server environment. For HTTP use the copied URL
 and Authenticate. Its OAuth client ID/scope configuration and callback need
 live verification; this is separate from the hosted custom MCP flow above.

@@ -43,6 +43,7 @@ import {
   MIN_HEIGHT,
   viewMessage,
 } from "../smartui/parse";
+import { joinSelection } from "../smartui/selection";
 import { expandShorthand } from "../smartui/shorthand";
 import { sendFromView, setSmartUi, toast, useApp } from "../state/store";
 import { Check, Code, Copy, Download, Play, Square } from "./icons";
@@ -356,6 +357,13 @@ export function SmartUIView({
     const links = new SendGate(1000);
     let lastSign = Date.now();
     let loaded = false;
+    // The reply's selection runs on into this view and out of it (smartui/selection.ts).
+    const target = frame.current;
+    const selection = target
+      ? joinSelection(target, (part) =>
+          target.contentWindow?.postMessage({ rc: page.token, type: "selection", ...part }, "*"),
+        )
+      : null;
     const onMessage = (event: MessageEvent) => {
       const data = event.data as { rc?: string; type?: string; [k: string]: unknown } | null;
       if (!frame.current || event.source !== frame.current.contentWindow || data?.rc !== page.token) return;
@@ -429,6 +437,24 @@ export function SmartUIView({
             void copyText(data.text);
           }
           break;
+        case "selection-text":
+          selection?.text(data.text);
+          break;
+        case "selection-press":
+          selection?.press();
+          break;
+        case "drag-out":
+          selection?.dragOut(Number(data.x), Number(data.y));
+          break;
+        case "drag-over":
+          selection?.dragOver(Number(data.x), Number(data.y));
+          break;
+        case "selection-copy": {
+          // The page's own copy has the page's text only: the reply's selection around it joins it.
+          const text = selection?.copied();
+          if (text) void copyText(text);
+          break;
+        }
         case "focus-modality":
           document.documentElement.toggleAttribute(KEYBOARD_NAV, data.keyboard === true);
           break;
@@ -462,6 +488,7 @@ export function SmartUIView({
     });
     return () => {
       window.removeEventListener("message", onMessage);
+      selection?.leave();
       clearInterval(watch);
       unTheme();
     };
