@@ -313,7 +313,7 @@ pub(crate) fn spawn_question_requests(
             let request = question_permission_request(&session_id, &question_id, &prompt);
             let _waiting = crate::thread_status::waiting(&session_id);
             let answer = clients
-                .request(None, request)
+                .request_approval(request)
                 .await
                 .ok()
                 .and_then(|response| question_reply(&response, &prompt));

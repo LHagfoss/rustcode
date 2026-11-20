@@ -20,6 +20,7 @@ export const Method = {
   sessionClose: "session/close",
   sessionMove: "_rustcode/session/move",
   sessionRepair: "_rustcode/session/repair",
+  sessionTurnPhase: "_rustcode/session/turnPhase",
   sessionActivity: "_rustcode/session/activity",
   /** What the processes a harness started do while its turn runs (CPU), sampled by the engine. */
   sessionChildActivity: "_rustcode/session/childActivity",

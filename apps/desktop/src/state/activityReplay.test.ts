@@ -14,7 +14,10 @@ const THREAD = `${LINUX}/${RAW_THREAD}`;
 const CWD = "/home/lars/code/rustcode";
 
 /** A machine whose `session/load` replays one row, then says the thread's activity, then answers. */
-function machineConnection(activity: { state: string; background: number }): AcpConnection {
+function machineConnection(
+  activity: { state: string; background: number },
+  phase?: JsonObject,
+): AcpConnection {
   let conn!: AcpConnection;
   const notify = (method: string, params: JsonObject) =>
     conn.receive(JSON.stringify({ jsonrpc: "2.0", method, params }));
@@ -29,6 +32,7 @@ function machineConnection(activity: { state: string; background: number }): Acp
           update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Merging #3967." } },
         });
         notify("_rustcode/session/activity", { sessionId: RAW_THREAD, ...activity });
+        if (phase) notify("_rustcode/session/turnPhase", { sessionId: RAW_THREAD, ...phase });
         conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { configOptions: [] } }));
         return;
       }
@@ -68,4 +72,17 @@ describe("opening a thread that works outside a prompt", () => {
     expect(isRunning(thread)).toBe(false);
     expect(thread?.waiting).toBe(2);
   });
+});
+
+test("retains the engine's phase and activity age across paired replay", async () => {
+  const before = Date.now();
+  watchMachineConnection(
+    LINUX,
+    machineConnection({ state: "idle", background: 0 }, { phase: "writing", activityAgeMs: 30_000 }),
+  );
+  expect(await openThread(THREAD)).toBeNull();
+  const phase = useApp.getState().threads[THREAD]?.enginePhase;
+  expect(phase?.label).toBe("Writing a reply");
+  expect(phase?.lastActivityAt).toBeGreaterThanOrEqual(before - 30_000);
+  expect(phase?.lastActivityAt).toBeLessThanOrEqual(Date.now() - 30_000);
 });

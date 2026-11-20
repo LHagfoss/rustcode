@@ -333,7 +333,7 @@ impl ClientSink for AcpClientSink {
             let _waiting = waiting;
             let started = std::time::Instant::now();
             let asked = chrono::Utc::now();
-            let answer = clients.request(None, request).await;
+            let answer = clients.request_approval(request).await;
             let decision = match &answer {
                 Ok(response) => match &response.outcome {
                     RequestPermissionOutcome::Selected(selected) => option_kinds

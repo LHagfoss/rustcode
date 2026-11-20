@@ -211,8 +211,15 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
       threads: Object.fromEntries(
         Object.entries(s.threads).map(([key, t]) => {
           if (splitThreadKey(key).host !== id) return [key, t];
-          if (isRunning(t)) return [key, finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN)];
-          return [key, t.permissions.length ? { ...t, permissions: [] } : t];
+          if (isRunning(t))
+            return [
+              key,
+              { ...finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN), enginePhase: undefined },
+            ];
+          return [
+            key,
+            t.permissions.length || t.enginePhase ? { ...t, permissions: [], enginePhase: undefined } : t,
+          ];
         }),
       ),
     }));
@@ -237,7 +244,7 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
     threads: Object.fromEntries(
       Object.entries(s.threads).map(([key, t]) =>
         splitThreadKey(key).host === id
-          ? [key, { ...endTurn(t), load: { phase: "idle" as const } }]
+          ? [key, { ...endTurn(t), enginePhase: undefined, load: { phase: "idle" as const } }]
           : [key, t],
       ),
     ),

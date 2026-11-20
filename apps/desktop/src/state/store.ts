@@ -269,6 +269,7 @@ import {
   isWoken,
   localId,
   type ThreadState,
+  TURN_PHASE_LABELS,
   waitingOn,
   wakeTurn,
   withChildActivity,
@@ -1083,6 +1084,20 @@ export function onSessionActivity(params: unknown) {
   if (state !== "running") scheduleAutoCompact(id);
 }
 
+function onTurnPhase(params: unknown) {
+  const p = obj(params);
+  const id = str(p?.sessionId);
+  if (!id || !get().threads[id]) return;
+  const phase = str(p?.phase);
+  const age = p?.activityAgeMs;
+  if (phase && typeof age === "number" && Object.hasOwn(TURN_PHASE_LABELS, phase)) {
+    const label = TURN_PHASE_LABELS[phase as keyof typeof TURN_PHASE_LABELS];
+    updateThread(id, (t) => ({ ...t, enginePhase: { label, lastActivityAt: Date.now() - age } }));
+  } else if (get().threads[id]?.enginePhase) {
+    updateThread(id, (t) => ({ ...t, enginePhase: undefined }));
+  }
+}
+
 /**
  * `_rustcode/session/childActivity`: what the processes the thread's harness started are doing
  * (a build, a test run) while its turn runs. Kept for the stall notice, which counts a child that
@@ -1132,13 +1147,19 @@ export async function handleInbound(
         threads: Object.fromEntries(
           Object.entries(s.threads).map(([id, t]) => [
             id,
-            isRunning(t) ? finishTurn(t, "failed", Date.now(), "The server stopped during this turn.") : t,
+            {
+              ...(isRunning(t)
+                ? finishTurn(t, "failed", Date.now(), "The server stopped during this turn.")
+                : t),
+              enginePhase: undefined,
+            },
           ]),
         ),
       }));
       return;
     case "notification":
       if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
+      else if (message.method === Method.sessionTurnPhase) onTurnPhase(message.params);
       else if (message.method === Method.sessionActivity) receiveActivity(message.params);
       else if (message.method === Method.sessionChildActivity) onChildActivity(message.params);
       else if (message.method === Method.threadCreated) threadCreated(message.params);
