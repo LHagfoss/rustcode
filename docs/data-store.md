@@ -327,6 +327,18 @@ mirror/<machine id>/threads/<id>.json   the transcript last read from it
   is not mirrored, and the previous copy stays. Files are written to a
   temporary file and renamed; an `index.json` that cannot be read is kept as
   `index.json.broken` before the next write, so nothing is overwritten blind.
+- **Complete, not only what was opened.** While a machine is connected and the
+  switch is on, the app also reads each of its threads whose copy is missing or
+  older than the thread (`apps/desktop/src/state/mirrorBackfill.ts`): newest
+  first, one at a time, a second apart, starting 15 seconds after the machine
+  connects and at most 200 per connection, the next connection continuing. The
+  read is `_rustcode/session/replay` (`engine/src/acp/session_replay.rs`): the
+  transcript `session/load` would replay, answered from the machine's history
+  file without opening the thread, so nothing starts there and a thread someone
+  has open there is not touched. Running threads, threads the app already holds
+  and projects left out are skipped; a machine on a release without the method
+  is skipped too. Settings › Machines › Thread copies says how many threads have
+  their conversation copied so far.
 - **What is in a transcript.** The conversation the app drew from the machine
   (messages, tool calls with their output), without attachment bytes. It is not
   the machine's `history.json` byte for byte; it is what a client can read over

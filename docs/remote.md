@@ -1430,6 +1430,9 @@ Client requests and notifications are restricted to these exact methods:
 
 - `initialize`
 - `_rustcode/session/status`, `_rustcode/session/snooze`, `_rustcode/session/repair`
+- `_rustcode/session/replay`: a thread's transcript as `session/load` would
+  replay it, without opening it (complete thread copies, `docs/data-store.md` ›
+  Thread mirror)
 - `_rustcode/harnesses`, `_rustcode/harnesses/default`, `_rustcode/harnesses/set`
 - `_rustcode/settings/get`, `_rustcode/settings/set`
 - `_rustcode/skills/add`, `_rustcode/skills/get`

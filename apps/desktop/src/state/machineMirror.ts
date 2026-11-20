@@ -147,13 +147,16 @@ export function transcriptToMirror(thread: ThreadState): { items: TranscriptItem
   return JSON.stringify(items).length > MAX_MIRROR_TRANSCRIPT_CHARS ? null : { items };
 }
 
-/** Mirrors the transcript just read from a thread on a machine. `key` is the thread's key. */
-export function mirrorTranscript(thread: ThreadState, key: string, now = Date.now()): void {
+/**
+ * Mirrors the transcript just read from a thread on a machine. `key` is the thread's key. Answers
+ * once the engine has it (or refused it); callers that do not need to wait need not.
+ */
+export async function mirrorTranscript(thread: ThreadState, key: string, now = Date.now()): Promise<void> {
   const { host, id } = splitThreadKey(key);
   if (!host || !send || switchedOn === false) return;
   const body = transcriptToMirror(thread);
   if (!body) return;
-  void ask({
+  await ask({
     action: "putTranscript",
     host,
     id,
@@ -170,19 +173,35 @@ export function mirrorTranscript(thread: ThreadState, key: string, now = Date.no
 
 // ---------------------------------------------------------------- reading
 
-/** The rows the mirror holds for a machine, newest first (all of them, not only the 200 cached). */
-export async function loadMirroredList(host: string): Promise<SessionSummary[]> {
+/** One thread the mirror holds: its row, and when its transcript was read (none if never). */
+export interface MirroredEntry {
+  session: SessionSummary;
+  transcriptRevision?: number;
+}
+
+/** Everything the mirror holds for a machine, newest first. */
+export async function loadMirroredEntries(host: string): Promise<MirroredEntry[]> {
   const answer = await ask({ action: "list", host });
   if (!isObject(answer) || !isObject(answer.hosts)) return [];
   const entry = answer.hosts[host];
   if (!isObject(entry) || !Array.isArray(entry.threads)) return [];
-  return entry.threads
-    .flatMap((thread) => (isObject(thread) ? [thread.session] : []))
-    .filter(
-      (row): row is SessionSummary =>
-        isObject(row) && typeof row.id === "string" && typeof row.cwd === "string",
-    )
-    .slice(0, MAX_MIRRORED_ROWS);
+  return entry.threads.flatMap((thread) => {
+    if (!isObject(thread)) return [];
+    const row = thread.session;
+    if (!isObject(row) || typeof row.id !== "string" || typeof row.cwd !== "string") return [];
+    const revision = isObject(thread.transcript) ? Number(thread.transcript.revision) : Number.NaN;
+    return [
+      {
+        session: row as unknown as SessionSummary,
+        ...(Number.isFinite(revision) ? { transcriptRevision: revision } : {}),
+      },
+    ];
+  });
+}
+
+/** The rows the mirror holds for a machine, newest first (all of them, not only the 200 cached). */
+export async function loadMirroredList(host: string): Promise<SessionSummary[]> {
+  return (await loadMirroredEntries(host)).map((entry) => entry.session).slice(0, MAX_MIRRORED_ROWS);
 }
 
 /** The transcript the mirror holds for a thread key, or null if it holds none. */

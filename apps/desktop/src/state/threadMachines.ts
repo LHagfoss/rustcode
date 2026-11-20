@@ -49,7 +49,7 @@ function keepRemoteTranscript(key: string): void {
   saveTranscript(thread, key);
   // The same read also goes to this computer's disk, where nothing ages out (docs/data-store.md ›
   // Thread mirror).
-  mirrorTranscript(thread, key);
+  void mirrorTranscript(thread, key);
 }
 
 function watchRemoteTranscripts(next: AppState, prev: AppState): void {

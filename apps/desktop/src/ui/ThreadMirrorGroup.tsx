@@ -16,7 +16,17 @@ export function mirrorLine(status: MirrorStatus | null): string {
   if (!threads) return status.enabled ? "Nothing copied yet." : "Off. Nothing is copied.";
   const from = hosts.length === 1 ? "1 machine" : `${hosts.length} machines`;
   const held = `${threads === 1 ? "1 thread" : `${threads} threads`} from ${from}`;
-  return status.enabled ? `Holding ${held}.` : `Off. Still holding ${held}; they stay readable.`;
+  const transcripts = hosts.reduce((sum, host) => sum + host.transcripts, 0);
+  // Copies fill in while a machine is connected (`state/mirrorBackfill.ts`): say how far.
+  const whole =
+    transcripts >= threads
+      ? ""
+      : transcripts === 0
+        ? ", none with its conversation yet"
+        : `, ${transcripts} of them with ${transcripts === 1 ? "its" : "their"} conversation so far`;
+  return status.enabled
+    ? `Holding ${held}${whole}.`
+    : `Off. Still holding ${held}${whole}; they stay readable.`;
 }
 
 /** One folder per line, blanks dropped, as the engine stores them. */
