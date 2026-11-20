@@ -63,7 +63,7 @@ import {
   machineStatus,
   recoveryLabel,
 } from "./machineLabels";
-import { Spinner } from "./primitives";
+import { ChromeButton, Spinner } from "./primitives";
 import { ServerProblems } from "./ServerProblems";
 import { Action, Chip, Group, Row } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
@@ -185,7 +185,10 @@ function ThisComputer() {
         <>
           <DeviceGlyphIcon glyph={local.icon ?? platformIcon(reported)} tint={local.tint} size={16} />
           {selfName()}
-          <Chip>This computer</Chip>
+          <Chip tone={running ? "ok" : "warn"}>
+            {running ? "Online" : status === "connecting" ? "Connecting" : "Offline"}
+          </Chip>
+          <span className="font-normal text-caption text-fg-faint">This computer</span>
         </>
       }
       subtitle={`Local server · ${open === 1 ? "1 thread" : `${open} threads`}`}
@@ -213,11 +216,6 @@ function ThisComputer() {
           <ServerProblems problems={server?.problems} />
         </>
       }
-      badge={
-        <Chip tone={running ? "ok" : "warn"}>
-          {running ? "Online" : status === "connecting" ? "Connecting" : "Offline"}
-        </Chip>
-      }
     >
       {server && !installed && (
         <Action disabled={installing} onClick={() => askInstallServer()}>
@@ -225,9 +223,7 @@ function ThisComputer() {
           Install server
         </Action>
       )}
-      <Action quiet onClick={() => openMachineSettings(LOCAL_MACHINE_ID)}>
-        <Settings size={13} /> Settings
-      </Action>
+      <MachineSettingsButton name={selfName()} onClick={() => openMachineSettings(LOCAL_MACHINE_ID)} />
     </Row>
   );
 }
@@ -261,7 +257,6 @@ function KnownMachines({ now, local }: { now: number; local: string | null }) {
                 : "Not paired on this computer."
             }
             status={row.facts.join(" · ")}
-            badge={<Chip tone="idle">Not paired</Chip>}
           >
             <Action onClick={() => setAddMachineOpen(true)}>
               <Plus size={12} /> Pair
@@ -320,6 +315,9 @@ export function MachineRow({
         <>
           <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={16} />
           {name}
+          <span data-status={status.kind}>
+            <Chip tone={status.tone}>{status.label}</Chip>
+          </span>
           {outdated && <Chip tone="warn">Outdated</Chip>}
         </>
       }
@@ -336,11 +334,6 @@ export function MachineRow({
       }
       subtitle={<span className="selectable break-words">{machineRoute(machine)}</span>}
       status={facts.join(" · ")}
-      badge={
-        <span data-status={status.kind}>
-          <Chip tone={status.tone}>{status.label}</Chip>
-        </span>
-      }
     >
       {recovery === "pair" ? (
         <PairAgainAction machine={machine} />
@@ -349,9 +342,7 @@ export function MachineRow({
           <RefreshCw size={12} /> {recoveryLabel(recovery)}
         </Action>
       ) : null}
-      <Action quiet aria-label={`Settings for ${name}`} onClick={() => openMachineSettings(machine.id)}>
-        <Settings size={13} /> Settings
-      </Action>
+      <MachineSettingsButton name={name} onClick={() => openMachineSettings(machine.id)} />
     </Row>
   );
 }
@@ -370,5 +361,17 @@ function PairAgainAction({ machine }: { machine: Machine }) {
     >
       <RefreshCw size={12} /> Pair again
     </Action>
+  );
+}
+
+/**
+ * A machine's settings, as a gear at the row's end: every row ends on the same control in the same
+ * place, and the row's one text button is the action that changes its state.
+ */
+function MachineSettingsButton({ name, onClick }: { name: string; onClick: () => void }) {
+  return (
+    <ChromeButton label={`Settings for ${name}`} tooltip="Machine settings" onClick={onClick}>
+      <Settings size={14} />
+    </ChromeButton>
   );
 }
