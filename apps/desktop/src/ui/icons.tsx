@@ -52,6 +52,7 @@ import {
   Delete02Icon,
   Download01Icon,
   DragDropVerticalIcon,
+  Edit03Icon,
   File02Icon,
   FileAddIcon,
   FileDiffIcon,
@@ -107,7 +108,6 @@ import {
   PaintBrush01Icon,
   PauseCircleIcon,
   PauseIcon,
-  PencilEdit01Icon,
   PencilEdit02Icon,
   PinIcon,
   PinOffIcon,
@@ -408,7 +408,7 @@ export const Pause = (props: IconProps) => <Rounded name="Pause" icon={PauseIcon
 export const PauseCircle = (props: IconProps) => (
   <Rounded name="PauseCircle" icon={PauseCircleIcon} {...props} />
 );
-export const Pencil = (props: IconProps) => <Rounded name="Pencil" icon={PencilEdit01Icon} {...props} />;
+export const Pencil = (props: IconProps) => <Rounded name="Pencil" icon={Edit03Icon} {...props} />;
 export const Pin = (props: IconProps) => <Rounded name="Pin" icon={PinIcon} {...props} />;
 export const PinOff = (props: IconProps) => <Rounded name="PinOff" icon={PinOffIcon} {...props} />;
 export const Play = (props: IconProps) => <Rounded name="Play" icon={PlayIcon} {...props} />;
