@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { settleAfterDays, settleAfterMs, sidebarSort } from "./sidebarPrefs";
+import { applySidebarSort, settleAfterDays, settleAfterMs, sidebarSort } from "./sidebarPrefs";
 import { type OrderKey, sortSection, threadMatches } from "./sidebarRows";
 import { idleSettled } from "./thread";
 
@@ -26,11 +26,15 @@ describe("the sidebar's sort", () => {
     expect(order("title")).toEqual(["new", "mid-unseen", "old-running"]);
   });
 
-  test("a stored sort is read leniently", () => {
-    expect(sidebarSort("title")).toBe("title");
-    expect(sidebarSort("activity")).toBe("activity");
-    expect(sidebarSort("nonsense")).toBe("title");
-    expect(sidebarSort(undefined)).toBe("title");
+  test("manual order is the default and can be restored after a sort", () => {
+    expect(sidebarSort()).toBe("manual");
+    try {
+      applySidebarSort("title");
+      expect(sidebarSort()).toBe("title");
+    } finally {
+      applySidebarSort("manual");
+    }
+    expect(sidebarSort()).toBe("manual");
   });
 });
 

@@ -4,9 +4,9 @@ import {
   advanceDrag,
   applyOrder,
   DRAG_THRESHOLD,
-  keepPlaces,
   keepThreads,
   moveBy,
+  rememberOrder,
   reorder,
   sectionOrderKey,
   startDrag,
@@ -186,25 +186,16 @@ describe("project arrangements", () => {
   });
 });
 
-describe("rows keep their places", () => {
-  const rows = (...ids: string[]) => ids.map((id) => ({ id }));
-  const ids = (list: { id: string }[]) => list.map((x) => x.id);
-
-  test("a row the sort would move stays where it was drawn", () => {
-    // "b" was renamed and now sorts first: it stays second.
-    expect(ids(keepPlaces(rows("b", "a", "c"), ["a", "b", "c"]))).toEqual(["a", "b", "c"]);
+describe("remembered sidebar order", () => {
+  test("new threads go first and hidden threads retain their slots", () => {
+    const saved = ["b", "hidden", "a"];
+    expect(rememberOrder(saved, ["a", "b"], true)).toBe(saved);
+    expect(rememberOrder(saved, ["new", "a", "b"], true)).toEqual(["new", ...saved]);
   });
 
-  test("a new row goes after the row it follows in the sort", () => {
-    expect(ids(keepPlaces(rows("a", "n", "c"), ["c", "a"]))).toEqual(["c", "a", "n"]);
-    expect(ids(keepPlaces(rows("n", "a", "c"), ["a", "c"]))).toEqual(["n", "a", "c"]);
-  });
-
-  test("nothing drawn before takes the sort as it is", () => {
-    expect(ids(keepPlaces(rows("b", "a"), undefined))).toEqual(["b", "a"]);
-  });
-
-  test("a row that went is dropped", () => {
-    expect(ids(keepPlaces(rows("a", "c"), ["a", "b", "c"]))).toEqual(["a", "c"]);
+  test("a returning project retains its slot after another project appears", () => {
+    const saved = rememberOrder(["b", "a"], ["a", "c"], false);
+    expect(saved).toEqual(["b", "a", "c"]);
+    expect(rememberOrder(saved, ["a", "b", "c"], false)).toBe(saved);
   });
 });

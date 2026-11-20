@@ -6,9 +6,8 @@
 // `settled`, and `threads:<project>` where the list is split by project): what
 // the user arranged, in the order they left it. Ids a section no longer draws
 // are kept — a thread that comes back (re-pinned, unfolded, filtered in again)
-// returns to the place it was put rather than to the end — and an id the section
-// draws that was never arranged comes after the arranged ones, in the order the
-// section itself gives it. An id for a thread that no longer exists is not kept:
+// returns to its saved place. New threads start at the top of their section, and
+// newly seen projects follow the saved projects. Deleted threads are removed by
 // `withoutThreads` on a trashed one and `keepThreads` against the engine's list
 // (state/store.ts) keep the stored value the size of the work in it.
 
@@ -18,7 +17,7 @@ import type { SessionSummary } from "../acp/types";
 export const DRAG_THRESHOLD = 4;
 
 /** One section's arrangement: the section keys and the ids each draws, in order. */
-export type SidebarOrder = Record<string, string[]>;
+export type SidebarOrder = Record<string, readonly string[]>;
 
 /**
  * The key a section keeps its order under. The list split by project arranges each
@@ -43,26 +42,17 @@ export function applyOrder<T extends Pick<SessionSummary, "id">>(
   return [...arranged, ...rest];
 }
 
-/**
- * The sorted items with the rows already drawn kept where they were (`before`, the ids drawn
- * last time): a thread renamed by its harness, or one that starts or ends a turn, stays in its
- * slot instead of jumping. A row not drawn before goes where the sort puts it, just after the
- * row it follows there, or first.
- */
-export function keepPlaces<T extends Pick<SessionSummary, "id">>(
-  sorted: readonly T[],
-  before: readonly string[] | undefined,
-): T[] {
-  if (!before?.length) return [...sorted];
-  const rank = new Map<string, number>();
-  for (const id of before) if (!rank.has(id)) rank.set(id, rank.size);
-  const out = sorted.filter((item) => rank.has(item.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
-  let prev: T | undefined;
-  for (const item of sorted) {
-    if (!rank.has(item.id)) out.splice(prev ? out.indexOf(prev) + 1 : 0, 0, item);
-    prev = item;
-  }
-  return out;
+/** Add newly seen ids and keep the saved slots for hidden rows. */
+export function rememberOrder(
+  stored: readonly string[] | undefined,
+  seen: readonly string[],
+  atTop: boolean,
+): readonly string[] {
+  if (!stored) return seen;
+  const known = new Set(stored);
+  const added = seen.filter((id) => !known.has(id));
+  if (!added.length) return stored;
+  return atTop ? [...added, ...stored] : [...stored, ...added];
 }
 
 /** The stored order with the ids it does not name yet, in the order the section draws them. */
