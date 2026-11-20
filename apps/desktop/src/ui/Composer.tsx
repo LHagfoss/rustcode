@@ -1222,7 +1222,8 @@ export const Composer = memo(function Composer({
             {/* Tokens in the draft read as tokens: a mirror under the field draws the same text with
                   each URL on an accent pill and each `@file` reference on a quiet one, and the field's
                   own text is transparent so the mirror shows through while the caret, selection and
-                  editing stay the field's. The two take the same padding, the same scroll offset and
+                  editing stay the field's. The shared selection colors cover the mirror where
+                  text is selected. The two take the same padding, the same scroll offset and
                   the same mask, so neither drifts from the other; a token's span adds no horizontal
                   padding, which is what keeps the caret on its character. */}
             <div ref={fieldBox} className="relative min-w-[160px] flex-1 basis-[160px]">
@@ -1274,8 +1275,7 @@ export const Composer = memo(function Composer({
                 style={fadeStyle}
                 className={cx(
                   "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-normal outline-none transition-[height] duration-150 ease-snappy placeholder:text-fg-faint",
-                  highlightedDraft &&
-                    "text-transparent caret-fg selection:bg-accent/25 selection:text-transparent",
+                  highlightedDraft && "text-transparent caret-fg",
                 )}
               />
               {suggestion && (
