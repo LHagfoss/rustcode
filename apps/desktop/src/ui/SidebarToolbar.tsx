@@ -63,7 +63,7 @@ export function SidebarToolbar() {
           <SquarePen size={14} />
           <span className="flex-1 text-left">New thread</span>
         </button>
-        <NavRow label="Scheduled Jobs" current={view === "loops"} onClick={() => setView({ kind: "loops" })}>
+        <NavRow label="Loops" current={view === "loops"} onClick={() => setView({ kind: "loops" })}>
           <Repeat size={14} />
         </NavRow>
       </nav>

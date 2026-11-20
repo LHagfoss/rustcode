@@ -1612,8 +1612,13 @@ pub(crate) struct LoopThread {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LoopRunEnd {
     /// The turn ended on its own. `quiet`: it found nothing for the user, so
-    /// its fresh thread was archived.
-    Finished { thread_id: String, quiet: bool },
+    /// its fresh thread was archived. `verdict`: the non-quiet opening line
+    /// shown on the Loops page and Review tab.
+    Finished {
+        thread_id: String,
+        quiet: bool,
+        verdict: Option<String>,
+    },
     /// The thread could not start, or its turn did not end well.
     Failed {
         thread_id: Option<String>,
@@ -1650,6 +1655,26 @@ pub(crate) fn loop_reply_is_quiet(reply: &str) -> bool {
     reply
         .get(..LOOP_QUIET_MARKER.len())
         .is_some_and(|start| start.eq_ignore_ascii_case(LOOP_QUIET_MARKER))
+}
+
+/// The one-line verdict a non-quiet Loop run opens with, bounded for the Loops
+/// page and Review list (where [`loop_prompt`] asks for it).
+pub(crate) fn loop_reply_verdict(reply: &str) -> Option<String> {
+    let line = reply.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let cleaned = line
+        .trim_start_matches(['#', '>', '-', '*', '_', '`', ' '])
+        .trim_end_matches(['*', '_', '`'])
+        .trim();
+    if cleaned.is_empty() || loop_reply_is_quiet(cleaned) {
+        return None;
+    }
+    const MAX_VERDICT_CHARS: usize = 180;
+    let clipped: String = cleaned.chars().take(MAX_VERDICT_CHARS).collect();
+    if cleaned.chars().count() > MAX_VERDICT_CHARS {
+        Some(format!("{}…", clipped.trim_end()))
+    } else {
+        Some(clipped)
+    }
 }
 
 /// The first message of a Loop's thread: the user's prompt, with what a
@@ -1752,7 +1777,7 @@ pub(crate) fn signed_out_message(
     } else {
         text.push_str(" in Settings › Harnesses");
     }
-    text.push_str(", or pick a signed-in account in the job's settings; then resume the job.");
+    text.push_str(", or pick a signed-in account in the loop's settings; then resume the loop.");
     text
 }
 
@@ -1859,13 +1884,22 @@ pub(crate) async fn run_loop_thread(
     };
     match ended {
         Ok(StopReason::EndTurn) => {
+            let reply = super::local::last_reply_cut(&thread_id).map(|(reply, _)| reply);
             // A fresh thread that found nothing leaves the list; the Loop's own
             // thread stays where the user put it.
             let quiet = fresh
-                && super::local::last_reply_cut(&thread_id)
-                    .is_some_and(|(reply, _)| loop_reply_is_quiet(&reply))
+                && reply.as_deref().is_some_and(loop_reply_is_quiet)
                 && crate::thread_status::set(&thread_id, "done").is_ok();
-            LoopRunEnd::Finished { thread_id, quiet }
+            let verdict = if quiet {
+                None
+            } else {
+                reply.as_deref().and_then(loop_reply_verdict)
+            };
+            LoopRunEnd::Finished {
+                thread_id,
+                quiet,
+                verdict,
+            }
         }
         Ok(other) => LoopRunEnd::Failed {
             thread_id: Some(thread_id),
@@ -1895,7 +1929,7 @@ fn signed_out_error(
         Some((harness, record.account))
     });
     let Some((harness, account)) = login else {
-        return format!("{message}: the harness is not signed in. Sign in, then resume the job.");
+        return format!("{message}: the harness is not signed in. Sign in, then resume the loop.");
     };
     let account = account.and_then(|id| {
         let dir = crate::harness::config::config_dir().ok()?;

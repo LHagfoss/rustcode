@@ -34,6 +34,8 @@ export interface LoopRun {
   error?: string;
   /** The thread the run started, or the loop's own thread it ran in. */
   threadId?: string;
+  /** The one-line verdict a non-quiet run opened with. */
+  verdict?: string;
   /** The run found nothing for the user, and its thread was archived. */
   quiet?: boolean;
   /** Why the run started nothing: the app was closed, or the loop's thread was busy. */
@@ -132,6 +134,7 @@ function runOf(value: Json): LoopRun | null {
     finishedAt: time(raw.finishedAt),
     error: str(raw.error),
     threadId: str(raw.threadId),
+    verdict: str(raw.verdict),
     quiet: bool(raw.quiet) ?? false,
     skipped: str(raw.skipped),
     silent: bool(raw.silent) ?? false,
@@ -486,7 +489,9 @@ export function lastResult(loop: Loop, now = Date.now()): { text: string; tone: 
       if (run.machine) return { text: `Started on ${run.machine} ${when}`, tone: "ok" };
       return run.quiet
         ? { text: `Nothing to report ${when}`, tone: "ok" }
-        : { text: `Finished ${when}`, tone: "ok" };
+        : run.verdict
+          ? { text: `${run.verdict} · ${when}`, tone: "ok" }
+          : { text: `Finished ${when}`, tone: "ok" };
     case "cancelled":
       return { text: run.skipped ? `Skipped ${when}: ${run.skipped}` : `Stopped ${when}`, tone: "muted" };
     default:
@@ -682,11 +687,11 @@ export async function setLoopPaused(id: string, paused: boolean): Promise<void> 
 }
 
 export async function runLoopNow(id: string): Promise<void> {
-  await request(Method.scheduledRun, { id }, 20_000);
+  await request(Method.loopsRun, { id }, 20_000);
 }
 
 export async function deleteLoop(id: string): Promise<void> {
-  await request(Method.scheduledDelete, { id }, 20_000);
+  await request(Method.loopsDelete, { id }, 20_000);
 }
 
 export async function startScheduler(): Promise<void> {

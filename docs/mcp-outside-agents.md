@@ -33,12 +33,12 @@ keeps only the token's SHA-256, in `<config>/outside-agents.json` (mode 0600).
 | --- | --- |
 | Read-only (default) | `whoami`, `list_threads`, `search_threads`, `list_projects`, `read_thread`, `wait_thread`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines`, and the lists and reads of `manage_settings` and `manage_capabilities` |
 | Delegate | Read-only, plus `start_thread`, `fan_out`, `message_thread` and `interrupt_thread` |
-| Manage | Delegate, plus `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` |
+| Manage | Delegate, plus `create_loop`, `update_loop`, `run_loop`, `delete_loop`, `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` |
 | Admin | Manage, plus the changes of `manage_settings` (`set`, `reset`) and `manage_capabilities` (skills, MCP servers, the default harness and the theme) |
 
 A tool's level can depend on what the call does: `manage_settings` and
 `manage_capabilities` read at Read-only and write only at Admin (`required_scope_for`), and a refusal names
-the level the call needs. Harness accounts, connections and outside-agent
+the level the call needs. `list_loops` is available at Read-only. Harness accounts, connections and outside-agent
 tokens are never offered to an outside agent at any level.
 
 The engine checks the level on every call, so lowering an app's access or
@@ -46,7 +46,7 @@ revoking it applies to its next call. A tool that is not classified in
 `orchestration/outside.rs` (`required_scope`) is refused to every level, so a
 new internal tool is never exposed by accident. A tool that is allowed by level
 but that the engine cannot run without a thread behind it (`manage_queue`,
-`handoff_worktree`, `transfer_thread`, projects and scheduled tasks) is not
+`handoff_worktree`, `transfer_thread` and projects) is not
 listed, and a call says so. `whoami` lists the projects the app can start
 threads in.
 

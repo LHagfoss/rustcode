@@ -109,10 +109,12 @@ export const Method = {
   scheduledCreate: "_rustcode/scheduled/create",
   scheduledDelete: "_rustcode/scheduled/delete",
   scheduledRun: "_rustcode/scheduled/run",
-  /** Loops: scheduled agent runs, each in a fresh thread (`docs/daemon.md` › Loops). */
+  /** Loops: scheduled and webhook agent runs, each in a fresh thread (`docs/daemon.md` › Loops). */
   loopsList: "_rustcode/loops/list",
   loopsSave: "_rustcode/loops/save",
   loopsSetPaused: "_rustcode/loops/set_paused",
+  loopsRun: "_rustcode/loops/run",
+  loopsDelete: "_rustcode/loops/delete",
   loopsStartDaemon: "_rustcode/loops/start_daemon",
 } as const;
 

@@ -57,18 +57,27 @@ pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd)
         |id: Option<String>| id.map(|id| serde_json::json!({ "thread_id": id }).to_string());
     match end {
         // A quiet run found nothing for the user and its thread was archived.
-        LoopRunEnd::Finished { thread_id, quiet } => RunOutcome::Succeeded {
-            summary: if quiet {
-                "The run found nothing to report".into()
-            } else {
-                "The run's thread finished".into()
-            },
-            output: Some(if quiet {
-                serde_json::json!({ "thread_id": thread_id, "quiet": true }).to_string()
-            } else {
-                serde_json::json!({ "thread_id": thread_id }).to_string()
-            }),
-        },
+        LoopRunEnd::Finished {
+            thread_id,
+            quiet,
+            verdict,
+        } => {
+            let mut body = serde_json::json!({ "thread_id": thread_id });
+            if quiet {
+                body["quiet"] = serde_json::json!(true);
+            }
+            if let Some(verdict) = verdict.as_deref().filter(|v| !v.is_empty()) {
+                body["verdict"] = serde_json::json!(verdict);
+            }
+            RunOutcome::Succeeded {
+                summary: if quiet {
+                    "The run found nothing to report".into()
+                } else {
+                    verdict.unwrap_or_else(|| "The run's thread finished".into())
+                },
+                output: Some(body.to_string()),
+            }
+        }
         LoopRunEnd::Failed { thread_id, error } => RunOutcome::Permanent {
             error,
             output: thread(thread_id),
@@ -688,12 +697,12 @@ async fn run_shell(run: ShellRun, cancellation: CancellationToken) -> ShellEnd {
     })
 }
 
-/// What a scheduled job's agent is asked after its script printed `stdout`,
+/// What a Loop's agent is asked after its script printed `stdout`,
 /// or `None` when the script printed nothing and no turn should start.
 pub(crate) fn script_prompt(prompt: &str, stdout: &str) -> Option<String> {
     let printed = stdout.trim();
     (!printed.is_empty())
-        .then(|| format!("{prompt}\n\nThe job's script printed:\n\n```\n{printed}\n```"))
+        .then(|| format!("{prompt}\n\nThe loop's script printed:\n\n```\n{printed}\n```"))
 }
 
 /// What a Loop's agent is asked when its webhook started the run: the

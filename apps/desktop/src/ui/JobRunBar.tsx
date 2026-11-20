@@ -30,13 +30,13 @@ export function JobRunBar({ threadId }: { threadId: string }) {
     >
       <Repeat size={12} className="shrink-0 text-fg-muted" />
       <span className="min-w-0 flex-1 truncate text-fg-muted">
-        <span className="font-medium">Scheduled run</span>
+        <span className="font-medium">Loop run</span>
         {run.name && <> of “{run.name}”</>}
         {status === "done" && <span className="text-fg-faint"> · finished</span>}
       </span>
       {run.id && (
         <Pill size="sm" quiet onClick={() => run.id && showJob(run.id)}>
-          View job
+          View loop
         </Pill>
       )}
     </div>

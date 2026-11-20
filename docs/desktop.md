@@ -1200,26 +1200,29 @@ composer's keys stay outside the table.
   any harness, or in a worktree), board, review, mark for review, settle the
   open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Scheduled Jobs** ("Loops" in code). The sidebar's *Scheduled Jobs* row
-  opens `ui/Loops.tsx`: prompts the scheduler daemon runs once or on a
-  schedule, each run in a fresh thread (`docs/daemon.md` › Scheduled Jobs). Each row says the schedule in words
-  ("Every 4 hours", "Weekdays at 09:00"), the project, the next run and the
-  last result, with pause/resume, run now, edit and delete; a row opens its
+- **Loops**. The sidebar's *Loops* row (and ⌘K › *Show Loops*) opens
+  `ui/Loops.tsx`: prompts the scheduler daemon runs once, on a schedule, or
+  from a webhook, each run in a fresh thread (`docs/daemon.md` › Loops). Each
+  row says the schedule in words ("Every 4 hours", "Weekdays at 09:00"), the
+  project, the next run and the last result (including the run's one-line
+  verdict), with pause/resume, run now, edit and delete; a row opens its
   prompt, agent and run history, each run linking to its thread. A loop the
   daemon paused after three failed runs says why under its row. *Review*
   lists the last seven days' failed runs and runs whose thread is still open
-  (not archived); *Mark reviewed* clears one (kept in app storage).
-  *New job* (`ui/LoopDialog.tsx`) takes a name, project, prompt, an optional
-  script (script mode: the agent starts only when it prints something), a
-  schedule preset, a cron or one time (*Once*: "in 2h", "at 09:00"), where
+  (not archived), showing each run's captured verdict; *Mark reviewed* clears
+  one (kept in app storage). *New loop* (`ui/LoopDialog.tsx`) offers quick
+  starter templates (CI watch, Security sweep, Issue triage, Perf & tech debt)
+  and takes a name, project, prompt, an optional script (script mode: the agent
+  starts only when it prints something), a schedule preset, a cron, manual, or
+  one time (*Once*: "in 2h", "at 09:00"), an optional webhook trigger, where
   each run goes (a new thread each run, or one thread of the project) and the
   agent (harness, model, effort), read-only by default. A run that found
   nothing archives its thread and reads "Nothing to report"; one whose script
-  printed nothing reads "The script printed nothing". Threads a job
-  ran in carry a badge in the sidebar (`ui/LoopBadge.tsx`, read from the
-  loops list at startup and every five minutes). With the daemon not running, the page says so and offers
-  *Start scheduler* (`_rustcode/loops/start_daemon`). The words, states and
-  review list are `state/loops.ts`; the mock serves four jobs, one in script mode
+  printed nothing reads "The script printed nothing". Threads a loop ran in
+  carry a badge in the sidebar (`ui/LoopBadge.tsx`, read from the loops list at
+  startup and every five minutes). With the daemon not running, the page says
+  so and offers *Start scheduler* (`_rustcode/loops/start_daemon`). The words,
+  states and review list are `state/loops.ts`; the mock serves five loops
   (`acp/mockLoops.ts`).
 - **Sidebar.** A *Needs you* row above the list opens the inbox
   (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits

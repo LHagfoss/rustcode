@@ -103,6 +103,26 @@ pub(crate) struct LoopsSetPausedRequest {
     pub paused: bool,
 }
 
+/// `_rustcode/loops/run`: run a Loop now, keeping its schedule.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/loops/run", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LoopsRunRequest {
+    pub id: String,
+}
+
+/// `_rustcode/loops/delete`: delete a Loop and its run history.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/loops/delete", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LoopsDeleteRequest {
+    pub id: String,
+}
+
 /// `_rustcode/loops/start_daemon`: start the scheduler, as
 /// `rustcode daemon start` does.
 #[derive(
@@ -151,6 +171,7 @@ fn run_json(run: &JobRunRecord) -> Value {
         "error": run.result_summary.as_ref().filter(|_| run.error_class.is_some()),
         "errorClass": run.error_class,
         "threadId": output.get("thread_id"),
+        "verdict": output.get("verdict"),
         "quiet": output.get("quiet").and_then(Value::as_bool).unwrap_or(false),
         "silent": output.get("silent").and_then(Value::as_bool).unwrap_or(false),
         "skipped": output.get("skipped"),
@@ -338,11 +359,11 @@ pub(crate) fn job_from(
 ) -> Result<JobRecord, String> {
     let prompt = request.prompt.trim().to_owned();
     if prompt.is_empty() {
-        return Err("a scheduled job needs a prompt".to_owned());
+        return Err("a loop needs a prompt".to_owned());
     }
     let name = request.name.trim().to_owned();
     if name.is_empty() {
-        return Err("a scheduled job needs a name".to_owned());
+        return Err("a loop needs a name".to_owned());
     }
     let machine = trimmed(request.machine);
     let script = request
@@ -567,6 +588,136 @@ async fn trigger_with(
 
 pub(crate) async fn set_paused(request: LoopsSetPausedRequest) -> Result<Value, String> {
     set_paused_with(&client()?, request).await
+}
+
+/// Partial update of an existing Loop, preserving untouched fields (including
+/// any script or webhook secret hash). Used by outside agents' `update_loop`.
+pub(crate) async fn patch(
+    id: &str,
+    paused: Option<bool>,
+    name: Option<String>,
+    prompt: Option<String>,
+    schedule: Option<Value>,
+    read_only: Option<bool>,
+    harness: Option<String>,
+    account: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    thread_id: Option<String>,
+) -> Result<Value, String> {
+    let client = client()?;
+    let has_edit = name.is_some()
+        || prompt.is_some()
+        || schedule.is_some()
+        || read_only.is_some()
+        || harness.is_some()
+        || account.is_some()
+        || model.is_some()
+        || effort.is_some()
+        || thread_id.is_some();
+    if has_edit {
+        current_daemon().await?;
+        let existing = match ask(
+            &client,
+            DaemonRequest::Get {
+                job_id: id.to_owned(),
+            },
+        )
+        .await?
+        {
+            DaemonResponse::Job { job } => job,
+            DaemonResponse::Error { message, .. } => return Err(message),
+            other => return Err(format!("the scheduler answered {other:?}")),
+        };
+        let JobAction::Loop {
+            prompt: old_prompt,
+            workspace: old_workspace,
+            harness: old_harness,
+            account: old_account,
+            model: old_model,
+            effort: old_effort,
+            read_only: old_read_only,
+            thread_id: old_thread_id,
+            script: old_script,
+            webhook: old_webhook,
+            machine: old_machine,
+        } = existing.action
+        else {
+            return Err(format!("job `{id}` is not a loop"));
+        };
+        let next_schedule = match schedule {
+            Some(value) => value,
+            None => serde_json::to_value(&existing.schedule)
+                .map_err(|error| format!("schedule: {error}"))?,
+        };
+        let (next_harness, next_account, next_model, next_effort, next_thread) = if thread_id
+            .is_some()
+        {
+            (None, None, None, None, thread_id)
+        } else if harness.is_some() || account.is_some() || model.is_some() || effort.is_some() {
+            (
+                harness.or(old_harness),
+                account.or(old_account),
+                model.or(old_model),
+                effort.or(old_effort),
+                None,
+            )
+        } else {
+            (
+                old_harness,
+                old_account,
+                old_model,
+                old_effort,
+                old_thread_id,
+            )
+        };
+        let request = LoopsSaveRequest {
+            id: Some(id.to_owned()),
+            name: name.unwrap_or(existing.name),
+            workspace: old_workspace,
+            prompt: prompt.unwrap_or(old_prompt),
+            schedule: next_schedule,
+            harness: next_harness,
+            account: next_account,
+            model: next_model,
+            effort: next_effort,
+            read_only: read_only.unwrap_or(old_read_only),
+            thread_id: next_thread,
+            script: old_script,
+            webhook: old_webhook.is_some(),
+            rotate_webhook: false,
+            machine: old_machine,
+        };
+        save_with(&client, request).await?;
+    }
+    if let Some(paused) = paused {
+        set_paused_with(
+            &client,
+            LoopsSetPausedRequest {
+                id: id.to_owned(),
+                paused,
+            },
+        )
+        .await?;
+    }
+    match ask(
+        &client,
+        DaemonRequest::Get {
+            job_id: id.to_owned(),
+        },
+    )
+    .await?
+    {
+        DaemonResponse::Job { job } => Ok(json!({
+            "id": job.id,
+            "name": job.name,
+            "paused": job.paused,
+            "schedule": job.schedule,
+            "next_due_at": (!matches!(job.schedule, ScheduleSpec::Manual)).then_some(job.next_due_at),
+        })),
+        DaemonResponse::Error { message, .. } => Err(message),
+        other => Err(format!("the scheduler answered {other:?}")),
+    }
 }
 
 async fn set_paused_with(

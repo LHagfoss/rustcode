@@ -1,7 +1,7 @@
-// The mock engine's Scheduled Jobs (issues 3892, 3937), as `_rustcode/loops/*` and the scheduled
-// run/delete calls answer them: one healthy with a thread left open for review, one whose last run
-// was skipped while the app was closed, one the daemon paused after three failed runs, one in
-// script mode whose last run printed nothing; one more runs only from its webhook.
+// The mock engine's Loops (issues 3892, 3937), as `_rustcode/loops/*` answers them: one healthy
+// with a thread left open for review, one whose last run was skipped while the app was closed, one
+// the daemon paused after three failed runs, one in script mode whose last run printed nothing; one
+// more runs only from its webhook.
 
 import { type JsonObject, str } from "./jsonrpc";
 
@@ -51,7 +51,14 @@ function seed(): JsonObject[] {
       effort: "medium",
       readOnly: true,
       nextDueAt: ahead(1.5),
-      runs: [done("run-ci-3", 2.5, "mock-loop-ci-3"), done("run-ci-2", 6.5), done("run-ci-1", 10.5)],
+      runs: [
+        {
+          ...done("run-ci-3", 2.5, "mock-loop-ci-3"),
+          verdict: "CI on main failed in desktop-tests (missing snapshot)",
+        },
+        done("run-ci-2", 6.5),
+        done("run-ci-1", 10.5),
+      ],
     },
     {
       id: "loop-red-main",
@@ -153,6 +160,10 @@ export class MockLoops {
         this.loops = this.loops.map((loop) => (loop.id === id ? { ...loop, paused } : loop));
         return { id, paused };
       }
+      case "_rustcode/loops/run":
+        return this.run(str(params.id) ?? "");
+      case "_rustcode/loops/delete":
+        return this.forget(str(params.id) ?? "");
       case "_rustcode/loops/start_daemon":
         return { daemonRunning: true, pid: 4242 };
       default:
@@ -193,7 +204,7 @@ export class MockLoops {
       runs: [],
       ...existing,
       id,
-      name: str(params.name) ?? "Job",
+      name: str(params.name) ?? "Loop",
       workspace: str(params.workspace) ?? "",
       prompt: str(params.prompt) ?? "",
       schedule: { ...(schedule as JsonObject), misfire_policy: "run_once" },

@@ -136,18 +136,18 @@ pub fn format_response(
             status.database_path
         ),
         DaemonResponse::Ack => match operation {
-            "pause" => "Scheduled job paused.".into(),
-            "resume" => "Scheduled job resumed.".into(),
-            "delete" => "Scheduled job deleted.".into(),
+            "pause" => "Loop paused.".into(),
+            "resume" => "Loop resumed.".into(),
+            "delete" => "Loop deleted.".into(),
             _ => "Command completed.".into(),
         },
         DaemonResponse::Job { job } => format!(
-            "Scheduled job '{}' ({}) created; next due {}.",
+            "Loop '{}' ({}) created; next due {}.",
             job.id, job.name, job.next_due_at
         ),
         DaemonResponse::Jobs { jobs } => {
             if jobs.is_empty() {
-                "No scheduled jobs.".into()
+                "No loops.".into()
             } else {
                 let mut rows = jobs
                     .iter()

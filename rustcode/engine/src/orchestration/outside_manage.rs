@@ -77,7 +77,11 @@ pub(crate) async fn answer(
         super::CONFIGURE_SESSION => configure_session(caller, args),
         super::MERGE_WHEN_GREEN => merge_when_green(caller, cancel, args).await,
         super::CLEANUP_WORKTREE => cleanup_worktree(caller, args).await,
+        super::LIST_SCHEDULED_TASKS => list_loops().await,
         super::CREATE_LOOP => create_loop(caller, args).await,
+        super::UPDATE_LOOP => update_loop(caller, args).await,
+        super::DELETE_SCHEDULED_TASK => delete_loop(args).await,
+        super::RUN_SCHEDULED_TASK_NOW => run_loop(args).await,
         _ => return None,
     })
 }
@@ -153,9 +157,115 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
                 "name": saved["name"],
                 "schedule": saved["schedule"],
                 "next_due_at": saved["nextDueAt"],
-            "machine": saved["machine"],
+                "machine": saved["machine"],
             })
         }
+        Err(reason) => error("target_unavailable", reason),
+    }
+}
+
+/// List loops on this computer using the same scheduler as the desktop.
+async fn list_loops() -> Value {
+    match crate::acp::scheduled::list().await {
+        Ok(value) => value,
+        Err(reason) => error("target_unavailable", reason),
+    }
+}
+
+/// Update, pause or resume an existing Loop on this computer.
+async fn update_loop(caller: &str, args: &Value) -> Value {
+    if let Err(refusal) = super::local::local_machine(args) {
+        return refusal;
+    }
+    let field = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let Some(id) = field("id") else {
+        return error("invalid", "id is required");
+    };
+    let thread_id = field("thread_id");
+    if let Some(tid) = thread_id.as_deref() {
+        let Some(meta) = crate::config::session_meta_by_id(tid) else {
+            return error("not_found", "no local thread has that id");
+        };
+        if !may_reach(caller, tid, &meta) {
+            return error("not_allowed", reach_refused());
+        }
+    }
+    let mut harness = field("harness");
+    let mut account = field("account");
+    if harness.is_some() {
+        let resolved = match super::local_threads::harness_for(harness.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(refusal) => return refusal,
+        };
+        account = match super::local_threads::account_for(&resolved, account.as_deref()) {
+            Ok(account) => account,
+            Err(refusal) => return refusal,
+        };
+        harness = Some(resolved.id);
+    }
+    let schedule = args
+        .get("schedule")
+        .filter(|value| value.is_object())
+        .cloned();
+    match crate::acp::loops::patch(
+        &id,
+        args.get("paused").and_then(Value::as_bool),
+        field("name"),
+        field("prompt"),
+        schedule,
+        args.get("read_only").and_then(Value::as_bool),
+        harness,
+        account,
+        field("model"),
+        field("effort"),
+        thread_id,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(reason) => error("target_unavailable", reason),
+    }
+}
+
+/// Delete a Loop by id.
+async fn delete_loop(args: &Value) -> Value {
+    if let Err(refusal) = super::local::local_machine(args) {
+        return refusal;
+    }
+    let Some(id) = args
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return error("invalid", "id is required");
+    };
+    match crate::acp::scheduled::delete(id.to_owned()).await {
+        Ok(value) => value,
+        Err(reason) => error("target_unavailable", reason),
+    }
+}
+
+/// Trigger one run of a Loop now, keeping its schedule.
+async fn run_loop(args: &Value) -> Value {
+    if let Err(refusal) = super::local::local_machine(args) {
+        return refusal;
+    }
+    let Some(id) = args
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return error("invalid", "id is required");
+    };
+    match crate::acp::scheduled::run(id.to_owned()).await {
+        Ok(value) => value,
         Err(reason) => error("target_unavailable", reason),
     }
 }

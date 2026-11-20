@@ -426,7 +426,7 @@ fn about(key: &str) -> (&'static str, Option<&'static [&'static str]>) {
         "workflow-timeout-minutes" => ("Workflow run time limit, in minutes", None),
         "workflow-kept-runs" => ("Finished workflow runs kept per thread", None),
         crate::orchestration::ALL_TOOLS_SETTING => (
-            "List the project, scheduled task, workflow and worktree handoff tools to threads",
+            "List the project, loop, workflow and worktree handoff tools to threads",
             None,
         ),
         _ => ("", None),
