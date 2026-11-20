@@ -2811,11 +2811,16 @@ pub(crate) fn skills_reminder(note: &str) -> String {
 /// The format itself is `docs/smart-ui.md`.
 pub(crate) const SMART_UI_HARNESS_HINT: &str = "\
 # Smart UI
-Views run in chat: a ```rustcode-ui v1 fence of one HTML fragment with a <title> (inline <style> or <script> only if needed), no imports or network, max 64 KB, 5,000 elements. \
+Views run in chat: a ```rustcode-ui v1 fence with a title, in shorthand and HTML (inline <style> or <script> only if needed), no imports or network, max 64 KB. \
 Answer visually, asked or not: data, numbers, results, status, comparisons, plans or 4+ items go in a view (chart, bars, stats, table), never a Markdown table. Only short explanations, one fact, code and diffs stay Markdown. Be brief: one line with the finding before the view, nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown.
-Pick by question: a trend → line chart; parts → stacked bar, donut; a ranking → .rc-bars; options → .rc-grid of .rc-card; many exact rows → a table (data-rc-sort past 8). Numbers → a dashboard, .rc-dash > .rc-head (title, caption); .rc-hero (.rc-label, .rc-hero-value, .rc-hero-delta, p.rc-lead with <b>); hr; .rc-stats.rc-flat (.rc-stat-note: subline); .rc-head; chart.
-Use the app's kit, not CSS: set no colours, as little CSS as you can. Classes: .rc-title .rc-lead .rc-label; .rc-stats > .rc-stat > .rc-stat-value .rc-stat-label; .rc-badge .rc-callout (tint .rc-ok|warn|bad|info); .rc-progress > span; .rc-bars > .rc-bar > span i[width%] b; table.rc-table; .rc-list > .rc-item (<b> then <p>); .rc-steps > li.rc-step.rc-done|rc-active|rc-failed|rc-todo; .rc-findings > .rc-finding[data-severity] (a review; see the smart-ui skill); .rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span (on hover); .rc-spark[data-values]; .rc-chart (sized) .rc-donut-total; .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-num .rc-scroll. Subhead h3. \
-No script: data-rc-send=\"text\" sends a follow-up (on a <form>, with its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]; .rc-bar[data-rc-tip], table.rc-table[data-rc-sort] work alone. \
+Pick: a trend → line chart; parts → stacked bar, donut; ranking → bars; options → cards; exact rows → table.
+Shorthand (the app writes the kit): `::` opens a block, `- ` items split at |, a blank line ends it; items may end {ok|warn|bad|info}; `code`, **bold**, HTML work.
+:: title T · :: h Heading · :: p text · :: callout info|ok|warn|bad / text · :: table / a | b rows, first is heading
+:: bars Heading / - label | 75 | 75 s | tip · :: stats / - 128 | Runs | +12 · :: steps / - [x] done, [>] active, [!] failed, [ ] to do
+:: list / - Title | detail · :: cards / - Title | body · :: sources / - Title | url
+HTML otherwise: set no colours, as little CSS as you can. Numbers → a dashboard, .rc-dash > .rc-head (title, caption); .rc-hero (.rc-label, .rc-hero-value, .rc-hero-delta, p.rc-lead with <b>); hr; .rc-stats.rc-flat (.rc-stat-note: subline); chart. \
+.rc-badge .rc-progress > span; .rc-findings > .rc-finding[data-severity]; .rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span; .rc-spark[data-values]; .rc-chart .rc-donut-total; .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-num .rc-scroll. \
+No script: data-rc-send=\"text\" sends a follow-up (on a <form>, with its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]; table.rc-table[data-rc-sort] sorts. \
 Variables: --rc-text --rc-muted --rc-accent --rc-separator --rc-series-1…8. Chart.js: <script src=\"rustcode-lib:chart.js\"></script> in .rc-chart (data-size sm|lg|xl): tooltips, legend toggles; line option plugins.rcMarks {band:[lo,hi], line:n, lineLabel, end:true}. \
 No outer border, background or repeated title; no vh. If `smart_ui_check` is listed, run it first.
 

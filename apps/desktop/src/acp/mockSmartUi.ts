@@ -307,3 +307,52 @@ export function mockLinkMeta(url: string): JsonObject | null {
   if (host.endsWith("example.com")) return null;
   return { title: host, icon: svgIcon("#435c6e", host.charAt(0).toUpperCase() || "?") };
 }
+
+/** The reconnect view as agents write it in kit HTML: bars with hover tips, a plan, a callout, cards, sources. */
+export const MOCK_RECONNECT_HTML = [
+  "The wait is mostly the silence limit and the backoff cap.\n\n",
+  "```rustcode-ui v1\n<title>Reconnect timing</title>\n",
+  "<h3>Why reconnecting takes about a minute</h3>\n",
+  '<div class="rc-bars">\n',
+  '<div class="rc-bar" data-rc-tip="SILENCE_LIMIT, rustcode/client/src/link.rs"><span>Detecting a silent drop</span><i style="width:100%"></i><b>up to 75 s</b></div>\n',
+  '<div class="rc-bar" data-rc-tip="BACKOFF_CAP, rustcode/client/src/link.rs"><span>Backoff after repeated short drops</span><i style="width:80%"></i><b>up to 60 s</b></div>\n',
+  '<div class="rc-bar" data-rc-tip="PING_TIMEOUT"><span>Ping answer on a VPS route</span><i style="width:20%"></i><b>15 s</b></div>\n',
+  "</div>\n",
+  '<p class="rc-lead">The wait ends early only when the network changes, the computer wakes or the app comes to the front.</p>\n',
+  "<h3>What I recommend, in order</h3>\n",
+  '<ol class="rc-steps">\n',
+  '<li class="rc-step rc-active"><b>Fast reconnect.</b> Ping every 10 s and treat 20 s of silence as a drop; cap the backoff at 5 s while the app is in front.</li>\n',
+  '<li class="rc-step rc-todo"><b>Settings follow the MacBook.</b> Push config, skills and MCP servers over the existing link.</li>\n',
+  '<li class="rc-step rc-todo"><b>Complete thread copies.</b> VPS threads appear in the sidebar with full history.</li>\n',
+  "</ol>\n",
+  '<div class="rc-callout rc-info">MCP is already in the CLI: <code>rustcode mcp add|list|remove</code>.</div>\n',
+  '<div class="rc-grid">\n',
+  '<div class="rc-card"><b>T3 parity after 1–3</b><p>One-way linked machines, quick reconnects, per-machine sign-ins.</p></div>\n',
+  '<div class="rc-card"><b>Deliberately not copied</b><p>A cloud relay; the hub plus your own tunnel covers it.</p></div>\n',
+  "</div>\n",
+  '<details class="rc-details rc-sources"><summary>Sources</summary><ol><li><a href="https://github.com/LHagfoss/rustcode">rustcode</a></li></ol></details>\n',
+  "```\n",
+];
+
+/** The same view in the shorthand (docs/smart-ui.md › Shorthand): the app writes the kit markup. */
+export const MOCK_RECONNECT_SHORTHAND = [
+  "The wait is mostly the silence limit and the backoff cap.\n\n",
+  "```rustcode-ui v1\n:: title Reconnect timing\n",
+  ":: bars Why reconnecting takes about a minute\n",
+  "- Detecting a silent drop | 75 | up to 75 s | SILENCE_LIMIT, rustcode/client/src/link.rs\n",
+  "- Backoff after repeated short drops | 60 | up to 60 s | BACKOFF_CAP, rustcode/client/src/link.rs\n",
+  "- Ping answer on a VPS route | 15 | 15 s | PING_TIMEOUT\n",
+  ":: p The wait ends early only when the network changes, the computer wakes or the app comes to the front.\n",
+  ":: steps What I recommend, in order\n",
+  "- [>] **Fast reconnect.** Ping every 10 s and treat 20 s of silence as a drop; cap the backoff at 5 s while the app is in front.\n",
+  "- [ ] **Settings follow the MacBook.** Push config, skills and MCP servers over the existing link.\n",
+  "- [ ] **Complete thread copies.** VPS threads appear in the sidebar with full history.\n",
+  ":: callout info\n",
+  "MCP is already in the CLI: `rustcode mcp add|list|remove`.\n",
+  ":: cards\n",
+  "- T3 parity after 1–3 | One-way linked machines, quick reconnects, per-machine sign-ins.\n",
+  "- Deliberately not copied | A cloud relay; the hub plus your own tunnel covers it.\n",
+  ":: sources\n",
+  "- rustcode | https://github.com/LHagfoss/rustcode\n",
+  "```\n",
+];

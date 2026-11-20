@@ -66,6 +66,47 @@ block whose reply is still streaming in front of the reader is drawn as it
 arrives (see Streaming below). Copy and Show Source are
 on every card.
 
+### Shorthand
+
+Most views are a handful of kit blocks, and in HTML every row repeats the same
+class names: a bar row is about 105 characters of markup for 27 of content. So a
+block may write the kit as `::` lines, which the app turns into the kit's own
+markup before the page is built (`apps/desktop/src/smartui/shorthand.ts`, called
+from `buildPage`, the streaming preview and the title lookup). Show Source and
+Copy keep what the agent wrote.
+
+```text
+:: title Reconnect timing
+:: bars Why reconnecting takes about a minute
+- Detecting a silent drop | 75 | up to 75 s | SILENCE_LIMIT
+- Ping answer on a VPS route | 15 | 15 s
+:: steps What I recommend
+- [>] **Fast reconnect.** Ping every 10 s.
+- [ ] **Settings follow the MacBook.**
+:: callout info
+MCP is already in the CLI: `rustcode mcp add|list`.
+:: sources
+- rustcode | https://github.com/LHagfoss/rustcode
+```
+
+A `::` line opens a block (`title`, `h`, `p`, `bars`, `stats`, `steps`, `list`,
+`cards`, `table`, `callout`, `sources`); its `- ` items split at `|` outside
+backticks; a blank line, the next `::` line or a line that starts with `<`
+ends it. An item may end `{ok}`, `{warn}`, `{bad}` or `{info}`, and a name after
+a block is an `h3` over it. Bars scale to the largest value (values that are
+all percentages are widths as written); a table sorts past eight rows. In text,
+`` `code` `` and `**bold**` work and HTML is kept as written. Anything else,
+and everything in a `<script>` or `<style>`, passes through, so a view mixes
+shorthand and HTML freely and a view without `::` lines is untouched. An
+unknown name (`:: chart`) stays text.
+
+The same reconnect view is 1,700 characters in kit HTML and 1,089 in shorthand
+(36% fewer; `MOCK_RECONNECT_HTML` and `MOCK_RECONNECT_SHORTHAND` in
+`acp/mockSmartUi.ts`). Bars, stats and steps save the most; prose saves nothing.
+JSON was not chosen: its quotes and keys cost about as much as the markup, and
+it cannot hold the HTML a view still needs. A CLI or tool that builds the view
+saves nothing either, since its arguments are the same output.
+
 ## Streaming
 
 The desktop app draws a view while its fence is still arriving, so a long view
@@ -326,12 +367,13 @@ all. It reports:
 
 - the block's byte size and about how many elements it builds (counted tags,
   not a DOM);
-- a missing `<title>`, an unclosed `<script>` or `<style>`;
+- a missing title (`<title>` or `:: title`), an unclosed `<script>` or `<style>`;
 - a `rustcode-lib:` name the app does not bundle (only `chart.js` is);
 - kit markup that does nothing as written: a `.rc-spark` without a
   `data-values` of at least two numbers, or `data-rc-sort` on something that is
   neither a table nor a heading;
-- what the page cannot do, with the line: network loads, `fetch`,
+- what the page cannot do, with the line: network loads (a link's `href` and a
+  `:: sources` item are not loads), `fetch`,
   `XMLHttpRequest`, sockets, storage, `document.write`, `@import`, `vh` units,
   and `CanvasText`/`AccentColor` inside a script (a canvas draws nothing with a
   system colour);

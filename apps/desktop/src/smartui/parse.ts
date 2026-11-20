@@ -3,6 +3,8 @@
 // (docs/visualizations.md). Only an info string of exactly `rustcode-ui v1`
 // runs; any other fence stays Markdown.
 
+import { expandShorthand } from "./shorthand";
+
 export const MAX_SOURCE_BYTES = 64 * 1024;
 export const MAX_ELEMENTS = 5000;
 export const MIN_HEIGHT = 48;
@@ -169,7 +171,7 @@ export function blockProblem(source: string): string | null {
 
 /** The page's `<title>`, for the hover label and accessibility; never drawn as chrome. */
 export function blockTitle(source: string): string {
-  const m = /<title[^>]*>([^<]{1,120})<\/title>/i.exec(source);
+  const m = /<title[^>]*>([^<]{1,120})<\/title>/i.exec(expandShorthand(source));
   return m?.[1]?.trim() || "Interactive view";
 }
 
