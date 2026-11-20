@@ -1361,7 +1361,7 @@ describe("engine controller with the mock engine", () => {
 
   test("thread actions: pin, archive, rename and trash", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().sessions.length === 15);
+    await until(() => useApp.getState().sessions.length === 16);
     const id = useApp.getState().sessions[1]!.id;
     togglePin(id);
     expect(useApp.getState().pinned).toEqual([id]);
@@ -1490,7 +1490,7 @@ describe("engine controller with the mock engine", () => {
 
   test("pins live in the engine when it has them; Settled is threads marked Done", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 15);
+    await until(() => useApp.getState().features.pins === true && useApp.getState().sessions.length === 16);
     const id = useApp.getState().sessions[2]!.id;
     togglePin(id);
     await new Promise((r) => setTimeout(r, 10));
@@ -2983,18 +2983,18 @@ describe("engine controller with the mock engine", () => {
 
   test("a window focus re-lists threads at most once per five seconds", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
-    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length === 15);
+    await until(() => useApp.getState().engine.phase === "ready" && useApp.getState().sessions.length === 16);
     const at = Date.now();
 
     // Nothing is listed twice in the gap: a list per focus would read every thread each time.
     useApp.setState({ sessions: [] });
     await refreshSessionsOnFocus(at);
-    expect(useApp.getState().sessions.length).toBe(15);
+    expect(useApp.getState().sessions.length).toBe(16);
     useApp.setState({ sessions: [] });
     await refreshSessionsOnFocus(at + 4_000);
     expect(useApp.getState().sessions.length).toBe(0);
     await refreshSessionsOnFocus(at + 6_000);
-    expect(useApp.getState().sessions.length).toBe(15);
+    expect(useApp.getState().sessions.length).toBe(16);
   });
 
   test("the panel is remembered per thread and never opens on its own", async () => {
