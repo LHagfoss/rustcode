@@ -301,7 +301,7 @@ impl Manager for WindowsTask {
         let state = self.state()?;
         let program = state
             .program
-            .context("the server is not installed; run `rustcode server install`")?;
+            .context("the server is not installed; run `rc server install`")?;
         let _ = run_tool(
             &windows_system_tool("schtasks.exe"),
             &["/End", "/TN", &self.task],

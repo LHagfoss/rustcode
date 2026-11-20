@@ -129,7 +129,7 @@ fn machines_list_says_how_to_add_the_first_one() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(text.contains("No machines saved"), "{text}");
-    assert!(text.contains("rustcode machines add"), "{text}");
+    assert!(text.contains("rc machines add"), "{text}");
     // JSON is a list either way, so a script can read it.
     let output = sandbox.run(&["machines", "list", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -193,7 +193,7 @@ fn machines_remove_forgets_a_machine_by_name_or_prefix() {
     let output = sandbox.run(&["machines", "remove", "Studio"]);
     assert!(!output.status.success());
     assert!(
-        stderr(&output).contains("rustcode machines") && stderr(&output).contains("Studio"),
+        stderr(&output).contains("rc machines") && stderr(&output).contains("Studio"),
         "{}",
         stderr(&output)
     );

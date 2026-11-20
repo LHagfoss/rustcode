@@ -1,4 +1,4 @@
-//! `rustcode settings|skill|harness …` and `rustcode mcp enable|disable|restart`:
+//! `rc settings|skill|harness …` and `rc mcp enable|disable|restart`:
 //! managing RustCode from a terminal (#3821).
 //! The work is in `rustcode::manage`, which the `manage_settings` tool uses
 //! too; this parses, prints and exits.
@@ -156,7 +156,7 @@ pub fn capability_op(command: &Commands) -> Option<(Op, bool)> {
     }
 }
 
-/// `rustcode mcp enable|disable|restart`; the other `mcp` commands edit the
+/// `rc mcp enable|disable|restart`; the other `mcp` commands edit the
 /// config themselves.
 pub fn mcp_op(command: &McpCommands) -> Option<Op> {
     match command {
@@ -275,7 +275,7 @@ fn print_list(kind: &str, answer: &Value) {
     }
 }
 
-/// `rustcode threads move|rename|pin|unpin`.
+/// `rc threads move|rename|pin|unpin`.
 pub async fn thread(command: &SessionCommands) -> Result<(), String> {
     let saved = rustcode::config::session_ids();
     let resolve = |raw: &str| crate::run::resolve_thread_id(raw, &saved);
@@ -328,7 +328,7 @@ pub async fn thread(command: &SessionCommands) -> Result<(), String> {
     Ok(())
 }
 
-/// `rustcode worktree …`.
+/// `rc worktree …`.
 pub fn worktree(command: &WorktreeCommands) -> Result<(), String> {
     let here = || std::env::current_dir().map_err(|error| error.to_string());
     match command {
@@ -422,7 +422,7 @@ fn confirm(question: &str) -> bool {
         && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-/// `rustcode account|connections|outside …`, or `None` for another command.
+/// `rc account|connections|outside …`, or `None` for another command.
 pub async fn credentials(command: &Commands) -> Option<Result<(), String>> {
     use rustcode::manage::accounts;
     Some(match command {
@@ -616,14 +616,14 @@ fn print_accounts(answer: &Value, json: bool) -> Result<(), String> {
         })
         .collect();
     if rows.is_empty() {
-        println!("No named accounts. Add one with `rustcode account add <harness> <id>`.");
+        println!("No named accounts. Add one with `rc account add <harness> <id>`.");
     } else {
         crate::run::print_rows(&["HARNESS", "ID", "NAME", "SIGN-IN", "FOLDER"], &rows);
     }
     Ok(())
 }
 
-/// `rustcode outside owner`: the owner's passkeys for the sign-in page.
+/// `rc outside owner`: the owner's passkeys for the sign-in page.
 fn owner(command: &crate::cli::OwnerCommands) -> Result<(), String> {
     use crate::cli::OwnerCommands;
     use rustcode::owner_passkeys;
@@ -647,7 +647,7 @@ fn owner(command: &crate::cli::OwnerCommands) -> Result<(), String> {
                     serde_json::to_string_pretty(&rows).map_err(|error| error.to_string())?
                 );
             } else if passkeys.is_empty() {
-                println!("No passkeys. Add one with `rustcode outside owner add-passkey`.");
+                println!("No passkeys. Add one with `rc outside owner add-passkey`.");
             } else {
                 for passkey in &passkeys {
                     println!(

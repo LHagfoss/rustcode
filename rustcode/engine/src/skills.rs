@@ -1174,7 +1174,7 @@ mod tests {
             ".rustcode/skills",
             "manage_capabilities",
             "action: \"create\"",
-            "rustcode skill list",
+            "rc skill list",
         ] {
             assert!(content.contains(name), "the skill names {name}");
         }

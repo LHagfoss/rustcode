@@ -47,7 +47,7 @@ operation with `unsupported_operation`.
 
 ### Usage
 
-`get_usage` reads the store behind `rustcode usage` for the last 30 days,
+`get_usage` reads the store behind `rc usage` for the last 30 days,
 today included. Token fields are what each harness reported; `cost_usd` is
 only the USD a harness reported. A value no turn reported is absent, not zero.
 

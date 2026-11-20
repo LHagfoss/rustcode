@@ -1,5 +1,5 @@
 //! Export a saved session as one zip archive, so it can be sent to another
-//! machine and analyzed there (`rustcode sessions export <id>`, `/export`).
+//! machine and analyzed there (`rc sessions export <id>`, `/export`).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

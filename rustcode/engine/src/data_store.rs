@@ -2896,7 +2896,7 @@ pub fn query(sql: &str, limit: usize) -> Result<QueryResult, String> {
     query_path(&path, sql, limit)
 }
 
-/// What `rustcode usage --pull-requests` prints (#3907): per harness and
+/// What `rc usage --pull-requests` prints (#3907): per harness and
 /// model, the pull requests its threads linked, how many merged, their CI
 /// failures and fix rounds, and the cost and tokens per merged one, as the
 /// `pr_outcomes_by_model` view has them.
@@ -2908,7 +2908,7 @@ pub fn pull_request_outcomes() -> Result<QueryResult, String> {
 }
 
 /// Per-table row counts and sizes, so growth itself can be tracked
-/// (`rustcode data stats`). Table and view names come from `sqlite_master`;
+/// (`rc data stats`). Table and view names come from `sqlite_master`;
 /// a size is `dbstat`'s for the table together with its indexes (they grow
 /// with it), when SQLite has that virtual table, and `NULL` otherwise, never
 /// a guess.

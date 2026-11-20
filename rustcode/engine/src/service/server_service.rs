@@ -1,4 +1,4 @@
-//! The RustCode server as a background service: `rustcode server install`,
+//! The RustCode server as a background service: `rc server install`,
 //! `status`, `restart`, `uninstall` and `logs` (`docs/server.md`).
 //!
 //! What can be decided without the machine is plain functions
@@ -270,7 +270,7 @@ pub struct GatewayReport {
 }
 
 impl GatewayReport {
-    /// One `Gateway` line in `rustcode server status`. `server_installed` makes
+    /// One `Gateway` line in `rc server status`. `server_installed` makes
     /// the difference between "the server starts it again" and "nothing will
     /// until you do": with no server installed nothing restarts it.
     pub fn human(&self, server_installed: bool) -> String {
@@ -298,14 +298,14 @@ impl GatewayReport {
             return out;
         }
         if !self.remote_enabled {
-            return "stopped (remote access is off: `rustcode remote start`, or Settings › Remote access)".to_owned();
+            return "stopped (remote access is off: `rc remote start`, or Settings › Remote access)".to_owned();
         }
         // Who starts it again: only an installed server does, so only then may
         // the line say so.
         let what = if server_installed {
             "the RustCode server starts it"
         } else {
-            "nothing starts it until `rustcode remote start` (no server is installed)"
+            "nothing starts it until `rc remote start` (no server is installed)"
         };
         match self.port {
             Some(port) => format!("stopped (remote access is on; {what} on port {port})"),
@@ -387,14 +387,14 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
     if !state.installed {
         problems.push(problem(
             "not-installed",
-            "The server is not installed as a background service: threads stop with the app. Run `rustcode server install`.",
+            "The server is not installed as a background service: threads stop with the app. Run `rc server install`.",
         ));
     } else {
         problems.extend(manager_problems);
         if live.is_none() && denied.is_none() {
             problems.push(problem(
                 "stopped",
-                "The service is installed but no server answers. See `rustcode server logs`, or run `rustcode server restart`.",
+                "The service is installed but no server answers. See `rc server logs`, or run `rc server restart`.",
             ));
         }
     }
@@ -404,7 +404,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
         problems.push(problem(
             "socket-denied",
             format!(
-                "Socket not reachable (permission denied): {reason}. Run `rustcode server status` from an unsandboxed shell."
+                "Socket not reachable (permission denied): {reason}. Run `rc server status` from an unsandboxed shell."
             ),
         ));
     }
@@ -413,7 +413,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
             problems.push(problem(
                 "version-mismatch",
                 format!(
-                    "The server runs {} and this rustcode is {cli_version}. `rustcode server restart --when-idle` brings the server up to date.",
+                    "The server runs {} and this rustcode is {cli_version}. `rc server restart --when-idle` brings the server up to date.",
                     live.version
                 ),
             ));
@@ -422,7 +422,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
             problems.push(problem(
                 "unmanaged",
                 format!(
-                    "The server answering (pid {}) was not started by the service. `rustcode server restart` hands it over.",
+                    "The server answering (pid {}) was not started by the service. `rc server restart` hands it over.",
                     live.pid
                 ),
             ));
@@ -435,7 +435,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
         problems.push(problem(
             "other-logon-session",
             format!(
-                "The server answering (pid {}) runs in Windows logon session {server}, and this rustcode in session {caller} (an SSH or elevated session is not your desktop's). Files it created may be denied to the other session: run `rustcode server restart` from the session you use.",
+                "The server answering (pid {}) runs in Windows logon session {server}, and this rustcode in session {caller} (an SSH or elevated session is not your desktop's). Files it created may be denied to the other session: run `rc server restart` from the session you use.",
                 live.pid
             ),
         ));
@@ -502,7 +502,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
 }
 
 impl StatusReport {
-    /// The report as `rustcode server status` prints it.
+    /// The report as `rc server status` prints it.
     pub fn human(&self) -> String {
         let mut out = String::new();
         let line = |out: &mut String, label: &str, value: String| {
@@ -672,7 +672,7 @@ pub struct InstallReport {
     pub problems: Vec<Problem>,
 }
 
-/// `rustcode server install`: write the definition, start the service and
+/// `rc server install`: write the definition, start the service and
 /// wait for the server to listen. A definition that is already as wanted
 /// changes nothing.
 ///
@@ -719,7 +719,7 @@ pub async fn install(force_dev: bool, yes: bool) -> Result<InstallReport> {
         problems.push(problem(
             "stopped",
             format!(
-                "The service was installed but the server did not answer within {}s. See `rustcode server logs`.",
+                "The service was installed but the server did not answer within {}s. See `rc server logs`.",
                 START_TIMEOUT.as_secs()
             ),
         ));
@@ -741,7 +741,7 @@ pub async fn install(force_dev: bool, yes: bool) -> Result<InstallReport> {
         problems.push(problem(
             "unmanaged",
             format!(
-                "The server answering (pid {}) was not started by the service. `rustcode server restart` hands it over.",
+                "The server answering (pid {}) was not started by the service. `rc server restart` hands it over.",
                 live.pid
             ),
         ));
@@ -1046,14 +1046,14 @@ pub async fn running_turns() -> Option<usize> {
     live_status().await.map(|live| live.running_turns)
 }
 
-/// `rustcode server restart`: stop the server and start it again from the
+/// `rc server restart`: stop the server and start it again from the
 /// installed definition, waiting for it to listen. Returns the new server.
 pub async fn restart() -> Result<Option<LiveStatus>> {
     let (manager, _) = current_manager()?;
     let state = manager.state()?;
     anyhow::ensure!(
         state.installed,
-        "the server is not installed as a background service; run `rustcode server install`"
+        "the server is not installed as a background service; run `rc server install`"
     );
     let before = live_status().await;
     // A server the service did not start (an app's) would make the service's
@@ -1123,7 +1123,7 @@ fn program_name(program: &Path) -> String {
 /// `current`, the `rc` running now.
 ///
 /// Releases before 1.45.0 named the app's CLI `rustcode` and installed the
-/// service as `rustcode server run --service`. Since 1.45.0 `rustcode` is the
+/// service as `rc server run --service`. Since 1.45.0 `rustcode` is the
 /// standalone harness, which has no `server` command: once an update, an
 /// installer or Homebrew puts the harness at that path, the service fails at
 /// its next start with `unrecognized subcommand 'server'`, and until then the
@@ -1274,7 +1274,7 @@ pub fn heal_at_startup() {
     }
 }
 
-/// `rustcode server uninstall`: stop the service and remove its definition.
+/// `rc server uninstall`: stop the service and remove its definition.
 /// Threads, settings, pairings and logs stay.
 pub fn uninstall() -> Result<bool> {
     let (manager, _) = current_manager()?;
@@ -1552,7 +1552,7 @@ mod tests {
         assert!(
             alone
                 .human()
-                .contains("nothing starts it until `rustcode remote start`"),
+                .contains("nothing starts it until `rc remote start`"),
             "{}",
             alone.human()
         );
@@ -1877,7 +1877,7 @@ mod tests {
     #[test]
     fn a_service_running_the_pre_rename_rustcode_is_migrated_to_rc() {
         let rc = Path::new("/home/lucas/.local/bin/rc");
-        // The LagosVPS unit: `rustcode server run --service`, where the harness
+        // The LagosVPS unit: `rc server run --service`, where the harness
         // now lives.
         assert!(needs_migration(
             Path::new("/home/lucas/.local/bin/rustcode"),

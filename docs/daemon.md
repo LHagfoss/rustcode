@@ -11,10 +11,10 @@ RustCode files. The task store remains `daemon/jobs.sqlite` on every platform.
 ## Start and inspect the daemon
 
 ```sh
-rustcode daemon start
-rustcode daemon status
-rustcode daemon logs --lines 100
-rustcode daemon stop
+rc daemon start
+rc daemon status
+rc daemon logs --lines 100
+rc daemon stop
 ```
 
 `daemon run` is the foreground worker used by `daemon start`. It owns the
@@ -30,7 +30,7 @@ The MCP server name must exist in the workspace configuration so RustCode can
 store its execution snapshot with the job:
 
 ```sh
-rustcode cron add \
+rc cron add \
   --id morning-teams \
   --name 'Morning Teams message' \
   --workspace "$PWD" \
@@ -66,15 +66,15 @@ time, so later config changes do not silently redirect a durable job.
 ## Manage loops
 
 ```sh
-rustcode loops list
-rustcode loops pause morning-teams
-rustcode loops resume morning-teams
-rustcode loops run morning-teams
-rustcode loops history morning-teams --limit 20
-rustcode loops delete morning-teams
+rc loops list
+rc loops pause morning-teams
+rc loops resume morning-teams
+rc loops run morning-teams
+rc loops history morning-teams --limit 20
+rc loops delete morning-teams
 ```
 
-`rustcode cron` stays as an alias for `rustcode loops`. The built-in
+`rc cron` stays as an alias for `rc loops`. The built-in
 `manage_scheduled_jobs` tool exposes the same operations as `create`, `list`,
 `pause`, `resume`, `run`, `history`, and `delete`. History output is bounded.
 Polling is also bounded by interval, maximum runs, and deadline; it does not
@@ -90,11 +90,11 @@ using `list_scheduled_tasks`, `run_scheduled_task_now`, `delete_scheduled_task`
 and `schedule_task` keep working through `orchestration/mcp_names.rs` and
 `_rustcode/scheduled/*` (`engine/src/acp/scheduled.rs`). Nothing starts the
 daemon for them: when it is stopped, `list_loops` says `daemon_running: false`
-with a `hint` (start it from Loops in the app, or `rustcode daemon start`), and
+with a `hint` (start it from Loops in the app, or `rc daemon start`), and
 the other calls refuse with the same reason.
 
 The user-facing name for all of this is **Loops**: the app's page, its dialog,
-the CLI (`rustcode loops`), agent instructions and MCP tool names use "loop",
+the CLI (`rc loops`), agent instructions and MCP tool names use "loop",
 once, recurring or webhook-triggered. Internal daemon persistence (`JobStore`,
 `daemon/jobs.sqlite`) and legacy tool aliases keep their names for existing
 callers.
@@ -105,12 +105,12 @@ A loop in the app is a daemon job whose action is `loop`: a prompt run once,
 on a schedule, or from a webhook, each run in a fresh top-level thread on any
 harness, or every run in one thread the loop names. The desktop app's Loops
 page creates, edits, pauses, resumes, runs and deletes them through
-`_rustcode/loops/*` (`engine/src/acp/loops.rs`), so `rustcode loops list` shows
+`_rustcode/loops/*` (`engine/src/acp/loops.rs`), so `rc loops list` shows
 the same entries. Agents running in a RustCode thread can use `list_loops`,
 `create_loop`, `update_loop`, `run_loop` and `delete_loop`. The desktop shows
 the schedule, project, agent, access and prompt for approval. Pass a five-field
 cron or one ISO 8601 time, and use `list_harnesses` for harness and account IDs.
-Outside agents (`rustcode mcp-connect`) have `list_loops` at Read-only access
+Outside agents (`rc mcp-connect`) have `list_loops` at Read-only access
 and `create_loop`, `update_loop`, `run_loop` and `delete_loop` at Manage access
 with an absolute project path. Their connection's approval setting applies, and
 cron uses the scheduler machine’s time zone when they omit it.
@@ -179,7 +179,7 @@ login while named accounts exist.
   the run and added to the prompt, fenced and marked as outside data the
   agent must not take instructions from. The daemon stores only the secret's
   SHA-256, so the URL is shown once, when the webhook is turned on or its
-  secret replaced; `rustcode cron list` and agents never see it, and an
+  secret replaced; `rc cron list` and agents never see it, and an
   agent's `create_loop` cannot turn a webhook on. An unknown Loop, one
   without a webhook and a wrong secret all answer 404; a paused Loop or one
   with a run going answers 409, and calls that arrive before a run starts

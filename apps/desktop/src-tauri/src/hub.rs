@@ -1,7 +1,7 @@
 //! Settings › Machines › *Hub*: this machine's role in the fleet's hub
 //! (`docs/remote.md` › The hub).
 //!
-//! The work is the CLI's own: `rustcode machines hub status --json`, `on`,
+//! The work is the CLI's own: `rc machines hub status --json`, `on`,
 //! `off`, `join <machine> --access <level> --ask <bool>` and `leave`, in the
 //! same binary the app starts its engine from (as `service.rs` does for the
 //! server). The CLI writes `<config>/hub.json` and checks that the hub is a

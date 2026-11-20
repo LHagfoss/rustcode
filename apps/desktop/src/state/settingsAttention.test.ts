@@ -27,9 +27,8 @@ describe("settings attention", () => {
   });
 
   test("finds the command a warning names", () => {
-    expect(problemCommand("Run `rustcode server restart --when-idle` now.")).toBe(
-      "rustcode server restart --when-idle",
-    );
+    expect(problemCommand("Run `rc server restart --when-idle` now.")).toBe("rc server restart --when-idle");
+    expect(problemCommand("Run `rustcode server restart` now.")).toBe("rustcode server restart");
     expect(problemCommand(PATH.message)).toBeNull();
   });
 });

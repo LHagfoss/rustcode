@@ -1,5 +1,5 @@
 //! Connect codes: what the host's owner carries to another computer to pair
-//! it, with no accept step on this host (`rustcode machines code`, Settings ›
+//! it, with no accept step on this host (`rc machines code`, Settings ›
 //! Machines › Create connect code).
 //!
 //! One code has two forms, both redeemable once within ten minutes

@@ -179,16 +179,16 @@ A shell changes the same stored status, through the same engine function the
 app's `_rustcode/session/status` and the MCP `update_session` use (#3151):
 
 ```bash
-rustcode threads settle <id>...      # done: Settled in the app
-rustcode threads unsettle <id>...    # idle: back to Active, from Settled
-rustcode threads review <id>...      # review: needs a look
-rustcode threads pin <id>...         # pinned to the top of the list (unpin too)
-rustcode threads rename <id> "New title"
-rustcode threads move <id> --harness codex [--account work] [--model gpt-5]
-rustcode worktree list [--repo <folder>] [--json]
-rustcode worktree status <path>
-rustcode worktree remove <path> [--force --yes]
-rustcode worktree prune [--repo <folder>]
+rc threads settle <id>...      # done: Settled in the app
+rc threads unsettle <id>...    # idle: back to Active, from Settled
+rc threads review <id>...      # review: needs a look
+rc threads pin <id>...         # pinned to the top of the list (unpin too)
+rc threads rename <id> "New title"
+rc threads move <id> --harness codex [--account work] [--model gpt-5]
+rc worktree list [--repo <folder>] [--json]
+rc worktree status <path>
+rc worktree remove <path> [--force --yes]
+rc worktree prune [--repo <folder>]
 ```
 
 `threads move` asks the running server, which runs the thread, to switch it
@@ -200,7 +200,7 @@ prune` and never touches files.
 
 Each prints one line per thread (`settled <id> <title>`, `active <id> <title>`,
 `review <id> <title>`), so a script sees which ones changed. Ids may be unique
-prefixes, as in `rustcode threads settle 018f0`, or a full id whose thread
+prefixes, as in `rc threads settle 018f0`, or a full id whose thread
 folder exists but holds no `history.json` yet (a settle right after a start); an
 ambiguous or unknown id is reported on stderr and exits non-zero, and the other
 ids on the line are still applied. `unsettle` only moves a thread out of
@@ -218,7 +218,7 @@ request and keeps working; the engine checks the pull request on the same
 schedule as the manual watches (`_rustcode/pulls/watch*`, #2648) and the
 thread reads what changed instead of polling `gh` itself (#3369).
 
-`manage_pull_links` is listed by `rustcode mcp-orchestrator` for every
+`manage_pull_links` is listed by `rc mcp-orchestrator` for every
 external harness thread, and the server answers it itself — no
 `_rustcode/orchestration` request, no user approval — because a link only
 writes the watch store and reads GitHub through `gh`. The engine answers the
@@ -508,7 +508,7 @@ wait at most 25 minutes per call: a longer `timeout_ms` is cut to that, not
 refused, and the descriptions tell the model to call again to keep waiting. An
 MCP client aborts a call that sends neither an answer nor progress (Claude Code
 did after about 1950 s: `sent no response or progress for 1956s; aborting`), so
-while any call is pending, `rustcode mcp-orchestrator` sends
+while any call is pending, `rc mcp-orchestrator` sends
 `notifications/progress` `{ progressToken, progress, message }` every 30 s when
 the `tools/call` carried `params._meta.progressToken` (`progress` rises with
 each one; nothing is sent for a call answered sooner, and none after its
@@ -1298,7 +1298,7 @@ merge still blocks). A git that cannot answer (a failed `status`, `cherry` or
 tree read) refuses with `unknown` instead of assuming clean. It then runs `git
 worktree remove`, `worktree prune` and `branch -D`, moves the threads that ran
 there back to the repository, and removes the worktree record; the app settles
-the thread afterwards (`_rustcode/session/status`), like `rustcode threads
+the thread afterwards (`_rustcode/session/status`), like `rc threads
 settle`. A running thread is refused, and so is the calling thread's own
 checkout.
 
@@ -1372,7 +1372,7 @@ call out, and a v10 app has neither the code nor the engine methods.
 | `update_project` | `{ path, destination?, name?, harness?, model? }`, at least one | `{ project: { path, name, harness?, model? } }` | Asked, allowed by Full access, grant `project:<path>` |
 | `remove_project` | `{ path }` | `{ path, removed: true, known, files_deleted: false }` | Asked, allowed by Full access, grant `remove-project:<path>` |
 | `schedule_task` | `{ prompt, schedule, project?, name?, model_profile? }` — `schedule` is `{ kind: "cron", expression, timezone? }` or `{ kind: "at", at }` (ISO 8601 with its offset) | `{ daemon_running: true, task: { id, name, paused, schedule, workspace, next_due_at } }`; the prompt is never echoed back | Asked, allowed by Full access, grant `schedule:new` |
-| `list_scheduled_tasks` | none | `{ daemon_running, tasks: [{ id, name, paused, schedule, workspace, next_due_at }], omitted_tasks? }`, at most 100. `daemon_running: false` means nothing will run until `rustcode daemon start` | None |
+| `list_scheduled_tasks` | none | `{ daemon_running, tasks: [{ id, name, paused, schedule, workspace, next_due_at }], omitted_tasks? }`, at most 100. `daemon_running: false` means nothing will run until `rc daemon start` | None |
 | `delete_scheduled_task` | `{ id }` | `{ id, deleted: true }` | Asked, allowed by Full access, grant `schedule:delete:<id>` |
 | `run_scheduled_task_now` | `{ id }` | `{ id, state }` (`claimed`, …), with the schedule left as it is | Asked, allowed by Full access, grant `schedule:run:<id>` |
 
@@ -1402,7 +1402,7 @@ another project while the setting is off, like the other reads; the four
 changing tools ask first.
 
 Scheduled work goes through `_rustcode/scheduled/list|create|delete|run`
-(`engine/src/acp/scheduled.rs`) and the daemon client `rustcode cron` and
+(`engine/src/acp/scheduled.rs`) and the daemon client `rc cron` and
 `manage_scheduled_jobs` already use (`docs/daemon.md`): there is no second
 scheduler, and the jobs are the same store the CLI lists. A job is created as
 a `prompt` action on the built-in harness (`raw_cli::build_scheduled_state`),
@@ -1415,7 +1415,7 @@ before the call; a machine-only caller gets the engine's guess (`TZ`, else
 `/etc/localtime`, else UTC). An `at` time is ISO 8601 with its offset, so it is
 never ambiguous. Nothing starts the daemon: `list_scheduled_tasks` answers
 `daemon_running: false` and the three changing calls refuse with "run
-`rustcode daemon start`".
+`rc daemon start`".
 
 The app advertises 11 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
 and a v10 app keeps exactly the v10 set and `PROMPT_HINT_V10`.
@@ -1680,7 +1680,7 @@ client advertises orchestration `>= 2`, an external harness thread gets the
 same tools through an MCP server the engine injects into the harness:
 
 ```
-RUSTCODE_ORCHESTRATOR_TOKEN=<t> rustcode mcp-orchestrator --session <thread id> --socket <path>
+RUSTCODE_ORCHESTRATOR_TOKEN=<t> rc mcp-orchestrator --session <thread id> --socket <path>
 ```
 
 The per-thread token travels in the server's environment (ACP `env`, Codex
@@ -1793,7 +1793,7 @@ tools (`read_project`, `create_project`, `clone_project`, `update_project`,
 `orchestration-all-tools` (off by default; `manage_settings`, or
 `settings.json`) lists them too, for threads started after it changes, and the
 server's instructions tell the agent so. A left-out tool that is called anyway
-is answered as before. The built-in harness and `rustcode mcp-connect` are not
+is answered as before. The built-in harness and `rc mcp-connect` are not
 affected: they pick their tools another way.
 
 Capability flag `orchestration` (see below): in the `session/new` /

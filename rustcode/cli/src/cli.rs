@@ -261,8 +261,8 @@ pub enum Commands {
     /// server in the background from login, switch remote access on and
     /// print a connect code
     #[command(after_help = "Examples:
-  rustcode up                    # on a headless machine; type the code on the other one
-  rustcode up --yes --json       # for a script (`rustcode machines add-ssh` runs this)")]
+  rc up                    # on a headless machine; type the code on the other one
+  rc up --yes --json       # for a script (`rc machines add-ssh` runs this)")]
     Up {
         /// Stop a server with turns running, to replace it with the service,
         /// without asking
@@ -340,9 +340,9 @@ pub enum Commands {
     GuardCommand,
 }
 
-/// `rustcode config …`: the commands that change what RustCode is set up
+/// `rc config …`: the commands that change what RustCode is set up
 /// with, in one place. Each is also accepted under its old top-level name
-/// (`rustcode sync`, `rustcode mcp`, …), so nothing written against those
+/// (`rc sync`, `rc mcp`, …), so nothing written against those
 /// breaks; [`Cli::flatten_config`] turns one into the other.
 #[derive(clap::Subcommand, Debug)]
 pub enum ConfigCommands {
@@ -544,8 +544,8 @@ pub fn parse() -> Cli {
 pub enum McpCommands {
     /// Add an MCP server: a URL for a remote server, or a command to spawn
     #[command(after_help = "Examples:
-  rustcode mcp add --transport http api https://mcp.example.com/mcp --header \"Authorization: Bearer <token>\"
-  rustcode mcp add --env API_KEY=<key> files -- npx -y @example/files-mcp")]
+  rc mcp add --transport http api https://mcp.example.com/mcp --header \"Authorization: Bearer <token>\"
+  rc mcp add --env API_KEY=<key> files -- npx -y @example/files-mcp")]
     Add(McpAddArgs),
     /// List configured MCP servers (header and environment values are hidden)
     List,
@@ -672,7 +672,7 @@ pub enum ServerCommands {
         #[arg(short, long)]
         yes: bool,
     },
-    /// Point a service an older release installed (`rustcode server run`)
+    /// Point a service an older release installed (`rc server run`)
     /// at this rc, and restart the server onto it
     Repair {
         /// Restart even if turns are running, instead of once they finish
@@ -763,14 +763,14 @@ pub enum RemoteCommands {
         json: bool,
     },
     /// Accept a device's request to connect and show the code to type on it
-    /// (the request ids are in `rustcode remote status`)
+    /// (the request ids are in `rc remote status`)
     Accept {
-        /// Request id from `rustcode remote status`
+        /// Request id from `rc remote status`
         id: String,
     },
     /// Deny a device's request to connect
     Deny {
-        /// Request id from `rustcode remote status`
+        /// Request id from `rc remote status`
         id: String,
     },
     /// Revoke a paired device and close its connections
@@ -822,12 +822,12 @@ pub enum MachineCommands {
     /// one: valid ten minutes, once, no accept step. Anyone who has it can see
     /// and run all threads on this computer.
     #[command(after_help = "Examples:
-  rustcode machines code                 # show the code and the link
-  rustcode machines code --link          # print only the link, for a script
-  rustcode machines connect \"$(ssh box rustcode machines code --link)\"")]
+  rc machines code                 # show the code and the link
+  rc machines code --link          # print only the link, for a script
+  rc machines connect \"$(ssh box rc machines code --link)\"")]
     Code {
         /// Print only the long form (`rustcode://connect/…`), for a script
-        /// or `ssh <host> rustcode machines code --link`
+        /// or `ssh <host> rc machines code --link`
         #[arg(long, conflicts_with_all = ["json", "cancel"])]
         link: bool,
         /// Print the code as JSON
@@ -851,15 +851,15 @@ pub enum MachineCommands {
     },
     /// Pair with a computer this one reaches over SSH, in one step: install
     /// RustCode there at this version if it is missing or older, start its
-    /// server with `rustcode up`, and pair with the connect code it prints.
+    /// server with `rc up`, and pair with the connect code it prints.
     /// The code only travels inside SSH.
     #[command(
         name = "add-ssh",
         after_help = "Examples:
-  rustcode machines add-ssh lars@box
-  rustcode machines add-ssh studio --yes          # an alias from ~/.ssh/config; install without asking
-  rustcode machines add-ssh admin@vps -p 2222 -i ~/.ssh/vps_ed25519
-  rustcode machines add-ssh lars@box --mutual     # that computer can reach this one too
+  rc machines add-ssh lars@box
+  rc machines add-ssh studio --yes          # an alias from ~/.ssh/config; install without asking
+  rc machines add-ssh admin@vps -p 2222 -i ~/.ssh/vps_ed25519
+  rc machines add-ssh lars@box --mutual     # that computer can reach this one too
 
 SSH runs non-interactively (BatchMode): a key that needs a passphrase must be in
 the agent (`ssh-add`), and an unknown host key must be accepted once in a terminal."
@@ -923,10 +923,10 @@ pub enum HubCommands {
     Off,
     /// Join a saved machine that is the hub, granting it an access ceiling
     #[command(after_help = "Examples:
-  rustcode machines hub join vps --access delegate
-  rustcode machines hub join vps --access read-only --ask false")]
+  rc machines hub join vps --access delegate
+  rc machines hub join vps --access read-only --ask false")]
     Join {
-        /// The hub: name, host id or a prefix of one, from `rustcode machines list`
+        /// The hub: name, host id or a prefix of one, from `rc machines list`
         machine: String,
         /// The most the hub may do here, at the outside-agent levels:
         /// read-only, delegate, manage or admin
@@ -1087,7 +1087,7 @@ pub enum SessionCommands {
     Move {
         /// Thread id, or a unique prefix of one
         id: String,
-        /// The harness to continue on, as `rustcode harness list` names it
+        /// The harness to continue on, as `rc harness list` names it
         #[arg(long)]
         harness: String,
         /// A named account of that harness
@@ -1390,9 +1390,9 @@ pub enum SettingsCommands {
     },
     /// Change one setting, on this machine or as a project's override
     #[command(after_help = "Examples:
-  rustcode settings set continue-after-limit false
-  rustcode settings set auto-compact-threshold 200000
-  rustcode settings set default-permission-mode edits --project ~/code/app")]
+  rc settings set continue-after-limit false
+  rc settings set auto-compact-threshold 200000
+  rc settings set default-permission-mode edits --project ~/code/app")]
     Set {
         key: String,
         /// The new value: true/false, a number, one of the accepted values, or JSON for a list
@@ -1422,7 +1422,7 @@ pub enum StorageCommands {
         json: bool,
     },
     /// Show how much disk space each store of RustCode's data takes, without
-    /// changing files (`rustcode usage` reports tokens, not bytes)
+    /// changing files (`rc usage` reports tokens, not bytes)
     Usage {
         /// Print the report as JSON, with each store's paths
         #[arg(long)]
@@ -1444,8 +1444,8 @@ pub enum DataCommands {
     /// Run one read-only SQL query over the data store (one statement, at most
     /// 1000 rows or 2 s)
     #[command(after_help = "Examples:
-  rustcode data query \"SELECT * FROM threads LIMIT 5\"
-  rustcode data query \"SELECT * FROM daily_usage ORDER BY day DESC LIMIT 10\" --json")]
+  rc data query \"SELECT * FROM threads LIMIT 5\"
+  rc data query \"SELECT * FROM daily_usage ORDER BY day DESC LIMIT 10\" --json")]
     Query {
         /// The statement, quoted; only reads, and only the data store
         sql: String,
@@ -2504,7 +2504,7 @@ mod tests {
             let name = command.get_name();
             assert!(
                 doc.contains(&format!("`rc config {name}"))
-                    || doc.contains(&format!("`rustcode config {name}")),
+                    || doc.contains(&format!("`rc config {name}")),
                 "docs/cli.md has no row for `rc config {name}`"
             );
         }

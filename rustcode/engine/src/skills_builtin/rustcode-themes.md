@@ -7,7 +7,7 @@ keywords: theme, palette, colour, color, dark mode, light mode, accent, contrast
 
 # RustCode themes
 
-One TOML file per theme. User themes: `rustcode theme path` (the
+One TOML file per theme. User themes: `rc theme path` (the
 `themes/` directory of the config). Project themes: `.rustcode/themes/`.
 A file with a built-in's name overrides it.
 
@@ -46,11 +46,11 @@ Set a token only when the derived one is wrong.
 
 ## CLI
 
-- `rustcode theme new <name> --from <theme>`: commented copy to edit.
-- `rustcode theme show <name>` (`--json`): resolved tokens, derived marked.
-- `rustcode theme validate <name>`: errors (bad colour, bad mode or
+- `rc theme new <name> --from <theme>`: commented copy to edit.
+- `rc theme show <name>` (`--json`): resolved tokens, derived marked.
+- `rc theme validate <name>`: errors (bad colour, bad mode or
   radius, missing key) and warnings (unknown key, text on bg below 4.5:1).
-- `rustcode theme set <name>`, `rustcode theme list`.
+- `rc theme set <name>`, `rc theme list`.
 
 ## Design rules
 
@@ -65,8 +65,8 @@ Set a token only when the derived one is wrong.
 
 ## Iterate
 
-1. `rustcode theme new mine --from rustcode` (or edit an existing file).
+1. `rc theme new mine --from rustcode` (or edit an existing file).
 2. Edit colours; keep the file valid TOML.
-3. `rustcode theme validate mine`; fix every error.
-4. `rustcode theme set mine`. The desktop app restyles within a second of
+3. `rc theme validate mine`; fix every error.
+4. `rc theme set mine`. The desktop app restyles within a second of
    each save; the terminal UI picks it up on `/theme` or restart.

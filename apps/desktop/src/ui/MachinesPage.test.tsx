@@ -22,10 +22,10 @@ const MACHINE: Machine = {
   lastConnectedAt: "2026-11-08T09:00:00+00:00",
 };
 
-function render(machine: Machine): string {
+function render(machine: Machine, local = "1.29.1"): string {
   return renderToStaticMarkup(
     <Tooltip.Provider>
-      <MachineRow machine={machine} count={2} now={Date.now()} local="1.29.1" />
+      <MachineRow machine={machine} count={2} now={Date.now()} local={local} />
     </Tooltip.Provider>,
   );
 }
@@ -61,7 +61,25 @@ describe("a machine row", () => {
   test("one that reconnects by itself still offers a manual retry", () => {
     const html = render({ ...MACHINE, state: "offline", retryInSecs: 4, hint: null });
     expect(html).toContain("Reconnecting");
-    expect(html).toContain("Reconnect</button>");
+    expect(html).toContain("Retry now</button>");
+    expect(html).not.toContain("Reconnect</button>");
+  });
+
+  test("an outdated one says how to update it there", () => {
+    const html = render(
+      { ...MACHINE, platform: "linux", version: "1.44.0", state: "offline", hint: null },
+      "1.45.0",
+    );
+    expect(html).toContain("Outdated");
+    expect(html).toContain("<code");
+    expect(html).toContain("rc --update");
+  });
+
+  test("route latency shows only while connected", () => {
+    const probe = { latencyMs: 0 } as NonNullable<NonNullable<Machine["route"]>["probe"]>;
+    const route = { ...MACHINE.route!, probe };
+    expect(render({ ...MACHINE, route })).toContain("Route latency 0 ms");
+    expect(render({ ...MACHINE, route, state: "offline", hint: null })).not.toContain("Route latency");
   });
 
   test("one that ended the pairing offers Pair again", () => {

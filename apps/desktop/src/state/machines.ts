@@ -498,7 +498,7 @@ export async function startMachines(): Promise<void> {
 export const SHELL_READ_MS = 10_000;
 /** Bonjour browses for a few seconds; the rest is the overlay rows. */
 const DISCOVER_MS = 20_000;
-/** `rustcode server status --json` starts a process. */
+/** `rc server status --json` starts a process. */
 const SERVER_STATUS_MS = 15_000;
 /** One task per machine runs in parallel, each with its own connect timeout. */
 export const PROBE_MS = 45_000;
@@ -972,7 +972,7 @@ export async function discoverMachines(): Promise<void> {
 /**
  * This computer's RustCode server as a background service. The page asks when
  * it opens and after an install; nothing polls it, because reading it starts
- * a process (`rustcode server status --json`).
+ * a process (`rc server status --json`).
  */
 export async function refreshServerService(): Promise<void> {
   if (!hasShell()) return;
@@ -1000,7 +1000,7 @@ export async function refreshServerService(): Promise<void> {
  * Install the server as a background service: it stays up when the app closes
  * and starts when you log in, so threads that live in it keep running. The
  * app's own threads stay in its engine until the app is switched to the server. It is the
- * CLI's own `rustcode server install`, so a development build is refused there
+ * CLI's own `rc server install`, so a development build is refused there
  * with the reason shown here. Answers whether it ended up installed.
  */
 export async function installServer(): Promise<boolean> {
@@ -1027,7 +1027,7 @@ export async function installServer(): Promise<boolean> {
 
 /**
  * Point the `rustcode` a shell runs at this app's engine (issue 3411): the
- * CLI's own `rustcode server link-path`, run by the app's engine so it is the
+ * CLI's own `rc server link-path`, run by the app's engine so it is the
  * app's version that the shell then finds. Homebrew's copy is refused with the
  * `brew` command. Answers whether the page now reads no version mismatch.
  */
@@ -1104,7 +1104,7 @@ export function gatewayOwnerLabel(owner: GatewayService["owner"]): string {
  * keeps it there. With the server installed and remote access on, that is the
  * server, so the computer stays reachable when the app closes. `serverInstalled`
  * is what makes "the server starts it" honest: with no server installed,
- * nothing restarts it but `rustcode remote start`.
+ * nothing restarts it but `rc remote start`.
  */
 export function gatewayLine(gateway: GatewayService | undefined, serverInstalled = false): string {
   if (!gateway) return "Not checked yet";
@@ -1113,7 +1113,7 @@ export function gatewayLine(gateway: GatewayService | undefined, serverInstalled
     return `Running on ${where} (started by ${gatewayOwnerLabel(gateway.owner)})`;
   }
   if (gateway.remoteEnabled) {
-    const who = serverInstalled ? "the server starts it" : "`rustcode remote start` starts it";
+    const who = serverInstalled ? "the server starts it" : "`rc remote start` starts it";
     return gateway.port ? `Not running · ${who} on port ${gateway.port}` : `Not running · ${who}`;
   }
   return "Off";

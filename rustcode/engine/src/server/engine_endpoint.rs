@@ -6,7 +6,7 @@
 //! A shared server is the other local engine, described by `run/server.json`
 //! (`lock.rs`). The remote gateway relays a paired desktop to whichever of
 //! the two is running, so a device reaches the engine whose threads the app
-//! shows without a `rustcode server run` behind it.
+//! shows without a `rc server run` behind it.
 //!
 //! The endpoint is reachable only by this user: the socket is `0600` in the
 //! `0700` `run` directory, and every connection's peer uid is checked

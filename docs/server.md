@@ -11,8 +11,8 @@ In code the server is still the engine (`rustcode/engine/src/server/`,
 ## `server run` and `server connect`
 
 ```sh
-rustcode server run       # the server, in the foreground until stopped
-rustcode server connect   # ACP on stdin/stdout, relayed to the server
+rc server run       # the server, in the foreground until stopped
+rc server connect   # ACP on stdin/stdout, relayed to the server
 ```
 
 - `server run` serves ACP to every client of this user until Ctrl-C,
@@ -20,7 +20,7 @@ rustcode server connect   # ACP on stdin/stdout, relayed to the server
   which one (pid, version, socket) and exits with status 0, doing nothing.
 - `server connect` relays newline-delimited ACP JSON-RPC between its
   stdin/stdout and the server, the same protocol `rustcode --acp` speaks over
-  stdio. If no server runs it starts `rustcode server run` in the background
+  stdio. If no server runs it starts `rc server run` in the background
   first (its own process group, output in `logs/server.log`) and waits up to
   30 seconds for it. When stdin closes it still relays what the server owes,
   then exits once the server closes the connection.
@@ -73,29 +73,29 @@ Only the user the server runs as.
 
 ## Running in the background
 
-`rustcode server run` in a terminal ends with the terminal. To have the server
+`rc server run` in a terminal ends with the terminal. To have the server
 start when you log in, and come back after a crash, install it as a service:
 
 ```sh
-rustcode server install     # write the service, start it, wait for the socket
-rustcode server status      # installed? running? clients, turns, problems
-rustcode server restart     # now; --when-idle waits until no turn is running
+rc server install     # write the service, start it, wait for the socket
+rc server status      # installed? running? clients, turns, problems
+rc server restart     # now; --when-idle waits until no turn is running
 rc server repair            # point a pre-1.45.0 `rustcode` service at rc
-rustcode server link-path   # point the rustcode on PATH at this one
-rustcode server update-cli  # update the rustcode in ~/.rustcode/bin, if older
-rustcode server logs -f     # the server's log
-rustcode server uninstall   # remove the service
+rc server link-path   # point the rustcode on PATH at this one
+rc server update-cli  # update the rustcode in ~/.rustcode/bin, if older
+rc server logs -f     # the server's log
+rc server uninstall   # remove the service
 ```
 
-On a machine another one should reach, `rustcode up` does the install, switches
-remote access on and prints a connect code in one step; `rustcode machines
+On a machine another one should reach, `rc up` does the install, switches
+remote access on and prints a connect code in one step; `rc machines
 add-ssh <host>` runs it over SSH from the other computer (`docs/remote.md` ›
 One command for a headless machine, › Connect over SSH).
 
 A restart run from a thread (a shell tool inside the server) would end its own
 caller when the server stops, so the command hands the stop and start to a
 detached helper (`restart --detached`, hidden) and returns at once; the helper's
-output is in `rustcode server logs`. The caller counts as inside when the server's
+output is in `rc server logs`. The caller counts as inside when the server's
 pid is one of its ancestors. From an outside shell nothing changes.
 
 Every background start (the server a restart, an install or `server connect`
@@ -132,7 +132,7 @@ which RustCode shows as *server not running*.
 | Linux | `systemd --user` unit `~/.config/systemd/user/rustcode-server.service`, `Restart=on-failure` | you are logged in; with lingering, from boot |
 | Windows | Scheduled Task `RustCode\Server`, "At log on" of your user, limited, hidden, restart on failure; if tasks are not allowed, a `Run` key entry (no restart on failure) | you are logged in |
 
-- The service runs `rustcode server run --service` from the `rustcode` that
+- The service runs `rc server run --service` from the `rustcode` that
   ran `install`: the app's bundled one, Homebrew's (the symlink, so formula
   upgrades are followed) or `cargo install`'s. `status` says which.
 - **Development builds never install.** A binary inside a cargo `target/`
@@ -143,7 +143,7 @@ which RustCode shows as *server not running*.
   (`no.rustcode.server-<hash>`, `rustcode-server-<hash>.service`) that sets the
   variable, so a scratch directory never replaces your real server's service.
   Not on Windows, where a task cannot set it.
-- If another server already runs (an app's, or `rustcode server run` in a
+- If another server already runs (an app's, or `rc server run` in a
   terminal), it holds the server lock and the service's own would exit at
   once, so `install` stops it first and then starts the service. It does not
   end running turns without asking: it stops with a message, and `--yes`
@@ -165,14 +165,14 @@ which RustCode shows as *server not running*.
   definition is unchanged it does nothing (but starts it if it is not
   running). If the definition changed while the server runs (a new binary
   path) the file is rewritten, the running server is left alone and `install`
-  says so: `rustcode server restart --when-idle` applies it.
+  says so: `rc server restart --when-idle` applies it.
 - **The app brings the server up to date at every start.** A service installed
   from the app's own engine keeps running the engine it started with, so after
   an app update the app reads `server status` once, and when the server it runs
   is on an *older* engine it acts on what the definition names (`binary`):
   - The unit runs this app's engine, or a copy `update-cli` manages (the
     install script's or the app's, replaced by this start or by an earlier one
-    whose restart was cut short) that runs a newer version than the server: `rustcode server restart --when-idle` in the background (issue
+    whose restart was cut short) that runs a newer version than the server: `rc server restart --when-idle` in the background (issue
     #3487). Running turns finish first, and a wait longer than ten minutes
     leaves the old server for the next start, where `status` reports
     `restart-pending`: a wait cut off by a long turn is not a failure, nothing
@@ -181,7 +181,7 @@ which RustCode shows as *server not running*.
   - The unit runs another `rustcode`, and it is still the one **the app
     installed the service with** (Settings › Machines › *Install server* writes
     that program to `<config dir>/service/installed-by-app`; the app moved, or
-    an AppImage's copy did): `rustcode server install` rewrites the definition to
+    an AppImage's copy did): `rc server install` rewrites the definition to
     this app's engine, then the same `--when-idle` restart. A definition a
     terminal installed — or reinstalled over the app's — is never rewritten.
   - The unit runs another `rustcode` the app does not install (Homebrew's,
@@ -204,7 +204,7 @@ which RustCode shows as *server not running*.
   in, so the threads that live in it keep running. Threads the app starts itself are still its own
   engine's and end with it, until the app is switched to the server (a later
   step: the app runs its own `rustcode --acp`, not a client of this one). The
-  app runs the same `rustcode server install` with the `rustcode` the app
+  app runs the same `rc server install` with the `rustcode` the app
   itself runs, so a development build is refused there with the reason shown,
   and a server another process runs is never stopped while a turn is running —
   `--yes` stays a decision for a terminal. Settings › Machines shows the
@@ -237,7 +237,7 @@ machine, or enable lingering and sign in again.
 
 ### `status`
 
-`rustcode server status` asks the running server over its socket
+`rc server status` asks the running server over its socket
 (`_rustcode/server/status`, which needs no `initialize` and is not counted as a
 client) and reads the service manager. `--json` prints:
 
@@ -284,8 +284,8 @@ which process owns the gateway:
 ```
 Gateway     running on 100.90.28.23:17879 (started by the RustCode server, version 1.23.0), 2 paired devices
 Gateway     stopped (remote access is on; the RustCode server starts it on port 17879)
-Gateway     stopped (remote access is on; nothing starts it until `rustcode remote start` (no server is installed))
-Gateway     stopped (remote access is off: `rustcode remote start`, or Settings › Remote access)
+Gateway     stopped (remote access is on; nothing starts it until `rc remote start` (no server is installed))
+Gateway     stopped (remote access is off: `rc remote start`, or Settings › Remote access)
 ```
 
 `owner` is `server`, `app` or `terminal`: a gateway started by the app or a
@@ -332,7 +332,7 @@ whoever updates that copy (see *Running in the background*).
 
 ### `link-path`
 
-`rustcode server link-path` is the one action behind that warning (Settings ›
+`rc server link-path` is the one action behind that warning (Settings ›
 Machines › "Use this app's version in a terminal"). It points the `rustcode` a
 shell finds at the engine that runs it: on macOS and Linux the copy becomes a
 symlink to this engine, so the next app update reaches it too; Windows has no
@@ -345,7 +345,7 @@ runs afterwards.
 
 ### `update-cli`
 
-`rustcode server update-cli` brings the `rustcode` a shell runs up to this
+`rc server update-cli` brings the `rustcode` a shell runs up to this
 engine's version after an app update (issue #3487). It looks at the copy a shell
 finds first on the login shell's `PATH` *and* at every file an install writes,
 so a foreign or `/usr/local/bin` copy first on `PATH` does not leave the
@@ -406,7 +406,7 @@ end themselves.
 ### `repair`: services from before the `rc` rename
 
 Before 1.45.0 the server CLI was `rustcode`, and `server install` wrote a
-service that runs `rustcode server run --service`. Since 1.45.0 `rustcode` is
+service that runs `rc server run --service`. Since 1.45.0 `rustcode` is
 the standalone harness, which has no `server` command. Once the harness, or
 nothing, is at that path (an installer, Homebrew, or a 1.44 server updating
 itself to the `rustcode-*` asset, which is now the harness), the service fails
@@ -436,23 +436,23 @@ A development build never rewrites a service, and a service that runs another
 ### Staying up to date
 
 A server a service manager runs keeps itself up to date, so a machine nobody
-sits at (a PC running `rustcode server` and `rustcode remote serve` in the
+sits at (a PC running `rc server` and `rc remote serve` in the
 background) does not stay on the version it was installed with. About every
 30 minutes (spread by up to 10% so paired machines do not all ask at the same
 second) it looks for a newer **stable** release. When it finds one it:
 
 1. waits until no turn is running (a turn that asks the user something is a
    running turn, so nothing waits on a person either),
-2. installs it as `rustcode --update` does: the release archive is checked
+2. installs it as `rc --update` does: the release archive is checked
    against the release's `SHA256SUMS`, and a Homebrew install goes through
    `brew`,
-3. restarts onto it with `rustcode server restart --when-idle`, started as a
+3. restarts onto it with `rc server restart --when-idle`, started as a
    detached helper so the restart is safe from inside the server.
 
 The remote gateway comes back on the new version too: the restarted server
 replaces a gateway older than itself, the same way `remote start` does.
 
-Every step is written to the server log (`rustcode server logs`) with the
+Every step is written to the server log (`rc server logs`) with the
 prefix `auto-update`: found, waiting for no turn to run, installing, installed,
 restarting. A failure (no network, a bad checksum, a replace that is refused) is
 logged and retried after a pause that doubles with each failure, up to six
@@ -477,9 +477,9 @@ to the app today.
 
 Whatever `auto_update` says, a server a service manager runs also follows its
 own binary. When something else replaces it with a newer version
-(`rustcode --update`, `brew upgrade`, the install script, the app), the server
+(`rc --update`, `brew upgrade`, the install script, the app), the server
 notices within about a minute. It then restarts onto that copy with
-`rustcode server restart --when-idle`, so a running turn is not cut off. It
+`rc server restart --when-idle`, so a running turn is not cut off. It
 logs `was replaced by <version>` and then `restarting onto <version>`. Without
 this, a server kept running the binary it started from until someone restarted
 it, and paired apps talked to the old engine. An older copy put in its place
@@ -494,5 +494,5 @@ standard output and error there, which catches a crash's trace but cannot be
 rotated by the server. A Windows task's output cannot be redirected, so there
 only the server's own log exists.
 
-`rustcode server logs` prints the last 100 lines (`--lines N`); `-f` follows
+`rc server logs` prints the last 100 lines (`--lines N`); `-f` follows
 the file, across a rotation.

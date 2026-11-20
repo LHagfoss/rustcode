@@ -1,8 +1,8 @@
 //! Settings › Machines › *This computer*: whether the RustCode server runs as a
 //! background service, and the one command that installs it (`docs/server.md`).
 //!
-//! The work is the engine's own: `rustcode server status --json` and
-//! `rustcode server install --yes`, the same commands a terminal runs, in the
+//! The work is the engine's own: `rc server status --json` and
+//! `rc server install --yes`, the same commands a terminal runs, in the
 //! same binary the app starts its engine from. Nothing here re-implements the
 //! service managers (launchd, systemd --user, Task Scheduler), and nothing here
 //! writes a unit file: the CLI is the source of truth for all three systems.
@@ -185,7 +185,7 @@ pub async fn server_link_path() -> Result<ServiceStatus, String> {
     read_status().await
 }
 
-/// The current state from `rustcode server status --json`. A status that
+/// The current state from `rc server status --json`. A status that
 /// cannot be read is a status the page says it does not know, never an error
 /// the page cannot show.
 async fn read_status() -> Result<ServiceStatus, String> {
@@ -231,7 +231,7 @@ pub(crate) fn server_installed() -> Option<bool> {
     read_report().map(|report| report.installed)
 }
 
-/// `rustcode server status --json` on a plain thread, for the catch-up at app
+/// `rc server status --json` on a plain thread, for the catch-up at app
 /// start: no settings page is waiting for it.
 fn read_report() -> Option<Report> {
     let output = run_sync(&["server", "status", "--json"], STATUS_TIMEOUT).ok()?;
@@ -280,7 +280,7 @@ pub(crate) fn service_program() -> PathBuf {
     .unwrap_or(engine)
 }
 
-/// What `rustcode server update-cli --json` said it found and did: one entry
+/// What `rc server update-cli --json` said it found and did: one entry
 /// per copy it looked at.
 #[derive(Debug, Deserialize)]
 struct UpdatedCli {
@@ -815,7 +815,7 @@ fn copy_program(source: &Path, target: &Path, appimage: Option<&Path>) -> Result
     let failure = |error: std::io::Error| {
         format!(
             "Cannot install the RustCode server from an AppImage: {} could not be copied to {} \
-             ({error}). Install the .deb, or run `rustcode server install` from a RustCode that \
+             ({error}). Install the .deb, or run `rc server install` from a RustCode that \
              lives outside an AppImage.",
             source.display(),
             target.display()

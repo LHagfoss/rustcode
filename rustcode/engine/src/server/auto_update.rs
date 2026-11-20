@@ -1,15 +1,15 @@
 //! A server that keeps itself up to date (`docs/server.md` › Staying up to
 //! date).
 //!
-//! A machine nobody sits at, a PC running `rustcode server` as a background
+//! A machine nobody sits at, a PC running `rc server` as a background
 //! service, used to stay on the version it was installed with: one ran 1.31.0
 //! while the Mac ran 1.31.3, and a bug fixed in 1.31.1 kept biting there. So a
 //! server that runs as a service looks for a newer stable release about every
 //! half hour. When it finds one it waits until no turn is running (a turn that
 //! asks the user something is a running turn, so nothing waits on a person
-//! either), installs it exactly as `rustcode --update` does (the release
+//! either), installs it exactly as `rc --update` does (the release
 //! archive is checked against `SHA256SUMS`; Homebrew installs go through
-//! `brew`), and restarts onto it through `rustcode server restart --when-idle`,
+//! `brew`), and restarts onto it through `rc server restart --when-idle`,
 //! which is safe to start from inside the server. The remote gateway comes
 //! back on the new version by itself: the restarted server replaces an older
 //! gateway (`remote_gateway::host`).
@@ -20,7 +20,7 @@
 //! each time, never in a loop.
 //!
 //! Separately, and whatever `auto_update` says, the server follows its own
-//! binary ([`watch_binary`]): when `rustcode --update`, Homebrew, the app or
+//! binary ([`watch_binary`]): when `rc --update`, Homebrew, the app or
 //! an install script replaces it with another version, the server restarts
 //! onto that copy once no turn runs. A server left on the binary it started
 //! from kept serving 1.40.0 for a day after 1.41.0 was installed, and paired

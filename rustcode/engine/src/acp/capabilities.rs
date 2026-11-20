@@ -27,7 +27,7 @@ pub(crate) struct SetCapabilityRequest {
 }
 
 /// Add an MCP server to the user config and start it; answers with the
-/// fresh snapshot. Fields mirror `rustcode mcp add`.
+/// fresh snapshot. Fields mirror `rc mcp add`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
 #[request(method = "_rustcode/capabilities/mcp/add", response = serde_json::Value)]
 pub(crate) struct AddMcpServerRequest {

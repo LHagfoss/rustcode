@@ -1,7 +1,7 @@
 //! The RustCode machine client.
 //!
 //! One implementation of "reach another computer's RustCode and speak to it",
-//! shared by the desktop app's Rust shell and `rustcode machines`, so a
+//! shared by the desktop app's Rust shell and `rc machines`, so a
 //! machine is saved, paired and connected to the same way wherever it is used.
 //!
 //! - [`registry`]: saved machines keyed by `host_id`, with their routes, in

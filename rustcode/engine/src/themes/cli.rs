@@ -1,4 +1,4 @@
-//! `rustcode theme ...`: each command's output as text, for the terminal
+//! `rc theme ...`: each command's output as text, for the terminal
 //! frontend to print. An `Err` is the message to print before exiting 1.
 
 use super::{
@@ -35,7 +35,7 @@ pub fn list(workspace: Option<&Path>) -> String {
 }
 
 fn named<'a>(themes: &'a [Theme], name: &str) -> Result<&'a Theme, String> {
-    find(themes, name).ok_or_else(|| format!("no theme named '{name}' (see `rustcode theme list`)"))
+    find(themes, name).ok_or_else(|| format!("no theme named '{name}' (see `rc theme list`)"))
 }
 
 /// `theme show <name> [--json]`: the resolved theme, as the desktop app
@@ -107,7 +107,7 @@ pub fn path(name: Option<&str>, workspace: Option<&Path>) -> Result<String, Stri
     match &theme.path {
         Some(path) => Ok(format!("{}\n", path.display())),
         None => Err(format!(
-            "'{}' is built in and has no file; copy it with `rustcode theme new <name> --from {}`",
+            "'{}' is built in and has no file; copy it with `rc theme new <name> --from {}`",
             theme.name(),
             theme.name()
         )),

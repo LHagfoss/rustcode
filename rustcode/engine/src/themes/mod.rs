@@ -985,9 +985,7 @@ pub fn template(name: &str, base: &Theme) -> String {
     let mut out = String::new();
     out.push_str("# RustCode theme (docs/themes.md).\n");
     out.push_str("# Colours are \"#rrggbb\". Save and the desktop app restyles at once;\n");
-    out.push_str(&format!(
-        "# check it with `rustcode theme validate {name}`.\n"
-    ));
+    out.push_str(&format!("# check it with `rc theme validate {name}`.\n"));
     out.push_str(&format!("name = \"{name}\"\n"));
     out.push_str(&format!(
         "description = \"Based on {}\"\n\n",

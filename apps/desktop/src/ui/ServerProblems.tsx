@@ -1,4 +1,4 @@
-// The RustCode server's warnings (`rustcode server status`), as a callout under
+// The RustCode server's warnings (`rc server status`), as a callout under
 // its row in Settings › Remote access and › Machines: each one in readable
 // text with what fixes it, when the app can (point a terminal's `rustcode` at
 // this app, install the server from this app), else the command to run, and a

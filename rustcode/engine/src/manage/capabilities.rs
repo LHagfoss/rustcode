@@ -1,4 +1,4 @@
-//! `manage_capabilities` and `rustcode skill|mcp|harness …` (#3821): what a
+//! `manage_capabilities` and `rc skill|mcp|harness …` (#3821): what a
 //! thread can use. Skills and MCP servers are turned on and off (and an MCP
 //! server restarted), a skill is created, the default harness for new threads is chosen, and the
 //! theme is switched. The engine's own methods do the work
@@ -166,21 +166,21 @@ impl Op {
     /// The command a person runs for the same change.
     fn hint(&self) -> String {
         match self {
-            Self::List(kind) => format!("rustcode {kind} list"),
+            Self::List(kind) => format!("rc {kind} list"),
             Self::Toggle {
                 kind,
                 name,
                 enabled,
             } => format!(
-                "rustcode {kind} {} {name}",
+                "rc {kind} {} {name}",
                 if *enabled { "enable" } else { "disable" }
             ),
-            Self::Restart(name) => format!("rustcode mcp restart {name}"),
+            Self::Restart(name) => format!("rc mcp restart {name}"),
             Self::CreateSkill { name, .. } => {
                 format!("write ~/.config/rustcode/skills/{name}/SKILL.md")
             }
-            Self::Default { harness, .. } => format!("rustcode harness default {harness}"),
-            Self::Theme(name) => format!("rustcode theme set {name}"),
+            Self::Default { harness, .. } => format!("rc harness default {harness}"),
+            Self::Theme(name) => format!("rc theme set {name}"),
         }
     }
 
@@ -476,14 +476,14 @@ mod tests {
             default.title(&json!({"harness": "claude-code"})),
             "Change the default harness for new threads: claude-code → codex with gpt-5 at high effort"
         );
-        assert_eq!(default.hint(), "rustcode harness default codex");
+        assert_eq!(default.hint(), "rc harness default codex");
         let off = Op::Toggle {
             kind: "skill".into(),
             name: "review".into(),
             enabled: false,
         };
         assert_eq!(off.title(&Value::Null), "Turn off skill review");
-        assert_eq!(off.hint(), "rustcode skill disable review");
+        assert_eq!(off.hint(), "rc skill disable review");
         let create = Op::CreateSkill {
             name: "notes".into(),
             content: "x".into(),
@@ -519,7 +519,7 @@ mod tests {
         .await;
         assert!(!answer.success);
         assert!(
-            answer.content.contains("rustcode theme set light"),
+            answer.content.contains("rc theme set light"),
             "{}",
             answer.content
         );

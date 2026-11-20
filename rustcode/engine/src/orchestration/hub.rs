@@ -1,4 +1,4 @@
-//! The parent engine's end of `rustcode mcp-orchestrator`
+//! The parent engine's end of `rc mcp-orchestrator`
 //! (`docs/orchestrator.md`, External harnesses as orchestrators).
 //!
 //! An external harness thread gets the orchestration tools through an MCP
@@ -37,7 +37,7 @@ pub struct CallRequest {
     pub tool: String,
     #[serde(default)]
     pub args: Value,
-    /// The call comes from an outside agent (`rustcode mcp-connect`), not from
+    /// The call comes from an outside agent (`rc mcp-connect`), not from
     /// a thread's harness: `token` is its own grant's, `session_id` is unused,
     /// and the engine applies the grant's scope (`outside.rs`).
     #[serde(default)]
@@ -59,7 +59,7 @@ impl CallAnswer {
     }
 }
 
-/// How the engine starts `rustcode mcp-orchestrator` for one thread.
+/// How the engine starts `rc mcp-orchestrator` for one thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
     pub command: PathBuf,
@@ -76,7 +76,7 @@ pub struct Launch {
     pub version: u8,
 }
 
-/// The environment variable `rustcode mcp-orchestrator` reads its token from.
+/// The environment variable `rc mcp-orchestrator` reads its token from.
 pub const ORCHESTRATOR_TOKEN_ENV: &str = "RUSTCODE_ORCHESTRATOR_TOKEN";
 
 /// Set to `1` when the thread's client runs Smart UI blocks: the server then
@@ -688,7 +688,7 @@ mod listen {
         }
     }
 
-    /// Say where this engine's hub listens, for `rustcode mcp-connect`, which
+    /// Say where this engine's hub listens, for `rc mcp-connect`, which
     /// starts outside any thread and so has no socket path handed to it. The
     /// last engine to bind wins; a stale file only makes the bridge's connect
     /// fail with a message that RustCode is not running.

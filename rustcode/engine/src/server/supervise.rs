@@ -5,7 +5,7 @@
 //! outlive the server: one killed with the session that started it (a restart
 //! over SSH on Windows) left a gateway that passed every handshake and refused
 //! every `acp_open`, until a person started the server again. So the gateway
-//! `rustcode remote serve` runs starts the server when none answers: when a
+//! `rc remote serve` runs starts the server when none answers: when a
 //! device opens ACP, and, for a server installed as a background service,
 //! from a watch of its own. A server that left `server.json` behind is dead
 //! when its process is gone or its pid names a later process. Starts back off
@@ -125,7 +125,7 @@ struct Supervisor {
 static SUPERVISOR: OnceLock<Supervisor> = OnceLock::new();
 
 /// Let this gateway start the server of `config_directory` when none answers,
-/// and watch an installed one. Only `rustcode remote serve` calls it: a
+/// and watch an installed one. Only `rc remote serve` calls it: a
 /// gateway in a test or inside another process starts nothing.
 pub fn supervise(program: PathBuf, config_directory: PathBuf) {
     let supervisor = Supervisor {
@@ -202,7 +202,7 @@ pub(crate) async fn revive(wait: Duration) -> Result<ClientStream, String> {
         if tokio::time::Instant::now() >= deadline {
             let next = backoff.failed(Instant::now());
             let why = format!(
-                "the RustCode server was started but did not answer within {}s; see `rustcode server logs`",
+                "the RustCode server was started but did not answer within {}s; see `rc server logs`",
                 wait.as_secs()
             );
             note(&format!("gateway: {why} (next try in {}s)", next.as_secs()));

@@ -5,7 +5,7 @@
 //! - `manage_settings`, a tool of the `rustcode` MCP server that external
 //!   harnesses (Claude Code, Codex and the rest) and outside agents call. Reads answer at once; a write asks the user through the
 //!   thread's own approval card, which names the value before and after.
-//! - `rustcode settings list|get|set|reset`, which sends the same
+//! - `rc settings list|get|set|reset`, which sends the same
 //!   `_rustcode/settings/*` request to the running server, or reads and writes
 //!   the file itself when none runs.
 //!
@@ -209,7 +209,7 @@ pub async fn answer(
                 shown(&before["value"]),
                 shown(&after_value)
             );
-            let hint = format!("rustcode settings {write} {key}");
+            let hint = format!("rc settings {write} {key}");
             if let Err(refusal) = gate(approval, tool, &title, &hint, args, cancel).await {
                 return refusal;
             }
@@ -491,12 +491,12 @@ async fn via_server(method: &str, params: Value) -> Result<(Value, Via), String>
     }
 }
 
-/// `rustcode settings list`.
+/// `rc settings list`.
 pub async fn cli_list(project: Option<&str>) -> Result<Value, String> {
     Ok(rows(&via_server(GET, get_params(None, project)).await?.0))
 }
 
-/// `rustcode settings get`.
+/// `rc settings get`.
 pub async fn cli_get(key: &str, project: Option<&str>) -> Result<Value, String> {
     if !settings::is_key(key) {
         return Err(unknown(key));
@@ -507,7 +507,7 @@ pub async fn cli_get(key: &str, project: Option<&str>) -> Result<Value, String> 
     ))
 }
 
-/// `rustcode settings set|reset` (`value` is `None` for a reset): write, then
+/// `rc settings set|reset` (`value` is `None` for a reset): write, then
 /// read the key back, with the value before it and where it was written.
 pub async fn cli_write(
     key: &str,
@@ -582,7 +582,7 @@ mod tests {
         )
         .await;
         assert!(!answer.success, "{}", answer.content);
-        assert!(answer.content.contains("rustcode settings set"));
+        assert!(answer.content.contains("rc settings set"));
         assert_eq!(get("wake-batch-seconds", None).unwrap()["value"], json!(60));
     }
 

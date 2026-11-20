@@ -148,8 +148,8 @@ Where this shows:
   tunnel is encrypted, and a public or unknown address is not. The gateway's
   own answer above is the authority for a device that connects *to* this
   computer.
-- `rustcode machines list`: a NETWORK column for each connected machine,
-  in the same words as `rustcode remote status` (`LAN (not encrypted)`,
+- `rc machines list`: a NETWORK column for each connected machine,
+  in the same words as `rc remote status` (`LAN (not encrypted)`,
   `NetBird (encrypted by the tunnel)`, `an unrecognised network (not
   encrypted)`), `—` for a machine that is not connected. `--json` carries
   `network` with `path`, `provider`, `encrypted` and `label` (null when the
@@ -164,7 +164,7 @@ Where this shows:
   the window tells each change once and records where a machine stands the
   first time it lists it, so a change from before the window opened is not
   news. A new address on the same kind of network is not a change.
-- `rustcode remote status`: each connected device says `connected over LAN (not
+- `rc remote status`: each connected device says `connected over LAN (not
   encrypted)` or `connected over NetBird (encrypted by the tunnel)`.
 - ACP: `_rustcode/remote` carries `routes` on each connected device. A
   device that was revoked is not listed, so it is never shown as connected,
@@ -197,11 +197,11 @@ port, protocol version, gateway id and capabilities only).
 
 Revocation, from the quickest to the widest:
 
-1. Settings › Remote access › *Revoke*, or `rustcode remote revoke <device>`:
+1. Settings › Remote access › *Revoke*, or `rc remote revoke <device>`:
    the device's connections close in the same step with `revoked`, and its
    token is forgotten.
-2. `rustcode remote devices deny <id>`: removes the ACP grant and disconnects.
-3. `/remote off` or `rustcode remote stop`: nobody reaches the gateway;
+2. `rc remote devices deny <id>`: removes the ACP grant and disconnects.
+3. `/remote off` or `rc remote stop`: nobody reaches the gateway;
    pairings are kept.
 4. Replay of a retired refresh token: the whole pairing is revoked by the host.
 5. Expiry: a static token ends after 30 days; a rotating pairing lasts until
@@ -317,7 +317,7 @@ Covered in CI (not by this page):
   overlay to the LAN is reported on the LAN and unencrypted; a revoked device
   is not listed as connected; an address nothing is known about is never
   encrypted, on the gateway (`acp/remote.rs` tests), in the client
-  (`registry.rs` tests) and in `rustcode machines list` (`machines.rs`
+  (`registry.rs` tests) and in `rc machines list` (`machines.rs`
   tests); a reconnection over the LAN after a tunnel raises a downgrade
   notice (`src-tauri/src/machines.rs`, `state/machines.test.ts`).
 
@@ -341,7 +341,7 @@ Not covered, and listed so nobody assumes otherwise:
 - A TLS-aware `describe`/`authenticate` and the downgrade refusal described
   under Migration, with tests for a changed certificate, an unknown
   certificate and a revoked device over TLS.
-- Per-connection route in the phone app (`rustcode machines list` and the
+- Per-connection route in the phone app (`rc machines list` and the
   desktop show it today).
 - A device-test checklist for an iPhone on LAN, NetBird and cellular.
 - Key support in the phone app (`rustcode-mobile`), then refusing tokens from

@@ -78,7 +78,7 @@ pub const SSH_ROUTE_TIMEOUT: Duration = Duration::from_secs(15);
 /// What kind of client this is. A label for the owner, and what the machine
 /// grants: ACP access follows an accepted request from a [`ClientKind::Desktop`],
 /// while a [`ClientKind::Cli`] device is allowed the session protocol until the
-/// owner grants it (`rustcode remote devices allow <device>`).
+/// owner grants it (`rc remote devices allow <device>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientKind {
     Desktop,
@@ -311,7 +311,7 @@ impl Connector {
     }
 
     /// The same connector with other timeouts, for a glance like
-    /// `rustcode machines list` that skips a route that does not answer in
+    /// `rc machines list` that skips a route that does not answer in
     /// seconds instead of waiting on it.
     pub fn with_timeouts(mut self, route_timeout: Duration, timeout: Duration) -> Self {
         self.route_timeout = route_timeout;
@@ -1114,7 +1114,7 @@ impl Connector {
         {
             bail!(
                 "that code has expired, was already used or was mistyped. Create a new one on \
-                 that machine (Settings › Machines › Create connect code, or `rustcode machines code`)"
+                 that machine (Settings › Machines › Create connect code, or `rc machines code`)"
             );
         }
         Ok((paired_from(connection, answer)?, route))
@@ -1271,7 +1271,7 @@ pub struct Connected {
 
 impl Connected {
     /// The hint for a route that does not answer while another one does, as
-    /// `rustcode machines list` and the app show it.
+    /// `rc machines list` and the app show it.
     ///
     /// `routes` is every route saved for the machine, so an overlay that does
     /// answer can silence a hint about one that does not, and `local` is this
@@ -1669,7 +1669,7 @@ fn describe() -> HandshakeRequest {
 
 /// What a machine that predates connect codes earns.
 const OLDER_MACHINE: &str = "that machine runs an older RustCode without connect codes; update \
-     RustCode there, or add it with `rustcode machines add <address>` and accept the request there";
+     RustCode there, or add it with `rc machines add <address>` and accept the request there";
 
 /// The `authenticate` frame that reconnects with an access token: no
 /// capability, because nothing is asked for and nothing rotates.
@@ -1779,7 +1779,7 @@ impl Refusal {
             code if code.needs_new_pairing() => "; pair with the machine again",
             ErrorCode::UnauthorizedAccess => {
                 "; this computer is not allowed to use that machine's threads — on that machine, \
-                 run `rustcode remote devices allow <device>`"
+                 run `rc remote devices allow <device>`"
             }
             ErrorCode::UnsupportedVersion => {
                 "; that machine speaks another RustCode remote protocol version — update RustCode \
@@ -1787,7 +1787,7 @@ impl Refusal {
             }
             ErrorCode::Internal => {
                 "; no RustCode engine is running there to relay to — open RustCode on that \
-                 machine, or run `rustcode server run` on it"
+                 machine, or run `rc server run` on it"
             }
             _ => "",
         }
@@ -2311,7 +2311,7 @@ mod tests {
         );
         let not_allowed = refusal(ErrorCode::UnauthorizedAccess).to_string();
         assert!(
-            not_allowed.contains("rustcode remote devices allow"),
+            not_allowed.contains("rc remote devices allow"),
             "{not_allowed}"
         );
         let revoked = refusal(ErrorCode::Revoked).to_string();

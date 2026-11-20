@@ -600,7 +600,7 @@ export function Loops() {
               }
             >
               The scheduler is stopped, so loops cannot be listed or run. It runs in the background, apart
-              from the app, as <span className="font-mono">rustcode daemon start</span> does.
+              from the app, as <span className="font-mono">rc daemon start</span> does.
             </Callout>
           ) : loops.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-16 text-center">

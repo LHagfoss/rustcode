@@ -1,5 +1,5 @@
 //! The model profile and reasoning effort new sessions start with: the
-//! config's default profile and that profile's effort. `rustcode defaults`
+//! config's default profile and that profile's effort. `rc defaults`
 //! reads and sets them for frontends such as the macOS app. Switching model or
 //! effort inside a session (the TUI's `/model` and `/effort`, ACP, remote
 //! controls) changes only that session; see `SessionModelScope`.

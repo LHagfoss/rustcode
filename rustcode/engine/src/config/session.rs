@@ -716,7 +716,7 @@ pub fn list_sessions_in_scope(limit: usize, scope: &SessionScope) -> (Vec<Sessio
 
 /// Store a thread's status the way the desktop app's
 /// `_rustcode/session/status` does (`done` = Settled, `review`, or `idle` =
-/// Active), for a caller outside the engine such as `rustcode threads
+/// Active), for a caller outside the engine such as `rc threads
 /// settle` (#3151). The app reads the same `status.json` from `session/list`,
 /// so it shows the change without a second writer.
 pub fn set_session_status(session_id: &str, status: &str) -> Result<(), String> {
@@ -727,7 +727,7 @@ pub fn set_session_status(session_id: &str, status: &str) -> Result<(), String> 
 }
 
 /// The status stored for a thread (`done`, `review`, or `idle` when it has
-/// none), for a caller outside the engine such as `rustcode threads unsettle`,
+/// none), for a caller outside the engine such as `rc threads unsettle`,
 /// which leaves a `review` thread alone.
 pub fn session_status(session_id: &str) -> String {
     crate::thread_status::current(session_id)
@@ -736,7 +736,7 @@ pub fn session_status(session_id: &str) -> String {
 }
 
 /// Ids of every saved thread, deduped and sorted, without reading a transcript
-/// (`SessionStore::session_history_paths`). `rustcode threads` resolves an id
+/// (`SessionStore::session_history_paths`). `rc threads` resolves an id
 /// prefix against these instead of scanning for a directory that a typo would
 /// create.
 ///
@@ -1252,7 +1252,7 @@ pub fn sync_config_pull() -> Result<(), String> {
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
         return Err(
-            "Sync repo not initialized. Please run: rustcode config sync init <remote-git-url>"
+            "Sync repo not initialized. Please run: rc config sync init <remote-git-url>"
                 .to_string(),
         );
     }
@@ -1332,7 +1332,7 @@ pub fn sync_config_push() -> Result<(), String> {
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
         return Err(
-            "Sync repo not initialized. Please run: rustcode config sync init <remote-git-url>"
+            "Sync repo not initialized. Please run: rc config sync init <remote-git-url>"
                 .to_string(),
         );
     }

@@ -13,7 +13,7 @@
 //! The built-in harness applies the verdict in its exec tool. A harness
 //! RustCode does not execute for gets the same verdict through its approval
 //! requests, and Claude Code through a `PreToolUse` hook that runs
-//! `rustcode guard-command`. Every violation is counted per thread in the
+//! `rc guard-command`. Every violation is counted per thread in the
 //! data store as a `command_guard.violation` operational event.
 
 use serde::Deserialize;
@@ -923,14 +923,13 @@ mod tests;
 mod settings_regression {
     #[test]
     fn inline_hook_settings_are_an_object_not_a_file_path() {
-        let settings = serde_json::json!(super::claude_hook_settings(
-            "rustcode guard-command".to_owned()
-        ));
+        let settings =
+            serde_json::json!(super::claude_hook_settings("rc guard-command".to_owned()));
         assert!(settings.is_object(), "SDK string settings are file paths");
         assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
         assert_eq!(
             settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "rustcode guard-command"
+            "rc guard-command"
         );
     }
 }

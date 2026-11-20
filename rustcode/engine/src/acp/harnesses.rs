@@ -472,7 +472,7 @@ pub(crate) async fn new_session(
 
 /// Give an external thread the orchestration tools when the client hosts
 /// version 2 of them: register it with the engine's orchestrator socket and
-/// have the harness start `rustcode mcp-orchestrator`. Whether it did.
+/// have the harness start `rc mcp-orchestrator`. Whether it did.
 async fn attach_orchestrator(
     session: &ExternalSession,
     info: super::clients::ClientInfo,

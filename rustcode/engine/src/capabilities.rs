@@ -410,7 +410,7 @@ pub async fn set_mcp_server_enabled(name: &str, enabled: bool) -> Result<McpEntr
         .ok_or_else(|| format!("MCP server '{name}' is no longer configured"))
 }
 
-/// Save a new server to the user config, validated like `rustcode mcp add`,
+/// Save a new server to the user config, validated like `rc mcp add`,
 /// and start it in this process. A start failure is recorded for the
 /// settings surfaces rather than returned: the server stays configured.
 pub async fn add_mcp_server(spec: &crate::config::McpServerSpec) -> Result<McpEntry, String> {

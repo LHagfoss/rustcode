@@ -1,13 +1,13 @@
 //! The RustCode server: one engine per user and config directory that
 //! several clients share (`docs/server.md`).
 //!
-//! `rustcode server run` holds the server lock (`lock.rs`), listens on a
+//! `rc server run` holds the server lock (`lock.rs`), listens on a
 //! local endpoint only this user can reach (`listen.rs`, `peer.rs`) and
 //! serves ACP on every connection to one [`AcpEngine`]. Sessions, turns and
 //! harness processes belong to that engine: a client that disconnects ends
 //! none of them, and the harnesses end with the server process.
 //!
-//! `rustcode server connect` is a client: it relays its stdin and stdout to
+//! `rc server connect` is a client: it relays its stdin and stdout to
 //! the server, starting one in the background first if none runs, so
 //! anything that spoke ACP to `rustcode --acp` can speak it to the server.
 //!
@@ -79,11 +79,11 @@ pub enum RunOutcome {
     AlreadyRunning(Option<ServerInfo>),
 }
 
-/// `rustcode server run`: serve every client of this user until a signal
+/// `rc server run`: serve every client of this user until a signal
 /// stops the process. `service` is set by a service manager (`--service`):
 /// on Windows it has no console window to keep open.
 pub async fn run(auto_approve: bool, service: bool) -> anyhow::Result<RunOutcome> {
-    // `rustcode server logs` reads this; only a server writes it. From the
+    // `rc server logs` reads this; only a server writes it. From the
     // first line on, so a server that cannot start says why there: a service
     // manager or a `Run` entry keeps no output of its own (panics land here
     // too, through the panic hook).
@@ -226,7 +226,7 @@ fn ended_without_stopping(previous: &ServerInfo) -> String {
             .unwrap_or_else(|| previous.started_at.to_string());
     format!(
         "the previous RustCode server (pid {}, version {}, started {started}) ended without stopping \
-         cleanly: it was killed (as `rustcode server restart` does on Windows) or crashed; on Windows, \
+         cleanly: it was killed (as `rc server restart` does on Windows) or crashed; on Windows, \
          the SSH session or job that started it also ends it when it closes",
         previous.pid, previous.version
     )
@@ -293,7 +293,7 @@ windows_signal!(
     tokio::signal::windows::CtrlShutdown
 );
 
-/// `rustcode server connect`: relay stdin and stdout to the server until
+/// `rc server connect`: relay stdin and stdout to the server until
 /// either side closes, starting the server first if none runs. `program` is
 /// the `rustcode` executable that starts it.
 pub async fn connect(program: PathBuf) -> anyhow::Result<()> {
@@ -338,7 +338,7 @@ pub enum Asked {
 }
 
 /// Send one ACP request to the running server and wait for its answer, as a
-/// client that reads it once: `rustcode settings` writes through the server
+/// client that reads it once: `rc settings` writes through the server
 /// so its clients hear of the change. Nothing is started.
 pub async fn ask_running(method: &str, params: serde_json::Value) -> Asked {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};

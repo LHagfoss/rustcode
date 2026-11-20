@@ -184,7 +184,7 @@ const EXACT_METHODS: &[&str] = &[
 ];
 // Settings › Outside agents for this machine: its connected apps, the
 // sign-ins its public sign-in page waits on, and sign-in codes. A paired
-// device can already run `rustcode outside` in a thread here, so this gives
+// device can already run `rc outside` in a thread here, so this gives
 // it nothing new; it lets the owner approve a hosted agent from any device.
 const METHOD_PREFIXES: &[&str] = &[
     "session/",

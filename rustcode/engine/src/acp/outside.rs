@@ -95,7 +95,7 @@ pub(crate) struct OutsideSignInRequest {
 }
 
 /// `_rustcode/outside/code`: a one-time sign-in code for the public sign-in
-/// page, as `rustcode outside code` makes one.
+/// page, as `rc outside code` makes one.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
 )]
@@ -109,7 +109,7 @@ pub(crate) struct OutsideCodeRequest {
 }
 
 /// `_rustcode/outside/passkey/add`: a link that adds an owner passkey on the
-/// public sign-in page, as `rustcode outside owner add-passkey` makes one.
+/// public sign-in page, as `rc outside owner add-passkey` makes one.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
 )]
