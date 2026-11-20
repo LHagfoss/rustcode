@@ -80,6 +80,14 @@ describe("links in a reply", () => {
     expect(out).toContain("hover:decoration-current");
   });
 
+  test("named GitHub PR and issue links render as chips", () => {
+    const pull = drawn("[PR #12](https://github.com/acme/app/pull/12)");
+    const issue = drawn("[Issue #7](https://github.com/acme/app/issues/7#issuecomment-42)");
+    expect(pull).toContain('data-icon="GitPullRequest"');
+    expect(issue).toContain('data-icon="CircleDot"');
+    expect(issue).toContain('href="https://github.com/acme/app/issues/7#issuecomment-42"');
+  });
+
   test("a bare URL is a chip that stays inside the text's line box", () => {
     const out = drawn("See https://example.com/page for it.");
     // `align-middle` seats the chip on the x-height without growing the line (ui/LinkChip.tsx).

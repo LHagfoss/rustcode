@@ -18,6 +18,7 @@ import remarkGfm from "remark-gfm";
 import { copiesOnClick } from "../lib/copyOnClick";
 import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/fileRefs";
 import { highlight, peekHighlight } from "../lib/highlight";
+import { githubRefOf } from "../lib/links";
 import { markdownBlocks } from "../lib/markdownBlocks";
 import { remarkMathAsCode, remarkMoneySafeMath } from "../lib/markdownMath";
 import { openExternal, openInEditor } from "../lib/native";
@@ -289,8 +290,8 @@ const components: Components = {
     const thread = href ? THREAD_LINK.exec(href) : null;
     if (thread?.[1])
       return <ThreadChip id={thread[1]} label={typeof children === "string" ? children : undefined} />;
-    // A bare link (autolinked, or `<url>`) reads as a chip; a link with its own words stays a link.
-    return href && /^https?:\/\//i.test(href) && typeof children === "string" && children === href ? (
+    // GitHub references use their chip even when Markdown gives the link a label.
+    return href && (githubRefOf(href) || (/^https?:\/\//i.test(href) && children === href)) ? (
       <LinkChip url={href} />
     ) : (
       <a
