@@ -1245,7 +1245,7 @@ pub fn sync_config_pull() -> Result<(), String> {
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
         return Err(
-            "Sync repo not initialized. Please run: rustcode sync init <remote-git-url>"
+            "Sync repo not initialized. Please run: rustcode config sync init <remote-git-url>"
                 .to_string(),
         );
     }
@@ -1325,7 +1325,7 @@ pub fn sync_config_push() -> Result<(), String> {
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
         return Err(
-            "Sync repo not initialized. Please run: rustcode sync init <remote-git-url>"
+            "Sync repo not initialized. Please run: rustcode config sync init <remote-git-url>"
                 .to_string(),
         );
     }

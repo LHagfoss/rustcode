@@ -4,7 +4,7 @@ use clap::Parser;
 #[command(
     name = "rustcode",
     version = env!("CARGO_PKG_VERSION"),
-    about = "AI-powered agentic coding assistant terminal"
+    about = "RustCode: the terminal app, and the commands for its threads, config, machines and server"
 )]
 pub struct Cli {
     /// Resume a chat session: bare `--resume` restores the most recent
@@ -69,7 +69,9 @@ pub enum Commands {
     /// Run as a headless Agent Client Protocol server over stdio
     Acp,
 
-    /// Sync config, skills, and themes with remote Git repository
+    /// Sync config, skills, and themes with remote Git repository; the same
+    /// as `config sync`
+    #[command(hide = true)]
     Sync {
         /// Pull latest config, skills, and themes from remote
         #[arg(long, conflicts_with = "push")]
@@ -79,6 +81,13 @@ pub enum Commands {
         push: bool,
         #[command(subcommand)]
         command: Option<SyncCommands>,
+    },
+
+    /// What RustCode is set up with: settings, harnesses, accounts, MCP
+    /// servers, skills, themes, defaults and Git sync
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
     },
 
     /// Export a thread as a zip archive (default: into ~/Downloads) to send
@@ -99,30 +108,33 @@ pub enum Commands {
         command: Option<SessionCommands>,
     },
 
-    /// List skills and turn one on or off for every project
-    #[command(alias = "skills")]
+    /// List skills and turn one on or off for every project; the same as
+    /// `config skill`
+    #[command(alias = "skills", hide = true)]
     Skill {
         #[command(subcommand)]
         command: ToggleCommands,
     },
 
-    /// List the harnesses and choose the one new threads start on
-    #[command(alias = "harnesses")]
+    /// List the harnesses and choose the one new threads start on; the same
+    /// as `config harness`
+    #[command(alias = "harnesses", hide = true)]
     Harness {
         #[command(subcommand)]
         command: HarnessCommands,
     },
 
     /// List, check, add and remove the named accounts of a harness (sign-ins
-    /// are never printed)
-    #[command(alias = "accounts")]
+    /// are never printed); the same as `config account`
+    #[command(alias = "accounts", hide = true)]
     Account {
         #[command(subcommand)]
         command: AccountCommands,
     },
 
-    /// List the GitHub and model sign-ins, or sign one out
-    #[command(alias = "connection")]
+    /// List the GitHub and model sign-ins, or sign one out; the same as
+    /// `config connections`
+    #[command(alias = "connection", hide = true)]
     Connections {
         #[command(subcommand)]
         command: ConnectionCommands,
@@ -143,14 +155,15 @@ pub enum Commands {
     },
 
     /// Read and change RustCode's server settings (`settings.json`), the
-    /// values Settings in the app shows; writes go through the running server
-    #[command(alias = "setting")]
+    /// values Settings in the app shows; the same as `config settings`
+    #[command(alias = "setting", hide = true)]
     Settings {
         #[command(subcommand)]
         command: SettingsCommands,
     },
 
-    /// List, show, create, validate and set themes (terminal and desktop app)
+    /// List, show, create, validate and set themes; the same as `config theme`
+    #[command(hide = true)]
     Theme {
         #[command(subcommand)]
         command: ThemeCommands,
@@ -205,7 +218,8 @@ pub enum Commands {
     },
 
     /// Show or set the model profile and reasoning effort new sessions start
-    /// with, as JSON
+    /// with; the same as `config defaults`
+    #[command(hide = true)]
     Defaults {
         /// Model profile name to make the default
         #[arg(long)]
@@ -313,7 +327,9 @@ pub enum Commands {
         command: CronCommands,
     },
 
-    /// Add, list, remove, turn on or off, and restart MCP servers
+    /// Add, list, remove, turn on or off, and restart MCP servers; the same
+    /// as `config mcp`
+    #[command(hide = true)]
     Mcp {
         #[command(subcommand)]
         command: McpCommands,
@@ -351,6 +367,206 @@ pub enum Commands {
     /// stdin; started by Claude Code, not by hand
     #[command(name = "guard-command", hide = true)]
     GuardCommand,
+}
+
+/// `rustcode config …`: the commands that change what RustCode is set up
+/// with, in one place. Each is also accepted under its old top-level name
+/// (`rustcode sync`, `rustcode mcp`, …), so nothing written against those
+/// breaks; [`Cli::flatten_config`] turns one into the other.
+#[derive(clap::Subcommand, Debug)]
+pub enum ConfigCommands {
+    /// Read and change RustCode's server settings (`settings.json`), the
+    /// values Settings in the app shows; writes go through the running server
+    #[command(alias = "setting")]
+    Settings {
+        #[command(subcommand)]
+        command: SettingsCommands,
+    },
+    /// List the harnesses and choose the one new threads start on
+    #[command(alias = "harnesses")]
+    Harness {
+        #[command(subcommand)]
+        command: HarnessCommands,
+    },
+    /// List, check, add and remove the named accounts of a harness (sign-ins
+    /// are never printed)
+    #[command(alias = "accounts")]
+    Account {
+        #[command(subcommand)]
+        command: AccountCommands,
+    },
+    /// List the GitHub and model sign-ins, or sign one out
+    #[command(alias = "connection")]
+    Connections {
+        #[command(subcommand)]
+        command: ConnectionCommands,
+    },
+    /// Add, list, remove, turn on or off, and restart MCP servers
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+    /// List skills and turn one on or off for every project
+    #[command(alias = "skills")]
+    Skill {
+        #[command(subcommand)]
+        command: ToggleCommands,
+    },
+    /// List, show, create, validate and set themes (terminal and desktop app)
+    Theme {
+        #[command(subcommand)]
+        command: ThemeCommands,
+    },
+    /// Show or set the model profile and reasoning effort new sessions start
+    /// with, as JSON
+    Defaults {
+        /// Model profile name to make the default
+        #[arg(long)]
+        model: Option<String>,
+        /// Reasoning effort for the default profile ("default" clears it)
+        #[arg(long)]
+        effort: Option<String>,
+    },
+    /// Sync config, skills, and themes with a remote Git repository (paired
+    /// machines can follow this one's settings instead: Settings › Machines)
+    Sync {
+        /// Pull latest config, skills, and themes from remote
+        #[arg(long, conflicts_with = "push")]
+        pull: bool,
+        /// Push local config, skills, and themes to remote
+        #[arg(long, conflicts_with = "pull")]
+        push: bool,
+        #[command(subcommand)]
+        command: Option<SyncCommands>,
+    },
+}
+
+impl From<ConfigCommands> for Commands {
+    fn from(command: ConfigCommands) -> Self {
+        match command {
+            ConfigCommands::Settings { command } => Commands::Settings { command },
+            ConfigCommands::Harness { command } => Commands::Harness { command },
+            ConfigCommands::Account { command } => Commands::Account { command },
+            ConfigCommands::Connections { command } => Commands::Connections { command },
+            ConfigCommands::Mcp { command } => Commands::Mcp { command },
+            ConfigCommands::Skill { command } => Commands::Skill { command },
+            ConfigCommands::Theme { command } => Commands::Theme { command },
+            ConfigCommands::Defaults { model, effort } => Commands::Defaults { model, effort },
+            ConfigCommands::Sync {
+                pull,
+                push,
+                command,
+            } => Commands::Sync {
+                pull,
+                push,
+                command,
+            },
+        }
+    }
+}
+
+impl Cli {
+    /// `config <command>` as the top-level command it stands for, so each is
+    /// handled in one place.
+    pub(crate) fn flatten_config(mut self) -> Self {
+        self.command = self.command.map(|command| match command {
+            Commands::Config { command } => command.into(),
+            other => other,
+        });
+        self
+    }
+}
+
+/// The sections `rustcode --help` lists commands under, in order. Every
+/// visible command is in exactly one (`help_groups_cover_every_command`);
+/// `config` lists its own commands.
+const HELP_GROUPS: &[(&str, &[&str])] = &[
+    (
+        "Terminal app",
+        &["init", "acp", "doctor", "bench", "discord"],
+    ),
+    (
+        "Threads",
+        &["threads", "export", "worktree", "usage", "data", "storage"],
+    ),
+    ("Config", &["config"]),
+    (
+        "Machines & remote",
+        &[
+            "up",
+            "machines",
+            "remote",
+            "outside",
+            "serve",
+            "mcp-connect",
+        ],
+    ),
+    ("Server", &["server", "daemon", "cron"]),
+];
+
+/// The command lines of `rustcode --help`, grouped by [`HELP_GROUPS`].
+fn grouped_commands(root: &clap::Command) -> String {
+    let styles = root.get_styles();
+    let (header, literal) = (styles.get_header(), styles.get_literal());
+    let mut rows: Vec<(Option<&str>, String, String)> = Vec::new();
+    for (group, names) in HELP_GROUPS {
+        rows.push((Some(group), String::new(), String::new()));
+        for name in *names {
+            let Some(command) = root.find_subcommand(name) else {
+                continue;
+            };
+            if *name == "config" {
+                for sub in command.get_subcommands() {
+                    let about = sub.get_about().map(ToString::to_string).unwrap_or_default();
+                    rows.push((None, format!("config {}", sub.get_name()), about));
+                }
+            } else {
+                let about = command
+                    .get_about()
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
+                rows.push((None, (*name).to_owned(), about));
+            }
+        }
+    }
+    let width = rows
+        .iter()
+        .map(|(_, name, _)| name.len())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for (group, name, about) in rows {
+        if let Some(group) = group {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&format!("{header}{group}:{header:#}\n"));
+        } else {
+            // Braces would read as template tags.
+            let about = about.replace('{', "(").replace('}', ")");
+            out.push_str(&format!("  {literal}{name:<width$}{literal:#}  {about}\n"));
+        }
+    }
+    out
+}
+
+/// The `rustcode` command, with its commands listed in groups.
+pub fn command() -> clap::Command {
+    let root = <Cli as clap::CommandFactory>::command();
+    let groups = grouped_commands(&root);
+    let header = *root.get_styles().get_header();
+    root.help_template(format!(
+        "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{groups}\n\
+         {header}Options:{header:#}\n{{options}}{{after-help}}"
+    ))
+}
+
+/// Parse the command line, with `config <command>` already flattened.
+pub fn parse() -> Cli {
+    let matches = command().get_matches();
+    <Cli as clap::FromArgMatches>::from_arg_matches(&matches)
+        .unwrap_or_else(|error| error.format(&mut command()).exit())
+        .flatten_config()
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -2390,6 +2606,88 @@ mod tests {
                 "docs/cli.md has no row for `rustcode {name}`"
             );
         }
+        let root = Cli::command();
+        for command in root.find_subcommand("config").unwrap().get_subcommands() {
+            let name = command.get_name();
+            assert!(
+                doc.contains(&format!("`rustcode config {name}")),
+                "docs/cli.md has no row for `rustcode config {name}`"
+            );
+        }
+    }
+
+    #[test]
+    fn config_commands_are_the_old_top_level_ones() {
+        let flat = |args: &[&str]| Cli::try_parse_from(args).unwrap().flatten_config().command;
+        assert!(matches!(
+            flat(&["rustcode", "config", "sync", "pull"]),
+            Some(Commands::Sync {
+                command: Some(SyncCommands::Pull),
+                ..
+            })
+        ));
+        assert!(matches!(
+            flat(&["rustcode", "sync", "--push"]),
+            Some(Commands::Sync { push: true, .. })
+        ));
+        assert!(matches!(
+            flat(&["rustcode", "config", "mcp", "list"]),
+            Some(Commands::Mcp { .. })
+        ));
+        assert!(matches!(
+            flat(&["rustcode", "mcp", "list"]),
+            Some(Commands::Mcp { .. })
+        ));
+        assert!(matches!(
+            flat(&["rustcode", "config", "setting", "list"]),
+            Some(Commands::Settings { .. })
+        ));
+        assert!(matches!(
+            flat(&["rustcode", "config", "defaults", "--effort", "high"]),
+            Some(Commands::Defaults {
+                effort: Some(_),
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["rustcode", "config", "sync", "--pull", "--push"]).is_err());
+    }
+
+    #[test]
+    fn help_groups_cover_every_command() {
+        let root = Cli::command();
+        let grouped: Vec<&str> = HELP_GROUPS
+            .iter()
+            .flat_map(|(_, names)| names.iter().copied())
+            .collect();
+        for command in root.get_subcommands().filter(|c| !c.is_hide_set()) {
+            let name = command.get_name();
+            assert_eq!(
+                grouped.iter().filter(|n| **n == name).count(),
+                1,
+                "`rustcode {name}` is not in exactly one HELP_GROUPS section"
+            );
+        }
+        for name in grouped {
+            assert!(
+                root.find_subcommand(name).is_some(),
+                "HELP_GROUPS names no command `{name}`"
+            );
+        }
+        let help = command().render_help().to_string();
+        for line in [
+            "Threads:",
+            "Config:",
+            "config sync",
+            "config mcp",
+            "Machines & remote:",
+            "Options:",
+        ] {
+            assert!(
+                help.contains(line),
+                "`rustcode --help` lacks {line:?}:\n{help}"
+            );
+        }
+        assert!(!help.contains("Commands:"), "{help}");
     }
 
     #[test]

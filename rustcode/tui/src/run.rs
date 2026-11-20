@@ -3,7 +3,6 @@
 
 use crate::runtime::AppRuntime;
 use crate::ui::TerminalRuntime;
-use clap::Parser;
 use ratatui::{
     backend::Backend,
     widgets::{Paragraph, Widget, Wrap},
@@ -971,7 +970,7 @@ pub(crate) fn print_rows(headers: &[&str], rows: &[Vec<String>]) {
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let cli_args = crate::cli::Cli::parse();
+    let cli_args = crate::cli::parse();
     // Started by an external harness on the engine's behalf: it speaks MCP
     // on stdio and must not run migrations or print anything else.
     if let Some(crate::cli::Commands::McpOrchestrator {
@@ -1440,11 +1439,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
                 println!(
-                    "Sync repository setup complete! You can now run `rustcode sync` anytime."
+                    "Sync repository setup complete! You can now run `rustcode config sync` anytime."
                 );
             }
             crate::cli::SyncAction::PullThenPush => {
-                // Default behavior for `rustcode sync` (pull then push)
+                // Default behavior for `rustcode config sync` (pull then push)
                 println!(
                     "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
                 );

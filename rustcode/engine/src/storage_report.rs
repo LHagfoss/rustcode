@@ -92,7 +92,7 @@ const STORES: &[Store] = &[
     },
     Store {
         name: "sync history",
-        holds: "the Git history of `rustcode sync`",
+        holds: "the Git history of `rustcode config sync`",
         retention: "kept; grows with each sync",
         entries: &[".git"],
     },

@@ -16,6 +16,13 @@ is shown once.
 `cli_doc_lists_every_command` in `rustcode/tui/src/cli.rs` fails when a
 command is added without a row here.
 
+`rustcode --help` lists the commands in the groups below: Terminal app,
+Threads, Config, Machines & remote, and Server (`HELP_GROUPS` in the same
+file). What RustCode is set up with is under `rustcode config`: settings,
+harness, account, connections, mcp, skill, theme, defaults and sync. Each
+still works under its old top-level name (`rustcode mcp list` is
+`rustcode config mcp list`), so scripts written against those keep working.
+
 ## Running RustCode
 
 | Command | What it does | Changes |
@@ -27,9 +34,7 @@ command is added without a row here.
 | `rustcode doctor` | Check config, binaries and skills | Creates missing folders with `--fix` |
 | `rustcode bench` | Inspect or compare structured turn telemetry | — |
 | `rustcode export [<id>]` | Export a thread as a zip (same as `threads export`) | A zip file |
-| `rustcode sync pull\|push\|init` | Sync config, skills and themes with a Git remote | Config files |
 | `rustcode discord` | Discord Rich Presence setup and status | Config |
-| `rustcode defaults` | Show or set the model profile and effort new sessions start with | Config |
 
 ## Server, daemon and machines
 
@@ -58,32 +63,40 @@ command is added without a row here.
 | `rustcode worktree remove <path> [--force]` | Remove one; uncommitted or unpushed work is kept unless `--force` (**asks**) | The worktree | |
 | `rustcode worktree prune` | `git worktree prune`: records of worktrees whose folders are gone | Git's records | |
 
-## Settings and what threads can use
+## Config: settings and what threads can use
 
 | Command | What it does | Changes | Server |
 | --- | --- | --- | --- |
-| `rustcode settings list\|get [--project]` | Server settings with value, source, default and accepted values | — | |
-| `rustcode settings set <key> <value> [--project]` | Change one; prints `before → after` | `settings.json` | |
-| `rustcode settings reset <key> [--project]` | Back to the default (or the machine's value) | `settings.json` | |
-| `rustcode skill list\|enable\|disable` | Skills offered to threads | `config.toml` | |
-| `rustcode mcp add\|list\|remove` | MCP servers in the user config | `config.toml` | |
-| `rustcode mcp enable\|disable` | Turn one on or off; the server starts or stops it | `config.toml` | |
-| `rustcode mcp restart <name>` | Reconnect one | — | Needed |
-| `rustcode harness list` | Harnesses, sign-in, accounts and the default | — | |
-| `rustcode harness default <id> [--model] [--effort]` | The harness new threads start on | `config.toml` | |
-| `rustcode theme list\|show\|new\|set\|validate\|path` | Themes for the terminal and the app | Theme files, `config.toml` | |
+| `rustcode config settings list\|get [--project]` | Server settings with value, source, default and accepted values | — | |
+| `rustcode config settings set <key> <value> [--project]` | Change one; prints `before → after` | `settings.json` | |
+| `rustcode config settings reset <key> [--project]` | Back to the default (or the machine's value) | `settings.json` | |
+| `rustcode config skill list\|enable\|disable` | Skills offered to threads | `config.toml` | |
+| `rustcode config mcp add\|list\|remove` | MCP servers in the user config | `config.toml` | |
+| `rustcode config mcp enable\|disable` | Turn one on or off; the server starts or stops it | `config.toml` | |
+| `rustcode config mcp restart <name>` | Reconnect one | — | Needed |
+| `rustcode config harness list` | Harnesses, sign-in, accounts and the default | — | |
+| `rustcode config harness default <id> [--model] [--effort]` | The harness new threads start on | `config.toml` | |
+| `rustcode config theme list\|show\|new\|set\|validate\|path` | Themes for the terminal and the app | Theme files, `config.toml` | |
+| `rustcode config defaults` | Show or set the model profile and effort new sessions start with | `config.toml` | |
+| `rustcode config sync pull\|push\|init` | Sync config, skills and themes with a Git remote; paired machines can follow this one's settings instead (Settings › Machines) | Config files | |
+
+Old names: `rustcode settings`, `rustcode skill`, `rustcode mcp`,
+`rustcode harness`, `rustcode theme`, `rustcode defaults` and `rustcode sync`
+are the same commands.
 
 ## Accounts, sign-ins and outside agents
 
 Not available to agents: an agent never adds, signs out or mints a credential.
+`rustcode account` and `rustcode connections` are the same as
+`rustcode config account` and `rustcode config connections`.
 
 | Command | What it does | Changes | Server |
 | --- | --- | --- | --- |
-| `rustcode account list\|check` | Named harness accounts and their sign-in state | — | |
-| `rustcode account add <harness> <id> [--name] [--config-dir]` | Register a named login in its own folder | `config.toml` | |
-| `rustcode account remove <harness> <id>` | Forget it; its folder and login stay (**asks**). Refused while a thread runs on it | `config.toml` | |
-| `rustcode connections list` | GitHub CLI accounts and saved model sign-ins | — | |
-| `rustcode connections logout github <login>` / `<provider> <account>` | Sign one out (**asks**) | The sign-in | |
+| `rustcode config account list\|check` | Named harness accounts and their sign-in state | — | |
+| `rustcode config account add <harness> <id> [--name] [--config-dir]` | Register a named login in its own folder | `config.toml` | |
+| `rustcode config account remove <harness> <id>` | Forget it; its folder and login stay (**asks**). Refused while a thread runs on it | `config.toml` | |
+| `rustcode config connections list` | GitHub CLI accounts and saved model sign-ins | — | |
+| `rustcode config connections logout github <login>` / `<provider> <account>` | Sign one out (**asks**) | The sign-in | |
 | `rustcode outside list` | Connected outside agents and their access | — | |
 | `rustcode outside create <name> [--platform] [--access] [--ask]` | Connect an app; prints its token and snippet once (**asks** above read-only) | `outside-agents.json` | |
 | `rustcode outside update <id> [--access] [--ask]` | Change its access or whether it asks | `outside-agents.json` | |
