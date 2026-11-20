@@ -1437,14 +1437,15 @@ export function Transcript({
         className={cx(
           // The strip of threads above the composer and this pill are one surface (index.css
           // `.rc-glass-overlay`), so what floats over the transcript reads as one glass. It sits a
-          // gap above everything the stack holds (`bottomInset`), and above the composer's drawer
-          // when that opens up over the transcript (`--rc-composer-float`, set by ui/Composer.tsx).
-          "rc-glass-overlay absolute z-30 flex h-[30px] max-w-[min(360px,calc(100%-32px))] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg transition-[opacity,translate,left,bottom] duration-200 ease-snappy",
+          // gap above everything the stack holds (`bottomInset`), centred in the lane clear of the
+          // right panel (`rc-lane-center`), and above the composer's drawer when that opens up over
+          // the transcript (`--rc-composer-float`, set by ui/Composer.tsx).
+          "rc-glass-overlay rc-lane-center absolute z-30 flex h-[30px] -translate-x-1/2 items-center gap-1.5 rounded-full px-3 font-medium text-callout text-fg transition-[opacity,translate,bottom] duration-200 ease-snappy",
           showLatest ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0",
         )}
         style={{
           bottom: `max(${bottomInset - 8}px, calc(var(--rc-composer-float, 0px) + 8px))`,
-          left: "50%",
+          maxWidth: "min(360px, calc(100% - var(--rc-panel-room, 0px) - 32px))",
         }}
       >
         <ArrowDown size={13} />

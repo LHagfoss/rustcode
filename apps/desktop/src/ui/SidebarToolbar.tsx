@@ -90,6 +90,34 @@ export function SidebarToolbar() {
   );
 }
 
+/** The heading of Pinned or Threads: it names the group, sits close to its rows, and never folds. */
+export function ThreadSectionLabel({
+  label,
+  threads,
+  filtering,
+}: {
+  label: string;
+  threads: boolean;
+  filtering: boolean;
+}) {
+  return (
+    <div
+      className={cx(
+        "flex w-full px-2 font-medium text-caption text-fg-faint",
+        threads ? "h-7 items-center gap-1" : "h-5 items-start",
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {threads && (
+        <>
+          <SortMenu />
+          <FilterMenu filtering={filtering} />
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Ordering is independent of which threads the list shows. */
 export function SortMenu() {
   const [sort] = useSidebarSort();

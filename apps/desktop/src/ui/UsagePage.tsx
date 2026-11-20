@@ -1,20 +1,29 @@
-// Settings › Usage: every subscription this machine is signed in to, with its
-// plan windows (`_rustcode/usage/plans`), whatever thread is open. The page
-// reads again by itself every three minutes while its window is visible (and
-// at once when it comes back after longer than that), so the numbers and the
-// read time move on their own; Refresh reads now, past the engine's minute of
-// cache. Opening the page and Refresh are explicit looks: every login, in one
-// read. The page's own timer is a background read like the app's poll — the
-// default login and the account of the thread on screen, never a login nothing
-// was read for or one a failed read paused — and it waits longer after a read
-// that failed. Claude's numbers come from Claude Code's sign-in in the macOS
-// Keychain; opening this page reads each login. Below them, each connected
-// machine's own subscriptions (`MachinePlans`), read there and shown here.
+// Settings › Usage: every subscription across this computer and its paired
+// machines, merged by subscription under "All machines" (or inspected per
+// machine). Local logins come from `_rustcode/usage/plans`, and each connected
+// machine's own subscriptions come from `_rustcode/usage/shared` (numbers plus
+// an opaque account fingerprint, never credentials). The page reads again by
+// itself every three minutes while its window is visible (and at once when it
+// comes back after longer than that), so the numbers and the read time move on
+// their own; Refresh reads now, past the engine's minute of cache, across every
+// connected machine. Opening the page and Refresh are explicit looks: every
+// login, in one read. The page's own timer is a background read like the app's
+// poll — the default login and the account of the thread on screen, never a
+// login nothing was read for or one a failed read paused — and it waits longer
+// after a read that failed.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { parsePlans, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
-import { sharedPlans } from "../state/fleetUsage";
+import {
+  groupMergedPlans,
+  type HostPlans,
+  type MachineScope,
+  type MergedUsagePlan,
+  mergeUsagePlans,
+  planProvenance,
+  sharedPlans,
+} from "../state/fleetUsage";
 import { usageRows } from "../state/logins";
 import {
   beginPageRead,
@@ -35,10 +44,10 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { LOCAL_HOST } from "../state/threadKeys";
 import {
   answeredPlans,
   failureText,
-  groupPlans,
   oneReadAtATime,
   USAGE_PLANS_KEY,
   type UsageAnswer,
@@ -48,8 +57,8 @@ import {
 import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
 import { RefreshCw } from "./icons";
-import { Skeleton, Spinner } from "./primitives";
-import { Action, Group, Row, SectionTitle } from "./settingsKit";
+import { Skeleton, Spinner, Tooltip } from "./primitives";
+import { Action, Chip, Choice, Group, Row, SectionTitle } from "./settingsKit";
 
 /** One page read, optionally bypassing the cache as an explicit look. */
 interface PageRead {
@@ -57,13 +66,46 @@ interface PageRead {
   asked: boolean;
 }
 
+interface RemoteRead {
+  plans: UsagePlan[];
+  readAt: number;
+}
+
 export function UsagePage() {
   const status = useApp((s) => s.engine.phase);
+  const connectedHosts = useApp((s) => s.connectedHosts);
+  const machineNames = useApp((s) => s.machineNames);
+  const [scope, setScope] = useState<MachineScope>("all");
   const [answer, setAnswer] = useState<PageAnswer<UsageAnswer> | null>(
     () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null,
   );
+  const [byHost, setByHost] = useState<Record<string, RemoteRead>>({});
+  const [remoteLoading, setRemoteLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const readMachines = useCallback(async (hosts: readonly string[]) => {
+    if (!hosts.length) return;
+    setRemoteLoading(true);
+    try {
+      await Promise.all(
+        hosts.map(async (host) => {
+          const conn = connectionFor(host);
+          if (!conn) return;
+          try {
+            const result = await conn.request(Method.usageShared, {}, 20_000);
+            const plans = sharedPlans(result);
+            setByHost((was) => ({ ...was, [host]: { plans, readAt: Date.now() } }));
+          } catch {
+            // A machine whose engine predates `_rustcode/usage/shared` or drops mid-read stays silent.
+          }
+        }),
+      );
+    } finally {
+      setRemoteLoading(false);
+    }
+  }, []);
+
   // One read at a time: the interval and a press of Refresh never double a
   // Keychain read or an Anthropic request. An explicit look that comes while a
   // read is in flight
@@ -150,6 +192,15 @@ export function UsagePage() {
     const view = usageView(cached, null);
     if (view.fetch) void load(view.force);
   }, [status, load]);
+  // Read connected machines on open and on the same poll interval while visible.
+  useEffect(() => {
+    if (!connectedHosts.length) return;
+    void readMachines(connectedHosts);
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void readMachines(connectedHosts);
+    }, PLAN_CACHE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [connectedHosts, readMachines]);
   // The page keeps itself current: a background read every three minutes while
   // its window is visible, one on coming back after being hidden longer than
   // that, and a longer wait after one that failed. The numbers, the bars and
@@ -174,45 +225,162 @@ export function UsagePage() {
     return harnessOf(s, thread) === "claude-code" && !accountOn(s, thread);
   });
   const view = usageView(answer, error);
-  if (view.plans === null) {
+  const effectiveScope: MachineScope =
+    scope === "all" || scope === LOCAL_HOST || connectedHosts.includes(scope) ? scope : "all";
+  const hasConnected = connectedHosts.length > 0;
+
+  const localRows = useMemo(
+    () => (view.plans ? usageRows(view.plans, keepOwnLogin).plans : null),
+    [view.plans, keepOwnLogin],
+  );
+
+  const displayed = useMemo((): {
+    entries: MergedUsagePlan[];
+    readAt: number | null;
+    showProvenance: boolean;
+  } | null => {
+    if (effectiveScope !== "all" && effectiveScope !== LOCAL_HOST) {
+      const remote = byHost[effectiveScope];
+      if (!remote) return null;
+      const name = machineNames[effectiveScope] ?? effectiveScope;
+      return {
+        entries: remote.plans.map((plan, idx) => ({
+          key: `${effectiveScope}:${plan.id}:${idx}`,
+          plan,
+          winnerHost: effectiveScope,
+          winnerMachine: name,
+          sources: [{ host: effectiveScope, machine: name, status: plan.status, readAt: remote.readAt }],
+        })),
+        readAt: remote.readAt,
+        showProvenance: false,
+      };
+    }
+    if (!localRows) return null;
+    if (effectiveScope === LOCAL_HOST || !hasConnected) {
+      return {
+        entries: localRows.map((plan, idx) => ({
+          key: `local:${plan.id}:${idx}`,
+          plan,
+          winnerHost: LOCAL_HOST,
+          winnerMachine: "This computer",
+          sources: [
+            {
+              host: LOCAL_HOST,
+              machine: "This computer",
+              status: plan.status,
+              readAt: view.readAt ?? undefined,
+            },
+          ],
+        })),
+        readAt: view.readAt,
+        showProvenance: false,
+      };
+    }
+    const hosts: HostPlans[] = [
+      {
+        host: LOCAL_HOST,
+        machine: "This computer",
+        plans: localRows,
+        readAt: view.readAt ?? undefined,
+      },
+    ];
+    let latestRead = view.readAt ?? 0;
+    for (const host of connectedHosts) {
+      const remote = byHost[host];
+      if (!remote) continue;
+      latestRead = Math.max(latestRead, remote.readAt);
+      hosts.push({
+        host,
+        machine: machineNames[host] ?? host,
+        plans: remote.plans,
+        readAt: remote.readAt,
+      });
+    }
+    return {
+      entries: mergeUsagePlans(hosts),
+      readAt: latestRead || view.readAt,
+      showProvenance: true,
+    };
+  }, [effectiveScope, localRows, hasConnected, connectedHosts, byHost, machineNames, view.readAt]);
+
+  const refreshAll = () => {
+    if (effectiveScope === "all" || effectiveScope === LOCAL_HOST) void load(true);
+    if (effectiveScope === "all") void readMachines(connectedHosts);
+    else if (effectiveScope !== LOCAL_HOST) void readMachines([effectiveScope]);
+  };
+
+  if (view.plans === null && (effectiveScope === "all" || effectiveScope === LOCAL_HOST)) {
     return view.fatal ? <p className="text-callout text-warning">{view.fatal}</p> : <PlansSkeleton />;
   }
-  // The harness's own login row is dropped while named accounts are there, unless
-  // the thread on screen still runs on it (state/logins.ts).
-  const rows = usageRows(view.plans, keepOwnLogin);
+  if (!displayed) {
+    return <PlansSkeleton />;
+  }
+
+  const busy = loading || remoteLoading;
+  const displayedPlans = displayed.entries.map((entry) => entry.plan);
+  const includesLocal = effectiveScope === "all" || effectiveScope === LOCAL_HOST;
+
   return (
     <>
-      <PlanSections plans={rows.plans} />
+      {hasConnected && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4">
+          <Choice<MachineScope>
+            label="Machines"
+            value={effectiveScope}
+            options={[
+              { value: "all", label: "All machines" },
+              { value: LOCAL_HOST, label: "This computer" },
+              ...connectedHosts.map((host) => ({ value: host, label: machineNames[host] ?? host })),
+            ]}
+            onChange={setScope}
+          />
+        </div>
+      )}
+      {displayed.entries.length > 0 ? (
+        <PlanSections entries={displayed.entries} showProvenance={displayed.showProvenance} />
+      ) : (
+        <Group>
+          <Row
+            title="No subscriptions reported"
+            subtitle={
+              effectiveScope === "all" || effectiveScope === LOCAL_HOST
+                ? "Sign in to a harness on this computer to see its plan usage here."
+                : `No subscriptions were reported on ${machineNames[effectiveScope] ?? effectiveScope}.`
+            }
+          />
+        </Group>
+      )}
       <div className="flex items-center gap-2 px-3 text-caption text-fg-muted sm:px-4">
         <span className="flex-1">
-          {view.note ? (
+          {includesLocal && view.note ? (
             <span className="text-warning">Could not refresh: {view.note}</span>
-          ) : view.readAt ? (
-            `${Date.now() - view.readAt < 60_000 ? "Read just now" : `Read ${relativeAge(view.readAt)}`} · this page refreshes every ${
+          ) : displayed.readAt ? (
+            `${Date.now() - displayed.readAt < 60_000 ? "Read just now" : `Read ${relativeAge(displayed.readAt)}`} · this page refreshes every ${
               PLAN_CACHE_POLL_MS / 60_000
-            } minutes. ${soonestReset(view.plans) ?? ""}`
+            } minutes. ${soonestReset(displayedPlans) ?? ""}`
           ) : null}
         </span>
-        <Action onClick={() => void load(true)} disabled={loading}>
-          {loading ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
+        <Action onClick={refreshAll} disabled={busy}>
+          {busy ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
         </Action>
       </div>
-      <p className="px-4 text-caption text-fg-muted">
-        Your system may ask once to allow RustCode to read Claude Code’s sign-in for usage.
-      </p>
-      <MachinePlans />
+      {includesLocal && (
+        <p className="px-4 text-caption text-fg-muted">
+          Your system may ask once to allow RustCode to read Claude Code’s sign-in for usage.
+        </p>
+      )}
     </>
   );
 }
 
-/** Each subscription's card, grouped by harness: this computer's, or a paired machine's (`where`). */
-function PlanSections({ plans, where = "on this computer" }: { plans: UsagePlan[]; where?: string }) {
+/** Each subscription's card, grouped by harness, with an optional machine provenance chip. */
+function PlanSections({ entries, showProvenance }: { entries: MergedUsagePlan[]; showProvenance: boolean }) {
   return (
     <>
-      {groupPlans(plans).map(({ harness, plans }) => {
-        const name = plans[0]?.via ?? harness;
+      {groupMergedPlans(entries).map(({ harness, plans }) => {
+        const name = plans[0]?.plan.via ?? harness;
         return (
-          <section key={`${where}:${harness}`}>
+          <section key={harness}>
             <SectionTitle
               title={
                 <>
@@ -221,112 +389,70 @@ function PlanSections({ plans, where = "on this computer" }: { plans: UsagePlan[
                 </>
               }
             />
-            {plans.map((p) => (
-              <Group
-                key={p.id}
-                minor
-                title={
-                  <span>
-                    {p.name}
-                    {p.plan && <span className="ml-1.5 font-normal text-fg-faint capitalize">{p.plan}</span>}
-                  </span>
-                }
-              >
-                {p.status === "ok" && p.windows.length > 0 ? (
-                  <div className="flex flex-col gap-4 px-4 py-4">
-                    {p.asOf !== undefined && (
-                      <p className="text-caption text-fg-muted">
-                        as of {relativeAge(p.asOf)} · the last numbers RustCode read for this login; run a
-                        Claude Code thread on it {where} to refresh them.
-                      </p>
-                    )}
-                    {p.windows.map((w) => (
-                      <PlanWindow key={w.label} window={w} title={w.label} />
-                    ))}
-                  </div>
-                ) : p.status === "notAsked" ? null : (
-                  <Row
-                    title={
-                      p.status === "signedOut"
-                        ? `Not signed in to ${p.via ?? p.name}`
-                        : p.status === "notInstalled"
-                          ? `${p.via ?? p.name} not found`
-                          : p.status === "ok"
-                            ? "No plan windows reported"
-                            : failureText(p).title
-                    }
-                    subtitle={
-                      p.error ??
-                      failureText(p).subtitle ??
-                      (p.status === "signedOut"
-                        ? `Sign in with ${p.via ?? p.name} ${where} to see this plan here.`
-                        : p.status === "notInstalled"
-                          ? `Install ${p.via ?? p.name} ${where} and sign in to see this plan here.`
-                          : undefined)
-                    }
-                  />
-                )}
-              </Group>
-            ))}
-          </section>
-        );
-      })}
-    </>
-  );
-}
-
-/**
- * The subscriptions of each connected machine (`_rustcode/usage/shared`): a
- * server that runs the threads holds fresh sign-ins, while this computer's own
- * copy of the same login may have lapsed. Numbers only; read on open and every
- * poll interval while the window is visible. A machine whose engine predates the
- * read, or that answers nothing, is not drawn.
- */
-function MachinePlans() {
-  const hosts = useApp((s) => s.connectedHosts);
-  const names = useApp((s) => s.machineNames);
-  const [byHost, setByHost] = useState<Record<string, { plans: UsagePlan[]; readAt: number }>>({});
-  useEffect(() => {
-    if (!hosts.length) return;
-    let live = true;
-    const read = () => {
-      if (document.visibilityState !== "visible") return;
-      for (const host of hosts) {
-        const conn = connectionFor(host);
-        if (!conn) continue;
-        conn
-          .request(Method.usageShared, {}, 20_000)
-          .then((result) => {
-            const plans = sharedPlans(result);
-            if (live) setByHost((was) => ({ ...was, [host]: { plans, readAt: Date.now() } }));
-          })
-          .catch(() => {});
-      }
-    };
-    read();
-    const timer = setInterval(read, PLAN_CACHE_POLL_MS);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [hosts]);
-  return (
-    <>
-      {hosts.map((host) => {
-        const shown = byHost[host];
-        if (!shown?.plans.length) return null;
-        const name = names[host] ?? host;
-        return (
-          <section key={host} className="mt-6">
-            <SectionTitle
-              title={`On ${name}`}
-              action={
-                <span className="text-caption text-fg-muted">
-                  {Date.now() - shown.readAt < 60_000 ? "Read just now" : `Read ${relativeAge(shown.readAt)}`}
-                </span>
-              }
-            />
-            <PlanSections plans={shown.plans} where={`on ${name}`} />
+            {plans.map((entry) => {
+              const p = entry.plan;
+              const where =
+                entry.winnerHost === LOCAL_HOST ? "on this computer" : `on ${entry.winnerMachine}`;
+              const provenance = showProvenance ? planProvenance(entry) : null;
+              return (
+                <Group
+                  key={entry.key}
+                  minor
+                  title={
+                    <span>
+                      {p.name}
+                      {p.plan && (
+                        <span className="ml-1.5 font-normal text-fg-faint capitalize">{p.plan}</span>
+                      )}
+                    </span>
+                  }
+                  action={
+                    provenance ? (
+                      <Tooltip label={provenance.detail}>
+                        <span>
+                          <Chip>{provenance.label}</Chip>
+                        </span>
+                      </Tooltip>
+                    ) : undefined
+                  }
+                >
+                  {p.status === "ok" && p.windows.length > 0 ? (
+                    <div className="flex flex-col gap-4 px-4 py-4">
+                      {p.asOf !== undefined && (
+                        <p className="text-caption text-fg-muted">
+                          as of {relativeAge(p.asOf)} · the last numbers RustCode read for this login; run a
+                          Claude Code thread on it {where} to refresh them.
+                        </p>
+                      )}
+                      {p.windows.map((w) => (
+                        <PlanWindow key={w.label} window={w} title={w.label} />
+                      ))}
+                    </div>
+                  ) : p.status === "notAsked" ? null : (
+                    <Row
+                      title={
+                        p.status === "signedOut"
+                          ? `Not signed in to ${p.via ?? p.name}`
+                          : p.status === "notInstalled"
+                            ? `${p.via ?? p.name} not found`
+                            : p.status === "ok"
+                              ? "No plan windows reported"
+                              : failureText(p).title
+                      }
+                      subtitle={
+                        p.error ??
+                        failureText(p).subtitle ??
+                        (p.status === "signedOut"
+                          ? `Sign in with ${p.via ?? p.name} ${where} to see this plan here.`
+                          : p.status === "notInstalled"
+                            ? `Install ${p.via ?? p.name} ${where} and sign in to see this plan here.`
+                            : undefined)
+                      }
+                    />
+                  )}
+                </Group>
+              );
+            })}
           </section>
         );
       })}

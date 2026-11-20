@@ -1341,19 +1341,22 @@ composer's keys stay outside the table.
   their top.
 - **Thread header buttons.** The chat header's buttons come from one
   registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): status,
-  plan, project actions, pull requests, terminal, details, changes. Settings › Chat › Thread
+  plan, git, project actions, terminal, and the side panel's toggle. Settings › Chat › Thread
   header buttons lists them as Shown and Hidden: drag a row to reorder it or
   move it across (pointer capture, so the webview's own drops never see it),
   ⌥↑/⌥↓ moves a focused row, and each row's Show/Hide button does the same
   without a pointer. A button's own condition still applies (no plan, no
-  pull requests), and hiding every button leaves the title alone. The two
-  panel toggles (details, changes) always draw after the rest, in their kept
-  order, so the panel's control is the header's last, rightmost one. The order
+  pull requests), and hiding every button leaves the title alone. The panel's
+  toggle always draws after the rest, so it is the header's last, rightmost
+  control; it opens the panel on the thread's last tab and closes it. The
+  status button keeps its menu icon while a turn runs (the thread list shows
+  the spinner). Changes and Pull requests are tabs of the panel, not header
+  buttons; a layout saved with them drops them. The order
   is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
   in a later release shows by default. A fresh install and Reset show status,
-  plan, terminal and details: Git, Project actions, Pull requests and Changes
-  (driving git by hand; agents commit and open pull requests, and the panel's
-  tabs hold the rest) are hidden. A saved layout keeps what it shows.
+  plan, terminal and the panel toggle: Git and Project actions (driving git by
+  hand; agents commit and open pull requests) are hidden. A saved layout keeps
+  what it shows.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the
   thread comes back exactly where it was (scroll, drafts, open rows). A
@@ -1552,13 +1555,13 @@ composer's keys stay outside the table.
   open the file in the editor at that line, resolved against the thread's
   folder (`open_in_editor`: VS Code, Cursor or Zed when installed, else
   the default text editor).
-- **Right panel.** Thread details opens as a compact 280px card on wide windows.
-  It shows the device, a local folder shortcut, branch, Changes, pull requests,
-  delegates, and reported context usage. Expand More thread details for properties,
-  deliverables, and the execution log. Changes, Pull requests and a side chat use a
-  wider pane with a resizable edge. Press ⌘⇧B to toggle the panel and Escape from
+- **Right panel.** One resizable card with tabs along its top: Details (the
+  default), Changes, Pull requests (where the harness reports them) and a side
+  chat. Every tab keeps the card's width, so switching tabs never moves its edge
+  or the chat beside it. Details shows the device, a local folder shortcut,
+  branch, delegates, and reported context usage. Press ⌘⇧B to toggle the panel and Escape from
   inside it to close it. Each thread remembers its panel. A thread with no saved
-  preference opens on Thread Details in a wide window and closed in a narrow one.
+  preference opens on Details in a wide window and closed in a narrow one.
   The new-thread screen opens closed. The Changes read belongs to the thread's
   folder: an answer for the last thread's folder is dropped and never drawn
   with this thread's name, and while the turn runs the panel says the changes

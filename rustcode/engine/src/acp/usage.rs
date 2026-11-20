@@ -479,17 +479,18 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
 pub(crate) struct UsageSharedRequest {}
 
 /// Answer `_rustcode/usage/shared`: the `_rustcode/usage/plans` rows for the
-/// Codex login and, where reading asks nothing, every Claude login, from the
-/// engine's minute of cache.
+/// Codex login, Antigravity (when installed), and — where reading asks nothing —
+/// every Claude login, from the engine's minute of cache.
 pub(crate) async fn shared_plans() -> serde_json::Value {
     plans(shared_request(claude_limits_without_asking())).await
 }
 
-/// What a paired computer's read asks of `plans`: never forced, never
-/// Antigravity, and Claude only when `claude` (no Keychain behind it).
+/// What a paired computer's read asks of `plans`: never forced, Antigravity
+/// from its cache (non-interactive, browser launchers suppressed), and Claude
+/// only when `claude` (no Keychain behind it).
 fn shared_request(claude: bool) -> UsagePlansRequest {
     UsagePlansRequest {
-        antigravity: false,
+        antigravity: true,
         claude,
         claude_accounts: claude,
         claude_account: None,
@@ -514,7 +515,7 @@ async fn subscription_plans(request: &UsagePlansRequest) -> Vec<serde_json::Valu
     // Settings › Usage's ChatGPT row is the Mac's own `~/.codex` login: the
     // Codex CLI reports it with no `CODEX_HOME`, and a named account's windows
     // are read per thread (`harness_limits`).
-    let codex = match read_cached(None).await {
+    let mut codex = match read_cached(None).await {
         Ok(limits) => {
             let windows: Vec<_> = [limits.primary.as_ref(), limits.secondary.as_ref()]
                 .into_iter()
@@ -527,6 +528,7 @@ async fn subscription_plans(request: &UsagePlansRequest) -> Vec<serde_json::Valu
         Err(CodexUsageError::SignedOut) => codex("signedOut", None, vec![]),
         Err(CodexUsageError::Unavailable(error)) => codex("unavailable", Some(&error), vec![]),
     };
+    attach_fingerprint(&mut codex, codex_fingerprint(None));
     // Only what was asked for is read: the default login when `claude`, and
     // the named accounts the request names (one at a time unless Settings ›
     // Usage looks at all of them). Their windows are per account; RustCode
@@ -552,7 +554,112 @@ async fn subscription_plans(request: &UsagePlansRequest) -> Vec<serde_json::Valu
         |dir, freshness| async move { usage(dir.as_deref(), freshness).await },
     )
     .await;
-    plans_answer(default, &named, codex)
+    let default_asked = default.is_some();
+    let default_fp = if default_asked {
+        claude_fingerprint(None)
+    } else {
+        None
+    };
+    let mut plans = plans_answer(default, &named, codex);
+    if default_asked {
+        attach_fingerprint(&mut plans[0], default_fp.clone());
+    }
+    for (idx, (account, _)) in named.iter().enumerate() {
+        let dir = account.resolved_dir();
+        let fp = if crate::harness::config::is_default_dir(&account.harness, &dir) {
+            default_fp.clone().or_else(|| claude_fingerprint(None))
+        } else {
+            claude_fingerprint(Some(&dir))
+        };
+        if let Some(row) = plans.get_mut(1 + idx) {
+            attach_fingerprint(row, fp);
+        }
+    }
+    plans
+}
+
+/// Attaches a non-PII account fingerprint to a plan row when known, so paired
+/// machines can deduplicate the same subscription without sharing credentials.
+fn attach_fingerprint(row: &mut serde_json::Value, fingerprint: Option<String>) {
+    if let Some(fp) = fingerprint {
+        row["fingerprint"] = serde_json::Value::String(fp);
+    }
+}
+
+/// A short deterministic hash of a provider's stable account identifier.
+/// Never carries emails, tokens, or raw UUIDs across the wire.
+fn hash_fingerprint(harness: &str, raw: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(harness.as_bytes());
+    hasher.update(b":");
+    hasher.update(raw.as_bytes());
+    let digest = hasher.finalize();
+    digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn claude_fingerprint_from_json(value: &serde_json::Value) -> Option<String> {
+    let account = value
+        .pointer("/oauthAccount/accountUuid")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let org = value
+        .pointer("/oauthAccount/organizationUuid")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let identity = match (account, org) {
+        (Some(a), Some(o)) => format!("{a}:{o}"),
+        (Some(a), None) => a.to_owned(),
+        (None, Some(o)) => o.to_owned(),
+        (None, None) => return None,
+    };
+    Some(hash_fingerprint("claude-code", &identity))
+}
+
+fn claude_fingerprint(config_dir: Option<&std::path::Path>) -> Option<String> {
+    let candidates: Vec<std::path::PathBuf> = match config_dir {
+        Some(dir) => vec![dir.join(".claude.json")],
+        None => match crate::home::home_dir() {
+            Some(home) => vec![
+                home.join(".claude.json"),
+                home.join(".claude").join(".claude.json"),
+            ],
+            None => return None,
+        },
+    };
+    candidates.into_iter().find_map(|path| {
+        let bytes = std::fs::read(path).ok()?;
+        let json = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+        claude_fingerprint_from_json(&json)
+    })
+}
+
+fn codex_fingerprint_from_json(value: &serde_json::Value) -> Option<String> {
+    let account_id = value
+        .pointer("/tokens/account_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some(hash_fingerprint("codex", account_id))
+}
+
+fn codex_fingerprint(home: Option<&std::path::Path>) -> Option<String> {
+    let dir = match home {
+        Some(dir) => dir.to_path_buf(),
+        None => std::env::var_os("CODEX_HOME")
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| crate::home::home_dir().map(|h| h.join(".codex")))?,
+    };
+    let bytes = std::fs::read(dir.join("auth.json")).ok()?;
+    let json = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+    codex_fingerprint_from_json(&json)
 }
 
 /// Reads one row per named account. An account on `~/.claude` is the login
@@ -1296,9 +1403,56 @@ mod shared_tests {
     #[test]
     fn shared_read_never_forces_and_skips_claude_behind_a_keychain() {
         let asks = shared_request(false);
-        assert!(!asks.claude && !asks.claude_accounts && !asks.force && !asks.antigravity);
+        assert!(!asks.claude && !asks.claude_accounts && !asks.force && asks.antigravity);
         assert!(asks.claude_account.is_none());
         let reads = shared_request(true);
-        assert!(reads.claude && reads.claude_accounts && !reads.force && !reads.antigravity);
+        assert!(reads.claude && reads.claude_accounts && !reads.force && reads.antigravity);
+    }
+
+    #[test]
+    fn fingerprints_are_stable_opaque_hashes_for_claude_and_codex() {
+        let claude_a = claude_fingerprint_from_json(&serde_json::json!({
+            "oauthAccount": {
+                "accountUuid": "acc-123",
+                "organizationUuid": "org-456",
+                "emailAddress": "alice@example.com"
+            }
+        }))
+        .expect("claude fingerprint");
+        let claude_same = claude_fingerprint_from_json(&serde_json::json!({
+            "oauthAccount": {
+                "accountUuid": "acc-123",
+                "organizationUuid": "org-456"
+            }
+        }))
+        .expect("same claude fingerprint");
+        let claude_other = claude_fingerprint_from_json(&serde_json::json!({
+            "oauthAccount": {
+                "accountUuid": "acc-999",
+                "organizationUuid": "org-456"
+            }
+        }))
+        .expect("other claude fingerprint");
+        assert_eq!(claude_a, claude_same);
+        assert_ne!(claude_a, claude_other);
+        assert_eq!(claude_a.len(), 16);
+        assert!(!claude_a.contains("acc-123"));
+        assert_eq!(claude_fingerprint_from_json(&serde_json::json!({})), None);
+
+        let codex_a = codex_fingerprint_from_json(&serde_json::json!({
+            "tokens": { "account_id": "acct_xyz", "access_token": "secret" }
+        }))
+        .expect("codex fingerprint");
+        let codex_other = codex_fingerprint_from_json(&serde_json::json!({
+            "tokens": { "account_id": "acct_other" }
+        }))
+        .expect("other codex fingerprint");
+        assert_ne!(codex_a, codex_other);
+        assert_eq!(codex_a.len(), 16);
+        assert!(!codex_a.contains("acct_xyz"));
+        assert_eq!(
+            codex_fingerprint_from_json(&serde_json::json!({"tokens": {}})),
+            None
+        );
     }
 }

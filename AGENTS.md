@@ -36,18 +36,21 @@ recipes when they conflict.
 ## Workflow
 
 - Inspect first; make the smallest scoped change.
-- Work in the active checkout on a task branch
-  (`git switch -c <type>/<scope>-<slug>`). Use a worktree only when it is
-  genuinely called for (subagents or other concurrent work, or an active
-  checkout holding unrelated dirty work), and ask the user first.
+- Work in a new worktree on a task branch (see below), unless the user says
+  to work in the active checkout; then use
+  `git switch -c <type>/<scope>-<slug>` there.
 - Put a worktree on disk, not under `/tmp`:
   `git worktree add -b <branch> ~/code/worktrees/rustcode-<slug> origin/main`.
   On Linux `/tmp` is often a RAM-backed tmpfs (about 7.9 GiB on the VPS): one
   worktree's `target/` filled it, failed the build with "No space left on
   device" and took the space from memory, and a reboot wipes it.
-- Remove a worktree and its task branch as soon as the branch is pushed and
-  merged: `git worktree remove`, `git worktree prune`, then `git branch -d`.
-  Never leave either behind; idle worktrees also keep their `target/`. First
+- Clean up when the user asks to settle the thread ("settle", "settle this"):
+  besides marking it settled, remove its worktree and task branch once the
+  branch is pushed and merged (`git worktree remove`, `git worktree prune`,
+  then `git branch -d`), and return the active checkout to `main` with
+  `git pull --ff-only`. If the PR is not merged yet, say so and leave both.
+  Never leave either behind after a merge; idle worktrees also keep their
+  `target/`. First
   confirm nothing unique is lost with `git cherry main <branch>` (a
   squash-merged branch legitimately shows commits that are not ancestors of
   `main`; verify the content matches).

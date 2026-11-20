@@ -1,6 +1,7 @@
-// Thread Details is a compact, content-height card. Changes, Pull requests and
-// the beside thread share the wider resizable pane. Every view draws on one
-// surface, the chat's own dark ground with a hairline edge, and is only as tall
+// One resizable card with a tab per view: Details (the default), Changes, Pull
+// requests and the beside thread. Every tab keeps the card's width, so
+// switching tabs never moves the card's edge or the chat beside it. Every view
+// draws on one surface, the chat's own dark ground with a hairline edge, and is only as tall
 // as its content. On a wide window the card floats over the chat's row: the
 // transcript keeps the row's full width (its scrollbar stays at the window's
 // edge) and pads its lane by the room the card takes, published on the row as
@@ -56,10 +57,9 @@ export const SHEET_AT = PANEL_SHEET_AT;
 const KEY = "rustcode.rightPanelWidth";
 /** The gap the card keeps from the header's foot and from the window's right and bottom edges. */
 const CARD_GAP = 12;
-const DETAILS_WIDTH = 280;
 /** The strip the resize edge straddles: a `-left-1 w-2` handle, half either side of the card's edge. */
 const HANDLE = 8;
-/** The surface a card of the right panel is drawn on: the details card and a pane alike. */
+/** The surface the right panel's card is drawn on, whichever tab it shows. */
 const CARD_SURFACE = "rounded-2xl border border-border bg-bg";
 /** The row is told when the card's width moves with it, so the lane's padding follows in step. */
 const MOVING = "rc-panel-moving";
@@ -198,8 +198,7 @@ export function RightPanel() {
   const open = !!panel;
   const kind = panel ?? shown;
   const sheet = panelIsSheet(viewport);
-  const compact = kind === "details";
-  const card = compact ? DETAILS_WIDTH : panelWidth(width, viewport, row);
+  const card = panelWidth(width, viewport, row);
   const widest = panelMax(viewport, row);
 
   // Width animates only for an open or a close: any other change (a tab, a
@@ -349,31 +348,29 @@ export function RightPanel() {
 
   const contents = kind && (
     <>
-      {!compact && (
-        <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 px-2">
-          {/* The views keep their labels and scroll before the close button leaves the row. */}
-          <div className="flex min-w-0 items-center overflow-x-auto">
-            <div className="flex shrink-0 items-center">
-              {tabs.length > 1 ? (
-                <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
-              ) : (
-                <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
-              )}
-            </div>
+      <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 px-2">
+        {/* The views keep their labels and scroll before the close button leaves the row. */}
+        <div className="flex min-w-0 items-center overflow-x-auto">
+          <div className="flex shrink-0 items-center">
+            {tabs.length > 1 ? (
+              <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
+            ) : (
+              <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
+            )}
           </div>
-          <span className="flex-1" data-tauri-drag-region />
-          <Tooltip label={`Close (${panelKey})`}>
-            <button
-              type="button"
-              aria-label="Close panel"
-              onClick={() => setPanel(null)}
-              className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-            >
-              <X size={14} />
-            </button>
-          </Tooltip>
         </div>
-      )}
+        <span className="flex-1" data-tauri-drag-region />
+        <Tooltip label={`Close (${panelKey})`}>
+          <button
+            type="button"
+            aria-label="Close panel"
+            onClick={() => setPanel(null)}
+            className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
+          >
+            <X size={14} />
+          </button>
+        </Tooltip>
+      </div>
       <Suspense fallback={<div className="flex-1" />}>
         {kind === "details" && <ThreadDetails />}
         {kind === "changes" && <ChangesPanel />}
@@ -413,11 +410,8 @@ export function RightPanel() {
             if (e.target === e.currentTarget && e.propertyName === "opacity" && !open) setShown(null);
           }}
           className={cx(
-            compact ? CARD_SURFACE : SHEET_SURFACE,
-            "absolute right-0 flex flex-col overflow-hidden outline-none transition-[opacity,translate] duration-200 ease-snappy",
-            compact
-              ? "top-14 right-3 max-h-[calc(100%_-_4.25rem)] w-[min(88vw,280px)]"
-              : "inset-y-0 w-[min(88vw,380px)] rounded-l-2xl",
+            SHEET_SURFACE,
+            "absolute inset-y-0 right-0 flex w-[min(88vw,380px)] flex-col overflow-hidden rounded-l-2xl outline-none transition-[opacity,translate] duration-200 ease-snappy",
             open ? "translate-x-0 opacity-100" : "translate-x-4 opacity-0",
           )}
         >
@@ -477,7 +471,7 @@ export function RightPanel() {
         }}
       >
         {contents}
-        {open && !compact && (
+        {open && (
           <div
             role="separator"
             aria-orientation="vertical"
