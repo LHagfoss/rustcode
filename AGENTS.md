@@ -71,6 +71,12 @@ instructions for work in this repository.
   the type check and the formatter. Then push and read the result:
   `gh pr checks <n>`, and `gh run view <run> --log-failed` for a failure. Fix
   from the CI log and push again.
+  - On the VPS, run the formatter locally and use GitHub Actions for Rust
+    compilation and tests, including workspace checks, Clippy, debug builds,
+    and single-test reproductions. Parallel Rust builds exhausted the VPS
+    memory and caused a reboot. The VPS Cargo config shares build output across
+    checkouts in `~/.cache/cargo-target`. Keep worktrees and build output on
+    disk: `/tmp` is a RAM-backed tmpfs of about 7.9 GiB on this VPS.
   - Rust (`rustcode/`, `harness/`, `Cargo.*`): `cargo check --workspace --tests` and
     `cargo fmt --all -- --check`. Without `--workspace` the check builds only
     the engine package, and CLI/harness changes pass unchecked. Do not run
