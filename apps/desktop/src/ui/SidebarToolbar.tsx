@@ -2,6 +2,7 @@ import { DropdownMenu } from "radix-ui";
 import type { ReactNode } from "react";
 import { projectName } from "../acp/types";
 import {
+  applySidebarSort,
   DEFAULT_SIDEBAR_SORT,
   PREF,
   SIDEBAR_SORTS,
@@ -10,7 +11,6 @@ import {
   useSidebarSort,
 } from "../state/sidebarPrefs";
 import { setView, toast, useApp } from "../state/store";
-import { applySidebarSort } from "../state/threadActions";
 import { startNewThreadFromContext } from "../state/threadOpen";
 import { ArrowDownUp, Check, ListFilter, Repeat, SquarePen, X } from "./icons";
 import { cx, MenuContent, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";

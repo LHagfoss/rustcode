@@ -35,7 +35,14 @@ import {
 } from "../state/pulls";
 import { pendingSummary } from "../state/setup";
 import { byProjectName, type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
-import { applyOrder, keepPlaces, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
+import {
+  applyOrder,
+  moveBy,
+  rememberOrder,
+  reorder,
+  type SidebarOrder,
+  sectionOrderKey,
+} from "../state/sidebarOrder";
 import {
   PREF,
   SETTLE_AFTER_DEFAULT_DAYS,
@@ -88,11 +95,14 @@ import {
   wakeSnoozed,
 } from "../state/store";
 import { idleSettled, isRunning } from "../state/thread";
+import { rememberSidebarOrder } from "../state/threadActions";
+import { splitThreadKey } from "../state/threadKeys";
 import {
   listedSinceOf,
   openChain,
   parentOf as parentOfThread,
   type SubRow,
+  threadCreatedAt,
   topLevel,
 } from "../state/topLevel";
 import { useWaitingIds } from "../state/waiting";
@@ -410,14 +420,6 @@ export function Sidebar() {
   // thread settles on its own (Settings › Appearance).
   const [toolbarOn] = usePref(PREF.toolbar, true);
   const [sort] = useSidebarSort();
-  // The order each Threads list was last drawn in under the Title sort, by section key, so a
-  // rename does not move a row; a new sort starts again from its own order.
-  const drawnPlaces = useRef(new Map<string, string[]>());
-  const placesSort = useRef(sort);
-  if (placesSort.current !== sort) {
-    placesSort.current = sort;
-    drawnPlaces.current = new Map();
-  }
   const [settleDays] = usePref<number>(PREF.settleAfterDays, SETTLE_AFTER_DEFAULT_DAYS);
   const settleMs = settleAfterMs(settleAfterDays(settleDays));
   // The projects folded under "group by project" (`project:<path>`); the shelves keep their own.
@@ -626,7 +628,8 @@ export function Sidebar() {
   const pullOf = (session: SessionSummary) =>
     pullForBranch(cachedPulls(session.worktree?.repo || session.cwd), session.worktree?.branch);
 
-  const sections = useMemo(() => {
+  const { sections, seenOrder } = useMemo(() => {
+    const seenOrder: SidebarOrder = {};
     const flagged = new Set(flags.split(" "));
     const isFresh = (id: string) => !!finished[id];
     // A thread that waits on work it handed out is drawn with the ones that run, so it is not lost
@@ -685,23 +688,22 @@ export function Sidebar() {
       needs: flagged.has(`${s.id}:n`),
       title: s.title || "New thread",
     });
-    // The order the user arranged comes over the section's own (state/sidebarOrder.ts): a row that
-    // was dragged or ⌥↑/↓'d is drawn where it was put, and the rows nobody arranged keep the order
-    // their section gives them (state/sidebarRows.ts `sortSection`).
-    // Sorted by title, the Threads list keeps each row where it was last drawn: a harness renames
-    // its thread as it works, and the row must not jump each time (state/sidebarOrder.ts
-    // `keepPlaces`).
+    const created = (s: SessionSummary) => threadCreatedAt(splitThreadKey(s.id).id) ?? s.updatedAt ?? 0;
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) => {
       const key = sectionOrderKey(id, project);
-      let sorted = sortSection(id, items, keyOf, sort);
-      if (sort === "title" && id === "threads") {
-        sorted = keepPlaces(sorted, drawnPlaces.current.get(key));
-        drawnPlaces.current.set(
-          key,
-          sorted.map((s) => s.id),
-        );
-      }
-      return applyOrder(sorted, layout[key]);
+      const ordered =
+        id === "threads"
+          ? [...items].sort((a, b) => created(b) - created(a) || a.id.localeCompare(b.id))
+          : sortSection(id, items, keyOf);
+      seenOrder[key] = ordered.filter((s) => !pendingById[s.id]).map((s) => s.id);
+      if (sort !== "manual" && id === "threads") return sortSection(id, items, keyOf, sort);
+      return [
+        ...ordered.filter((s) => pendingById[s.id]),
+        ...applyOrder(
+          ordered.filter((s) => !pendingById[s.id]),
+          rememberOrder(layout[key], seenOrder[key], true),
+        ),
+      ];
     };
     // The threads by project, whenever the preference is on, including a single project.
     const grouped = sidebarProjects(active);
@@ -712,10 +714,9 @@ export function Sidebar() {
         if (project.project) project.label = projectLabel(project.project);
         project.items = arranged("threads", project.items, project.key);
       }
-      projects = applyOrder(
-        byProjectName(projects).map((p) => ({ ...p, id: p.key })),
-        layout.projects,
-      );
+      const named = byProjectName(projects).map((p) => ({ ...p, id: p.key }));
+      seenOrder.projects = named.map((p) => p.id);
+      projects = applyOrder(named, layout.projects);
     }
     // The sections this layout draws, in its order: Pinned and the one Threads list, and the
     // shelves close it (state/sidebarRows.ts `sectionsOf`).
@@ -737,7 +738,7 @@ export function Sidebar() {
         })),
       );
     }
-    return all.filter((g) => g.id === "threads" || g.items.length);
+    return { sections: all.filter((g) => g.id === "threads" || g.items.length), seenOrder };
   }, [
     filtered,
     flags,
@@ -760,6 +761,8 @@ export function Sidebar() {
     sort,
     settleMs,
   ]);
+
+  useEffect(() => rememberSidebarOrder(seenOrder), [seenOrder]);
 
   const settledSection = sections.find((g) => g.id === "settled");
   // The first shelf starts the foot of the list; Pinned and Threads name themselves (`sectionLabelled`).
@@ -819,13 +822,14 @@ export function Sidebar() {
     for (const section of sections) {
       // Settled draws a slice of its rows, and a folded section draws none: the rows on screen are
       // the ones a drag can move.
+      if (section.id === "threads" && sort !== "manual") continue;
       const items = section.id === "settled" ? section.items.slice(0, settledLimit) : section.items;
       if (section.projects) {
         for (const p of section.projects) add(sectionOrderKey(section.id, p.key), p.items);
       } else add(section.id, items);
     }
     return homes;
-  }, [byId, sections, settledLimit]);
+  }, [byId, sections, settledLimit, sort]);
 
   // ⌥↑/↓ on a focused row takes it one place up or down the list it is drawn in, and keeps the
   // keyboard on it: the row is the same element, moved (ui/Sidebar.tsx `onListKey`).

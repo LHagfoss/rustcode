@@ -15,8 +15,7 @@ import type { InboxItem } from "./inbox";
 import { dismissRows, restoreRows } from "./inboxDismissed";
 import { forgetThreadOutbox, queueChange } from "./machineOutbox";
 import { forget } from "./orchestration";
-import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
-import { PREF, type SidebarSort, writePref } from "./sidebarPrefs";
+import { keepThreads, rememberOrder, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import {
   type AppState,
   applySnooze,
@@ -44,7 +43,7 @@ import {
   without,
 } from "./store";
 import { isRunning, localId, messagesAfter, type ThreadState, truncateBefore, userIndexOf } from "./thread";
-import { splitThreadKey } from "./threadKeys";
+import { isRemoteThread, splitThreadKey } from "./threadKeys";
 import { clearStatusMark } from "./threadStatus";
 
 // Read through `useApp` at call time: store.ts imports this module, so `useApp` is not defined yet
@@ -280,12 +279,17 @@ export function setSectionOrder(key: string, ids: string[]) {
   store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
 }
 
-/** Applying a sort replaces manual project and thread arrangements, even for the current sort. */
-export function applySidebarSort(sort: SidebarSort) {
-  const sidebarOrder = {};
-  set({ sidebarOrder });
-  store(STORAGE.sidebarOrder, JSON.stringify(sidebarOrder));
-  writePref(PREF.sort, sort);
+/** Remember newly seen rows while retaining positions for currently hidden rows. */
+export function rememberSidebarOrder(seen: SidebarOrder) {
+  const before = get().sidebarOrder;
+  let next = before;
+  for (const [key, ids] of Object.entries(seen)) {
+    const order = rememberOrder(before[key], ids, key !== "projects");
+    if (!order.length || order === before[key]) continue;
+    if (next === before) next = { ...before };
+    next[key] = order;
+  }
+  saveSidebarOrder(next, before);
 }
 
 /** The arrangement, written only when it changed (`state/sidebarOrder.ts`). */
@@ -311,7 +315,7 @@ export function forgetSidebarOrder(ids: readonly string[]) {
 export function pruneSidebarOrder(known: readonly string[]) {
   const ids = new Set(known);
   saveSidebarOrder(
-    keepThreads(get().sidebarOrder, (id) => ids.has(id)),
+    keepThreads(get().sidebarOrder, (id) => isRemoteThread(id) || ids.has(id)),
     get().sidebarOrder,
   );
 }
