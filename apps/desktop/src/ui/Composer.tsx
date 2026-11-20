@@ -1274,7 +1274,8 @@ export const Composer = memo(function Composer({
                 style={fadeStyle}
                 className={cx(
                   "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-normal outline-none transition-[height] duration-150 ease-snappy placeholder:text-fg-faint",
-                  highlightedDraft && "text-transparent caret-fg selection:bg-accent/30",
+                  highlightedDraft &&
+                    "text-transparent caret-fg selection:bg-accent/25 selection:text-transparent",
                 )}
               />
               {suggestion && (

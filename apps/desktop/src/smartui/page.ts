@@ -464,6 +464,72 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     if (window.__rcThemeCharts) window.__rcThemeCharts();
     for (const callback of listeners) { try { callback(theme); } catch (e) { console.error(e); } }
   });
+  // One selection with the reply around the view (src/smartui/selection.ts): the app says what
+  // part of the page its selection covers, a drag that starts here and leaves the page carries on
+  // in the app, and the page reports what it has selected for the app's copy.
+  let pressed = false;
+  let driven = false;
+  const selectionText = () => {
+    const selection = document.getSelection();
+    return selection ? selection.toString().slice(0, 200000) : "";
+  };
+  const caretAt = (x, y) => {
+    x = Math.max(0, Math.min(window.innerWidth - 1, x));
+    y = Math.max(0, Math.min(window.innerHeight - 1, y));
+    if (document.caretPositionFromPoint) {
+      const p = document.caretPositionFromPoint(x, y);
+      if (p) return [p.offsetNode, p.offset];
+    }
+    if (document.caretRangeFromPoint) {
+      const r = document.caretRangeFromPoint(x, y);
+      if (r) return [r.startContainer, r.startOffset];
+    }
+    return null;
+  };
+  window.addEventListener("message", (event) => {
+    const data = event.data;
+    if (event.source !== parent || !data || data.rc !== token || data.type !== "selection") return;
+    const selection = document.getSelection();
+    if (!selection || !document.body) return;
+    if (data.mode === "extend") {
+      // A drag from here left the page and the app has the pointer: run on to this edge.
+      if (selection.rangeCount > 0) {
+        selection.extend(document.body, data.to === "end" ? document.body.childNodes.length : 0);
+      }
+      return;
+    }
+    // The app sends a part only after a press of its own: a drag from here has ended.
+    pressed = false;
+    if (data.mode === "none") {
+      if (driven) selection.removeAllRanges();
+      driven = false;
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(document.body);
+    if (data.mode === "head" || data.mode === "tail") {
+      const caret = caretAt(Number(data.x), Number(data.y));
+      if (caret && data.mode === "head") range.setEnd(caret[0], caret[1]);
+      else if (caret) range.setStart(caret[0], caret[1]);
+    }
+    selection.removeAllRanges();
+    selection.addRange(range);
+    driven = true;
+  });
+  document.addEventListener("selectionchange", () => post({ type: "selection-text", text: selectionText() }));
+  document.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    pressed = true;
+    driven = false;
+    post({ type: "selection-press" });
+  }, true);
+  window.addEventListener("mouseup", () => { pressed = false; }, true);
+  document.addEventListener("mousemove", (event) => {
+    if (!(event.buttons & 1)) { pressed = false; return; }
+    // A drag from here that may leave the page, or one from the app whose pointer the page got.
+    post({ type: pressed ? "drag-out" : "drag-over", x: event.clientX, y: event.clientY });
+  }, true);
+  document.addEventListener("copy", () => post({ type: "selection-copy" }));
   const setKeyboardNav = (active) => {
     document.documentElement.toggleAttribute("data-keyboard-nav", active);
     post({ type: "focus-modality", keyboard: active });
