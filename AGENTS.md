@@ -159,16 +159,16 @@ instructions for work in this repository.
 ## Checking desktop app behavior
 
 - Look at UI changes in the mock: it needs no engine and no model turns. Run
-  `bun run mock-window open` in `apps/desktop`: it starts the mock dev server
-  (`VITE_TRANSPORT=mock`) and one headless Chrome at 1512×945 and native scale
-  (2x), and reuses both on the next call, so there is one shared browser rather
-  than one per agent. It is headless on purpose: a visible window steals the
+  `bun run mock-window open` in `apps/desktop`: it opens a tab and starts a mock
+  dev server (`VITE_TRANSPORT=mock`) for the current checkout. Checkouts share one headless
+  Chrome at 1512×945 and native scale (2x), and reopening from the same checkout
+  reuses its tab and server. It is headless on purpose: a visible window steals the
   user's focus on every launch, so agents never pass `open --show` (that is for
   a person who wants to watch). An already open window is reused in whichever
   mode it started. Then `bun run mock-window eval "<js>"` evaluates
   in the page, `bun run mock-window screenshot <file.png>` saves a PNG of it,
-  and `bun run mock-window close` stops only that window and server. For
-  anything a user does, prefer `click "<css>"` (with `--at <x>,<y>` for a
+  and `bun run mock-window close` closes that checkout's tab and stops its
+  server. For anything a user does, prefer `click "<css>"` (with `--at <x>,<y>` for a
   partly covered element), `type "<text>"` and `press <key>` over `eval`: they
   send real input and focus, so the check exercises what the user does and the
   window shows it. For hover cards, drag-to-reorder, wheel scrolling and double
@@ -176,17 +176,15 @@ instructions for work in this repository.
   `drag "<from css>" "<to css>" [--steps <n>]`, `scroll "<css>" <dy>`,
   `dblclick "<css>"` and `move <x>,<y>` (off an element, to dismiss it), which
   send real input too. Keep the window open for the whole check, and close only
-  when finished. Agents must not launch their own Chrome for UI checks; when
-  several threads work concurrently, only the orchestrating thread drives the
-  window, and the others gate on `bun run check` and unit tests. Do not open
-  browser panes in the user's terminal.
+  when finished. Concurrent threads should run their checks from separate
+  checkouts. Threads in the same checkout share its tab. Do not open browser
+  panes in the user's terminal.
 - To stage a state the mock does not reach (a finished thread, an update in
   progress, a Settings page), evaluate `await import("/src/state/store.ts")`
   (or `updates.ts`) in the page and set state on it. The window is long-lived,
-  so the thread driving it restarts the server for its own check (`bun run
-  mock-window close`, then `open`), and no other thread closes it. After an
-  edit, HMR serves the module under a `?t=` URL and the import returns a
-  second, empty copy. `?updatePreview` stages the update row.
+  so restart the checkout's server for a fresh check (`bun run mock-window
+  close`, then `open`). After an edit, HMR serves the module under a `?t=` URL
+  and the import returns a second, empty copy. `?updatePreview` stages the update row.
 - To test an engine change in the app, build the orchestrator CLI binary with
   `cargo build -p rustcode-cli --bin rc`, then `bun tauri dev`. A
   plain `cargo build` does not rebuild that binary, and the app then talks
