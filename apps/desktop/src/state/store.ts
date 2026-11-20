@@ -99,6 +99,7 @@ export {
   pickNewThreadAccount,
   pickNewThreadAccountOn,
   pickNewThreadChoice,
+  refreshAllHarnessModels,
   refreshHarnesses,
   rememberModelEffort,
   removeHarness,
