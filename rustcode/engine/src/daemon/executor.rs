@@ -78,10 +78,19 @@ pub(crate) fn loop_outcome(end: crate::orchestration::local_threads::LoopRunEnd)
                 output: Some(body.to_string()),
             }
         }
-        LoopRunEnd::Failed { thread_id, error } => RunOutcome::Permanent {
-            error,
-            output: thread(thread_id),
-        },
+        LoopRunEnd::Failed { thread_id, error } => {
+            if crate::orchestration::local_threads::is_transient_failure(&error) {
+                RunOutcome::Transient {
+                    error,
+                    output: thread(thread_id),
+                }
+            } else {
+                RunOutcome::Permanent {
+                    error,
+                    output: thread(thread_id),
+                }
+            }
+        }
         // Its output says so: the scheduler pauses the job on the first one,
         // since every run until the user signs in fails the same way.
         LoopRunEnd::SignedOut { thread_id, error } => RunOutcome::Permanent {
@@ -107,6 +116,18 @@ pub trait ActionBackend: Send + Sync {
         session: String,
         cancellation: CancellationToken,
     ) -> ExecutionFuture;
+
+    /// Execute one action with its owning job id so job-run metadata links back
+    /// to the job by stable id rather than mutable display name.
+    fn run_job(
+        &self,
+        action: JobAction,
+        session: String,
+        _job_id: String,
+        cancellation: CancellationToken,
+    ) -> ExecutionFuture {
+        self.run(action, session, cancellation)
+    }
 }
 
 pub struct ActionExecutor {
@@ -131,6 +152,7 @@ impl JobExecutor for ActionExecutor {
         let backend = self.backend.clone();
         let timeout = self.timeout;
         Box::pin(async move {
+            let job_id = context.job.id.clone();
             let session = match &context.job.action {
                 JobAction::Prompt {
                     session_id: Some(id),
@@ -204,7 +226,12 @@ impl JobExecutor for ActionExecutor {
                 let child = cancellation.child_token();
                 // Dropping a future must also request cancellation of blocking adapters.
                 let _cancel_on_drop = child.clone().drop_guard();
-                let future = backend.run(action.clone(), session.clone(), child.clone());
+                let future = backend.run_job(
+                    action.clone(),
+                    session.clone(),
+                    job_id.clone(),
+                    child.clone(),
+                );
                 tokio::pin!(future);
                 let result = tokio::select! {
                     biased;
@@ -339,6 +366,16 @@ impl ActionBackend for ProductionActions {
         &self,
         action: JobAction,
         session: String,
+        cancellation: CancellationToken,
+    ) -> ExecutionFuture {
+        self.run_job(action, session, String::new(), cancellation)
+    }
+
+    fn run_job(
+        &self,
+        action: JobAction,
+        session: String,
+        job_id: String,
         cancellation: CancellationToken,
     ) -> ExecutionFuture {
         Box::pin(async move {
@@ -533,6 +570,7 @@ impl ActionBackend for ProductionActions {
                         },
                     };
                     let run = crate::orchestration::local_threads::LoopThread {
+                        id: job_id,
                         name: session,
                         prompt,
                         workspace,

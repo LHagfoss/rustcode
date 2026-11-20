@@ -1778,6 +1778,19 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: loops::LoopsCancelRequest, responder, connection| {
+                connection.spawn(async move {
+                    match loops::cancel(request.id).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: loops::LoopsDeleteRequest, responder, connection| {
                 connection.spawn(async move {
                     match scheduled::delete(request.id).await {

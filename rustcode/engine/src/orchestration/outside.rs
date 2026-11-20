@@ -715,7 +715,7 @@ pub fn summarize(tool: &str, args: &Value) -> String {
         super::UPDATE_LOOP | super::DELETE_SCHEDULED_TASK | super::RUN_SCHEDULED_TASK_NOW
     ) {
         if let Some(id) = text("id", 80) {
-            parts.push(format!("loop {id}"));
+            parts.push(format!("job {id}"));
         }
         if let Some(name) = text("name", 80) {
             parts.push(format!("named {name}"));
@@ -1271,7 +1271,7 @@ pub fn instructions(grant: &Grant) -> String {
         ""
     };
     format!(
-        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_threads` finds threads, `read_thread` reads one, and `list_loops` lists loops. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_thread` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_thread` sends an existing thread a message, `interrupt_thread` stops a running turn, and `wait_thread` returns an answer. With Manage access `create_loop`, `update_loop`, `run_loop` and `delete_loop` manage loops (once or recurring) in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` act on a thread you name with `thread_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Threads started by `start_thread` and `fan_out` run at Auto-edit. They can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
+        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_threads` finds threads, `read_thread` reads one, and `list_jobs` lists jobs. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_thread` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_thread` sends an existing thread a message, `interrupt_thread` stops a running turn, and `wait_thread` returns an answer. With Manage access `create_job`, `update_job`, `run_job` and `delete_job` manage jobs (once, recurring or webhook) in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` act on a thread you name with `thread_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Threads started by `start_thread` and `fan_out` run at Auto-edit. They can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
         grant.name,
         grant.scope.label(),
         grant.scope.meaning(),
@@ -1514,14 +1514,16 @@ mod tests {
     #[test]
     fn outside_agents_need_manage_access_and_a_project_for_create_loop() {
         let name = super::super::CREATE_LOOP;
+        let public = super::super::mcp_names::public_tool(name);
+        assert_eq!(public, "create_job");
         assert_eq!(required_scope(name), Some(Scope::Manage));
         assert!(
             !tools_for(Scope::Delegate)
                 .iter()
-                .any(|tool| tool["name"] == name)
+                .any(|tool| tool["name"] == public)
         );
         let tools = tools_for(Scope::Manage);
-        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        let tool = tools.iter().find(|tool| tool["name"] == public).unwrap();
         assert!(
             tool["inputSchema"]["required"]
                 .as_array()

@@ -16,24 +16,30 @@ const cron = (expression: string): JsonObject => ({
   misfire_policy: "run_once",
 });
 
-const done = (id: string, hours: number, threadId?: string): JsonObject => ({
-  id,
-  state: "succeeded",
-  scheduledAt: ago(hours),
-  startedAt: ago(hours),
-  finishedAt: ago(hours - 0.1),
-  ...(threadId ? { threadId } : {}),
-});
+const done = (id: string, hours: number, threadId?: string, durationSec = 42): JsonObject => {
+  const started = Date.now() - hours * HOUR;
+  return {
+    id,
+    state: "succeeded",
+    scheduledAt: new Date(started).toISOString(),
+    startedAt: new Date(started).toISOString(),
+    finishedAt: new Date(started + durationSec * 1000).toISOString(),
+    ...(threadId ? { threadId } : {}),
+  };
+};
 
-const failed = (id: string, hours: number, error: string): JsonObject => ({
-  id,
-  state: "failed",
-  scheduledAt: ago(hours),
-  startedAt: ago(hours),
-  finishedAt: ago(hours - 0.05),
-  error,
-  errorClass: "permanent",
-});
+const failed = (id: string, hours: number, error: string, durationSec = 14): JsonObject => {
+  const started = Date.now() - hours * HOUR;
+  return {
+    id,
+    state: "failed",
+    scheduledAt: new Date(started).toISOString(),
+    startedAt: new Date(started).toISOString(),
+    finishedAt: new Date(started + durationSec * 1000).toISOString(),
+    error,
+    errorClass: "permanent",
+  };
+};
 
 const HARNESS_OFF = "Claude Code cannot run a thread: it is turned off in Settings › Harnesses";
 
@@ -162,6 +168,8 @@ export class MockLoops {
       }
       case "_rustcode/loops/run":
         return this.run(str(params.id) ?? "");
+      case "_rustcode/loops/cancel":
+        return this.cancel(str(params.id) ?? "");
       case "_rustcode/loops/delete":
         return this.forget(str(params.id) ?? "");
       case "_rustcode/loops/start_daemon":
@@ -192,6 +200,25 @@ export class MockLoops {
         : loop,
     );
     return { id, state: "claimed" };
+  }
+
+  /** `_rustcode/loops/cancel`: stop a running mock run. */
+  cancel(id: string): JsonObject {
+    const at = new Date().toISOString();
+    this.loops = this.loops.map((loop) => {
+      if (loop.id !== id || !Array.isArray(loop.runs)) return loop;
+      return {
+        ...loop,
+        runs: loop.runs.map((entry) => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+          const run = entry as JsonObject;
+          return run.state === "running" || run.state === "claimed"
+            ? { ...run, state: "cancelled", finishedAt: at }
+            : run;
+        }),
+      };
+    });
+    return { id, cancelled: true };
   }
 
   private save(params: JsonObject): JsonObject {

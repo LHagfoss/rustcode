@@ -17,9 +17,19 @@ const TOOLS: &[(&str, &str)] = &[
     (super::CONFIGURE_SESSION, "configure_thread"),
     (super::TRANSFER_SESSION, "transfer_thread"),
     (super::INTERRUPT_SESSION, "interrupt_thread"),
-    (super::LIST_SCHEDULED_TASKS, "list_loops"),
-    (super::DELETE_SCHEDULED_TASK, "delete_loop"),
-    (super::RUN_SCHEDULED_TASK_NOW, "run_loop"),
+    (super::LIST_SCHEDULED_TASKS, "list_jobs"),
+    (super::CREATE_LOOP, "create_job"),
+    (super::UPDATE_LOOP, "update_job"),
+    (super::DELETE_SCHEDULED_TASK, "delete_job"),
+    (super::RUN_SCHEDULED_TASK_NOW, "run_job"),
+];
+/// Retired public MCP spellings that still route to the same internal tools.
+const ALIASES: &[(&str, &str)] = &[
+    ("list_loops", super::LIST_SCHEDULED_TASKS),
+    ("create_loop", super::CREATE_LOOP),
+    ("update_loop", super::UPDATE_LOOP),
+    ("delete_loop", super::DELETE_SCHEDULED_TASK),
+    ("run_loop", super::RUN_SCHEDULED_TASK_NOW),
 ];
 const ID_FIELDS: &[(&str, &str)] = &[("session_id", "thread_id"), ("session_ids", "thread_ids")];
 
@@ -34,6 +44,11 @@ pub(super) fn internal_tool(name: &str) -> &str {
     TOOLS
         .iter()
         .find_map(|&(internal, public)| (name == public).then_some(internal))
+        .or_else(|| {
+            ALIASES
+                .iter()
+                .find_map(|&(alias, internal)| (name == alias).then_some(internal))
+        })
         .unwrap_or(name)
 }
 
@@ -98,6 +113,8 @@ fn public_schema(schema: &mut Value) {
 pub(super) enum ReplyNames {
     Legacy,
     Thread,
+    /// Called via the retired `list_loops` alias; keep `loops` / `omitted_loops`.
+    LoopAlias,
     /// A tool whose name stayed the same and whose arguments cannot tell the
     /// callers apart. Keep the old result fields usable for these calls.
     Both,
@@ -105,9 +122,12 @@ pub(super) enum ReplyNames {
 
 pub(super) fn call_args(name: &str, args: &mut Value) -> Result<ReplyNames, CallAnswer> {
     let tool = internal_tool(name);
-    // Loops already use thread_id from the MCP schema through to the app.
+    // Jobs already use thread_id from the MCP schema through to the app.
     if matches!(tool, super::CREATE_LOOP | super::UPDATE_LOOP) {
         return Ok(ReplyNames::Thread);
+    }
+    if name == "list_loops" {
+        return Ok(ReplyNames::LoopAlias);
     }
     if !super::is_tool(tool) && tool != crate::workflow::STATUS_TOOL_NAME {
         return Ok(ReplyNames::Legacy);
@@ -162,8 +182,12 @@ impl ReplyNames {
             if tool == super::LIST_SCHEDULED_TASKS
                 && let Some(fields) = body.as_object_mut()
             {
-                for &(internal, public) in &[("tasks", "loops"), ("omitted_tasks", "omitted_loops")]
-                {
+                let renames: &[(&str, &str)] = if matches!(self, Self::LoopAlias) {
+                    &[("tasks", "loops"), ("omitted_tasks", "omitted_loops")]
+                } else {
+                    &[("tasks", "jobs"), ("omitted_tasks", "omitted_jobs")]
+                };
+                for &(internal, public) in renames {
                     if let Some(field) = fields.remove(internal) {
                         fields.entry(public).or_insert(field);
                     }
@@ -186,7 +210,7 @@ impl ReplyNames {
                     }
                 }
                 for &(internal, public) in ID_FIELDS.iter().chain(&[("sessions", "threads")]) {
-                    let field = if matches!(self, Self::Thread) {
+                    let field = if matches!(self, Self::Thread | Self::LoopAlias) {
                         fields.remove(internal)
                     } else {
                         fields.get(internal).cloned()
@@ -251,30 +275,28 @@ mod tests {
 
     #[test]
     fn loop_mcp_names_translate_tools_and_list_fields_while_keeping_legacy_aliases() {
-        assert_eq!(
-            public_tool(super::super::LIST_SCHEDULED_TASKS),
-            "list_loops"
-        );
-        assert_eq!(
-            public_tool(super::super::RUN_SCHEDULED_TASK_NOW),
-            "run_loop"
-        );
+        assert_eq!(public_tool(super::super::LIST_SCHEDULED_TASKS), "list_jobs");
+        assert_eq!(public_tool(super::super::CREATE_LOOP), "create_job");
+        assert_eq!(public_tool(super::super::UPDATE_LOOP), "update_job");
+        assert_eq!(public_tool(super::super::RUN_SCHEDULED_TASK_NOW), "run_job");
         assert_eq!(
             public_tool(super::super::DELETE_SCHEDULED_TASK),
-            "delete_loop"
+            "delete_job"
         );
-        assert_eq!(
-            internal_tool("list_loops"),
-            super::super::LIST_SCHEDULED_TASKS
-        );
-        assert_eq!(
-            internal_tool("run_loop"),
-            super::super::RUN_SCHEDULED_TASK_NOW
-        );
-        assert_eq!(
-            internal_tool("delete_loop"),
-            super::super::DELETE_SCHEDULED_TASK
-        );
+        for (alias, expected) in [
+            ("list_jobs", super::super::LIST_SCHEDULED_TASKS),
+            ("list_loops", super::super::LIST_SCHEDULED_TASKS),
+            ("create_job", super::super::CREATE_LOOP),
+            ("create_loop", super::super::CREATE_LOOP),
+            ("update_job", super::super::UPDATE_LOOP),
+            ("update_loop", super::super::UPDATE_LOOP),
+            ("run_job", super::super::RUN_SCHEDULED_TASK_NOW),
+            ("run_loop", super::super::RUN_SCHEDULED_TASK_NOW),
+            ("delete_job", super::super::DELETE_SCHEDULED_TASK),
+            ("delete_loop", super::super::DELETE_SCHEDULED_TASK),
+        ] {
+            assert_eq!(internal_tool(alias), expected, "{alias}");
+        }
 
         let raw = CallAnswer {
             success: true,
@@ -283,6 +305,18 @@ mod tests {
                     .to_string(),
         };
         let mut args = json!({});
+        let job_names = call_args("list_jobs", &mut args).unwrap();
+        let job_reply: Value = serde_json::from_str(
+            &job_names
+                .answer(super::super::LIST_SCHEDULED_TASKS, raw.clone())
+                .content,
+        )
+        .unwrap();
+        assert_eq!(
+            job_reply,
+            json!({"daemon_running": true, "jobs": [{"id": "loop-1"}], "omitted_jobs": 2})
+        );
+
         let loop_names = call_args("list_loops", &mut args).unwrap();
         let loop_reply: Value = serde_json::from_str(
             &loop_names

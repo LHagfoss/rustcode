@@ -36,9 +36,13 @@ pub enum DaemonRequest {
     },
     RunNow {
         job_id: String,
-        /// What the run starts from (a Loop's webhook body), kept on the run.
+        /// What the run starts from (a job's webhook body), kept on the run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<String>,
+    },
+    /// Stop an active run of `job_id`, if one is currently executing.
+    Cancel {
+        job_id: String,
     },
     Shutdown {
         instance_id: String,

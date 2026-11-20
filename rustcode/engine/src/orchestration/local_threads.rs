@@ -1670,11 +1670,12 @@ pub(super) fn account_for(
 
 // ------------------------------------------------------------------ loops
 
-/// What one run of a Loop (`docs/daemon.md` › Loops) starts: a fresh
+/// What one run of a Job (`docs/daemon.md` › Jobs) starts: a fresh
 /// top-level thread in the project's own folder, or a turn on the one thread
-/// the Loop sends every run to.
+/// the job sends every run to.
 #[derive(Debug, Clone)]
 pub(crate) struct LoopThread {
+    pub id: String,
     pub name: String,
     pub prompt: String,
     pub workspace: String,
@@ -1736,10 +1737,45 @@ pub(crate) fn loop_reply_is_quiet(reply: &str) -> bool {
         .is_some_and(|start| start.eq_ignore_ascii_case(LOOP_QUIET_MARKER))
 }
 
-/// The one-line verdict a non-quiet Loop run opens with, bounded for the Loops
-/// page and Review list (where [`loop_prompt`] asks for it).
+/// The one-line verdict a non-quiet job run opens with, bounded for the Jobs
+/// page and Review list (where [`loop_prompt`] asks for it). Skips fenced code
+/// blocks (such as ` ```rustcode-ui v1 `) so a Smart UI view falls back to its
+/// title instead of returning a fence marker or `None`.
 pub(crate) fn loop_reply_verdict(reply: &str) -> Option<String> {
-    let line = reply.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let mut in_fence = false;
+    let mut candidate: Option<String> = None;
+    let mut view_title: Option<String> = None;
+    for raw in reply.lines() {
+        let line = raw.trim();
+        if line.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            if view_title.is_none() {
+                if let Some(rest) = line.strip_prefix(":: title ") {
+                    let t = rest.trim();
+                    if !t.is_empty() {
+                        view_title = Some(t.to_owned());
+                    }
+                } else if let Some(start) = line.find("<title>") {
+                    let rest = &line[start + 7..];
+                    if let Some(end) = rest.find("</title>") {
+                        let t = rest[..end].trim();
+                        if !t.is_empty() {
+                            view_title = Some(t.to_owned());
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        if !line.is_empty() {
+            candidate = Some(line.to_owned());
+            break;
+        }
+    }
+    let line = candidate.or(view_title)?;
     let cleaned = line
         .trim_start_matches(['#', '>', '-', '*', '_', '`', ' '])
         .trim_end_matches(['*', '_', '`'])
@@ -1756,11 +1792,11 @@ pub(crate) fn loop_reply_verdict(reply: &str) -> Option<String> {
     }
 }
 
-/// The first message of a Loop's thread: the user's prompt, with what a
+/// The first message of a job's thread: the user's prompt, with what a
 /// scheduled run is for and, read-only, what it may not do.
 pub(crate) fn loop_prompt(name: &str, prompt: &str, read_only: bool) -> String {
     let mut text = format!(
-        "This is a scheduled run of the Loop “{name}”. Nobody is watching it run. \
+        "This is a scheduled run of the job “{name}”. Nobody is watching it run. \
          When nothing needs the user, answer in one or two lines starting with \
          “{LOOP_QUIET_MARKER}”. When something does, start with a one-line verdict saying what."
     );
@@ -1826,6 +1862,39 @@ pub(crate) fn is_sign_in_failure(error: &str) -> bool {
     .any(|phrase| error.contains(phrase))
 }
 
+/// Whether a job run failure looks transient (network blip, rate limit, or
+/// temporary provider outage) and should retry with backoff before counting
+/// against the auto-pause strike limit.
+pub(crate) fn is_transient_failure(error: &str) -> bool {
+    if is_sign_in_failure(error) {
+        return false;
+    }
+    let error = error.to_ascii_lowercase();
+    [
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection refused",
+        "broken pipe",
+        "econnreset",
+        "temporarily unavailable",
+        "service unavailable",
+        "overloaded",
+        "rate limit",
+        "too many requests",
+        "http 429",
+        "http 502",
+        "http 503",
+        "http 504",
+        "502 bad gateway",
+        "503 service",
+        "504 gateway",
+        "network error",
+    ]
+    .iter()
+    .any(|phrase| error.contains(phrase))
+}
+
 /// What a run on a signed-out login says: which login, where it lives, and
 /// how to sign it in again.
 pub(crate) fn signed_out_message(
@@ -1856,7 +1925,7 @@ pub(crate) fn signed_out_message(
     } else {
         text.push_str(" in Settings › Harnesses");
     }
-    text.push_str(", or pick a signed-in account in the loop's settings; then resume the loop.");
+    text.push_str(", or pick a signed-in account in the job's settings; then resume the job.");
     text
 }
 
@@ -1925,8 +1994,15 @@ pub(crate) async fn run_loop_thread(
                 meta.insert("account".to_owned(), json!(account));
             }
             meta.insert("title".to_owned(), json!(run.name));
-            // The run's thread belongs to the job's view, not the thread list.
-            meta.insert("scheduledJob".to_owned(), json!(run.name));
+            // The run's thread belongs to the Jobs view, not the thread list.
+            // Store the stable job id so "View job" still resolves after renames
+            // or beyond the recent-run history cap.
+            let job_ref = if run.id.is_empty() {
+                &run.name
+            } else {
+                &run.id
+            };
+            meta.insert("scheduledJob".to_owned(), json!(job_ref));
             if let Some(model) = model.as_ref() {
                 meta.insert("model".to_owned(), json!(model));
             }

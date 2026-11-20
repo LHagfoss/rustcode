@@ -8,7 +8,7 @@ use super::{
 use chrono::{DateTime, Duration, Utc};
 use futures_util::FutureExt;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -38,6 +38,7 @@ pub struct Scheduler {
     cancellation: CancellationToken,
     started: AtomicBool,
     status: Mutex<(usize, Option<DateTime<Utc>>)>,
+    active_cancels: Mutex<HashMap<String, CancellationToken>>,
 }
 
 impl Scheduler {
@@ -58,6 +59,7 @@ impl Scheduler {
             cancellation: CancellationToken::new(),
             started: AtomicBool::new(false),
             status: Mutex::new((0, None)),
+            active_cancels: Mutex::new(HashMap::new()),
         })
     }
     pub fn store(&self) -> Arc<Mutex<JobStore>> {
@@ -76,7 +78,7 @@ impl Scheduler {
         self.run_now_with(id, None)
     }
 
-    /// Run now with what started the run (a Loop's webhook body).
+    /// Run now with what started the run (a job's webhook body).
     pub fn run_now_with(&self, id: &str, input: Option<String>) -> Result<()> {
         self.store
             .lock()
@@ -84,6 +86,18 @@ impl Scheduler {
             .run_now_with(id, self.clock.now(), input)?;
         self.notify_changed();
         Ok(())
+    }
+
+    /// Stop an active run of `id`, if one is currently executing.
+    pub fn cancel_run(&self, id: &str) -> Result<()> {
+        let token = self.active_cancels.lock().unwrap().get(id).cloned();
+        match token {
+            Some(token) => {
+                token.cancel();
+                Ok(())
+            }
+            None => Err(DaemonError::Conflict("job is not currently running".into())),
+        }
     }
 
     pub async fn run(self: Arc<Self>) -> Result<()> {
@@ -119,6 +133,7 @@ impl Scheduler {
             }
         }
         *self.status.lock().unwrap() = (0, None);
+        self.active_cancels.lock().unwrap().clear();
         result
     }
 
@@ -173,10 +188,14 @@ impl Scheduler {
                     run.state = JobRunState::Running;
                     run.started_at = Some(now);
                     let this = self.clone();
+                    let cancellation = this.cancellation.child_token();
+                    this.active_cancels
+                        .lock()
+                        .unwrap()
+                        .insert(job.id.clone(), cancellation.clone());
                     tasks.spawn(async move {
                         let id = job.id.clone();
                         let session = job.target_session.clone();
-                        let cancellation = this.cancellation.child_token();
                         let context = JobRunContext { job, run: run.clone(), cancellation: cancellation.clone() };
                         // Catch executor panics as unknown effects, and bound an
                         // executor that ignores cancellation. Never retry either.
@@ -217,6 +236,7 @@ impl Scheduler {
                 done = tasks.join_next(), if !tasks.is_empty() => {
                     let (id, session, result) = done.unwrap().map_err(|e| DaemonError::Storage(e.to_string()))?;
                     active_jobs.remove(&id);
+                    self.active_cancels.lock().unwrap().remove(&id);
                     if let Some(session) = session { sessions.remove(&session); }
                     result?;
                 }
@@ -324,6 +344,10 @@ impl super::server::SchedulerControl for Scheduler {
     }
     fn run_now(&self, id: &str, input: Option<String>) -> Result<super::protocol::DaemonResponse> {
         Scheduler::run_now_with(self, id, input)?;
+        Ok(super::protocol::DaemonResponse::Ack)
+    }
+    fn cancel_run(&self, id: &str) -> Result<super::protocol::DaemonResponse> {
+        Scheduler::cancel_run(self, id)?;
         Ok(super::protocol::DaemonResponse::Ack)
     }
     fn snapshot(&self) -> (usize, Option<String>) {
@@ -566,6 +590,35 @@ mod tests {
         wait_calls(&executor, 3).await;
         scheduler.shutdown();
         executor.gate.notify_waiters();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancel_run_stops_an_active_execution() {
+        let clock = TestClock::new(at(0));
+        let executor = RecordingExecutor {
+            block: true,
+            ..Default::default()
+        };
+        let mut store = JobStore::in_memory().unwrap();
+        store.create(job("due", at(0), None)).unwrap();
+        let scheduler = scheduler(store, clock, executor.clone(), 1);
+        let task = tokio::spawn(scheduler.clone().run());
+        wait_calls(&executor, 1).await;
+        let cancellation: CancellationToken =
+            executor.calls.lock().unwrap()[0].cancellation.clone();
+        scheduler.cancel_run("due").unwrap();
+        assert!(cancellation.is_cancelled());
+        assert!(scheduler.cancel_run("missing").is_err());
+        executor.gate.notify_waiters();
+        let run = wait_state(
+            &scheduler,
+            "due",
+            crate::daemon::model::JobRunState::Cancelled,
+        )
+        .await;
+        assert_eq!(run.state, crate::daemon::model::JobRunState::Cancelled);
+        scheduler.shutdown();
         task.await.unwrap().unwrap();
     }
 

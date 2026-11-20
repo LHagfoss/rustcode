@@ -446,6 +446,70 @@ export function agoText(at: number, now = Date.now()): string {
   return `${Math.floor(past / DAY)} d ago`;
 }
 
+/** Compact run duration ("<1s", "42s", "2m 15s", "1h 4m"), or null when unavailable. */
+export function runDurationText(startedAt?: number, finishedAt?: number): string | null {
+  if (startedAt === undefined || finishedAt === undefined || finishedAt < startedAt) return null;
+  const totalSec = Math.round((finishedAt - startedAt) / 1000);
+  if (totalSec < 1) return "<1s";
+  if (totalSec < 60) return `${totalSec}s`;
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  if (mins < 60) return secs ? `${mins}m ${secs}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
+}
+
+const RUN_DAY_WEEKDAY = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+const RUN_DAY_DATE = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+
+/** "Today 08:00", "Yesterday 08:00", "Thu 08:00", or "Nov 16 08:00" in local 24h time. */
+export function runTimestampText(at: number, now = Date.now()): string {
+  const d = new Date(at);
+  const ref = new Date(now);
+  const time = clock(d.getHours(), d.getMinutes());
+  if (d.toDateString() === ref.toDateString()) return `Today ${time}`;
+  const yesterday = new Date(ref);
+  yesterday.setDate(ref.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+  if (now - at >= 0 && now - at < 6 * DAY) return `${RUN_DAY_WEEKDAY.format(d)} ${time}`;
+  return `${RUN_DAY_DATE.format(d)} ${time}`;
+}
+
+const FALLBACK_TIMEZONES = [
+  "UTC",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "Europe/London",
+  "Europe/Oslo",
+  "Europe/Berlin",
+  "Europe/Paris",
+  "Asia/Tokyo",
+  "Asia/Singapore",
+  "Australia/Sydney",
+];
+
+/** Available IANA timezones, with the user's own zone first. */
+export function timeZoneChoices(current?: string): string[] {
+  const local = userTimeZone();
+  const intlWithValues = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
+  const supported =
+    typeof intlWithValues.supportedValuesOf === "function"
+      ? intlWithValues.supportedValuesOf("timeZone")
+      : FALLBACK_TIMEZONES;
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (const zone of [local, current, "UTC", ...supported]) {
+    if (zone && !seen.has(zone)) {
+      seen.add(zone);
+      list.push(zone);
+    }
+  }
+  return list;
+}
+
 const isActive = (run: LoopRun) => run.state === "claimed" || run.state === "running";
 const isFailure = (run: LoopRun) =>
   run.finishedAt !== undefined && (run.state === "failed" || run.state === "ambiguous");
@@ -690,6 +754,10 @@ export async function runLoopNow(id: string): Promise<void> {
   await request(Method.loopsRun, { id }, 20_000);
 }
 
+export async function cancelLoopRun(id: string): Promise<void> {
+  await request(Method.loopsCancel, { id }, 20_000);
+}
+
 export async function deleteLoop(id: string): Promise<void> {
   await request(Method.loopsDelete, { id }, 20_000);
 }
@@ -701,15 +769,15 @@ export async function startScheduler(): Promise<void> {
 // ---------------------------------------------------------------- loop threads in the sidebar
 
 /**
- * Which loop each thread a run started or ran in belongs to, by thread id: the sidebar's Loop badge.
- * `runs`: the threads a run started fresh, which live in the Scheduled Jobs view and not the sidebar.
+ * Which job each thread a run started or ran in belongs to, by thread id: the sidebar's Job badge.
+ * `runs`: the threads a run started fresh, which live in the Jobs view and not the sidebar.
  */
 export const useLoopThreads = create<{
   byThread: Record<string, string>;
   runs: Record<string, true>;
-  /** The loop id each run's thread belongs to, so a run thread can lead back to its job. */
+  /** The job id each run's thread belongs to, so a run thread can lead back to its job. */
   loopOf: Record<string, string>;
-  /** The job the Scheduled Jobs view opens on: shown expanded, once. */
+  /** The job the Jobs view opens on: shown expanded, once. */
   reveal: string | null;
 }>(() => ({
   byThread: {},
@@ -719,7 +787,7 @@ export const useLoopThreads = create<{
 }));
 
 /**
- * The threads fresh runs started, by id. A loop that sends every run to one thread leaves that
+ * The threads fresh runs started, by id. A job that sends every run to one thread leaves that
  * thread out: the user picked it, and it stays in the list.
  */
 export function loopRunThreads(loops: readonly Loop[]): Record<string, true> {
@@ -732,8 +800,8 @@ export function loopRunThreads(loops: readonly Loop[]): Record<string, true> {
 }
 
 /**
- * Whether a thread is a scheduled job's run, which the thread list leaves to the Scheduled Jobs view:
- * the engine marks every run thread it starts, and the loops' run history names older ones.
+ * Whether a thread is a job's run, which the thread list leaves to the Jobs view:
+ * the engine marks every run thread it starts, and the jobs' run history names older ones.
  */
 export function isJobRunThread(
   session: { id: string; scheduledJob?: string },

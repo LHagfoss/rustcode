@@ -291,9 +291,9 @@ pub enum Commands {
         command: MachineCommands,
     },
 
-    /// Manage loops through the running daemon
-    #[command(alias = "loop", alias = "cron")]
-    Loops {
+    /// Manage jobs through the running daemon
+    #[command(alias = "job", alias = "loops", alias = "loop", alias = "cron")]
+    Jobs {
         #[command(subcommand)]
         command: CronCommands,
     },
@@ -472,7 +472,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "mcp-connect",
         ],
     ),
-    ("Server", &["server", "daemon", "loops"]),
+    ("Server", &["server", "daemon", "jobs"]),
 ];
 
 /// The command lines of `rustcode --help`, grouped by [`HELP_GROUPS`].
@@ -957,7 +957,7 @@ pub enum RemoteDeviceCommands {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum CronCommands {
-    /// Add a loop
+    /// Add a job
     Add {
         #[arg(long)]
         id: String,
@@ -979,30 +979,36 @@ pub enum CronCommands {
         #[arg(long)]
         json: bool,
     },
-    /// List loops
+    /// List jobs
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Pause a loop
+    /// Pause a job
     Pause {
         job_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Resume a loop
+    /// Resume a job
     Resume {
         job_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Run a loop now
+    /// Run a job now
     Run {
         job_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Show recent runs for a loop
+    /// Stop an active run of a job
+    Stop {
+        job_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show recent runs for a job
     History {
         job_id: String,
         #[arg(long, default_value_t = 20, value_parser = parse_history_limit)]
@@ -1010,7 +1016,7 @@ pub enum CronCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a loop
+    /// Delete a job
     Delete {
         job_id: String,
         #[arg(long)]
@@ -2244,7 +2250,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             cli.command,
-            Some(Commands::Loops {
+            Some(Commands::Jobs {
                 command: CronCommands::Add {
                     id,
                     target_session: Some(target),
@@ -2257,12 +2263,15 @@ mod tests {
 
     #[test]
     fn parses_cron_job_controls_and_history_limit() {
-        for action in ["pause", "resume", "run", "delete"] {
+        for action in ["pause", "resume", "run", "stop", "delete"] {
+            let jobs_cli =
+                Cli::try_parse_from(["rustcode", "jobs", action, "job-1", "--json"]).unwrap();
+            assert!(matches!(jobs_cli.command, Some(Commands::Jobs { .. })));
             let cli = Cli::try_parse_from(["rustcode", "cron", action, "job-1", "--json"]).unwrap();
-            assert!(matches!(cli.command, Some(Commands::Loops { .. })));
+            assert!(matches!(cli.command, Some(Commands::Jobs { .. })));
             let loops_cli =
                 Cli::try_parse_from(["rustcode", "loops", action, "job-1", "--json"]).unwrap();
-            assert!(matches!(loops_cli.command, Some(Commands::Loops { .. })));
+            assert!(matches!(loops_cli.command, Some(Commands::Jobs { .. })));
         }
         let history = Cli::try_parse_from([
             "rustcode", "cron", "history", "job-1", "--limit", "7", "--json",
@@ -2270,7 +2279,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             history.command,
-            Some(Commands::Loops {
+            Some(Commands::Jobs {
                 command: CronCommands::History {
                     job_id,
                     limit: 7,
@@ -2278,6 +2287,7 @@ mod tests {
                 }
             }) if job_id == "job-1"
         ));
+        assert!(Cli::try_parse_from(["rustcode", "jobs", "list", "--json"]).is_ok());
         assert!(Cli::try_parse_from(["rustcode", "cron", "list", "--json"]).is_ok());
         assert!(Cli::try_parse_from(["rustcode", "loops", "list", "--json"]).is_ok());
     }

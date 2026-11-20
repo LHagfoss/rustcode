@@ -151,10 +151,10 @@ export function baseActions(): PaletteAction[] {
     },
     {
       id: "loops",
-      label: s.view.kind === "loops" ? "Show the chat" : "Show Loops",
-      detail: "Scheduled and webhook runs",
+      label: s.view.kind === "loops" ? "Show the chat" : "Show Jobs",
+      detail: "Scheduled, one-off and webhook runs",
       icon: Repeat,
-      words: "loops scheduled jobs cron webhook repeat",
+      words: "jobs loops scheduled cron webhook repeat",
       run: () => setView(s.view.kind === "loops" ? { kind: "chat" } : { kind: "loops" }),
     },
     {

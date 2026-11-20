@@ -28,6 +28,7 @@ import {
   type Repeat,
   type ScheduleForm,
   saveLoop,
+  timeZoneChoices,
   userTimeZone,
   WEEKDAYS,
   WEEKENDS,
@@ -35,7 +36,7 @@ import {
 } from "../state/loops";
 import { projectsOn } from "../state/projects";
 import { errorText, useApp } from "../state/store";
-import { ChevronRight, Webhook } from "./icons";
+import { ChevronRight, Trash2, Webhook } from "./icons";
 import { CopyButton } from "./Markdown";
 import { Callout, cx, inputClass, noTextHelpers, Pill, Segments, Select, Switch } from "./primitives";
 
@@ -43,7 +44,7 @@ const EFFORTS = ["low", "medium", "high"];
 
 const REPEATS: { value: Repeat; label: string }[] = [
   { value: "hours", label: "Hourly" },
-  { value: "days", label: "Weekly" },
+  { value: "days", label: "Daily" },
   { value: "monthly", label: "Monthly" },
   { value: "once", label: "Once" },
   { value: "cron", label: "Cron" },
@@ -115,13 +116,13 @@ function ordinal(n: number): string {
 
 const MONTH_DAYS = Array.from({ length: 28 }, (_, i) => ({ value: String(i + 1), label: ordinal(i + 1) }));
 
-function draftOf(loop: Loop | null, project: string): LoopDraft {
+function draftOf(loop: Loop | null, project: string, duplicate = false): LoopDraft {
   if (!loop) {
     return { name: "", workspace: project, prompt: "", cron: "0 */4 * * *", readOnly: true };
   }
   return {
-    id: loop.id,
-    name: loop.name,
+    id: duplicate ? undefined : loop.id,
+    name: duplicate ? `${loop.name} (copy)` : loop.name,
     workspace: loop.workspace,
     prompt: loop.prompt,
     cron: loop.schedule.kind === "cron" ? loop.schedule.expression : "0 9 * * *",
@@ -133,7 +134,7 @@ function draftOf(loop: Loop | null, project: string): LoopDraft {
     readOnly: loop.readOnly,
     threadId: loop.threadId,
     script: loop.script,
-    webhook: loop.webhook,
+    webhook: duplicate ? false : loop.webhook,
     machine: loop.machine,
   };
 }
@@ -256,20 +257,26 @@ function ToggleRow({
 export function LoopDialog({
   open,
   loop,
+  duplicate = false,
   onOpenChange,
+  onDelete,
   onSaved,
 }: {
   open: boolean;
-  /** The loop to edit; null makes a new one. */
+  /** The job to edit (or duplicate); null makes a new one. */
   loop: Loop | null;
+  /** Prefill from `loop` as a new job without its id or webhook secret. */
+  duplicate?: boolean;
   onOpenChange: (open: boolean) => void;
+  onDelete?: () => void;
   onSaved: () => void;
 }) {
+  const isEditing = Boolean(loop && !duplicate);
   const sessions = useApp((s) => s.sessions);
   const projectCwd = useApp((s) => s.projectCwd);
   const harnesses = useApp((s) => s.harnesses);
   const projects = useMemo(() => projectsOn(sessions), [sessions]);
-  const [draft, setDraft] = useState<LoopDraft>(() => draftOf(loop, projectCwd));
+  const [draft, setDraft] = useState<LoopDraft>(() => draftOf(loop, projectCwd, duplicate));
   const [form, setForm] = useState<ScheduleForm>(() => formOf(loop));
   const [target, setTarget] = useState<"fresh" | "one">("fresh");
   const [customDays, setCustomDays] = useState(false);
@@ -320,10 +327,10 @@ export function LoopDialog({
       openedFor.current = null;
       return;
     }
-    const key = loop?.id ?? "";
+    const key = `${loop?.id ?? ""}:${duplicate ? "dup" : "edit"}`;
     if (openedFor.current === key) return;
     openedFor.current = key;
-    setDraft(draftOf(loop, fallbackProject));
+    setDraft(draftOf(loop, fallbackProject, duplicate));
     setForm(formOf(loop));
     setTarget(loop?.threadId ? "one" : "fresh");
     setCustomDays(false);
@@ -331,7 +338,7 @@ export function LoopDialog({
     setError(null);
     setSaving(false);
     setMadeWebhook(null);
-  }, [open, loop, fallbackProject]);
+  }, [open, loop, duplicate, fallbackProject]);
 
   // A new loop opened before the projects were read takes the first one when they arrive.
   useEffect(() => {
@@ -358,10 +365,14 @@ export function LoopDialog({
     .filter((session) => !session.host && session.cwd === draft.workspace)
     .map((session) => ({ value: session.id, label: session.title || "New thread" }));
   if (draft.threadId && !threadOptions.some((option) => option.value === draft.threadId)) {
-    threadOptions.unshift({ value: draft.threadId, label: "The loop's thread" });
+    threadOptions.unshift({ value: draft.threadId, label: "The job's thread" });
   }
   const threadId = target === "one" ? draft.threadId || threadOptions[0]?.value : undefined;
   const timezone = draft.timezone ?? userTimeZone();
+  const timeZoneOptions = useMemo(
+    () => timeZoneChoices(timezone).map((zone) => ({ value: zone, label: zone })),
+    [timezone],
+  );
   const daysChoice =
     DAY_SHORTCUTS.find(
       ({ days }) => days.length === form.days.length && days.every((day) => form.days.includes(day)),
@@ -455,7 +466,7 @@ export function LoopDialog({
             // replace an existing job's name. An edit opens with nothing focused; a new job
             // starts in its empty Name field.
             onOpenAutoFocus={(e) => {
-              if (!loop) return;
+              if (!isEditing) return;
               e.preventDefault();
               (e.currentTarget as HTMLElement).focus({ preventScroll: true });
             }}
@@ -467,7 +478,7 @@ export function LoopDialog({
               <>
                 <div className="flex shrink-0 flex-col gap-1 px-5 pt-5 pb-3">
                   <Dialog.Title className="font-semibold text-title3">
-                    {loop ? "Edit loop" : "New loop"}
+                    {isEditing ? "Edit job" : "New job"}
                   </Dialog.Title>
                   <p className="text-caption text-fg-muted">
                     {remote
@@ -477,7 +488,7 @@ export function LoopDialog({
                 </div>
                 <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-4">
                   <Section title="Task">
-                    {!loop && (
+                    {!isEditing && !duplicate && (
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="mr-0.5 text-caption text-fg-faint">Templates</span>
                         {TEMPLATES.map((template) => (
@@ -707,25 +718,34 @@ export function LoopDialog({
                           className={cx(inputClass, "font-mono")}
                         />
                       )}
-                      <p
-                        aria-live="polite"
-                        className={cx("text-caption", cronError ? "text-danger" : "text-fg-muted")}
-                      >
-                        {cronError ?? words ?? `Cron ${cron}`}
-                        {!cronError && !once && !manual && timezone && ` · ${timezone}`}
-                      </p>
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                        <p
+                          aria-live="polite"
+                          className={cx("text-caption", cronError ? "text-danger" : "text-fg-muted")}
+                        >
+                          {cronError ?? words ?? `Cron ${cron}`}
+                        </p>
+                        {!once && !manual && timezone && (
+                          <Select
+                            label="Time zone"
+                            value={timezone}
+                            options={timeZoneOptions}
+                            onChange={(tz) => patch({ timezone: tz })}
+                          />
+                        )}
+                      </div>
                     </Field>
                     <ToggleRow
                       label="Webhook"
                       hint={
                         draft.webhook
-                          ? "A POST to the loop’s URL starts a run, with the request body added to the prompt as data."
+                          ? "A POST to the job’s URL starts a run, with the request body added to the prompt as data."
                           : "Also start runs from GitHub or another service by calling a URL."
                       }
                       checked={draft.webhook ?? false}
                       onChange={(webhook) => patch({ webhook, rotateWebhook: false })}
                     />
-                    {draft.webhook && loop?.webhook && (
+                    {draft.webhook && isEditing && loop?.webhook && (
                       <div className="flex items-center gap-3 rounded-lg bg-fill-subtle px-3 py-2">
                         <Webhook size={14} className="shrink-0 text-fg-muted" />
                         <div className="flex min-w-0 flex-1 flex-col">
@@ -847,6 +867,11 @@ export function LoopDialog({
                 </div>
                 <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-5 py-3">
                   {/* In the footer, not under the form: a refused save is seen without scrolling. */}
+                  {onDelete && !error && (
+                    <Pill danger size="sm" onClick={onDelete} className="mr-auto">
+                      <Trash2 size={12} /> Delete
+                    </Pill>
+                  )}
                   {error && (
                     <p role="alert" className="mr-auto min-w-0 text-caption text-danger">
                       {error}
@@ -854,7 +879,7 @@ export function LoopDialog({
                   )}
                   <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
                   <Pill prominent disabled={!ready || saving} onClick={() => void save()}>
-                    {saving ? "Saving…" : loop ? "Save changes" : "Create loop"}
+                    {saving ? "Saving…" : isEditing ? "Save changes" : "Create job"}
                   </Pill>
                 </div>
               </>
@@ -877,7 +902,7 @@ function WebhookMade({ webhook, onDone }: { webhook: LoopWebhook; onDone: () => 
         <div className="flex min-w-0 flex-col gap-1">
           <Dialog.Title className="font-semibold text-title3">Webhook ready</Dialog.Title>
           <p className="text-caption text-fg-muted">
-            Copy the URL now. It is shown only this once; if it is lost, replace it from the loop’s editor.
+            Copy the URL now. It is shown only this once; if it is lost, replace it from the job’s editor.
           </p>
         </div>
       </div>

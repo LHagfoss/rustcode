@@ -34,7 +34,7 @@ async fn run_daemon_or_cron_command(
     };
     if !matches!(
         command,
-        crate::cli::Commands::Daemon { .. } | crate::cli::Commands::Loops { .. }
+        crate::cli::Commands::Daemon { .. } | crate::cli::Commands::Jobs { .. }
     ) {
         return Ok(false);
     }
@@ -81,7 +81,7 @@ async fn run_daemon_or_cron_command(
                 }
             }
         },
-        crate::cli::Commands::Loops { command } => {
+        crate::cli::Commands::Jobs { command } => {
             let (operation, request, json) = match command {
                 crate::cli::CronCommands::Add {
                     id,
@@ -129,6 +129,13 @@ async fn run_daemon_or_cron_command(
                     DaemonRequest::RunNow {
                         job_id: job_id.clone(),
                         input: None,
+                    },
+                    *json,
+                ),
+                crate::cli::CronCommands::Stop { job_id, json } => (
+                    "stop",
+                    DaemonRequest::Cancel {
+                        job_id: job_id.clone(),
                     },
                     *json,
                 ),
