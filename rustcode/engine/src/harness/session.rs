@@ -967,6 +967,10 @@ pub(crate) struct ExternalSession {
     started_mcp: StdMutex<Option<McpFingerprint>>,
     turn: Mutex<()>,
     cancel: StdMutex<Option<Arc<Notify>>>,
+    /// The client's id for the Stop that asked the running turn to end
+    /// (`_rustcode/session/stop`), so the harness's answer to it is logged
+    /// under the same attempt (issue 4086).
+    stop_attempt: StdMutex<Option<String>>,
     record: StdMutex<HarnessRecord>,
     transcript: Arc<StdMutex<Transcript>>,
     closed: AtomicBool,
@@ -1089,6 +1093,7 @@ impl ExternalSession {
             started_mcp: StdMutex::new(None),
             turn: Mutex::new(()),
             cancel: StdMutex::new(None),
+            stop_attempt: StdMutex::new(None),
             record: StdMutex::new(record),
             transcript,
             closed: AtomicBool::new(false),
@@ -2085,12 +2090,19 @@ impl ExternalSession {
                 result
             }
             () = cancel.notified() => {
+                let attempt = self
+                    .stop_attempt
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .take();
+                let asked = std::time::Instant::now();
                 adapter.cancel();
-                match tokio::time::timeout(CANCEL_GRACE, &mut turn).await {
+                self.stop_event("stop.harness_cancel", attempt.as_deref(), None, None);
+                let (result, outcome) = match tokio::time::timeout(CANCEL_GRACE, &mut turn).await {
                     // A harness that answers a cancel with an error has still
                     // stopped.
-                    Ok(Ok(stop)) => Ok(stop),
-                    Ok(Err(_)) => Ok(StopReason::Cancelled),
+                    Ok(Ok(stop)) => (Ok(stop), "obeyed"),
+                    Ok(Err(_)) => (Ok(StopReason::Cancelled), "errored"),
                     Err(_) => {
                         crate::dbg_log!(
                             "harness {} ignored cancel for {} s; killing it",
@@ -2099,9 +2111,16 @@ impl ExternalSession {
                         );
                         adapter.kill();
                         self.forget_adapter(&adapter).await;
-                        Ok(StopReason::Cancelled)
+                        (Ok(StopReason::Cancelled), "killed")
                     }
-                }
+                };
+                self.stop_event(
+                    "stop.harness_stopped",
+                    attempt.as_deref(),
+                    Some(outcome),
+                    Some(asked.elapsed().as_millis() as u64),
+                );
+                result
             }
             () = &mut silent => {
                 // Unreachable when the deadline is off: that future never resolves.
@@ -2186,8 +2205,8 @@ impl ExternalSession {
         }
     }
 
-    /// Ask the running turn to stop.
-    pub(crate) fn cancel(&self) {
+    /// Ask the running turn to stop. False when no turn is running.
+    pub(crate) fn cancel(&self) -> bool {
         if let Some(cancel) = self
             .cancel
             .lock()
@@ -2195,7 +2214,39 @@ impl ExternalSession {
             .as_ref()
         {
             cancel.notify_one();
+            return true;
         }
+        false
+    }
+
+    /// [`Self::cancel`] for the client's Stop `attempt`: the harness's answer
+    /// to it is logged under that id (`stop.harness_cancel`,
+    /// `stop.harness_stopped`).
+    pub(crate) fn stop(&self, attempt: Option<&str>) -> bool {
+        *self
+            .stop_attempt
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = attempt.map(str::to_owned);
+        self.cancel()
+    }
+
+    fn stop_event(
+        &self,
+        event: &str,
+        attempt: Option<&str>,
+        outcome: Option<&str>,
+        elapsed_ms: Option<u64>,
+    ) {
+        crate::logger::operational_event(
+            event,
+            serde_json::json!({
+                "session_id": self.id,
+                "harness": self.harness.id,
+                "attempt": attempt,
+                "outcome": outcome,
+                "elapsed_ms": elapsed_ms,
+            }),
+        );
     }
 
     /// Whether this thread was closed: the app's registry dropped it, so a

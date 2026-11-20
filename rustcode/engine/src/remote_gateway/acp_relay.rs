@@ -127,6 +127,9 @@ const EXACT_METHODS: &[&str] = &[
     // The transcript a load would replay, read without opening the thread:
     // what keeps a complete copy of this machine's threads on the other.
     "_rustcode/session/replay",
+    // Stop with an answer: `session/cancel` that says it reached this engine
+    // and where it went (`acp/stop.rs`), so a paired app can tell a lost Stop.
+    "_rustcode/session/stop",
     "_rustcode/harnesses",
     // A harness's models, listed by starting it briefly when it never ran
     // here: a freshly set up machine has learned none, and its model picker
@@ -465,6 +468,7 @@ mod tests {
                 "_rustcode/session/snooze",
                 "_rustcode/session/repair",
                 "_rustcode/session/replay",
+                "_rustcode/session/stop",
                 "_rustcode/harnesses",
                 "_rustcode/harnesses/models",
                 "_rustcode/harnesses/default",
@@ -505,6 +509,7 @@ mod tests {
             "_rustcode/session/snooze",
             "_rustcode/session/repair",
             "_rustcode/session/replay",
+            "_rustcode/session/stop",
             "session/load",
             "session/new",
             "session/prompt",

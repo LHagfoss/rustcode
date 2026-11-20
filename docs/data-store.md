@@ -460,6 +460,10 @@ fields listed; every other event and field stays in `debug.log`:
 | `harness.reaped` | `harness`, `native_session_id`, `reason` (`idle`, `memory` or `cap`), `idle_ms`, `work_in_flight`, `pressure`, `live` |
 | `harness.resumed` | `harness`, `native_session_id` |
 | `harness.turn_silent` | `harness`, `native_session_id`, `timeout_ms` |
+| `stop.received` | `attempt`, `via` |
+| `stop.delivered` | `attempt`, `via`, `route`, `active` |
+| `stop.harness_cancel` | `harness`, `attempt` |
+| `stop.harness_stopped` | `harness`, `attempt`, `outcome`, `elapsed_ms` |
 | `subagent.spawn` | `agent_id`, `parent_id`, `agent_type`, `context_inheritance`, `inherited_messages` |
 | `subagent.finish` | `agent_id`, `status`, `reason`, `rounds` |
 | `thread.wake` | `delegates`, `finished`, `failed`, `asking`, `stalled` (a wake turn: the app telling an orchestrator what its delegates did; counts only, issue 3649). The turn's tokens and cost are on its `turns` row: the first turn of that `thread_id` that starts at or after the event's `at` |

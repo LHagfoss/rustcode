@@ -259,6 +259,7 @@ import { forgetRunDrift, reconcileRunState, resetRunStatePoll, startRunStatePoll
 import { parseScheduleBook, SCHEDULED_KEY } from "./schedule";
 import { resetScheduledSends, restoreScheduled } from "./scheduledSends";
 import type { SidebarOrder } from "./sidebarOrder";
+import { resetStops, setStopSink } from "./stopTrace";
 import {
   applyUpdate,
   endTurn,
@@ -728,6 +729,11 @@ const logs = frameQueue<string>(
   16,
   SERVER_LOG_LINES,
 );
+/** A line of the app's own for Settings › Diagnostics, kept with the server's (the Stop trace). */
+export function noteDiagnostic(line: string): void {
+  logs.push(line);
+}
+setStopSink(noteDiagnostic);
 
 // ---------------------------------------------------------------- engine toast
 
@@ -1534,6 +1540,7 @@ export function resetForTests() {
   resetLostTurns();
   resetRunStatePoll();
   forcingStops.clear();
+  resetStops();
   engineWatch?.();
   engineWatch = undefined;
   forgetAskedModels();

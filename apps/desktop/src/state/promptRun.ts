@@ -6,6 +6,7 @@ import {
   obj,
   RpcError,
   str,
+  TimeoutError,
 } from "../acp/jsonrpc";
 import { byActivity, type Harness, Method, parseConfigOptions, permissionCancelled } from "../acp/types";
 import { afterPaint } from "../lib/frame";
@@ -55,6 +56,17 @@ import { refreshPlanCache, refreshPlanUsage } from "./planUsage";
 import { nextQueued } from "./queue";
 import { engineBusy, FORCE_STOP_MS } from "./runState";
 import { acceptsImages, removeQueued, threadHarness } from "./sendActions";
+import {
+  beginStop,
+  finishStop,
+  lastStage,
+  markStop,
+  type StopAttempt,
+  settleStop,
+  stopAckMs,
+  stopPending,
+  stopTrace,
+} from "./stopTrace";
 import { errorText, isReportCommand, refreshSessions, toast, updateThread, useApp } from "./store";
 import {
   appendNotice,
@@ -332,6 +344,8 @@ export async function runPrompt(
   const rawFailure = failure;
   if (failure !== undefined)
     failure = readableTurnError(failure, contextPercent(useApp.getState().threads[id]?.usage));
+  // A Stop in flight ends with the turn it stopped, and says how it ended.
+  settleStop(id, "ended", outcome);
   updateThread(id, (t) => ({
     ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
     ...(options.requestedCompaction && previousQueueHold ? { queueHeld: true } : {}),
@@ -451,13 +465,18 @@ export type TurnOutcome = "completed" | "cancelled" | "failed" | "skipped";
 
 export async function cancel(id = useApp.getState().selectedId): Promise<void> {
   if (!id) return;
+  const thread = useApp.getState().threads[id];
+  // One Stop at a time: a press while one is in flight for this turn is noted on it, not sent
+  // again (issue 4086). "Stopping…" shows from here until the turn ends or the Stop fails.
+  const attempt = beginStop(id, thread?.turn?.startedAt);
+  if (!attempt) return;
   const conn = connectionForThread(id);
   // A stop that finds nothing to send it on says so, instead of doing nothing.
   if (!conn) {
+    finishStop(attempt, "suppressed", "no_connection");
     toast(threadIsRemote(id) ? "That computer is not connected." : "The server is not connected.", "error");
     return;
   }
-  const thread = useApp.getState().threads[id];
   // Stopping a thread stops the work it gave other threads (M1); turns the user started there go on.
   void stopLinksFrom(id);
   // The engine may run a turn this window lost track of (`engineRunning`, the list's status): Stop
@@ -465,12 +484,16 @@ export async function cancel(id = useApp.getState().selectedId): Promise<void> {
   const engineRuns =
     !!useApp.getState().engineRunning[id] ||
     (!isLoaded(thread) && engineBusy(sessionById(useApp.getState(), id)?.status));
-  if (!isRunning(thread) && !engineRuns) return;
+  if (!isRunning(thread) && !engineRuns) {
+    finishStop(attempt, "suppressed", "not_running");
+    return;
+  }
   // Recorded first: a quit inside the harness's cancel grace would otherwise leave the thread
   // listed as running, and the restart would resume a turn the user stopped.
   noteStopped(id);
+  watchStops();
+  const sent = sendStop(conn, id, attempt);
   try {
-    conn.notify(Method.sessionCancel, { sessionId: splitThreadKey(id).id });
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
     for (const request of thread?.permissions ?? []) conn.respond(request.rpcId, permissionCancelled);
     if (thread) {
@@ -479,9 +502,73 @@ export async function cancel(id = useApp.getState().selectedId): Promise<void> {
     }
   } catch (error) {
     toast(errorText(error), "error");
-    return;
   }
+  // Not awaited: the engine's answer is recorded when it comes, and a caller (a restart, a
+  // queued message) goes on as soon as the Stop is on its way.
+  void sent;
   void forceStopIfStuck(id, thread?.turn?.startedAt);
+}
+
+/**
+ * Sends one Stop and records where it went: `_rustcode/session/stop`, which the engine answers
+ * once it has told the harness, or `session/cancel` for an engine from before it. False when it
+ * could not be sent at all: the attempt has failed, and pressing Stop again tries again.
+ */
+async function sendStop(conn: AcpConnection, id: string, attempt: StopAttempt): Promise<boolean> {
+  const sessionId = splitThreadKey(id).id;
+  const remote = threadIsRemote(id);
+  const where = remote ? (machineOfThread(id) ?? "that computer") : "the server";
+  markStop(attempt, "dispatched", remote ? "remote" : "local");
+  try {
+    const answer = obj(
+      await conn.request(Method.sessionStop, { sessionId, attempt: attempt.id }, stopAckMs()),
+    );
+    markStop(attempt, "acknowledged", answer?.active === false ? "idle" : (str(answer?.route) ?? "none"));
+    return true;
+  } catch (error) {
+    if (error instanceof RpcError && error.isMethodNotFound) {
+      try {
+        conn.notify(Method.sessionCancel, { sessionId, _meta: { rustcode: { stopAttempt: attempt.id } } });
+        markStop(attempt, "acknowledged", "legacy");
+        return true;
+      } catch (notifyError) {
+        finishStop(attempt, "failed", "closed");
+        toast(`Stop did not reach ${where}: ${errorText(notifyError)}`, "error");
+        return false;
+      }
+    }
+    if (error instanceof TimeoutError) {
+      // Still pending: the turn may yet end, and the forced stop below ends it if it does not.
+      markStop(attempt, "timed_out", "no_ack");
+      toast(`${remote ? where : "The server"} has not confirmed the stop yet.`, "info");
+      return true;
+    }
+    // -32000 is the shell's own answer for a line it could not send (`droppedLineAnswer`).
+    const reason =
+      error instanceof ConnectionClosedError
+        ? "closed"
+        : error instanceof RpcError
+          ? error.code === -32000
+            ? "dropped"
+            : "rejected"
+          : "write_failed";
+    finishStop(attempt, "failed", reason);
+    toast(`Stop did not reach ${where}: ${errorText(error)}. Press Stop to try again.`, "error");
+    return false;
+  }
+}
+
+let stopWatch: (() => void) | null = null;
+
+/** Ends a pending Stop once its thread runs nothing, however the turn ended. */
+function watchStops(): void {
+  if (stopWatch) return;
+  stopWatch = useApp.subscribe((s) => {
+    for (const id of Object.keys(s.threads)) {
+      if (!stopPending(id) || isRunning(s.threads[id]) || s.engineRunning[id]) continue;
+      settleStop(id, "ended", "not_running");
+    }
+  });
 }
 
 /**
@@ -494,6 +581,7 @@ export async function stopNow(id: string, waitMs = 3_000): Promise<boolean> {
   while (isRunning(useApp.getState().threads[id]) && Date.now() < until)
     await new Promise((r) => setTimeout(r, 100));
   if (isRunning(useApp.getState().threads[id])) {
+    settleStop(id, "forced", "stop_now");
     await closeThread(id);
     updateThread(id, (t) => (isRunning(t) ? finishTurn(t, "cancelled", Date.now()) : t));
   }
@@ -514,6 +602,9 @@ async function forceStopIfStuck(id: string, turnStartedAt: number | undefined): 
   forcingStops.add(id);
   try {
     await new Promise((resolve) => setTimeout(resolve, FORCE_STOP_MS));
+    // A Stop that never got out has nothing to force: the user was told, and presses Stop again.
+    const attempt = stopTrace(id).at(-1);
+    if (attempt && lastStage(attempt)?.stage === "failed") return;
     const now = useApp.getState();
     const thread = now.threads[id];
     // Ended, or a new turn began since: nothing is stuck.
@@ -521,6 +612,7 @@ async function forceStopIfStuck(id: string, turnStartedAt: number | undefined): 
     const engineStill = !isRunning(thread) && !!now.engineRunning[id];
     if (!sameTurn && !engineStill) return;
     toast("The turn did not stop, so it was ended.", "info");
+    settleStop(id, "forced", sameTurn ? "ignored_cancel" : "engine_still_running");
     await closeThread(id);
     updateThread(id, (t) => (isRunning(t) ? finishTurn(t, "cancelled", Date.now()) : t));
     useApp.setState((s) => {

@@ -30,6 +30,8 @@ export const Method = {
   threadDeleted: "_rustcode/threads/deleted",
   sessionPrompt: "session/prompt",
   sessionCancel: "session/cancel",
+  /** `session/cancel` with an answer: that the engine took it and where it went (acp/stop.rs). */
+  sessionStop: "_rustcode/session/stop",
   sessionSetConfigOption: "session/set_config_option",
   sessionUpdate: "session/update",
   requestPermission: "session/request_permission",

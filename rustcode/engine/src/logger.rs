@@ -1224,6 +1224,14 @@ const ALLOWED_EVENT_FIELDS: &[(&str, &[&str])] = &[
         "harness.turn_silent",
         &["harness", "native_session_id", "timeout_ms"],
     ),
+    // A Stop, by the app's attempt id (`acp/stop.rs`, issue 4086).
+    ("stop.received", &["attempt", "via"]),
+    ("stop.delivered", &["attempt", "via", "route", "active"]),
+    ("stop.harness_cancel", &["harness", "attempt"]),
+    (
+        "stop.harness_stopped",
+        &["harness", "attempt", "outcome", "elapsed_ms"],
+    ),
     (
         "subagent.spawn",
         &[

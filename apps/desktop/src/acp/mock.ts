@@ -1086,10 +1086,11 @@ export class MockEngine {
         }
         return { configOptions: configOptions(thread, this.harnesses) };
       }
-      case "session/cancel": {
+      case "session/cancel":
+      case "_rustcode/session/stop": {
         const run = this.running.get(str(params.sessionId) ?? "");
         if (run) run.cancelled = true;
-        return null;
+        return method === "session/cancel" ? null : { route: "builtin", active: !!run };
       }
       case "session/prompt":
         return this.prompt(params);

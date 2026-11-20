@@ -58,6 +58,7 @@ import { useMachineReconnecting } from "../state/machines";
 import { type MentionNode, type MentionSection, mentionNodes, rankMachines } from "../state/mentionDrawer";
 import { noteRecentFile, recentFiles, recentFirst } from "../state/recentFiles";
 import { scheduledSummary, scheduleRefusalText } from "../state/schedule";
+import { useStops } from "../state/stopTrace";
 import {
   acceptsImages,
   answerPermission,
@@ -117,7 +118,7 @@ import { LinkChip } from "./LinkChip";
 import { MachineSelector } from "./MachineSelector";
 import { ModelPicker } from "./ModelPicker";
 import { useMachineMentions } from "./machineMentions";
-import { cx, noTextHelpers, Pill, Tooltip } from "./primitives";
+import { cx, noTextHelpers, Pill, Spinner, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
 import { ScheduledMessages } from "./ScheduledMessages";
 import { SendLaterDialog } from "./SendLaterDialog";
@@ -439,6 +440,8 @@ export const Composer = memo(function Composer({
   });
   const images = acceptsImages(thread);
   const cancelReason = controlDisabledReason("cancel", thread?.harness?.capabilities, harnessName);
+  // A Stop in flight (state/stopTrace.ts): the button says so until the turn ends or the Stop fails.
+  const stopping = useStops((s) => !!thread?.id && !!s.pending[thread.id]);
   const cwd = thread?.cwd ?? projectCwd;
   const canSend = !!draft.trim() || hasExtras(extras);
   const mirror = useRef<HTMLDivElement>(null);
@@ -1357,10 +1360,11 @@ export const Composer = memo(function Composer({
                 )
               )}
               {running ? (
-                <Tooltip label={cancelReason ?? "Stop turn (Esc)"}>
+                <Tooltip label={cancelReason ?? (stopping ? "Stopping…" : "Stop turn (Esc)")}>
                   <button
                     type="button"
-                    aria-label="Stop turn"
+                    aria-label={stopping ? "Stopping…" : "Stop turn"}
+                    aria-busy={stopping || undefined}
                     disabled={!!cancelReason}
                     onClick={() => {
                       haptic("level");
@@ -1368,7 +1372,11 @@ export const Composer = memo(function Composer({
                     }}
                     className="flex size-9 items-center justify-center rounded-full bg-danger text-accent-fg hover:bg-danger/85 disabled:opacity-40 sm:size-8"
                   >
-                    <Square size={10} fill="currentColor" strokeWidth={0} />
+                    {stopping ? (
+                      <Spinner size={12} />
+                    ) : (
+                      <Square size={10} fill="currentColor" strokeWidth={0} />
+                    )}
                   </button>
                 </Tooltip>
               ) : queuedEdit ? null : (
