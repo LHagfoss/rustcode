@@ -78,6 +78,22 @@ describe("each harness's input_tokens, normalized", () => {
     });
   });
 
+  test("antigravity reports cache reads outside it, and its Gemini models are priced", () => {
+    // harness/acp_child.rs:110 reads inputTokens next to cachedReadTokens; a
+    // recorded turn caches more than its whole input, so it cannot be inside.
+    const neon = counts({ input: 1_613_128, cached: 24_039_326, cacheWrite: 0, output: 246_488 });
+    expect(normalize("antigravity", neon)).toEqual({
+      uncachedInput: 1_613_128,
+      cacheRead: 24_039_326,
+      cacheWrite: 0,
+      output: 246_488,
+    });
+    // 1.613128M at 3, 24.039326M at 0.15, 0.246488M at 15.
+    expect(estimateUsd("antigravity", "gemini-4-neon", neon)).toBeCloseTo(12.1426, 3);
+    expect(priceOf("gemini-4-argon")).toBeDefined();
+    expect(priceOf("gemini-3.8-flash")).toBeDefined();
+  });
+
   test("a harness whose semantics are unknown yields nothing, never a guess", () => {
     expect(normalize("gemini", counts({ input: 100, cached: 50, output: 10 }))).toBeUndefined();
     expect(normalize("opencode", counts({ input: 100, output: 10 }))).toBeUndefined();
@@ -124,7 +140,7 @@ describe("list prices", () => {
   });
 
   test("the table is dated", () => {
-    expect(PRICE_DATE).toBe("2026-11-12");
+    expect(PRICE_DATE).toBe("2026-11-20");
   });
 });
 
