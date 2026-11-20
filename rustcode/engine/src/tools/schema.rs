@@ -2696,8 +2696,8 @@ pub(crate) const OUTPUT_STYLE_VIZ_HINT: &str = "A rustcode-viz block replaces a 
 
 /// Added to [`OUTPUT_STYLE_PROMPT_HINT`] while Smart UI is on: the view carries the
 /// detail, so the text around it stays a line or two (its "a table" means a view's).
-pub(crate) const OUTPUT_STYLE_SMART_UI_HINT: &str =
-    "Be brief: a few short lines, not paragraphs; the view carries the detail.\n";
+pub(crate) const OUTPUT_STYLE_SMART_UI_HINT: &str = "Be brief: a few short lines, not paragraphs; the view carries the detail. \
+In views, link GitHub issues and PRs with an HTML anchor whose href is the full GitHub URL.\n";
 
 /// The output-style text for a frontend. With Smart UI on the agent is taught
 /// views instead of `rustcode-viz`; otherwise it depends on the viz level.

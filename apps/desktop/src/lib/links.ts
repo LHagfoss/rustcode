@@ -77,10 +77,11 @@ export interface GitHubRef {
   number: number;
 }
 
+export const GITHUB_REF_URL =
+  /^https:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/(pull|issues)\/(\d+)(?:[/?#]|$)/i;
+
 export function githubRefOf(url: string): GitHubRef | undefined {
-  const match = /^https:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/(pull|issues)\/(\d+)(?:[/?#]|$)/i.exec(
-    url,
-  );
+  const match = GITHUB_REF_URL.exec(url);
   const number = Number(match?.[3]);
   if (!match || !Number.isSafeInteger(number) || number <= 0) return undefined;
   return { repo: match[1] ?? "", kind: match[2]?.toLowerCase() === "pull" ? "pull" : "issue", number };

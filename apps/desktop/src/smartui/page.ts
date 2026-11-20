@@ -4,6 +4,7 @@
 // the block names `rustcode-lib:chart.js`. The names here are a contract
 // with the engine's `smart-ui` skill (docs/smart-ui.md, "Runtime").
 
+import { GITHUB_REF_URL } from "../lib/links";
 import { KIT_SCRIPT } from "./kit";
 import { stripEmptyTags } from "./parse";
 import { expandShorthand } from "./shorthand";
@@ -138,6 +139,13 @@ h1 { font-size: var(--rc-text-size-title); }
 p + p { margin-top: 8px; }
 small, .rc-muted { color: var(--rc-muted); }
 a { color: var(--rc-accent); }
+a.rc-github-chip { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle;
+  max-width: 100%; padding: 0 5px; border-radius: 999px; color: var(--rc-text);
+  background: var(--rc-surface); box-shadow: inset 0 0 0 1px var(--rc-separator);
+  font-size: var(--rc-text-size-sm); text-decoration: none; }
+a.rc-github-chip:hover { text-decoration: underline; }
+.rc-github-chip > svg { width: 12px; height: 12px; flex: none; }
+.rc-github-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 table { border-collapse: collapse; width: 100%; font-size: var(--rc-text-size-sm); }
 th { text-align: left; font-weight: 600; color: var(--rc-muted); padding: 5px 8px;
   border-bottom: 1px solid var(--rc-separator); }
@@ -703,6 +711,31 @@ ${KIT_SCRIPT}
     for (const el of document.querySelectorAll(RC_PRESSABLE)) {
       if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
       if (!el.hasAttribute("role")) el.setAttribute("role", "button");
+    }
+    for (const link of document.querySelectorAll("a[href]:not(.rc-github-chip)")) {
+      const href = link.getAttribute("href");
+      const ref = ${GITHUB_REF_URL}.exec(href);
+      const number = Number(ref?.[3]);
+      if (!ref || !Number.isSafeInteger(number) || number <= 0) continue;
+      const pull = ref[2].toLowerCase() === "pull";
+      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      icon.setAttribute("viewBox", "0 0 24 24");
+      icon.setAttribute("aria-hidden", "true");
+      icon.setAttribute("fill", "none");
+      icon.setAttribute("stroke", "currentColor");
+      icon.setAttribute("stroke-width", "2");
+      icon.innerHTML = pull
+        ? '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v6m7-9h2a3 3 0 0 1 3 3v6"/>'
+        : '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/>';
+      const label = document.createElement("span");
+      if (!link.textContent.trim() || link.textContent.trim() === href) {
+        label.textContent = (pull ? "PR #" : "Issue #") + number;
+      } else {
+        label.append(...link.childNodes);
+      }
+      if (!link.hasAttribute("title")) link.title = href;
+      link.replaceChildren(icon, label);
+      link.classList.add("rc-github-chip");
     }
     // A sources fold says how many it holds and which site each link is on.
     for (const sources of document.querySelectorAll("details.rc-sources")) {
