@@ -126,7 +126,11 @@ async fn read(program: &Path, env: &[(String, String)]) -> Read {
     let said = said(&report.stdout, &report.stderr);
     if !report.status.success() {
         return Err(with_said(
-            "Antigravity CLI could not read the quota. Check its sign-in, then press Refresh.",
+            &format!(
+                "Antigravity CLI ({}) could not read the quota. Check its sign-in, then press \
+                 Refresh.",
+                program.display()
+            ),
             said.as_deref(),
         ));
     }
