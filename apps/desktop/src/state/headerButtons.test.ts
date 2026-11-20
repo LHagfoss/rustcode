@@ -14,17 +14,19 @@ describe("header buttons sanitising", () => {
   test("the hand-driven git buttons are hidden by default", () => {
     expect(DEFAULT_HEADER_BUTTONS).toEqual(ids("status", "plan", "terminal", "details"));
     // Still buttons the setting lists, so each can be shown.
-    for (const id of ids("git", "actions", "pulls", "changes")) expect(HEADER_BUTTON_IDS).toContain(id);
+    for (const id of ids("git", "actions")) expect(HEADER_BUTTON_IDS).toContain(id);
   });
 
-  test("a layout saved with Pull requests shown keeps it", () => {
-    const shown = ids("status", "pulls", "changes");
-    expect(sanitizeHeaderButtons({ shown, known: [...HEADER_BUTTON_IDS] })).toEqual(shown);
-    // Saved before `known` existed: nothing is re-added or removed.
-    expect(sanitizeHeaderButtons({ shown: ids("pulls", "plan") })).toEqual(ids("pulls", "plan"));
+  test("Changes and Pull requests left the header for the panel's tabs", () => {
+    // A layout saved with them shown keeps the rest of its order.
+    const shown = ids("status", "pulls", "git", "changes", "details");
+    const known = [...HEADER_BUTTON_IDS, ...ids("pulls", "changes")];
+    expect(sanitizeHeaderButtons({ shown, known })).toEqual(ids("status", "git", "details"));
+    // Saved before `known` existed: nothing is re-added.
+    expect(sanitizeHeaderButtons({ shown: ids("pulls", "plan") })).toEqual(ids("plan"));
   });
 
-  test("a layout saved with the old defaults keeps Pull requests, and a reset hides it", () => {
+  test("a layout saved with every button keeps them, and a reset hides the git ones", () => {
     const old = [...HEADER_BUTTON_IDS];
     expect(sanitizeHeaderButtons({ shown: old, known: old })).toEqual(old);
     expect(sameHeaderButtons(old, DEFAULT_HEADER_BUTTONS)).toBe(false);
@@ -37,17 +39,17 @@ describe("header buttons sanitising", () => {
   });
 
   test("a saved order is kept as it is", () => {
-    const shown = ids("changes", "status", "terminal");
+    const shown = ids("details", "status", "terminal");
     expect(sanitizeHeaderButtons({ shown, known: [...HEADER_BUTTON_IDS] })).toEqual(shown);
   });
 
   test("unknown ids and duplicates are dropped", () => {
     expect(
       sanitizeHeaderButtons({
-        shown: ["nope", "plan", "plan", 7, "plan", "changes"],
+        shown: ["nope", "plan", "plan", 7, "plan", "changes", "details"],
         known: [...HEADER_BUTTON_IDS],
       }),
-    ).toEqual(ids("plan", "changes"));
+    ).toEqual(ids("plan", "details"));
   });
 
   test("every button hidden is a valid choice", () => {
@@ -55,17 +57,15 @@ describe("header buttons sanitising", () => {
   });
 
   test("a button added in a later release shows by default, after the arranged ones", () => {
-    // Saved before `details` and `changes` existed.
+    // Saved before `details` existed.
     const stored = { shown: ids("terminal", "plan"), known: ids("status", "plan", "pulls", "terminal") };
-    expect(sanitizeHeaderButtons(stored)).toEqual(
-      ids("terminal", "plan", "git", "actions", "details", "changes"),
-    );
+    expect(sanitizeHeaderButtons(stored)).toEqual(ids("terminal", "plan", "git", "actions", "details"));
   });
 
   test("project actions show for a layout saved before they existed", () => {
     const known = HEADER_BUTTON_IDS.filter((id) => id !== "actions");
-    expect(sanitizeHeaderButtons({ shown: ids("status", "changes"), known })).toEqual(
-      ids("status", "changes", "actions"),
+    expect(sanitizeHeaderButtons({ shown: ids("status", "details"), known })).toEqual(
+      ids("status", "details", "actions"),
     );
   });
 
