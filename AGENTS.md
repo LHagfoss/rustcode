@@ -186,7 +186,10 @@ profile and stale dependency version leaves artifacts behind.
   `type "<text>"`, `press <key>`, `hover "<css>" [--wait <ms>]` (prints what
   opened), `drag "<from css>" "<to css>" [--steps <n>]`, `scroll "<css>" <dy>`,
   `dblclick "<css>"` and `move <x>,<y>` (off an element, to dismiss it).
-  `eval "<js>"` evaluates in the page and `screenshot <file.png>` saves a PNG.
+  `eval "<js>"` evaluates in the page (top-level `await` works) and
+  `screenshot <file.png>` saves a PNG; `--selector "<css>"` crops it to that
+  element and `--clip <x>,<y>,<w>,<h>` to a viewport rectangle, so no image
+  tool is needed.
 - To stage a state the mock does not reach (a finished thread, an update in
   progress, a Settings page), evaluate `await import("/src/state/store.ts")`
   (or `updates.ts`) in the page and set state on it. The window is
