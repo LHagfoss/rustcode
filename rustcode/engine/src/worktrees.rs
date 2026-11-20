@@ -1290,6 +1290,83 @@ pub(crate) async fn cleanup_resolving_rename(
     .await
 }
 
+/// Whether a thread's worktree is due for cleanup after its linked pull
+/// request merged: only when the worktree sits exactly at the merged head, so
+/// a pull request the thread merely linked (another thread's, or one it
+/// reviews) never removes its own work, and neither does a commit made after
+/// the merge.
+pub(crate) fn merged_cleanup_due(
+    snapshot: &crate::pull_watch::Snapshot,
+    worktree_head: &str,
+) -> bool {
+    snapshot.state == "merged"
+        && !snapshot.head.trim().is_empty()
+        && snapshot.head.trim() == worktree_head.trim()
+}
+
+/// Clean up the worktrees of threads whose own pull request merged, without
+/// waiting for an agent to call `cleanup_worktree`: threads forgot to, and
+/// merged worktrees piled up. It runs the same [`cleanup`], so a dirty
+/// worktree, unpushed commits or ignored files that are not build output
+/// still refuse it, and the thread moves back to its repository. A thread
+/// with a turn running or waiting on the user is left for a later round;
+/// every other thread is tried once per engine, so a refusal is not retried
+/// every 30 seconds.
+pub(crate) async fn clean_merged(
+    watches: &[crate::pull_watch::Watch],
+    tried: &mut std::collections::HashSet<String>,
+) {
+    use crate::thread_status::Status;
+    for watch in watches {
+        let Some(snapshot) = watch.snapshot.as_ref() else {
+            continue;
+        };
+        if snapshot.state != "merged" || tried.contains(&watch.session_id) {
+            continue;
+        }
+        let Some(worktree) = of_session(&watch.session_id) else {
+            continue;
+        };
+        if matches!(
+            crate::thread_status::current(&watch.session_id),
+            Status::Running | Status::NeedsInput
+        ) {
+            continue;
+        }
+        tried.insert(watch.session_id.clone());
+        let probe = worktree.path.clone();
+        let head = tokio::task::spawn_blocking(move || git_line(&probe, &["rev-parse", "HEAD"]))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        if !merged_cleanup_due(snapshot, &head) {
+            continue;
+        }
+        let cleaned = cleanup_resolving_rename(
+            worktree.path.clone(),
+            Some(worktree.branch.clone()),
+            Some(snapshot.head.clone()),
+            true,
+        )
+        .await;
+        let outcome = match &cleaned {
+            Ok(Ok(_)) => "removed",
+            Ok(Err(refusal)) => refusal.reason,
+            Err(_) => "failed",
+        };
+        crate::logger::operational_event(
+            "worktree.auto_cleanup",
+            json!({
+                "session_id": watch.session_id,
+                "pull_request": watch.number,
+                "branch": worktree.branch,
+                "outcome": outcome,
+            }),
+        );
+    }
+}
+
 /// Remove a merged delegate's worktree and branch (#3153), refusing when the
 /// worktree is dirty, its commits are not on the base branch, it is on a
 /// different branch than the caller named, or it holds ignored files that are
@@ -2062,6 +2139,26 @@ pub(crate) mod tests {
         git(&repo, &["add", "-A"]).unwrap();
         git(&repo, &["commit", "-q", "-m", "init"]).unwrap();
         (dir, repo)
+    }
+
+    #[test]
+    fn only_a_worktree_at_its_merged_head_is_cleaned_up() {
+        let snapshot = |state: &str, head: &str| crate::pull_watch::Snapshot {
+            state: state.to_owned(),
+            head: head.to_owned(),
+            ..Default::default()
+        };
+        assert!(merged_cleanup_due(
+            &snapshot("merged", "abc123"),
+            "abc123\n"
+        ));
+        // Still open or closed unmerged: the work is not on the base.
+        assert!(!merged_cleanup_due(&snapshot("open", "abc123"), "abc123"));
+        assert!(!merged_cleanup_due(&snapshot("closed", "abc123"), "abc123"));
+        // Another thread's pull request, or a commit made after the merge.
+        assert!(!merged_cleanup_due(&snapshot("merged", "abc123"), "def456"));
+        // A head that could not be read never matches.
+        assert!(!merged_cleanup_due(&snapshot("merged", ""), ""));
     }
 
     fn rand_suffix() -> u64 {

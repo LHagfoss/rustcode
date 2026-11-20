@@ -147,6 +147,16 @@ pull request merged and the thread runs in a worktree, the thread becomes
 `done`. Without a watch nothing polls GitHub; `manage_pull_links` (below) is
 how a thread starts one without the app.
 
+The same check also cleans up a merged thread's worktree on its own, so
+nobody has to call `cleanup_worktree`. That happens only when the worktree
+sits exactly at the merged head, and only once no turn is running and the
+thread is not waiting on the user. It runs the same safe cleanup as
+`cleanup_worktree`: a dirty worktree, unpushed commits or stray ignored files
+still refuse it. The worktree and its branch are removed and the thread moves
+back to its repository. Each attempt is logged as a `worktree.auto_cleanup`
+operational event with its `outcome`, and each thread is tried once per
+engine run.
+
 ### Paired machines and snooze
 
 The desktop sends status changes to the thread's owning machine using its

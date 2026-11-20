@@ -135,6 +135,7 @@ pub(super) fn start_pull_watching(clients: &clients::Clients) {
     tokio::spawn(async move {
         let mut lease = None;
         let mut announced = std::collections::HashMap::new();
+        let mut cleaned = std::collections::HashSet::new();
         loop {
             if lease.is_none() {
                 lease = store.lease();
@@ -165,6 +166,9 @@ pub(super) fn start_pull_watching(clients: &clients::Clients) {
                     );
                 })
                 .await;
+                // A worktree thread whose own pull request merged no longer
+                // needs its checkout: remove it, as `cleanup_worktree` would.
+                crate::worktrees::clean_merged(&store.load(), &mut cleaned).await;
             }
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }
