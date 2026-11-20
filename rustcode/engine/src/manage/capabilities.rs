@@ -166,13 +166,13 @@ impl Op {
     /// The command a person runs for the same change.
     fn hint(&self) -> String {
         match self {
-            Self::List(kind) => format!("rustcode {kind} list"),
+            Self::List(kind) => format!("rc {kind} list"),
             Self::Toggle {
                 kind,
                 name,
                 enabled,
             } => format!(
-                "rustcode {kind} {} {name}",
+                "rc {kind} {} {name}",
                 if *enabled { "enable" } else { "disable" }
             ),
             Self::Restart(name) => format!("rc mcp restart {name}"),
