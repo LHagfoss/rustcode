@@ -23,11 +23,11 @@ import {
   Ellipsis,
   FilePlus2,
   FolderOpen,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
   Sparkles,
-  SquarePen,
   Trash2,
 } from "./icons";
 import { cardInset, cx, MenuContent, menuItem, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
@@ -459,7 +459,7 @@ function McpSection({
                 aria-label="Edit the config file"
                 onClick={() => openPath(data.configPath!)}
               >
-                <SquarePen size={12} /> Edit config
+                <Pencil size={12} /> Edit config
               </Action>
             </Tooltip>
           )}
@@ -968,7 +968,7 @@ function SkillRow({
           <MenuContent align="end" className="min-w-[200px]">
             {files && !s.readOnly && (
               <DropdownMenu.Item className={menuItem} onSelect={() => openPath(skillFile(s.path))}>
-                <SquarePen size={13} /> Edit SKILL.md
+                <Pencil size={13} /> Edit SKILL.md
               </DropdownMenu.Item>
             )}
             {files && (

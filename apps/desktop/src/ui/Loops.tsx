@@ -33,17 +33,7 @@ import { selectThread } from "../state/threadOpen";
 import { statusOf } from "../state/threadStatus";
 import { setView } from "../state/viewActions";
 import { ViewHeader } from "./Board";
-import {
-  ArrowUpRight,
-  ChevronRight,
-  Ellipsis,
-  Play,
-  Plus,
-  Repeat,
-  SquarePen,
-  Trash2,
-  Webhook,
-} from "./icons";
+import { ArrowUpRight, ChevronRight, Ellipsis, Pencil, Play, Plus, Repeat, Trash2, Webhook } from "./icons";
 import { LoopDialog } from "./LoopDialog";
 import {
   Callout,
@@ -274,7 +264,7 @@ function LoopRow({
             disabled={running}
             onClick={onEdit}
           >
-            <SquarePen size={14} />
+            <Pencil size={14} />
           </IconAction>
           <IconAction
             label={loop.paused ? "Resume it to run now" : "Run now"}
