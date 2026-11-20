@@ -83,6 +83,7 @@ impl RequestHandler {
                         database_path: self.database_path.clone(),
                         active_runs,
                         next_wake_at,
+                        version: Some(super::protocol::DAEMON_VERSION.to_owned()),
                     },
                 });
             }

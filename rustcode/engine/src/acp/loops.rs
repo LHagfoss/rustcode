@@ -205,7 +205,40 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
 }
 
 pub(crate) async fn list() -> Result<Value, String> {
+    // The page still lists what an old scheduler holds; the next save says why it waits.
+    let _ = current_daemon().await;
     list_with(&client()?).await
+}
+
+/// Whether a scheduler that reports `version` runs this build's job format.
+fn daemon_is_current(version: Option<&str>) -> bool {
+    version == Some(crate::daemon::protocol::DAEMON_VERSION)
+}
+
+/// Restart a scheduler that an older RustCode started. It keeps running across
+/// app updates, and an older build drops the job fields it does not know, such
+/// as a Loop's account, from every save. One with a run going is left alone,
+/// and the save is refused instead of losing what the user chose.
+async fn current_daemon() -> Result<(), String> {
+    let lifecycle = lifecycle()?;
+    let Ok(Some(status)) = lifecycle.status().await else {
+        return Ok(());
+    };
+    if daemon_is_current(status.version.as_deref()) {
+        return Ok(());
+    }
+    if status.active_runs > 0 {
+        return Err(
+            "The scheduler is from an older RustCode and would drop some of these settings. \
+             Save again once its run ends, and it restarts on the new version."
+                .to_owned(),
+        );
+    }
+    lifecycle
+        .stop()
+        .await
+        .map_err(|error| format!("the scheduler did not stop to update: {error}"))?;
+    start_daemon().await.map(|_| ())
 }
 
 async fn list_with(client: &DaemonClient) -> Result<Value, String> {
@@ -370,6 +403,7 @@ pub(crate) async fn save(request: LoopsSaveRequest) -> Result<Value, String> {
     if let Some(machine) = trimmed(request.machine.clone()) {
         member_of_this_hub(&machine)?;
     }
+    current_daemon().await?;
     let mut answer = save_with(&client()?, request).await?;
     if let (Some(id), Some(secret)) = (
         answer["loop"]["id"].as_str(),
@@ -593,6 +627,16 @@ mod tests {
             rotate_webhook: false,
             machine: None,
         }
+    }
+
+    #[test]
+    fn only_a_scheduler_on_this_version_is_current() {
+        assert!(daemon_is_current(Some(
+            crate::daemon::protocol::DAEMON_VERSION
+        )));
+        // A scheduler from before the version field, or from another release.
+        assert!(!daemon_is_current(None));
+        assert!(!daemon_is_current(Some("0.0.1")));
     }
 
     #[test]

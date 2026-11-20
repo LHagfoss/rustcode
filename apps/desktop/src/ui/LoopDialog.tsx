@@ -411,6 +411,14 @@ export function LoopDialog({
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
           <Dialog.Content
             aria-describedby={undefined}
+            // Radix focuses the first field with its text selected, so one keystroke would
+            // replace an existing job's name. An edit opens with nothing focused; a new job
+            // starts in its empty Name field.
+            onOpenAutoFocus={(e) => {
+              if (!loop) return;
+              e.preventDefault();
+              (e.currentTarget as HTMLElement).focus({ preventScroll: true });
+            }}
             className="elevated pointer-events-auto flex max-h-[calc(100%-48px)] w-[min(580px,calc(100vw-48px))] flex-col overflow-hidden"
           >
             {madeWebhook ? (
@@ -773,13 +781,14 @@ export function LoopDialog({
                       onChange={(readOnly) => patch({ readOnly })}
                     />
                   </Section>
+                </div>
+                <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-5 py-3">
+                  {/* In the footer, not under the form: a refused save is seen without scrolling. */}
                   {error && (
-                    <p role="alert" className="text-callout text-danger">
+                    <p role="alert" className="mr-auto min-w-0 text-caption text-danger">
                       {error}
                     </p>
                   )}
-                </div>
-                <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3">
                   <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
                   <Pill prominent disabled={!ready || saving} onClick={() => void save()}>
                     {saving ? "Saving…" : loop ? "Save changes" : "Schedule job"}

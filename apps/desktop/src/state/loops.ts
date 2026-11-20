@@ -699,12 +699,19 @@ export async function startScheduler(): Promise<void> {
  * Which loop each thread a run started or ran in belongs to, by thread id: the sidebar's Loop badge.
  * `runs`: the threads a run started fresh, which live in the Scheduled Jobs view and not the sidebar.
  */
-export const useLoopThreads = create<{ byThread: Record<string, string>; runs: Record<string, true> }>(
-  () => ({
-    byThread: {},
-    runs: {},
-  }),
-);
+export const useLoopThreads = create<{
+  byThread: Record<string, string>;
+  runs: Record<string, true>;
+  /** The loop id each run's thread belongs to, so a run thread can lead back to its job. */
+  loopOf: Record<string, string>;
+  /** The job the Scheduled Jobs view opens on: shown expanded, once. */
+  reveal: string | null;
+}>(() => ({
+  byThread: {},
+  runs: {},
+  loopOf: {},
+  reveal: null,
+}));
 
 /**
  * The threads fresh runs started, by id. A loop that sends every run to one thread leaves that
@@ -740,11 +747,22 @@ export function loopThreadNames(loops: readonly Loop[]): Record<string, string> 
   return byThread;
 }
 
+/** Every thread the loops' recorded runs went to, and the loop's id. */
+export function loopIdsByThread(loops: readonly Loop[]): Record<string, string> {
+  const byThread: Record<string, string> = {};
+  for (const loop of loops) {
+    if (loop.threadId) byThread[loop.threadId] = loop.id;
+    for (const run of loop.runs) if (run.threadId) byThread[run.threadId] = loop.id;
+  }
+  return byThread;
+}
+
 /** Keep the sidebar's Loop badges in step with a list the page or a refresh read. */
 export function rememberLoops(snapshot: LoopsSnapshot): void {
   useLoopThreads.setState({
     byThread: loopThreadNames(snapshot.loops),
     runs: loopRunThreads(snapshot.loops),
+    loopOf: loopIdsByThread(snapshot.loops),
   });
 }
 

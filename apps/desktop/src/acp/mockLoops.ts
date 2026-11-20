@@ -68,7 +68,7 @@ function seed(): JsonObject[] {
       nextDueAt: ahead(0.3),
       runs: [
         { ...done("run-red-2", 0.2), quiet: true, silent: true },
-        done("run-red-1", 0.7, "mock-loop-ci-3"),
+        done("run-red-1", 0.7),
       ],
     },
     {

@@ -1118,6 +1118,32 @@ export function seedThreads(): MockThread[] {
         }),
       ],
     },
+    // A scheduled job's run (mockLoops.ts › CI watch): kept out of the sidebar, opened from its job.
+    {
+      id: "mock-loop-ci-3",
+      cwd: "/Users/you/code/rustcode",
+      title: "CI watch",
+      updatedAt: minutes(150),
+      harness: "codex",
+      model: "gpt-6-luna",
+      effort: "medium",
+      checkpoints: [],
+      history: [
+        update("mock-loop-ci-3", {
+          sessionUpdate: "user_message_chunk",
+          content: text(
+            "Check CI on main. Tell me only if something broke, with the failing job and its first error.",
+          ),
+        }),
+        update("mock-loop-ci-3", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "`lint` failed on main at 14:02: `biome` found an unused import in `src/ui/Loops.tsx:9`.",
+          ),
+          ...turn(9000),
+        }),
+      ],
+    },
     {
       id: "mock-quiet-5",
       cwd: "/Users/you/code/rustcode",

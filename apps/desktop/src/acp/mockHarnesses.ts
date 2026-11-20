@@ -103,6 +103,12 @@ export function initialHarnesses(onboarded: boolean): HarnessSnapshot {
             config_dir: "~/.codex-paral",
             auth: "ok",
           },
+          {
+            id: "personal-1",
+            name: "Personal 1",
+            config_dir: "~/.codex-personal-1",
+            auth: "ok",
+          },
         ],
         // The Mac's own Codex home, which no account names yet.
         discovered_accounts: [{ config_dir: "~/.codex", suggested_name: "Codex" }],

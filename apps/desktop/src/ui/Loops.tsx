@@ -5,7 +5,7 @@
 // prompt and run history. Review lists what loops did on their own that is still worth a look.
 
 import { DropdownMenu } from "radix-ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type HarnessSnapshot, Method, projectName } from "../acp/types";
 import {
   agoText,
@@ -26,12 +26,24 @@ import {
   scheduleInWords,
   setLoopPaused,
   startScheduler,
+  useLoopThreads,
 } from "../state/loops";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { selectThread } from "../state/threadOpen";
 import { statusOf } from "../state/threadStatus";
+import { setView } from "../state/viewActions";
 import { ViewHeader } from "./Board";
-import { ChevronRight, Ellipsis, Play, Plus, Repeat, SquarePen, Trash2, Webhook } from "./icons";
+import {
+  ArrowUpRight,
+  ChevronRight,
+  Ellipsis,
+  Play,
+  Plus,
+  Repeat,
+  SquarePen,
+  Trash2,
+  Webhook,
+} from "./icons";
 import { LoopDialog } from "./LoopDialog";
 import {
   Callout,
@@ -63,6 +75,16 @@ const STATE_BADGE: Record<ReturnType<typeof loopState>, { label: string; tint: s
   paused: { label: "Paused", tint: "bg-fg-faint" },
   active: { label: "Scheduled", tint: "bg-success" },
 };
+
+/** Open the Scheduled Jobs view on one job, expanded: the way back from one of its runs. */
+export function showJob(id: string): void {
+  useLoopThreads.setState({ reveal: id });
+  setView({ kind: "loops" });
+}
+
+/** The thread a run went to on this computer; a hub Loop's thread is on its member. */
+const runThread = (run: { machine?: string; threadId?: string } | undefined) =>
+  run && !run.machine ? run.threadId : undefined;
 
 const TONE: Record<"ok" | "bad" | "muted", string> = {
   ok: "text-fg-muted",
@@ -164,6 +186,8 @@ function LoopRow({
   const result = lastResult(loop, now);
   const reason = pauseReason(loop);
   const running = state === "running";
+  // The latest run's thread, opened from the row like any thread.
+  const lastThread = running ? undefined : runThread(loop.runs[0]);
   const next = !loop.paused && loop.nextDueAt !== undefined ? loop.nextDueAt : undefined;
   // A loop with no schedule but a webhook is waiting for a call, not unscheduled.
   const waiting = state === "active" && next === undefined && listening(loop);
@@ -175,7 +199,7 @@ function LoopRow({
         : "Unscheduled"
       : badge.label;
   return (
-    <li className="flex flex-col rounded-lg bg-surface">
+    <li data-loop={loop.id} className="flex flex-col rounded-lg bg-surface">
       <div className="flex flex-wrap items-center gap-x-2 px-3 py-2">
         <button
           type="button"
@@ -223,12 +247,35 @@ function LoopRow({
               {nextRunLine(loop, next, now)}
             </time>
           )}
-          <span title={result.text} className={cx("block truncate text-caption", TONE[result.tone])}>
-            {result.text}
-          </span>
+          {lastThread ? (
+            <Tooltip label="Open the last run">
+              <button
+                type="button"
+                onClick={() => selectThread(lastThread)}
+                className={cx(
+                  "group/last flex max-w-full items-center gap-1 rounded text-left text-caption hover:text-fg",
+                  TONE[result.tone],
+                )}
+              >
+                <span className="truncate underline-offset-2 group-hover/last:underline">{result.text}</span>
+                <ArrowUpRight size={12} className="shrink-0 opacity-60 group-hover/last:opacity-100" />
+              </button>
+            </Tooltip>
+          ) : (
+            <span title={result.text} className={cx("block truncate text-caption", TONE[result.tone])}>
+              {result.text}
+            </span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {running && <Spinner size={12} className="mr-1 text-fg-muted" />}
+          <IconAction
+            label={running ? "Edit it once the run ends" : "Edit"}
+            disabled={running}
+            onClick={onEdit}
+          >
+            <SquarePen size={14} />
+          </IconAction>
           <IconAction
             label={loop.paused ? "Resume it to run now" : "Run now"}
             disabled={running || loop.paused}
@@ -256,10 +303,14 @@ function LoopRow({
               </button>
             </DropdownMenu.Trigger>
             <MenuContent align="end">
-              <DropdownMenu.Item className={menuItem} disabled={running} onSelect={onEdit}>
-                <SquarePen size={13} className="text-fg-muted" /> Edit
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator className={menuSeparator} />
+              {lastThread && (
+                <>
+                  <DropdownMenu.Item className={menuItem} onSelect={() => selectThread(lastThread)}>
+                    <ArrowUpRight size={13} className="text-fg-muted" /> Open last run
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator className={menuSeparator} />
+                </>
+              )}
               <DropdownMenu.Item
                 className={cx(menuItem, menuItemDanger)}
                 onSelect={() =>
@@ -330,10 +381,9 @@ function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: stri
                       ? `Skipped: ${run.skipped}`
                       : "Stopped"
                     : `Failed${run.error ? `: ${run.error}` : ""}`;
-            // A hub Loop's thread is on its member, not in this computer's list.
-            const threadId = run.machine ? undefined : run.threadId;
-            return (
-              <li key={run.id} className="flex min-w-0 items-center gap-3 py-1 text-caption">
+            const threadId = runThread(run);
+            const body = (
+              <>
                 <span className="w-20 shrink-0 text-fg-faint">{agoText(at, now)}</span>
                 <span
                   className={cx(
@@ -343,10 +393,24 @@ function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: stri
                 >
                   {text}
                 </span>
-                {threadId && (
-                  <Pill size="sm" quiet onClick={() => selectThread(threadId)}>
-                    Open thread
-                  </Pill>
+              </>
+            );
+            // A run with a thread opens it from anywhere on its line, like a thread in the list.
+            return (
+              <li key={run.id} className="flex min-w-0">
+                {threadId ? (
+                  <button
+                    type="button"
+                    onClick={() => selectThread(threadId)}
+                    className="group/run -mx-2 flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-1 text-left text-caption hover:bg-fill-subtle"
+                  >
+                    {body}
+                    <span className="flex shrink-0 items-center gap-1 text-fg-faint group-hover/run:text-fg">
+                      Open <ArrowUpRight size={12} />
+                    </span>
+                  </button>
+                ) : (
+                  <div className="flex min-w-0 flex-1 items-center gap-3 py-1 text-caption">{body}</div>
                 )}
               </li>
             );
@@ -445,6 +509,21 @@ export function Loops() {
     if (data) rememberLoops(data);
   }, [data]);
 
+  // Opened from one of a job's runs: that job is shown expanded and scrolled to, once.
+  const reveal = useLoopThreads((s) => s.reveal);
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!reveal || !data?.loops.some((loop) => loop.id === reveal)) return;
+    setTab("loops");
+    setExpanded(reveal);
+    useLoopThreads.setState({ reveal: null });
+    requestAnimationFrame(() =>
+      listRef.current
+        ?.querySelector(`[data-loop="${CSS.escape(reveal)}"]`)
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+  }, [reveal, data]);
+
   const loops = data?.loops ?? [];
   const upcoming: Loop[] = [];
   const inactive: Loop[] = [];
@@ -515,7 +594,7 @@ export function Loops() {
           )}
         </div>
       </ViewHeader>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 pt-2 pb-8">
           {!data ? (
             <Loading error={error} onRetry={() => void reload()} />
