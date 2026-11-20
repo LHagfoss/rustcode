@@ -65,6 +65,11 @@ const THREAD_TOOLS = new Map([
   ["configure_thread", "configure_session"],
   ["transfer_thread", "transfer_session"],
   ["interrupt_thread", "interrupt_session"],
+  ["list_jobs", "list_scheduled_tasks"],
+  ["create_job", "create_loop"],
+  ["update_job", "update_loop"],
+  ["delete_job", "delete_scheduled_task"],
+  ["run_job", "run_scheduled_task_now"],
   ["list_loops", "list_scheduled_tasks"],
   ["delete_loop", "delete_scheduled_task"],
   ["run_loop", "run_scheduled_task_now"],
@@ -284,25 +289,21 @@ function orchestrationLabel(
     case "remove_project":
       return { title: "Removed project", summary: text(args.path) || undefined };
     case "create_loop":
-      return { title: "Created a loop", summary: text(args.name) || undefined };
+      return { title: "Created a job", summary: text(args.name) || undefined };
     case "update_loop":
       return {
         title:
-          args.paused === true
-            ? "Paused a loop"
-            : args.paused === false
-              ? "Resumed a loop"
-              : "Updated a loop",
+          args.paused === true ? "Paused a job" : args.paused === false ? "Resumed a job" : "Updated a job",
         summary: text(args.name) || text(args.id) || undefined,
       };
     case "schedule_task":
       return { title: "Scheduled a task", summary: text(args.name) || text(args.prompt) || undefined };
     case "list_scheduled_tasks":
-      return { title: "Listed loops" };
+      return { title: "Listed jobs" };
     case "delete_scheduled_task":
-      return { title: "Deleted a loop", summary: text(args.id) || undefined };
+      return { title: "Deleted a job", summary: text(args.id) || undefined };
     case "run_scheduled_task_now":
-      return { title: "Ran a loop", summary: text(args.id) || undefined };
+      return { title: "Ran a job", summary: text(args.id) || undefined };
     case "update_session":
       return { title: "Updated thread", summary: text(args.title) || text(args.status) || undefined };
     case "interrupt_session":

@@ -103,13 +103,23 @@ pub(crate) struct LoopsSetPausedRequest {
     pub paused: bool,
 }
 
-/// `_rustcode/loops/run`: run a Loop now, keeping its schedule.
+/// `_rustcode/loops/run`: run a job now, keeping its schedule.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
 )]
 #[request(method = "_rustcode/loops/run", response = serde_json::Value)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LoopsRunRequest {
+    pub id: String,
+}
+
+/// `_rustcode/loops/cancel`: stop an active run of a job.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/loops/cancel", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LoopsCancelRequest {
     pub id: String,
 }
 
@@ -588,6 +598,15 @@ async fn trigger_with(
 
 pub(crate) async fn set_paused(request: LoopsSetPausedRequest) -> Result<Value, String> {
     set_paused_with(&client()?, request).await
+}
+
+/// Stop an active run of `id`.
+pub(crate) async fn cancel(id: String) -> Result<Value, String> {
+    match ask(&client()?, DaemonRequest::Cancel { job_id: id.clone() }).await? {
+        DaemonResponse::Ack => Ok(json!({ "id": id, "cancelled": true })),
+        DaemonResponse::Error { message, .. } => Err(message),
+        other => Err(format!("the scheduler answered {other:?}")),
+    }
 }
 
 /// Partial update of an existing Loop, preserving untouched fields (including

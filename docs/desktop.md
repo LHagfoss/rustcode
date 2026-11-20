@@ -1200,29 +1200,32 @@ composer's keys stay outside the table.
   any harness, or in a worktree), board, review, mark for review, settle the
   open thread (unsettle it while it is settled),
   compare a fan-out, panels, every Settings page, appearance, restart.
-- **Loops**. The sidebar's *Loops* row (and ⌘K › *Show Loops*) opens
-  `ui/Loops.tsx`: prompts the scheduler daemon runs once, on a schedule, or
-  from a webhook, each run in a fresh thread (`docs/daemon.md` › Loops). Each
-  row says the schedule in words ("Every 4 hours", "Weekdays at 09:00"), the
-  project, the next run and the last result (including the run's one-line
-  verdict), with pause/resume, run now, edit and delete; a row opens its
-  prompt, agent and run history, each run linking to its thread. A loop the
-  daemon paused after three failed runs says why under its row. *Review*
-  lists the last seven days' failed runs and runs whose thread is still open
-  (not archived), showing each run's captured verdict; *Mark reviewed* clears
-  one (kept in app storage). *New loop* (`ui/LoopDialog.tsx`) offers quick
-  starter templates (CI watch, Security sweep, Issue triage, Perf & tech debt)
-  and takes a name, project, prompt, an optional script (script mode: the agent
-  starts only when it prints something), a schedule preset, a cron, manual, or
-  one time (*Once*: "in 2h", "at 09:00"), an optional webhook trigger, where
-  each run goes (a new thread each run, or one thread of the project) and the
-  agent (harness, model, effort), read-only by default. A run that found
-  nothing archives its thread and reads "Nothing to report"; one whose script
-  printed nothing reads "The script printed nothing". Threads a loop ran in
-  carry a badge in the sidebar (`ui/LoopBadge.tsx`, read from the loops list at
-  startup and every five minutes). With the daemon not running, the page says
-  so and offers *Start scheduler* (`_rustcode/loops/start_daemon`). The words,
-  states and review list are `state/loops.ts`; the mock serves five loops
+- **Jobs**. The sidebar's *Jobs* row (and ⌘K › *Show Jobs*) opens
+  `ui/Loops.tsx`: prompts the scheduler daemon runs once, on a schedule,
+  manually, or from a webhook, each run in a fresh thread or one chosen thread
+  (`docs/daemon.md` › Jobs). Each card puts the job's name, project, schedule
+  and latest outcome/verdict first with calm next-run timing underneath, and
+  expands across the full row header to show the prompt, pre-check script,
+  agent/access/timezone chips and timestamped run history with durations;
+  active runs show a **Stop** button (`_rustcode/loops/cancel`), and the
+  overflow menu holds Edit, Duplicate, Open last run and Delete. A job the
+  daemon paused after three failed runs (or immediately on a signed-out login)
+  says why under its row. *Review* lists the last seven days' failed runs and
+  runs whose thread is still open (not archived), showing each run's captured
+  verdict; *Mark reviewed* clears one (kept in app storage). *New job* / *Edit
+  job* (`ui/LoopDialog.tsx`) offers quick starter templates (CI watch, Security
+  sweep, Issue triage, Perf & tech debt) and takes a name, project, prompt, an
+  optional pre-check script (the agent starts only when it prints something), a
+  schedule preset (`Hourly`, `Daily`, `Monthly`, `Once`, `Cron`, `Manual`) with
+  a timezone selector, an optional webhook trigger, where each run goes (a new
+  thread each run, or one thread of the project) and the agent (harness,
+  account, model, effort), read-only by default. A run that found nothing
+  archives its thread and reads "Nothing to report"; one whose script printed
+  nothing reads "Script printed nothing". Threads a job ran in carry a badge in
+  the sidebar (`ui/LoopBadge.tsx`, read from the jobs list at startup and every
+  five minutes). With the daemon not running, the page says so and offers
+  *Start scheduler* (`_rustcode/loops/start_daemon`). The words, states and
+  review list are `state/loops.ts`; the mock serves five jobs
   (`acp/mockLoops.ts`).
 - **Sidebar.** A *Needs you* row above the list opens the inbox
   (`ui/Inbox.tsx`, `state/inbox.ts`) and is drawn only while something waits

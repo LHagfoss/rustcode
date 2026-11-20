@@ -232,7 +232,7 @@ async fn ask(client: &DaemonClient, request: DaemonRequest) -> Result<DaemonResp
 
 /// Why nothing scheduled runs, and how to start it: what a refused call and an
 /// empty list say.
-pub(crate) const DAEMON_STOPPED: &str = "loops cannot run because the RustCode scheduler is stopped; ask the user to start it from Loops in the RustCode app, or run `rc daemon start`";
+pub(crate) const DAEMON_STOPPED: &str = "jobs cannot run because the RustCode scheduler is stopped; ask the user to start it from Jobs in the RustCode app, or run `rc daemon start`";
 
 pub(crate) async fn list() -> Result<Value, String> {
     list_with(&client()?).await
@@ -519,7 +519,7 @@ mod tests {
             let answer = list_with(&client).await.unwrap();
             assert_eq!(answer["daemon_running"], false);
             assert!(answer["tasks"].as_array().unwrap().is_empty());
-            assert!(answer["hint"].as_str().unwrap().contains("Loops"));
+            assert!(answer["hint"].as_str().unwrap().contains("Jobs"));
             let created = create_with(
                 &client,
                 create_job(

@@ -1,16 +1,20 @@
-// Loops (issues 3892, 3937): prompts the scheduler daemon runs once, on a schedule, or from a
-// webhook, each run in a fresh thread (docs/daemon.md › Loops). Reached from the sidebar's Loops
-// row. The list says when each loop runs, when next and how its last run went, with pause/resume,
-// run now, edit and delete; a row opens its prompt and run history. Review lists what loops did on
-// their own that is still worth a look.
+// Jobs (issues 3892, 3937): prompts the scheduler daemon runs once, on a schedule, manually, or
+// from a webhook, each run in a fresh thread or one chosen thread (docs/daemon.md › Jobs). Reached
+// from the sidebar's Jobs row. Each card puts the job's name, cadence and latest outcome first,
+// keeps next-run timing calm underneath, and expands cleanly across the full row to show the
+// prompt, agent details and timestamped run history. Review lists failed runs and open threads.
 
 import { DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type HarnessSnapshot, Method, projectName } from "../acp/types";
+import { lastAccountFor } from "../state/harnessActions";
+import { newThreadAccountOn } from "../state/logins";
 import {
   agoText,
+  cancelLoopRun,
   deleteLoop,
   type Loop,
+  type LoopRun,
   lastResult,
   loadReviewed,
   loopState,
@@ -21,7 +25,9 @@ import {
   type ReviewItem,
   rememberLoops,
   reviewItems,
+  runDurationText,
   runLoopNow,
+  runTimestampText,
   saveReviewed,
   scheduleInWords,
   setLoopPaused,
@@ -33,7 +39,20 @@ import { selectThread } from "../state/threadOpen";
 import { statusOf } from "../state/threadStatus";
 import { setView } from "../state/viewActions";
 import { ViewHeader } from "./Board";
-import { ArrowUpRight, ChevronRight, Ellipsis, Pencil, Play, Plus, Repeat, Trash2, Webhook } from "./icons";
+import {
+  ArrowUpRight,
+  ChevronRight,
+  Copy,
+  Ellipsis,
+  Pencil,
+  Play,
+  Plus,
+  Repeat,
+  SquareStop,
+  Terminal,
+  Trash2,
+  Webhook,
+} from "./icons";
 import { LoopDialog } from "./LoopDialog";
 import {
   Callout,
@@ -51,47 +70,51 @@ import {
 } from "./primitives";
 import { Loading, useEngineData } from "./settingsKit";
 
-/** How often the open page asks again, so a run going or ending shows without a click. */
-const REFRESH_MS = 30_000;
+/** Poll quickly while a run is active; rest at 30s when idle. */
+const IDLE_REFRESH_MS = 30_000;
+const RUNNING_REFRESH_MS = 5_000;
 
-type Tab = "loops" | "review";
+type Tab = "jobs" | "review";
 
-/** A loop that is not paused and has a webhook: a call can start it at any time. */
+/** A job that is not paused and has a webhook: a call can start it at any time. */
 const listening = (loop: Loop) => !loop.paused && loop.webhook;
 
-const STATE_BADGE: Record<ReturnType<typeof loopState>, { label: string; tint: string }> = {
-  running: { label: "Running", tint: "bg-accent" },
-  failing: { label: "Paused", tint: "bg-danger" },
-  paused: { label: "Paused", tint: "bg-fg-faint" },
-  active: { label: "Scheduled", tint: "bg-success" },
-};
-
-/** Open the Loops view on one loop, expanded: the way back from one of its runs. */
+/** Open the Jobs view on one job, expanded: the way back from one of its runs. */
 export function showJob(id: string): void {
   useLoopThreads.setState({ reveal: id });
   setView({ kind: "loops" });
 }
 
-/** The thread a run went to on this computer; a hub Loop's thread is on its member. */
+/** The thread a run went to on this computer; a hub job's thread is on its member. */
 const runThread = (run: { machine?: string; threadId?: string } | undefined) =>
   run && !run.machine ? run.threadId : undefined;
 
-const TONE: Record<"ok" | "bad" | "muted", string> = {
-  ok: "text-fg-muted",
+const OUTCOME_TEXT: Record<"ok" | "bad" | "muted", string> = {
+  ok: "text-fg",
   bad: "text-danger",
-  muted: "text-fg-faint",
+  muted: "text-fg-muted",
 };
+
+function runDotTint(run: LoopRun | undefined): string {
+  if (!run) return "bg-fg-faint";
+  if (run.state === "running" || run.state === "claimed") return "bg-accent";
+  if (run.state === "failed" || run.state === "ambiguous") return "bg-danger";
+  if (run.state === "cancelled") return "bg-fg-faint";
+  return run.quiet || run.silent ? "bg-fg-faint" : "bg-success";
+}
 
 function IconAction({
   label,
   onClick,
   children,
   disabled,
+  tone,
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
   disabled?: boolean;
+  tone?: "danger";
 }) {
   return (
     <Tooltip label={label}>
@@ -103,7 +126,10 @@ function IconAction({
           e.stopPropagation();
           onClick();
         }}
-        className="inline-flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg disabled:opacity-40"
+        className={cx(
+          "inline-flex size-7 items-center justify-center rounded-md disabled:opacity-40",
+          tone === "danger" ? "text-danger hover:bg-danger/12" : "text-fg-muted hover:bg-fill hover:text-fg",
+        )}
       >
         {children}
       </button>
@@ -114,18 +140,28 @@ function IconAction({
 const NEXT_RUN_FORMAT = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
-  hour: "numeric",
+  hour: "2-digit",
   minute: "2-digit",
+  hour12: false,
 });
-const NEXT_RUN_TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const NEXT_RUN_TIME = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 const NEXT_RUN_WEEKDAY = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
-  hour: "numeric",
+  hour: "2-digit",
   minute: "2-digit",
+  hour12: false,
+});
+const FULL_RUN_FORMAT = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
 });
 const WEEK_MS = 6 * 86_400_000;
 
-/** "In 20 min · 9:59 AM" today, "In 20 h · Thu 5:44 AM" this week, then the date: how long, then when. */
+/** "In 20 min · 09:59" today, "In 2 d · Mon 08:00" this week, then the date. */
 function nextRunLine(loop: Loop, next: number, now: number): string {
   const left = nextRunText(loop, now);
   const when =
@@ -137,16 +173,25 @@ function nextRunLine(loop: Loop, next: number, now: number): string {
   return `${left[0]?.toUpperCase()}${left.slice(1)} · ${when.format(next)}`;
 }
 
-function loopAgent(loop: Loop, harnesses: HarnessSnapshot | null): string {
+function jobAgent(
+  loop: Loop,
+  harnesses: HarnessSnapshot | null,
+  signedOut: Parameters<typeof newThreadAccountOn>[2],
+): string {
   if (loop.threadId) return "Existing thread";
   const harness = harnesses?.harnesses.find(
     (item) => item.id === (loop.harness || harnesses.default.harness),
   );
-  const account = harness?.accounts?.find((item) => item.id === loop.account);
+  // Resolve the effective account the daemon will use when the job was saved without one.
+  const effectiveAccountId =
+    loop.account ||
+    (!loop.machine && harness ? newThreadAccountOn(harness, lastAccountFor(harness.id), signedOut) : null) ||
+    undefined;
+  const account = harness?.accounts?.find((item) => item.id === effectiveAccountId);
   const model = harness?.models.find((item) => item.id === loop.model);
   return [
     harness?.name ?? loop.harness,
-    account?.name ?? loop.account,
+    account?.name ?? effectiveAccountId,
     model?.name ?? loop.model,
     loop.effort && `${loop.effort} effort`,
   ]
@@ -154,13 +199,64 @@ function loopAgent(loop: Loop, harnesses: HarnessSnapshot | null): string {
     .join(" · ");
 }
 
-function LoopRow({
+function StatusChip({
+  state,
+  waiting,
+  completed,
+}: {
+  state: ReturnType<typeof loopState>;
+  waiting: boolean;
+  completed: boolean;
+}) {
+  if (state === "running") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent/14 px-2 py-0.5 font-medium text-caption text-accent">
+        <Spinner size={10} />
+        Running
+      </span>
+    );
+  }
+  if (state === "failing") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-danger/12 px-2 py-0.5 font-medium text-caption text-danger">
+        Paused · failing
+      </span>
+    );
+  }
+  if (state === "paused") {
+    return (
+      <span className="inline-flex shrink-0 items-center rounded-full bg-fill px-2 py-0.5 text-caption text-fg-muted">
+        Paused
+      </span>
+    );
+  }
+  if (waiting) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-fill px-2 py-0.5 text-caption text-fg-muted">
+        <Webhook size={10} />
+        Webhook
+      </span>
+    );
+  }
+  if (completed) {
+    return (
+      <span className="inline-flex shrink-0 items-center rounded-full bg-fill px-2 py-0.5 text-caption text-fg-faint">
+        Completed
+      </span>
+    );
+  }
+  return null;
+}
+
+function JobRow({
   loop,
   now,
   expanded,
   agent,
   onToggle,
   onEdit,
+  onDuplicate,
+  onDelete,
   act,
 }: {
   loop: Loop;
@@ -169,111 +265,155 @@ function LoopRow({
   agent: string;
   onToggle: () => void;
   onEdit: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
   act: (what: string, run: () => Promise<void>) => void;
 }) {
   const state = loopState(loop);
-  const badge = STATE_BADGE[state];
   const result = lastResult(loop, now);
   const reason = pauseReason(loop);
   const running = state === "running";
-  // The latest run's thread, opened from the row like any thread.
-  const lastThread = running ? undefined : runThread(loop.runs[0]);
+  const latestRun = loop.runs[0];
+  const lastThread = running ? undefined : runThread(latestRun);
   const next = !loop.paused && loop.nextDueAt !== undefined ? loop.nextDueAt : undefined;
-  // A loop with no schedule but a webhook is waiting for a call, not unscheduled.
   const waiting = state === "active" && next === undefined && listening(loop);
-  const badgeLabel = waiting
-    ? "On webhook"
-    : state === "active" && next === undefined
-      ? loop.schedule.kind === "once"
-        ? "Completed"
-        : "Unscheduled"
-      : badge.label;
+  const completed = state === "active" && next === undefined && !waiting && loop.schedule.kind === "once";
+  const quietResult = latestRun?.state === "succeeded" && (latestRun.quiet || latestRun.silent);
+  const secondarySchedule =
+    next !== undefined
+      ? `Next: ${nextRunLine(loop, next, now)}`
+      : loop.paused
+        ? "Paused"
+        : waiting
+          ? "Waits for webhook"
+          : completed
+            ? "Finished one-time run"
+            : "Manual only";
+
+  const handleHeaderClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest("[data-row-action]")) return;
+    onToggle();
+  };
+
   return (
     <li data-loop={loop.id} className="flex flex-col rounded-lg bg-surface">
-      <div className="flex flex-wrap items-center gap-x-2 px-3 py-2">
-        <button
-          type="button"
-          aria-expanded={expanded}
-          onClick={onToggle}
-          className="flex min-w-[min(100%,210px)] flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-subtle"
-        >
-          <ChevronRight
-            size={12}
-            className={cx("shrink-0 text-fg-faint transition-transform", expanded && "rotate-90")}
-          />
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="flex min-w-0 flex-wrap items-center gap-x-2">
+      {/* Full-row hover & expand target; action buttons opt out via data-row-action. */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: expand toggle also lives on the accessible button inside */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users activate the button inside */}
+      <div
+        onClick={handleHeaderClick}
+        className={cx(
+          "flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 hover:bg-fill-subtle",
+          expanded ? "rounded-t-lg" : "rounded-lg",
+        )}
+      >
+        <div className="flex min-w-[min(100%,220px)] flex-1 items-center gap-2">
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-label={expanded ? `Collapse ${loop.name}` : `Expand ${loop.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-faint hover:text-fg"
+          >
+            <ChevronRight size={12} className={cx("transition-transform", expanded && "rotate-90")} />
+          </button>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="truncate font-medium text-body text-fg">{loop.name}</span>
-              <span className="inline-flex shrink-0 items-center gap-1.5 text-caption text-fg-muted">
-                <span
-                  aria-hidden
-                  className={cx(
-                    "size-1.5 rounded-full",
-                    next === undefined && state === "active" && !waiting ? "bg-fg-faint" : badge.tint,
-                  )}
-                />
-                {badgeLabel}
+              <StatusChip state={state} waiting={waiting} completed={completed} />
+            </div>
+            <div className="flex min-w-0 items-center gap-1.5 text-caption text-fg-muted">
+              <span className="truncate">
+                {projectName(loop.workspace)}
+                {loop.machine && ` on ${loop.machine}`} · {scheduleInWords(loop.schedule)}
               </span>
-            </span>
-            <span className="truncate text-caption text-fg-muted">
-              {projectName(loop.workspace)}
-              {loop.machine && ` on ${loop.machine}`} · {scheduleInWords(loop.schedule)}
-              {loop.webhook && loop.schedule.kind !== "manual" && (
-                <span className="ml-2 inline-flex items-center gap-1 align-[-2px] text-fg-faint">
-                  <Webhook size={12} />
-                  Webhook
-                </span>
+              {loop.script && (
+                <Tooltip label="Runs a pre-check script first">
+                  <span className="inline-flex shrink-0 items-center text-fg-faint">
+                    <Terminal size={12} />
+                  </span>
+                </Tooltip>
               )}
-            </span>
-          </span>
-        </button>
-        <div className="min-w-0 basis-44 px-2 py-1">
-          {next !== undefined && (
+              {loop.webhook && loop.schedule.kind !== "manual" && (
+                <Tooltip label="Webhook trigger enabled">
+                  <span className="inline-flex shrink-0 items-center text-fg-faint">
+                    <Webhook size={12} />
+                  </span>
+                </Tooltip>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Outcome first, next run second: aligned across rows. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:max-w-[270px] sm:basis-64">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", runDotTint(latestRun))} />
+            {lastThread ? (
+              <Tooltip label="Open the last run's thread">
+                <button
+                  type="button"
+                  data-row-action
+                  onClick={() => selectThread(lastThread)}
+                  className={cx(
+                    "group/last flex min-w-0 items-center gap-1 rounded text-left text-callout hover:text-fg",
+                    quietResult ? "text-fg-muted" : OUTCOME_TEXT[result.tone],
+                  )}
+                >
+                  <span className="truncate underline-offset-2 group-hover/last:underline">
+                    {result.text}
+                  </span>
+                  <ArrowUpRight size={12} className="shrink-0 opacity-60 group-hover/last:opacity-100" />
+                </button>
+              </Tooltip>
+            ) : (
+              <span
+                title={result.text}
+                className={cx(
+                  "truncate text-callout",
+                  quietResult ? "text-fg-muted" : OUTCOME_TEXT[result.tone],
+                )}
+              >
+                {result.text}
+              </span>
+            )}
+          </div>
+          {next !== undefined ? (
             <time
               dateTime={new Date(next).toISOString()}
               title={NEXT_RUN_FORMAT.format(next)}
-              className="block truncate font-medium text-callout text-fg"
+              className="tabular truncate pl-3 text-caption text-fg-faint"
             >
-              {nextRunLine(loop, next, now)}
+              {secondarySchedule}
             </time>
-          )}
-          {lastThread ? (
-            <Tooltip label="Open the last run">
-              <button
-                type="button"
-                onClick={() => selectThread(lastThread)}
-                className={cx(
-                  "group/last flex max-w-full items-center gap-1 rounded text-left text-caption hover:text-fg",
-                  TONE[result.tone],
-                )}
-              >
-                <span className="truncate underline-offset-2 group-hover/last:underline">{result.text}</span>
-                <ArrowUpRight size={12} className="shrink-0 opacity-60 group-hover/last:opacity-100" />
-              </button>
-            </Tooltip>
           ) : (
-            <span title={result.text} className={cx("block truncate text-caption", TONE[result.tone])}>
-              {result.text}
-            </span>
+            <span className="truncate pl-3 text-caption text-fg-faint">{secondarySchedule}</span>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {running && <Spinner size={12} className="mr-1 text-fg-muted" />}
-          <IconAction
-            label={running ? "Edit it once the run ends" : "Edit"}
-            disabled={running}
-            onClick={onEdit}
-          >
-            <Pencil size={14} />
-          </IconAction>
-          <IconAction
-            label={loop.paused ? "Resume it to run now" : "Run now"}
-            disabled={running || loop.paused}
-            onClick={() => act("Started a run", () => runLoopNow(loop.id))}
-          >
-            <Play size={14} />
-          </IconAction>
-          <Tooltip label={loop.paused ? "Paused" : "On"}>
+
+        {/* Compact right controls: Stop/Run, Pause switch, and overflow menu. */}
+        <div data-row-action className="flex shrink-0 items-center gap-1.5">
+          {running ? (
+            <IconAction
+              label="Stop running job"
+              tone="danger"
+              onClick={() => act("Stopped run", () => cancelLoopRun(loop.id))}
+            >
+              <SquareStop size={14} />
+            </IconAction>
+          ) : (
+            <IconAction
+              label={loop.paused ? "Resume to run now" : "Run now"}
+              disabled={loop.paused}
+              onClick={() => act("Started a run", () => runLoopNow(loop.id))}
+            >
+              <Play size={14} />
+            </IconAction>
+          )}
+          <Tooltip label={loop.paused ? "Paused — click to enable" : "Enabled — click to pause"}>
             <span className="inline-flex px-1">
               <Switch
                 label={loop.paused ? `Resume ${loop.name}` : `Pause ${loop.name}`}
@@ -293,119 +433,181 @@ function LoopRow({
               </button>
             </DropdownMenu.Trigger>
             <MenuContent align="end">
+              <DropdownMenu.Item className={menuItem} disabled={running} onSelect={onEdit}>
+                <Pencil size={13} className="text-fg-muted" /> {running ? "Edit (wait for run)" : "Edit"}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item className={menuItem} onSelect={onDuplicate}>
+                <Copy size={13} className="text-fg-muted" /> Duplicate
+              </DropdownMenu.Item>
               {lastThread && (
-                <>
-                  <DropdownMenu.Item className={menuItem} onSelect={() => selectThread(lastThread)}>
-                    <ArrowUpRight size={13} className="text-fg-muted" /> Open last run
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Separator className={menuSeparator} />
-                </>
+                <DropdownMenu.Item className={menuItem} onSelect={() => selectThread(lastThread)}>
+                  <ArrowUpRight size={13} className="text-fg-muted" /> Open last run
+                </DropdownMenu.Item>
               )}
-              <DropdownMenu.Item
-                className={cx(menuItem, menuItemDanger)}
-                onSelect={() =>
-                  askConfirm({
-                    title: `Delete “${loop.name}”?`,
-                    message:
-                      "It stops at once, and its run history goes with it. The threads it started stay.",
-                    action: "Delete",
-                    destructive: true,
-                    run: () => act("Deleted", () => deleteLoop(loop.id)),
-                  })
-                }
-              >
+              <DropdownMenu.Separator className={menuSeparator} />
+              <DropdownMenu.Item className={cx(menuItem, menuItemDanger)} onSelect={onDelete}>
                 <Trash2 size={13} /> Delete
               </DropdownMenu.Item>
             </MenuContent>
           </DropdownMenu.Root>
         </div>
       </div>
+
       {reason && (
         <Callout className="mx-4 mb-3 bg-bg">
           {/* A signed-out login's reason already says how to sign in. */}
           {loop.runs[0]?.signedOut ? reason : `${reason}. Fix the cause, then resume it.`}
         </Callout>
       )}
-      {expanded && <LoopDetail loop={loop} now={now} agent={agent} />}
+      {expanded && (
+        <JobDetail
+          loop={loop}
+          now={now}
+          agent={agent}
+          running={running}
+          onEdit={onEdit}
+          onDuplicate={onDuplicate}
+        />
+      )}
     </li>
   );
 }
 
-function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: string }) {
+function MetaChip({ children, tone }: { children: React.ReactNode; tone?: "warning" }) {
   return (
-    <div className="mx-5 flex flex-col gap-3 border-t border-border py-3">
+    <span
+      className={cx(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-caption",
+        tone === "warning" ? "bg-warning/12 text-warning" : "bg-fill-subtle text-fg-muted",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function JobDetail({
+  loop,
+  now,
+  agent,
+  running,
+  onEdit,
+  onDuplicate,
+}: {
+  loop: Loop;
+  now: number;
+  agent: string;
+  running: boolean;
+  onEdit: () => void;
+  onDuplicate: () => void;
+}) {
+  const timezone = "timezone" in loop.schedule ? loop.schedule.timezone : undefined;
+  return (
+    <div className="mx-4 flex flex-col gap-3 border-t border-border pt-3 pb-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-caption text-fg-muted">Prompt</span>
+        <div className="flex items-center gap-1">
+          <Pill size="sm" quiet disabled={running} onClick={onEdit}>
+            <Pencil size={12} /> Edit
+          </Pill>
+          <Pill size="sm" quiet onClick={onDuplicate}>
+            <Copy size={12} /> Duplicate
+          </Pill>
+        </div>
+      </div>
       <p className="selectable whitespace-pre-wrap break-words rounded-md bg-fill-subtle px-3 py-2 text-callout text-fg">
         {loop.prompt}
       </p>
       {loop.script && (
         <div className="flex flex-col gap-1">
-          <span className="font-medium text-caption text-fg-muted">Script, run first</span>
+          <span className="font-medium text-caption text-fg-muted">Pre-check script</span>
           <pre className="selectable overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-fill-subtle px-3 py-2 font-mono text-caption text-fg">
             {loop.script}
           </pre>
         </div>
       )}
-      <p className="text-caption text-fg-muted">
-        {agent} · {loop.readOnly ? "Read-only" : "Can edit, commit and push"}
-        {loop.schedule.kind === "cron" && loop.schedule.timezone ? ` · ${loop.schedule.timezone}` : ""}
-      </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {agent && <MetaChip>{agent}</MetaChip>}
+        <MetaChip tone={loop.readOnly ? undefined : "warning"}>
+          {loop.readOnly ? "Read-only" : "Full access"}
+        </MetaChip>
+        {timezone && <MetaChip>{timezone}</MetaChip>}
+        {loop.webhook && (
+          <MetaChip>
+            <Webhook size={10} /> Webhook
+          </MetaChip>
+        )}
+        {loop.machine && <MetaChip>Runs on {loop.machine}</MetaChip>}
+      </div>
       {loop.runs.length > 0 && (
-        <ol aria-label="Recent runs" className="flex flex-col border-t border-border pt-2">
-          {loop.runs.map((run) => {
-            const at = run.finishedAt ?? run.startedAt ?? run.scheduledAt;
-            const text =
-              run.state === "succeeded"
-                ? run.silent
-                  ? "The script printed nothing"
-                  : run.queued
-                    ? `Waiting for ${run.machine ?? "its machine"}, which is offline`
-                    : run.machine
-                      ? `Started on ${run.machine}`
-                      : run.quiet
-                        ? "Nothing to report"
-                        : (run.verdict ?? "Finished")
-                : run.state === "running" || run.state === "claimed"
-                  ? "Running"
-                  : run.state === "cancelled"
-                    ? run.skipped
-                      ? `Skipped: ${run.skipped}`
-                      : "Stopped"
-                    : `Failed${run.error ? `: ${run.error}` : ""}`;
-            const threadId = runThread(run);
-            const body = (
-              <>
-                <span className="w-20 shrink-0 text-fg-faint">{agoText(at, now)}</span>
-                <span
-                  className={cx(
-                    "min-w-0 flex-1 break-words",
-                    run.state === "failed" || run.state === "ambiguous" ? "text-danger" : "text-fg-muted",
-                  )}
-                >
-                  {text}
-                </span>
-              </>
-            );
-            // A run with a thread opens it from anywhere on its line, like a thread in the list.
-            return (
-              <li key={run.id} className="flex min-w-0">
-                {threadId ? (
-                  <button
-                    type="button"
-                    onClick={() => selectThread(threadId)}
-                    className="group/run -mx-2 flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-1 text-left text-caption hover:bg-fill-subtle"
+        <div className="flex flex-col gap-1 border-t border-border pt-3">
+          <span className="font-medium text-caption text-fg-muted">Recent runs</span>
+          <ol aria-label="Recent runs" className="flex flex-col">
+            {loop.runs.map((run) => {
+              const at = run.finishedAt ?? run.startedAt ?? run.scheduledAt;
+              const duration = runDurationText(run.startedAt, run.finishedAt);
+              const text =
+                run.state === "succeeded"
+                  ? run.silent
+                    ? "Script printed nothing"
+                    : run.queued
+                      ? `Waiting for ${run.machine ?? "its machine"} (offline)`
+                      : run.machine
+                        ? `Started on ${run.machine}`
+                        : run.quiet
+                          ? "Nothing to report"
+                          : (run.verdict ?? "Finished")
+                  : run.state === "running" || run.state === "claimed"
+                    ? "Running…"
+                    : run.state === "cancelled"
+                      ? run.skipped
+                        ? `Skipped: ${run.skipped}`
+                        : "Stopped"
+                      : `Failed${run.error ? `: ${run.error}` : ""}`;
+              const threadId = runThread(run);
+              const isError = run.state === "failed" || run.state === "ambiguous";
+              const isActionable = run.state === "succeeded" && !run.quiet && !run.silent;
+              const body = (
+                <>
+                  <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", runDotTint(run))} />
+                  <span
+                    title={`${FULL_RUN_FORMAT.format(at)} (${agoText(at, now)})`}
+                    className="tabular w-28 shrink-0 text-fg-faint"
                   >
-                    {body}
-                    <span className="flex shrink-0 items-center gap-1 text-fg-faint group-hover/run:text-fg">
-                      Open <ArrowUpRight size={12} />
-                    </span>
-                  </button>
-                ) : (
-                  <div className="flex min-w-0 flex-1 items-center gap-3 py-1 text-caption">{body}</div>
-                )}
-              </li>
-            );
-          })}
-        </ol>
+                    {runTimestampText(at, now)}
+                  </span>
+                  <span className="tabular w-12 shrink-0 text-fg-faint">{duration ?? "—"}</span>
+                  <span
+                    className={cx(
+                      "min-w-0 flex-1 break-words",
+                      isError ? "text-danger" : isActionable ? "text-fg" : "text-fg-muted",
+                    )}
+                  >
+                    {text}
+                  </span>
+                </>
+              );
+              return (
+                <li key={run.id} className="flex min-w-0">
+                  {threadId ? (
+                    <button
+                      type="button"
+                      onClick={() => selectThread(threadId)}
+                      className="group/run -mx-2 flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-caption hover:bg-fill-subtle"
+                    >
+                      {body}
+                      <span className="flex shrink-0 items-center gap-1 text-fg-faint group-hover/run:text-fg">
+                        Open <ArrowUpRight size={12} />
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-caption">{body}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
       )}
     </div>
   );
@@ -423,7 +625,7 @@ function ReviewList({
   if (!items.length) {
     return (
       <p className="py-8 text-center text-callout text-fg-muted">
-        Nothing to review. Failed runs and threads loops left open in the last {REVIEW_DAYS} days show here.
+        Nothing to review. Failed runs and threads jobs left open in the last {REVIEW_DAYS} days show here.
       </p>
     );
   }
@@ -434,16 +636,23 @@ function ReviewList({
         const threadId = run.machine ? undefined : run.threadId;
         return (
           <li key={run.id} className={cx("flex items-center gap-3 rounded-lg bg-surface", cardInset)}>
+            <span
+              aria-hidden
+              className={cx("size-1.5 shrink-0 rounded-full", kind === "failed" ? "bg-danger" : "bg-success")}
+            />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="truncate font-medium text-callout text-fg">{loop.name}</span>
+              <div className="flex items-center gap-2">
+                <span className="truncate font-medium text-callout text-fg">{loop.name}</span>
+                <span className="tabular shrink-0 text-caption text-fg-faint">
+                  {runTimestampText(at, now)}
+                </span>
+              </div>
               <span
                 className={cx("truncate text-caption", kind === "failed" ? "text-danger" : "text-fg-muted")}
               >
                 {kind === "failed"
-                  ? `Failed ${agoText(at, now)}${run.error ? `: ${run.error}` : ""}`
-                  : run.verdict
-                    ? `${run.verdict} · ${agoText(at, now)}`
-                    : `Its thread is open · ${agoText(at, now)}`}
+                  ? `Failed${run.error ? `: ${run.error}` : ""}`
+                  : (run.verdict ?? "Thread is open for review")}
               </span>
             </div>
             {threadId && (
@@ -465,22 +674,28 @@ export function Loops() {
   const { data, error, reload } = useEngineData(Method.loopsList, parseLoops);
   const sessions = useApp((s) => s.sessions);
   const harnesses = useApp((s) => s.harnesses);
+  const signedOut = useApp((s) => s.signedOutLogins);
   const statusMarks = useApp((s) => s.statusMarks);
-  const [tab, setTab] = useState<Tab>("loops");
+  const [tab, setTab] = useState<Tab>("jobs");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [editing, setEditing] = useState<Loop | null>(null);
+  const [duplicating, setDuplicating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [reviewed, setReviewed] = useState(loadReviewed);
   const [now, setNow] = useState(() => Date.now());
 
+  const loops = data?.loops ?? [];
+  const hasRunning = loops.some((loop) => loopState(loop) === "running");
+
   useEffect(() => {
+    const interval = hasRunning ? RUNNING_REFRESH_MS : IDLE_REFRESH_MS;
     const timer = setInterval(() => {
       setNow(Date.now());
       void reload();
-    }, REFRESH_MS);
+    }, interval);
     return () => clearInterval(timer);
-  }, [reload]);
+  }, [reload, hasRunning]);
 
   const act = useCallback(
     (what: string, run: () => Promise<void>) => {
@@ -500,22 +715,23 @@ export function Loops() {
     if (data) rememberLoops(data);
   }, [data]);
 
-  // Opened from one of a job's runs: that job is shown expanded and scrolled to, once.
+  // Opened from one of a job's runs: match by stable id, falling back to legacy name.
   const reveal = useLoopThreads((s) => s.reveal);
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!reveal || !data?.loops.some((loop) => loop.id === reveal)) return;
-    setTab("loops");
-    setExpanded(reveal);
+    if (!reveal || !data) return;
+    const match = data.loops.find((loop) => loop.id === reveal || loop.name === reveal);
+    if (!match) return;
+    setTab("jobs");
+    setExpanded(match.id);
     useLoopThreads.setState({ reveal: null });
     requestAnimationFrame(() =>
       listRef.current
-        ?.querySelector(`[data-loop="${CSS.escape(reveal)}"]`)
+        ?.querySelector(`[data-loop="${CSS.escape(match.id)}"]`)
         ?.scrollIntoView({ block: "nearest" }),
     );
   }, [reveal, data]);
 
-  const loops = data?.loops ?? [];
   const upcoming: Loop[] = [];
   const inactive: Loop[] = [];
   for (const loop of loops) {
@@ -523,12 +739,11 @@ export function Loops() {
       upcoming.push(loop);
     else inactive.push(loop);
   }
-  // Loops that only wait for their webhook go after the ones with a time.
   upcoming.sort(
     (a, b) => (a.nextDueAt ?? Infinity) - (b.nextDueAt ?? Infinity) || a.name.localeCompare(b.name),
   );
   inactive.sort((a, b) => Number(b.paused) - Number(a.paused) || a.name.localeCompare(b.name));
-  // Open: still in the list and not archived. `statusMarks` changes when the user archives one.
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: statusMarks is what statusOf reads
   const open = useMemo(() => {
     const listed = new Set(sessions.map((session) => session.id));
@@ -542,6 +757,22 @@ export function Loops() {
     next.add(runId);
     setReviewed(next);
     saveReviewed(next);
+  };
+
+  const confirmDelete = (loop: Loop, onDeleted?: () => void) => {
+    askConfirm({
+      title: `Delete “${loop.name}”?`,
+      message: "It stops at once, and its run history goes with it. The threads it started stay.",
+      action: "Delete",
+      destructive: true,
+      run: async () => {
+        await deleteLoop(loop.id);
+        toast("Job deleted", "success");
+        setNow(Date.now());
+        onDeleted?.();
+        void reload();
+      },
+    });
   };
 
   const startDaemon = async () => {
@@ -559,19 +790,20 @@ export function Loops() {
 
   const openNew = () => {
     setEditing(null);
+    setDuplicating(false);
     setDialogOpen(true);
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-bg">
-      <ViewHeader title="Loops">
+      <ViewHeader title="Jobs">
         <div className="flex items-center gap-2">
           {loops.length > 0 && (
             <Segments
               label="Show"
               value={tab}
               options={[
-                { value: "loops", label: "Loops" },
+                { value: "jobs", label: "Jobs" },
                 { value: "review", label: review.length ? `Review ${review.length}` : "Review" },
               ]}
               onChange={setTab}
@@ -580,7 +812,7 @@ export function Loops() {
           {data?.daemonRunning && loops.length > 0 && (
             <Pill prominent onClick={openNew}>
               <Plus size={13} />
-              New loop
+              New job
             </Pill>
           )}
         </div>
@@ -599,29 +831,29 @@ export function Loops() {
                 </Pill>
               }
             >
-              The scheduler is stopped, so loops cannot be listed or run. It runs in the background, apart
-              from the app, as <span className="font-mono">rc daemon start</span> does.
+              The scheduler is stopped, so jobs cannot be listed or run. It runs in the background, apart from
+              the app, as <span className="font-mono">rc daemon start</span> does.
             </Callout>
           ) : loops.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-16 text-center">
               <span className="inline-flex size-10 items-center justify-center rounded-full bg-fill text-fg-muted">
                 <Repeat size={18} />
               </span>
-              <h2 className="font-semibold text-title3 text-fg">No loops yet</h2>
+              <h2 className="font-semibold text-title3 text-fg">No jobs yet</h2>
               <p className="max-w-sm text-callout text-fg-muted">
-                A loop runs a prompt once, on a schedule, or from a webhook—like “every 4 hours, check CI on
-                main”—each run in a fresh thread. Runs are read-only unless you say otherwise.
+                A job runs a prompt once, on a schedule, manually, or from a webhook—like “every 4 hours,
+                check CI on main”—each run in a fresh thread. Runs are read-only unless you say otherwise.
               </p>
               <Pill prominent onClick={openNew}>
-                New loop
+                New job
               </Pill>
             </div>
           ) : tab === "review" ? (
             <ReviewList items={review} now={now} onReviewed={markReviewed} />
           ) : (
             [
-              { title: "Upcoming", loops: upcoming },
-              { title: "Inactive", loops: inactive },
+              { title: "Active", loops: upcoming },
+              { title: "Paused & inactive", loops: inactive },
             ].map(
               (group) =>
                 group.loops.length > 0 && (
@@ -629,17 +861,24 @@ export function Loops() {
                     <h2 className="px-1 font-medium text-caption text-fg-muted">{group.title}</h2>
                     <ul className="flex flex-col gap-2">
                       {group.loops.map((loop) => (
-                        <LoopRow
+                        <JobRow
                           key={loop.id}
                           loop={loop}
                           now={now}
-                          agent={loopAgent(loop, harnesses)}
+                          agent={jobAgent(loop, harnesses, signedOut)}
                           expanded={expanded === loop.id}
                           onToggle={() => setExpanded((id) => (id === loop.id ? null : loop.id))}
                           onEdit={() => {
                             setEditing(loop);
+                            setDuplicating(false);
                             setDialogOpen(true);
                           }}
+                          onDuplicate={() => {
+                            setEditing(loop);
+                            setDuplicating(true);
+                            setDialogOpen(true);
+                          }}
+                          onDelete={() => confirmDelete(loop)}
                           act={act}
                         />
                       ))}
@@ -653,9 +892,18 @@ export function Loops() {
       <LoopDialog
         open={dialogOpen}
         loop={editing}
+        duplicate={duplicating}
         onOpenChange={setDialogOpen}
+        onDelete={
+          editing && !duplicating
+            ? () =>
+                confirmDelete(editing, () => {
+                  setDialogOpen(false);
+                })
+            : undefined
+        }
         onSaved={() => {
-          toast(editing ? "Loop saved" : "Loop created", "success");
+          toast(editing && !duplicating ? "Job saved" : "Job created", "success");
           void reload();
         }}
       />

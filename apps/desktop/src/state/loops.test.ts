@@ -21,8 +21,11 @@ import {
   parseLoops,
   pauseReason,
   reviewItems,
+  runDurationText,
+  runTimestampText,
   saveParams,
   scheduleInWords,
+  timeZoneChoices,
   webhookOf,
   withRunAccount,
 } from "./loops";
@@ -490,5 +493,25 @@ describe("hub Loops (#3957)", () => {
       text: "CI broke on main: test_x fails · 5 min ago",
       tone: "ok",
     });
+  });
+
+  test("run duration, timestamp, and timezone helpers format cleanly", () => {
+    expect(runDurationText(1000, 1400)).toBe("<1s");
+    expect(runDurationText(1000, 43_000)).toBe("42s");
+    expect(runDurationText(0, 135_000)).toBe("2m 15s");
+    expect(runDurationText(0, 3_600_000)).toBe("1h");
+    expect(runDurationText(0, 3_840_000)).toBe("1h 4m");
+    expect(runDurationText(undefined, 1000)).toBeNull();
+    expect(runDurationText(2000, 1000)).toBeNull();
+
+    const today = new Date(2026, 10, 17, 14, 0).getTime();
+    const sameDay = new Date(2026, 10, 17, 8, 5).getTime();
+    const yesterday = new Date(2026, 10, 16, 9, 30).getTime();
+    expect(runTimestampText(sameDay, today)).toBe("Today 08:05");
+    expect(runTimestampText(yesterday, today)).toBe("Yesterday 09:30");
+
+    const zones = timeZoneChoices("Europe/Oslo");
+    expect(zones).toContain("Europe/Oslo");
+    expect(zones).toContain("UTC");
   });
 });

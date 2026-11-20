@@ -739,6 +739,20 @@ impl JobStore {
             save_job(&tx, &job)?;
         }
         save_run(&tx, &run)?;
+        if settlement.state != JobRunState::Running && !retry {
+            // Keep settled history bounded on disk to match the read cap.
+            tx.execute(
+                "DELETE FROM job_runs
+                 WHERE job_id=?1 AND active=0 AND rowid NOT IN (
+                     SELECT rowid FROM job_runs
+                     WHERE job_id=?1 AND active=0
+                     ORDER BY scheduled_order DESC, rowid DESC
+                     LIMIT ?2
+                 )",
+                params![job.id, MAX_HISTORY_ROWS as i64],
+            )
+            .map_err(storage)?;
+        }
         tx.commit().map_err(storage)
     }
 

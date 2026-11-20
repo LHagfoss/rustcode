@@ -358,7 +358,7 @@ pub fn prompt_hint(version: u8) -> &'static str {
         _ => {
             static HINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
             HINT.get_or_init(|| {
-                format!("{PROMPT_HINT_V16} To manage loops (prompts run once or on a schedule, shown in the app's Loops page), use `create_loop`, `list_scheduled_tasks`, `update_loop`, `run_scheduled_task_now` and `delete_scheduled_task` when the user asks. The user approves changes in the app.")
+                format!("{PROMPT_HINT_V16} To manage jobs (prompts run once, on a schedule, or from a webhook, shown in the app's Jobs page), use `create_loop`, `list_scheduled_tasks`, `update_loop`, `run_scheduled_task_now` and `delete_scheduled_task` when the user asks. The user approves changes in the app.")
             })
         }
     }
@@ -405,7 +405,7 @@ pub const EXTRA_TOOL_NAMES: [&str; 14] = [
 
 /// What the MCP server adds to its instructions when it lists the core tools
 /// alone, so an agent asked for one of the others knows where it went.
-pub const CORE_TOOLS_NOTE: &str = "Not listed here: the tools that manage projects, edit/run/delete loops (`update_loop`, `run_loop`, `delete_loop`), workflow runs and worktree handoff. When the user asks for one, turn `orchestration-all-tools` on with `manage_settings`; threads started after that list them.";
+pub const CORE_TOOLS_NOTE: &str = "Not listed here: the tools that manage projects, edit/run/delete jobs (`update_job`, `run_job`, `delete_job`), workflow runs and worktree handoff. When the user asks for one, turn `orchestration-all-tools` on with `manage_settings`; threads started after that list them.";
 
 /// Whether the user has every tool listed to threads ([`ALL_TOOLS_SETTING`]).
 pub fn lists_all_tools() -> bool {
@@ -424,7 +424,7 @@ pub fn mcp_instructions(version: u8) -> &'static str {
         _ => {
             static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
             TEXT.get_or_init(|| {
-                format!("{MCP_INSTRUCTIONS_V16}\n\nLoops: `list_scheduled_tasks` lists loops, and `create_loop` adds a loop to the app's Loops page when the user asks; the user approves the schedule and prompt in the app.")
+                format!("{MCP_INSTRUCTIONS_V16}\n\nJobs: `list_scheduled_tasks` lists jobs, and `create_loop` adds a job to the app's Jobs page when the user asks; the user approves the schedule and prompt in the app.")
             })
         }
     }

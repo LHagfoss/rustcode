@@ -117,7 +117,7 @@ export async function createLoop(
     ? state.sessions.find((session) => session.id === threadId && !session.host)
     : undefined;
   if (threadId && (!target || projectPath(target.cwd) !== workspace)) {
-    return failureJson(failure("invalid", "thread_id must name a local thread in the loop's project"));
+    return failureJson(failure("invalid", "thread_id must name a local thread in the job's project"));
   }
   const runHarness = state.harnesses?.harnesses.find(
     (entry) => entry.id === (harness ?? state.harnesses?.default.harness),
@@ -181,7 +181,7 @@ export async function updateLoop(
   if (listed.error) return listed;
   const existing = parseLoops(listed).loops.find((entry) => entry.id === id);
   if (!existing && hasEdit) {
-    return failureJson(failure("not_found", `no loop has id “${id}”`));
+    return failureJson(failure("not_found", `no job has id “${id}”`));
   }
   const label = existing?.name ?? id;
   const changes: string[] = [];
@@ -203,7 +203,7 @@ export async function updateLoop(
     caller: caller.id,
     callerTitle: caller.title,
     target: label,
-    detail: `Update loop “${label}”:\n${changes.join("\n")}`,
+    detail: `Update job “${label}”:\n${changes.join("\n")}`,
   });
   if (no) return failureJson(no);
 
@@ -269,7 +269,7 @@ async function scheduledTaskName(id: string): Promise<string> {
   const task = tasks.find((entry) => obj(entry)?.id === id);
   const name = str(obj(task)?.name);
   const workspace = str(obj(task)?.workspace);
-  if (!name && !workspace) return "that loop";
+  if (!name && !workspace) return "that job";
   return `“${name ?? id}”${workspace ? `, which runs in ${workspace}` : ""}`;
 }
 

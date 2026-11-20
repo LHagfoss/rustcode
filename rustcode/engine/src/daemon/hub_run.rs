@@ -71,7 +71,7 @@ pub(crate) async fn run(run: MemberRun) -> RunOutcome {
         );
     };
     let (tool, arguments) = run.call();
-    let caller = format!("the Loop “{}”", run.name);
+    let caller = format!("the job “{}”", run.name);
     let answer = crate::remote_gateway::lifecycle::RemoteLifecycle::new(&config_dir)
         .hub_call(&run.machine, tool, arguments, &caller)
         .await

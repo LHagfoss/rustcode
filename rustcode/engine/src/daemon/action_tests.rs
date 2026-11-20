@@ -1000,6 +1000,16 @@ fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
         }
         other => panic!("{other:?}"),
     }
+    match loop_outcome(LoopRunEnd::Failed {
+        thread_id: Some("t-6".into()),
+        error: "HTTP 503 Service Unavailable".into(),
+    }) {
+        RunOutcome::Transient { error, output } => {
+            assert!(error.contains("503"));
+            assert_eq!(output.as_deref(), Some(r#"{"thread_id":"t-6"}"#));
+        }
+        other => panic!("{other:?}"),
+    }
     match loop_outcome(LoopRunEnd::SignedOut {
         thread_id: Some("t-4".into()),
         error: "Claude Code is not signed in".into(),
@@ -1035,6 +1045,20 @@ fn a_quiet_loop_reply_starts_with_the_marker() {
     assert_eq!(
         loop_reply_verdict("\n## **CI broke on main: test_x fails.**\nDetails here."),
         Some("CI broke on main: test_x fails.".to_owned())
+    );
+    assert_eq!(
+        loop_reply_verdict("```rustcode-ui v1\n<title>Daily Dev Summary</title>\n```"),
+        Some("Daily Dev Summary".to_owned())
+    );
+    assert_eq!(
+        loop_reply_verdict("```rustcode-ui v1\n:: title 3 failing checks on main\n```"),
+        Some("3 failing checks on main".to_owned())
+    );
+    assert_eq!(
+        loop_reply_verdict(
+            "2 alerts need attention.\n\n```rustcode-ui v1\n<title>Ignored</title>\n```"
+        ),
+        Some("2 alerts need attention.".to_owned())
     );
     assert_eq!(loop_reply_verdict("Nothing to report."), None);
 }
@@ -1101,7 +1125,7 @@ fn a_signed_out_run_names_the_login_and_how_to_sign_in() {
         named.contains("CLAUDE_CONFIG_DIR=~/.claude-paral-2 claude auth login"),
         "{named}"
     );
-    assert!(named.contains("resume the loop"), "{named}");
+    assert!(named.contains("resume the job"), "{named}");
     let default = signed_out_message(&harness, None);
     assert!(default.contains("default login (~/.claude)"), "{default}");
 }

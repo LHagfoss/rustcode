@@ -1401,21 +1401,21 @@ worktree tools use, bounded at ten minutes. `read_project` is refused for
 another project while the setting is off, like the other reads; the four
 changing tools ask first.
 
-Scheduled work goes through `_rustcode/scheduled/list|create|delete|run`
-(`engine/src/acp/scheduled.rs`) and the daemon client `rc cron` and
-`manage_scheduled_jobs` already use (`docs/daemon.md`): there is no second
-scheduler, and the jobs are the same store the CLI lists. A job is created as
-a `prompt` action on the built-in harness (`raw_cli::build_scheduled_state`),
-which is why `harness`, `account` and per-task model choice are not arguments:
-a schedule that ran on an external harness would need that harness's process,
-which the daemon does not own. `model_profile` names a config profile, as the
-CLI's `--action` does. A cron with no `timezone` is read in the user's own zone,
+Scheduled work originally went through `_rustcode/scheduled/list|create|delete|run`
+(`engine/src/acp/scheduled.rs`) for built-in-harness `prompt` actions (`schedule_task`).
+Jobs on any harness (with `harness`, `account`, `model`, `effort`, `read_only`,
+and optional `thread_id`) now use `_rustcode/loops/*` (`engine/src/acp/loops.rs`)
+and are exposed over MCP as `list_jobs`, `create_job`, `update_job`, `run_job`,
+and `delete_job` (with `*_loop` and legacy `*_scheduled_task*` aliases in
+`orchestration/mcp_names.rs`; see `docs/daemon.md`). Both share the same daemon
+store (`daemon/jobs.sqlite`) used by `rc jobs` (aliases `loops`, `cron`) and
+`manage_scheduled_jobs`. A cron with no `timezone` is read in the user's own zone,
 which the app fills in from `Intl.DateTimeFormat().resolvedOptions().timeZone`
 before the call; a machine-only caller gets the engine's guess (`TZ`, else
 `/etc/localtime`, else UTC). An `at` time is ISO 8601 with its offset, so it is
-never ambiguous. Nothing starts the daemon: `list_scheduled_tasks` answers
-`daemon_running: false` and the three changing calls refuse with "run
-`rc daemon start`".
+never ambiguous. Nothing starts the daemon: `list_jobs` answers
+`daemon_running: false` and the mutating calls refuse with a hint to start it
+from Jobs or run `rc daemon start`.
 
 The app advertises 11 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
 and a v10 app keeps exactly the v10 set and `PROMPT_HINT_V10`.

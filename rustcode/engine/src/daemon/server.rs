@@ -20,6 +20,7 @@ use tokio::{io::BufReader, sync::Notify};
 pub trait SchedulerControl: Send + Sync {
     fn notify_changed(&self);
     fn run_now(&self, job_id: &str, input: Option<String>) -> super::Result<DaemonResponse>;
+    fn cancel_run(&self, job_id: &str) -> super::Result<DaemonResponse>;
     fn snapshot(&self) -> (usize, Option<String>);
 }
 
@@ -102,6 +103,19 @@ impl RequestHandler {
                     .get(&job_id)?;
                 return match &self.scheduler {
                     Some(scheduler) => scheduler.run_now(&job_id, input),
+                    None => Ok(DaemonResponse::error(
+                        "scheduler_unavailable",
+                        "scheduler execution is not installed",
+                    )),
+                };
+            }
+            DaemonRequest::Cancel { job_id } => {
+                self.store
+                    .try_lock()
+                    .map_err(|_| DaemonError::Conflict("store is busy".into()))?
+                    .get(&job_id)?;
+                return match &self.scheduler {
+                    Some(scheduler) => scheduler.cancel_run(&job_id),
                     None => Ok(DaemonResponse::error(
                         "scheduler_unavailable",
                         "scheduler execution is not installed",
