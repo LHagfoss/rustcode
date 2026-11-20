@@ -7,6 +7,7 @@ import { isLoading } from "../state/thread";
 
 import { useCallback } from "react";
 import { modelName, relationshipOf } from "../acp/types";
+import { useStops } from "../state/stopTrace";
 import { cancel, runPrompt, selectThread, setDraft, useApp } from "../state/store";
 import { isRunning } from "../state/thread";
 import { PermissionMenu } from "./Composer";
@@ -19,6 +20,7 @@ import { Transcript } from "./Transcript";
 function SideChatField({ id }: { id: string }) {
   const draft = useApp((s) => s.drafts[id] ?? "");
   const running = useApp((s) => isRunning(s.threads[id]));
+  const stopping = useStops((s) => !!s.pending[id]);
   // Opened from a message, the field starts on its quote: it mounts per thread (`key`), takes the
   // keyboard and puts the caret at the end of the quote.
   const start = useCallback((el: HTMLTextAreaElement | null) => {
@@ -53,7 +55,9 @@ function SideChatField({ id }: { id: string }) {
       <div className="mt-1 flex items-center justify-between gap-2">
         <PermissionMenu threadId={id} compact />
         {running ? (
-          <Pill onClick={() => void cancel(id)}>Stop</Pill>
+          <Pill onClick={() => void cancel(id)} aria-busy={stopping || undefined}>
+            {stopping ? "Stopping…" : "Stop"}
+          </Pill>
         ) : (
           <Pill onClick={send} aria-disabled={!draft.trim()}>
             Send

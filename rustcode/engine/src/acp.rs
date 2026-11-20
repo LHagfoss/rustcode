@@ -33,6 +33,7 @@ mod session_repair;
 mod session_replay;
 pub(crate) mod settings;
 pub(crate) mod steer;
+mod stop;
 mod streaming;
 mod telemetry;
 mod themes;
@@ -3206,26 +3207,34 @@ async fn serve_connection(
             {
                 let server = server.clone();
                 async move |notification: CancelNotification, _connection| {
-                    if let Some(external) =
-                        harnesses::get(&server.external, notification.session_id.0.as_ref()).await
-                    {
-                        external.cancel();
-                        return Ok(());
-                    }
-                    let turns = server
-                        .sessions
-                        .lock()
-                        .await
-                        .get(notification.session_id.0.as_ref())
-                        .map(|session| Arc::clone(&session.turns));
-                    if let Some(turns) = turns {
-                        turns.cancel_active().await;
-                    }
-                    crate::tools::abort_background_starts(notification.session_id.0.as_ref());
+                    let attempt = stop::notification_attempt(notification.meta.as_ref());
+                    stop::stop(
+                        &server,
+                        notification.session_id.0.as_ref(),
+                        attempt.as_deref(),
+                        "notification",
+                    )
+                    .await;
                     Ok(())
                 }
             },
             agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: stop::StopRequest, responder, _connection| {
+                    let answer = stop::stop(
+                        &server,
+                        &request.session_id,
+                        request.attempt.as_deref(),
+                        "request",
+                    )
+                    .await;
+                    responder.respond(answer)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             {
