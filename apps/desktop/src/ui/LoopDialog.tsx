@@ -1,9 +1,9 @@
-// New / Edit scheduled job (issues 3892, 3937, 3990): a name, the project it runs in, the prompt, a schedule
-// (every few hours, on chosen weekdays at a time, monthly, once at a date and time, or a cron of
-// the user's own), where each run goes (a fresh thread, or one thread every time) and the agent a
-// fresh run starts: a harness, one of its models and an effort. A webhook can start runs too, with
-// or without a schedule; its URL is shown once, after the save that made it. Saved through
-// `_rustcode/loops/save` into the scheduler daemon's store.
+// New / Edit loop (issues 3892, 3937): a name, the project it runs in, the prompt, a schedule
+// (every few hours, on chosen weekdays at a time, monthly, once at a date and time, manual, or a
+// cron of the user's own), where each run goes (a fresh thread, or one thread every time) and the
+// agent a fresh run starts: a harness, one of its models and an effort. A webhook can start runs
+// too, with or without a schedule; its URL is shown once, after the save that made it. Saved
+// through `_rustcode/loops/save` into the scheduler daemon's store.
 
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -65,6 +65,46 @@ const DAY_SHORTCUTS = [
   { label: "Every day", days: EVERY_DAY },
   { label: "Weekdays", days: WEEKDAYS },
   { label: "Weekends", days: WEEKENDS },
+];
+
+interface LoopTemplate {
+  label: string;
+  name: string;
+  prompt: string;
+  script?: string;
+  form: Partial<ScheduleForm>;
+}
+
+const TEMPLATES: LoopTemplate[] = [
+  {
+    label: "CI watch",
+    name: "CI watch",
+    prompt:
+      "Check CI on main. Report the failing job, its first error, and the likely cause. Say Nothing to report if main is green.",
+    script: "gh run list --branch main --status failure --limit 5",
+    form: { repeat: "hours", everyHours: 4 },
+  },
+  {
+    label: "Security sweep",
+    name: "Security sweep",
+    prompt:
+      "Audit recent commits and dependencies for security vulnerabilities, exposed endpoints, or missing auth checks. Rank findings High, Medium, or Low with concrete remediation steps. Say Nothing to report if clean.",
+    form: { repeat: "days", days: [...EVERY_DAY], time: "09:00" },
+  },
+  {
+    label: "Issue triage",
+    name: "Issue triage",
+    prompt:
+      "Review new open issues since yesterday. Group them by area, rank severity (High, Medium, Low), and propose concrete next steps. Say Nothing to report if there are no new issues.",
+    form: { repeat: "days", days: [...WEEKDAYS], time: "09:00" },
+  },
+  {
+    label: "Perf & tech debt",
+    name: "Perf & tech debt",
+    prompt:
+      "Inspect recent changes for performance regressions, hot loops, unbounded allocations, or growing tech debt. Propose the highest-impact fix first. Say Nothing to report if nothing stands out.",
+    form: { repeat: "days", days: [1], time: "09:00" },
+  },
 ];
 
 function ordinal(n: number): string {
@@ -318,7 +358,7 @@ export function LoopDialog({
     .filter((session) => !session.host && session.cwd === draft.workspace)
     .map((session) => ({ value: session.id, label: session.title || "New thread" }));
   if (draft.threadId && !threadOptions.some((option) => option.value === draft.threadId)) {
-    threadOptions.unshift({ value: draft.threadId, label: "The job's thread" });
+    threadOptions.unshift({ value: draft.threadId, label: "The loop's thread" });
   }
   const threadId = target === "one" ? draft.threadId || threadOptions[0]?.value : undefined;
   const timezone = draft.timezone ?? userTimeZone();
@@ -427,7 +467,7 @@ export function LoopDialog({
               <>
                 <div className="flex shrink-0 flex-col gap-1 px-5 pt-5 pb-3">
                   <Dialog.Title className="font-semibold text-title3">
-                    {loop ? "Edit scheduled job" : "New scheduled job"}
+                    {loop ? "Edit loop" : "New loop"}
                   </Dialog.Title>
                   <p className="text-caption text-fg-muted">
                     {remote
@@ -437,6 +477,29 @@ export function LoopDialog({
                 </div>
                 <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-4">
                   <Section title="Task">
+                    {!loop && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="mr-0.5 text-caption text-fg-faint">Templates</span>
+                        {TEMPLATES.map((template) => (
+                          <Pill
+                            key={template.label}
+                            size="sm"
+                            quiet
+                            onClick={() => {
+                              patch({
+                                name: template.name,
+                                prompt: template.prompt,
+                                script: remote ? undefined : template.script,
+                              });
+                              patchForm(template.form);
+                              if (!remote && template.script) setScriptOpen(true);
+                            }}
+                          >
+                            {template.label}
+                          </Pill>
+                        ))}
+                      </div>
+                    )}
                     {machineOptions.length > 1 && (
                       <Field label="Machine">
                         <Select
@@ -656,7 +719,7 @@ export function LoopDialog({
                       label="Webhook"
                       hint={
                         draft.webhook
-                          ? "A POST to the job’s URL starts a run, with the request body added to the prompt as data."
+                          ? "A POST to the loop’s URL starts a run, with the request body added to the prompt as data."
                           : "Also start runs from GitHub or another service by calling a URL."
                       }
                       checked={draft.webhook ?? false}
@@ -791,7 +854,7 @@ export function LoopDialog({
                   )}
                   <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
                   <Pill prominent disabled={!ready || saving} onClick={() => void save()}>
-                    {saving ? "Saving…" : loop ? "Save changes" : "Schedule job"}
+                    {saving ? "Saving…" : loop ? "Save changes" : "Create loop"}
                   </Pill>
                 </div>
               </>
@@ -814,7 +877,7 @@ function WebhookMade({ webhook, onDone }: { webhook: LoopWebhook; onDone: () => 
         <div className="flex min-w-0 flex-col gap-1">
           <Dialog.Title className="font-semibold text-title3">Webhook ready</Dialog.Title>
           <p className="text-caption text-fg-muted">
-            Copy the URL now. It is shown only this once; if it is lost, replace it from the job’s editor.
+            Copy the URL now. It is shown only this once; if it is lost, replace it from the loop’s editor.
           </p>
         </div>
       </div>

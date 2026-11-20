@@ -321,8 +321,9 @@ pub enum Commands {
         command: MachineCommands,
     },
 
-    /// Manage scheduled jobs through the running daemon
-    Cron {
+    /// Manage loops through the running daemon
+    #[command(alias = "loop", alias = "cron")]
+    Loops {
         #[command(subcommand)]
         command: CronCommands,
     },
@@ -501,7 +502,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "mcp-connect",
         ],
     ),
-    ("Server", &["server", "daemon", "cron"]),
+    ("Server", &["server", "daemon", "loops"]),
 ];
 
 /// The command lines of `rustcode --help`, grouped by [`HELP_GROUPS`].
@@ -979,7 +980,7 @@ pub enum RemoteDeviceCommands {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum CronCommands {
-    /// Add a scheduled job
+    /// Add a loop
     Add {
         #[arg(long)]
         id: String,
@@ -1001,30 +1002,30 @@ pub enum CronCommands {
         #[arg(long)]
         json: bool,
     },
-    /// List scheduled jobs
+    /// List loops
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Pause a scheduled job
+    /// Pause a loop
     Pause {
         job_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Resume a scheduled job
+    /// Resume a loop
     Resume {
         job_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Run a scheduled job now
+    /// Run a loop now
     Run {
         job_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Show recent runs for a scheduled job
+    /// Show recent runs for a loop
     History {
         job_id: String,
         #[arg(long, default_value_t = 20, value_parser = parse_history_limit)]
@@ -1032,7 +1033,7 @@ pub enum CronCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a scheduled job
+    /// Delete a loop
     Delete {
         job_id: String,
         #[arg(long)]
@@ -2355,7 +2356,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             cli.command,
-            Some(Commands::Cron {
+            Some(Commands::Loops {
                 command: CronCommands::Add {
                     id,
                     target_session: Some(target),
@@ -2370,7 +2371,10 @@ mod tests {
     fn parses_cron_job_controls_and_history_limit() {
         for action in ["pause", "resume", "run", "delete"] {
             let cli = Cli::try_parse_from(["rustcode", "cron", action, "job-1", "--json"]).unwrap();
-            assert!(matches!(cli.command, Some(Commands::Cron { .. })));
+            assert!(matches!(cli.command, Some(Commands::Loops { .. })));
+            let loops_cli =
+                Cli::try_parse_from(["rustcode", "loops", action, "job-1", "--json"]).unwrap();
+            assert!(matches!(loops_cli.command, Some(Commands::Loops { .. })));
         }
         let history = Cli::try_parse_from([
             "rustcode", "cron", "history", "job-1", "--limit", "7", "--json",
@@ -2378,7 +2382,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             history.command,
-            Some(Commands::Cron {
+            Some(Commands::Loops {
                 command: CronCommands::History {
                     job_id,
                     limit: 7,
@@ -2387,6 +2391,7 @@ mod tests {
             }) if job_id == "job-1"
         ));
         assert!(Cli::try_parse_from(["rustcode", "cron", "list", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["rustcode", "loops", "list", "--json"]).is_ok());
     }
 
     #[test]

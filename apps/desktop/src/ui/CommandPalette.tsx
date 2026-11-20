@@ -50,6 +50,7 @@ import {
   PanelLeft,
   PanelRight,
   RefreshCw,
+  Repeat,
   Search,
   Sparkles,
   SquarePen,
@@ -143,6 +144,14 @@ export function baseActions(): PaletteAction[] {
       keys: shortcutHint("inbox"),
       words: "attention waiting inbox approve decline failed delegate",
       run: () => setView({ kind: "inbox" }),
+    },
+    {
+      id: "loops",
+      label: s.view.kind === "loops" ? "Show the chat" : "Show Loops",
+      detail: "Scheduled and webhook runs",
+      icon: Repeat,
+      words: "loops scheduled jobs cron webhook repeat",
+      run: () => setView(s.view.kind === "loops" ? { kind: "chat" } : { kind: "loops" }),
     },
     {
       id: "board",

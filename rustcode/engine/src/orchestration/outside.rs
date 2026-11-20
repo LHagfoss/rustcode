@@ -163,6 +163,7 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
         | REMOVE_PROJECT
         | SCHEDULE_TASK
         | CREATE_LOOP
+        | UPDATE_LOOP
         | DELETE_SCHEDULED_TASK
         | RUN_SCHEDULED_TASK_NOW => Scope::Manage,
         _ => return None,
@@ -205,7 +206,11 @@ pub fn implemented(tool: &str) -> bool {
             | CONFIGURE_SESSION
             | MERGE_WHEN_GREEN
             | CLEANUP_WORKTREE
+            | LIST_SCHEDULED_TASKS
             | CREATE_LOOP
+            | UPDATE_LOOP
+            | DELETE_SCHEDULED_TASK
+            | RUN_SCHEDULED_TASK_NOW
             | crate::manage::MANAGE_SETTINGS
             | crate::manage::MANAGE_CAPABILITIES
     )
@@ -705,6 +710,19 @@ pub fn summarize(tool: &str, args: &Value) -> String {
             }
             .to_owned(),
         );
+    } else if matches!(
+        tool,
+        super::UPDATE_LOOP | super::DELETE_SCHEDULED_TASK | super::RUN_SCHEDULED_TASK_NOW
+    ) {
+        if let Some(id) = text("id", 80) {
+            parts.push(format!("loop {id}"));
+        }
+        if let Some(name) = text("name", 80) {
+            parts.push(format!("named {name}"));
+        }
+        if let Some(paused) = args["paused"].as_bool() {
+            parts.push(if paused { "pause" } else { "resume" }.to_owned());
+        }
     }
     for key in ["prompt", "message"] {
         if let Some(value) = text(key, 160) {
@@ -1253,7 +1271,7 @@ pub fn instructions(grant: &Grant) -> String {
         ""
     };
     format!(
-        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_threads` finds threads and `read_thread` reads one. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_thread` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_thread` sends an existing thread a message, `interrupt_thread` stops a running turn, and `wait_thread` returns an answer. With Manage access `create_loop` adds a scheduled job (once or recurring) in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` act on a thread you name with `thread_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Threads started by `start_thread` and `fan_out` run at Auto-edit. They can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
+        "You are connected to RustCode, the app that owns the user's coding-agent threads, projects, settings and usage on this computer and on the machines paired with it. Each thread runs on a harness (the built-in one, Codex, Claude Code, Gemini CLI, OpenCode or Pi). You are “{}” with {} access: {}.{ask}\n\nStart with `{WHOAMI}`: it lists this connection's access, the tools it has and lacks, the projects, machines and harnesses that exist. `list_threads` finds threads, `read_thread` reads one, and `list_loops` lists loops. `thread_usage` and `query_data` answer usage questions. With Delegate access `start_thread` starts a standalone thread in a project `{WHOAMI}` lists, `fan_out` starts the same task on two to four harnesses, `message_thread` sends an existing thread a message, `interrupt_thread` stops a running turn, and `wait_thread` returns an answer. With Manage access `create_loop`, `update_loop`, `run_loop` and `delete_loop` manage loops (once or recurring) in the project you name, and `merge_when_green`, `cleanup_worktree`, `update_thread` and `configure_thread` act on a thread you name with `thread_id`. `manage_settings` and `manage_capabilities` read RustCode's settings, skills, MCP servers, harnesses and themes; with Admin access they also change them. Threads started by `start_thread` and `fan_out` run at Auto-edit. They can edit files, and a command that needs approval is declined. Tools outside your access are not listed.",
         grant.name,
         grant.scope.label(),
         grant.scope.meaning(),

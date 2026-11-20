@@ -1770,11 +1770,11 @@ The MCP server also validates arguments, so a bad call fails without
 reaching the engine.
 
 A harness that does not defer MCP tools sends every listed definition with
-each request, so the server lists a core set by default and leaves out the 14
-tools few threads call: the project tools (`read_project`, `create_project`,
-`clone_project`, `update_project`, `remove_project`), the daemon's scheduled
-tasks (`schedule_task`, `list_scheduled_tasks`, `delete_scheduled_task`,
-`run_scheduled_task_now`), the workflow tools (`run_workflow`,
+each request, so the server lists a core set by default (including `list_loops`
+and `create_loop`) and leaves out the 14 tools few threads call: the project
+tools (`read_project`, `create_project`, `clone_project`, `update_project`,
+`remove_project`), loop mutations and legacy scheduling (`schedule_task`,
+`update_loop`, `delete_loop`, `run_loop`), the workflow tools (`run_workflow`,
 `workflow_status`, `stop_workflow`) and worktree handoff (`worktree_status`,
 `handoff_worktree`). That is about a third of the list's bytes. The setting
 `orchestration-all-tools` (off by default; `manage_settings`, or

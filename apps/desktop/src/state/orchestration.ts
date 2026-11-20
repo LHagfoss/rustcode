@@ -67,8 +67,10 @@ import { formatDuration } from "./thread";
  * `list_pull_requests`, `read_project`, `clone_project`).
  * Version 18 gives `transfer_session` an `account` and a `model`.
  * Version 19 adds `create_loop`.
+ * Version 20 adds `compact_session`.
+ * Version 21 adds `update_loop`.
  */
-export const CAPABILITY_VERSION = 20;
+export const CAPABILITY_VERSION = 21;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** One `read_session` page. */

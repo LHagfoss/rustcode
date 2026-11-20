@@ -17,6 +17,9 @@ const TOOLS: &[(&str, &str)] = &[
     (super::CONFIGURE_SESSION, "configure_thread"),
     (super::TRANSFER_SESSION, "transfer_thread"),
     (super::INTERRUPT_SESSION, "interrupt_thread"),
+    (super::LIST_SCHEDULED_TASKS, "list_loops"),
+    (super::DELETE_SCHEDULED_TASK, "delete_loop"),
+    (super::RUN_SCHEDULED_TASK_NOW, "run_loop"),
 ];
 const ID_FIELDS: &[(&str, &str)] = &[("session_id", "thread_id"), ("session_ids", "thread_ids")];
 
@@ -103,7 +106,7 @@ pub(super) enum ReplyNames {
 pub(super) fn call_args(name: &str, args: &mut Value) -> Result<ReplyNames, CallAnswer> {
     let tool = internal_tool(name);
     // Loops already use thread_id from the MCP schema through to the app.
-    if tool == super::CREATE_LOOP {
+    if matches!(tool, super::CREATE_LOOP | super::UPDATE_LOOP) {
         return Ok(ReplyNames::Thread);
     }
     if !super::is_tool(tool) && tool != crate::workflow::STATUS_TOOL_NAME {
@@ -154,6 +157,16 @@ impl ReplyNames {
                     && let Some(text) = field.as_str()
                 {
                     *field = Value::from(public_text(text));
+                }
+            }
+            if tool == super::LIST_SCHEDULED_TASKS
+                && let Some(fields) = body.as_object_mut()
+            {
+                for &(internal, public) in &[("tasks", "loops"), ("omitted_tasks", "omitted_loops")]
+                {
+                    if let Some(field) = fields.remove(internal) {
+                        fields.entry(public).or_insert(field);
+                    }
                 }
             }
             self.result_fields(&mut body);
@@ -231,6 +244,68 @@ mod tests {
         let mut args = json!({"thread_id": "existing"});
         call_args(super::super::CREATE_LOOP, &mut args).unwrap();
         assert_eq!(args, json!({"thread_id": "existing"}));
+        let mut update = json!({"id": "loop-1", "thread_id": "existing"});
+        call_args(super::super::UPDATE_LOOP, &mut update).unwrap();
+        assert_eq!(update, json!({"id": "loop-1", "thread_id": "existing"}));
+    }
+
+    #[test]
+    fn loop_mcp_names_translate_tools_and_list_fields_while_keeping_legacy_aliases() {
+        assert_eq!(
+            public_tool(super::super::LIST_SCHEDULED_TASKS),
+            "list_loops"
+        );
+        assert_eq!(
+            public_tool(super::super::RUN_SCHEDULED_TASK_NOW),
+            "run_loop"
+        );
+        assert_eq!(
+            public_tool(super::super::DELETE_SCHEDULED_TASK),
+            "delete_loop"
+        );
+        assert_eq!(
+            internal_tool("list_loops"),
+            super::super::LIST_SCHEDULED_TASKS
+        );
+        assert_eq!(
+            internal_tool("run_loop"),
+            super::super::RUN_SCHEDULED_TASK_NOW
+        );
+        assert_eq!(
+            internal_tool("delete_loop"),
+            super::super::DELETE_SCHEDULED_TASK
+        );
+
+        let raw = CallAnswer {
+            success: true,
+            content:
+                json!({"daemon_running": true, "tasks": [{"id": "loop-1"}], "omitted_tasks": 2})
+                    .to_string(),
+        };
+        let mut args = json!({});
+        let loop_names = call_args("list_loops", &mut args).unwrap();
+        let loop_reply: Value = serde_json::from_str(
+            &loop_names
+                .answer(super::super::LIST_SCHEDULED_TASKS, raw.clone())
+                .content,
+        )
+        .unwrap();
+        assert_eq!(
+            loop_reply,
+            json!({"daemon_running": true, "loops": [{"id": "loop-1"}], "omitted_loops": 2})
+        );
+
+        let legacy_names = call_args("list_scheduled_tasks", &mut args).unwrap();
+        let legacy_reply: Value = serde_json::from_str(
+            &legacy_names
+                .answer(super::super::LIST_SCHEDULED_TASKS, raw)
+                .content,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy_reply,
+            json!({"daemon_running": true, "tasks": [{"id": "loop-1"}], "omitted_tasks": 2})
+        );
     }
 
     #[test]

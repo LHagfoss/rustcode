@@ -76,6 +76,7 @@ import {
   runScheduledTaskNow,
   scheduleTask,
   threadStatus,
+  updateLoop,
 } from "./hostSchedule";
 import { activityFrom, fanOut, start, wait } from "./hostStart";
 import {
@@ -504,7 +505,7 @@ export function verb(q: GrantAsk): string {
     case "project":
       return `change the project “${q.target}”`;
     case "schedule":
-      return q.onceOnly ? `schedule the job “${q.target}”` : `schedule “${q.target}”`;
+      return q.onceOnly ? `create the loop “${q.target}”` : `change the loop “${q.target}”`;
   }
 }
 
@@ -549,7 +550,7 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   cleanup: "Cleaned up a delegate's worktree",
   handoff: "Handed a worktree off",
   project: "Changed a project",
-  schedule: "Changed scheduled work",
+  schedule: "Changed loops",
 };
 
 export async function permitted(
@@ -903,6 +904,8 @@ async function perform(
       return removeProject(caller, call);
     case "create_loop":
       return createLoop(caller, call);
+    case "update_loop":
+      return updateLoop(caller, call);
     case "schedule_task":
       return scheduleTask(caller, call);
     case "list_scheduled_tasks":

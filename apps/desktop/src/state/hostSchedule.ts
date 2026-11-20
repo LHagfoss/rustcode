@@ -24,7 +24,7 @@ import {
   targetMachine,
 } from "./host";
 import { projectPath } from "./hostProjects";
-import { userTimeZone } from "./loops";
+import { parseLoops, userTimeZone } from "./loops";
 import {
   activityOf,
   type Call,
@@ -117,7 +117,7 @@ export async function createLoop(
     ? state.sessions.find((session) => session.id === threadId && !session.host)
     : undefined;
   if (threadId && (!target || projectPath(target.cwd) !== workspace)) {
-    return failureJson(failure("invalid", "thread_id must name a local thread in the job's project"));
+    return failureJson(failure("invalid", "thread_id must name a local thread in the loop's project"));
   }
   const runHarness = state.harnesses?.harnesses.find(
     (entry) => entry.id === (harness ?? state.harnesses?.default.harness),
@@ -161,14 +161,106 @@ export async function createLoop(
   return { id: loop.id ?? null, name, schedule, next_due_at: loop.nextDueAt ?? null };
 }
 
-/** `list_scheduled_tasks`: what the daemon holds, and whether it is running. */
+/** Update, pause or resume an existing loop after user approval. */
+export async function updateLoop(
+  caller: RuleThread,
+  call: Extract<Call, { tool: "update_loop" }>,
+): Promise<JsonObject> {
+  const { id } = call;
+  const hasEdit =
+    call.name !== undefined ||
+    call.prompt !== undefined ||
+    call.schedule !== undefined ||
+    call.readOnly !== undefined ||
+    call.harness !== undefined ||
+    call.account !== undefined ||
+    call.model !== undefined ||
+    call.effort !== undefined ||
+    call.threadId !== undefined;
+  const listed = await askScheduler(Method.loopsList, {}, 20_000);
+  if (listed.error) return listed;
+  const existing = parseLoops(listed).loops.find((entry) => entry.id === id);
+  if (!existing && hasEdit) {
+    return failureJson(failure("not_found", `no loop has id “${id}”`));
+  }
+  const label = existing?.name ?? id;
+  const changes: string[] = [];
+  if (call.paused !== undefined) changes.push(call.paused ? "Pause" : "Resume");
+  if (call.name !== undefined) changes.push(`Rename to “${call.name}”`);
+  if (call.schedule !== undefined) {
+    changes.push(
+      call.schedule.kind === "manual"
+        ? "Manual / webhook schedule"
+        : scheduleText(localSchedule(call.schedule)),
+    );
+  }
+  if (call.readOnly !== undefined) {
+    changes.push(call.readOnly ? "Read-only" : "Full access during unattended runs");
+  }
+  if (call.prompt !== undefined) changes.push("", call.prompt);
+  const no = await permitted(caller, `schedule:update:${id}`, {
+    kind: "schedule",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: label,
+    detail: `Update loop “${label}”:\n${changes.join("\n")}`,
+  });
+  if (no) return failureJson(no);
+
+  if (hasEdit && existing) {
+    const schedule =
+      call.schedule === undefined
+        ? existing.schedule
+        : call.schedule.kind === "manual"
+          ? { kind: "manual" }
+          : localSchedule(call.schedule);
+    const useThread =
+      call.threadId ?? (call.harness || call.model || call.effort ? undefined : existing.threadId);
+    const saved = await askScheduler(Method.loopsSave, {
+      id: existing.id,
+      name: call.name ?? existing.name,
+      workspace: existing.workspace,
+      prompt: call.prompt ?? existing.prompt,
+      schedule,
+      readOnly: call.readOnly ?? existing.readOnly,
+      ...(existing.script ? { script: existing.script } : {}),
+      ...(existing.webhook ? { webhook: true } : {}),
+      ...(existing.machine ? { machine: existing.machine } : {}),
+      ...(useThread
+        ? { threadId: useThread }
+        : {
+            ...((call.harness ?? existing.harness) ? { harness: call.harness ?? existing.harness } : {}),
+            ...((call.account ?? existing.account) ? { account: call.account ?? existing.account } : {}),
+            ...((call.model ?? existing.model) ? { model: call.model ?? existing.model } : {}),
+            ...((call.effort ?? existing.effort) ? { effort: call.effort ?? existing.effort } : {}),
+          }),
+    });
+    if (saved.error) return saved;
+  }
+  if (call.paused !== undefined) {
+    const toggled = await askScheduler(Method.loopsSetPaused, { id, paused: call.paused });
+    if (toggled.error) return toggled;
+  }
+  const after = parseLoops(await askScheduler(Method.loopsList, {}, 20_000)).loops.find(
+    (entry) => entry.id === id,
+  );
+  return {
+    id,
+    name: after?.name ?? call.name ?? label,
+    paused: after?.paused ?? call.paused ?? existing?.paused ?? false,
+    schedule: (after?.schedule ?? existing?.schedule ?? null) as Json,
+    next_due_at: after?.nextDueAt ? new Date(after.nextDueAt).toISOString() : null,
+  };
+}
+
+/** `list_scheduled_tasks` (`list_loops`): what the daemon holds, and whether it is running. */
 export async function listScheduledTasks(): Promise<JsonObject> {
   return askScheduler(Method.scheduledList, {}, 20_000);
 }
 
 /**
- * What the list says a task is called and where it runs, so a card names it
- * rather than a `task-1723…` id. The daemon may not answer: the changing call
+ * What the list says a loop is called and where it runs, so a card names it
+ * rather than a `loop-1723…` id. The daemon may not answer: the changing call
  * then reads as it did before, still naming the id it was given.
  */
 async function scheduledTaskName(id: string): Promise<string> {
@@ -177,11 +269,11 @@ async function scheduledTaskName(id: string): Promise<string> {
   const task = tasks.find((entry) => obj(entry)?.id === id);
   const name = str(obj(task)?.name);
   const workspace = str(obj(task)?.workspace);
-  if (!name && !workspace) return "that scheduled task";
+  if (!name && !workspace) return "that loop";
   return `“${name ?? id}”${workspace ? `, which runs in ${workspace}` : ""}`;
 }
 
-/** `delete_scheduled_task`: the task leaves the scheduler at once. */
+/** `delete_scheduled_task` (`delete_loop`): the loop leaves the scheduler at once. */
 export async function deleteScheduledTask(caller: RuleThread, id: string): Promise<JsonObject> {
   const task = await scheduledTaskName(id);
   const no = await permitted(caller, `schedule:delete:${id}`, {
@@ -195,7 +287,7 @@ export async function deleteScheduledTask(caller: RuleThread, id: string): Promi
   return askScheduler(Method.scheduledDelete, { id });
 }
 
-/** `run_scheduled_task_now`: one run now, with the schedule left as it is. */
+/** `run_scheduled_task_now` (`run_loop`): one run now, with the schedule left as it is. */
 export async function runScheduledTaskNow(caller: RuleThread, id: string): Promise<JsonObject> {
   const task = await scheduledTaskName(id);
   const no = await permitted(caller, `schedule:run:${id}`, {
@@ -203,7 +295,7 @@ export async function runScheduledTaskNow(caller: RuleThread, id: string): Promi
     caller: caller.id,
     callerTitle: caller.title,
     target: id,
-    detail: `It would run ${task} now, and keep its schedule. Its prompt runs with no thread open.`,
+    detail: `It would run ${task} now, and keep its schedule.`,
   });
   if (no) return failureJson(no);
   return askScheduler(Method.scheduledRun, { id });

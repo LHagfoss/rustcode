@@ -965,7 +965,7 @@ pub const REMOVE_PROJECT: Tool = Tool {
 
 pub const CREATE_LOOP: Tool = Tool {
     name: crate::orchestration::CREATE_LOOP,
-    description: "Create a scheduled job (once or recurring) on any harness, shown in Scheduled Jobs. Each run is a fresh read-only thread by default; runs while RustCode is open. Agent IDs: list_harnesses. The user approves it.",
+    description: "Create a loop (once or recurring) on any harness, shown in Loops. Each run is a fresh read-only thread by default; runs while RustCode is open. Agent IDs: list_harnesses. The user approves it.",
     arguments: r#"{"name":"Morning check","prompt":"Check the build","schedule":{"kind":"cron","expression":"0 9 * * 1-5"}}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -982,7 +982,7 @@ pub const CREATE_LOOP: Tool = Tool {
             ("read_only".into(), serde_json::json!({"type":"boolean","default":true,"description":"Decline approvals during unattended runs"})),
             ("client_request_id".into(), serde_json::json!({"type":"string","description":"Reuse the same ID when retrying this exact request"})),
         ]));
-        properties["name"]["description"] = serde_json::json!("Name shown in Scheduled Jobs");
+        properties["name"]["description"] = serde_json::json!("Name shown in Loops");
         schema["required"] = serde_json::json!(["name", "prompt", "schedule"]);
         schema
     },
@@ -990,9 +990,45 @@ pub const CREATE_LOOP: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+pub const UPDATE_LOOP: Tool = Tool {
+    name: crate::orchestration::UPDATE_LOOP,
+    description: "Update, pause or resume a loop by id, shown in Loops. Omitted fields stay unchanged. The user approves it.",
+    arguments: r#"{"id":"loop-1750000000000-1a2b","paused":true}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "minLength": 1, "description": "Loop id from list_loops"},
+                "paused": {"type": "boolean", "description": "true pauses the loop, false resumes it"},
+                "name": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Name shown in Loops"},
+                "prompt": {"type": "string", "minLength": 1, "maxLength": 32768, "description": "Prompt each run is asked to do"},
+                "schedule": {
+                    "oneOf": [
+                        {"type": "object", "properties": {"kind": {"const": "cron"}, "expression": {"type": "string", "minLength": 1}, "timezone": {"type": "string", "minLength": 1}}, "required": ["kind", "expression"], "additionalProperties": false},
+                        {"type": "object", "properties": {"kind": {"const": "at"}, "at": {"type": "string", "minLength": 1}}, "required": ["kind", "at"], "additionalProperties": false},
+                        {"type": "object", "properties": {"kind": {"const": "manual"}}, "required": ["kind"], "additionalProperties": false}
+                    ]
+                },
+                "harness": {"type": "string", "minLength": 1, "description": "Harness ID from list_harnesses"},
+                "account": {"type": "string", "minLength": 1, "description": "Named account ID from list_harnesses"},
+                "model": {"type": "string", "minLength": 1, "description": "Model ID from list_harnesses"},
+                "effort": {"type": "string", "minLength": 1, "description": "Reasoning effort supported by the model"},
+                "thread_id": {"type": "string", "minLength": 1, "description": "Existing thread in the project; omit harness, account, model and effort when supplied"},
+                "read_only": {"type": "boolean", "description": "Decline approvals during unattended runs"}
+            },
+            "required": ["id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 pub const SCHEDULE_TASK: Tool = Tool {
     name: crate::orchestration::SCHEDULE_TASK,
-    description: "Schedule a built-in-harness job: a prompt run once at an ISO 8601 time or on a cron. `schedule` is {kind: cron, expression, timezone?} or {kind: at, at}; timezone defaults to the user's. For another harness or Scheduled Jobs, use create_loop. Needs the scheduler running; report its next run. The user approves it.",
+    description: "Schedule a built-in-harness task: a prompt run once at an ISO 8601 time or on a cron. `schedule` is {kind: cron, expression, timezone?} or {kind: at, at}; timezone defaults to the user's. For another harness or Loops, use create_loop. Needs the scheduler running; report its next run. The user approves it.",
     arguments: r#"{"prompt": "Check the build", "schedule": {"kind": "cron", "expression": "0 9 * * 1-5", "timezone": "Europe/Oslo"}, "project": "/abs/project", "name": "Morning check"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -1000,7 +1036,7 @@ pub const SCHEDULE_TASK: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "prompt": {"type": "string", "minLength": 1, "maxLength": 32768, "description": "what the scheduled run is asked to do"},
+                "prompt": {"type": "string", "minLength": 1, "maxLength": 32768, "description": "what each run is asked to do"},
                 "schedule": {
                     "oneOf": [
                         {"type": "object", "properties": {"kind": {"const": "cron"}, "expression": {"type": "string", "minLength": 1}, "timezone": {"type": "string", "minLength": 1}}, "required": ["kind", "expression"], "additionalProperties": false},
@@ -1021,7 +1057,7 @@ pub const SCHEDULE_TASK: Tool = Tool {
 
 pub const LIST_SCHEDULED_TASKS: Tool = Tool {
     name: crate::orchestration::LIST_SCHEDULED_TASKS,
-    description: "List scheduled jobs (once and recurring): id, name, paused, schedule, workspace and next run, at most 100. `daemon_running: false` means the scheduler is stopped; `hint` says how to start it.",
+    description: "List loops (once, recurring and webhook): id, name, paused, schedule, workspace and next run, at most 100. `daemon_running: false` means the scheduler is stopped; `hint` says how to start it.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -1039,8 +1075,8 @@ pub const LIST_SCHEDULED_TASKS: Tool = Tool {
 
 pub const DELETE_SCHEDULED_TASK: Tool = Tool {
     name: crate::orchestration::DELETE_SCHEDULED_TASK,
-    description: "Delete a scheduled job by id. It stops at once with its run history. The user approves it.",
-    arguments: r#"{"id": "task-1750000000000-1a2b"}"#,
+    description: "Delete a loop by id. It stops at once with its run history. The user approves it.",
+    arguments: r#"{"id": "loop-1750000000000-1a2b"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -1059,8 +1095,8 @@ pub const DELETE_SCHEDULED_TASK: Tool = Tool {
 
 pub const RUN_SCHEDULED_TASK_NOW: Tool = Tool {
     name: crate::orchestration::RUN_SCHEDULED_TASK_NOW,
-    description: "Run a scheduled job now by id, keeping its schedule. Needs the scheduler. The user approves it.",
-    arguments: r#"{"id": "task-1750000000000-1a2b"}"#,
+    description: "Run a loop now by id, keeping its schedule. Needs the scheduler. The user approves it.",
+    arguments: r#"{"id": "loop-1750000000000-1a2b"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {

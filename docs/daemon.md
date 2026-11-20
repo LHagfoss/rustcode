@@ -63,57 +63,57 @@ The equivalent harness operation is:
 RustCode snapshots the configured MCP command and environment at creation
 time, so later config changes do not silently redirect a durable job.
 
-## Manage jobs
+## Manage loops
 
 ```sh
-rustcode cron list
-rustcode cron pause morning-teams
-rustcode cron resume morning-teams
-rustcode cron run morning-teams
-rustcode cron history morning-teams --limit 20
-rustcode cron delete morning-teams
+rustcode loops list
+rustcode loops pause morning-teams
+rustcode loops resume morning-teams
+rustcode loops run morning-teams
+rustcode loops history morning-teams --limit 20
+rustcode loops delete morning-teams
 ```
 
-The harness tool exposes the same operations as `create`, `list`, `pause`,
-`resume`, `run`, `history`, and `delete`. History output is bounded. Polling is
-also bounded by interval, maximum runs, and deadline; it does not create a
-shell `sleep` loop or ask the model to repeatedly poll.
+`rustcode cron` stays as an alias for `rustcode loops`. The built-in
+`manage_scheduled_jobs` tool exposes the same operations as `create`, `list`,
+`pause`, `resume`, `run`, `history`, and `delete`. History output is bounded.
+Polling is also bounded by interval, maximum runs, and deadline; it does not
+create a shell `sleep` loop or ask the model to repeatedly poll.
 
 ## From an agent
 
-An orchestrating thread can schedule work with the same client
-(`docs/orchestrator.md` v10): `schedule_task` adds a prompt on a cron
-expression or once at an ISO time, and `list_scheduled_tasks`,
-`delete_scheduled_task` and `run_scheduled_task_now` manage what is there.
-They go through `_rustcode/scheduled/*` (`engine/src/acp/scheduled.rs`), the
-same socket and protocol `rustcode cron` uses — one scheduler, one store — and
-each changing call asks the user first. A scheduled prompt runs on the
-built-in harness in a recorded session, so it takes `model_profile` rather
-than a harness or account. Nothing starts the daemon for them: when it is
-stopped, `list_scheduled_tasks` says `daemon_running: false` with a `hint`
-(start it from Scheduled Jobs in the app, or `rustcode daemon start`), and the
-other calls refuse with the same reason.
+An orchestrating thread or an outside agent can manage loops through RustCode's
+MCP tools: `list_loops` lists them (including loop configuration), `create_loop`
+creates one on any harness, `update_loop` edits, pauses or resumes one,
+`run_loop` triggers a run now, and `delete_loop` removes one. Legacy callers
+using `list_scheduled_tasks`, `run_scheduled_task_now`, `delete_scheduled_task`
+and `schedule_task` keep working through `orchestration/mcp_names.rs` and
+`_rustcode/scheduled/*` (`engine/src/acp/scheduled.rs`). Nothing starts the
+daemon for them: when it is stopped, `list_loops` says `daemon_running: false`
+with a `hint` (start it from Loops in the app, or `rustcode daemon start`), and
+the other calls refuse with the same reason.
 
-The user-facing name for all of this is **Scheduled Jobs** (issue 3990): the
-app's page, its dialog and every tool description use "scheduled job", once or
-recurring. The tool names (`schedule_task`, `create_loop`,
-`list_scheduled_tasks`, `run_scheduled_task_now`, `delete_scheduled_task`)
-and the `_rustcode/loops/*` methods keep their names for existing callers.
+The user-facing name for all of this is **Loops**: the app's page, its dialog,
+the CLI (`rustcode loops`), agent instructions and MCP tool names use "loop",
+once, recurring or webhook-triggered. Internal daemon persistence (`JobStore`,
+`daemon/jobs.sqlite`) and legacy tool aliases keep their names for existing
+callers.
 
-## Scheduled Jobs (the `loop` action)
+## Loops (the `loop` action)
 
-A scheduled job in the app is a job whose action is `loop`: a prompt run once
-or on a schedule, each run in a fresh top-level thread on any harness, or every
-run in one thread the job names. The desktop app's Scheduled Jobs page
-creates, edits, pauses, resumes, runs and deletes them through
-`_rustcode/loops/*` (`engine/src/acp/loops.rs`) and the scheduled run/delete
-methods, so `rustcode cron list` shows the same jobs. Agents running in a
-RustCode thread can use the RustCode MCP tool `create_loop`. The desktop shows
+A loop in the app is a daemon job whose action is `loop`: a prompt run once,
+on a schedule, or from a webhook, each run in a fresh top-level thread on any
+harness, or every run in one thread the loop names. The desktop app's Loops
+page creates, edits, pauses, resumes, runs and deletes them through
+`_rustcode/loops/*` (`engine/src/acp/loops.rs`), so `rustcode loops list` shows
+the same entries. Agents running in a RustCode thread can use `list_loops`,
+`create_loop`, `update_loop`, `run_loop` and `delete_loop`. The desktop shows
 the schedule, project, agent, access and prompt for approval. Pass a five-field
 cron or one ISO 8601 time, and use `list_harnesses` for harness and account IDs.
-Outside agents with Manage access can also use `create_loop` with an absolute
-project path. Their connection's approval setting applies, and cron uses
-the scheduler machine’s time zone when they omit it.
+Outside agents (`rustcode mcp-connect`) have `list_loops` at Read-only access
+and `create_loop`, `update_loop`, `run_loop` and `delete_loop` at Manage access
+with an absolute project path. Their connection's approval setting applies, and
+cron uses the scheduler machine’s time zone when they omit it.
 
 ```json
 {
@@ -148,11 +148,14 @@ login while named accounts exist.
   model and effort are the thread's own. A run while the thread works on a
   turn, or while it is open in another RustCode process, is skipped like a
   run with the app closed; a deleted thread fails the run.
-- **Quiet by default.** The prompt asks the agent to start with “Nothing to
-  report” when nothing needs the user. A fresh run's thread whose last reply
-  starts that way is archived (status `done`) and its output adds
+- **Quiet by default, verdicts when actionable.** The prompt asks the agent to
+  start with “Nothing to report” when nothing needs the user, or a one-line
+  verdict when something does. A fresh run's thread whose last reply starts
+  with “Nothing to report” is archived (status `done`) and its output adds
   `"quiet": true`; the page says "Nothing to report" and the review list
-  leaves it out. A Loop's own thread is never archived.
+  leaves it out. For non-quiet runs, the opening line is captured as `verdict`
+  in the run output and shown on the Loops page and Review tab. A Loop's own
+  thread is never archived.
 - **Script mode.** A job may carry a `script` (set in the app's editor; an
   agent's `create_loop` cannot). Each run executes it first in the project
   folder through the same sandbox as `shell_command`, read-only when the job
@@ -201,8 +204,8 @@ login while named accounts exist.
   the command that signs it in, and the job pauses after that one run.
 - **Run threads stay out of the thread list.** Each fresh thread a run starts
   carries `scheduledJob` in its metadata (`_meta.rustcode.scheduledJob` in
-  `session/list`); the sidebar leaves it to the Scheduled Jobs page, which
-  opens it from the run.
+  `session/list`); the sidebar leaves it to the Loops page, which opens it
+  from the run.
 - A run's agent turn may take 25 minutes before it is stopped.
 
 ### On another machine, from the hub

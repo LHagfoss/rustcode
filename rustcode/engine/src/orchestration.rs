@@ -78,6 +78,7 @@ pub const CLONE_PROJECT: &str = "clone_project";
 pub const UPDATE_PROJECT: &str = "update_project";
 pub const REMOVE_PROJECT: &str = "remove_project";
 pub const CREATE_LOOP: &str = "create_loop";
+pub const UPDATE_LOOP: &str = "update_loop";
 pub const SCHEDULE_TASK: &str = "schedule_task";
 pub const LIST_SCHEDULED_TASKS: &str = "list_scheduled_tasks";
 pub const DELETE_SCHEDULED_TASK: &str = "delete_scheduled_task";
@@ -133,9 +134,11 @@ pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// Added by version 13: where a thread's work stands, and handing it over.
 pub const V13_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = COMPACT_VERSION;
+pub const VERSION: u8 = UPDATE_LOOP_VERSION;
+/// Version 21 adds updating, pausing and resuming Loops (`update_loop`).
+pub const UPDATE_LOOP_VERSION: u8 = 21;
 pub const COMPACT_VERSION: u8 = 20;
-/// Version 19 adds creating scheduled Loops.
+/// Version 19 adds creating Loops.
 pub const LOOPS_VERSION: u8 = 19;
 /// Version 14 adds mid-turn messaging.
 pub const STEER_VERSION: u8 = 14;
@@ -355,7 +358,7 @@ pub fn prompt_hint(version: u8) -> &'static str {
         _ => {
             static HINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
             HINT.get_or_init(|| {
-                format!("{PROMPT_HINT_V16} To schedule a job (a prompt run once at a time or on a recurring schedule, shown in the app's Scheduled Jobs), use `create_loop` when the user asks; `list_scheduled_tasks`, `run_scheduled_task_now` and `delete_scheduled_task` list, run and delete jobs. The user approves the schedule and prompt in the app.")
+                format!("{PROMPT_HINT_V16} To manage loops (prompts run once or on a schedule, shown in the app's Loops page), use `create_loop`, `list_scheduled_tasks`, `update_loop`, `run_scheduled_task_now` and `delete_scheduled_task` when the user asks. The user approves changes in the app.")
             })
         }
     }
@@ -371,7 +374,7 @@ pub const MCP_INSTRUCTIONS_LIMIT: usize = 4000;
 /// What the MCP server tells a version 16 client: the rules that span tools,
 /// with the ones that protect the user first. What a single tool does is in
 /// that tool's description, which a client does not cut.
-pub const MCP_INSTRUCTIONS_V16: &str = "RustCode's threads, projects, settings and usage. Rules first. Use `request_secret` for credentials instead of asking for them in chat; never read or print the destination file. Change RustCode's settings, skills and MCP servers with `manage_settings` and `manage_capabilities`; never edit `settings.json` or `config.toml` by hand. Tools that change another thread (`update_session`, `organize_threads`, `configure_session`, `transfer_session`, `interrupt_session`, `answer_request`, `merge_when_green`, `cleanup_worktree`, `handoff_worktree`), a project or a schedule run only when the user asks; the user approves, and a card for another machine names it. `machine` takes another paired computer's id or name from `list_machines`: omitted, a tool acts on this computer. Name one only when the user did, and never fall back to this computer when it is offline. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path.\n\nQuestions about the user's threads, projects, past work and usage: ask `list_sessions`, `search_sessions`, `read_session`, `list_worktrees`, `list_projects`, `thread_usage` and `query_data` instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it.\n\nDelegating: `start_session` and `fan_out` start a delegate, shown nested under this thread: give it a whole task; a Claude Code thread has no subagent tool, so delegate through them. `message_session` gives an existing thread work. For a thread the user will follow up themselves, pass `standalone: true` and name its session id to them: nothing is delivered back. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates and check their pull requests with `thread_status`. Wait on a whole wave in one `wait_session` with `link_ids` and `all: true`, or end the turn: the app wakes this thread when children finish. Call `list_harnesses` once.\n\nThis thread: when its title is still automatic, call `update_session` once with a short title (6 words or fewer); a title the user chose stays. When the user says to settle (\"settle\", \"settle this\", \"settle it\"), call `update_session` with `status: \"settled\"` on this thread or the one they name. Settling only marks it done; it does not merge, push or clean anything up.";
+pub const MCP_INSTRUCTIONS_V16: &str = "RustCode's threads, projects, settings and usage. Rules first. Use `request_secret` for credentials instead of asking for them in chat; never read or print the destination file. Change RustCode's settings, skills and MCP servers with `manage_settings` and `manage_capabilities`; never edit `settings.json` or `config.toml` by hand. Tools that change another thread (`update_session`, `organize_threads`, `configure_session`, `transfer_session`, `interrupt_session`, `answer_request`, `merge_when_green`, `cleanup_worktree`, `handoff_worktree`), a project or a loop run only when the user asks; the user approves, and a card for another machine names it. `machine` takes another paired computer's id or name from `list_machines`: omitted, a tool acts on this computer. Name one only when the user did, and never fall back to this computer when it is offline. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path.\n\nQuestions about the user's threads, projects, past work and usage: ask `list_sessions`, `search_sessions`, `read_session`, `list_worktrees`, `list_projects`, `thread_usage` and `query_data` instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it.\n\nDelegating: `start_session` and `fan_out` start a delegate, shown nested under this thread: give it a whole task; a Claude Code thread has no subagent tool, so delegate through them. `message_session` gives an existing thread work. For a thread the user will follow up themselves, pass `standalone: true` and name its session id to them: nothing is delivered back. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates and check their pull requests with `thread_status`. Wait on a whole wave in one `wait_session` with `link_ids` and `all: true`, or end the turn: the app wakes this thread when children finish. Call `list_harnesses` once.\n\nThis thread: when its title is still automatic, call `update_session` once with a short title (6 words or fewer); a title the user chose stays. When the user says to settle (\"settle\", \"settle this\", \"settle it\"), call `update_session` with `status: \"settled\"` on this thread or the one they name. Settling only marks it done; it does not merge, push or clean anything up.";
 
 /// The setting that lists [`EXTRA_TOOL_NAMES`] to a thread; off by default.
 pub const ALL_TOOLS_SETTING: &str = "orchestration-all-tools";
@@ -379,10 +382,10 @@ pub const ALL_TOOLS_SETTING: &str = "orchestration-all-tools";
 /// The tools a thread's MCP server leaves out of its list unless the user
 /// turns [`ALL_TOOLS_SETTING`] on. Every listed tool is sent with each request
 /// of a harness that does not defer them, and these are the ones few threads
-/// call: managing projects, the daemon's scheduled tasks, workflow runs and
-/// moving a worktree. Leaving them out takes about a third off the list. One
-/// that is called anyway is still answered, so a harness holding an older
-/// list keeps working.
+/// call: managing projects, loop mutations (`update_loop`, `run_loop`,
+/// `delete_loop`, legacy `schedule_task`), workflow runs and moving a worktree.
+/// Leaving them out takes about a third off the list. One that is called anyway
+/// is still answered, so a harness holding an older list keeps working.
 pub const EXTRA_TOOL_NAMES: [&str; 14] = [
     READ_PROJECT,
     CREATE_PROJECT,
@@ -390,7 +393,7 @@ pub const EXTRA_TOOL_NAMES: [&str; 14] = [
     UPDATE_PROJECT,
     REMOVE_PROJECT,
     SCHEDULE_TASK,
-    LIST_SCHEDULED_TASKS,
+    UPDATE_LOOP,
     DELETE_SCHEDULED_TASK,
     RUN_SCHEDULED_TASK_NOW,
     WORKTREE_STATUS,
@@ -402,7 +405,7 @@ pub const EXTRA_TOOL_NAMES: [&str; 14] = [
 
 /// What the MCP server adds to its instructions when it lists the core tools
 /// alone, so an agent asked for one of the others knows where it went.
-pub const CORE_TOOLS_NOTE: &str = "Not listed here: the tools that manage projects, scheduled tasks, workflow runs and worktree handoff. When the user asks for one, turn `orchestration-all-tools` on with `manage_settings`; threads started after that list them.";
+pub const CORE_TOOLS_NOTE: &str = "Not listed here: the tools that manage projects, edit/run/delete loops (`update_loop`, `run_loop`, `delete_loop`), workflow runs and worktree handoff. When the user asks for one, turn `orchestration-all-tools` on with `manage_settings`; threads started after that list them.";
 
 /// Whether the user has every tool listed to threads ([`ALL_TOOLS_SETTING`]).
 pub fn lists_all_tools() -> bool {
@@ -421,7 +424,7 @@ pub fn mcp_instructions(version: u8) -> &'static str {
         _ => {
             static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
             TEXT.get_or_init(|| {
-                format!("{MCP_INSTRUCTIONS_V16}\n\nScheduling: `create_loop` adds a job to the app's Scheduled Jobs, when the user asks; the user approves the schedule and prompt in the app.")
+                format!("{MCP_INSTRUCTIONS_V16}\n\nLoops: `list_scheduled_tasks` lists loops, and `create_loop` adds a loop to the app's Loops page when the user asks; the user approves the schedule and prompt in the app.")
             })
         }
     }
@@ -440,7 +443,7 @@ pub fn is_tool(name: &str) -> bool {
         || V11_TOOL_NAMES.contains(&name)
         || V12_TOOL_NAMES.contains(&name)
         || V13_TOOL_NAMES.contains(&name)
-        || matches!(name, CREATE_LOOP | COMPACT_SESSION)
+        || matches!(name, CREATE_LOOP | UPDATE_LOOP | COMPACT_SESSION)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -561,9 +564,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             names.push(CREATE_LOOP);
             names
         }
-        _ => {
+        20 => {
             let mut names = tool_names(19);
             names.push(COMPACT_SESSION);
+            names
+        }
+        _ => {
+            let mut names = tool_names(20);
+            names.push(UPDATE_LOOP);
             names
         }
     }
@@ -1328,6 +1336,105 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             }
         }
         LIST_SCHEDULED_TASKS => Ok(()),
+        UPDATE_LOOP => {
+            required_name(args, "id")?;
+            if args.get("session_id").is_some() {
+                return Err("use thread_id to reuse an existing thread".to_owned());
+            }
+            if args
+                .get("paused")
+                .is_some_and(|value| !value.is_boolean() && !value.is_null())
+            {
+                return Err("paused must be a boolean".to_owned());
+            }
+            if args
+                .get("read_only")
+                .is_some_and(|value| !value.is_boolean() && !value.is_null())
+            {
+                return Err("read_only must be a boolean".to_owned());
+            }
+            if let Some(prompt) = args.get("prompt")
+                && !prompt.is_null()
+            {
+                bounded_text(args, "prompt")?;
+            }
+            for field in ["name", "harness", "account", "model", "effort", "thread_id"] {
+                optional_name(args, field)?;
+            }
+            if args.get("thread_id").is_some_and(Value::is_string)
+                && ["harness", "account", "model", "effort"]
+                    .iter()
+                    .any(|key| args.get(key).is_some_and(Value::is_string))
+            {
+                return Err(
+                    "an existing thread uses its own harness, account, model and effort".to_owned(),
+                );
+            }
+            if let Some(schedule) = args.get("schedule")
+                && !schedule.is_null()
+            {
+                let Some(obj) = schedule.as_object() else {
+                    return Err("schedule must be an object".to_owned());
+                };
+                let kind = obj.get("kind").and_then(Value::as_str).unwrap_or("");
+                if kind == "manual" {
+                    // Valid: runs on webhook or Run now.
+                } else if !SCHEDULE_KINDS.contains(&kind) {
+                    return Err(format!(
+                        "schedule.kind must be one of {SCHEDULE_KINDS:?} or \"manual\""
+                    ));
+                } else {
+                    match obj.get("expression") {
+                        None | Some(Value::Null) => {}
+                        Some(Value::String(expression))
+                            if expression.split_whitespace().count() == 5 => {}
+                        Some(_) => {
+                            return Err("schedule.expression must be a five-field cron expression"
+                                .to_owned());
+                        }
+                    }
+                    match obj.get("at") {
+                        None | Some(Value::Null) => {}
+                        Some(Value::String(at))
+                            if chrono::DateTime::parse_from_rfc3339(at).is_ok() => {}
+                        Some(_) => {
+                            return Err(
+                                "schedule.at must be an ISO 8601 time with its offset".to_owned()
+                            );
+                        }
+                    }
+                    if kind == "cron" && obj.get("expression").and_then(Value::as_str).is_none() {
+                        return Err(
+                            "schedule.expression is required for a cron schedule".to_owned()
+                        );
+                    }
+                    if kind == "at" && obj.get("at").and_then(Value::as_str).is_none() {
+                        return Err("schedule.at is required for a one-off schedule".to_owned());
+                    }
+                }
+            }
+            let changes = [
+                "paused",
+                "name",
+                "prompt",
+                "schedule",
+                "read_only",
+                "harness",
+                "account",
+                "model",
+                "effort",
+                "thread_id",
+            ]
+            .iter()
+            .any(|key| !matches!(args.get(*key), None | Some(Value::Null)));
+            if !changes {
+                return Err(
+                    "give at least one field to update (paused, name, prompt, schedule, read_only, harness, account, model, effort or thread_id)"
+                        .to_owned(),
+                );
+            }
+            Ok(())
+        }
         DELETE_SCHEDULED_TASK | RUN_SCHEDULED_TASK_NOW => required_name(args, "id"),
         START_SESSION => {
             bounded_text(args, "prompt")?;
@@ -2378,6 +2485,19 @@ mod tests {
         assert!(!ok(CREATE_LOOP, loop_args));
         assert!(!tool_names(18).contains(&CREATE_LOOP));
         assert!(tool_names(LOOPS_VERSION).contains(&CREATE_LOOP));
+        assert!(!tool_names(COMPACT_VERSION).contains(&UPDATE_LOOP));
+        assert!(tool_names(UPDATE_LOOP_VERSION).contains(&UPDATE_LOOP));
+        assert!(ok(UPDATE_LOOP, json!({"id": "loop-1", "paused": true})));
+        assert!(ok(
+            UPDATE_LOOP,
+            json!({"id": "loop-1", "name": "Renamed", "schedule": {"kind": "manual"}})
+        ));
+        assert!(!ok(UPDATE_LOOP, json!({"id": "loop-1"})));
+        assert!(!ok(UPDATE_LOOP, json!({"paused": true})));
+        assert!(!ok(
+            UPDATE_LOOP,
+            json!({"id": "loop-1", "thread_id": "t-1", "harness": "codex"})
+        ));
         assert!(ok(
             SCHEDULE_TASK,
             json!({"prompt": "Once", "schedule": {"kind": "at", "at": "2026-03-04T09:30:00+01:00"}})

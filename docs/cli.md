@@ -45,7 +45,7 @@ still works under its old top-level name (`rustcode mcp list` is
 | `rustcode server status\|logs\|link-path\|update-cli` | Read the server's state, log, CLI link and update | `update-cli` replaces the CLI |
 | `rustcode serve` | Serve sessions over TCP for remote frontends (experimental) | — |
 | `rustcode daemon start\|run\|stop\|status\|logs` | The scheduler daemon | Daemon process |
-| `rustcode cron add\|list\|pause\|resume\|run\|history\|delete` | Scheduled jobs in the daemon | Jobs |
+| `rustcode loops add\|list\|pause\|resume\|run\|history\|delete` | Loops in the daemon (alias: `cron`) | Loops |
 | `rustcode remote …` | The remote gateway: pairing, devices, status | Pairings |
 | `rustcode machines list\|add\|remove\|code\|connect\|add-ssh\|discover` | Machines this one is paired with | Pairings |
 

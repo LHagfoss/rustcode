@@ -464,4 +464,31 @@ describe("hub Loops (#3957)", () => {
     const started = loop({ runs: [run("r1", "succeeded", 1, { machine: "laptop", threadId: "t-1" })] });
     expect(lastResult(started, NOW)).toEqual({ text: "Started on laptop 1 h ago", tone: "ok" });
   });
+
+  test("a non-quiet run verdict is parsed and shown as the last result", () => {
+    const parsed = parseLoops({
+      daemonRunning: true,
+      loops: [
+        {
+          id: "loop-ci",
+          name: "CI watch",
+          runs: [
+            {
+              id: "r1",
+              state: "succeeded",
+              scheduledAt: new Date(NOW - 5 * 60_000).toISOString(),
+              finishedAt: new Date(NOW - 5 * 60_000).toISOString(),
+              threadId: "t-1",
+              verdict: "CI broke on main: test_x fails",
+            },
+          ],
+        },
+      ],
+    });
+    expect(parsed.loops[0]?.runs[0]?.verdict).toBe("CI broke on main: test_x fails");
+    expect(lastResult(parsed.loops[0]!, NOW)).toEqual({
+      text: "CI broke on main: test_x fails · 5 min ago",
+      tone: "ok",
+    });
+  });
 });
