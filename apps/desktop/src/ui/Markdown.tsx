@@ -28,7 +28,7 @@ import { selectThread, toast, useApp } from "../state/store";
 import { Check, Copy, MessagesSquare } from "./icons";
 import { LinkChip } from "./LinkChip";
 import { MarkdownImage, MermaidBlock } from "./MarkdownMedia";
-import { copyText, cx, Pill } from "./primitives";
+import { copyText, cx, Pill, Tooltip } from "./primitives";
 
 export function CopyButton({
   text,
@@ -229,18 +229,19 @@ const THREAD_LINK = /^rustcode:\/\/thread\/([^/?#\s]+)$/;
 function ThreadChip({ id, label }: { id: string; label?: string }) {
   const title = useApp((s) => s.sessions.find((session) => session.id === id)?.title) ?? label ?? "A thread";
   return (
-    <button
-      type="button"
-      title={`Open “${title}”`}
-      onClick={() => selectThread(id)}
-      className={cx(
-        PILL,
-        "inline-flex max-w-full cursor-pointer items-center gap-1 bg-fill-strong align-baseline text-fg hover:bg-accent/12",
-      )}
-    >
-      <MessagesSquare size={12} className="shrink-0 text-fg-muted" />
-      <span className="truncate">{title}</span>
-    </button>
+    <Tooltip label={`Open “${title}”`}>
+      <button
+        type="button"
+        onClick={() => selectThread(id)}
+        className={cx(
+          PILL,
+          "inline-flex max-w-full cursor-pointer items-center gap-1 bg-fill-strong align-baseline text-fg hover:bg-accent/12",
+        )}
+      >
+        <MessagesSquare size={12} className="shrink-0 text-fg-muted" />
+        <span className="truncate">{title}</span>
+      </button>
+    </Tooltip>
   );
 }
 
@@ -360,43 +361,46 @@ const components: Components = {
       return (
         // Inline like body `code` and the same size, so a file reference sits in the line the way
         // code does: a <button> is an inline block, and its padding would raise the line around it.
-        <span
-          role="link"
-          tabIndex={0}
-          title={`Open ${ref.path}${ref.line ? ` at line ${ref.line}` : ""}`}
-          onClick={() => openRef(ref)}
-          onKeyDown={(e) => {
-            if (e.key !== "Enter" && e.key !== " ") return;
-            e.preventDefault();
-            openRef(ref);
-          }}
-          className={cx(
-            PILL,
-            "cursor-pointer bg-accent/10 font-mono text-[0.85em] text-accent [box-decoration-break:clone] hover:bg-accent/20",
-          )}
-        >
-          {children}
-        </span>
+        <Tooltip label={`Open ${ref.path}${ref.line ? ` at line ${ref.line}` : ""}`}>
+          <span
+            role="link"
+            tabIndex={0}
+            onClick={() => openRef(ref)}
+            onKeyDown={(e) => {
+              // A link opens on Enter only: Space scrolls the transcript, as it does past a link.
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              openRef(ref);
+            }}
+            className={cx(
+              PILL,
+              "cursor-pointer bg-accent/10 font-mono text-[0.85em] text-accent outline-none [box-decoration-break:clone] hover:bg-accent/20 keyboard:focus-visible:ring-2 keyboard:focus-visible:ring-focus/40",
+            )}
+          >
+            {children}
+          </span>
+        </Tooltip>
       );
     return (
       // The text is on the clipboard, so the press is the code's own and not what holds it (a
       // link around the words would open as well).
-      <code
-        title="Click to copy"
-        onClick={(e) => {
-          // A press that is the end of a drag has just selected the reply: leave it selected.
-          if (!copiesOnClick(window.getSelection())) return;
-          e.stopPropagation();
-          void copyText(e.currentTarget.textContent ?? "");
-        }}
-        className={cx(
-          PILL,
-          // `clone` rounds every fragment of code that wraps onto a second line, not only its ends.
-          "cursor-pointer bg-fill font-mono text-[0.85em] [box-decoration-break:clone] hover:bg-fill-strong",
-        )}
-      >
-        {children}
-      </code>
+      <Tooltip label="Click to copy">
+        <code
+          onClick={(e) => {
+            // A press that is the end of a drag has just selected the reply: leave it selected.
+            if (!copiesOnClick(window.getSelection())) return;
+            e.stopPropagation();
+            void copyText(e.currentTarget.textContent ?? "");
+          }}
+          className={cx(
+            PILL,
+            // `clone` rounds every fragment of code that wraps onto a second line, not only its ends.
+            "cursor-pointer bg-fill font-mono text-[0.85em] [box-decoration-break:clone] hover:bg-fill-strong",
+          )}
+        >
+          {children}
+        </code>
+      </Tooltip>
     );
   },
 };

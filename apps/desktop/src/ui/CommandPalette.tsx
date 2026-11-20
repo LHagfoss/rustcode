@@ -74,23 +74,27 @@ import { FilterMenu, SortMenu } from "./SidebarToolbar";
 
 export type { PaletteAction };
 
-const SETTINGS: [SettingsSection, string][] = [
-  ["general", "General"],
-  ["chat", "Chat"],
-  ["agents", "Harnesses: install, sign in, models and text generation"],
-  ["orchestration", "Orchestration: delegates, workflows and presets"],
-  ["voice", "Voice & computer use: dictation and browser tools"],
-  ["connections", "Connections"],
-  ["capabilities", "Capabilities: skills and MCP servers"],
-  ["remote", "Remote access: phones and paired devices"],
-  ["machines", "Machines: other computers to run threads on"],
-  ["appearance", "Appearance"],
-  ["keyboard", "Keyboard"],
-  ["usage", "Usage"],
-  ["statistics", "Statistics: recorded tokens and reported cost"],
-  ["advanced", "Advanced: request bodies and setup"],
-  ["diagnostics", "Diagnostics: server status, logs and debug report"],
-];
+/** Every Settings page, by its id: a `Record` so a page added to `SettingsSection` must be named here. */
+const SETTINGS: Record<SettingsSection, string> = {
+  general: "General",
+  chat: "Chat",
+  permissions: "Permissions: default access and remembered approvals",
+  agents: "Harnesses: install, sign in, models and text generation",
+  orchestration: "Orchestration: delegates, workflows and presets",
+  voice: "Voice & computer use: dictation and browser tools",
+  connections: "Connections",
+  capabilities: "Capabilities: skills and MCP servers",
+  remote: "Remote access: phones and paired devices",
+  machines: "Machines: other computers to run threads on",
+  outside: "Outside agents: other apps that use RustCode's tools",
+  appearance: "Appearance",
+  keyboard: "Keyboard",
+  usage: "Usage",
+  statistics: "Statistics: recorded tokens and reported cost",
+  advanced: "Advanced: request bodies and setup",
+  diagnostics: "Diagnostics: server status, logs and debug report",
+  about: "About",
+};
 
 /** Actions other views add (board, review, …), so the palette lists them without knowing them. */
 const extra: (() => PaletteAction[])[] = [];
@@ -247,7 +251,7 @@ export function baseActions(): PaletteAction[] {
       keys: shortcutHint("toggle-terminal"),
       run: () => setTerminalOpen(!useApp.getState().terminalOpen),
     },
-    ...SETTINGS.map(
+    ...(Object.entries(SETTINGS) as [SettingsSection, string][]).map(
       ([id, label]): PaletteAction => ({
         id: `settings-${id}`,
         // The page the sidebar's Settings button opened (its Escape closes it) is named for what

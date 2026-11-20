@@ -23,7 +23,7 @@ const RAW_COLOR = /#[0-9a-fA-F]{3,8}\b(?![-\w])|\b(?:rgba?|hsla?|oklch)\(/;
 const PALETTE =
   /(?<![\w-])(?:bg|text|border|ring|from|to|via|fill|stroke|outline|divide|decoration|caret|accent|placeholder|shadow)-(?:white|black|zinc|neutral|stone|gray|slate|red|blue|green|amber|orange|yellow|emerald|sky|indigo|violet|purple|pink|rose|teal|cyan|lime)(?![\w-])|-\[(?:#|rgb|hsl)/;
 const RETIRED =
-  /(?<![\w-])(?:bg|text|border|ring|from|to|via|fill|stroke|outline|divide|accent|placeholder)-(?:fg-[234]|fill-[1-4]|hairline|brand|brand-fill|chat|field|attention|info)(?![\w-])|(?<![\w-])shadow-(?:float|panel)(?![\w-])|--rc-(?:fg|chat|hairline|brand|attention|red|green|orange|blue|field|fill-[1-4])(?![\w-])/;
+  /(?<![\w-])(?:bg|text|border|ring|from|to|via|fill|stroke|outline|divide|accent|placeholder)-(?:fg-[234]|fill-[1-4]|hairline|brand|brand-fill|chat|field|attention|info)(?![\w-])|(?<![\w-])shadow-(?:float|panel)(?![\w-])|--rc-(?:fg|chat|hairline|brand|attention|red|green|orange|blue|field|fill-[1-4])(?![\w-])|(?<![\w-])text-(?:text(?:-muted|-faint)?|accent-text|xs|sm|base|lg|xl|2xl|3xl)(?![\w-])/;
 const ARBITRARY_RADIUS = /(?<![\w-])rounded(?:-[trblse]{1,2})?-(?:\[|4xl)/;
 const NATIVE_SELECT = /<select\b/;
 const HAND_TIMED_HOVER = /(?<![\w-])transition-colors(?![\w-])/;
@@ -100,7 +100,6 @@ const NATIVE_TITLE_ALLOWED: Record<string, number> = {
   "ui/DelegateStatus.tsx": 1,
   "ui/EarlierAttempts.tsx": 1,
   "ui/Inbox.tsx": 3,
-  "ui/Markdown.tsx": 3,
   "ui/NewThreadWidgets.tsx": 1,
   "ui/OverviewDeliverables.tsx": 2,
   "ui/OverviewDetails.tsx": 1,

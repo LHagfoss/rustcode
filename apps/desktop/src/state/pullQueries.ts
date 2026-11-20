@@ -20,7 +20,7 @@ import {
   pullErrorTitle,
 } from "../acp/rustcode";
 import { Method } from "../acp/types";
-import { request, toast } from "./store";
+import { errorText, request, toast } from "./store";
 
 /** The four lists the panel draws. */
 export type PullListState = "open" | "closed" | "merged" | "all";
@@ -149,10 +149,6 @@ function stateOf(value: unknown): PullListState | undefined {
   return typeof value === "string" && (STATES as readonly string[]).includes(value)
     ? (value as PullListState)
     : undefined;
-}
-
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

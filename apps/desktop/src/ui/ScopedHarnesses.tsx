@@ -89,7 +89,7 @@ export function ScopedHarnessList({ targets, writes }: { targets: ScopeMachine[]
               </div>
               {/* Mixed says it in the chip, whose hover card lists each machine. */}
               {!mixed && (
-                <div className="flex items-center gap-1.5 truncate text-caption text-fg-muted">
+                <div className="flex min-w-0 items-center gap-1.5 text-caption text-fg-muted">
                   {!reading && !offline && (
                     <span
                       className={cx(
@@ -98,13 +98,15 @@ export function ScopedHarnessList({ targets, writes }: { targets: ScopeMachine[]
                       )}
                     />
                   )}
-                  {reading
-                    ? "Reading…"
-                    : offline
-                      ? "An offline machine keeps its value"
-                      : checked
-                        ? "On"
-                        : "Off"}
+                  <span className="truncate">
+                    {reading
+                      ? "Reading…"
+                      : offline
+                        ? "An offline machine keeps its value"
+                        : checked
+                          ? "On"
+                          : "Off"}
+                  </span>
                 </div>
               )}
             </div>

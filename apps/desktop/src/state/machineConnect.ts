@@ -1,15 +1,8 @@
 import { bool, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { RemoteMethod } from "../acp/remote";
 import { shellCall, shellCallWithin } from "../lib/shell";
-import {
-  errorText,
-  type Machine,
-  PAIR_DEADLINE_MS,
-  refreshMachines,
-  type SshVia,
-  useMachines,
-} from "./machines";
-import { request, toast } from "./store";
+import { type Machine, PAIR_DEADLINE_MS, refreshMachines, type SshVia, useMachines } from "./machines";
+import { errorText, request, toast } from "./store";
 
 // ---------------------------------------------------------------- connect codes
 
