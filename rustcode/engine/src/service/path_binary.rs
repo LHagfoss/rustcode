@@ -4,7 +4,7 @@
 //! A machine can hold several copies: the app's bundled engine, Homebrew's,
 //! the install script's under the home directory, `cargo install`'s. The one
 //! first on `PATH` is what a shell runs, so it is also what
-//! `rustcode server install` and version checks between machines use. When it
+//! `rc server install` and version checks between machines use. When it
 //! is an older copy, those checks compare the wrong binary and the service
 //! runs something else than the app.
 //!

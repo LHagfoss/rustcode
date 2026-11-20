@@ -1,5 +1,5 @@
 // Settings › Machines › Hub: this machine's role in the fleet's hub
-// (docs/remote.md › The hub). The shell runs `rustcode machines hub …`
+// (docs/remote.md › The hub). The shell runs `rc machines hub …`
 // (`src-tauri/src/hub.rs`); this keeps what it answers.
 
 import { create } from "zustand";

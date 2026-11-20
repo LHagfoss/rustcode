@@ -166,7 +166,7 @@ fn default_subagent_max_wall_secs() -> u64 {
 /// config may.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteConfig {
-    /// Address the gateway binds, as `rustcode remote serve --bind`.
+    /// Address the gateway binds, as `rc remote serve --bind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind: Option<String>,
     /// TCP port, as `--port`.
@@ -198,7 +198,7 @@ pub struct OutsideConfig {
     /// endpoint on, e.g. `https://rustcode.example.com`. Set, the endpoint
     /// also answers requests for that host: hosted agents (ChatGPT, Claude)
     /// can register and sign in, approved with a code from
-    /// `rustcode outside code`. Unset, it answers only on 127.0.0.1.
+    /// `rc outside code`. Unset, it answers only on 127.0.0.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
 }
@@ -1637,7 +1637,7 @@ pub struct AppConfig {
 /// Which parts of the in-memory model setup belong to the running session
 /// rather than to the config file. The file's `[default] big` and each
 /// profile's `reasoning_effort` are what new sessions start with in every
-/// frontend (`rustcode defaults` sets them for the macOS app), so a session
+/// frontend (`rc defaults` sets them for the macOS app), so a session
 /// switching model or effort must not rewrite them: saves keep the file's
 /// values for the parts marked here.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -2733,7 +2733,7 @@ async fn session_model_and_effort_leave_the_default_for_new_sessions_alone() {
     assert_eq!(deep.reasoning_effort, None);
     assert_eq!(saved.theme, "light");
 
-    // `rustcode defaults` (the macOS app's settings) changes the default
+    // `rc defaults` (the macOS app's settings) changes the default
     // while this session runs; the session's next save must keep it.
     let mut defaults = saved;
     crate::model_defaults::save(&mut defaults, Some("deep"), Some("low")).unwrap();

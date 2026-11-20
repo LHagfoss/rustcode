@@ -1535,7 +1535,7 @@ fn manage_mcp_servers_schema() -> Value {
 
 pub const MANAGE_MCP_SERVERS: Tool = Tool {
     name: "manage_mcp_servers",
-    description: "Add, list, start or remove MCP servers in the user config, validated like `rustcode mcp add`. `add` also starts the server in this session, so its tools are callable at once. Never edit config.toml or pipe JSON-RPC from a shell instead. Secret values are stored, never shown.",
+    description: "Add, list, start or remove MCP servers in the user config, validated like `rc mcp add`. `add` also starts the server in this session, so its tools are callable at once. Never edit config.toml or pipe JSON-RPC from a shell instead. Secret values are stored, never shown.",
     arguments: r#"{"operation":"add|list|start|remove", "name":"server name (add, start, remove)", "target":["URL, or command then its arguments"], "transport":"stdio|http", "headers":["Name: value"], "env":["KEY=value"], "client_id":"OAuth client id", "always_include":false, "replace":false, "start":true}"#,
     handler: manage_mcp_servers,
     // Every operation prompts: `add` and `start` launch a command or open a

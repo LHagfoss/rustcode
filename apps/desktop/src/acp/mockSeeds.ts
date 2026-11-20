@@ -209,7 +209,7 @@ export function seedBranchThreads(): MockThread[] {
       id: "mock-branch-plain",
       title: "Pick a name for the new command",
       updatedAt: minutes(9),
-      history: turn("mock-branch-plain", "What should the new command be called?", "`rustcode data query`."),
+      history: turn("mock-branch-plain", "What should the new command be called?", "`rc data query`."),
     },
   ];
 }
@@ -279,7 +279,7 @@ export function seedDelegatedThreads(): MockThread[] {
       model: "chatgpt/gpt-6-luna",
       effort: "medium",
       checkpoints: [],
-      history: turn("mock-plain", "What should the new command be called?", "`rustcode data query`."),
+      history: turn("mock-plain", "What should the new command be called?", "`rc data query`."),
     },
   ];
 }

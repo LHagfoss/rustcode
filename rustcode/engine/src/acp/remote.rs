@@ -1192,7 +1192,7 @@ fn remote_enabled() -> bool {
 /// What Settings › Remote access shows without naming a thread: whether
 /// remote access is on, the gateway's address and state, the paired devices
 /// and where pairing stands. Reads the gateway's own status, so it is the
-/// same answer `rustcode remote status` gives.
+/// same answer `rc remote status` gives.
 async fn host_status() -> Value {
     let Some(directory) = crate::config::get_config_dir() else {
         return json!({
@@ -1568,7 +1568,7 @@ async fn answer_connect_host(id: &str, accept: bool) -> Value {
     status
 }
 
-/// Settings › Remote access › Revoke: forget a device, as `rustcode remote
+/// Settings › Remote access › Revoke: forget a device, as `rc remote
 /// revoke` does, and answer with the machine's status.
 async fn revoke_host(device_id: &str) -> Value {
     let result = match crate::config::get_config_dir() {

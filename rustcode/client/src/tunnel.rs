@@ -200,7 +200,7 @@ fn describe_failure(host: &str, gateway_port: u16, stderr: &str) -> String {
     // `-W` signed in, but nothing listens on the gateway's port there.
     if lower.contains("open failed") || lower.contains("stdio forwarding failed") {
         return format!(
-            "SSH to {host} works, but nothing answers on RustCode's port {gateway_port} there. Start its server (`rustcode up`) and try again."
+            "SSH to {host} works, but nothing answers on RustCode's port {gateway_port} there. Start its server (`rc up`) and try again."
         );
     }
     classify_ssh_error(host, stderr).1

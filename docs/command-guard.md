@@ -102,7 +102,7 @@ mistakes, not an agent set on getting around it.
 | Harness | How | Rewrite |
 | --- | --- | --- |
 | RustCode (built-in) | In the exec tool (`run_command`), as the command is about to run. | Runs the rewritten command; its output starts with a line naming the rule. |
-| Claude Code | A `PreToolUse` hook on `Bash` (and post-call hooks for hints), added to the session when the project has a policy (`_meta.claudeCode.options.settings`, running the hidden `rustcode guard-command`). Unix only. | Refused with the command to run instead. |
+| Claude Code | A `PreToolUse` hook on `Bash` (and post-call hooks for hints), added to the session when the project has a policy (`_meta.claudeCode.options.settings`, running the hidden `rc guard-command`). Unix only. | Refused with the command to run instead. |
 | Codex, Gemini CLI, OpenCode, Pi | Through the approval request the harness sends (`session/request_permission`): a command the policy refuses is rejected without asking the user. | Rejected, and noted in `debug.log`. |
 
 The last row guards only what a harness asks about. A harness running in a
@@ -120,7 +120,7 @@ Every refused or rewritten command is one `command_guard.violation` row in
 harness}` (`action` is `deny` or `rewrite`), and no command text.
 
 ```sh
-rustcode data query "SELECT thread_id, json_extract(fields_json,'$.rule') AS rule, \
+rc data query "SELECT thread_id, json_extract(fields_json,'$.rule') AS rule, \
   json_extract(fields_json,'$.action') AS action, COUNT(*) AS violations \
   FROM operational_events WHERE event_type = 'command_guard.violation' \
   GROUP BY thread_id, rule, action ORDER BY violations DESC"

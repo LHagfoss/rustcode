@@ -1,7 +1,7 @@
 //! The machine owner's passkeys, which approve a hosted agent's sign-in on
 //! the public sign-in page (#3954, `docs/architecture/hub-plan.md` phase 2).
 //!
-//! Only the local user adds one: `rustcode outside owner add-passkey` (or
+//! Only the local user adds one: `rc outside owner add-passkey` (or
 //! Settings › Outside agents) writes a one-time enrollment ticket next to the
 //! grants and prints a link to `<public_url>/owner/passkey`, where the browser
 //! creates the credential. A passkey is bound to the public address: its
@@ -499,7 +499,7 @@ pub(super) fn register_at(
     posted: &Registration<'_>,
 ) -> Result<Passkey, String> {
     let enrollment = take_enrollment(enrollments, posted.ticket).ok_or_else(|| {
-        "this link was used already or has expired; make a new one with `rustcode outside owner add-passkey`".to_owned()
+        "this link was used already or has expired; make a new one with `rc outside owner add-passkey`".to_owned()
     })?;
     let client = decode_field(posted.client_data, "client data")?;
     let challenge = client_data(&client, "webauthn.create", origin)?;
@@ -693,7 +693,7 @@ pub(super) fn enrollment_page(
     let exclude = js(existing);
     let algorithms = js(&ALGORITHMS);
     let body = format!(
-        r#"<div class="pair"><div class="avatar"><img src="/logo.png" alt="RustCode"></div></div><p class="eyebrow">RustCode on {machine}</p><h1>Add a passkey</h1><p class="sub">“{label}” will approve hosted agents that sign in to RustCode on {machine} at <b>{host}</b>, with no sign-in code. Only add it on a device you keep.</p><form method="post" action="/owner/passkey" id="enroll"><input type="hidden" name="ticket" value="{ticket}"><input type="hidden" name="pk_client"><input type="hidden" name="pk_attestation"><div class="actions"><button type="button" class="primary" id="add" style="flex:1">Add passkey</button></div><p class="hint" id="add-error" role="alert" hidden></p></form><p class="foot">Remove it any time with <code>rustcode outside owner remove-passkey</code> or in RustCode › Settings › Outside agents.</p><script nonce="{nonce}">{B64}document.getElementById('add').addEventListener('click',async()=>{{const f=document.getElementById('enroll');const say=t=>{{const p=document.getElementById('add-error');p.textContent=t;p.hidden=false;}};try{{const c=await navigator.credentials.create({{publicKey:{{challenge:b({challenge}),rp:{{id:{rp},name:'RustCode'}},user:{{id:b({user}),name:'owner',displayName:{name}}},pubKeyCredParams:{algorithms}.map(a=>({{type:'public-key',alg:a}})),excludeCredentials:{exclude}.map(i=>({{type:'public-key',id:b(i)}})),authenticatorSelection:{{residentKey:'preferred',userVerification:'required'}},attestation:'none'}}}});f.pk_client.value=e(c.response.clientDataJSON);f.pk_attestation.value=e(c.response.attestationObject);f.submit();}}catch(x){{say('No passkey was made. Try again, or make a new link if this one expired.');}}}});</script>"#,
+        r#"<div class="pair"><div class="avatar"><img src="/logo.png" alt="RustCode"></div></div><p class="eyebrow">RustCode on {machine}</p><h1>Add a passkey</h1><p class="sub">“{label}” will approve hosted agents that sign in to RustCode on {machine} at <b>{host}</b>, with no sign-in code. Only add it on a device you keep.</p><form method="post" action="/owner/passkey" id="enroll"><input type="hidden" name="ticket" value="{ticket}"><input type="hidden" name="pk_client"><input type="hidden" name="pk_attestation"><div class="actions"><button type="button" class="primary" id="add" style="flex:1">Add passkey</button></div><p class="hint" id="add-error" role="alert" hidden></p></form><p class="foot">Remove it any time with <code>rc outside owner remove-passkey</code> or in RustCode › Settings › Outside agents.</p><script nonce="{nonce}">{B64}document.getElementById('add').addEventListener('click',async()=>{{const f=document.getElementById('enroll');const say=t=>{{const p=document.getElementById('add-error');p.textContent=t;p.hidden=false;}};try{{const c=await navigator.credentials.create({{publicKey:{{challenge:b({challenge}),rp:{{id:{rp},name:'RustCode'}},user:{{id:b({user}),name:'owner',displayName:{name}}},pubKeyCredParams:{algorithms}.map(a=>({{type:'public-key',alg:a}})),excludeCredentials:{exclude}.map(i=>({{type:'public-key',id:b(i)}})),authenticatorSelection:{{residentKey:'preferred',userVerification:'required'}},attestation:'none'}}}});f.pk_client.value=e(c.response.clientDataJSON);f.pk_attestation.value=e(c.response.attestationObject);f.submit();}}catch(x){{say('No passkey was made. Try again, or make a new link if this one expired.');}}}});</script>"#,
         machine = escape(machine),
         label = escape(&offer.name),
         host = escape(rp_id),

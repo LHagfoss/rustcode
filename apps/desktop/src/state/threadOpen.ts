@@ -114,7 +114,7 @@ export function resetFocusList(): void {
 
 /**
  * A window focus re-lists the threads, at most once per 5 s: a change made outside this window
- * (`rustcode threads settle` in a terminal, another app) reaches the list with no turn to carry it,
+ * (`rc threads settle` in a terminal, another app) reaches the list with no turn to carry it,
  * and flapping between windows should not read 500 threads each time. Off until connected, and
  * `now` is a parameter so it can be felt with a clock in tests.
  */

@@ -1,4 +1,4 @@
-//! `rustcode machines hub`: the fleet's hub role (#3957, `docs/remote.md` ›
+//! `rc machines hub`: the fleet's hub role (#3957, `docs/remote.md` ›
 //! The hub).
 
 use std::path::Path;
@@ -18,9 +18,9 @@ pub async fn run(config_dir: &Path, command: &HubCommands) -> Result<()> {
             config.save(config_dir)?;
             println!(
                 "This machine is the fleet's hub. Machines join it with \
-                 `rustcode machines hub join <this machine>` and keep a link to its remote \
-                 gateway, so keep remote access on here (`rustcode remote start`, or \
-                 `rustcode server` with remote access) and give them a route they reach from \
+                 `rc machines hub join <this machine>` and keep a link to its remote \
+                 gateway, so keep remote access on here (`rc remote start`, or \
+                 `rc server` with remote access) and give them a route they reach from \
                  anywhere, such as its public wss:// address."
             );
         }
@@ -50,7 +50,7 @@ pub async fn run(config_dir: &Path, command: &HubCommands) -> Result<()> {
             let tokens = TokenStore::open(config_dir)?;
             if tokens.get(&hub.host_id)?.is_none() {
                 bail!(
-                    "{} is saved but not paired; pair with it first (`rustcode machines add`)",
+                    "{} is saved but not paired; pair with it first (`rc machines add`)",
                     hub.name
                 );
             }
@@ -63,7 +63,7 @@ pub async fn run(config_dir: &Path, command: &HubCommands) -> Result<()> {
             config.save(config_dir)?;
             println!(
                 "Joined the hub {} at {} access{}. This machine's remote gateway keeps the \
-                 link, so keep remote access on here (`rustcode remote start`). Outside agents \
+                 link, so keep remote access on here (`rc remote start`). Outside agents \
                  on {} can now pass `machine` to act here, at most at that access.",
                 hub.name,
                 access.label(),
@@ -134,10 +134,10 @@ fn format_status(config: &HubConfig, members: Option<&[HubMember]>) -> String {
     out.push_str("This machine is the fleet's hub.\n");
     match members {
         None => out.push_str(
-            "Its remote gateway is not running, so no machine can link to it. Start it with `rustcode remote start`.\n",
+            "Its remote gateway is not running, so no machine can link to it. Start it with `rc remote start`.\n",
         ),
         Some([]) => out.push_str(
-            "No machine has joined yet. On each one: `rustcode machines hub join <this machine>`.\n",
+            "No machine has joined yet. On each one: `rc machines hub join <this machine>`.\n",
         ),
         Some(members) => {
             for member in members {

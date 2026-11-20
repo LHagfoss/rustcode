@@ -90,7 +90,7 @@ pub enum PairingMethod {
     /// The short code typed by hand next to the address.
     Code,
     /// A connect code the host's owner created for another computer
-    /// (`rustcode machines code`, Settings › Machines › Create connect code):
+    /// (`rc machines code`, Settings › Machines › Create connect code):
     /// the short code's secret or the long form's credential. It pairs a
     /// desktop with full thread access, since creating it was the owner's
     /// consent; the phone challenge and its code are a separate slot.

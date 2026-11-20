@@ -312,7 +312,7 @@ fn usage_text(row: &serde_json::Value, key: &str) -> String {
         .to_owned()
 }
 
-/// `get_usage`: the last 30 days from the store `rustcode usage` reads. A
+/// `get_usage`: the last 30 days from the store `rc usage` reads. A
 /// host without a store yet has no usage, not an error.
 fn usage_summary_at(store: &Path, since: &str, until: &str) -> Result<RemoteResult, String> {
     if !store.is_file() {
@@ -834,7 +834,7 @@ impl WorkspaceRouter {
             if owner_alive(&owners, session_id) {
                 return Err(refused(
                     RemoteErrorCode::Busy,
-                    "a session owner already holds this session without sharing it; check `rustcode remote status`",
+                    "a session owner already holds this session without sharing it; check `rc remote status`",
                 ));
             }
             if let Some(holder) = crate::config::session_open_by(config, session_id) {

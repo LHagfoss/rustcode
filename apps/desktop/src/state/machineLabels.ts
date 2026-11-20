@@ -452,7 +452,7 @@ export function updateAdvice(platform: string): string {
     case "windows":
       return "run the RustCode installer";
     case "linux":
-      return "install the new AppImage, or run `rustcode --update`";
+      return "run `rc --update`, or install the new AppImage";
     default:
       return "install the newer RustCode";
   }

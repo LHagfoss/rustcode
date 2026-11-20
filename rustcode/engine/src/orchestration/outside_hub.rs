@@ -152,7 +152,7 @@ pub(super) async fn forward(caller: &str, tool: &str, args: &Value) -> Option<Ca
             .knows(machine)
             .then(|| {
                 CallAnswer::failure(format!(
-                    "error: {machine} is reached through this hub, and the hub's remote gateway is not running. Start it with `rustcode remote start` on the hub. Nothing was sent."
+                    "error: {machine} is reached through this hub, and the hub's remote gateway is not running. Start it with `rc remote start` on the hub. Nothing was sent."
                 ))
             }),
         Err(error) => Some(CallAnswer::failure(format!(

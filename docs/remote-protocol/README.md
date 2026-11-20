@@ -288,7 +288,7 @@ reconnect <15m  → authenticate {device_id, access_token: A2}
   gateway serves anyone; if that file cannot be read the gateway refuses to
   start and names it, and never overwrites it, so a revoked family cannot come
   back. The owner repairs it, or deletes it after revoking the device with
-  `rustcode remote revoke`.
+  `rc remote revoke`.
 - Two connections racing with the same refresh token (a client trying several
   routes at once) are not a replay: the first rotates, the second gets the same
   answer, and both are accepted. Keep the answer from the route that stays up;
@@ -930,8 +930,8 @@ control for turn cancellation. Slash text in prompt/queue/steer stays rejected.
 After upgrading the executable, restart the gateway as well as the session owner
 before using newly added controls. A gateway launched before the upgrade can
 discard new snapshot fields while decoding owner IPC, even when the terminal
-owner is current. In a separate terminal run `rustcode remote stop`, then
-`rustcode remote serve` with the same bind/advertise options previously used.
+owner is current. In a separate terminal run `rc remote stop`, then
+`rc remote serve` with the same bind/advertise options previously used.
 Shared session owners reconnect automatically; pairings remain saved. Reattach
 in the app. Do not restart a running session merely to reconnect the gateway.
 
@@ -939,7 +939,7 @@ in the app. Do not restart a running session merely to reconnect the gateway.
 
 Once remote sharing is enabled, an installed macOS RustCode registers a private,
 per-user LaunchAgent. The gateway survives terminal closure, starts at login, and
-restarts after a crash or binary upgrade. `rustcode remote start` enables it,
+restarts after a crash or binary upgrade. `rc remote start` enables it,
 `remote pair` starts it as needed, and `remote stop` explicitly disables the
 LaunchAgent. Development binaries run detached without installing a login job.
 The gateway advertises `_rustcode._tcp` on the local network; its Bonjour record
@@ -1071,7 +1071,7 @@ when its capability flag is listed in a `sessions` result, so a phone can tell
 an older Mac from one that supports the operation.
 
 `get_usage` (capability `usage_summary`) returns the last 30 days from the
-store `rustcode usage` reads, today included. Every token field is what a
+store `rc usage` reads, today included. Every token field is what a
 harness reported; `cost_usd` is only ever the USD a harness reported, never a
 price RustCode computed. A field no turn reported is absent, not zero. Days
 and groups are bounded to 1000 rows; `by_day` is newest first, the other two

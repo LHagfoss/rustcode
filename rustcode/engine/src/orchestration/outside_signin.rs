@@ -5,7 +5,7 @@
 //! sign-in waiting here; every app connected to this engine shows it as a
 //! card with the same two match words the page shows, and the page reloads
 //! itself until the owner answers. A sign-in code from the app or
-//! `rustcode outside code` approves on the spot. Nothing here runs script: the
+//! `rc outside code` approves on the spot. Nothing here runs script: the
 //! page is plain HTML and CSS under a strict Content-Security-Policy.
 
 use std::collections::HashMap;
@@ -450,7 +450,7 @@ pub(super) fn consent_page(
         .map(|e| format!(r#"<p class="error" role="alert">{}</p>"#, escape(e)))
         .unwrap_or_default();
     let body = format!(
-        r#"{pair}<p class="eyebrow">RustCode on {machine}</p><h1>{name} wants to connect</h1><p class="sub">It will use RustCode's tools through <b>{host}</b>.</p>{error}<form method="post" action="/authorize">{hidden}<p class="label">Choose what it can do</p><div class="opts">{options}</div><p class="note">{note}</p><div class="actions"><button name="decision" value="deny" formnovalidate>Cancel</button><button class="primary" name="decision" value="app">Approve in RustCode</button></div>{passkey}<details{open}><summary>Have a sign-in code?</summary><div class="coderow"><input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Sign-in code"><button name="decision" value="approve">Use code</button></div><p class="hint">In RustCode open Settings › Outside agents › Get a sign-in code, or run <code>rustcode outside code</code> on {machine}. The code sets the most this app may do.</p></details></form><p class="foot">You can see and revoke it any time in RustCode › Settings › Outside agents.</p>"#,
+        r#"{pair}<p class="eyebrow">RustCode on {machine}</p><h1>{name} wants to connect</h1><p class="sub">It will use RustCode's tools through <b>{host}</b>.</p>{error}<form method="post" action="/authorize">{hidden}<p class="label">Choose what it can do</p><div class="opts">{options}</div><p class="note">{note}</p><div class="actions"><button name="decision" value="deny" formnovalidate>Cancel</button><button class="primary" name="decision" value="app">Approve in RustCode</button></div>{passkey}<details{open}><summary>Have a sign-in code?</summary><div class="coderow"><input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Sign-in code"><button name="decision" value="approve">Use code</button></div><p class="hint">In RustCode open Settings › Outside agents › Get a sign-in code, or run <code>rc outside code</code> on {machine}. The code sets the most this app may do.</p></details></form><p class="foot">You can see and revoke it any time in RustCode › Settings › Outside agents.</p>"#,
         pair = pair(c.client_name, false),
         machine = escape(c.machine),
         name = escape(c.client_name),

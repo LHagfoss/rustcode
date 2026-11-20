@@ -1,6 +1,6 @@
 //! A session owner that every device left while it waits on the user.
 //!
-//! A remote session owner (`rustcode remote session-owner`) runs a turn for
+//! A remote session owner (`rc remote session-owner`) runs a turn for
 //! a phone. When the turn stops on a tool approval or a question and no
 //! device is attached, nobody can answer it: the owner would hold the
 //! session, and its approval, for as long as it lives. After

@@ -84,8 +84,8 @@ the old session is not rerouted to the new session.
 | `/remote` | Enable the current session, start or discover the gateway, and display address, QR and manual pairing details. Repeating it is idempotent. |
 | `/remote status` | Report this session's sharing state, gateway address and attached device names. Never print stored device credentials. |
 | `/remote off` | Remove this registration and its subscriptions; leave the running turn alone. |
-| `rustcode remote serve` | Run the gateway with explicit bind/advertised address options. Reuse CLI conventions and lifecycle safeguards. |
-| `rustcode remote devices` / `revoke` | Inspect paired devices and revoke one device, closing its connections immediately. |
+| `rc remote serve` | Run the gateway with explicit bind/advertised address options. Reuse CLI conventions and lifecycle safeguards. |
+| `rc remote devices` / `revoke` | Inspect paired devices and revoke one device, closing its connections immediately. |
 
 Default to loopback until the user configures a LAN or NetBird address.
 Support an explicit advertised address distinct from the bind address; never

@@ -24,7 +24,7 @@ repository depends on them.
 
 | Term | Means | Where it shows |
 | --- | --- | --- |
-| **Thread** | A conversation the user sees and returns to: its messages, its project folder, its model, its history, logs and folder under `~/.config/rustcode/threads/`. | macOS and iOS sidebars and menus, the TUI, the CLI (`rustcode threads …`), storage, logs. |
+| **Thread** | A conversation the user sees and returns to: its messages, its project folder, its model, its history, logs and folder under `~/.config/rustcode/threads/`. | macOS and iOS sidebars and menus, the TUI, the CLI (`rc threads …`), storage, logs. |
 | **Session** | The provider's own handle on a conversation: an ACP `sessionId` or a Codex thread id. In RustCode it is a *binding* to a thread, not the app's object ([the execution graph](architecture/execution-graph.md)); today one thread still has exactly one. | ACP (`session/new`, `session/load`, `sessionId`), and internal code identifiers that have not been renamed. |
 | **Turn** | One user message and everything the agent does to answer it, until the answer ends or the user stops it. | "Worked for 1m 29s", the turn summary, Stop. |
 | **Round** | One model request inside a turn; tool calls run between rounds. | Logs and `turn.summary` events (`rounds`), not the UI. |
@@ -35,7 +35,7 @@ repository depends on them.
 | **Harness** | What runs a thread's turns: RustCode's built-in harness or an external coding agent such as Codex or Claude Code. Chosen when the thread starts ([harnesses.md](harnesses.md)). | The new-thread picker, onboarding, Settings; `_meta.rustcode.harness` in ACP. |
 | **Provider** | A model API the built-in harness calls (OpenAI, Anthropic, Copilot, an OpenAI-compatible server). An external harness has its own models and sign-in, not RustCode's providers. | Settings → providers, `[[providers]]` in the config. |
 | **Machine** | A computer running RustCode that this app can run threads on: this computer, or one paired over a connect code, SSH or an address. Never *environment* ([Machine](#machine)). Code, the shell and the protocol say `machine` too (`Machine`, `machines_*`, `machines.json`, `machines.rs`, `?machines=`). | Settings › Machines, the new-thread Run on selector, the Add machine dialog, `list_machines`. |
-| **Loop** | An automated agent prompt run once, on a schedule, or from a webhook by the scheduler daemon ([daemon.md](daemon.md)). Each run starts a fresh thread (or reuses one chosen thread) on any harness, read-only by default. | The sidebar's *Loops* row, `rustcode loops …` (alias `cron`), MCP tools `list_loops`, `create_loop`, `update_loop`, `run_loop`, `delete_loop`. |
+| **Loop** | An automated agent prompt run once, on a schedule, or from a webhook by the scheduler daemon ([daemon.md](daemon.md)). Each run starts a fresh thread (or reuses one chosen thread) on any harness, read-only by default. | The sidebar's *Loops* row, `rc loops …` (alias `cron`), MCP tools `list_loops`, `create_loop`, `update_loop`, `run_loop`, `delete_loop`. |
 | **Plan** | The agent's task list (`todo_write`): what it proposes to do, step by step. | The task plan; never proof that a step ran. |
 
 ## Harness, provider, agent
@@ -67,7 +67,7 @@ Where both words appear today they mean the same:
 | --- | --- | --- |
 | Thread, thread id | Session, session id (`sessionId`) | ACP (`session/new`, `session/load`) |
 | `~/.config/rustcode/threads/` | `~/.config/rustcode/sessions/` (a link to it) | Storage |
-| `rustcode threads …` | `rustcode sessions …` (alias) | CLI |
+| `rc threads …` | `rc sessions …` (alias) | CLI |
 | `thread_id`, `list_threads`, `read_thread` | `session_id`, `list_sessions`, `read_session` (aliases) | RustCode MCP |
 | `thread_id`, `list_threads`, `kind: "threads"` | `session_id`, `list_sessions`, `kind: "sessions"` | Remote protocol, when the device asks for thread names ([details](remote-protocol/README.md#thread-names)) |
 | "Thread status", "Resume thread" | "Session status", "Resume session" | Terminal UI; old transcripts still say session and render the same |
@@ -79,7 +79,7 @@ Where both words appear today they mean the same:
 A computer a thread can run on is a **machine**, in the apps, the docs, the
 CLI and the code alike: Settings › Machines, *Add machine*, the Run on
 selector, `Machine`, `useMachines`, the `machines_*` shell commands,
-`machines.json`, `rustcode machines …`, the `machine` field new threads accept
+`machines.json`, `rc machines …`, the `machine` field new threads accept
 and the `list_machines` orchestration tool. Do not call it an *environment*:
 that word means a process's environment variables, or a harness's sandbox.
 
@@ -105,8 +105,8 @@ not paired: it is listed read-only until it is paired on its own. The code says
 - **Internal identifiers.** Types and functions such as `SessionStore` or
   `selectedSession` keep their names; renaming thousands of identifiers buys
   nothing a user sees. New code may say thread.
-- **Old names keep working.** `rustcode sessions …` stays as an alias of
-  `rustcode threads …`, `~/.config/rustcode/sessions` is a link to
+- **Old names keep working.** `rc sessions …` stays as an alias of
+  `rc threads …`, `~/.config/rustcode/sessions` is a link to
   `threads/` after the migration, and the remote protocol keeps its v1 names
   for devices that do not ask for thread names.
 
@@ -124,9 +124,9 @@ All done:
 
 1. Storage: `~/.config/rustcode/sessions/` is renamed to `threads/` by the
    first start of a new version (storage migration
-   `0001-sessions-folder-to-threads`, see `rustcode storage status`), with a
+   `0001-sessions-folder-to-threads`, see `rc storage status`), with a
    `sessions` link left for older versions.
-2. CLI: `rustcode threads …`, with `sessions` as an alias.
+2. CLI: `rc threads …`, with `sessions` as an alias.
 3. Apps: the macOS, iOS and terminal UIs say "thread".
 4. Remote protocol (engine ↔ iOS): a device that asks for thread names in its
    handshake gets them; an older app, or an older gateway, keeps the v1

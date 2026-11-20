@@ -821,7 +821,7 @@ fn load_oauth_token(server: &str) -> Option<OAuthToken> {
     serde_json::from_str(&contents).ok()
 }
 
-/// Whether RustCode holds a sign-in for `server` (`rustcode mcp login`), read from disk without
+/// Whether RustCode holds a sign-in for `server` (`rc mcp login`), read from disk without
 /// refreshing it, so a harness thread can tell cheaply that a sign-in arrived or went.
 pub(crate) fn has_saved_login(server: &str) -> bool {
     load_oauth_token(server).is_some()
@@ -2646,7 +2646,7 @@ pub(crate) fn plan_reconcile(
 }
 
 /// Start servers added to the config since the session began and stop ones
-/// removed or turned off, wherever the edit came from: `rustcode mcp add`,
+/// removed or turned off, wherever the edit came from: `rc mcp add`,
 /// `/mcp`, the app, or a hand-edited file. Cheap when nothing changed: one
 /// `stat` per config file. Turns with their own registry (scheduled jobs)
 /// keep theirs.

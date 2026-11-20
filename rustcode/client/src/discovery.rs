@@ -4,7 +4,7 @@
 //! protocol version, its stable `gateway` identifier and its optional
 //! handshakes in `caps`. A machine that lists `desktops` there takes a
 //! `connect_request` from a desktop app or the command line, which is what
-//! `rustcode machines discover` and `rustcode machines add --discover` look
+//! `rc machines discover` and `rc machines add --discover` look
 //! for. The record never carries anything that could pair a device.
 
 use crate::registry::RouteKind;

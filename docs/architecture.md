@@ -58,7 +58,7 @@ remote-only mobile decision.
 | `rustcode-lifecycle` | Turn lifecycle and stop-state types |
 | `rustcode-tasks` | Session-aware background task state and event delivery |
 | `rustcode-loop-detect` | Semantic loop, failure, progress, and reasoning guards |
-| `rustcode-client` | The machine client: saved machines and routes, ask-to-connect pairing, the device-token store, the WebSocket transport and ACP over another machine's gateway. Used by `rustcode machines` and, later, the desktop app's Rust shell |
+| `rustcode-client` | The machine client: saved machines and routes, ask-to-connect pairing, the device-token store, the WebSocket transport and ACP over another machine's gateway. Used by `rc machines` and, later, the desktop app's Rust shell |
 
 The root `rustcode` crate owns integration concerns: model/network turns,
 ACP, configuration, the terminal UI state, and adapters
@@ -172,6 +172,6 @@ Metadata only — no message text, tool arguments or output. The engine writes
 it beside `track_usage` for its own turns and when an external harness's
 prompt returns (reading Claude Code's and Pi's own session logs for the token
 counts their `usage_update` omits), backfills existing folders once in the
-background, and exposes reads through `rustcode usage` and
-`rustcode data query`. See [data store](data-store.md).
+background, and exposes reads through `rc usage` and
+`rc data query`. See [data store](data-store.md).
 

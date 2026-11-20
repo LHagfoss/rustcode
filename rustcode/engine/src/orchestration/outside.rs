@@ -42,7 +42,7 @@ use super::hub::{CallAnswer, CallRequest};
 /// The caller id an outside agent's calls carry inside the engine, so the
 /// thread machinery (links, `wait_session`) can tell it from a thread.
 pub const CALLER_PREFIX: &str = "outside:";
-/// The environment variable `rustcode mcp-connect` reads its token from.
+/// The environment variable `rc mcp-connect` reads its token from.
 pub const TOKEN_ENV: &str = "RUSTCODE_MCP_TOKEN";
 /// The tool every grant has: who is calling, what it may do, and what exists.
 pub const WHOAMI: &str = "whoami";
@@ -515,7 +515,7 @@ pub fn name_of_caller(caller: &str) -> Option<String> {
         .map(|grant| grant.name)
 }
 
-/// Make sure this engine's hub is listening, so `rustcode mcp-connect` can
+/// Make sure this engine's hub is listening, so `rc mcp-connect` can
 /// find it. Nothing on a platform without the hub's socket.
 pub async fn ensure_hub() {
     #[cfg(unix)]
@@ -1213,11 +1213,11 @@ fn approver_connected() -> bool {
 fn no_approver(grant: &Grant, tool: &str) -> String {
     if let Some(hub) = grant.id.strip_prefix(super::outside_hub::HUB_GRANT_PREFIX) {
         return format!(
-            "error: {tool} needs the user's approval in the RustCode app on this machine, and no RustCode app is connected to it to ask. Nothing was sent. Tell the user: open the RustCode app there and retry, or let the hub act without asking by running `rustcode machines hub join {hub} --ask false` on that machine."
+            "error: {tool} needs the user's approval in the RustCode app on this machine, and no RustCode app is connected to it to ask. Nothing was sent. Tell the user: open the RustCode app there and retry, or let the hub act without asking by running `rc machines hub join {hub} --ask false` on that machine."
         );
     }
     format!(
-        "error: {tool} needs the user's approval in the RustCode app, and no RustCode app is connected to this machine to ask. Nothing was sent. Tell the user: open the RustCode app (on this machine or one paired with it) and retry, or let “{}” act without asking by running `rustcode outside update {} --ask false` on this machine.",
+        "error: {tool} needs the user's approval in the RustCode app, and no RustCode app is connected to this machine to ask. Nothing was sent. Tell the user: open the RustCode app (on this machine or one paired with it) and retry, or let “{}” act without asking by running `rc outside update {} --ask false` on this machine.",
         grant.name, grant.id
     )
 }
@@ -1884,7 +1884,7 @@ mod tests {
         assert!(
             refused
                 .content
-                .contains(&format!("rustcode outside update {} --ask false", grant.id)),
+                .contains(&format!("rc outside update {} --ask false", grant.id)),
             "{}",
             refused.content
         );
@@ -2434,7 +2434,7 @@ pub(super) fn refresh_http(path: &Path, refresh: &str, client_id: &str) -> Optio
 // --------------------------------------------------- one-time sign-in codes
 
 const CODE_FILE: &str = "outside-codes.json";
-/// How long a sign-in code from `rustcode outside code` can be used.
+/// How long a sign-in code from `rc outside code` can be used.
 pub const SIGN_IN_CODE_SECS: i64 = 600;
 const MAX_OPEN_CODES: usize = 10;
 /// No 0/O or 1/I, so a code read off a screen is typed right.

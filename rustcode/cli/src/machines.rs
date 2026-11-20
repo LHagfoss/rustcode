@@ -1,4 +1,4 @@
-//! `rustcode machines`: the other computers this one is paired with.
+//! `rc machines`: the other computers this one is paired with.
 //!
 //! Pairing is either a connect code (`code` there, `connect <code>` here: no
 //! accept step), or ask-to-connect: this end asks, the person at the other
@@ -149,8 +149,8 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
             println!("[]");
         } else {
             println!(
-                "No machines saved. Add one with `rustcode machines add <address>`, or \
-                 `rustcode machines discover` to find them on this network."
+                "No machines saved. Add one with `rc machines add <address>`, or \
+                 `rc machines discover` to find them on this network."
             );
         }
         return Ok(());
@@ -345,7 +345,7 @@ fn connection_route(route: &Route) -> ConnectionRoute {
 }
 
 /// The network a connected machine is on and whether it is encrypted, in the
-/// words `rustcode remote status` uses: `LAN (not encrypted)`,
+/// words `rc remote status` uses: `LAN (not encrypted)`,
 /// `NetBird (encrypted by the tunnel)`. A machine that is not connected is on
 /// no network.
 fn network_label(network: Option<&ConnectionRoute>) -> String {
@@ -435,7 +435,7 @@ async fn add(
     discover_for: Duration,
 ) -> Result<()> {
     // A connect code where an address was expected: pair with it instead of
-    // asking, as `rustcode machines connect` does.
+    // asking, as `rc machines connect` does.
     if let Some(given) = address
         && code.is_none()
         && rustcode_client::connect_code::looks_like_code(given)
@@ -447,7 +447,7 @@ async fn add(
         (None, true) => pick_discovered(discover_for).await?,
         (Some(_), true) => unreachable!("clap refuses --discover with an address"),
         (None, false) => {
-            bail!("name a machine address (`rustcode machines add <address>`) or pass --discover")
+            bail!("name a machine address (`rc machines add <address>`) or pass --discover")
         }
     };
     let connector = Connector::new(config_dir, ClientKind::Desktop)?;
@@ -509,7 +509,7 @@ async fn add(
         chrono::Utc::now(),
     )?;
     println!(
-        "Paired with {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
+        "Paired with {} ({}). Saved as \"{}\"; `rc machines list` shows it.",
         welcome.machine_name(),
         machine.host_id,
         machine.name
@@ -518,7 +518,7 @@ async fn add(
 }
 
 /// Create a connect code on this computer, switching remote access on as
-/// `rustcode remote pair` does, and print it.
+/// `rc remote pair` does, and print it.
 async fn create_code(
     config_dir: &std::path::Path,
     link_only: bool,
@@ -567,7 +567,7 @@ async fn create_code(
     Ok(())
 }
 
-/// What `rustcode machines code` prints for a person.
+/// What `rc machines code` prints for a person.
 fn code_text(offer: &rustcode::remote_gateway::control::MachineOfferDetails) -> String {
     let minutes = offer.expires_in_secs.div_ceil(60);
     let mut text = format!(
@@ -589,12 +589,12 @@ fn code_text(offer: &rustcode::remote_gateway::control::MachineOfferDetails) -> 
     }
     if offer.address_in_code {
         text.push_str(&format!(
-            "\nOn the other computer:\n  rustcode machines connect {}\n",
+            "\nOn the other computer:\n  rc machines connect {}\n",
             offer.code.expose()
         ));
     } else {
         text.push_str(&format!(
-            "\nThe code carries no address. On the other computer:\n  rustcode machines connect {} --address {}\n",
+            "\nThe code carries no address. On the other computer:\n  rc machines connect {} --address {}\n",
             offer.code.expose(),
             offer.address
         ));
@@ -603,7 +603,7 @@ fn code_text(offer: &rustcode::remote_gateway::control::MachineOfferDetails) -> 
         "\nOr paste the link, which carries every address this computer answers on:\n  {}\n",
         offer.link.expose()
     ));
-    text.push_str("\nWithdraw it with `rustcode machines code --cancel`.\n");
+    text.push_str("\nWithdraw it with `rc machines code --cancel`.\n");
     text
 }
 
@@ -625,7 +625,7 @@ async fn connect_code(
     let (paired, route) = connector.pair_with_code(&code, address).await?;
     let machine = save_code_pairing(config_dir, &tokens, &paired, route, name).await?;
     println!(
-        "Paired with {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
+        "Paired with {} ({}). Saved as \"{}\"; `rc machines list` shows it.",
         paired.session.welcome().machine_name(),
         machine.host_id,
         machine.name
@@ -763,7 +763,7 @@ async fn pair_back(
 }
 
 /// Connect over SSH (`rustcode_client::ssh`): sign in, check, install when
-/// needed, `rustcode up` there, then pair and save here. With mutual access
+/// needed, `rc up` there, then pair and save here. With mutual access
 /// that computer pairs back afterwards.
 async fn add_ssh(
     config_dir: &std::path::Path,
@@ -862,7 +862,7 @@ async fn add_ssh(
         AccessChoice::Ask => {
             !json
                 && confirm(&format!(
-                    "Let {host} reach this computer too? It could see and run all threads here; you can revoke it under `rustcode remote devices`. [y/N] "
+                    "Let {host} reach this computer too? It could see and run all threads here; you can revoke it under `rc remote devices`. [y/N] "
                 ))
         }
     };
@@ -890,7 +890,7 @@ async fn add_ssh(
         return Ok(());
     }
     println!(
-        "Paired with {} over {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
+        "Paired with {} over {} ({}). Saved as \"{}\"; `rc machines list` shows it.",
         connected.paired.session.welcome().machine_name(),
         machine
             .routes
@@ -901,11 +901,11 @@ async fn add_ssh(
     );
     match &back {
         None => println!(
-            "{host} cannot reach this computer: pairing is one way. `rustcode machines add-ssh {} --mutual` (or `rustcode machines code` here and `rustcode machines connect` there) lets it.",
+            "{host} cannot reach this computer: pairing is one way. `rc machines add-ssh {} --mutual` (or `rc machines code` here and `rc machines connect` there) lets it.",
             target.destination
         ),
         Some(Ok(())) => println!(
-            "{host} can reach this computer too. Each side revokes its own: `rustcode machines remove` here, `rustcode remote revoke` for {host}'s access to this computer."
+            "{host} can reach this computer too. Each side revokes its own: `rc machines remove` here, `rc remote revoke` for {host}'s access to this computer."
         ),
         Some(Err(failed)) => println!(
             "{host} could not connect back, so pairing stays one way: {}",
@@ -913,15 +913,13 @@ async fn add_ssh(
         ),
     }
     if connected.report.server.mode != "service" {
-        println!(
-            "Its server runs until {host} restarts; `rustcode up` there makes it start at login."
-        );
+        println!("Its server runs until {host} restarts; `rc up` there makes it start at login.");
     }
     for problem in &connected.report.problems {
         println!("{host}: {}", problem.message);
     }
     println!(
-        "To remove RustCode's service there later: ssh {} rustcode server uninstall",
+        "To remove RustCode's service there later: ssh {} rc server uninstall",
         target.destination
     );
     Ok(())
@@ -1021,7 +1019,7 @@ async fn discover(duration: Duration, json: bool) -> Result<()> {
         true => println!(
             "No machines found. RustCode must be running with remote access on, on the same \
              network; an overlay network (Tailscale, NetBird) is not announced by Bonjour — add \
-             that address with `rustcode machines add <address>`."
+             that address with `rc machines add <address>`."
         ),
         false => println!("{}", discovered_table(&found)),
     }

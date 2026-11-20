@@ -78,7 +78,7 @@ Options (`curl … | bash -s -- <options>` on macOS and Linux):
 | `--system-webkit` | | Linux: require system WebKitGTK 4.1 and install the smaller archive |
 | `--appimage` | | Linux: use the portable AppImage even with system WebKitGTK installed |
 | `--bin-dir DIR` | | CLI to `DIR` instead of `/usr/local/bin` or `~/.local/bin` |
-| `--version 1.31.4` or `$RUSTCODE_VERSION` | `-Version 1.31.4` or `$env:RUSTCODE_VERSION` | that release instead of the latest (`v` optional, a beta like `1.32.0-beta.2` too); a release that does not exist stops with its URL. `rustcode machines add-ssh` uses it to put the other computer on this one's version |
+| `--version 1.31.4` or `$RUSTCODE_VERSION` | `-Version 1.31.4` or `$env:RUSTCODE_VERSION` | that release instead of the latest (`v` optional, a beta like `1.32.0-beta.2` too); a release that does not exist stops with its URL. `rc machines add-ssh` uses it to put the other computer on this one's version |
 
 ```bash
 curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash -s -- --no-app
@@ -205,7 +205,7 @@ the install script or the app wrote in its own folders, and names a Homebrew or
 
 Native binaries released before v0.31.0 predate the GitHub Release updater and
 cannot bootstrap themselves without Homebrew. Reinstall once from the current
-release, then `rustcode --update` will use the matching GitHub archive for
+release, then `rc --update` will use the matching GitHub archive for
 future upgrades:
 
 ```bash

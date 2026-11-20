@@ -1,4 +1,4 @@
-//! `rustcode account|connections|outside …` (#3821): harness accounts, the
+//! `rc account|connections|outside …` (#3821): harness accounts, the
 //! GitHub and model sign-ins, and the tokens of outside agents, from a
 //! terminal only. None of these is a tool: an agent never adds, signs out or
 //! mints a credential. Each request goes through the running server when

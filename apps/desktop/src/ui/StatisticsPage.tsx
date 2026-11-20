@@ -900,7 +900,7 @@ function UsageFootnote({
           that count. Cost is the USD a harness reported, or the same tokens at API list prices on{" "}
           {PRICE_DATE} where it reported none; a reported number is never altered. The total adds each row's
           reported cost or its estimate, never both, and shows the two parts beneath it. Estimates are not a
-          bill: a subscription can charge differently. The CLI's rustcode usage is still reported-only.
+          bill: a subscription can charge differently. The CLI's rc usage is still reported-only.
         </span>
         {totals.turnsWithoutAnyTokens > 0 && (
           <span className="block">

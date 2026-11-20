@@ -1130,7 +1130,7 @@ pub fn apply_revocation_notes(
 ) -> Result<Devices> {
     let noted = notes.load().with_context(|| {
         format!(
-            "cannot read {}; a family whose revocation could not be written to the device store is recorded there, so the gateway refuses to start rather than let it authenticate again. Repair or delete that file after revoking the affected devices with `rustcode remote revoke`",
+            "cannot read {}; a family whose revocation could not be written to the device store is recorded there, so the gateway refuses to start rather than let it authenticate again. Repair or delete that file after revoking the affected devices with `rc remote revoke`",
             notes.path().display()
         )
     })?;
@@ -2372,7 +2372,7 @@ mod revocation_note_tests {
         let error = apply_revocation_notes(&store, &notes, store.load().unwrap()).unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains("revocations.json"), "{message}");
-        assert!(message.contains("rustcode remote revoke"), "{message}");
+        assert!(message.contains("rc remote revoke"), "{message}");
         // The store is untouched: nothing was applied half-way.
         assert_eq!(store.load().unwrap().list().len(), 1);
         assert_eq!(devices.list()[0].id, enrolled.record.id);

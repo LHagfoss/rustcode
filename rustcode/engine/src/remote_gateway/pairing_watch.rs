@@ -2,7 +2,7 @@
 //! wrong codes left, a lockout, and how it ended.
 //!
 //! The pairing details are printed once; this turns the gateway's status into
-//! one line that `/remote` and `rustcode remote pair` refresh every second,
+//! one line that `/remote` and `rc remote pair` refresh every second,
 //! until the challenge they showed is paired, used up, expired or replaced.
 //! It reads only [`GatewayStatus`], so no secret is involved.
 
@@ -137,7 +137,7 @@ pub fn format_progress(progress: &PairingProgress, again: &str) -> Option<String
             format!("Paired \"{name}\". This code is used; run {again} to add another device.")
         }
         PairingProgress::Paired { device: None } => format!(
-            "This code was used, but no device was added (see `rustcode remote status`). Run {again} for a new code."
+            "This code was used, but no device was added (see `rc remote status`). Run {again} for a new code."
         ),
         PairingProgress::UsedUp => format!(
             "This code is used up: {ATTEMPTS_PER_CHALLENGE} wrong codes were entered. Run {again} for a new code."
@@ -284,9 +284,9 @@ mod tests {
         let used = watch.observe(Some(&status(ended(ChallengeEnd::UsedUp), &[])));
         assert_eq!(used, PairingProgress::UsedUp);
         assert!(
-            format_progress(&used, "`rustcode remote pair`")
+            format_progress(&used, "`rc remote pair`")
                 .unwrap()
-                .contains("5 wrong codes were entered. Run `rustcode remote pair`")
+                .contains("5 wrong codes were entered. Run `rc remote pair`")
         );
 
         let expired = PairingStatus {

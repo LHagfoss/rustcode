@@ -1,4 +1,4 @@
-//! `rustcode server install|status|restart|uninstall|logs`: the commands
+//! `rc server install|status|restart|uninstall|logs`: the commands
 //! that manage the background service (`docs/server.md`). The work is in
 //! `rustcode::service::server_service`; this prints, asks and exits.
 
@@ -12,7 +12,7 @@ pub async fn run(command: &ServerCommands) -> ! {
     let code = match execute(command).await {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("rustcode server: {error:#}");
+            eprintln!("rc server: {error:#}");
             1
         }
     };
@@ -148,7 +148,7 @@ async fn restart(when_idle: bool, yes: bool, detached: bool) -> anyhow::Result<i
         service::RestartPlan::Confirm { running } => {
             if !confirm(running, "Restart")? {
                 println!(
-                    "Not restarted. `rustcode server restart --when-idle` waits for the turns to finish."
+                    "Not restarted. `rc server restart --when-idle` waits for the turns to finish."
                 );
                 return Ok(1);
             }
@@ -182,7 +182,7 @@ async fn restart(when_idle: bool, yes: bool, detached: bool) -> anyhow::Result<i
         service::spawn_detached_restart(when_idle)?;
         println!(
             "This runs inside the server, so the restart continues in the background{}. \
-             See `rustcode server logs` for the result.",
+             See `rc server logs` for the result.",
             if when_idle {
                 ", once no turn is running"
             } else {
@@ -197,7 +197,7 @@ async fn restart(when_idle: bool, yes: bool, detached: bool) -> anyhow::Result<i
             Ok(0)
         }
         None => {
-            anyhow::bail!("the server did not answer after the restart; see `rustcode server logs`")
+            anyhow::bail!("the server did not answer after the restart; see `rc server logs`")
         }
     }
 }

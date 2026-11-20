@@ -2,8 +2,8 @@
 //!
 //! A Loop is a daemon job whose action is [`JobAction::Loop`]: a prompt run on
 //! a schedule, each run in a fresh thread on the app's engine. These methods
-//! go through the same client and store as `rustcode cron` and
-//! `_rustcode/scheduled/*`, so `rustcode cron list` shows the same jobs. Run
+//! go through the same client and store as `rc cron` and
+//! `_rustcode/scheduled/*`, so `rc cron list` shows the same jobs. Run
 //! now and delete are `_rustcode/scheduled/run` and `_rustcode/scheduled/delete`.
 //!
 //! Unlike the scheduled methods, `start_daemon` starts the scheduler: the
@@ -124,7 +124,7 @@ pub(crate) struct LoopsDeleteRequest {
 }
 
 /// `_rustcode/loops/start_daemon`: start the scheduler, as
-/// `rustcode daemon start` does.
+/// `rc daemon start` does.
 #[derive(
     Debug,
     Clone,
@@ -487,12 +487,12 @@ fn member_of_this_hub(machine: &str) -> Result<(), String> {
         crate::config::get_config_dir().ok_or("error: config directory unavailable")?;
     if !HubConfig::load(&config_dir).hub {
         return Err(format!(
-            "this computer is not the fleet's hub, so it cannot run a Loop on {machine}; save the Loop on {machine}, or make this computer the hub (rustcode machines hub on)"
+            "this computer is not the fleet's hub, so it cannot run a Loop on {machine}; save the Loop on {machine}, or make this computer the hub (rc machines hub on)"
         ));
     }
     if !Members::new(&config_dir).knows(machine) {
         return Err(format!(
-            "{machine} has not joined this hub; on {machine}, run rustcode machines hub join with this computer's name"
+            "{machine} has not joined this hub; on {machine}, run rc machines hub join with this computer's name"
         ));
     }
     Ok(())
@@ -739,7 +739,7 @@ async fn set_paused_with(
     }
 }
 
-/// Start the scheduler the way `rustcode daemon start` does: this same binary
+/// Start the scheduler the way `rc daemon start` does: this same binary
 /// running `daemon run`, detached, with this config directory.
 pub(crate) async fn start_daemon() -> Result<Value, String> {
     let config_dir =

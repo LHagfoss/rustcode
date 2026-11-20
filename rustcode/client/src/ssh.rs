@@ -9,7 +9,7 @@
 //!    release installer of this version (`scripts/install.sh --version`, or
 //!    `install.ps1 -Version`), sent over SSH's standard input, so both
 //!    computers end on the same release.
-//! 4. **Start**: `rustcode up --yes --json` there: the server as a service,
+//! 4. **Start**: `rc up --yes --json` there: the server as a service,
 //!    remote access on, and a connect code in the JSON it prints.
 //! 5. **Pair**: redeem that code here over the routes it lists, or through
 //!    SSH itself (`crate::tunnel`) when none answers, when the server there
@@ -340,7 +340,7 @@ pub fn parse_probe(output: &str) -> Option<Probe> {
                 // Since 1.45.0 `rustcode` is the standalone harness, which has
                 // no `up` or `server`: only an older one is the app's CLI.
                 // Counting the harness made a machine whose server runs
-                // `rustcode` look up to date, and `rustcode up` then failed.
+                // `rustcode` look up to date, and `rc up` then failed.
                 if program_name == "rustcode" && !version_older(version, RC_RENAME_VERSION) {
                     continue;
                 }
@@ -440,7 +440,7 @@ pub fn check_supported(probe: &Probe) -> std::result::Result<(), String> {
     }
 }
 
-/// What `rustcode up --json` printed there (`rustcode/tui/src/up.rs`).
+/// What `rc up --json` printed there (`rustcode/tui/src/up.rs`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpReport {
     pub version: String,
@@ -498,12 +498,12 @@ impl UpReport {
             }
             offset += line.len();
         }
-        bail!("`rustcode up` printed no report")
+        bail!("`rc up` printed no report")
     }
 }
 
 /// What a connection over SSH ends with: the pairing, to be saved by the
-/// caller as any other, and what `rustcode up` said there.
+/// caller as any other, and what `rc up` said there.
 pub struct Connected {
     pub paired: Paired,
     /// The route the pairing used, saved first.
@@ -946,7 +946,7 @@ fn remote_rustcode(os: RemoteOs, program: &str, args: &str) -> (String, Option<S
     }
 }
 
-/// Step 4: `rustcode up --yes --json` there.
+/// Step 4: `rc up --yes --json` there.
 async fn start(target: &SshTarget, os: RemoteOs, program: &str) -> Result<UpReport> {
     let host = target.host();
     let (remote, input) = remote_rustcode(os, program, "up --yes --json");
@@ -967,7 +967,8 @@ async fn start(target: &SshTarget, os: RemoteOs, program: &str) -> Result<UpRepo
         } else {
             format!(
                 "RustCode on {host} could not start its server: {}",
-                said.trim_start_matches("rustcode up: ")
+                said.trim_start_matches("rc up: ")
+                    .trim_start_matches("rustcode up: ")
             )
         };
         return Err(failure(Step::Start, FailureKind::StartFailed, message));
@@ -1077,7 +1078,7 @@ async fn withdraw(target: &SshTarget, os: RemoteOs, program: &str) {
 }
 
 /// The last step of mutual access: have `target` redeem `link`, a connect
-/// code created on this computer, with `rustcode machines connect` there.
+/// code created on this computer, with `rc machines connect` there.
 /// This computer's gateway then lists that computer as a paired device of its
 /// own, apart from the pairing the caller already saved, and each side
 /// revokes its own.
@@ -1161,7 +1162,7 @@ pub async fn pair_back(
     result
 }
 
-/// What a failed `rustcode machines connect` on the other computer means for
+/// What a failed `rc machines connect` on the other computer means for
 /// the person: too old to know the command, this computer unreachable from
 /// there, or something else it said.
 pub fn classify_pair_back_failure(

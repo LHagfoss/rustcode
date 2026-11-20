@@ -59,12 +59,12 @@ bind = "100.92.13.44"      # this machine's NetBird address
 # advertise = "mac.netbird.cloud"   # optional: the name devices should dial
 ```
 
-Alternatively, run `rustcode remote serve --bind 100.92.13.44` first. Obtain
+Alternatively, run `rc remote serve --bind 100.92.13.44` first. Obtain
 the address with `netbird status`. Ordinary same-LAN pairing needs no config.
 
 The gateway runs in the background when started by `/remote`; output goes to
 `remote/gateway.log` in the configuration directory. It keeps running when the
-terminal exits; `rustcode remote stop` stops it.
+terminal exits; `rc remote stop` stops it.
 
 ## Automatic address selection
 
@@ -88,7 +88,7 @@ address pairing details name.
 
 To prefer the mesh instead (stable across Wi-Fi changes, reachable off-LAN),
 set `[remote] prefer_interface = "netbird"` — or
-`rustcode remote serve --prefer-interface netbird`. An `auto` bind then picks
+`rc remote serve --prefer-interface netbird`. An `auto` bind then picks
 the NetBird interface address first (`wt`-prefixed devices, or any interface
 with netbird in its name) and falls back to the LAN default when NetBird is
 down. On macOS NetBird uses a generic `utun` device shared with other VPNs,
@@ -119,7 +119,7 @@ service name, port, protocol version and the gateway's identifier, never
 pairing material. The identifier lets a paired device recognise this host at
 a new address and reconnect there with the token it already holds.
 
-`rustcode remote status` and `/remote status` list the machine's current
+`rc remote status` and `/remote status` list the machine's current
 addresses next to the listen and advertised address, and say whether the bind
 is `auto` (follows address changes) or fixed and whether the advertised host
 was given with `--advertise`. When the listener sits on an address the machine
@@ -128,14 +128,14 @@ command that recovers it:
 
 ```text
   warning        192.168.31.237 is no longer an address of this machine and the bind is fixed: no device can reach the gateway
-  recover        `rustcode remote stop && rustcode remote serve --bind auto` (follows address changes from now on)
+  recover        `rc remote stop && rc remote serve --bind auto` (follows address changes from now on)
                  or `--bind 192.168.31.185` for the address it has now; a `[remote] bind` in config.toml needs the same change
 ```
 
 With an `auto` bind the warning only says the gateway is about to move.
 
-To choose another address by hand: `rustcode remote stop`, then
-`rustcode remote serve` with an explicit `--bind`. Sessions that were shared
+To choose another address by hand: `rc remote stop`, then
+`rc remote serve` with an explicit `--bind`. Sessions that were shared
 register with the new gateway on their own within two minutes; devices stay
 paired.
 
@@ -161,7 +161,7 @@ kept.
 | **Pairing** | The challenge on screen, its countdown, the wrong codes left, a lockout, and *Paired ‹name›* once a device pairs. |
 | **A phone asking to connect** | A card in the window's corner, over any page: *‹name› wants to connect*, the platform and address, *Deny* and *Accept*. Accept shows the code to enter on the phone (large, with *Copy* and its countdown) until the phone pairs or the code runs out. See [Connection requests](#connection-requests). |
 | **Remote access › Asking to connect** | The same requests with the same answers, while any are open. |
-| **Paired devices** | How many devices are paired, with their names and when each was last seen. A connected device also shows the route it arrived over and whether that route is encrypted (`LAN · Unencrypted`, `NetBird · Encrypted`, `VPN · Encrypted`, `This computer`), judged from the address it dialled. *Revoke* forgets one and disconnects it at once, as `rustcode remote revoke` does. |
+| **Paired devices** | How many devices are paired, with their names and when each was last seen. A connected device also shows the route it arrived over and whether that route is encrypted (`LAN · Unencrypted`, `NetBird · Encrypted`, `VPN · Encrypted`, `This computer`), judged from the address it dialled. *Revoke* forgets one and disconnects it at once, as `rc remote revoke` does. |
 | **Remote access › Refused connections** | Devices the gateway turned away, newest first, for a quarter of an hour after each stopped trying: an app that speaks another remote protocol version, a pairing code that did not work, an unknown or revoked pairing, or an app that was refused before it could say anything. Each says what happened and what to do, so a phone whose only message is that it cannot connect is answered here. See [Refused connections](#refused-connections). |
 | **Routes** | The addresses the phone can dial this computer at, best first: each LAN address it listens on, each overlay address (NetBird, Tailscale or ZeroTier, with its provider when the interface name says) and the machine's `.local` name. The handshake reports the same list, so a phone learns it and keeps using the first route that answers. |
 | A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
@@ -225,7 +225,7 @@ works as before.
 | --- | --- |
 | `/remote` (`/remote on`) | Switch remote access on for this machine. Finds the running gateway or starts one and shares the session on screen; every other terminal shares its session within a couple of seconds, and so does every terminal started later. While no device is paired it shows the gateway address, a QR code and a manual pairing code; afterwards it shows the status. |
 | `/remote pair` | Same, and always shows a fresh pairing challenge, to add another device. The panel counts the challenge down and shows the wrong codes left, a lockout, and how it ended (see [Pairing](#pairing)). |
-| `/remote status` | Whether this session is shared, the gateway address, the devices attached to this session and the devices connected to the gateway, followed by everything `rustcode remote status` shows (addresses, paired devices, pairing state, shared sessions with this terminal's marked, log paths) once the gateway answers. Names only, never a credential. |
+| `/remote status` | Whether this session is shared, the gateway address, the devices attached to this session and the devices connected to the gateway, followed by everything `rc remote status` shows (addresses, paired devices, pairing state, shared sessions with this terminal's marked, log paths) once the gateway answers. Names only, never a credential. |
 | `/remote off` | Switch remote access off for this machine: the gateway stops, every session disappears from every device, and nothing is shared until `/remote` is run again. Pairings are kept; running turns are not affected. |
 
 The switch is remembered across restarts. While it is on, each interactive
@@ -273,15 +273,15 @@ remote access on is the short moment before it has registered.
 
 | Command | Behavior |
 | --- | --- |
-| `rustcode remote serve [--bind <ip>] [--port <port>] [--advertise <host>] [--prefer-interface <name>]` | Run the gateway in the foreground until Ctrl-C, SIGTERM or `remote stop`. |
-| `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
-| `rustcode remote off` | Stop the running gateway (alias of `stop`). |
-| `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address, code and expiry time. In a terminal it then counts the challenge down until a device pairs or it ends (Ctrl-C leaves earlier); otherwise it prints and exits. |
-| `rustcode remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
-| `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
-| `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
-| `rustcode remote status` | The running gateway: every address the WebSocket listener is bound to, one line each with its interface and the kind of network it is on (so an `auto` bind shows its LAN and its overlay addresses), and the advertised address with whether each follows address changes; who started it (the RustCode server, the app or a terminal), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected (with the network each arrived over and whether it is encrypted), the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
-| `rustcode remote stop` | Stop the running gateway. |
+| `rc remote serve [--bind <ip>] [--port <port>] [--advertise <host>] [--prefer-interface <name>]` | Run the gateway in the foreground until Ctrl-C, SIGTERM or `remote stop`. |
+| `rc remote on` | Enable the persistent background gateway (alias of `start`). |
+| `rc remote off` | Stop the running gateway (alias of `stop`). |
+| `rc remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address, code and expiry time. In a terminal it then counts the challenge down until a device pairs or it ends (Ctrl-C leaves earlier); otherwise it prints and exits. |
+| `rc remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
+| `rc remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
+| `rc remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
+| `rc remote status` | The running gateway: every address the WebSocket listener is bound to, one line each with its interface and the kind of network it is on (so an `auto` bind shows its LAN and its overlay addresses), and the advertised address with whether each follows address changes; who started it (the RustCode server, the app or a terminal), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected (with the network each arrived over and whether it is encrypted), the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
+| `rc remote stop` | Stop the running gateway. |
 
 One gateway runs per configuration directory. A second `remote serve` is
 refused while the first holds its lock; a gateway that died is detected by
@@ -331,13 +331,13 @@ machine's `.local` name. Each is `{ "address": "host:port", "kind": … }`, wher
 Only addresses the gateway is actually listening on are reported: an address
 it does not answer on is not a route. A device adds them to the routes it
 keeps for this host, so pairing once is enough to reach it on another network.
-The same list is in `rustcode remote status` and Settings › Remote access; the
+The same list is in `rc remote status` and Settings › Remote access; the
 pairing QR code's `alternates` stay compatible with it, and with an `auto` bind
 they name the LAN and overlay addresses a device may dial instead.
 
 ## Pairing
 
-A pairing challenge (from `/remote` or `rustcode remote pair`) has two
+A pairing challenge (from `/remote` or `rc remote pair`) has two
 representations:
 
 - a QR code. It encodes compact JSON with `protocol_version`, `address`,
@@ -348,8 +348,8 @@ representations:
 The code is drawn with half-block characters in explicit black on white with a
 four-module quiet zone, so it scans in light and dark terminal themes. If the
 terminal is too narrow for it the panel says so; use the address and code, or
-`rustcode remote pair` in a wider window. When output is not a terminal,
-`rustcode remote pair` prints the payload as text instead.
+`rc remote pair` in a wider window. When output is not a terminal,
+`rc remote pair` prints the payload as text instead.
 
 A challenge lasts two minutes and is single use: pairing with either
 representation destroys both. It tolerates five wrong attempts, shared by
@@ -373,20 +373,20 @@ When the challenge ends the line says how, and the QR code is taken down:
 `Paired "Lars's iPhone".`, used up (five wrong codes), expired, replaced by a
 newer challenge, or gone because the gateway stopped or restarted. In the
 `/remote` panel this runs until the panel is closed or replaced;
-`rustcode remote pair` in a terminal keeps running until the challenge ends
+`rc remote pair` in a terminal keeps running until the challenge ends
 (Ctrl-C leaves earlier, the challenge stays valid). When output is not a
-terminal, `rustcode remote pair` prints the details once and exits. If pairing
+terminal, `rc remote pair` prints the details once and exits. If pairing
 is already locked when the challenge is issued, the details say so first.
-`rustcode remote status` shows the same numbers at any time.
+`rc remote status` shows the same numbers at any time.
 
 A code that runs out is not always a wrong code. The gateway notes whether any
 socket reached it while the latest code was showing (`pairing.last_challenge_reached`
 in status, `pairing.lastChallengeReached` over ACP). When none did, the desktop
-and `rustcode remote pair` say that no device connected, and that the phone must
+and `rc remote pair` say that no device connected, and that the phone must
 be on the same network as the address shown (or reach it over NetBird or a VPN):
 the failure is the route, so no refusal could be recorded for it. An expired or
 used-up challenge is replaced by running `/remote pair` or
-`rustcode remote pair` again.
+`rc remote pair` again.
 
 A paired device receives a random token once. The host stores only its
 SHA-256 digest in `remote/devices.json` under the configuration directory
@@ -409,7 +409,7 @@ closes; if the device store cannot be written, the revocation is noted in
 `remote/revocations.json`, retried, and the device is refused meanwhile. That
 note is applied before the gateway serves anyone: if it cannot be read the
 gateway refuses to start and names it, rather than let a revoked family back
-in; repair it, or delete it after `rustcode remote revoke`. Pair again if that
+in; repair it, or delete it after `rc remote revoke`. Pair again if that
 was you.
 Until the device acknowledges the new token, presenting the previous one again
 is a retry that gets the same tokens back, so a lost acknowledgement never
@@ -424,7 +424,7 @@ A device that does not ask for rotation keeps the static token, and its
 pairing lasts 30 days. Within them the device reconnects on its own, with no
 code. After them its token is refused like an unknown one and the device
 pairs again; a connection that is open at that moment stays open until it
-drops. `rustcode remote devices` shows when each pairing expires, or `until
+drops. `rc remote devices` shows when each pairing expires, or `until
 revoked` for a device that rotates its tokens. An expired device is forgotten
 when the next one pairs and does not count against the device limit. Pairings
 made before this limit existed are counted from the day they were made.
@@ -435,8 +435,8 @@ host drops the earlier record and its token. A connection still open with the
 old token is closed as revoked. Apps that do not send an identifier, and
 records paired before the host kept one, add a record each time; those
 duplicates are not merged. They expire 30 days after they were paired, or can
-be revoked earlier by identifier. `rustcode remote devices` and
-`rustcode remote status` show when each device last paired or connected
+be revoked earlier by identifier. `rc remote devices` and
+`rc remote status` show when each device last paired or connected
 (`unknown` for records stored before this was kept), which tells the stale
 ones from the one in use.
 
@@ -468,7 +468,7 @@ At most four requests are open on a host and one per network address, so a
 peer cannot flood the owner with prompts; a phone that reconnects with the
 same install identifier replaces its own open request. Pressing *Pair a
 device* while a code is on screen for a request replaces that code too.
-`rustcode remote status` lists open requests. The frames and their order are
+`rc remote status` lists open requests. The frames and their order are
 in [the protocol](remote-protocol/README.md#connection-requests).
 
 ## Refused connections
@@ -495,7 +495,7 @@ address and app counted rather than listed again.
 
 Settings › Remote access lists them under *Refused connections*, with the
 device's own label when its frame named one, its kind and platform, the
-address it came from, how many tries and how long ago. `rustcode remote status`
+address it came from, how many tries and how long ago. `rc remote status`
 prints the same lines, and `refusedConnections` carries them to any ACP client.
 Nothing that is only a bug on the device (a binary frame, an oversized one, a
 handshake that never arrives) is recorded, so it cannot crowd out the reasons a person can fix.
@@ -504,7 +504,7 @@ version and address a refused frame named are read from it.
 
 ## Machines
 
-A computer can also be the *client*: `rustcode machines` pairs this one with
+A computer can also be the *client*: `rc machines` pairs this one with
 another computer's gateway and keeps it, so the same machine is one entry with
 every address it answers on. This is the command-line side of the desktop app's
 multi-machine client (`rustcode/client`, the `rustcode-client` crate); the app
@@ -512,13 +512,13 @@ fills in the same saved machines.
 
 | Command | Behavior |
 | --- | --- |
-| `rustcode machines code [--link] [--json] [--cancel]` | Create a [connect code](#connect-codes) on **this** computer for another one to pair with: the short code, the address it carries, the long link and what to run on the other computer. `--link` prints only the link, for a script; `--cancel` withdraws the open code. Switches remote access on when it is off, as `rustcode remote pair` does. |
-| `rustcode machines connect <code> [--address <host:port>] [--name <name>]` | Pair with a connect code created on another computer, with no accept step there: stores the token and saves the machine. `--address` is where to reach it when the short code carries no address, or instead of the one it carries. `rustcode machines add <code>` does the same. Over SSH in one line: `rustcode machines connect "$(ssh box rustcode machines code --link)"`. |
-| `rustcode machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in; the code is exactly the eight digits it shows (spaces and dashes are ignored). It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
-| `rustcode machines add --discover` | The same, choosing the machine from Bonjour when exactly one answers. |
-| `rustcode machines list [--threads] [--json]` | Name, platform, the route in use, the network it runs over with whether that is encrypted (`LAN (not encrypted)`, `NetBird (encrypted by the tunnel)`; `—` while the machine is not connected) and whether the machine answers now. Under a machine that is reachable one way and not another, it prints the hint: e.g. `Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.` The platform comes from the gateway (`macos`, `windows` or `linux`) and is refreshed whenever the machine is reached; a gateway older than that reports none, and the row keeps `unknown`. With `--threads`, each connected machine's thread titles over ACP (`session/list`), printed under the machine's row and after its hint. `--json` for scripts, with the same hint under `hint` and the network under `network` (`path`, `provider`, `encrypted`, `label`). |
-| `rustcode machines remove <name-or-id>` | Forget a machine and delete its token. It still lists this computer until it is revoked there. |
-| `rustcode machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
+| `rc machines code [--link] [--json] [--cancel]` | Create a [connect code](#connect-codes) on **this** computer for another one to pair with: the short code, the address it carries, the long link and what to run on the other computer. `--link` prints only the link, for a script; `--cancel` withdraws the open code. Switches remote access on when it is off, as `rc remote pair` does. |
+| `rc machines connect <code> [--address <host:port>] [--name <name>]` | Pair with a connect code created on another computer, with no accept step there: stores the token and saves the machine. `--address` is where to reach it when the short code carries no address, or instead of the one it carries. `rc machines add <code>` does the same. Over SSH in one line: `rc machines connect "$(ssh box rc machines code --link)"`. |
+| `rc machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in; the code is exactly the eight digits it shows (spaces and dashes are ignored). It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
+| `rc machines add --discover` | The same, choosing the machine from Bonjour when exactly one answers. |
+| `rc machines list [--threads] [--json]` | Name, platform, the route in use, the network it runs over with whether that is encrypted (`LAN (not encrypted)`, `NetBird (encrypted by the tunnel)`; `—` while the machine is not connected) and whether the machine answers now. Under a machine that is reachable one way and not another, it prints the hint: e.g. `Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.` The platform comes from the gateway (`macos`, `windows` or `linux`) and is refreshed whenever the machine is reached; a gateway older than that reports none, and the row keeps `unknown`. With `--threads`, each connected machine's thread titles over ACP (`session/list`), printed under the machine's row and after its hint. `--json` for scripts, with the same hint under `hint` and the network under `network` (`path`, `provider`, `encrypted`, `label`). |
+| `rc machines remove <name-or-id>` | Forget a machine and delete its token. It still lists this computer until it is revoked there. |
+| `rc machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
 
 An address is `host`, `host:port`, `[v6]:port` or `ws://host:port`; the port
 defaults to `17879`. `wss://host` is the machine's public address, a tunnel
@@ -538,7 +538,7 @@ the tunnel's edge, and the tunnel provider can read it.
 - The command line pairs as a **desktop** client, because that is the pairing
   the machine's owner grants ACP access to when accepting the request. A
   `cli`-kind device reaching the same code is allowed the session protocol
-  until the owner runs `rustcode remote devices allow <device>` there.
+  until the owner runs `rc remote devices allow <device>` there.
 - Saved machines live in `machines.json` in the configuration directory
   (`0600` on Unix). Each is keyed by the machine's stable `host_id` — its
   gateway identifier — with an ordered list of routes (`lan`, `vpn`,
@@ -552,7 +552,7 @@ the tunnel's edge, and the tunnel provider can read it.
   `zerotier`; a Tailscale address is its own kind and provider). Every machine is a peer; a `main` field in a file written
   by an older release is read and ignored. A change takes
   `machines.lock` next to the file and re-reads it first, so two
-  `rustcode machines` runs cannot drop each other's machine.
+  `rc machines` runs cannot drop each other's machine.
 - Tokens are kept in the operating system credential store (Keychain,
   Credential Manager, Secret Service) under `rustcode-machines`, one entry per
   machine *and profile*: the account names this configuration directory's
@@ -610,7 +610,7 @@ the tunnel's edge, and the tunnel provider can read it.
   address, learned from its handshake, is listed too, so a machine away from
   home is one click rather than a typed IP. The two sources are merged by host
   id, one row per machine, and an address found that way never needs typing.
-  `rustcode machines discover` itself stays Bonjour only, since it is a
+  `rc machines discover` itself stays Bonjour only, since it is a
   one-shot browse with no saved machines behind it.
 - A hint is shown when one *kind* of route answers and another does not, in
   `machines list` and in the app's machine status: an overlay address that
@@ -714,11 +714,11 @@ other: no request to accept, and no address to look up when the code carries
 it.
 
 1. On the computer to be reached: Settings › Machines › **Add machine** › Connect code › **Create connect code**
-   (or `rustcode machines code`). It shows `K7MQ-29XH-TP4W-NRD6` with **Copy**
+   (or `rc machines code`). It shows `K7MQ-29XH-TP4W-NRD6` with **Copy**
    and **Copy link**, the address the code carries, and a countdown with
    *Waiting for a computer…*, which becomes *Paired ‹name›*.
 2. On the other computer: Settings › Machines › **Add machine** › Connect code › **I have a code**, paste the code or the link, **Connect** (or
-   `rustcode machines connect <code>`). It is paired, its token stored, and
+   `rc machines connect <code>`). It is paired, its token stored, and
    the first computer's threads appear.
 
 | | Short code | Link |
@@ -730,7 +730,7 @@ it.
 - A code works **once, for ten minutes**, and five wrong tries destroy it; the
   host-wide pairing lockout (ten failures in five minutes) applies as well.
   Creating a new code replaces the open one; **Cancel code** (or
-  `rustcode machines code --cancel`) withdraws it. `rustcode remote status`
+  `rc machines code --cancel`) withdraws it. `rc remote status`
   lists an open code.
 - It lives in a slot of its own next to the phone challenge: showing a QR
   code, accepting a computer's connection request and creating a connect code
@@ -738,7 +738,7 @@ it.
 - **Anyone who has the code can see and run all threads on that computer**: it
   pairs a `desktop` device with ACP access, because creating the code is the
   owner's consent. The device it creates is listed under Settings › Remote
-  access › Devices and `rustcode remote devices`, and removed there like any
+  access › Devices and `rc remote devices`, and removed there like any
   other.
 - The short code has the alphabet `23456789ABCDEFGHJKLMNPQRSTUVWXYZ` (no `0`,
   `1`, `I`, `O`); case, spaces and dashes do not matter. When the gateway
@@ -756,10 +756,10 @@ it.
 
 ### One command for a headless machine
 
-`rustcode up` makes the computer it runs on one another can pair with:
+`rc up` makes the computer it runs on one another can pair with:
 
 1. installs (or repairs) the RustCode server as a background service from
-   login, as `rustcode server install` does, and restarts a server of an older
+   login, as `rc server install` does, and restarts a server of an older
    version when no turn is running (`--yes` restarts it anyway). On Linux it
    tries `loginctl enable-linger` without sudo first; where that needs root,
    the result says the `sudo` command to run. Where no service can be
@@ -768,7 +768,7 @@ it.
    restarts, and the result says so;
 2. switches remote access on and waits for the gateway. With a server
    running, the server starts the gateway itself (`remote/start-requested`,
-   which `rustcode remote stop` overrides): on Windows a command run over SSH
+   which `rc remote stop` overrides): on Windows a command run over SSH
    is in the SSH logon session, and a gateway started there would be out of
    reach of the desktop and leave files only an administrator can open;
 3. creates a connect code and prints it, with the command to type on the
@@ -787,7 +787,7 @@ Machines › **Connect over SSH**, type `lars@box` or an alias from
 `~/.ssh/config`, **Connect**; or
 
 ```bash
-rustcode machines add-ssh lars@box [--port 2222] [--identity ~/.ssh/key] [--yes | --no-install] [--mutual | --one-way] [--json]
+rc machines add-ssh lars@box [--port 2222] [--identity ~/.ssh/key] [--yes | --no-install] [--mutual | --one-way] [--json]
 ```
 
 **Connect through** chooses how the machine is reached afterwards:
@@ -806,7 +806,7 @@ reach this one too ([Mutual access](#mutual-access)).
 | Signing in | `ssh … exit 0` | *SSH could not sign in to box without asking for a password or passphrase…* (`ssh-add`), an unknown or changed host key (*connect once in a terminal*), or *box did not answer over SSH* |
 | Checking RustCode | a POSIX login shell (`sh -l -s`) reports `uname` and every `rustcode` with its version (`~/.rustcode/bin` too); with no POSIX shell, Windows PowerShell does | *RustCode has no build for Linux on riscv64*, or no usable shell |
 | Installing RustCode X.Y.Z | only when it is missing or older than this computer's: this release's `install.sh --no-app --version X.Y.Z --bin-dir ~/.rustcode/bin` (or `install.ps1 -NoApp -Version X.Y.Z`) sent over SSH's standard input, checked against the release `SHA256SUMS` as always. The app's checkbox, `--yes` or the terminal prompt allow it; `--no-install` and a run with no terminal refuse | the installer's last line |
-| Starting its server | `rustcode up --yes --json` there | what `up` said |
+| Starting its server | `rc up --yes --json` there | what `up` said |
 | Pairing | the connect code from that JSON, redeemed here over the routes it lists, else through SSH (`ssh -W`) | *box is reachable over SSH, but pairing through it failed: …*, with what its network address answered. The open code is withdrawn there |
 
 - Every command uses this computer's own `ssh`, its config and agent, with
@@ -820,7 +820,7 @@ reach this one too ([Mutual access](#mutual-access)).
   path the remote reported, quoted for its shell.
 - **The pairing secret travels inside SSH only**, whichever route pairs.
 - Nothing is stopped or removed. To take the service off that computer:
-  `ssh box rustcode server uninstall`.
+  `ssh box rc server uninstall`.
 - On Windows the server runs as the logon task in the user's desktop session,
   so it starts once that user is signed in on the PC; `up` over SSH asks that
   server to start the gateway rather than starting one in the SSH session.
@@ -874,20 +874,20 @@ by hand: Add machine › SSH › **Both ways**, or `--mutual`.
   a fresh connect code, which pairs `box` as a `desktop` device with ACP
   access, as any code does ([Connect codes](#connect-codes)). The SSH sign-in
   that `box` already accepted is `box`'s consent: its own user's
-  `rustcode machines connect` redeems the code there and stores the token in
+  `rc machines connect` redeems the code there and stores the token in
   its own credential store. In a terminal with neither flag, `add-ssh` asks
   *Let box reach this computer too?*; with `--json` or no terminal the answer
   is one way.
 - **How.** After the one-way pairing is saved, a sixth step, *Letting box reach
   this computer* (`pair_back`), creates the code here and runs
-  `rustcode machines connect <link>` over SSH on `box`. The code lives ten
+  `rc machines connect <link>` over SSH on `box`. The code lives ten
   minutes and works once; it is withdrawn when the step fails.
 - **Two pairings.** Each direction is its own pairing with its own token:
   `box` is a saved machine here, and `box` is a paired device on this
   computer (under Settings › Remote access › Paired devices and
-  `rustcode remote devices`). Ending one never ends the other: *Forget* on the
-  machine (or `rustcode machines remove`) ends this computer's access to
-  `box`; *Revoke* on the device (or `rustcode remote revoke`) ends `box`'s
+  `rc remote devices`). Ending one never ends the other: *Forget* on the
+  machine (or `rc machines remove`) ends this computer's access to
+  `box`; *Revoke* on the device (or `rc remote revoke`) ends `box`'s
   access to this computer. Settings › Machines › ‹box› › **Access** shows
   both with their own button; a device counts as `box` when its `hostId` is
   the machine's id.
@@ -901,9 +901,9 @@ by hand: Add machine › SSH › **Both ways**, or `--mutual`.
     computer on RustCode's port…*, naming the addresses; or remote access here
     listens on this computer only (`remote.bind`).
   - `box` refused or could not store the pairing (a locked credential store):
-    what `rustcode machines connect` printed there.
-  To retry only this direction, create a code here (`rustcode machines code
-  --link`) and redeem it there (`ssh box rustcode machines connect <link>`).
+    what `rc machines connect` printed there.
+  To retry only this direction, create a code here (`rc machines code
+  --link`) and redeem it there (`ssh box rc machines connect <link>`).
 
 ### In the desktop app
 
@@ -929,7 +929,7 @@ are all visible at once.
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
 | **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
 | A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Reconnecting…* (a machine that is away while the app retries it on its own), *Offline*, what a machine that answered and would not serve said — *Server not running*, *Version mismatch*, *Not allowed*, *Busy*, *Refused* — and *Needs pairing* — the route **in use** (else the one it answered on last) under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then when it was last reached and how many threads it has. **Remove** sits in a row of its own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
-| **This computer · RustCode server** | Whether the RustCode server is installed as a background service: *Server: Installed · Running*, or *Not installed* with **Install server**. Installed, that engine stays up when the app closes and starts when you log in; the threads this app starts still run in its own engine and end with it. What `rustcode server status` reports, including a running version that differs from the app's, is on the same line. |
+| **This computer · RustCode server** | Whether the RustCode server is installed as a background service: *Server: Installed · Running*, or *Not installed* with **Install server**. Installed, that engine stays up when the app closes and starts when you log in; the threads this app starts still run in its own engine and end with it. What `rc server status` reports, including a running version that differs from the app's, is on the same line. |
 | **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
 | **Pair again** | On a machine whose pairing it ended (*Needs pairing*): asks it again, so a new code can be typed. |
 
@@ -969,16 +969,16 @@ ACP. Showing and driving those threads in the sidebar is the next step
 ## Revoking and stopping
 
 - Settings › Remote access › *Revoke* on a paired device does the same as
-  `rustcode remote revoke` below.
+  `rc remote revoke` below.
 
-- `/remote off` (or `rustcode remote stop`) ends access to every session for
+- `/remote off` (or `rc remote stop`) ends access to every session for
   every device until `/remote` is run again.
-- `rustcode remote revoke <device>` forgets the device and, when the gateway
+- `rc remote revoke <device>` forgets the device and, when the gateway
   is running, closes all of its connections and subscriptions in the same
   step; the device receives a `revoked` error and must be paired again. With
   the gateway stopped, the device is removed from the store directly. If a
   running gateway does not answer, nothing is revoked and the command says so.
-- `rustcode remote stop` stops the gateway. Shared sessions keep running in
+- `rc remote stop` stops the gateway. Shared sessions keep running in
   their terminals and look for a gateway again for two minutes; after that
   they report that sharing stopped.
 
@@ -1051,8 +1051,8 @@ terminal's session lists after its first exchange.
   refused exits with the reason in its log. A registered owner that the
   gateway drops (the machine slept, for example) registers again by itself;
   after five refusals in a row it exits.
-- `rustcode remote stop` stops the gateway only. Owners keep running and
-  register with the next gateway. `rustcode remote status` lists owners that
+- `rc remote stop` stops the gateway only. Owners keep running and
+  register with the next gateway. `rc remote status` lists owners that
   are running without being shared under `idle owners`.
 
 ### Saved sessions
@@ -1100,7 +1100,7 @@ the gateway whenever remote access is on and starts it again if it stops, so
 quitting the app leaves port 17879 answering and this machine's server threads
 reachable from the other machines. Only one gateway runs at a time: the app
 uses the running one instead of binding its own, and the server adopts the
-app's, so the port never has two owners (`rustcode server status` › `Gateway`
+app's, so the port never has two owners (`rc server status` › `Gateway`
 says which one runs and who started it). What the server starts it with —
 bind, port, advertised address, interface preference — is the settings the
 last gateway recorded in `remote/settings.json`, which only the gateway that
@@ -1120,7 +1120,7 @@ RustCode server removes the agent: the server supervises the gateway instead,
 and two supervisors would race for the same port. Only the process launchd was
 running for the agent is replaced — its pid is read before the job is booted
 out — so a plist left behind after the job was unloaded never stops a gateway
-the app or a terminal started, which the server adopts as usual. `rustcode remote stop`
+the app or a terminal started, which the server adopts as usual. `rc remote stop`
 removes the agent; the next start installs it with the current environment.
 
 ## Choosing the address a device dials
@@ -1141,11 +1141,11 @@ removes the agent; the next start installs it with the current environment.
   overlay address (see [Automatic address selection](#automatic-address-selection)),
   and a paired client learns it from `routes` and tries it after the LAN
   (see [Machines](#machines)). Nothing has to be typed. If the overlay still
-  does not answer, `rustcode machines list` says what to check on that machine:
+  does not answer, `rc machines list` says what to check on that machine:
   NetBird's **Block inbound connections**, a NetBird access policy that allows
   TCP `17879` between the two machines, Tailscale's ACLs or grants for that
   port, or ZeroTier's flow rules.
-- **A fixed setup:** `rustcode remote serve --bind <netbird ip> --advertise <host>.netbird.cloud`
+- **A fixed setup:** `rc remote serve --bind <netbird ip> --advertise <host>.netbird.cloud`
   (or the same two values as `[remote] bind` and `advertise`) pins the mesh
   address and a name that never changes. On Linux `--prefer-interface netbird`
   makes the mesh address the advertised one while LAN and overlay listeners
@@ -1200,9 +1200,9 @@ the gateway's TCP port; Windows asks the first time the gateway listens.
   this machine shares, now and later, for 30 days or until revoked. There are
   no per-session grants and no per-session opt-out. Per-session grants have
   been considered; they are not planned for now.
-- **Ending access:** `rustcode remote revoke <device>` closes that device's
+- **Ending access:** `rc remote revoke <device>` closes that device's
   connections in the same step and forgets its token; `/remote off` or
-  `rustcode remote stop` ends access for every device (see
+  `rc remote stop` ends access for every device (see
   [Revoking and stopping](#revoking-and-stopping)).
 - **Browsers** cannot reach the gateway: an upgrade request with an `Origin`
   header is refused, except the exact `rustcode-mobile://app` a native phone
@@ -1219,7 +1219,7 @@ moment.
 
 **Local sockets.** The gateway has two Unix sockets in `remote/` under the
 configuration directory (`0700`), each `0600`: `control.sock` for the
-`rustcode remote …` commands and `owner.sock` for terminals that share a
+`rc remote …` commands and `owner.sock` for terminals that share a
 session. Only the user who runs the gateway can connect; the owner socket also
 checks the peer's user ID. If the configuration path is too long for a socket
 address, both sockets go to `/tmp/rustcode-<uid>/<hash>/` instead, created
@@ -1294,7 +1294,7 @@ The gateway, pairing, connection requests, Bonjour and Settings › Remote
 access work as on the other systems. What differs:
 
 - **No gateway login service of its own.** Remote access started from the app,
-  `/remote` or `rustcode remote start` runs the gateway as a detached
+  `/remote` or `rc remote start` runs the gateway as a detached
   background process (no console window, its own process group); macOS also
   installs a LaunchAgent for it when no RustCode server is installed. With the
   server installed, the server's own logon task hosts the gateway, so the
@@ -1321,14 +1321,14 @@ is phase 5 of [the hub plan](architecture/hub-plan.md).
 On the hub:
 
 ```sh
-rustcode machines hub on
+rc machines hub on
 ```
 
 On each other machine, after pairing with the hub as usual (`rustcode
 machines add`, a connect code, or over SSH):
 
 ```sh
-rustcode machines hub join vps --access delegate
+rc machines hub join vps --access delegate
 ```
 
 - **The link is outbound.** The member's own remote gateway connects to the
@@ -1337,7 +1337,7 @@ rustcode machines hub join vps --access delegate
   route to the member and the member opens no port. Give the hub a route the
   member reaches from anywhere, such as its public `wss://` address
   ([Hosted agents](mcp-outside-agents.md#hosted-agents-chatgpt-claude-and-other-cloud-clients)).
-  The member's gateway must run (remote access on, or `rustcode remote
+  The member's gateway must run (remote access on, or `rc remote
   start`); it reconnects with a backoff from 5 seconds to 5 minutes while the
   hub is away.
 - **Only computers join.** A paired desktop or command line with its machine
@@ -1365,9 +1365,9 @@ rustcode machines hub join vps --access delegate
   ceiling, calls waiting), and on a member *Join a hub* picks the paired hub,
   its access and whether to ask, with *Leave* to undo. The app runs these
   commands (`apps/desktop/src-tauri/src/hub.rs`).
-- `rustcode machines hub status` shows the role and, on the hub, each member
-  with its state, ceiling and waiting calls (`--json` too). `rustcode machines
-  hub leave` and `rustcode machines hub off` undo each side; an open link closes
+- `rc machines hub status` shows the role and, on the hub, each member
+  with its state, ceiling and waiting calls (`--json` too). `rc machines
+  hub leave` and `rc machines hub off` undo each side; an open link closes
   within a minute.
 
 The hub's frames are between two RustCode gateways and are not part of the
@@ -1390,7 +1390,7 @@ the member answers `hub_result {call_id, success, content}`.
   the app still runs it, answers "session is already active": a live session
   cannot be opened twice. Close the thread in the app and open it again.
 - No push notifications.
-- `rustcode machines` reaches a machine over its WebSocket, directly or through
+- `rc machines` reaches a machine over its WebSocket, directly or through
   an [SSH route](#ssh-routes); the only relay is [the hub](#the-hub), and only
   for outside agents' calls, and a route list is not reordered or learned yet (steps 1.8 and
   1.11 of the machine network plan). Connect over SSH pairs one way unless *Both ways* is chosen
@@ -1416,12 +1416,12 @@ version 1. The grant defaults to false, including for existing device records.
 Self-reported device kind never grants access. Accepting a desktop's ask-to-connect
 request grants ACP after it enters the request-bound code; the approval says
 "Can see and run all threads on this machine". Pairing with a standalone short
-code never grants ACP. The owner can run `rustcode remote devices allow <id>`
-or `rustcode remote devices deny <id>`; deny immediately disconnects the device.
+code never grants ACP. The owner can run `rc remote devices allow <id>`
+or `rc remote devices deny <id>`; deny immediately disconnects the device.
 Devices without the grant receive a gateway
 `error` with code `unauthorized_access` when opening ACP. When no engine is
 running, or none of the described ones answers, the gateway started by
-`rustcode remote serve` starts the server and relays to it once it listens
+`rc remote serve` starts the server and relays to it once it listens
 (within about 7 seconds; starts back off, see `docs/server.md`). When that
 fails too, the connection is closed with `internal`, which a client reports as
 `server_not_running`, and the gateway writes why to its log.

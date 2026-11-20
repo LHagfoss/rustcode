@@ -414,7 +414,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
     64 KB of icon; no cookies. Cached in memory and in the app's cache
     folder for a week (failures for an hour).
   - `threads.rs`: `thread_rename` and `thread_trash`, done as the SwiftUI
-    app does them: the folder comes from `rustcode threads path <id>` and
+    app does them: the folder comes from `rc threads path <id>` and
     must be that thread's folder in the store. Rename writes `title.txt`;
     Trash moves the folder to `~/.Trash` after `session/close`.
   - `pty.rs`: `pty_open|write|resize|close`, the login shell in a PTY
@@ -888,7 +888,7 @@ composer's keys stay outside the table.
   The new thread page's *Usage* and *This month* spend use the same rule,
   read by model. A model id a router prefixes (`openrouter/openai/…`) is
   priced as the model it names; a `-free` tier never is.
-  The CLI's `rustcode usage` stays reported-only.
+  The CLI's `rc usage` stays reported-only.
 - **Settings › Diagnostics.** Built in for debugging the RustCode server
   (the `rustcode --acp` process; "server" is its user-facing name,
   [terminology.md](terminology.md)) on macOS, Linux and Windows
@@ -905,7 +905,7 @@ composer's keys stay outside the table.
   environment that changes how WebKitGTK composites. *Harnesses*: what
   Settings › Harnesses last detected, with the binary this app's `PATH`
   resolves. *Open thread log* opens the open thread's `logs/debug.log` (also
-  in every thread's menu); the shell finds the folder with `rustcode threads path`.
+  in every thread's menu); the shell finds the folder with `rc threads path`.
   *Copy debug report* puts all of it, the last 200 log lines and the last 50
   `operational_events` in one Markdown block for a GitHub issue, with
   tokens, API keys, email addresses and the home folder (`~`) taken out
@@ -1462,7 +1462,7 @@ composer's keys stay outside the table.
   (`_rustcode/themes`) with a preview each, picks one
   (`_rustcode/themes/set`), opens the themes folder and creates one
   (`_rustcode/themes/new`; an engine without it gets the
-  `rustcode theme new` command to copy). `_rustcode/themes/changed`
+  `rc theme new` command to copy). `_rustcode/themes/changed`
   (a file edited, or the CLI picking another) applies at once. A theme
   sets the light/dark mode; System uses the built-in pair. The tokens are
   written onto `:root` (`src/lib/themes.ts`), so nothing re-renders, and
@@ -2126,7 +2126,7 @@ is written as a line to `updates.log` in the config folder, next to
 `debug.log`. It shows *Updating to X…*, installs and
 reopens like **Update to X** does, so the app starts its bundled engine anew
 and, in a release build, its start-up catch-up restarts a background server
-onto the new binary with `rustcode server restart --when-idle`. **Update to X** installs in place on macOS, Linux (AppImage and
+onto the new binary with `rc server restart --when-idle`. **Update to X** installs in place on macOS, Linux (AppImage and
 `.deb`) and Windows; how depends on how this copy was installed
 (`Install` in `updater.rs`, decided from `$APPIMAGE`, the binary's path,
 `dpkg-query -S` and the files beside it). Every route first downloads the
@@ -2171,13 +2171,13 @@ same version (`src-tauri/src/service.rs` `catch_up_after_update`, issue #3487):
 
 - The `rustcode` a terminal runs — the install script's copy in `~/.local/bin`
   or `/usr/local/bin`, `~/.rustcode/bin`, or whatever the login shell finds
-  first — is replaced by `rustcode server update-cli` when it is older and this
+  first — is replaced by `rc server update-cli` when it is older and this
   app may own it. Homebrew's copy and `cargo install`'s are named as theirs and
   left to `brew upgrade` / `cargo install`, a development build is never
   touched, and a link that already points at the app needs nothing.
 - A service installed from an AppImage gets the new engine copied to it.
 - A background server still running the engine from before the update is
-  restarted (`rustcode server restart --when-idle`, so a running turn finishes
+  restarted (`rc server restart --when-idle`, so a running turn finishes
   first). When its definition names another `rustcode`, the app rewrites the
   definition to its engine while that is still the program it installed the
   service with, and otherwise leaves it alone and the Machines page says

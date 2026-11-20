@@ -10,7 +10,7 @@
 //! not in it; see [`crate::tokens`].
 //!
 //! Every change happens under an exclusive lock on `machines.lock` and
-//! re-reads the file first, so two `rustcode machines` processes (or the app
+//! re-reads the file first, so two `rc machines` processes (or the app
 //! and the command line) cannot drop each other's machine.
 
 use anyhow::{Context, Result, bail, ensure};
@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 const MAX_MACHINES_BYTES: u64 = 256 * 1024;
 const MAX_ROUTES_PER_MACHINE: usize = 16;
 /// Shortest identifier prefix `remove` and `select` accept, matching
-/// `rustcode remote revoke`.
+/// `rc remote revoke`.
 const MIN_SELECTOR_CHARS: usize = 4;
 
 /// How this client reaches a machine. Ordered as the app prefers to try them.

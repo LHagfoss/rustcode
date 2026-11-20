@@ -4,7 +4,7 @@ Status: milestone 1 is implemented (#2637, #2638). Orchestration v2
 ([orchestrator.md](../orchestrator.md)) is built on the engine side:
 `read_session`, `start_session` and `fan_out` for clients advertising
 version 2, and the same tools for external harnesses through
-`rustcode mcp-orchestrator`. The remaining milestones are proposed. The macOS app is the first target; TUI parity is a later, optional
+`rc mcp-orchestrator`. The remaining milestones are proposed. The macOS app is the first target; TUI parity is a later, optional
 follow-up.
 
 ## As built (M1)
@@ -105,7 +105,7 @@ ambient access to other projects.
 | Subagents (`spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `inspect_agent`, `list_agents`, `cancel_agent`) | `rustcode/engine/src/app/subagent_controller.rs`, `subagent_context.rs`, `subagent_persistence.rs`, tools in `tools/misc.rs`; [multi-agent.md](../multi-agent.md) | A settled tool vocabulary and limits: explicit context inheritance (`minimal`/`evidence`/`recent`/`fork`), 32-message mailboxes, 8 KiB messages and completions, bounded inspect tails, interrupt semantics, cancellation down the tree, resume marks running work `interrupted` | Children are session-local (numeric ids, stored in the parent's `agents.json`), share the parent's workspace and policy, and are not chats the user can open in the sidebar |
 | `delegate_task` | `tools/delegate.rs` | Hand a self-contained task to an external CLI | Fire-and-forget; no status, no follow-up, no result routing |
 | ACP sessions | `rustcode/engine/src/acp.rs`, `acp/prompt.rs`; [acp.md](../acp.md) | One engine process hosts many sessions, each with its own `AppState`, cwd/workspace root, sandbox, per-session turn gate (`SessionTurnState`), cancellation and background task routes. `session/new`, `session/load`, `session/list` (per project or all), `session/close` | Sessions cannot see each other; there is no engine-side API for one session to address another |
-| Session store and search | `rustcode/core/rustcode-session`, `config/session.rs`, `rustcode sessions search --json`, `SessionSearch.swift` | Persistent sessions filed by date with `workspace.json`, content search with snippets, exact-project and all-project scopes | Only the user can browse; no bounded, permissioned read for an agent |
+| Session store and search | `rustcode/core/rustcode-session`, `config/session.rs`, `rc sessions search --json`, `SessionSearch.swift` | Persistent sessions filed by date with `workspace.json`, content search with snippets, exact-project and all-project scopes | Only the user can browse; no bounded, permissioned read for an agent |
 | Remote control plane | `remote/protocol.rs` (`RemoteOperation`), `remote/owner.rs`, `remote_gateway/`; [remote.md](../remote.md) | A tested contract for driving a session from outside its owner: list, create, attach, `GetHistory`, `SubmitPrompt`, `Steer`, `Queue`, `CancelTurn`, `AnswerQuestion`, `ResolveApproval`, `ResumeSession`, request receipts (`Received`/`Applied`/`Rejected`/`Unknown`) | Built for a paired device and a human, not for an agent inside another session; terminal-owned |
 | Scheduler daemon | `daemon/`; [daemon.md](../daemon.md) | `JobAction::Prompt { prompt, workspace, session_id }`: durable, out-of-turn prompts into a session | Scheduled, not interactive; no result routing back to a caller |
 | macOS app | `macos/Sources/RustCode/RustCodeApp.swift` | Several open sessions per engine (`openSessions`), per-session queues and turn activity, permission sheets driven by `session/request_permission`, sidebar search across projects | No notion of one chat driving another |
@@ -178,7 +178,7 @@ Decisions:
   returns the transcript.
 - **Reading other sessions is a separate, narrower grant**. `list_sessions`
   returns metadata and search snippets (title, project, updated time, match
-  snippet as `rustcode sessions search` prints it). `read_session` returns a
+  snippet as `rc sessions search` prints it). `read_session` returns a
   bounded excerpt: at most 8 entries of 768 characters (the `inspect_agent`
   tail limits), or the entries around a search match. Tool outputs, images,
   reasoning and system reminders are never returned. Excerpts pass a

@@ -540,7 +540,7 @@ pub fn server_log_path() -> Option<PathBuf> {
 }
 
 /// From now on every line this process logs is also written to the server's
-/// log, which `rustcode server logs` reads. Called by the server only: a
+/// log, which `rc server logs` reads. Called by the server only: a
 /// service manager's own capture of standard output (a crash's trace) goes to
 /// the same file, but cannot be rotated from here.
 pub fn mirror_to_server_log() {
@@ -970,7 +970,7 @@ fn try_append_line_to_logs_with_limit(
         return false;
     };
     // A server's panic belongs in its own log too: a server that dies leaves
-    // `server.log` as the evidence `rustcode server logs` shows.
+    // `server.log` as the evidence `rc server logs` shows.
     if SERVER_LOG.load(Ordering::Acquire) {
         append_server_log_locked(
             &config_dir.join("logs").join("server.log"),

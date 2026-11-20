@@ -1,7 +1,7 @@
 // What in Settings needs the person's attention, and on which page: the gear's
 // dot says something does, and the nav puts the same dot on the page that says
 // what and offers the fix. A paired machine that is not connected points at
-// Machines; a problem `rustcode server status` reports (an older `rustcode` on
+// Machines; a problem `rc server status` reports (an older `rustcode` on
 // PATH, a server on another version) points at Remote access, where the server
 // row lists it with its fix.
 //
@@ -89,11 +89,11 @@ export function settingsAttention(
   return attention;
 }
 
-/** The commands a problem names in backticks (`rustcode server restart`), for a copy action. */
+/** The commands a problem names in backticks (`rc server restart`), for a copy action. */
 export function problemCommand(message: string): string | null {
   for (const match of message.matchAll(/`([^`]+)`/g)) {
     const text = match[1]?.trim() ?? "";
-    if (text.startsWith("rustcode ") || text.startsWith("brew ")) return text;
+    if (text.startsWith("rc ") || text.startsWith("rustcode ") || text.startsWith("brew ")) return text;
   }
   return null;
 }

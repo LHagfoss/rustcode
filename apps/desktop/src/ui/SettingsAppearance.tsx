@@ -102,7 +102,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
     try {
       const path = await createTheme(name, base);
       if (path === null) {
-        setCli(`rustcode theme new ${name} --from ${base}`);
+        setCli(`rc theme new ${name} --from ${base}`);
         return;
       }
       toast(path ? `Created ${path}` : "Theme created", "success");

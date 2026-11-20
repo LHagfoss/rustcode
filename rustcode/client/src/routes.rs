@@ -351,7 +351,7 @@ where
 /// What a caller knows about a machine's routes when it asks for the hint to
 /// show under its row.
 ///
-/// This is the words `rustcode machines list` prints under a machine and the
+/// This is the words `rc machines list` prints under a machine and the
 /// app shows in its status, so the reason a machine is reachable one way and
 /// not the other is on screen instead of being guessed at.
 pub struct RouteReport<'a> {

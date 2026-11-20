@@ -80,7 +80,7 @@ const STORES: &[Store] = &[
     },
     Store {
         name: "data store",
-        holds: "threads, turns and tool calls for `rustcode usage` and `data query` (metadata only)",
+        holds: "threads, turns and tool calls for `rc usage` and `data query` (metadata only)",
         retention: "kept; the per-turn token deltas cannot be rebuilt",
         entries: &["data.sqlite*"],
     },
@@ -92,7 +92,7 @@ const STORES: &[Store] = &[
     },
     Store {
         name: "sync history",
-        holds: "the Git history of `rustcode config sync`",
+        holds: "the Git history of `rc config sync`",
         retention: "kept; grows with each sync",
         entries: &[".git"],
     },

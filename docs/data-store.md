@@ -54,7 +54,7 @@ payload only when the user turns payload capture on ("Captured payloads").
 | `operational_events` | one row per allowlisted event: `thread_id`, `turn_id`, `sequence`, `event_type`, `at`, `fields_json`, `original_bytes`, `captured_bytes`, `payload_truncated`, `redaction_version` |
 | `command_receipts` | one row per orchestration call made with a retry key: `caller` (the calling thread), `client_request_id`, `action` (the tool), `args_hash`, `result_json`, `created_at`, keyed on `(caller, client_request_id)` |
 | `usage_cursors` | one row per thread, harness and session series (the harness's native session id and its account): the last cumulative session total that series reported (`input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`) and `updated_at` |
-| `outside_agent_calls` | one row per tool call an outside agent made through `rustcode mcp-connect` (`docs/mcp-outside-agents.md`): `at`, `client_id`, `client_name`, `platform`, `scope`, `tool`, `outcome` (`ok`, `error`, `denied`, `declined`, `unavailable`), `duration_ms`, `detail` (a short reason, never an argument); kept 90 days |
+| `outside_agent_calls` | one row per tool call an outside agent made through `rc mcp-connect` (`docs/mcp-outside-agents.md`): `at`, `client_id`, `client_name`, `platform`, `scope`, `tool`, `outcome` (`ok`, `error`, `denied`, `declined`, `unavailable`), `duration_ms`, `detail` (a short reason, never an argument); kept 90 days |
 | `store_meta` | internal bookkeeping, such as whether the one-time backfill ran |
 
 Tokens and cost are `NULL` when a harness did not report them, and are never
@@ -69,7 +69,7 @@ The store is a record of what happened, and so are the thread folders.
 RustCode keeps them as long as the disk allows, so later questions have data
 to answer them:
 
-- **Settling is a status.** `rustcode threads settle` and the app's Settled
+- **Settling is a status.** `rc threads settle` and the app's Settled
   mark write `status.json` (and `threads.settled_at` here). They never delete
   `history.json`, `logs/`, `performance.json`, usage rows or tool-call rows.
   Removing a worktree on cleanup is fine, since the code is in git, but first
@@ -98,10 +98,10 @@ to answer them:
   days (newest 10,000 kept) because they exist to make a retry safe, not to
   keep history.
 - `tool_output/` and `attachments/` are only touched by the explicit
-  `rustcode storage clean` command, which moves files to `storage/removed`
+  `rc storage clean` command, which moves files to `storage/removed`
   first and shows its plan before it does.
 
-`rustcode data stats` prints each table's row count and size, so growth can be
+`rc data stats` prints each table's row count and size, so growth can be
 watched. Raw rows are one per protocol frame, with a folded streaming row per
 flush window and chunk kind; a busy machine adds a few megabytes a day.
 
@@ -209,7 +209,7 @@ Cost is only what the harness reported. Codex reports none, so its
 estimate into `cost_usd`.
 
 To compare harnesses anyway, opt in to an estimate with a price file you
-keep (#3934): `rustcode usage --pull-requests --prices prices.toml`. The
+keep (#3934): `rc usage --pull-requests --prices prices.toml`. The
 file must name where its prices come from and the day they were read; rates
 are USD per million tokens, and `cached_input` and `cache_write` default to
 `input`:
@@ -626,7 +626,7 @@ is the harness's reported USD cost, else the log's. The pass carries a
 version (`store_meta.backfill_version`); a later release that can read more
 runs it again and rewrites only rows still marked `backfill`, so a live turn
 is never overwritten and a refreshed summary is never added twice.
-`rustcode usage` and `rustcode data` run the same pass if they are the first
+`rc usage` and `rc data` run the same pass if they are the first
 thing to open the file.
 
 A second one-time pass runs at engine start, before the first session list
@@ -658,26 +658,26 @@ keeps them exact from there.
 
 ## Reading
 
-`rustcode data query "<sql>"` runs one statement through a read-only
+`rc data query "<sql>"` runs one statement through a read-only
 connection (`SQLITE_OPEN_READ_ONLY`, `PRAGMA query_only = ON`), with `ATTACH`
 disabled, a progress handler that stops a query after two seconds, and at most
 1000 rows. Writes, `ATTACH`, a second statement and reads of another database
-file are refused. `rustcode data schema` prints the tables and view.
+file are refused. `rc data schema` prints the tables and view.
 
 ## CLI
 
 ```console
-rustcode usage                 # tokens per harness and model, all turns
-rustcode usage --since 2026-11-01 --json
-rustcode usage --pull-requests  # merged share, CI failures, cost and tokens per merged PR
-rustcode usage --pull-requests --prices prices.toml  # plus a labelled cost estimate
-rustcode data query "SELECT * FROM daily_usage ORDER BY day DESC LIMIT 7"
-rustcode data query "SELECT * FROM daily_compactions ORDER BY day DESC LIMIT 7"
-rustcode data schema
-rustcode data stats            # rows and bytes per table
+rc usage                 # tokens per harness and model, all turns
+rc usage --since 2026-11-01 --json
+rc usage --pull-requests  # merged share, CI failures, cost and tokens per merged PR
+rc usage --pull-requests --prices prices.toml  # plus a labelled cost estimate
+rc data query "SELECT * FROM daily_usage ORDER BY day DESC LIMIT 7"
+rc data query "SELECT * FROM daily_compactions ORDER BY day DESC LIMIT 7"
+rc data schema
+rc data stats            # rows and bytes per table
 ```
 
-`rustcode usage` reports tokens and the cost the harness reported in USD — a
+`rc usage` reports tokens and the cost the harness reported in USD — a
 blank cost means the harness reported none, and RustCode does not price
 requests itself. The answer counts missing data per column:
 `turns_without_input_tokens`, `turns_without_output_tokens`,
@@ -686,7 +686,7 @@ requests itself. The answer counts missing data per column:
 `turns_without_cost`. `turns_without_tokens` is the older, narrower count of
 turns where **both** input and output are missing. A row with no token counts
 prints `—`, not `0`, and the last row totals the table; a total summed from
-only the turns that reported a column is marked partial. `rustcode storage
+only the turns that reported a column is marked partial. `rc storage
 usage` is a different command: it reports disk space, and lists `data.sqlite`
 among the stores.
 
@@ -722,8 +722,8 @@ its `body`, which carries a link's message and answer) does not widen what a
 caller can read: with the setting on, the caller could read those threads
 anyway.
 
-A shell has the same data without an app: `rustcode usage` and
-`rustcode data query`. The engine answers the app through
+A shell has the same data without an app: `rc usage` and
+`rc data query`. The engine answers the app through
 `_rustcode/data/usage`, `_rustcode/data/query` and `_rustcode/data/activity`
 (`engine/src/acp/data.rs`).
 

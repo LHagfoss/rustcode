@@ -10,7 +10,7 @@ import { errorText, request, toast } from "./store";
  * A connect code this computer shows for another computer to pair with it: no request and no
  * accept step, valid ten minutes, once (docs/remote.md › Connect codes). The engine creates it on
  * this computer's gateway; the other computer redeems it with `machines_connect_code` (or
- * `rustcode machines connect`).
+ * `rc machines connect`).
  */
 export interface ConnectOffer {
   /** The short form, `K7MQ-29XH-TP4W-NRD6`. */

@@ -1,4 +1,4 @@
-//! `rustcode mcp-orchestrator --session <id> --socket <path>` (token in
+//! `rc mcp-orchestrator --session <id> --socket <path>` (token in
 //! `RUSTCODE_ORCHESTRATOR_TOKEN`):
 //! a stdio MCP server that offers an external harness the orchestration
 //! tools (`docs/orchestrator.md`). It holds no state of its own: every
@@ -66,9 +66,9 @@ impl Forward for SocketForward {
 /// What an app that is not a thread of RustCode is told when no engine
 /// answers: it was not started by one, so "the thread may have closed" would
 /// send its user looking for a thread that never existed.
-const NOT_RUNNING: &str = "RustCode is not running on this computer: open the RustCode app (or start `rustcode server run`) and try again";
+const NOT_RUNNING: &str = "RustCode is not running on this computer: open the RustCode app (or start `rc server run`) and try again";
 
-/// Whichever engine is running now, for `rustcode mcp-connect`. The bridge
+/// Whichever engine is running now, for `rc mcp-connect`. The bridge
 /// lives as long as the app that started it, which is usually longer than one
 /// run of RustCode, and every engine listens on a socket named for its own
 /// process: a socket read once at startup is dead after the first restart.
@@ -106,7 +106,7 @@ impl Forward for PublishedForward {
 pub struct Identity {
     pub session_id: String,
     pub token: String,
-    /// An outside agent (`rustcode mcp-connect`): the token is its grant's, the
+    /// An outside agent (`rc mcp-connect`): the token is its grant's, the
     /// instructions and tool list come from the engine, and every call goes to
     /// the engine's gate (`outside.rs`), which decides by the grant's scope.
     pub outside: bool,
@@ -368,7 +368,7 @@ struct Offered {
     core_only: bool,
 }
 
-/// Run `rustcode mcp-connect` on stdin/stdout: the orchestration tools for an
+/// Run `rc mcp-connect` on stdin/stdout: the orchestration tools for an
 /// app that is not a thread of RustCode (Claude Desktop, Cursor, Codex), under
 /// the grant its token belongs to. The engine decides what the token may do on
 /// every call; this only carries the bytes.

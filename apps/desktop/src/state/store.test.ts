@@ -2968,7 +2968,7 @@ describe("engine controller with the mock engine", () => {
     await setThreadStatus(id, "review");
     expect(statusOf(useApp.getState(), id)).toBe("review");
 
-    // `rustcode threads settle <id>` in a terminal stores the same status.json without a turn, so
+    // `rc threads settle <id>` in a terminal stores the same status.json without a turn, so
     // no update announces it: the app's mark must not outlive the first list that disagrees.
     await request(V2Method.sessionStatus, { session_id: id, status: "done" }, 10_000);
     await refreshSessions();

@@ -4,7 +4,7 @@
 //! answers requests for that host, which a tunnel or proxy (cloudflared)
 //! forwards to the same loopback port: hosted agents register themselves,
 //! sign in on a page this server shows, and the owner approves with a
-//! one-time code from `rustcode outside code`. Secrets are never logged;
+//! one-time code from `rc outside code`. Secrets are never logged;
 //! restarting discards unexchanged authorization codes.
 use super::outside_signin::{self, Consent, Outcome, PAGE_HEADERS};
 use super::{hub::CallRequest, mcp_names, outside};
@@ -42,7 +42,7 @@ struct Server {
     public: Option<String>,
     /// Signs registered client ids, so registration stores nothing.
     key: [u8; 32],
-    /// Where `rustcode outside code` leaves its one-time sign-in codes.
+    /// Where `rc outside code` leaves its one-time sign-in codes.
     sign_in_codes: PathBuf,
     /// The owner's passkeys, and the links that add one.
     passkeys: PathBuf,
@@ -175,7 +175,7 @@ pub fn configured_public_base() -> Option<Result<String, String>> {
     config.outside.public_url.as_deref().map(public_base)
 }
 
-/// What `rustcode outside code` prints.
+/// What `rc outside code` prints.
 pub struct SignInCode {
     /// `XXXX-XXXX`, shown once.
     pub code: String,
@@ -231,7 +231,7 @@ pub async fn ensure() -> Result<String, String> {
         let public = match configured_public_base() {
             Some(Ok(public)) => Some(public),
             Some(Err(error)) => {
-                // Local agents keep working; `rustcode outside code` says what is wrong.
+                // Local agents keep working; `rc outside code` says what is wrong.
                 crate::dbg_log!("outside-agent public URL ignored: {error}");
                 None
             }
@@ -912,7 +912,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<Upgrade> {
             .await;
             return None;
         }
-        // A link from `rustcode outside owner add-passkey`: the page that
+        // A link from `rc outside owner add-passkey`: the page that
         // makes the owner's passkey for this public address.
         ("GET", "/owner/passkey") if public => {
             let q = fields(query.as_bytes());
@@ -925,7 +925,7 @@ async fn serve(mut stream: TcpStream, server: Arc<Server>) -> Option<Upgrade> {
                     410,
                     &outside_signin::message_page(
                         "This link no longer works",
-                        "A passkey link works once, for 10 minutes. Make a new one with `rustcode outside owner add-passkey` on this machine.",
+                        "A passkey link works once, for 10 minutes. Make a new one with `rc outside owner add-passkey` on this machine.",
                     ),
                 )
                 .await;
