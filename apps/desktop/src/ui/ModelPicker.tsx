@@ -51,12 +51,14 @@ import {
   newThreadChoice,
   pickNewThreadAccount,
   pickNewThreadChoice,
+  refreshAllHarnessModels,
   refreshHarnesses,
   setConfigOption,
   shortcutFor,
   shownPlan,
   switchThreadAccount,
   switchThreadHarness,
+  toast,
   useApp,
 } from "../state/store";
 import type { ThreadState } from "../state/thread";
@@ -64,7 +66,7 @@ import { isRunning } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
-import { Check, ChevronUp, Lock, Star, UserRound, Zap } from "./icons";
+import { Check, ChevronUp, Lock, RefreshCw, Star, UserRound, Zap } from "./icons";
 import { cx, MenuSearchField, menuLabel, menuSeparator, Skeleton, Switch, Tooltip } from "./primitives";
 
 interface Choice {
@@ -528,6 +530,8 @@ function ModelPanel({
   onSearchFocus,
   fieldRef,
   maxHeight = CARD_MAX,
+  onRefresh,
+  refreshing = false,
 }: {
   groups: ModelGroup[];
   current?: string | null;
@@ -542,6 +546,10 @@ function ModelPanel({
   fieldRef: RefObject<HTMLInputElement | null>;
   /** The card's ceiling: less the note under it when the list has one. */
   maxHeight?: string;
+  /** Lists every harness's models again, past the engine's model cache. */
+  onRefresh?: () => void;
+  /** A Refresh models runs. */
+  refreshing?: boolean;
 }) {
   const [filter, setFilter] = useState("");
   const [favourites, setFavourites] = useState(() => readModelHistory("favourites"));
@@ -718,7 +726,7 @@ function ModelPanel({
             }
           }}
         >
-          <div className="p-1">
+          <div className="flex items-center gap-1 p-1">
             <MenuSearchField
               value={filter}
               onChange={setFilter}
@@ -727,7 +735,23 @@ function ModelPanel({
               inputRef={field}
               controls="model-list"
               activeDescendant={rows[active] ? `model-row-${active}` : undefined}
+              className="flex-1"
             />
+            {onRefresh && (
+              <Tooltip label={refreshing ? "Refreshing models…" : "Refresh models"}>
+                <button
+                  type="button"
+                  aria-label="Refresh models"
+                  aria-busy={refreshing}
+                  aria-disabled={refreshing}
+                  // Not `disabled`: a disabled button drops the focus out of the card.
+                  onClick={refreshing ? undefined : onRefresh}
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg aria-disabled:cursor-default"
+                >
+                  <RefreshCw size={13} className={cx(refreshing && "animate-spin")} />
+                </button>
+              </Tooltip>
+            )}
           </div>
           <div
             ref={scroller}
@@ -1139,6 +1163,19 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     else void refreshHarnesses();
   }, [open, engineReady, host]);
 
+  // Refresh models: every harness on this machine is started again to list its models, for a model
+  // added since the engine's cached list (refreshed on its own only once a day or on a new version).
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshModels = () => {
+    setRefreshing(true);
+    void refreshAllHarnessModels(host)
+      .then((failed) => {
+        if (failed)
+          toast(`${failed} ${failed === 1 ? "harness" : "harnesses"} could not list models.`, "error");
+      })
+      .finally(() => setRefreshing(false));
+  };
+
   /**
    * A model row. In the current harness it is set in place and the level the
    * new model does not offer is clamped to its default; another harness is
@@ -1272,6 +1309,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
             }}
             fieldRef={field}
             maxHeight={cardMax}
+            onRefresh={engineReady ? refreshModels : undefined}
+            refreshing={refreshing}
           />
           <TraitsColumn
             model={displayName ?? label}

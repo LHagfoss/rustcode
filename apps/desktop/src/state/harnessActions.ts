@@ -26,6 +26,7 @@ import {
   errorText,
   harnessesOn,
   lacksModels,
+  loadMachineHarnesses,
   type NewThreadChoice,
   newThreadChoice,
   STORAGE,
@@ -266,6 +267,51 @@ export async function fetchHarnessModels(id: string, refresh = false): Promise<n
   if (refresh) await refreshHarnesses();
   else void refreshHarnesses();
   return models.length;
+}
+
+/** Harnesses a Refresh models lists at once: each is a process the harness starts. */
+const REFRESH_CONCURRENCY = 2;
+
+/** The Refresh models in flight, one per machine: pressing it again joins it. */
+const refreshing = new Map<string, Promise<number>>();
+
+/**
+ * "Refresh models" in the model picker: start every enabled harness on `host` again and list its
+ * models, rather than answer from the engine's model cache (`_rustcode/harnesses/models` with
+ * `refresh`), so a model a harness gained since it was last listed shows at once. Then the
+ * machine's snapshot is read again. Answers how many harnesses failed to list; a failure keeps
+ * the harness's last list.
+ */
+export function refreshAllHarnessModels(host = LOCAL_HOST): Promise<number> {
+  let run = refreshing.get(host);
+  if (!run) {
+    run = refreshMachineModels(host).finally(() => refreshing.delete(host));
+    refreshing.set(host, run);
+  }
+  return run;
+}
+
+async function refreshMachineModels(host: string): Promise<number> {
+  const conn = connectionFor(host);
+  if (!conn) return 0;
+  const listed = host ? get().remoteHarnesses[host] : get().harnesses;
+  const ids = (listed?.harnesses ?? []).filter((h) => !h.builtin && h.enabled).map((h) => h.id);
+  const queue = [...ids];
+  let failed = 0;
+  const worker = async () => {
+    for (let id = queue.shift(); id; id = queue.shift()) {
+      try {
+        await conn.request(Method.harnessModels, { harness: id, refresh: true }, 60_000);
+      } catch {
+        failed++;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(REFRESH_CONCURRENCY, ids.length) }, worker));
+  forgetAskedModels();
+  if (host) await loadMachineHarnesses(host, { report: false, refresh: true });
+  else await refreshHarnesses();
+  return failed;
 }
 
 /** Model listings in flight (ensureHarnessModels), one per harness. */
