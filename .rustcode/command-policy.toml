@@ -1,7 +1,8 @@
 # Shell rules for agents working in this repository (AGENTS.md, "Workflow").
 # RustCode's command guard reads this file: see docs/command-guard.md.
 # A deny rule refuses the command and tells the agent why; a rewrite rule runs
-# it with a prefix. Rules look through quotes, `&&` lists, `VAR=x` prefixes and
+# it with a prefix; a hint rule adds a note when the output shows a known
+# failure. Rules look through quotes, `&&` lists, `VAR=x` prefixes and
 # wrappers such as `timeout`, `env` or `sh -c`.
 
 [[rule]]
@@ -51,3 +52,11 @@ program = "git"
 subcommand = ["push"]
 flags = ["--force", "-f", "--force-with-lease"]
 message = "Never force-push. Merge `origin/main` into the branch and push normally."
+
+[[rule]]
+name = "git-ref-lock-race"
+action = "hint"
+program = "git"
+subcommand = ["fetch", "pull", "remote", "worktree"]
+output = ["cannot lock ref"]
+message = "Another thread fetched this repository at the same time and moved the ref under this command. Nothing is broken: run the same command again."

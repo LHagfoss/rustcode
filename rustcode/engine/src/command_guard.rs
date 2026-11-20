@@ -3,8 +3,9 @@
 //!
 //! A project opts in with `.rustcode/command-policy.toml`. Each `[[rule]]`
 //! names a program (and optionally a subcommand and flags) and either denies
-//! it with a message or rewrites it with a prefix, such as running heavy
-//! `cargo` at background priority. The matcher reads the command the way a
+//! it with a message, rewrites it with a prefix, such as running heavy
+//! `cargo` at background priority, or adds a hint to its output when that
+//! output shows a known failure. The matcher reads the command the way a
 //! shell would at the level that matters here: quotes, `&&`/`;`/`|` lists,
 //! leading `VAR=value` assignments, wrappers such as `env`, `timeout`,
 //! `nice` or `taskpolicy`, and `sh -c '…'` scripts.
@@ -36,6 +37,9 @@ const MAX_NESTING: usize = 3;
 enum Action {
     Deny,
     Rewrite,
+    /// Leave the command alone; when its output contains one of `output`,
+    /// tell the agent `message` after it ran.
+    Hint,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +77,10 @@ struct Rule {
     /// these wrappers (`taskpolicy`, `nice`).
     #[serde(default)]
     skip_if_wrapped: Vec<String>,
+    /// Hint: text in the command's output (stdout or stderr) that shows the
+    /// failure the hint explains. Any one of them matches.
+    #[serde(default)]
+    output: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +160,15 @@ impl Policy {
             {
                 return Err(format!("rewrite rule `{}` has no prefix", rule.name));
             }
+            if rule.action == Action::Hint
+                && (rule.output.iter().all(|text| text.trim().is_empty())
+                    || rule.message.trim().is_empty())
+            {
+                return Err(format!(
+                    "hint rule `{}` needs an output to match and a message",
+                    rule.name
+                ));
+            }
         }
         Ok(Self {
             path,
@@ -197,6 +214,7 @@ impl Policy {
                     continue;
                 }
                 match rule.action {
+                    Action::Hint => {}
                     Action::Deny => {
                         return Verdict::Deny {
                             rule: rule.name.clone(),
@@ -247,6 +265,33 @@ impl Policy {
             command: rewritten,
             rules,
         }
+    }
+
+    /// What to tell the agent after `command` ran and printed `output`: the
+    /// message of each hint rule that matches the command and whose output
+    /// text appears, or `None`.
+    pub fn hint(&self, command: &str, output: &str) -> Option<String> {
+        let mut found = Vec::new();
+        scan(command, None, 0, &Context::default(), &mut found);
+        let mut messages: Vec<String> = Vec::new();
+        for rule in self.rules.iter().filter(|rule| rule.action == Action::Hint) {
+            let shown = rule
+                .output
+                .iter()
+                .any(|text| !text.trim().is_empty() && output.contains(text.as_str()));
+            if !shown || !found.iter().any(|invocation| rule.matches(invocation)) {
+                continue;
+            }
+            let message = format!(
+                "Command guard hint (`{}`): {} ({POLICY_PATH})",
+                rule.name,
+                rule.message.trim()
+            );
+            if !messages.contains(&message) {
+                messages.push(message);
+            }
+        }
+        (!messages.is_empty()).then(|| messages.join("\n"))
     }
 
     fn deny_message(&self, rule: &Rule) -> String {
@@ -634,6 +679,12 @@ pub fn check(dir: &Path, command: &str, extra_env: &[(String, String)]) -> Verdi
     }
 }
 
+/// The hint of the policy at or above `dir` for `command` after it printed
+/// `output`, if any.
+pub fn hint(dir: &Path, command: &str, output: &str) -> Option<String> {
+    Policy::find(dir)?.hint(command, output)
+}
+
 /// Whether a project at `dir` has a policy the guard applies.
 pub fn has_policy(dir: &Path) -> bool {
     Policy::find(dir).is_some()
@@ -748,8 +799,8 @@ pub fn requested_command(raw_input: &Value) -> Option<String> {
     }
 }
 
-/// The Claude Code settings that run [`hook_response`] before each Bash call
-/// of thread `thread_id`, as an inline SDK settings object.
+/// The Claude Code settings that run [`hook_response`] before and after each
+/// Bash call of thread `thread_id`, as an inline SDK settings object.
 /// The ACP adapter treats string settings as file paths, not serialized JSON.
 /// `None` where the hook cannot run (not the `rustcode` binary, not Unix).
 pub fn claude_code_settings(thread_id: Option<&str>) -> Option<Value> {
@@ -775,19 +826,25 @@ pub fn claude_code_settings(thread_id: Option<&str>) -> Option<Value> {
 }
 
 fn claude_hook_settings(command: String) -> Value {
+    let bash = json!([{
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": command}],
+    }]);
     json!({
         "hooks": {
-            "PreToolUse": [{
-                "matcher": "Bash",
-                "hooks": [{"type": "command", "command": command}],
-            }]
+            "PreToolUse": bash,
+            // A failed call fires `PostToolUseFailure` instead.
+            "PostToolUse": bash,
+            "PostToolUseFailure": bash,
         }
     })
 }
 
-/// Answer a Claude Code `PreToolUse` hook call: the JSON to print when the
-/// command is refused, nothing when it may run. Input that is not a Bash call
-/// or does not parse is let through.
+/// Answer a Claude Code hook call. Before a Bash call (`PreToolUse`): the
+/// JSON to print when the command is refused, nothing when it may run. After
+/// one (`PostToolUse`, `PostToolUseFailure`): the hint its output calls for,
+/// as context for the model. Input that is not a Bash call or does not parse
+/// is let through.
 pub fn hook_response(input: &str) -> Option<String> {
     let call: Value = serde_json::from_str(input).ok()?;
     if call.get("tool_name").and_then(Value::as_str) != Some("Bash") {
@@ -799,6 +856,25 @@ pub fn hook_response(input: &str) -> Option<String> {
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())?;
+    let event = call
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .unwrap_or("PreToolUse");
+    if matches!(event, "PostToolUse" | "PostToolUseFailure") {
+        let context = hint(&dir, command, &hook_output_text(&call))?;
+        return Some(
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": event,
+                    "additionalContext": context,
+                }
+            })
+            .to_string(),
+        );
+    }
+    if event != "PreToolUse" {
+        return None;
+    }
     let verdict = check(&dir, command, &[]);
     let reason = refusal(&verdict)?;
     if let Ok(thread_id) = std::env::var(THREAD_ENV) {
@@ -814,6 +890,29 @@ pub fn hook_response(input: &str) -> Option<String> {
         })
         .to_string(),
     )
+}
+
+/// The text a finished Bash call printed, from a post-call hook's input: the
+/// `tool_response` (a string or its `stdout`/`stderr`/`output`) and, for a
+/// failed call, its `error`.
+fn hook_output_text(call: &Value) -> String {
+    let mut text = String::new();
+    let mut push = |value: Option<&Value>| {
+        if let Some(part) = value.and_then(Value::as_str) {
+            text.push_str(part);
+            text.push('\n');
+        }
+    };
+    match call.get("tool_response") {
+        Some(Value::Object(response)) => {
+            for key in ["stdout", "stderr", "output"] {
+                push(response.get(key));
+            }
+        }
+        response => push(response),
+    }
+    push(call.get("error"));
+    text
 }
 
 #[cfg(test)]

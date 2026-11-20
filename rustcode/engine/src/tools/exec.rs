@@ -643,7 +643,8 @@ fn run_command_output_with_workspace_and_progress_for_call(
 
 /// Apply the project's command policy (`crate::command_guard`) to a command
 /// before it runs: a denied command fails with the rule's message, a command a
-/// rule rewrites runs as rewritten and its output says so.
+/// rule rewrites runs as rewritten and its output says so, and output a hint
+/// rule recognises (a failure another thread caused) ends with its hint.
 fn run_command_output_inner(
     args: &Value,
     progress: Option<CommandProgressCallback>,
@@ -651,7 +652,7 @@ fn run_command_output_inner(
     call_id: Option<&str>,
     explicit_workspace_root: Option<Option<std::path::PathBuf>>,
 ) -> Result<super::ToolExecutionOutput, String> {
-    use crate::command_guard::{Verdict, check, record_violation, refusal};
+    use crate::command_guard::{Verdict, check, hint, record_violation, refusal};
     let Some(command_str) = args.get("command").and_then(Value::as_str) else {
         return run_command_output_unguarded(
             args,
@@ -687,14 +688,31 @@ fn run_command_output_inner(
         .as_deref()
         .map_or(Verdict::Allow, |dir| check(dir, command_str, &guard_env));
     let thread_id = get_active_session_id().unwrap_or_default();
+    let with_hint = |result: Result<super::ToolExecutionOutput, String>| {
+        let Some(dir) = guard_dir.as_deref() else {
+            return result;
+        };
+        match result {
+            Ok(mut output) => {
+                if let Some(text) = hint(dir, command_str, &output.content) {
+                    output.content = format!("{}\n{text}", output.content.trim_end());
+                }
+                Ok(output)
+            }
+            Err(error) => Err(match hint(dir, command_str, &error) {
+                Some(text) => format!("{}\n{text}", error.trim_end()),
+                None => error,
+            }),
+        }
+    };
     match verdict {
-        Verdict::Allow => run_command_output_unguarded(
+        Verdict::Allow => with_hint(run_command_output_unguarded(
             args,
             progress,
             cancel_token,
             call_id,
             explicit_workspace_root,
-        ),
+        )),
         Verdict::Deny { .. } => {
             record_violation(&thread_id, "rustcode", &verdict);
             Err(refusal(&verdict).unwrap_or_default())
@@ -710,13 +728,13 @@ fn run_command_output_inner(
                 "[command guard: rule `{}` ran this as: {command}]\n",
                 rules.join("`, `")
             );
-            let mut output = run_command_output_unguarded(
+            let mut output = with_hint(run_command_output_unguarded(
                 &rewritten,
                 progress,
                 cancel_token,
                 call_id,
                 explicit_workspace_root,
-            )?;
+            ))?;
             output.content = format!("{note}{}", output.content);
             Ok(output)
         }

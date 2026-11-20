@@ -1695,8 +1695,8 @@ fn repository_branch_policy_resolves_generic_switch_recipe_without_moving_checko
     // must defer to it rather than prescribing one recipe for every repo, and
     // must still refuse to move or discard the user's checkout.
     assert!(
-        repository_policy
-            .contains("Do not use a separate worktree unless it is genuinely called for"),
+        repository_policy.contains("Use a worktree only when it is")
+            && repository_policy.contains("genuinely called for"),
         "repository policy must make worktree use conditional"
     );
     assert!(

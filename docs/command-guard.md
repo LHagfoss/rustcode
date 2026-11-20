@@ -55,6 +55,29 @@ skip_if_wrapped = ["taskpolicy", "nice"]
 
 A deny rule beats a rewrite rule in the same command.
 
+### Hints
+
+A **hint** rule never stops or changes a command. After it ran, when its
+output (stdout or stderr) contains one of `output`, the agent is told
+`message`, so a failure with a known cause is not diagnosed from scratch:
+
+```toml
+[[rule]]
+name = "git-ref-lock-race"
+action = "hint"
+program = "git"
+subcommand = ["fetch", "pull", "remote", "worktree"]
+output = ["cannot lock ref"]
+message = "Another thread fetched this repository at the same time and moved the ref under this command. Nothing is broken: run the same command again."
+```
+
+This repository uses that one: worktree threads share `refs/remotes/origin/*`,
+and two fetches at once fail one of them with `error: cannot lock ref
+'refs/remotes/origin/main': is at … but expected …`. The built-in harness
+appends the hint to the command's output; Claude Code gets it as context from a
+`PostToolUse`/`PostToolUseFailure` hook. Other harnesses do not report output
+to RustCode, so they show no hint. A hint is not counted as a violation.
+
 ## What the matcher sees
 
 It reads a command the way the shell groups it, without running anything:
@@ -79,7 +102,7 @@ mistakes, not an agent set on getting around it.
 | Harness | How | Rewrite |
 | --- | --- | --- |
 | RustCode (built-in) | In the exec tool (`run_command`), as the command is about to run. | Runs the rewritten command; its output starts with a line naming the rule. |
-| Claude Code | A `PreToolUse` hook on `Bash`, added to the session when the project has a policy (`_meta.claudeCode.options.settings`, running the hidden `rustcode guard-command`). Unix only. | Refused with the command to run instead. |
+| Claude Code | A `PreToolUse` hook on `Bash` (and post-call hooks for hints), added to the session when the project has a policy (`_meta.claudeCode.options.settings`, running the hidden `rustcode guard-command`). Unix only. | Refused with the command to run instead. |
 | Codex, Gemini CLI, OpenCode, Pi | Through the approval request the harness sends (`session/request_permission`): a command the policy refuses is rejected without asking the user. | Rejected, and noted in `debug.log`. |
 
 The last row guards only what a harness asks about. A harness running in a
