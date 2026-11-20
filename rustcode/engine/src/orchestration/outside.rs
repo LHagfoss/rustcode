@@ -1514,14 +1514,16 @@ mod tests {
     #[test]
     fn outside_agents_need_manage_access_and_a_project_for_create_loop() {
         let name = super::super::CREATE_LOOP;
+        let public = super::super::mcp_names::public_tool(name);
+        assert_eq!(public, "create_job");
         assert_eq!(required_scope(name), Some(Scope::Manage));
         assert!(
             !tools_for(Scope::Delegate)
                 .iter()
-                .any(|tool| tool["name"] == name)
+                .any(|tool| tool["name"] == public)
         );
         let tools = tools_for(Scope::Manage);
-        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        let tool = tools.iter().find(|tool| tool["name"] == public).unwrap();
         assert!(
             tool["inputSchema"]["required"]
                 .as_array()
