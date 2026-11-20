@@ -1199,19 +1199,17 @@
 .rc-toast {
   background: var(--rc-glass-bg-strong);
 }
-/* The composer shares the sidebar surface and keeps a subtle edge. */
+/* The composer and the question panel over it share the sidebar surface, glass, shadow and corner. */
+.rc-composer-card,
 .rc-composer {
   background: var(--rc-composer-bg);
   @apply glass-filter;
   box-shadow:
     0 3px 12px -4px var(--rc-shadow-soft),
     0 0 0 1px var(--rc-separator);
-}
-/* The box clips to its own corner, so the attachment thumbnails and a scrolled field stop at the
-   curve instead of painting over it. Nothing in it opens a popover: they are portalled. */
-.rc-composer {
   border-radius: var(--rc-composer-radius);
   overflow: hidden;
+  transition: background-color 160ms ease-out;
 }
 /* The tray is the card's last row, not a slab of its own: the card's one glass carries it. Its
    controls come from four files and each sets its own height (`h-7` on the pills, the round send
@@ -1275,10 +1273,11 @@
 /* Focus inside the card changes its fill only. Its ring is the keyboard's, and it is the card's
    only rim: clicking into the field never draws one, tabbing into the card does
    (lib/focusModality.ts). */
+.rc-composer-card:focus-within,
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
 }
-:root[data-keyboard-nav] .rc-composer:focus-within {
+:root[data-keyboard-nav] :is(.rc-composer, .rc-composer-card):focus-within {
   outline: 2px solid color-mix(in srgb, var(--rc-focus) 40%, transparent);
   outline-offset: 1px;
 }
@@ -1324,12 +1323,19 @@
 .rc-lane-room {
   right: var(--rc-panel-room, 0px);
 }
+/* Centred horizontally in the chat lane, clear of the right panel's card (`--rc-panel-room`). */
+.rc-lane-center {
+  left: calc(50% - var(--rc-panel-room, 0px) / 2);
+}
 /* Opening or closing the card eases the lane with it, on the card's own 200ms. */
 .rc-panel-moving .rc-lane-pad {
   transition: padding-right 200ms var(--ease-snappy);
 }
 .rc-panel-moving .rc-lane-inset {
   transition: right 200ms var(--ease-snappy);
+}
+.rc-panel-moving .rc-lane-center {
+  transition-property: opacity, translate, left, bottom;
 }
 .rc-composer-fade {
   height: 56px;
@@ -1466,6 +1472,7 @@
   .rc-header-glass.rc-frost::before {
     --rc-glass-pane: var(--rc-bg);
   }
+  .rc-composer-card:focus-within,
   .rc-composer:focus-within {
     background: var(--rc-composer-bg-focus);
   }
@@ -1477,6 +1484,7 @@
       .rc-glass-faint,
       .rc-glass-overlay,
       .rc-composer,
+      .rc-composer-card,
       .rc-toast,
       .rc-composer-footer,
       .rc-scrim,
@@ -1500,7 +1508,9 @@
   --rc-composer-bg-focus: var(--rc-sidebar);
   --rc-composer-bg-over: var(--rc-sidebar);
 }
-:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) .rc-composer:focus-within {
+:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) .rc-composer:focus-within,
+:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
+  .rc-composer-card:focus-within {
   background: var(--rc-composer-bg-focus);
 }
 /* No filter behind an opaque fill (see the query above): the surfaces keep their solid tokens and
@@ -1511,6 +1521,7 @@
     .rc-glass-faint,
     .rc-glass-overlay,
     .rc-composer,
+    .rc-composer-card,
     .rc-toast,
     .rc-composer-footer,
     .rc-scrim,

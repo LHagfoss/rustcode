@@ -1388,8 +1388,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   leaves, so an answer has a visible result instead of a card vanishing under
   the pointer.
 - **Question panel:** a question waiting on the user is a panel over the
-  composer (`ui/AttentionCards.tsx` `QuestionCard`, `elevated p-4`, `rc-in`),
-  not in place of it: the composer stays below with its draft, so the thread
+  composer (`ui/AttentionCards.tsx` `QuestionCard`, `rc-composer-card px-5 py-4`,
+  `rc-in`), sharing the composer's surface, glass, shadow and `--rc-composer-radius`
+  corner, not in place of it: the composer stays below with its draft, so the thread
   and the user's own words keep their place while the question is answered.
   The header (`h2`, accent) names the question and, for a set asked one after
   another, `2 of 3` (`step`/`steps` in the request's `_meta.rustcode`); the
