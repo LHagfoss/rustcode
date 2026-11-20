@@ -18,12 +18,10 @@ Be brief: one short line before the view with the finding, nothing after it.
 Caveats go in the view (`.rc-callout`, `.rc-muted`); sources go last in it,
 folded (Kit › Sources), never as a Markdown list after it.
 
-Pick by question: a trend over time → line chart; parts of a whole → stacked
-bar or donut; a ranking → `.rc-bars`; options → a `.rc-grid` of `.rc-card`s;
-many exact rows → a table (sortable past eight); numbers → the dashboard
-below. Prefer bars, cards and charts to a flat table. Asked for graphs or hover, chart with
-Chart.js: tooltips, legend toggles and the eight series colours come free, and
-hovering a column shows that column.
+Pick by question: a trend → line chart; parts → stacked bar or donut; a
+ranking → bars; options → cards; many exact rows → a table; numbers → the
+dashboard below. Prefer bars, cards and charts to a flat table; asked for
+graphs or hover, use Chart.js.
 
 ## Format
 
@@ -39,28 +37,22 @@ hovering a column shows that column.
 ```
 ````
 
-The title labels the view; do not repeat it. Write the kit in shorthand, which
-the app turns into the kit's own markup: fewer tokens, and every view of a kind
-alike. HTML (below) is for the rest, and the two mix freely.
+The title labels the view; do not repeat it. Shorthand for the kit (the app
+writes its markup), HTML for the rest; they mix.
 
 ## Shorthand
 
-A `::` line opens a block; its `- ` lines are items, cells split at `|`
-(outside backticks; `\|` keeps one); a blank line, the next `::` or a line
-that starts with `<` ends it. An item may end `{ok}`, `{warn}`, `{bad}` or
-`{info}`. In text, `code`, **bold** and inline HTML work. A name after the
-block (`:: bars Slowest crates`) is an `h3` over it.
+A `::` line opens a block, its `- ` items split at `|` (not in backticks), and
+a blank line or a line starting `<` ends it. An item may end `{ok}`, `{warn}`,
+`{bad}` or `{info}`; `code`, **bold** and HTML work in text. A name after a
+block is an `h3` over it.
 
-- `:: title Text` the view's title · `:: h Text` a heading · `:: p` text (on its line or below)
-- `:: bars` `- label | value | shown | tip`: widths scale to the largest value
-  (all `%` values are widths as written); `shown` defaults to the value; `tip` shows on hover.
-- `:: stats` `- value | label | note`
-- `:: steps` `- [x] done`, `[>] active`, `[!] failed`, `[ ] to do`
-- `:: list` `- Title | detail` (or one line of prose) · `:: cards` `- Title | body`
-- `:: table` then `a | b` rows, the first the heading (Markdown divider rows are
-  skipped); sortable past eight rows.
-- `:: callout info|ok|warn|bad [lead]` then its text
-- `:: sources` `- Title | url`, folded, last in the view
+- `:: title T` · `:: h Heading` · `:: p` text
+- `:: bars` `- label | value | shown | tip`, scaled to the largest (`%` as written)
+- `:: stats` `- value | label | note` · `:: steps` `- [x]` done, `[>]` active, `[!]` failed, `[ ]` to do
+- `:: list` `- Title | detail` · `:: cards` `- Title | body`
+- `:: table` then `a | b` rows, the first the heading; sorts past eight rows
+- `:: callout info|ok|warn|bad` then text · `:: sources` `- Title | url`, last
 
 Optional inline `<script>`, data embedded. No network, imports or storage; a link opens in the browser, never in the view. Limits: 64 KB, 5,000
 elements. The app draws it as it streams: lead with the part worth reading.
@@ -73,9 +65,7 @@ literal is what makes two views of the same kind look unlike, and
 
 - Ink: `--rc-text --rc-muted --rc-faint --rc-accent --rc-accent-text --rc-bg
   --rc-surface --rc-separator --rc-danger --rc-success --rc-warning`.
-- Type: `--rc-font --rc-mono --rc-text-size`, also `-sm` (table, bar, chip),
-  `-xs` (label, badge, tip), `--rc-text-size-title` and
-  `--rc-text-size-value` (a big number).
+- Type: `--rc-font --rc-mono --rc-text-size` and its `-sm -xs -title -value`.
 - Shape: `--rc-radius --rc-radius-sm --rc-radius-xs --rc-radius-pill`.
 - Charts: `--rc-series-1` … `--rc-series-8` (the first is the accent).
 
@@ -94,15 +84,11 @@ so leave out margins (16 px; 28 px inside `.rc-dash`). A `.rc-card` is already a
 - Status: `.rc-badge .rc-callout`, tinted by `.rc-ok .rc-warn .rc-bad .rc-info`
   (also on a stat, a bar or a line in `.rc-term`);
   `<div class="rc-progress"><span style="width:72%"></span></div>`
-- Bars (`:: bars`): `.rc-bars > .rc-bar[data-rc-tip] > span, i[style=width:40%], b`; each highlights and shows its tip on hover.
 - Rows: `<table class="rc-table" data-rc-sort>` sorts on a click or Enter in a
   heading (`data-rc-sort="text"` on one `th` compares it as text) and
   highlights the row under the pointer; in `.rc-scroll` its header sticks.
-  An item is a label row with an optional trailing value and may carry a description block (`div` or `p`).
-  `<ul class="rc-list"><li class="rc-item"><span>Name</span><span class="rc-badge rc-ok">Ready</span></li></ul>`
-- Plans (`:: steps`): `ol.rc-steps > li.rc-step.rc-done`, also `rc-active rc-failed rc-todo`.
+  `.rc-list > .rc-item`: a label row, an optional trailing value or badge, an optional `p`.
 - Review: `.rc-findings > .rc-finding[data-severity=high|medium|low]` holding `<div><code>a.ts:21</code> · Codex</div><p>…</p><p class="rc-finding-note rc-ok">Fixed</p>`; a set-aside note drops `rc-ok` and ends with a `data-rc-send` Reopen chip.
-- Sources (`:: sources`): `details.rc-details.rc-sources > summary + ol > li > a[href]`; a link opens in the browser.
 - Folding: `<details class="rc-details"><summary>Files</summary>…</details>`,
   `.rc-tree` around nested ones, `.rc-file` rows of name and value.
 - Output: `<div class="rc-term"><div>$ cargo test</div><div class="rc-ok">ok</div></div>`

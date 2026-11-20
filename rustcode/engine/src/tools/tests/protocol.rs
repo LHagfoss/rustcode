@@ -2242,14 +2242,12 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         "rustcode-lib:chart.js",
         "--rc-series-1…8",
         ".rc-num",
-        ".rc-stat-label",
         "--rc-separator",
         "Answer visually, asked or not",
         "never a Markdown table",
         "A report to another thread stays plain Markdown",
         "set no colours",
         "as little CSS as you can",
-        ".rc-stat-value",
         ".rc-badge",
         ":: bars",
         ":: stats",
@@ -2319,12 +2317,10 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // review findings class adds about 80 more (its markup is in the smart-ui
     // skill, not here), so the cap was 2,300. Answering visually by default
     // (data, results and 4+ items in a view, no Markdown tables, brief text)
-    // adds about 30, so it was 2,350. The `::` shorthand adds about 160 and
-    // the kit list it replaces gives back what it can: a view in shorthand is
-    // about a third shorter (600 bytes on the reconnect fixture), so it pays
-    // for itself in the first view of a thread. The cap is 2,500.
+    // adds about 30, so it is 2,350. The `::` shorthand fits in the same cap:
+    // the kit markup it writes no longer has to be spelled out here.
     assert!(
-        SMART_UI_HARNESS_HINT.len() < 2_500,
+        SMART_UI_HARNESS_HINT.len() < 2_350,
         "{}",
         SMART_UI_HARNESS_HINT.len()
     );
