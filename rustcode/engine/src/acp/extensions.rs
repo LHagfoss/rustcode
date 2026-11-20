@@ -139,16 +139,13 @@ pub(super) fn start_pull_watching(clients: &clients::Clients) {
             if lease.is_none() {
                 lease = store.lease();
             }
-            if lease.is_none() {
-                // Another process checks GitHub and tells only its own
-                // clients: pass on what it found to this engine's.
-                for (watch, events) in crate::pull_watch::unannounced(&store.load(), &mut announced)
-                {
-                    notify.publish(
-                        clients::Topic::PullWatches,
-                        PullWatchNotification { watch, events },
-                    );
-                }
+            // A link can already have pending events when it is created.
+            // Forward those as well as events written by another engine.
+            for (watch, events) in crate::pull_watch::unannounced(&store.load(), &mut announced) {
+                notify.publish(
+                    clients::Topic::PullWatches,
+                    PullWatchNotification { watch, events },
+                );
             }
             if lease.is_some() {
                 crate::pull_watch::check_due(&store, |watch, events| {
