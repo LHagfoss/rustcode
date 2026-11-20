@@ -770,6 +770,8 @@ function ModelPanel({
                 (choice) =>
                   modelKey(choice) === modelKey({ harness: item.group.harness.id, model: item.model.value }),
               );
+              const selected =
+                item.group.harness.id === groups[0]?.harness.id && item.model.value === current;
               return (
                 <div role="presentation" key={`${item.section}:${item.group.harness.id}:${item.model.value}`}>
                   {item.section && item.section !== rows[i - 1]?.section && (
@@ -781,9 +783,7 @@ function ModelPanel({
                     id={`model-row-${i}`}
                     role="option"
                     tabIndex={-1}
-                    aria-selected={
-                      item.group.harness.id === groups[0]?.harness.id && item.model.value === current
-                    }
+                    aria-selected={selected}
                     aria-disabled={!!item.group.blocked}
                     onMouseEnter={() => highlight(i)}
                     onClick={() => !item.group.blocked && choose(item.group, item.model.value)}
@@ -797,34 +797,39 @@ function ModelPanel({
                       <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
                     )}
                     <span className="min-w-0 flex-1 truncate text-body">{name}</span>
-                    <Tooltip label={`${starred ? "Unstar" : "Star"} model (⌘D / Ctrl+D)`}>
-                      <button
-                        type="button"
-                        aria-label={`${starred ? "Remove" : "Add"} ${name} ${starred ? "from" : "to"} favourites`}
-                        aria-pressed={starred}
-                        onFocus={() => highlight(i)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-                        }}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleStar(item.group.harness.id, item.model.value);
-                          field.current?.focus();
-                        }}
-                        className={cx(
-                          "shrink-0 rounded p-1 text-fg-muted hover:text-fg focus-visible:opacity-100 group-hover/model:opacity-100 group-focus-within/model:opacity-100",
-                          starred || i === active ? "opacity-100" : "opacity-0",
-                        )}
-                      >
-                        <Star size={12} fill={starred ? "currentColor" : "none"} />
-                      </button>
-                    </Tooltip>
                     {providerName && (
                       <span className="shrink-0 text-caption text-fg-faint">{providerName}</span>
                     )}
-                    {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
-                      <Check size={13} className="shrink-0 text-accent" />
-                    )}
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Tooltip label={`${starred ? "Unstar" : "Star"} model (⌘D / Ctrl+D)`}>
+                        <button
+                          type="button"
+                          aria-label={`${starred ? "Remove" : "Add"} ${name} ${starred ? "from" : "to"} favourites`}
+                          aria-pressed={starred}
+                          onFocus={() => highlight(i)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+                          }}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleStar(item.group.harness.id, item.model.value);
+                            field.current?.focus();
+                          }}
+                          className={cx(
+                            "flex size-5 shrink-0 items-center justify-center rounded text-fg-muted hover:text-fg focus-visible:opacity-100 group-hover/model:opacity-100 group-focus-within/model:opacity-100",
+                            starred || i === active ? "opacity-100" : "opacity-0",
+                          )}
+                        >
+                          <Star size={12} fill={starred ? "currentColor" : "none"} />
+                        </button>
+                      </Tooltip>
+                      <Check
+                        size={13}
+                        strokeWidth={2.5}
+                        aria-hidden
+                        className={cx("shrink-0 text-accent", !selected && "invisible")}
+                      />
+                    </div>
                   </div>
                 </div>
               );
