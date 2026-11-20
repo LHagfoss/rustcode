@@ -13,8 +13,24 @@ use std::sync::LazyLock;
 
 use rustcode_core::update::{
     BREW_UPDATE_COMMAND, BREW_UPGRADE_COMMAND, UpdateCheck, Version, format_version,
-    is_brew_install, parse_semver, target_asset_name,
+    is_brew_install, parse_semver, target_asset_name, target_cli_asset_name,
 };
+
+fn current_binary_asset_name() -> Option<&'static str> {
+    let is_rc = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| stem == "rc")
+        })
+        .unwrap_or(false);
+    if is_rc {
+        target_cli_asset_name()
+    } else {
+        target_asset_name()
+    }
+}
 
 const GITHUB_REPO: &str = "LHagfoss/rustcode";
 const GITHUB_API_LATEST_RELEASE: &str =
@@ -90,12 +106,12 @@ async fn fetch_github_latest(client: &reqwest::Client) -> Option<(Version, Strin
             return None;
         }
         let version = stable_version(&release.tag_name)?;
-        let target_name = target_asset_name()?;
+        let asset_name = current_binary_asset_name()?;
         let download_url = release
             .assets
-            .into_iter()
-            .find(|a| a.name == target_name)
-            .map(|a| a.browser_download_url)?;
+            .iter()
+            .find(|a| a.name == asset_name)
+            .map(|a| a.browser_download_url.clone())?;
         return Some((version, download_url));
     }
     None
@@ -182,7 +198,7 @@ pub async fn run_update(client: &reqwest::Client, expected: Version) -> Result<(
 
 /// Download matching archive from GitHub Releases and replace the current binary.
 pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> Result<(), String> {
-    let asset_name = target_asset_name().ok_or_else(|| {
+    let asset_name = current_binary_asset_name().ok_or_else(|| {
         format!(
             "Unsupported platform: {}/{}",
             std::env::consts::OS,

@@ -8,9 +8,10 @@ cd "$scratch"
 git init -q
 git config user.name CI
 git config user.email ci@example.test
-mkdir -p rustcode/tui
+mkdir -p rustcode/cli harness
 printf 'version = "1.0.0"\n' > Cargo.toml
-printf 'version = "1.0.0"\n' > rustcode/tui/Cargo.toml
+printf 'version = "1.0.0"\n' > rustcode/cli/Cargo.toml
+printf 'version = "1.0.0"\n' > harness/Cargo.toml
 printf 'version = "1.0.0"\n' > Cargo.lock
 printf '# Changelog\n' > CHANGELOG.md
 git add .
@@ -18,7 +19,8 @@ git commit -qm baseline
 base="$(git rev-parse HEAD)"
 
 printf 'version = "1.0.1"\n' > Cargo.toml
-printf 'version = "1.0.1"\n' > rustcode/tui/Cargo.toml
+printf 'version = "1.0.1"\n' > rustcode/cli/Cargo.toml
+printf 'version = "1.0.1"\n' > harness/Cargo.toml
 printf 'version = "1.0.1"\n' > Cargo.lock
 printf '# Changelog\n1.0.1\n' > CHANGELOG.md
 git add .
@@ -33,8 +35,8 @@ if bash "$script_dir/ci-version-only.sh" "$base"; then exit 1; fi
 echo 'ok - dependency edits require compiled checks'
 
 git checkout -q HEAD~1
-mkdir -p rustcode/tui/src
-printf 'fn main() {}\n' > rustcode/tui/src/main.rs
+mkdir -p harness/src
+printf 'fn main() {}\n' > harness/src/main.rs
 git add .
 git commit -qm source
 if bash "$script_dir/ci-version-only.sh" "$base"; then exit 1; fi
@@ -42,10 +44,10 @@ echo 'ok - source edits require compiled checks'
 
 # The path-only mode the CI filter job uses before it has a diff.
 prefilter() { bash "$script_dir/ci-version-only.sh" --prefilter; }
-printf 'CHANGELOG.md\nCargo.toml\nCargo.lock\nrustcode/tui/Cargo.toml\n' | prefilter
+printf 'CHANGELOG.md\nCargo.toml\nCargo.lock\nrustcode/cli/Cargo.toml\nharness/Cargo.toml\n' | prefilter
 echo 'ok - release metadata paths pass the prefilter'
 
-if printf 'CHANGELOG.md\nrustcode/tui/src/main.rs\n' | prefilter; then exit 1; fi
+if printf 'CHANGELOG.md\nharness/src/main.rs\n' | prefilter; then exit 1; fi
 echo 'ok - a source path fails the prefilter'
 
 if printf 'docs/readme.md\n' | prefilter; then exit 1; fi

@@ -13,7 +13,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-const BINARY: &str = env!("CARGO_BIN_EXE_rustcode");
+const BINARY: &str = env!("CARGO_BIN_EXE_rc");
 /// Upper bound for one run: none of these wait on a model or a terminal.
 const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 

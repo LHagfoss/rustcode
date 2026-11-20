@@ -23,7 +23,7 @@ if [ ! -x "$CHROME" ]; then
 fi
 
 RUSTCODE_CONTEXT_PANEL_SHOTS="$WORK" \
-  cargo test --manifest-path "$ROOT/Cargo.toml" -p rustcode-tui \
+  cargo test --manifest-path "$ROOT/Cargo.toml" -p rustcode-harness \
   context_panel_screenshots_are_written_when_requested
 
 mkdir -p "$OUT"

@@ -3130,6 +3130,26 @@ async fn remote_thread_reaches_the_local_app() {
         .await
         .expect("the app initializes");
 
+    // The built-in harness is opt-in; enable it on this test host before asking
+    // hosted::start to launch a thread on it.
+    let config_dir = crate::harness::config::config_dir().expect("config dir");
+    crate::harness::config::edit_in(&config_dir, |_, entries| {
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.id == crate::harness::BUILTIN_ID)
+        {
+            entry.enabled = Some(true);
+        } else {
+            entries.push(crate::harness::config::HarnessEntry {
+                id: crate::harness::BUILTIN_ID.to_owned(),
+                enabled: Some(true),
+                ..crate::harness::config::HarnessEntry::default()
+            });
+        }
+        Ok(())
+    })
+    .expect("enable built-in harness");
+
     // The gateway routes the paired computer's request to the engine's thread host.
     let folder = tempfile::tempdir().expect("folder");
     let folder_path = std::fs::canonicalize(folder.path()).expect("folder");

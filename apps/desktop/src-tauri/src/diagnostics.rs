@@ -78,10 +78,14 @@ fn quick_output(
     }
 }
 
-/// `rustcode 1.21.0` → `1.21.0`.
+/// `rc 1.21.0` or `rustcode 1.21.0` → `1.21.0`.
 fn version_from(output: &str) -> Option<String> {
     let line = output.lines().next()?.trim();
-    let version = line.strip_prefix("rustcode").map(str::trim).unwrap_or(line);
+    let version = line
+        .strip_prefix("rc")
+        .or_else(|| line.strip_prefix("rustcode"))
+        .map(str::trim)
+        .unwrap_or(line);
     (!version.is_empty()).then(|| version.to_string())
 }
 
@@ -409,6 +413,7 @@ mod tests {
 
     #[test]
     fn versions_are_read_from_their_commands() {
+        assert_eq!(version_from("rc 1.21.0\n").as_deref(), Some("1.21.0"));
         assert_eq!(version_from("rustcode 1.21.0\n").as_deref(), Some("1.21.0"));
         assert_eq!(version_from("1.2.3").as_deref(), Some("1.2.3"));
         assert_eq!(version_from(""), None);

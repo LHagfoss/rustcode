@@ -47,11 +47,13 @@ pub(crate) fn choice(ask: &ThreadStart) -> Result<Choice, RemoteError> {
         .filter(|id| !id.is_empty());
     let id = match asked {
         Some(id) => id.to_owned(),
-        // A device that names no harness gets the one a new thread starts on.
-        None => defaults
-            .harness
-            .clone()
-            .unwrap_or_else(|| harness::BUILTIN_ID.to_owned()),
+        // A device that names no harness gets the host's configured default
+        // (never implicitly falling back to the opt-in built-in harness).
+        None => harness::default_harness_id(&defaults, &entries).ok_or_else(|| {
+            invalid(
+                "no default harness is configured on this host; enable a harness in Settings › Harnesses",
+            )
+        })?,
     };
     let resolved = harness::resolve(&entries, &id).ok_or_else(|| {
         let all = harness::resolve_all(&entries);

@@ -534,7 +534,7 @@ pub async fn bind_hub_when_connected() {
 /// of where it goes, and the text. The token is in the text, so this is
 /// handed back once, when the grant is made.
 pub fn snippet(platform: &str, command: &str, token: &str) -> Value {
-    let command_json = serde_json::to_string(command).unwrap_or_else(|_| "\"rustcode\"".into());
+    let command_json = serde_json::to_string(command).unwrap_or_else(|_| "\"rc\"".into());
     let token_json = serde_json::to_string(token).unwrap_or_default();
     if platform == "codex" {
         let text = format!(

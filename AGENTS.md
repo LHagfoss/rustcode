@@ -2,13 +2,13 @@
 
 ## What RustCode is
 
-RustCode is the orchestrator: the app and the CLI that own threads, projects,
-settings and usage data, and run each thread on a harness (Codex, Claude Code,
-Gemini CLI, OpenCode, Pi, or the built-in harness in
-`rustcode/engine/src/network/turn`). Query it from an agent with the
-`mcp__rustcode__*` tools, `rustcode threads list --all`,
-`rustcode threads path <id>`, `rustcode usage` (tokens and the cost each
-harness reported) and `rustcode data query "<sql>"` (the local data store,
+RustCode is the orchestrator: the app and the `rc` CLI that own threads,
+projects, settings and usage data, and run each thread on a harness (Codex,
+Claude Code, Gemini CLI, OpenCode, Pi, or the optional standalone `rustcode`
+TUI/harness in `harness/`). Query it from an agent with the
+`mcp__rustcode__*` tools, `rc threads list --all`,
+`rc threads path <id>`, `rc usage` (tokens and the cost each
+harness reported) and `rc data query "<sql>"` (the local data store,
 `docs/data-store.md`); threads are on disk in `~/.config/rustcode/threads`.
 
 ## Instruction priority
@@ -71,9 +71,9 @@ instructions for work in this repository.
   the type check and the formatter. Then push and read the result:
   `gh pr checks <n>`, and `gh run view <run> --log-failed` for a failure. Fix
   from the CI log and push again.
-  - Rust (`rustcode/`, `Cargo.*`): `cargo check --workspace --tests` and
+  - Rust (`rustcode/`, `harness/`, `Cargo.*`): `cargo check --workspace --tests` and
     `cargo fmt --all -- --check`. Without `--workspace` the check builds only
-    the engine package, and a TUI change passes unchecked. Do not run
+    the engine package, and CLI/harness changes pass unchecked. Do not run
     `cargo test` or `cargo nextest`; the command guard refuses them. To
     reproduce a CI failure you cannot read from the log, set
     `RUSTCODE_ALLOW_LOCAL_TESTS=1` and run that one test by name.
@@ -83,8 +83,8 @@ instructions for work in this repository.
     -D warnings` in `apps/desktop/src-tauri` (its own Cargo workspace; CI
     runs its tests). This is the product: the RustCode orchestrator app. Start
     from `docs/desktop.md` › "Status and roadmap", follow `docs/design.md`,
-    and run it with `bun tauri dev` (it uses `target/debug/rustcode`;
-    rebuild that after engine changes).
+    and run it with `bun tauri dev` (it uses `target/debug/rc`;
+    rebuild that after engine changes with `cargo build -p rustcode-cli --bin rc`).
   - A UI-only change needs no cargo run, and a Rust-only one no `bun run
     check`, unless the change crosses the ACP boundary between them.
 - The shell rules in this section are enforced by RustCode's command guard
@@ -187,8 +187,8 @@ instructions for work in this repository.
   mock-window close`, then `open`), and no other thread closes it. After an
   edit, HMR serves the module under a `?t=` URL and the import returns a
   second, empty copy. `?updatePreview` stages the update row.
-- To test an engine change in the app, build the engine binary with
-  `cargo build -p rustcode-tui --bin rustcode`, then `bun tauri dev`. A
+- To test an engine change in the app, build the orchestrator CLI binary with
+  `cargo build -p rustcode-cli --bin rc`, then `bun tauri dev`. A
   plain `cargo build` does not rebuild that binary, and the app then talks
   to the old engine.
 - To install a local build over the user's app, replace

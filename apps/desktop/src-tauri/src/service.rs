@@ -782,11 +782,11 @@ pub fn stable_program(
             home.filter(|dir| !dir.as_os_str().is_empty())
                 .map(|dir| dir.join(".local").join("share"))
         })?;
-    Some(data.join("rustcode").join("bin").join(if cfg!(windows) {
-        "rustcode.exe"
-    } else {
-        "rustcode"
-    }))
+    Some(
+        data.join("rustcode")
+            .join("bin")
+            .join(if cfg!(windows) { "rc.exe" } else { "rc" }),
+    )
 }
 
 /// Copy `source` to `target`, unless `target` is already that binary. Written
@@ -1031,7 +1031,7 @@ mod tests {
     /// the unit must name a copy that outlives it: `$XDG_DATA_HOME/rustcode/bin`.
     #[test]
     fn an_appimage_is_installed_from_a_copy_under_the_data_directory() {
-        let mount = Path::new("/tmp/.mount_RustCoJpCJlA/usr/bin/rustcode");
+        let mount = Path::new("/tmp/.mount_RustCoJpCJlA/usr/bin/rc");
         assert_eq!(
             stable_program(
                 mount,
@@ -1039,23 +1039,17 @@ mod tests {
                 Some(Path::new("/home/lars/.local/share")),
                 Some(Path::new("/home/lars"))
             ),
-            Some(PathBuf::from(
-                "/home/lars/.local/share/rustcode/bin/rustcode"
-            ))
+            Some(PathBuf::from("/home/lars/.local/share/rustcode/bin/rc"))
         );
         // `$XDG_DATA_HOME` wins; without it the default data directory is used.
         assert_eq!(
             stable_program(mount, true, None, Some(Path::new("/home/lars"))),
-            Some(PathBuf::from(
-                "/home/lars/.local/share/rustcode/bin/rustcode"
-            ))
+            Some(PathBuf::from("/home/lars/.local/share/rustcode/bin/rc"))
         );
         // The path itself says it, even when `$APPIMAGE` is not in the env.
         assert_eq!(
             stable_program(mount, false, None, Some(Path::new("/home/lars"))),
-            Some(PathBuf::from(
-                "/home/lars/.local/share/rustcode/bin/rustcode"
-            ))
+            Some(PathBuf::from("/home/lars/.local/share/rustcode/bin/rc"))
         );
         // An empty `XDG_DATA_HOME` is not a directory.
         assert_eq!(
@@ -1065,9 +1059,7 @@ mod tests {
                 Some(Path::new("")),
                 Some(Path::new("/home/lars"))
             ),
-            Some(PathBuf::from(
-                "/home/lars/.local/share/rustcode/bin/rustcode"
-            ))
+            Some(PathBuf::from("/home/lars/.local/share/rustcode/bin/rc"))
         );
     }
 
@@ -1159,7 +1151,7 @@ mod tests {
         std::fs::write(&appimage, b"image").unwrap();
 
         let program = program_for(engine, Some(&appimage), None, Some(&home)).expect("the copy");
-        assert_eq!(program, home.join(".local/share/rustcode/bin/rustcode"));
+        assert_eq!(program, home.join(".local/share/rustcode/bin/rc"));
         assert!(!program.starts_with(mount), "{}", program.display());
         let output = run_program(&program, &["server", "status"], Duration::from_secs(5))
             .expect("the copy runs");

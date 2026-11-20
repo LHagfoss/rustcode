@@ -184,7 +184,7 @@ fn scope_of(text: &str) -> Result<outside::Scope, String> {
 fn command() -> String {
     std::env::current_exe()
         .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "rustcode".to_owned())
+        .unwrap_or_else(|_| "rc".to_owned())
 }
 
 pub(crate) async fn list(_request: OutsideListRequest) -> Result<Value, String> {

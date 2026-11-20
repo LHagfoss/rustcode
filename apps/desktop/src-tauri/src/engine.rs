@@ -213,31 +213,38 @@ pub fn now_ms() -> u64 {
 /// Events kept for a webview that has not attached yet.
 const EARLY_MAX: usize = 200;
 
-/// `$RUSTCODE_ENGINE`, else the workspace's debug build in a dev build, else
-/// the bundled sidecar next to the app binary, else `rustcode` on PATH.
+/// `$RUSTCODE_ENGINE`, else the workspace's debug build (`rc`, falling back to
+/// `rustcode`) in a dev build, else the bundled `rc` sidecar next to the app
+/// binary, else `rc` on PATH.
 pub fn resolve_engine() -> PathBuf {
     if let Some(path) = std::env::var_os("RUSTCODE_ENGINE") {
         return PathBuf::from(path);
     }
+    let exe_names = if cfg!(windows) {
+        ["rc.exe", "rustcode.exe"]
+    } else {
+        ["rc", "rustcode"]
+    };
     if cfg!(debug_assertions) {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/rustcode");
-        if dev.exists() {
-            return dev;
+        let debug_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug");
+        for name in exe_names {
+            let dev = debug_dir.join(name);
+            if dev.exists() {
+                return dev;
+            }
         }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let bundled = dir.join(if cfg!(windows) {
-                "rustcode.exe"
-            } else {
-                "rustcode"
-            });
-            if bundled.exists() {
-                return bundled;
+            for name in exe_names {
+                let bundled = dir.join(name);
+                if bundled.exists() {
+                    return bundled;
+                }
             }
         }
     }
-    PathBuf::from("rustcode")
+    PathBuf::from("rc")
 }
 
 impl Engine {

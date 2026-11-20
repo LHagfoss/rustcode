@@ -58,9 +58,9 @@ jobs:
                   # does not survive the wrapper ("The filename or extension
                   # is too long", os error 206). An empty wrapper turns it off.
                   RUSTC_WRAPPER: ${{ runner.os != 'Windows' && 'sccache' || '' }}
-              # The `rustcode` binary is built by the rustcode-tui package;
-              # the root package is a library since the TUI extraction.
-              run: cargo build --locked --release --target ${{ matrix.target }} -p rustcode-tui
+              # Build both shipping binaries: `rc` (orchestrator CLI and desktop
+              # sidecar, zero TUI deps) and `rustcode` (standalone TUI harness).
+              run: cargo build --locked --release --target ${{ matrix.target }} -p rustcode-cli --bin rc -p rustcode-harness --bin rustcode
 
             - name: Show compiler cache stats
               if: always()
@@ -95,7 +95,7 @@ jobs:
 
             # A bare executable cannot be stapled: it is signed and submitted,
             # and Gatekeeper finds the ticket online.
-            - name: Sign and notarize macOS binary
+            - name: Sign and notarize macOS binaries
               if: steps.signing.outputs.enabled == 'true'
               shell: bash
               env:
@@ -105,8 +105,11 @@ jobs:
                   MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
                   MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
               run: |
+                  scripts/macos-release-signing.sh sign target/${{ matrix.target }}/release/rc
                   scripts/macos-release-signing.sh sign target/${{ matrix.target }}/release/rustcode
-                  ditto -c -k --keepParent target/${{ matrix.target }}/release/rustcode "$RUNNER_TEMP/rustcode-cli-notarize.zip"
+                  mkdir -p "$RUNNER_TEMP/notarize-bins"
+                  cp target/${{ matrix.target }}/release/rc target/${{ matrix.target }}/release/rustcode "$RUNNER_TEMP/notarize-bins/"
+                  ditto -c -k --keepParent "$RUNNER_TEMP/notarize-bins" "$RUNNER_TEMP/rustcode-cli-notarize.zip"
                   scripts/macos-release-signing.sh notarize "$RUNNER_TEMP/rustcode-cli-notarize.zip"
 
             - name: Remove signing keychain
@@ -114,18 +117,26 @@ jobs:
               shell: bash
               run: scripts/macos-release-signing.sh cleanup
 
-            - name: Package Linux / macOS binary
+            - name: Package Linux / macOS binaries
               if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os != 'Windows'
               shell: bash
               run: |
+                  rc_name="${{ matrix.name }}"
+                  rc_name="rc-${rc_name#rustcode-}"
+                  cp target/${{ matrix.target }}/release/rc "$rc_name"
+                  chmod +x "$rc_name"
+                  tar czf "${rc_name}.tar.gz" -C . "$rc_name"
                   cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
                   chmod +x ${{ matrix.name }}
                   tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
 
-            - name: Package Windows binary
+            - name: Package Windows binaries
               if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
               shell: powershell
               run: |
+                  $rcName = "rc-" + ("${{ matrix.name }}" -replace '^rustcode-', '')
+                  Copy-Item "target/${{ matrix.target }}/release/rc.exe" "$rcName.exe"
+                  Compress-Archive -Path "$rcName.exe" -DestinationPath "$rcName.zip"
                   Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
                   Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
 
@@ -134,9 +145,11 @@ jobs:
               uses: actions/upload-artifact@v7
               with:
                   name: ${{ matrix.name }}
-                  # Each runner produces only one of these archives;
-                  # unmatched patterns are skipped, not an error.
+                  # Each runner produces only one archive format (tar.gz or zip),
+                  # holding both `rc` (orchestrator CLI) and `rustcode` (harness).
                   path: |
                       ${{ matrix.name }}.tar.gz
                       ${{ matrix.name }}.zip
+                      rc-*.tar.gz
+                      rc-*.zip
 

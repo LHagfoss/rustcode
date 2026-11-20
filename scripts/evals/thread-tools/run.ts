@@ -260,7 +260,7 @@ const binary = () => {
 async function toolList(scratch: string): Promise<{ name: string; description?: string; inputSchema?: unknown }[]> {
   const bin = binary();
   if (!existsSync(bin)) {
-    throw new Error(`no rustcode binary at ${bin}; build it with cargo build -p rustcode-tui --bin rustcode or set RUSTCODE_BIN`);
+    throw new Error(`no rc binary at ${bin}; build it with cargo build -p rustcode-cli --bin rc or set RUSTCODE_BIN`);
   }
   const session = [
     {

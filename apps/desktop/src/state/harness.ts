@@ -121,7 +121,10 @@ export function groupHarnesses(list: Harness[]): { standard: Harness[]; custom: 
   };
 }
 
-/** First-run default: Claude Code when it can run, else the first agent that can, else RustCode. */
+/**
+ * First-run default: Claude Code when it can run, else the first external agent
+ * that can, else the built-in harness only if explicitly enabled, else none.
+ */
 export function preferredDefault(snapshot: HarnessSnapshot): {
   harness: string;
   model: string | null;
@@ -133,9 +136,8 @@ export function preferredDefault(snapshot: HarnessSnapshot): {
   };
   const pick =
     orderHarnesses(snapshot.harnesses).find((h) => !h.builtin && installed(h)) ??
-    snapshot.harnesses.find((h) => h.builtin && h.enabled) ??
-    snapshot.harnesses.find((h) => h.builtin);
-  return { harness: pick?.id ?? "rustcode", model: null, effort: null };
+    snapshot.harnesses.find((h) => h.builtin && h.enabled);
+  return { harness: pick?.id ?? "", model: null, effort: null };
 }
 
 export function usableHarnesses(snapshot: HarnessSnapshot): Harness[] {
@@ -194,7 +196,7 @@ export function normalizeDefault(
   choice: { harness: string; model: string | null; effort: string | null },
 ): { harness: string; model: string | null; effort: string | null } {
   const h = snapshot.harnesses.find((x) => x.id === choice.harness);
-  if (!h) return { harness: "rustcode", model: null, effort: null };
+  if (!h) return { harness: "", model: null, effort: null };
   const models = concreteModels(h.id, h.models);
   const model = listedModel(h.id, models, choice.model) ?? firstModel(h.id, models);
   const modelId = model?.id ?? (h.models.length ? null : choice.model);
@@ -239,7 +241,7 @@ export function restoreChoice(
   memory?: EffortMemory,
 ): { harness: string; model: string | null; effort: string | null } {
   const h = snapshot.harnesses.find((x) => x.id === id);
-  if (!h) return { harness: "rustcode", model: null, effort: null };
+  if (!h) return { harness: "", model: null, effort: null };
   const last = h.last ?? local?.[id] ?? null;
   const fallback = snapshot.default.harness === id ? snapshot.default : null;
   const models = concreteModels(h.id, h.models);

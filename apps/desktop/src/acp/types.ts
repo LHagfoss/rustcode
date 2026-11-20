@@ -1308,7 +1308,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
   return {
     harnesses,
     default: {
-      harness: str(d?.harness) ?? "rustcode",
+      harness: str(d?.harness) ?? "",
       model: str(d?.model) ?? null,
       effort: str(d?.effort) ?? null,
     },

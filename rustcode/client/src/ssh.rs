@@ -250,7 +250,7 @@ pub struct Installed {
 /// on the `PATH`.
 const PROBE_SH: &str = r#"printf 'os\t%s\n' "$(uname -s 2>/dev/null)"
 printf 'arch\t%s\n' "$(uname -m 2>/dev/null)"
-for c in "$HOME/.rustcode/bin/rustcode" "$(command -v rustcode 2>/dev/null)"; do
+for c in "$HOME/.rustcode/bin/rc" "$(command -v rc 2>/dev/null)" "$HOME/.rustcode/bin/rustcode" "$(command -v rustcode 2>/dev/null)"; do
   if [ -n "$c" ] && [ -x "$c" ]; then
     printf 'bin\t%s\t%s\n' "$c" "$("$c" --version 2>/dev/null | head -n 1)"
   fi
@@ -261,9 +261,14 @@ done
 const PROBE_PS1: &str = r#"$ProgressPreference = 'SilentlyContinue'
 Write-Output "os`tWindows"
 Write-Output ("arch`t" + $env:PROCESSOR_ARCHITECTURE)
-$candidates = @(Join-Path $env:USERPROFILE '.rustcode\bin\rustcode.exe')
-$found = Get-Command rustcode -ErrorAction SilentlyContinue
-if ($found) { $candidates += $found.Source }
+$candidates = @(
+  (Join-Path $env:USERPROFILE '.rustcode\bin\rc.exe'),
+  (Join-Path $env:USERPROFILE '.rustcode\bin\rustcode.exe')
+)
+foreach ($name in @('rc', 'rustcode')) {
+  $found = Get-Command $name -ErrorAction SilentlyContinue
+  if ($found) { $candidates += $found.Source }
+}
 foreach ($c in $candidates) {
   if (Test-Path -PathType Leaf $c) {
     $v = (& $c --version 2>$null | Select-Object -First 1)
@@ -313,13 +318,19 @@ pub fn parse_probe(output: &str) -> Option<Probe> {
             }
             Some("arch") => arch = fields.next().unwrap_or("").trim().to_owned(),
             Some("bin") => {
-                let (Some(path), Some(version)) = (fields.next(), fields.next()) else {
+                let (Some(path), Some(version_line)) = (fields.next(), fields.next()) else {
                     continue;
                 };
-                // `rustcode 1.31.4`: the last word.
-                let Some(version) = version.split_whitespace().last() else {
+                // `rc 1.44.0` or `rustcode 1.31.4`: ignore unrelated `rc` binaries.
+                let mut words = version_line.split_whitespace();
+                let (Some(program_name), Some(version), None) =
+                    (words.next(), words.next(), words.next())
+                else {
                     continue;
                 };
+                if !matches!(program_name, "rc" | "rustcode") {
+                    continue;
+                }
                 if parse_version(version).is_none() {
                     continue;
                 }
@@ -1255,6 +1266,17 @@ mod tests {
         let bare = parse_probe("os\tDarwin\narch\tarm64\nbin\t/x/rustcode\t\n").unwrap();
         assert_eq!(bare.os, RemoteOs::Macos);
         assert_eq!(bare.installed, None);
+        let rc_and_unrelated = parse_probe(
+            "os\tLinux\narch\tx86_64\nbin\t/usr/bin/rc\tplan9-rc 9.9.9\nbin\t/home/a/.rustcode/bin/rc\trc 1.44.0\nbin\t/usr/local/bin/rustcode\trustcode 1.44.0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            rc_and_unrelated.installed,
+            Some(Installed {
+                path: "/home/a/.rustcode/bin/rc".into(),
+                version: "1.44.0".into(),
+            })
+        );
         assert_eq!(parse_probe("'sh' is not recognized"), None);
     }
 

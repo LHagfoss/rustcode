@@ -1113,6 +1113,10 @@ phase_verify_release() {
 
     # The desktop app (apps/desktop) ships as RustCode-<ver>-*.
     local expected_assets=(
+        "rc-linux-x86_64.tar.gz"
+        "rc-linux-aarch64.tar.gz"
+        "rc-macos-aarch64.tar.gz"
+        "rc-windows-x86_64.zip"
         "rustcode-linux-x86_64.tar.gz"
         "rustcode-linux-aarch64.tar.gz"
         "rustcode-macos-aarch64.tar.gz"
@@ -1128,6 +1132,7 @@ phase_verify_release() {
     # A beta ships the macOS CLI and app only (build.yml).
     if is_prerelease; then
         expected_assets=(
+            "rc-macos-aarch64.tar.gz"
             "rustcode-macos-aarch64.tar.gz"
             "RustCode-$VERSION-macos-aarch64.app.zip"
             "rustcode-web.tar.gz"

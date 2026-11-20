@@ -13,7 +13,7 @@ A case passes when the agent called every tool in `must` and none in
 ## Run
 
 ```sh
-cargo build -p rustcode-tui --bin rustcode
+cargo build -p rustcode-cli --bin rc
 bun scripts/evals/thread-tools/run.ts
 ```
 

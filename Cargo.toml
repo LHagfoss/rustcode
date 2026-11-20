@@ -16,12 +16,12 @@ members = [
     "rustcode/core/rustcode-tasks",
     "rustcode/core/rustcode-loop-detect",
     # The machine client: saved machines, pairing, the WebSocket transport and
-    # ACP over the remote gateway, shared by the app and `rustcode machines`.
+    # ACP over the remote gateway, shared by the app and `rc machines`.
     "rustcode/client",
-    # The engine is the root package itself: agent loop, tools, config,
-    # session state, ACP, daemon, and the terminal frontend behind `tui`.
-    # Terminal frontend (TUI + CLI modes).
-    "rustcode/tui",
+    # The orchestrator CLI (`rc`) and desktop app sidecar: zero TUI deps.
+    "rustcode/cli",
+    # The standalone terminal harness (`rustcode`): interactive TUI and built-in agent.
+    "harness",
 ]
 resolver = "3"
 # The Tauri desktop app is its own Cargo workspace (own lockfile and target).

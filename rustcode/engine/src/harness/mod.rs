@@ -429,15 +429,42 @@ fn builtin_resolved() -> ResolvedHarness {
     }
 }
 
-/// The built-in harness as `entries` leave it: on unless turned off in Settings › Harnesses.
+/// The built-in harness as `entries` leave it: off by default (opt-in in Settings › Harnesses).
 fn builtin_in(entries: &[config::HarnessEntry]) -> ResolvedHarness {
     ResolvedHarness {
         enabled: entries
             .iter()
             .find(|entry| entry.id == BUILTIN_ID)
-            .is_none_or(config::HarnessEntry::is_enabled),
+            .is_some_and(config::HarnessEntry::is_enabled),
         ..builtin_resolved()
     }
+}
+
+/// The default harness id for new threads: the explicitly configured default,
+/// else the first enabled external harness (preferring `claude-code`), else
+/// `None`. The built-in `rustcode` harness is never chosen implicitly.
+pub(crate) fn default_harness_id(
+    defaults: &config::HarnessDefaults,
+    entries: &[config::HarnessEntry],
+) -> Option<String> {
+    if let Some(harness) = defaults
+        .harness
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        return Some(harness.to_owned());
+    }
+    let all = resolve_all(entries);
+    if all
+        .iter()
+        .any(|h| h.id == "claude-code" && h.enabled && h.kind != HarnessKind::Builtin)
+    {
+        return Some("claude-code".to_owned());
+    }
+    all.into_iter()
+        .find(|h| h.kind != HarnessKind::Builtin && h.enabled)
+        .map(|h| h.id)
 }
 
 /// Every harness in snapshot order: the built-in one, the known ones, then
@@ -956,7 +983,7 @@ pub(crate) async fn snapshot_in_with(dir: &std::path::Path, probe: bool) -> Resu
     Ok(json!({
         "harnesses": rows,
         "default": {
-            "harness": defaults.harness.clone().unwrap_or_else(|| BUILTIN_ID.to_owned()),
+            "harness": default_harness_id(&defaults, &entries),
             "model": defaults.model,
             "effort": defaults.effort,
         },
@@ -1099,7 +1126,18 @@ pub(crate) async fn set_default(
         if model.is_some() || effort.is_some() {
             config::remember(harnesses, &harness, model.clone(), effort.clone())?;
         }
-        defaults.harness = (harness != BUILTIN_ID).then_some(harness);
+        // Explicitly picking the opt-in built-in harness as the default enables it.
+        if harness == BUILTIN_ID {
+            config::apply_change(
+                harnesses,
+                config::HarnessChange {
+                    id: BUILTIN_ID.to_owned(),
+                    enabled: Some(true),
+                    ..Default::default()
+                },
+            )?;
+        }
+        defaults.harness = Some(harness);
         defaults.model = model;
         defaults.effort = effort;
         Ok(())
@@ -1173,7 +1211,7 @@ pub(crate) fn starting_choice(
     if let Some(entry) = entries.iter().find(|entry| entry.id == id) {
         candidates.push((entry.model.clone(), entry.effort.clone()));
     }
-    if defaults.harness.as_deref().unwrap_or(BUILTIN_ID) == id {
+    if defaults.harness.as_deref() == Some(id) {
         candidates.push((defaults.model.clone(), defaults.effort.clone()));
     }
     let listed = |model: &str| models.is_empty() || models.iter().any(|known| known.id == model);
@@ -1590,7 +1628,7 @@ mod tests {
                 "my-agent"
             ]
         );
-        assert!(all[0].enabled);
+        assert!(!all[0].enabled, "built-in harness is opt-in by default");
         assert!(!all[1].enabled, "known harnesses start off");
         let gemini = all.iter().find(|h| h.id == "gemini").unwrap();
         let custom = all.iter().find(|h| h.id == "my-agent").unwrap();
@@ -1656,12 +1694,13 @@ mod tests {
         let snapshot = snapshot_in(dir.path()).await.unwrap();
         assert_eq!(
             snapshot["default"],
-            json!({"harness": "rustcode", "model": null, "effort": null})
+            json!({"harness": null, "model": null, "effort": null})
         );
         assert_eq!(snapshot["onboarded"], false);
         let rows = snapshot["harnesses"].as_array().unwrap();
         assert_eq!(rows[0]["id"], "rustcode");
         assert_eq!(rows[0]["builtin"], true);
+        assert_eq!(rows[0]["enabled"], false);
         assert_eq!(rows[0]["installed"], true);
         let codex = rows.iter().find(|row| row["id"] == "codex").unwrap();
         for key in [
@@ -1972,7 +2011,7 @@ mod tests {
             "remembering does not turn it on"
         );
         assert_eq!(row("opencode")["last"], Value::Null);
-        assert_eq!(snapshot["default"]["harness"], "rustcode");
+        assert_eq!(snapshot["default"]["harness"], Value::Null);
     }
 
     /// #2797: after an engine restart a restored thread still offers every

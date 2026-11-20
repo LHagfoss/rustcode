@@ -1508,7 +1508,7 @@ mod tests {
         assert!(
             server
                 .message
-                .contains("`rustcode` on PATH is 1.25.0 (/usr/local/bin/rustcode)"),
+                .contains("`rc` on PATH is 1.25.0 (/usr/local/bin/rustcode)"),
             "{}",
             server.message
         );
