@@ -1282,12 +1282,11 @@ fn at(seconds: i64) -> Option<String> {
 
 /// The links whose news this engine has not passed on to its clients yet.
 ///
-/// Only the engine holding the checking lease reads GitHub, and it tells its
-/// own clients. When that is another process (a `rustcode server` service, a
-/// second app window's engine), this engine's clients would hear nothing
-/// until they reconnected and listed the watches again: every event arrived
-/// at once after an app restart, as if typed then. Each round, an engine
-/// without the lease passes on what the store holds for a link and its thread
+/// Only the engine holding the checking lease reads GitHub. Every engine
+/// also forwards pending events from the store, including an initial failure
+/// recorded when a pull request is linked. This covers events written by
+/// another process and events that arrive outside the polling callback.
+/// Each engine passes on what the store holds for a link and its thread
 /// has not been handed. `announced` remembers how many events it already
 /// passed on per link, so a round adds a notification only for news. The
 /// client claims events through [`WatchStore::take`], so a notification the
@@ -2061,7 +2060,29 @@ mod tests {
     }
 
     #[test]
-    fn an_engine_without_the_lease_passes_on_link_news_once() {
+    fn a_link_created_with_failing_checks_has_news_before_the_first_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let failing = view(
+            "open",
+            "abc",
+            json!([check("CI", "FAILURE")]),
+            "MERGEABLE",
+            json!([]),
+        );
+        store
+            .link("s1", Path::new("/r"), "o/r", 7, &failing, 1_000)
+            .unwrap();
+
+        let mut announced = std::collections::HashMap::new();
+        let news = unannounced(&store.load(), &mut announced);
+        assert_eq!(news.len(), 1);
+        assert_eq!(news[0].1[0].kind, "checks_failed");
+        assert!(unannounced(&store.load(), &mut announced).is_empty());
+    }
+
+    #[test]
+    fn an_engine_passes_on_link_news_once() {
         let dir = tempfile::tempdir().unwrap();
         let store = WatchStore::new(dir.path());
         let mut link = watch(&store);
