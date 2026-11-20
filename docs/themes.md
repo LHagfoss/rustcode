@@ -11,7 +11,7 @@ gets its desktop tokens over ACP. Users edit theme files by hand, with
 | Source | Location | Notes |
 | --- | --- | --- |
 | `builtin` | compiled in (`rustcode/engine/src/themes/builtin/`) | also copied to the user directory on first run |
-| `user` | `<config>/themes/*.toml` (`rustcode theme path`) | synced by `rustcode sync` |
+| `user` | `<config>/themes/*.toml` (`rustcode theme path`) | synced by `rustcode config sync` |
 | `project` | `.rustcode/themes/*.toml` in the workspace or an ancestor | closer directory wins |
 
 Themes are matched by `name`, case-insensitively: a project theme overrides a

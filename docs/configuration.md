@@ -48,7 +48,7 @@ its size, file count, what it holds and how it is bounded today:
 | workspaces | isolated subagent workspaces | kept |
 | backups | copies of config files taken before a change | kept |
 | logs | `debug.log` and `debug.log.1` | rotation |
-| sync history | the Git history of `rustcode sync` | kept |
+| sync history | the Git history of `rustcode config sync` | kept |
 | indexes | the symbol index and saved memory | kept |
 | remote | paired devices and the gateway's state | kept |
 
@@ -168,7 +168,7 @@ rustcode mcp remove api
 same name. Servers are written to `[[mcp_servers]]` in the user `config.toml`
 and start with the next session. Header and environment values are stored
 there in plain text (the file is created with mode `0600`), and `mcp list`
-prints only their names. `config.toml` is one of the files `rustcode sync`
+prints only their names. `config.toml` is one of the files `rustcode config sync`
 pushes, so keep the sync remote private when it holds tokens.
 
 Inside a session the model does the same through the `manage_mcp_servers`
@@ -678,24 +678,24 @@ in, the call is refused and names the `rustcode settings` command to run
 instead. An outside agent needs Admin access to write
 ([mcp-outside-agents.md](mcp-outside-agents.md)).
 
-`settings.json` is deliberately not part of `rustcode sync`: it is one
+`settings.json` is deliberately not part of `rustcode config sync`: it is one
 machine's behaviour, not a shared configuration.
 
 ## Syncing config, skills, and themes
 
 Initialize a config sync repository with a remote Git URL, then choose a
-direction explicitly or run the default pull-then-pull sync:
+direction explicitly or run the default pull-then-push sync (`rustcode sync` still works):
 
 ```bash
-rustcode sync init <remote-git-url>
-rustcode sync --pull       # or: rustcode sync pull
-rustcode sync --push       # or: rustcode sync push
-rustcode sync              # pull, then push
+rustcode config sync init <remote-git-url>
+rustcode config sync --pull   # or: rustcode config sync pull
+rustcode config sync --push   # or: rustcode config sync push
+rustcode config sync          # pull, then push
 ```
 
 `--pull` and `--push` cannot be used together.
 
-`rustcode sync` stages only files inside the RustCode config directory:
+`rustcode config sync` stages only files inside the RustCode config directory:
 `.gitignore`, `config.toml`, `skills/`, `themes/`, and `commands/`. Skills in
 `~/.agents/skills`, a workspace `.rustcode/skills`, or any
 `extra_skill_dirs` entry are **not** synced — the universal root is shared
@@ -727,7 +727,7 @@ Then run `/prompt review the current diff`, review or edit the staged text, and
 press Enter to submit it. Templates are limited to 64 KiB and expanded prompts
 to 256 KiB; empty, invalid UTF-8, symlink, and slash-command expansions are
 rejected. Listing does not create command directories. User templates are
-included in `rustcode sync`; workspace templates remain with the project.
+included in `rustcode config sync`; workspace templates remain with the project.
 
 ### Text generators
 
