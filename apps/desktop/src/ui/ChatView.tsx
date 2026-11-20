@@ -765,15 +765,16 @@ function NewThreadHeading({
         {project ? (
           <>
             What should we build in{" "}
-            <button
-              type="button"
-              onClick={() => void chooseFolder(false)}
-              title={`Change folder (${displayPath(project)})`}
-              className="-mx-1 inline-block max-w-full truncate rounded-md px-1 align-bottom text-fg hover:bg-fill"
-            >
-              {projectName(project)}
-              <span className="sr-only"> (change folder)</span>
-            </button>
+            <Tooltip label={`Change folder (${displayPath(project)})`}>
+              <button
+                type="button"
+                onClick={() => void chooseFolder(false)}
+                className="-mx-1 inline-block max-w-full truncate rounded-md px-1 align-bottom text-fg hover:bg-fill"
+              >
+                {projectName(project)}
+                <span className="sr-only"> (change folder)</span>
+              </button>
+            </Tooltip>
             ?
           </>
         ) : (

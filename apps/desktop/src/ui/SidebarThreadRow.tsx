@@ -975,16 +975,17 @@ export const ThreadRow = memo(function ThreadRow({
               </RowAction>
             )}
             <DropdownMenu.Root modal={false}>
-              <DropdownMenu.Trigger asChild>
-                <button
-                  type="button"
-                  aria-label={`Actions for ${session.title || "thread"}`}
-                  title={`Actions · ${formatBinding("shift+f10")}`}
-                  className="flex size-6 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
-                >
-                  <Ellipsis size={14} />
-                </button>
-              </DropdownMenu.Trigger>
+              <Tooltip label={`Actions · ${formatBinding("shift+f10")}`}>
+                <DropdownMenu.Trigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`Actions for ${session.title || "thread"}`}
+                    className="flex size-6 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+                  >
+                    <Ellipsis size={14} />
+                  </button>
+                </DropdownMenu.Trigger>
+              </Tooltip>
               <MenuContent align="start" sideOffset={4} className="w-[280px]">
                 <ThreadMenuItems
                   session={session}
@@ -1036,45 +1037,44 @@ export const PendingRow = memo(function PendingRow({
   const failure = pending.failure;
   return (
     <div className="group relative">
-      <button
-        type="button"
-        data-row-id={pending.id}
-        tabIndex={navActive ? 0 : -1}
-        onClick={() => selectThread(pending.id)}
-        aria-current={selected ? "page" : undefined}
-        title={failure ? `${pending.title} · ${failure.text}` : pending.title}
-        className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
-      >
-        <RowFill selected={selected} radius={compact ? "rounded-lg" : "rounded-xl"} />
-        {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
-        <span className={cx(ROW_LINE, compact && "col-span-full")}>
-          <span className={ROW_LEFT}>
-            <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
-            <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
-          </span>
-          {/* Dismiss sits over the slot's end when the setup failed, so the words keep its room. */}
-          <span className={cx(ROW_RIGHT, "text-sub text-fg-muted", failure && "pr-6")}>
-            {failure ? (
-              <>
-                <CircleAlert size={12} className="text-danger" />
-                <span className="font-medium text-danger">Failed</span>
-              </>
-            ) : (
-              <>
-                <Spinner size={10} />
-                <Elapsed since={pending.startedAt} />
-              </>
-            )}
-          </span>
-        </span>
-        {!compact && (
-          <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-            <span className="min-w-0 truncate" title={failure?.text}>
-              {failure ? failure.text : displayPath(pending.cwd)}
+      <Tooltip label={failure ? `${pending.title} · ${failure.text}` : pending.title}>
+        <button
+          type="button"
+          data-row-id={pending.id}
+          tabIndex={navActive ? 0 : -1}
+          onClick={() => selectThread(pending.id)}
+          aria-current={selected ? "page" : undefined}
+          className={cx(compact ? COMPACT_ROW : ROW_GRID, "relative w-full text-left")}
+        >
+          <RowFill selected={selected} radius={compact ? "rounded-lg" : "rounded-xl"} />
+          {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
+          <span className={cx(ROW_LINE, compact && "col-span-full")}>
+            <span className={ROW_LEFT}>
+              <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
+              <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
+            </span>
+            {/* Dismiss sits over the slot's end when the setup failed, so the words keep its room. */}
+            <span className={cx(ROW_RIGHT, "text-sub text-fg-muted", failure && "pr-6")}>
+              {failure ? (
+                <>
+                  <CircleAlert size={12} className="text-danger" />
+                  <span className="font-medium text-danger">Failed</span>
+                </>
+              ) : (
+                <>
+                  <Spinner size={10} />
+                  <Elapsed since={pending.startedAt} />
+                </>
+              )}
             </span>
           </span>
-        )}
-      </button>
+          {!compact && (
+            <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+              <span className="min-w-0 truncate">{failure ? failure.text : displayPath(pending.cwd)}</span>
+            </span>
+          )}
+        </button>
+      </Tooltip>
       <div className={cx("absolute right-2 flex items-center", compact ? "top-[2px]" : "top-1.5")}>
         {failure && (
           <RowAction label="Dismiss" onClick={() => dismissPendingSetup(pending.id)}>

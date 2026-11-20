@@ -160,16 +160,17 @@ function TracePanel({ end, items, model }: { end: TurnEnd; items: TranscriptItem
         <span className="font-semibold text-body">Trace</span>
         <span className="text-callout text-fg-muted tabular">{formatDuration(trace.durationMs)}</span>
         <span className="flex-1" />
-        <span
-          className={cx("text-callout tabular", total ? "text-fg-muted" : "text-fg-faint")}
-          title={
+        <Tooltip
+          label={
             total
               ? "Reported by the harness for this turn"
               : "The harness reported no token counts or cost for this turn"
           }
         >
-          {total ?? "No usage reported"}
-        </span>
+          <span className={cx("text-callout tabular", total ? "text-fg-muted" : "text-fg-faint")}>
+            {total ?? "No usage reported"}
+          </span>
+        </Tooltip>
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1">
         <span className="text-caption text-fg-faint">Sort</span>
@@ -282,9 +283,9 @@ function TraceRowView({
           )}
         </span>
         {/* The bar keeps its room: a long path gives way in its middle, not its end. */}
-        <span className="truncate text-callout text-fg" title={row.label}>
-          {middleClip(row.label, 30)}
-        </span>
+        <Tooltip label={row.label}>
+          <span className="truncate text-callout text-fg">{middleClip(row.label, 30)}</span>
+        </Tooltip>
         {slowest && (
           <span className="shrink-0 rounded-full bg-fill px-1 text-caption text-fg-muted">Slowest</span>
         )}

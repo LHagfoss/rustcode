@@ -569,26 +569,26 @@ export function Review({ threadId }: { threadId: string }) {
                 const f = files?.find((x) => x.path === path);
                 const n = comments.filter((c) => c.path === path).length;
                 return (
-                  <button
-                    key={path}
-                    type="button"
-                    onClick={() => setSelected(path)}
-                    aria-current={selected === path ? "true" : undefined}
-                    title={path}
-                    className={cx(
-                      "flex w-full items-center gap-1.5 rounded-md px-2 py-[5px] text-left",
-                      selected === path ? "bg-fill" : "hover:bg-fill-subtle",
-                    )}
-                  >
-                    {f ? <StatusMark status={f.status} /> : <span className="size-4 shrink-0" />}
-                    <span className="min-w-0 flex-1 truncate font-mono text-callout">
-                      {path.split("/").pop()}
-                    </span>
-                    {n > 0 && (
-                      <span className="rounded-full bg-accent/20 px-1.5 text-caption text-accent">{n}</span>
-                    )}
-                    {f && <DiffCount added={f.added} removed={f.removed} />}
-                  </button>
+                  <Tooltip key={path} label={path} side="right">
+                    <button
+                      type="button"
+                      onClick={() => setSelected(path)}
+                      aria-current={selected === path ? "true" : undefined}
+                      className={cx(
+                        "flex w-full items-center gap-1.5 rounded-md px-2 py-[5px] text-left",
+                        selected === path ? "bg-fill" : "hover:bg-fill-subtle",
+                      )}
+                    >
+                      {f ? <StatusMark status={f.status} /> : <span className="size-4 shrink-0" />}
+                      <span className="min-w-0 flex-1 truncate font-mono text-callout">
+                        {path.split("/").pop()}
+                      </span>
+                      {n > 0 && (
+                        <span className="rounded-full bg-accent/20 px-1.5 text-caption text-accent">{n}</span>
+                      )}
+                      {f && <DiffCount added={f.added} removed={f.removed} />}
+                    </button>
+                  </Tooltip>
                 );
               })}
             </div>

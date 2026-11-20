@@ -38,7 +38,7 @@ import {
   X,
 } from "./icons";
 import { ProjectMark } from "./ProjectMark";
-import { cx, Kbd, Pill } from "./primitives";
+import { cx, Kbd, Pill, Tooltip } from "./primitives";
 import { WhileAwayCard } from "./WhileAway";
 
 /** One thing a row offers, in the order the digit keys pick it. */
@@ -248,18 +248,20 @@ function InboxRow({
               <RowActions item={item} onRun={onRun} withoutAnswers />
             </span>
           ) : (
-            <button
-              type="button"
-              onClick={onOpen}
-              title={item.detail}
-              className={cx(
-                "min-w-0 flex-1 text-left text-callout text-fg-muted hover:text-fg",
-                // The selected row reads its question whole: the answers drop to their own line.
-                active ? "break-words whitespace-normal" : "truncate",
-              )}
-            >
-              {item.detail}
-            </button>
+            // The selected row reads its question whole, so only a truncated one needs the tip.
+            <Tooltip label={active ? undefined : item.detail}>
+              <button
+                type="button"
+                onClick={onOpen}
+                className={cx(
+                  "min-w-0 flex-1 text-left text-callout text-fg-muted hover:text-fg",
+                  // The selected row reads its question whole: the answers drop to their own line.
+                  active ? "break-words whitespace-normal" : "truncate",
+                )}
+              >
+                {item.detail}
+              </button>
+            </Tooltip>
           )}
           {item.pending > 1 && (
             <span className="shrink-0 text-caption text-fg-faint tabular">
@@ -289,15 +291,16 @@ function InboxRow({
       </div>
       {/* The row's own x: the quick way out for a pointer, beside the answers the
           hovered line offers and the digit key that does the same. */}
-      <button
-        type="button"
-        onClick={() => onRun(dismissAction(item))}
-        title="Dismiss"
-        aria-label={`Dismiss ${item.title}`}
-        className="mt-0.5 flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100"
-      >
-        <X size={13} />
-      </button>
+      <Tooltip label="Dismiss">
+        <button
+          type="button"
+          onClick={() => onRun(dismissAction(item))}
+          aria-label={`Dismiss ${item.title}`}
+          className="mt-0.5 flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100"
+        >
+          <X size={13} />
+        </button>
+      </Tooltip>
     </li>
   );
 }
@@ -335,22 +338,23 @@ export function NeedsYouRow({ threadIds }: { threadIds: ReadonlySet<string> }) {
   if (!count) return null;
   return (
     <div className="shrink-0 px-3 pb-1.5">
-      <button
-        type="button"
-        onClick={() => setView({ kind: "inbox" })}
-        aria-current={here ? "page" : undefined}
-        title="Threads in the current filter that need you. Open the inbox for all projects."
-        className="flex h-[38px] w-full items-center gap-2 rounded-md px-3 text-left text-callout text-fg-muted hover:bg-fill hover:text-fg"
-      >
-        <Hand size={14} className="shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
-        <span className="min-w-0 flex-1 truncate font-medium">Needs you</span>
-        <span
-          key={count}
-          className="rc-count-roll shrink-0 rounded-full bg-warning/14 px-1.5 font-medium text-caption text-warning tabular"
+      <Tooltip label="Threads in the current filter that need you. Open the inbox for all projects.">
+        <button
+          type="button"
+          onClick={() => setView({ kind: "inbox" })}
+          aria-current={here ? "page" : undefined}
+          className="flex h-[38px] w-full items-center gap-2 rounded-md px-3 text-left text-callout text-fg-muted hover:bg-fill hover:text-fg"
         >
-          {count > 99 ? "99+" : count}
-        </span>
-      </button>
+          <Hand size={14} className="shrink-0 text-warning" fill="currentColor" fillOpacity={0.2} />
+          <span className="min-w-0 flex-1 truncate font-medium">Needs you</span>
+          <span
+            key={count}
+            className="rc-count-roll shrink-0 rounded-full bg-warning/14 px-1.5 font-medium text-caption text-warning tabular"
+          >
+            {count > 99 ? "99+" : count}
+          </span>
+        </button>
+      </Tooltip>
     </div>
   );
 }

@@ -92,27 +92,9 @@ const SPACING =
  * A native `title` on a control is no tip at all: lib/quietNative.ts strips every `title` and keeps
  * its text only as the `aria-label`, so the hint never shows and a keyboard never reaches it. The
  * tip is the `Tooltip` (docs/design.md › Tooltips and hover cards), on a span around a disabled
- * control. These files still have that many such titles from before the rule; the count only goes
- * down, and a file that drops one must lower its number here.
+ * control. A file that truly needs one names itself here with its count; a stale count fails.
  */
-const NATIVE_TITLE_ALLOWED: Record<string, number> = {
-  "ui/ChatView.tsx": 1,
-  "ui/DelegateStatus.tsx": 1,
-  "ui/EarlierAttempts.tsx": 1,
-  "ui/Inbox.tsx": 3,
-  "ui/NewThreadWidgets.tsx": 1,
-  "ui/OverviewDeliverables.tsx": 2,
-  "ui/OverviewDetails.tsx": 1,
-  "ui/OverviewProperties.tsx": 1,
-  "ui/PullRequests.tsx": 1,
-  "ui/Review.tsx": 1,
-  "ui/Rows.tsx": 4,
-  "ui/ScheduledMessages.tsx": 1,
-  "ui/Sidebar.tsx": 1,
-  "ui/SidebarThreadRow.tsx": 2,
-  "ui/StatisticsCharts.tsx": 1,
-  "ui/WorkflowRuns.tsx": 1,
-};
+const NATIVE_TITLE_ALLOWED: Record<string, number> = {};
 /** A native control, or a `Pill` (which hands its props to a `<button>`). */
 const CONTROL_TAG = /^<(?:button|a|input|textarea|summary|Pill)\b/;
 /** Any other tag the pointer or the keyboard acts on. */

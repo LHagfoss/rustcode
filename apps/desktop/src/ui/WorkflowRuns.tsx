@@ -96,14 +96,15 @@ function WorkerLine({
     </>
   );
   return thread ? (
-    <button
-      type="button"
-      onClick={() => selectThread(thread)}
-      title="Open this worker's thread"
-      className="flex min-w-0 flex-col gap-0.5 rounded-lg px-2 py-1 text-left hover:bg-fill-subtle active:bg-fill-strong"
-    >
-      {body}
-    </button>
+    <Tooltip label="Open this worker's thread">
+      <button
+        type="button"
+        onClick={() => selectThread(thread)}
+        className="flex min-w-0 flex-col gap-0.5 rounded-lg px-2 py-1 text-left hover:bg-fill-subtle active:bg-fill-strong"
+      >
+        {body}
+      </button>
+    </Tooltip>
   ) : (
     <div className="flex min-w-0 flex-col gap-0.5 px-2 py-1">{body}</div>
   );
