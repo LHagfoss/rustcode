@@ -25,9 +25,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use agent_client_protocol::schema::v1::{
-    ClientCapabilities, SessionInfoUpdate, SessionNotification, SessionUpdate,
+    ClientCapabilities, ContentBlock, SessionInfoUpdate, SessionNotification, SessionUpdate,
+    ToolCallId, ToolCallStatus,
 };
 use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification, JsonRpcRequest};
 use serde_json::json;
@@ -209,6 +211,146 @@ fn join_text(last: &mut SessionUpdate, next: &SessionUpdate) -> bool {
     true
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Phase {
+    Waiting,
+    Writing,
+    Tool,
+    Approval,
+}
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_rustcode/session/turnPhase")]
+#[serde(rename_all = "camelCase")]
+struct TurnPhaseNotification {
+    session_id: String,
+    phase: Option<Phase>,
+    activity_age_ms: Option<u64>,
+}
+
+struct TurnTiming {
+    started: Instant,
+    changed: Instant,
+    last_activity: Option<(Instant, chrono::DateTime<chrono::Utc>)>,
+    phase: Phase,
+    durations: [u64; 4],
+    tools: HashSet<ToolCallId>,
+    approvals: usize,
+    writing: bool,
+}
+
+fn millis(duration: std::time::Duration) -> u64 {
+    duration.as_millis() as u64
+}
+
+impl TurnTiming {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            started: now,
+            changed: now,
+            last_activity: None,
+            phase: Phase::Waiting,
+            durations: [0; 4],
+            tools: HashSet::new(),
+            approvals: 0,
+            writing: false,
+        }
+    }
+
+    fn notification(&self, session_id: &str) -> TurnPhaseNotification {
+        TurnPhaseNotification {
+            session_id: session_id.to_owned(),
+            phase: Some(self.phase),
+            activity_age_ms: Some(millis(
+                self.last_activity
+                    .map_or(self.started, |(at, _)| at)
+                    .elapsed(),
+            )),
+        }
+    }
+
+    fn record(&mut self, update: &SessionUpdate) -> bool {
+        match update {
+            SessionUpdate::AgentMessageChunk(chunk) if meaningful_content(&chunk.content) => {
+                self.writing = true;
+            }
+            SessionUpdate::AgentThoughtChunk(chunk) if meaningful_content(&chunk.content) => {
+                self.writing = false;
+            }
+            SessionUpdate::ToolCall(call) => {
+                self.tool_status(&call.tool_call_id, Some(call.status));
+            }
+            SessionUpdate::ToolCallUpdate(call) => {
+                self.tool_status(&call.tool_call_id, call.fields.status);
+            }
+            SessionUpdate::Plan(_) => {}
+            _ => return false,
+        }
+        self.activity();
+        true
+    }
+
+    fn tool_status(&mut self, id: &ToolCallId, status: Option<ToolCallStatus>) {
+        self.writing = false;
+        match status {
+            Some(ToolCallStatus::Pending | ToolCallStatus::InProgress) => {
+                self.tools.insert(id.clone());
+            }
+            Some(_) => {
+                self.tools.remove(id);
+            }
+            None => {}
+        }
+    }
+
+    fn activity(&mut self) {
+        let now = Instant::now();
+        self.last_activity = Some((now, chrono::Utc::now()));
+        let phase = if self.approvals > 0 {
+            Phase::Approval
+        } else if !self.tools.is_empty() {
+            Phase::Tool
+        } else if self.writing {
+            Phase::Writing
+        } else {
+            Phase::Waiting
+        };
+        if phase != self.phase {
+            self.durations[self.phase as usize] += millis(now.duration_since(self.changed));
+            self.changed = now;
+            self.phase = phase;
+        }
+    }
+
+    fn persist(mut self, thread_id: String) {
+        self.durations[self.phase as usize] += millis(self.changed.elapsed());
+        let [waiting, writing, tool, approval] = self.durations;
+        let fields = json!({
+            "phase_ms": { "waiting": waiting, "writing": writing, "tool": tool, "approval": approval },
+            "last_activity_at": self.last_activity.map(|(_, wall)| wall.to_rfc3339()),
+            "elapsed_ms": millis(self.started.elapsed()),
+        });
+        crate::data_store::record_operational_event(&crate::data_store::OperationalEventRow {
+            thread_id,
+            turn_id: None,
+            event_type: "turn.phase_summary".to_owned(),
+            at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            fields_json: Some(fields.to_string()),
+            original_bytes: None,
+            captured_bytes: None,
+            payload_truncated: false,
+        });
+    }
+}
+
+fn meaningful_content(content: &ContentBlock) -> bool {
+    !matches!(content, ContentBlock::Text(text) if text.text.is_empty())
+}
+
 #[derive(Default)]
 struct Registry {
     next_id: ClientId,
@@ -217,6 +359,7 @@ struct Registry {
     entries: HashMap<ClientId, Entry>,
     /// The turn each session runs, if any.
     turns: HashMap<String, Turn>,
+    timings: HashMap<String, TurnTiming>,
     /// Bumped whenever a session's turn starts, ends or stops being kept:
     /// a replay built from the history checks nothing moved under it.
     generations: HashMap<String, u64>,
@@ -435,6 +578,7 @@ impl Clients {
         registry.generations.remove(session_id);
         registry.logs.remove(session_id);
         registry.activities.remove(session_id);
+        registry.timings.remove(session_id);
     }
 
     /// The history of `session_id` changed without an update saying so (a
@@ -607,13 +751,40 @@ fn send_all<N: JsonRpcNotification>(
 pub(crate) struct LiveTurn {
     clients: Clients,
     session_id: String,
+    started: Instant,
+}
+
+fn ended_phase(session_id: &str) -> TurnPhaseNotification {
+    TurnPhaseNotification {
+        session_id: session_id.to_owned(),
+        phase: None,
+        activity_age_ms: None,
+    }
 }
 
 impl Drop for LiveTurn {
     fn drop(&mut self) {
-        let mut registry = self.clients.registry();
-        if registry.turns.remove(&self.session_id).is_some() {
-            registry.bump(&self.session_id);
+        let timing = {
+            let mut registry = self.clients.registry();
+            if !registry
+                .timings
+                .get(&self.session_id)
+                .is_some_and(|timing| timing.started == self.started)
+            {
+                return;
+            }
+            if registry.turns.remove(&self.session_id).is_some() {
+                registry.bump(&self.session_id);
+            }
+            let timing = registry.timings.remove(&self.session_id);
+            let _ = send_all(
+                audience_of(&registry, &self.session_id),
+                ended_phase(&self.session_id),
+            );
+            timing
+        };
+        if let Some(timing) = timing {
+            timing.persist(self.session_id.clone());
         }
     }
 }
@@ -756,6 +927,11 @@ impl Peer {
             self.connection
                 .send_notification(activity_notification(session_id, activity))?;
         }
+        self.connection
+            .send_notification(registry.timings.get(session_id).map_or_else(
+                || ended_phase(session_id),
+                |timing| timing.notification(session_id),
+            ))?;
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
             entry
@@ -804,6 +980,11 @@ impl Peer {
             self.connection
                 .send_notification(activity_notification(session_id, activity))?;
         }
+        self.connection
+            .send_notification(registry.timings.get(session_id).map_or_else(
+                || ended_phase(session_id),
+                |timing| timing.notification(session_id),
+            ))?;
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
             entry
@@ -927,6 +1108,12 @@ impl SessionClients {
                 registry.turns.remove(&self.session_id);
                 registry.bump(&self.session_id);
             }
+            if let Some(timing) = registry.timings.get_mut(&self.session_id)
+                && timing.record(&update)
+            {
+                let phase = timing.notification(&self.session_id);
+                let _ = send_all(audience_of(&registry, &self.session_id), phase);
+            }
             registry.deliver(
                 &self.session_id,
                 cursor,
@@ -970,9 +1157,15 @@ impl SessionClients {
             .turns
             .insert(self.session_id.clone(), Turn { base, updates });
         registry.bump(&self.session_id);
+        let timing = TurnTiming::new();
+        let phase = timing.notification(&self.session_id);
+        let started = timing.started;
+        registry.timings.insert(self.session_id.clone(), timing);
+        let _ = send_all(audience_of(&registry, &self.session_id), phase);
         LiveTurn {
             clients: self.clients.clone(),
             session_id: self.session_id.clone(),
+            started,
         }
     }
 
@@ -987,6 +1180,28 @@ impl SessionClients {
     /// the same server does not count: it cannot answer this session's calls.
     pub(crate) fn app_attached(&self) -> bool {
         self.requester(Some(Capability::Threads)).is_some()
+    }
+
+    pub(crate) async fn request_approval<R: JsonRpcRequest>(
+        &self,
+        request: R,
+    ) -> Result<R::Response, agent_client_protocol::Error> {
+        let _approval = self.approval();
+        self.request(None, request).await
+    }
+
+    fn approval(&self) -> Option<PendingApproval<'_>> {
+        let mut registry = self.clients.registry();
+        let timing = registry.timings.get_mut(&self.session_id)?;
+        timing.approvals += 1;
+        timing.activity();
+        let started = timing.started;
+        let phase = timing.notification(&self.session_id);
+        let _ = send_all(audience_of(&registry, &self.session_id), phase);
+        Some(PendingApproval {
+            session: self,
+            started,
+        })
     }
 
     /// Ask the client that most recently attached the session and has `need`.
@@ -1007,6 +1222,26 @@ impl SessionClients {
     }
 }
 
+struct PendingApproval<'a> {
+    session: &'a SessionClients,
+    started: Instant,
+}
+
+impl Drop for PendingApproval<'_> {
+    fn drop(&mut self) {
+        let id = &self.session.session_id;
+        let mut registry = self.session.clients.registry();
+        if let Some(timing) = registry.timings.get_mut(id)
+            && timing.started == self.started
+        {
+            timing.approvals -= 1;
+            timing.activity();
+            let phase = timing.notification(id);
+            let _ = send_all(audience_of(&registry, id), phase);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1014,6 +1249,21 @@ mod tests {
         AgentCapabilities, InitializeRequest, InitializeResponse,
     };
     use agent_client_protocol::{Agent, Channel, Client};
+
+    #[test]
+    fn reply_chunks_refresh_activity_but_empty_chunks_do_not() {
+        let mut timing = TurnTiming::new();
+        assert_eq!(timing.phase, Phase::Waiting);
+        assert!(timing.record(&text("first")));
+        assert_eq!(timing.phase, Phase::Writing);
+
+        let earlier = Instant::now() - std::time::Duration::from_secs(30);
+        timing.last_activity = Some((earlier, chrono::Utc::now()));
+        assert!(!timing.record(&text("")));
+        assert!(timing.notification("s").activity_age_ms.unwrap() >= 30_000);
+        assert!(timing.record(&text("next")));
+        assert!(timing.last_activity.unwrap().0 > earlier);
+    }
 
     #[tokio::test]
     async fn late_attach_and_subscribe_do_not_restore_a_disconnected_client() {

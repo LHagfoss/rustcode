@@ -1413,11 +1413,13 @@ export function WaitingRow({ wait }: { wait: Waiting }) {
  */
 export function WorkingRow({
   startedAt,
+  phase,
   now,
   done,
   elapsedMs,
 }: {
   startedAt?: number;
+  phase?: { label: string; lastActivityAt: number };
   now: number;
   /** The turn finished: the line settles on a check for a moment instead of vanishing. */
   done?: boolean;
@@ -1432,7 +1434,20 @@ export function WorkingRow({
       role="status"
     >
       {done && <CircleCheck size={13} className="shrink-0 text-success rc-dot-in" aria-hidden />}
-      {time ? `${done ? "Worked" : "Working"} for ${time}` : done ? "Worked" : "Working…"}
+      {!done && phase ? (
+        <>
+          <span>{phase.label}</span>
+          <span className="text-fg-faint">
+            Last activity {formatDuration(now - phase.lastActivityAt)} ago
+          </span>
+        </>
+      ) : time ? (
+        `${done ? "Worked" : "Working"} for ${time}`
+      ) : done ? (
+        "Worked"
+      ) : (
+        "Working…"
+      )}
     </div>
   );
 }

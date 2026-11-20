@@ -434,8 +434,9 @@ export function Transcript({
   // A paired engine can keep running a prompt this window did not send.
   const remoteBusy = useApp((s) => threadIsRemote(thread.id) && engineBusy(statusOf(s, thread.id)));
   const runningHere = isRunning(thread);
-  const running = runningHere || remoteBusy;
-  const now = useNow(runningHere);
+  const hasEnginePhase = !!thread.enginePhase;
+  const running = runningHere || remoteBusy || hasEnginePhase;
+  const now = useNow(running);
   const latestEndId = thread.items.findLast((item) => item.kind === "turnEnd")?.id;
   const settlingId = useTurnSettle(thread.id, running, latestEndId);
 
@@ -593,7 +594,7 @@ export function Transcript({
         last?.kind === "assistant";
       // With an approval waiting, the turn is not working: the row that asks is the foot.
       const activity = workingLabel(visible);
-      if (!shows && !waiting && !(settleEnd && activity === "Working"))
+      if (!hasEnginePhase && !shows && !waiting && !(settleEnd && activity === "Working"))
         out.push({
           key: "activity",
           activity,
@@ -633,6 +634,7 @@ export function Transcript({
     drawnRows.current = keepUnchangedRows(drawnRows.current, out);
     return drawnRows.current;
   }, [
+    hasEnginePhase,
     visible,
     subagentSteps,
     started,
@@ -1319,6 +1321,7 @@ export function Transcript({
                     ) : row.working ? (
                       <WorkingRow
                         startedAt={thread.turn?.startedAt}
+                        phase={thread.enginePhase}
                         now={now}
                         done={row.working.done}
                         elapsedMs={row.working.elapsedMs}

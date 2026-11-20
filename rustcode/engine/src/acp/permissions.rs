@@ -355,7 +355,7 @@ pub(crate) fn external_tool_approver(
                 permission_options(&call),
             );
             let started = std::time::Instant::now();
-            let response = clients.request(None, request).await;
+            let response = clients.request_approval(request).await;
             let choice = response
                 .as_ref()
                 .map_or(PermissionChoice::Reject, |response| {
@@ -463,7 +463,7 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
                     .begin_user_wait(std::time::Instant::now());
                 let wait_started = std::time::Instant::now();
                 let waiting = crate::thread_status::waiting(&session_id);
-                let response = clients.request(None, request).await;
+                let response = clients.request_approval(request).await;
                 drop(waiting);
                 let wait = wait_started.elapsed();
                 record_approval_wait(&mut *state.lock().await, wait);
