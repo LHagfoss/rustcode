@@ -12,7 +12,7 @@ import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState }
 import { count } from "../lib/plural";
 import { type DayPoint, sparklinePath, sparklineSeries, type Trend } from "../state/period";
 import { ArrowDown, ArrowUp } from "./icons";
-import { cx } from "./primitives";
+import { cx, Tooltip } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
 import { Choice } from "./settingsKit";
 
@@ -387,30 +387,33 @@ export function CostShare({
         {shares.map((share) => {
           const off = hidden.has(share.key);
           return (
-            <button
+            <Tooltip
               key={share.key}
-              type="button"
-              aria-pressed={!off}
-              title={off ? `Show ${share.label} again` : `Hide ${share.label} from the bar`}
-              onClick={() => onToggle(share.key)}
-              onPointerEnter={() => onHover(share.key)}
-              onPointerLeave={() => onHover(null)}
-              onFocus={() => onHover(share.key)}
-              onBlur={() => onHover(null)}
-              className={cx(
-                "flex min-w-0 items-center gap-1.5 rounded-sm text-caption",
-                off ? "text-fg-faint line-through" : "text-fg-muted hover:text-fg",
-              )}
+              label={off ? `Show ${share.label} again` : `Hide ${share.label} from the bar`}
             >
-              <span
-                aria-hidden
-                className="size-2 shrink-0 rounded-xs"
-                style={{ background: shareShade(rank.get(share.key) ?? 0), opacity: off ? 0.4 : 1 }}
-              />
-              <span className="truncate">{share.label}</span>
-              <span className="tabular">{formatCost(share.usd)}</span>
-              <span className="text-fg-faint tabular">{percentLabel(share.usd, total)}</span>
-            </button>
+              <button
+                type="button"
+                aria-pressed={!off}
+                onClick={() => onToggle(share.key)}
+                onPointerEnter={() => onHover(share.key)}
+                onPointerLeave={() => onHover(null)}
+                onFocus={() => onHover(share.key)}
+                onBlur={() => onHover(null)}
+                className={cx(
+                  "flex min-w-0 items-center gap-1.5 rounded-sm text-caption",
+                  off ? "text-fg-faint line-through" : "text-fg-muted hover:text-fg",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className="size-2 shrink-0 rounded-xs"
+                  style={{ background: shareShade(rank.get(share.key) ?? 0), opacity: off ? 0.4 : 1 }}
+                />
+                <span className="truncate">{share.label}</span>
+                <span className="tabular">{formatCost(share.usd)}</span>
+                <span className="text-fg-faint tabular">{percentLabel(share.usd, total)}</span>
+              </button>
+            </Tooltip>
           );
         })}
       </div>

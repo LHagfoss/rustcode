@@ -256,13 +256,15 @@ function FeedbackCard({
           {item.at !== undefined && <> · {relativeAge(item.at)}</>}
         </span>
         {item.outdated && (
-          <span className="shrink-0 text-warning" title="The code has changed since this comment">
-            Outdated
-          </span>
+          <Tooltip label="The code has changed since this comment">
+            <span className="shrink-0 text-warning">Outdated</span>
+          </Tooltip>
         )}
-        <Pill size="sm" quiet onClick={onAdd} title="Add to the thread's composer">
-          <CirclePlus size={12} /> Add to thread
-        </Pill>
+        <Tooltip label="Add to the thread's composer">
+          <Pill size="sm" quiet onClick={onAdd}>
+            <CirclePlus size={12} /> Add to thread
+          </Pill>
+        </Tooltip>
       </div>
       <Markdown text={item.body} className="text-callout" />
     </div>

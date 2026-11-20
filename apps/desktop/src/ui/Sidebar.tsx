@@ -102,7 +102,7 @@ import { NeedsYouRow } from "./Inbox";
 import { ChevronDown, ChevronRight, CornerDownRight, FolderPlus, PanelLeft, Search } from "./icons";
 import { SettingsButton } from "./MainHeader";
 import { HiddenDot, ProjectHeader } from "./ProjectHeader";
-import { Cluster, ClusterButton, cx, Pill, Skeleton } from "./primitives";
+import { Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
 import { PendingRow, ROW_HEIGHT, ThreadRow } from "./SidebarThreadRow";
 import { SidebarToolbar } from "./SidebarToolbar";
@@ -1454,18 +1454,19 @@ export function Sidebar() {
       </div>
       <CustomSnooze />
       {!hidden && (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize sidebar"
-          title="Drag to resize · Double-click to reset"
-          onPointerDown={onResize}
-          // Back to the width a fresh window has, kept like any other width.
-          onDoubleClick={() => setWidth(DEFAULT_WIDTH)}
-          className="group absolute top-0 right-[-3px] bottom-0 z-10 w-[7px] cursor-col-resize"
-        >
-          <div className="mx-auto h-full w-px bg-transparent group-hover:bg-fill" />
-        </div>
+        <Tooltip label="Drag to resize · Double-click to reset" side="right">
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            onPointerDown={onResize}
+            // Back to the width a fresh window has, kept like any other width.
+            onDoubleClick={() => setWidth(DEFAULT_WIDTH)}
+            className="group absolute top-0 right-[-3px] bottom-0 z-10 w-[7px] cursor-col-resize"
+          >
+            <div className="mx-auto h-full w-px bg-transparent group-hover:bg-fill" />
+          </div>
+        </Tooltip>
       )}
     </aside>
   );
