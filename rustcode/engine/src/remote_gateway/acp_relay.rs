@@ -138,6 +138,10 @@ const EXACT_METHODS: &[&str] = &[
     // chunks under the frame limit (`acp/attachments.rs`), confined to the
     // attachment stores.
     "_rustcode/session/harness",
+    // Moving a closed thread to another project folder on this machine
+    // ("Change Project Folder"): the folder is checked as `session/new`'s is,
+    // so it reaches no further than starting a thread there.
+    "_rustcode/session/move",
     "_rustcode/attachments/read",
     "_rustcode/attachments/upload",
     // A thread's plan usage windows (percent used and reset time) for the
@@ -397,6 +401,7 @@ mod tests {
                 "_rustcode/worktrees/state",
                 "_rustcode/environment/sync",
                 "_rustcode/session/harness",
+                "_rustcode/session/move",
                 "_rustcode/attachments/read",
                 "_rustcode/attachments/upload",
                 "_rustcode/usage/limits",
@@ -446,6 +451,7 @@ mod tests {
             "_rustcode/project/create",
             "_rustcode/worktrees/state",
             "_rustcode/session/harness",
+            "_rustcode/session/move",
             "_rustcode/attachments/read",
             "_rustcode/attachments/upload",
             "_rustcode/usage/limits",

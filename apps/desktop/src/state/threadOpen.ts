@@ -358,17 +358,20 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
     toast("Stop the running turn before moving this thread to another folder.");
     return false;
   }
-  if (!get().agent?.sessionMove || !connection) {
+  // Another computer's thread moves on that computer; one on an older RustCode says so in its
+  // answer (`errorText`), so only this computer's own engine is checked up front.
+  const conn = connectionForThread(id);
+  if (!conn) {
+    toast("That computer is not connected.", "error");
+    return false;
+  }
+  if (!threadIsRemote(id) && !get().agent?.sessionMove) {
     toast("This server cannot move a thread to another folder. Update RustCode.", "error");
     return false;
   }
   if (thread && get().agent?.closeSession) await closeThread(id);
   try {
-    await connectionForThread(id)?.request(
-      Method.sessionMove,
-      { sessionId: splitThreadKey(id).id, cwd },
-      10_000,
-    );
+    await conn.request(Method.sessionMove, { sessionId: splitThreadKey(id).id, cwd }, 10_000);
   } catch (error) {
     toast(`Could not move the thread: ${errorText(error)}`, "error");
     if (thread) void openThread(id);
