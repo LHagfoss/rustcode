@@ -4,7 +4,8 @@
 // into view. Here it runs on the Oniguruma (WebAssembly) engine, 73 ms and
 // 13 ms, and none of it on the main thread (docs/desktop.md › Native frame rate).
 
-import type { HighlighterGeneric } from "shiki";
+import type { HighlighterCore } from "shiki/core";
+import { HIGHLIGHT_LANGS } from "./highlightLangs";
 import { THEMES } from "./highlightThemes";
 
 export interface HighlightRequest {
@@ -19,31 +20,36 @@ export interface HighlightResponse {
   html: string | null;
 }
 
-let highlighter: Promise<HighlighterGeneric<string, string>> | null = null;
+let highlighter: Promise<HighlighterCore> | null = null;
 const loaded = new Set<string>();
 const failed = new Set<string>();
 
 function getHighlighter() {
   highlighter ??= (async () => {
-    const [{ createHighlighter }, { createOnigurumaEngine }] = await Promise.all([
-      import("shiki"),
+    const [{ createHighlighterCore }, { createOnigurumaEngine }] = await Promise.all([
+      import("shiki/core"),
       import("shiki/engine/oniguruma"),
     ]);
-    return createHighlighter({
+    return createHighlighterCore({
       themes: THEMES,
       langs: [],
       engine: createOnigurumaEngine(import("shiki/wasm")),
-    }) as Promise<HighlighterGeneric<string, string>>;
+    });
   })();
   return highlighter;
 }
 
 async function render(code: string, language: string): Promise<string | null> {
   if (failed.has(language)) return null;
+  const load = HIGHLIGHT_LANGS[language];
+  if (!load) {
+    failed.add(language);
+    return null;
+  }
   const h = await getHighlighter();
   if (!loaded.has(language)) {
     try {
-      await h.loadLanguage(language as never);
+      await h.loadLanguage((await load()).default);
       loaded.add(language);
     } catch {
       failed.add(language);
