@@ -22,8 +22,8 @@
 use crate::app::ChatMessage;
 use agent_client_protocol::schema::v1::{
     ContentBlock, Meta, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate,
-    TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdateFields,
-    ToolKind,
+    TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, ToolKind,
 };
 use rustcode_core::{ToolCallRef, ToolResultRecord};
 use serde_json::Value;
@@ -837,7 +837,6 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::ToolCallUpdate;
 
     #[test]
     fn interruption_closes_only_unfinished_tools_without_an_exit_code() {
