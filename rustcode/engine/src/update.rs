@@ -106,13 +106,11 @@ async fn fetch_github_latest(client: &reqwest::Client) -> Option<(Version, Strin
             return None;
         }
         let version = stable_version(&release.tag_name)?;
-        let preferred = current_binary_asset_name()?;
-        let fallback = target_asset_name()?;
+        let asset_name = current_binary_asset_name()?;
         let download_url = release
             .assets
             .iter()
-            .find(|a| a.name == preferred)
-            .or_else(|| release.assets.iter().find(|a| a.name == fallback))
+            .find(|a| a.name == asset_name)
             .map(|a| a.browser_download_url.clone())?;
         return Some((version, download_url));
     }

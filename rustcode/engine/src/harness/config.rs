@@ -1068,7 +1068,11 @@ enabled = true
         );
         assert_eq!(claude.model.as_deref(), Some("opus"));
         let builtin = entry("rustcode").unwrap();
-        assert_eq!(builtin.enabled, None);
+        assert_eq!(
+            builtin.enabled,
+            Some(false),
+            "remembering does not turn the opt-in built-in harness on"
+        );
         assert_eq!(builtin.model.as_deref(), Some("local"));
         assert!(
             entry("gemini").is_none(),

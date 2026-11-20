@@ -198,7 +198,7 @@ async fn run_remote_command(
                 .await
                 .map_err(|error| {
                     format!(
-                        "remote session-owner requires the standalone `rustcode` harness binary ({}): {error}",
+                        "detached remote session-owner requires the standalone `rustcode` harness binary (tried {}): {error}. Install it with `install.sh --with-harness` (Windows: `install.ps1 -WithHarness`) or `cargo install --path harness`, set RUSTCODE_HARNESS_BIN, or keep the RustCode desktop app running.",
                         harness_bin.display()
                     )
                 })?;

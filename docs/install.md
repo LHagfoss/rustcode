@@ -4,9 +4,10 @@ The one-line installers and Homebrew are covered in the [README](../README.md#in
 This page covers supported platforms, building from source, the desktop app and
 updating.
 
-The installers put the `rustcode` CLI on your machine and, unless you pass
-`--no-app` (`-NoApp` on Windows), the RustCode desktop app as well: see
-[Native desktop app](#native-desktop-app).
+The installers put the `rc` orchestrator CLI on your machine and, unless you
+pass `--no-app` (`-NoApp` on Windows), the RustCode desktop app as well: see
+[Native desktop app](#native-desktop-app). Pass `--with-harness` (`-WithHarness`
+on Windows) to also install the standalone `rustcode` TUI/harness binary.
 
 ## Supported platforms
 
@@ -19,23 +20,26 @@ targets, but those targets are not covered by release CI.
 
 ## From Source (Rust / Cargo)
 
-The `rustcode` binary lives in the `rustcode-tui` package; the repository root
-is the engine library and has no binary target.
+The `rc` orchestrator CLI lives in `rustcode/cli` (`rustcode-cli`) and the
+standalone `rustcode` TUI/harness lives in `harness` (`rustcode-harness`); the
+repository root is the engine library and has no binary target.
 
 ```bash
 # Clone and build
 git clone https://github.com/lhagfoss/rustcode.git
 cd rustcode
-cargo install --path rustcode/tui
+cargo install --path rustcode/cli
+# Optional standalone TUI/harness:
+cargo install --path harness
 ```
 
-`cargo install` writes to `~/.cargo/bin`. If a prebuilt `rustcode` from
+`cargo install` writes to `~/.cargo/bin`. If a prebuilt `rc` from
 `install.sh` is already on your `PATH` (it installs to `~/.local/bin`, or
 `/usr/local/bin` when writable), remove it or ensure `~/.cargo/bin` comes
 first — otherwise the older binary keeps winning:
 
 ```bash
-rustcode --version   # check this resolves to the build you just made
+rc --version   # check this resolves to the build you just made
 ```
 
 ## Native desktop app
@@ -52,7 +56,7 @@ against the release's `SHA256SUMS`:
 | Linux x86_64 (`--appimage`, or no system WebKitGTK) | `RustCode-<ver>-linux-x86_64.AppImage` | `~/Applications/RustCode.AppImage`, menu entry and icon in `~/.local/share` |
 | Linux x86_64 (`--deb`) | `RustCode-<ver>-linux-x86_64.deb` | system package via `apt-get`/`dpkg` (asks for sudo) |
 
-The app carries its own engine (`rustcode --acp`) inside the bundle, so it
+The app carries its own engine (`rc --acp`) inside the bundle, so it
 works without the CLI on `PATH`. Linux ARM64 and Intel macOS get the CLI
 only.
 
@@ -61,7 +65,7 @@ On macOS the installer quits a running RustCode, moves an existing
 Trash rather than deleting it, unpacks the new one, checks its code signature
 and bundle id, clears the quarantine flag on that verified app only and
 registers it with Launch Services. The AppImage needs FUSE (`libfuse2`) to
-run; the `.deb` does not, and also installs the engine as `/usr/bin/rustcode`.
+run; the `.deb` does not, and also installs the engine as `/usr/bin/rc`.
 
 Options (`curl … | bash -s -- <options>` on macOS and Linux):
 
@@ -69,6 +73,7 @@ Options (`curl … | bash -s -- <options>` on macOS and Linux):
 | --- | --- | --- |
 | `--no-app` | `-NoApp` or `$env:RUSTCODE_NO_APP = "1"` | CLI only, as before |
 | `--no-cli` | `-NoCli` or `$env:RUSTCODE_NO_CLI = "1"` | app only |
+| `--with-harness` | `-WithHarness` or `$env:RUSTCODE_WITH_HARNESS = "1"` | also install the standalone `rustcode` TUI/harness binary |
 | `--deb` | | Linux: the `.deb` instead of the AppImage |
 | `--system-webkit` | | Linux: require system WebKitGTK 4.1 and install the smaller archive |
 | `--appimage` | | Linux: use the portable AppImage even with system WebKitGTK installed |
@@ -178,16 +183,16 @@ and run it as described in [desktop.md](desktop.md).
 RustCode comes with a built-in cross-platform self-updater for macOS, Linux, and Windows.
 Native installations update from GitHub Releases; Homebrew installations use Homebrew.
 
-- **In CLI:** Run `rustcode --update` (or `rustcode --upgrade`)
-- **Inside RustCode TUI:** Type `/update` (or accept the update modal on startup)
+- **In CLI:** Run `rc --update` (or `rc --upgrade`)
+- **Inside standalone `rustcode` TUI:** Type `/update` (or accept the update modal on startup)
 - **Homebrew (macOS):** `brew upgrade rustcode`
 - **Desktop app:** see [Updating the app](#updating-the-app)
 
 A machine can hold several copies, and the one first on `PATH` is what a shell
 runs: the app's bundled engine, Homebrew's, the install script's copy in
 `~/.local/bin` or `/usr/local/bin` (and `~/.rustcode/bin`,
-`%USERPROFILE%\.rustcode\bin\rustcode.exe` on Windows), or `cargo install`'s.
-`rustcode server status` reports when the `rustcode` a shell finds is another
+`%USERPROFILE%\.rustcode\bin\rc.exe` on Windows), or `cargo install`'s.
+`rc server status` reports when the `rc` a shell finds is another
 version than the engine that answered, with both paths and the command that
 fixes it: update that copy, or remove it so the shell finds the one the app runs
 ([server](server.md#status)). After a desktop app update the app also does it

@@ -3,10 +3,12 @@
 # Usage: curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash
 #        curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash -s -- --no-app
 #
-# Installs the `rustcode` CLI and the RustCode desktop app (macOS:
-# /Applications/RustCode.app; Linux: a system-WebKitGTK app when available,
-# otherwise AppImage, or .deb with --deb). Downloads are checksum-verified.
-# Run with --help for the options; docs/install.md has the details.
+# Installs the RustCode orchestrator CLI (`rc`) and the RustCode desktop app
+# (macOS: /Applications/RustCode.app; Linux: a system-WebKitGTK app when
+# available, otherwise AppImage, or .deb with --deb). Pass --with-harness to
+# also install the standalone `rustcode` TUI/harness binary. Downloads are
+# checksum-verified. Run with --help for the options; docs/install.md has the
+# details.
 
 set -euo pipefail
 
@@ -14,6 +16,7 @@ REPO="LHagfoss/rustcode"
 APP_BUNDLE_ID="com.lhagfoss.rustcode.desktop"
 INSTALL_CLI=1
 INSTALL_APP=1
+INSTALL_HARNESS="${RUSTCODE_WITH_HARNESS:-0}"
 USE_DEB=0
 LINUX_APP_FORMAT=auto
 CLI_SHARED=0
@@ -26,14 +29,15 @@ ARTIFACTS="${RUSTCODE_INSTALL_ARTIFACTS:-}"
 
 usage() {
     cat <<'USAGE'
-Install the RustCode CLI and desktop app from the latest GitHub release, or
-from the release --version names.
+Install the RustCode orchestrator CLI (`rc`) and desktop app from the latest
+GitHub release, or from the release --version names.
 Linux uses the smaller system-WebKitGTK app when WebKitGTK 4.1 is available,
 otherwise AppImage. The system app and CLI share one engine.
 
 Options:
   --no-app        Install only the CLI.
   --no-cli        Install only the desktop app.
+  --with-harness  Also install the standalone `rustcode` TUI/harness binary.
   --deb           Linux: install the desktop app's .deb with dpkg (asks for
                   sudo) instead of the AppImage.
   --system-webkit Linux: require the smaller app using system WebKitGTK 4.1.
@@ -45,6 +49,7 @@ Options:
 
 Environment:
   RUSTCODE_VERSION=X.Y.Z           The same as --version.
+  RUSTCODE_WITH_HARNESS=1          The same as --with-harness.
   RUSTCODE_INSTALL_ARTIFACTS=DIR   Install from DIR (release asset names and a
                                    SHA256SUMS) instead of downloading.
 USAGE
@@ -54,6 +59,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --no-app) INSTALL_APP=0 ;;
         --no-cli) INSTALL_CLI=0 ;;
+        --with-harness) INSTALL_HARNESS=1 ;;
         --deb) USE_DEB=1 ;;
         --system-webkit) LINUX_APP_FORMAT=system ;;
         --appimage) LINUX_APP_FORMAT=appimage ;;
@@ -78,8 +84,8 @@ if [ "$USE_DEB" = 1 ] && [ "$LINUX_APP_FORMAT" != auto ]; then
     echo "--deb cannot be combined with --system-webkit or --appimage." >&2
     exit 2
 fi
-if [ "$INSTALL_CLI" = 0 ] && [ "$INSTALL_APP" = 0 ]; then
-    echo "Nothing to install: --no-app and --no-cli together." >&2
+if [ "$INSTALL_CLI" = 0 ] && [ "$INSTALL_APP" = 0 ] && [ "$INSTALL_HARNESS" = 0 ]; then
+    echo "Nothing to install: --no-app and --no-cli together without --with-harness." >&2
     exit 2
 fi
 if [ -n "$VERSION" ]; then
@@ -497,6 +503,42 @@ install_cli() {
     fi
 }
 
+install_harness() {
+    local archive extracted harness_exe
+    if fetch_verified "$ASSET_NAME"; then
+        archive="$VERIFIED_PATH"
+    else
+        error "Could not download standalone harness ${ASSET_NAME}."
+    fi
+
+    mkdir -p "${TMP_DIR}/harness"
+    if ! run_with_spinner "Extracting standalone harness archive..." tar -xzf "$archive" -C "${TMP_DIR}/harness"; then
+        error "Could not extract ${archive}."
+    fi
+
+    extracted="$(find "${TMP_DIR}/harness" -type f -name "rustcode*" ! -name "*.tar.gz" | head -n 1)"
+    if [ -z "$extracted" ]; then
+        error "Extracted archive did not contain rustcode binary."
+    fi
+
+    chmod +x "$extracted"
+    select_cli_directory
+    harness_exe="${INSTALL_DIR}/rustcode"
+
+    if ! run_with_spinner "Installing to ${harness_exe}..." cp "$extracted" "$harness_exe"; then
+        error "Could not install standalone harness to ${harness_exe}."
+    fi
+    chmod +x "$harness_exe"
+
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+        if codesign --force --sign "RustCode Local Signing" --identifier org.rustcode.harness "$harness_exe" >/dev/null 2>&1; then
+            success "Signed standalone harness with the local \"RustCode Local Signing\" certificate."
+        fi
+    fi
+
+    success "RustCode standalone harness ${LATEST_TAG} installed successfully to ${harness_exe}!"
+}
+
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 app_is_running() {
@@ -765,6 +807,9 @@ fi
 if [ "$INSTALL_CLI" = 1 ] && [ "$CLI_SHARED" = 0 ]; then
     install_cli
 fi
+if [ "$INSTALL_HARNESS" = 1 ]; then
+    install_harness
+fi
 
 if [ "$INSTALL_APP" = 1 ]; then
     if [ "$TARGET_OS" = "macos" ]; then
@@ -773,5 +818,8 @@ if [ "$INSTALL_APP" = 1 ]; then
 fi
 
 if [ "$INSTALL_CLI" = 1 ]; then
-    echo "Run 'rustcode' to start pair programming!"
+    echo "Run 'rc --help' to get started!"
+fi
+if [ "$INSTALL_HARNESS" = 1 ]; then
+    echo "Run 'rustcode' to start the standalone terminal harness!"
 fi

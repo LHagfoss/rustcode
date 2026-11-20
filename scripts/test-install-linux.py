@@ -126,6 +126,24 @@ class LinuxInstaller(unittest.TestCase):
         self.run_installer("--no-cli")
         self.assertTrue((self.home / "Applications/RustCode.AppImage").exists())
 
+    def test_with_harness_installs_standalone_rustcode_binary(self):
+        self.archive("rc-linux-x86_64.tar.gz", {
+            "rc-linux-x86_64": b"#!/bin/sh\necho rc-cli\n",
+        })
+        self.archive("rustcode-linux-x86_64.tar.gz", {
+            "rustcode-linux-x86_64": b"#!/bin/sh\necho standalone-harness\n",
+        })
+        self.manifest()
+        self.run_installer("--no-app", "--with-harness")
+        self.assertEqual(
+            subprocess.check_output([str(self.home / "bin/rc")], text=True).strip(),
+            "rc-cli",
+        )
+        self.assertEqual(
+            subprocess.check_output([str(self.home / "bin/rustcode")], text=True).strip(),
+            "standalone-harness",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
