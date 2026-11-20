@@ -3,13 +3,14 @@
 
 import { STATUS_LABEL, type ThreadStatus } from "../acp/v2";
 import { statusOf, useApp } from "../state/store";
-import { CircleCheck, Eye, Hand } from "./icons";
+import { CircleAlert, CircleCheck, Eye, Hand } from "./icons";
 import { cx, Spinner } from "./primitives";
 
 const TONE: Record<ThreadStatus, string> = {
   idle: "",
   running: "bg-accent/12 text-accent",
   needs_input: "bg-warning/14 text-warning",
+  stalled: "bg-danger/12 text-danger",
   review: "bg-accent/16 text-accent",
   done: "bg-success/12 text-success",
 };
@@ -17,6 +18,7 @@ const TONE: Record<ThreadStatus, string> = {
 export function StatusIcon({ status, size = 11 }: { status: ThreadStatus; size?: number }) {
   if (status === "running") return <Spinner size={size} className="text-accent" />;
   if (status === "needs_input") return <Hand size={size} />;
+  if (status === "stalled") return <CircleAlert size={size} />;
   if (status === "review") return <Eye size={size} />;
   if (status === "done") return <CircleCheck size={size} />;
   return null;

@@ -1258,8 +1258,17 @@ async fn serve_connection(
                     let Some((state, _)) = server.session_handle(&request.session_id).await else {
                         return responder.respond_with_error(unknown_session(&request.session_id));
                     };
-                    let answer =
-                        rewind::rewind(&mut *state.lock().await, request.user_index, &request.text);
+                    let answer = {
+                        let mut state = state.lock().await;
+                        if request.first_only
+                            && !crate::thread_status::has_only_first_prompt(&state.history)
+                        {
+                            Err(agent_client_protocol::Error::invalid_params()
+                                .data("the first message is no longer the entire transcript"))
+                        } else {
+                            rewind::rewind(&mut state, request.user_index, &request.text)
+                        }
+                    };
                     match answer {
                         Ok(answer) => {
                             // No update says the chat was cut: nobody

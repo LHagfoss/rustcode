@@ -15,6 +15,9 @@ pub(crate) struct RewindRequest {
     /// The message's text, so a chat that changed underneath is not cut in
     /// the wrong place.
     pub text: String,
+    /// A stalled first message can be retried only while it is the whole history.
+    #[serde(default)]
+    pub first_only: bool,
 }
 
 /// The history index of the `user_index`th message a replay shows.

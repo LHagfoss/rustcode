@@ -1696,8 +1696,8 @@ fn repository_branch_policy_resolves_generic_switch_recipe_without_moving_checko
     // must still refuse to move or discard the user's checkout.
     assert!(
         repository_policy.contains("Work in a new worktree on a task branch")
-            && repository_policy.contains("unless the user says"),
-        "repository policy must default to a worktree and allow an explicit override"
+            && repository_policy.contains("to work in the active checkout; then use"),
+        "repository policy must allow the user to choose the active checkout"
     );
     assert!(
         repository_policy.contains("no `git rebase`, `git reset --hard`, or")
