@@ -1,7 +1,8 @@
 import { Dialog } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
-import { clipboardImage, openExternal } from "../lib/native";
+import type { SystemInfo } from "../lib/diagnostics";
+import { clipboardImage, openExternal, systemInfo } from "../lib/native";
 import { pastedImages } from "../lib/paste";
 import { activeTransport, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
@@ -9,8 +10,9 @@ import { Bug, ChevronDown, ExternalLink, Image, MessageSquarePlus, X } from "./i
 import { Pill } from "./primitives";
 
 const repository = "https://github.com/lhagfoss/rustcode";
+// A field is a fill a step over the dialog, never an outline (docs/design.md › Borders).
 const field =
-  "w-full rounded-md border border-border bg-bg/40 px-3 py-2 text-body text-fg placeholder:text-fg-faint focus-visible:outline-1 focus-visible:outline-accent";
+  "w-full rounded-lg bg-fill px-3 py-2 text-body text-fg outline-none placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
 const reportTypes = [
   { kind: "bug", name: "Bug", label: "bug", Icon: Bug },
   { kind: "feature", name: "Feature", label: "enhancement", Icon: MessageSquarePlus },
@@ -20,18 +22,46 @@ type ReportType = (typeof reportTypes)[number];
 type Options = { labels: string[]; can_label: boolean };
 type Screenshot = { name: string; url: string; file: File };
 
+const OS_NAMES: Record<string, string> = { macos: "macOS", windows: "Windows", linux: "Linux" };
+
+/** A bug report's `### Where`: the app, the OS and its architecture, and the thread's harness. */
+export function whereLines(version: string | null, system: SystemInfo | null, harness?: string): string {
+  const os = system && [OS_NAMES[system.os] ?? system.os, system.osVersion].filter(Boolean).join(" ");
+  return [
+    `- RustCode Desktop${version ? ` ${version}` : ""}`,
+    system && `- OS: ${os} (${system.arch})`,
+    harness && `- Harness: ${harness}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** A file's bytes as base64, as the shell's save commands take them. */
+function base64Of(file: File): Promise<string> {
+  const reader = new FileReader();
+  return new Promise<string>((resolve, reject) => {
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 export function IssueReportDialog({
   open,
   onOpenChange,
+  harness,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The harness of the thread the report was opened from, for a bug's `### Where`. */
+  harness?: string;
 }) {
   const [type, setType] = useState<ReportType>(reportTypes[0]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [details, setDetails] = useState("");
   const [version, setVersion] = useState<string | null>(null);
+  const [system, setSystem] = useState<SystemInfo | null>(null);
   const [options, setOptions] = useState<Options | null>(null);
   const [labels, setLabels] = useState<string[]>([]);
   const [setupError, setSetupError] = useState("");
@@ -41,6 +71,7 @@ export function IssueReportDialog({
   const [issue, setIssue] = useState("");
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
   const [imageError, setImageError] = useState("");
+  const [savingAll, setSavingAll] = useState(false);
   const titleInput = useRef<HTMLInputElement>(null);
   const uploads = useRef<HTMLInputElement>(null);
   const imageUrls = useRef(new Set<string>());
@@ -75,6 +106,9 @@ export function IssueReportDialog({
     void appVersion().then((value) => {
       if (current) setVersion(value);
     });
+    void systemInfo().then((value) => {
+      if (current) setSystem(value);
+    });
     return () => {
       current = false;
     };
@@ -100,15 +134,35 @@ export function IssueReportDialog({
 
   const saveImage = async ({ name, file }: Screenshot) => {
     try {
-      const reader = new FileReader();
-      const encoded = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      });
-      await shellCall("issue_report_save_image", { name, data: encoded });
+      await shellCall("issue_report_save_image", { name, data: await base64Of(file) });
     } catch (reason) {
       setImageError(String(reason));
+    }
+  };
+
+  // Every screenshot in one press: the app asks for one folder; a browser downloads each.
+  const saveAll = async () => {
+    if (savingAll || !screenshots.length) return;
+    setImageError("");
+    if (!isTauri()) {
+      for (const { url, name } of screenshots) {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        link.click();
+      }
+      return;
+    }
+    setSavingAll(true);
+    try {
+      const images = await Promise.all(
+        screenshots.map(async ({ name, file }) => ({ name, data: await base64Of(file) })),
+      );
+      await shellCall<number>("issue_report_save_images", { images });
+    } catch (reason) {
+      setImageError(String(reason));
+    } finally {
+      setSavingAll(false);
     }
   };
 
@@ -138,7 +192,7 @@ export function IssueReportDialog({
     !bug && "**Feature request**",
     `### ${bug ? "What happened" : "What are you trying to do?"}\n\n${description.trim()}`,
     details.trim() && `### ${bug ? "Steps to reproduce" : "Idea"}\n\n${details.trim()}`,
-    bug && `### Where\n\nRustCode Desktop${version ? ` ${version}` : ""}`,
+    bug && `### Where\n\n${whereLines(version, system, harness)}`,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -215,7 +269,7 @@ export function IssueReportDialog({
                           key={item.kind}
                           quiet
                           aria-pressed={type === item}
-                          className="justify-center px-3 text-fg-muted aria-pressed:bg-surface-2 aria-pressed:text-fg"
+                          className="justify-center px-3 text-fg-muted aria-pressed:bg-knob aria-pressed:text-knob-fg aria-pressed:shadow-knob"
                           onClick={() => setType(item)}
                         >
                           <item.Icon size={16} />
@@ -299,16 +353,24 @@ export function IssueReportDialog({
                   </>
                 )}
                 {(!issue || screenshots.length > 0) && (
-                  <section aria-label="Screenshots" className="rounded-lg border border-border px-3 py-2">
+                  <section aria-label="Screenshots" className="rounded-lg bg-fill-subtle px-3 py-2">
                     <div className="flex items-center gap-2">
                       <Image size={18} className="shrink-0 text-fg-muted" />
                       <div className="flex-1">
                         <p className="text-callout font-medium">Screenshots</p>
                         <p className="text-caption text-fg-muted">
-                          {issue ? "Save images to attach on GitHub." : "Paste images to attach on GitHub."}
+                          {issue
+                            ? "Save them, then drag them into the issue on GitHub."
+                            : "GitHub cannot take them from the app: after filing, save them and attach them to the issue."}
                         </p>
                       </div>
-                      {!issue && <Pill onClick={() => uploads.current?.click()}>Add images</Pill>}
+                      {issue ? (
+                        <Pill disabled={savingAll} onClick={() => void saveAll()}>
+                          {savingAll ? "Saving…" : "Save all"}
+                        </Pill>
+                      ) : (
+                        <Pill onClick={() => uploads.current?.click()}>Add images</Pill>
+                      )}
                       <input
                         ref={uploads}
                         type="file"
@@ -388,7 +450,10 @@ export function IssueReportDialog({
                         Done
                       </Pill>
                       <Pill prominent onClick={() => openExternal(issue)}>
-                        View issue <ExternalLink size={14} />
+                        {screenshots.length
+                          ? `Open issue to attach ${screenshots.length} screenshot${screenshots.length === 1 ? "" : "s"}`
+                          : "View issue"}{" "}
+                        <ExternalLink size={14} />
                       </Pill>
                     </>
                   ) : (

@@ -60,7 +60,10 @@ describe("the inline pills in a reply", () => {
 
   test("inline code says it copies, keeps its shape when it wraps, and is a pointer", () => {
     const out = drawn("run `bun run check` now");
-    expect(out).toContain('title="Click to copy"');
+    // "Click to copy" is a hover tooltip, not a native `title` (quietNative.ts would turn that into
+    // the code's accessible name).
+    expect(out).not.toContain("title=");
+    expect(out).not.toContain('aria-label="Click to copy"');
     expect(out).toContain("cursor-pointer");
     // Every fragment of code that wraps onto another line gets its own pill ends.
     expect(out).toContain("[box-decoration-break:clone]");

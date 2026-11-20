@@ -99,6 +99,7 @@ import { forgetMachineOutbox, forgetThreadOutbox } from "./machineOutbox";
 import {
   askConfirm,
   deferAnnouncement,
+  errorText,
   flushMachineOutbox,
   isTombstoned,
   keptUnlisted,
@@ -1365,8 +1366,4 @@ export function reconnectMachine(machine: Pick<Machine, "id">): void {
         ),
       }));
     });
-}
-
-export function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

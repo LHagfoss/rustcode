@@ -1420,7 +1420,11 @@ export const Composer = memo(function Composer({
           </span>
         </div>
       </div>
-      <IssueReportDialog open={reportOpen} onOpenChange={setReportOpen} />
+      <IssueReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        harness={thread ? harness?.name : undefined}
+      />
       {thread && (
         <SendLaterDialog
           open={sendLater}

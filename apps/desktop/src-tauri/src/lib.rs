@@ -100,6 +100,7 @@ pub fn run() {
             issue_report::issue_report_options,
             issue_report::issue_report_submit,
             issue_report::issue_report_save_image,
+            issue_report::issue_report_save_images,
             native::open_url,
             native::reveal_path,
             native::open_login_terminal,

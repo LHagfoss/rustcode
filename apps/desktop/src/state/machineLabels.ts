@@ -6,7 +6,6 @@ import { readStorage, writeStorage } from "../lib/storage";
 import { appVersion } from "../lib/updater";
 import {
   type DiscoveredMachine,
-  errorText,
   type Machine,
   type MachineReason,
   type MachineRoute,
@@ -16,7 +15,7 @@ import {
   SHELL_READ_MS,
   useMachines,
 } from "./machines";
-import { toast } from "./store";
+import { errorText, toast } from "./store";
 import { compareVersions } from "./updates";
 
 // ---------------------------------------------------------------- labels
