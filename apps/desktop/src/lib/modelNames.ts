@@ -20,9 +20,19 @@ const FAMILIES = new Set(["opus", "sonnet", "haiku", "fable"]);
 /**
  * A model as people read it: a Claude id or alias as `Opus 5.5` (`claude-opus-5-5`, `opus`,
  * `claude-sonnet-5.5`, `claude-opus-4-8-20260101`), with a `[1m]` context suffix kept as
- * ` 1M`; any other id unchanged.
+ * ` 1M`. Known GPT and Gemini ids use their family casing and a readable version.
+ * Unknown ids and catalog names keep their spelling.
  */
 export function modelTitle(model: string): string {
+  const gpt = /^gpt[- ](\d+(?:\.\d+)?)(?:[- ](astra|luna|sol|terra))?$/i.exec(model);
+  if (gpt) return `GPT ${gpt[1]}${gpt[2] ? ` ${titleWord(gpt[2])}` : ""}`;
+
+  const gemini = /^gemini[- ](\d+(?:\.\d+)?)[- ](neon|flash(?:-lite)?|pro)$/i.exec(model);
+  if (gemini?.[2]) {
+    const variant = gemini[2].toLowerCase() === "flash-lite" ? "Flash-Lite" : titleWord(gemini[2]);
+    return `Gemini ${gemini[1]} ${variant}`;
+  }
+
   const context = /\[(\d+)m\]$/i.exec(model);
   const bare = context ? model.slice(0, context.index) : model;
   const id = MODEL_ALIASES[bare.toLowerCase()] ?? bare;
@@ -30,8 +40,21 @@ export function modelTitle(model: string): string {
   const family = match?.[1]?.toLowerCase();
   if (!match || !family || !FAMILIES.has(family)) return model;
   const version = match[3] ? `${match[2]}.${match[3]}` : match[2];
-  const name = `${family[0]?.toUpperCase()}${family.slice(1)} ${version}`;
+  const name = `${titleWord(family)} ${version}`;
   return context ? `${name} ${context[1]}M` : name;
+}
+
+function titleWord(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+/** Model families with a bundled brand mark in the picker. */
+export function modelIconHarness(model: string): string | undefined {
+  const id = model.split("/").pop()?.toLowerCase() ?? "";
+  if (/^gpt[- ]/.test(id)) return "codex";
+  if (/^gemini[- ]/.test(id)) return "gemini";
+  if (id.startsWith("claude-") || FAMILIES.has(id)) return "claude-code";
+  return undefined;
 }
 
 /** The model a Claude Code usage row recorded, including its older shorthand. */

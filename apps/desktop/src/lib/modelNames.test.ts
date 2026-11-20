@@ -12,8 +12,15 @@ describe("modelTitle", () => {
     expect(modelTitle("opus[1m]")).toBe("Opus 5.5 1M");
   });
 
-  test("leaves every other model as it is", () => {
-    expect(modelTitle("gpt-6.1-terra")).toBe("gpt-6.1-terra");
+  test("cleans up known GPT and Gemini ids", () => {
+    expect(modelTitle("gpt-6.1-terra")).toBe("GPT 6.1 Terra");
+    expect(modelTitle("Gpt-6.2-sol")).toBe("GPT 6.2 Sol");
+    expect(modelTitle("gemini-4-neon")).toBe("Gemini 4 Neon");
+    expect(modelTitle("gemini-3.8-flash-lite")).toBe("Gemini 3.8 Flash-Lite");
+  });
+
+  test("keeps other names and meaningful hyphens", () => {
+    expect(modelTitle("gpt-oss-120b")).toBe("gpt-oss-120b");
     expect(modelTitle("deepseek-v4.1-flash")).toBe("deepseek-v4.1-flash");
     expect(modelTitle("default")).toBe("default");
   });

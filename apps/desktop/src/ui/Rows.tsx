@@ -532,7 +532,6 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
         ? "Reasoning summary"
         : "Thinking";
   const headings = thoughtHeadings(item.text);
-  const tail = live ? item.text.split("\n").filter(Boolean).slice(-5).join("\n") : "";
   return (
     <div className="text-callout">
       <div className="flex max-w-full items-center gap-1">
@@ -554,9 +553,9 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
         </button>
         {open && item.text.trim() && <CopyButton text={item.text} iconOnly label="Copy thinking" />}
       </div>
-      {(open || (live && tail)) && (
-        <div className={cx("pt-2 text-fg-muted", live && !open && "line-clamp-5")}>
-          <Markdown text={open ? item.text : tail} streaming={live} className="gap-1.5 text-callout" />
+      {open && (
+        <div className="pt-2 text-fg-muted">
+          <Markdown text={item.text} streaming={live} className="gap-1.5 text-callout" />
         </div>
       )}
     </div>
