@@ -405,6 +405,25 @@ fn ask_of(args: &Value) -> Ask<'_> {
     }
 }
 
+fn earlier_start(receipt: &crate::data_store::ReceiptRow) -> Result<Option<Value>, Value> {
+    use crate::data_store::Receipt;
+    match crate::data_store::check_receipt(
+        &receipt.caller,
+        &receipt.client_request_id,
+        &receipt.action,
+        &receipt.args_hash,
+    ) {
+        Ok(Receipt::None) => Ok(None),
+        Ok(Receipt::Replay { result, .. }) => Ok(Some(super::local::replay(result))),
+        Ok(Receipt::Conflict) => Err(json!({
+            "error": {"code": "invalid", "message": "client_request_id reused with different arguments"}
+        })),
+        Err(error) => Err(unavailable(format!(
+            "could not read the start receipt: {error}"
+        ))),
+    }
+}
+
 /// `start_session`: one thread, its first turn running on its own from here.
 pub(crate) async fn start(
     caller: &str,
@@ -418,6 +437,23 @@ pub(crate) async fn start(
     if let Err(refusal) = delegation(caller, "start_session") {
         return refusal;
     }
+    let mut receipt = args.get(super::CLIENT_REQUEST_ID).and_then(Value::as_str).map(|key| {
+        crate::data_store::ReceiptRow {
+            caller: caller.to_owned(),
+            client_request_id: key.to_owned(),
+            action: super::START_SESSION.to_owned(),
+            args_hash: super::args_hash(super::START_SESSION, args),
+            result_json: failed(format!(
+                "start {key} is in progress or its outcome is unknown; check list_sessions in the target project before starting again"
+            )).to_string(),
+        }
+    });
+    if let Some(receipt) = &receipt {
+        match earlier_start(receipt) {
+            Ok(None) => {}
+            Ok(Some(answer)) | Err(answer) => return answer,
+        }
+    }
     let ask = ask_of(args);
     // The slot is checked and held under the gate, which is let go before the
     // thread starts: a harness that takes minutes to start blocks only itself.
@@ -429,7 +465,16 @@ pub(crate) async fn start(
             Err(refusal) => return refusal,
         }
     };
-    match start_one(caller, &ask, reservation.as_ref(), asker, cancel).await {
+    match start_one(
+        caller,
+        &ask,
+        reservation.as_ref(),
+        asker,
+        cancel,
+        receipt.as_mut(),
+    )
+    .await
+    {
         Ok(answer) => answer,
         Err(refusal) => refusal,
     }
@@ -494,7 +539,7 @@ pub(crate) async fn fan_out(
             fan_out: Some(&fan_id),
             access: base.access,
         };
-        match start_one(caller, &ask, reservation.as_ref(), asker, cancel).await {
+        match start_one(caller, &ask, reservation.as_ref(), asker, cancel, None).await {
             Ok(answer) => {
                 if let Some(link) = answer.get("link_id").and_then(Value::as_str) {
                     link_ids.push(link.to_owned());
@@ -536,6 +581,7 @@ async fn start_one(
     reservation: Option<&Reservation>,
     asker: Option<&super::ask_user::Asker>,
     cancel: &tokio_util::sync::CancellationToken,
+    mut receipt: Option<&mut crate::data_store::ReceiptRow>,
 ) -> Result<Value, Value> {
     if chain_refusal(caller) {
         return Err(not_allowed(format!(
@@ -643,12 +689,32 @@ async fn start_one(
         "rustcode".to_owned(),
         Value::Object(meta),
     )]));
+    if let Some(receipt) = receipt.as_deref() {
+        let claimed = crate::data_store::claim_start_receipt(receipt)
+            .map_err(|error| unavailable(format!("could not claim the start receipt: {error}")))?;
+        if !claimed {
+            return earlier_start(receipt)?.ok_or_else(|| {
+                unavailable("the start receipt expired during lookup; retry with the same client_request_id")
+            });
+        }
+    }
     // The engine's own `session/new` handler makes the worktree and records it.
     let response = engine
         .request(request, CREATE_TIMEOUT)
         .await
-        .map_err(|message| failed(format!("the thread could not start: {message}")))?;
+        .map_err(|message| failed(format!(
+            "could not confirm the thread start: {message}; check list_sessions in the target project before starting again"
+        )))?;
     let session_id = response.session_id.to_string();
+
+    if let Some(receipt) = receipt.as_deref_mut() {
+        let checkpoint = failed(format!(
+            "thread {session_id} was created; open it or use read_session to check whether its first prompt arrived"
+        ));
+        crate::data_store::advance_start_receipt(receipt, &checkpoint).map_err(|error| {
+            failed(format!("thread {session_id} was created, but its start receipt could not be updated: {error}; open the thread to continue"))
+        })?;
+    }
 
     let mut answer = json!({
         "session_id": session_id,
@@ -667,9 +733,9 @@ async fn start_one(
     if ask.standalone {
         // A thread of the user's own: its prompt is its first message, with no
         // "From thread" header and no delegate report to end with (issue 3443).
-        deliver(engine, session_id, ask.prompt.to_owned(), None);
+        deliver(engine, session_id.clone(), ask.prompt.to_owned(), None);
         answer["standalone"] = json!(true);
-        return Ok(answer);
+        return finish_start(receipt, answer, &session_id);
     }
     // The link takes the slot from here on, so the reservation lets it go.
     if let Some(reservation) = reservation {
@@ -711,6 +777,19 @@ async fn start_one(
     );
     answer["link_id"] = json!(link);
     answer["links_left"] = json!(links_left(caller));
+    finish_start(receipt, answer, &session_id)
+}
+
+fn finish_start(
+    receipt: Option<&mut crate::data_store::ReceiptRow>,
+    answer: Value,
+    session_id: &str,
+) -> Result<Value, Value> {
+    if let Some(receipt) = receipt {
+        crate::data_store::advance_start_receipt(receipt, &answer).map_err(|error| {
+            failed(format!("thread {session_id} was started, but its final receipt could not be saved: {error}; open the thread to check its first prompt"))
+        })?;
+    }
     Ok(answer)
 }
 

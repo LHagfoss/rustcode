@@ -75,6 +75,9 @@ pub(crate) async fn answer_json_with_asker(
     if let Err(reason) = super::validate(name, args) {
         return error("invalid", format!("invalid {name} call: {reason}"));
     }
+    if name == super::START_SESSION {
+        return super::local_threads::start(session_id, args, asker.as_ref(), cancel).await;
+    }
     // A retry key makes a call that must not happen twice safe to retry. The
     // app keeps its receipts for a week; this server keeps them for its life,
     // which is as long as the thread it serves.
@@ -103,9 +106,6 @@ pub(crate) async fn answer_json_with_asker(
         super::LIST_MACHINES => list_machines(args).await,
         super::THREAD_STATUS => thread_status(session_id, args),
         super::WAIT_SESSION => wait_session(session_id, cancel, args).await,
-        super::START_SESSION => {
-            super::local_threads::start(session_id, args, asker.as_ref(), cancel).await
-        }
         super::MESSAGE_SESSION => super::local_threads::message(session_id, args).await,
         super::FAN_OUT => {
             super::local_threads::fan_out(session_id, args, asker.as_ref(), cancel).await
@@ -1410,7 +1410,7 @@ fn receipts() -> &'static Receipts {
 }
 
 /// A recorded answer, marked so an agent knows it is not new work.
-fn replay(mut answer: Value) -> Value {
+pub(super) fn replay(mut answer: Value) -> Value {
     if answer.get("error").is_none()
         && let Some(object) = answer.as_object_mut()
     {

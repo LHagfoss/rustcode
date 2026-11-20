@@ -3420,6 +3420,32 @@ fn a_receipt_round_trips_and_a_changed_call_is_a_conflict() {
 }
 
 #[test]
+fn a_start_claim_survives_reopen_and_advances_without_allowing_a_second_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DATA_FILE);
+    let mut claim = receipt("a", "start-1", "start_session", "h1");
+    let pending = json!({"error": {"message": "start outcome unknown"}});
+    claim.result_json = pending.to_string();
+    let read = |hash| check_receipt_at(&path, "a", "start-1", "start_session", hash).unwrap();
+
+    assert!(receipts::write_receipt(&open(&path).unwrap(), &claim).unwrap());
+    let mut retry = claim.clone();
+    assert!(!receipts::write_receipt(&open(&path).unwrap(), &retry).unwrap());
+    assert_eq!(read("changed arguments"), Receipt::Conflict);
+    assert!(matches!(read("h1"), Receipt::Replay { result, .. } if result == pending));
+
+    let checkpoint = json!({"error": {"message": "check thread child for its first prompt"}});
+    receipts::advance_start_receipt_at(&path, &mut claim, &checkpoint).unwrap();
+    assert!(matches!(read("h1"), Receipt::Replay { result, .. } if result == checkpoint));
+    assert!(!receipts::write_receipt(&open(&path).unwrap(), &retry).unwrap());
+
+    let completed = json!({"session_id": "child", "receipt": "started"});
+    assert!(receipts::advance_start_receipt_at(&path, &mut retry, &completed).is_err());
+    receipts::advance_start_receipt_at(&path, &mut claim, &completed).unwrap();
+    assert!(matches!(read("h1"), Receipt::Replay { result, .. } if result == completed));
+}
+
+#[test]
 fn receipts_age_out_of_the_retry_window_and_stay_bounded() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(DATA_FILE);
