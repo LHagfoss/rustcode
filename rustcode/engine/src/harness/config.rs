@@ -196,15 +196,12 @@ fn valid_id(id: &str) -> bool {
 }
 
 /// Whether `change` may apply while `defaults` hold: the built-in harness turns off only once
-/// another harness starts new threads, so a new thread always has one that is on.
+/// it is not the chosen default harness, so a new thread always has one that is on.
 pub(crate) fn check_default(
     defaults: &HarnessDefaults,
     change: &HarnessChange,
 ) -> Result<(), String> {
-    let builtin_default = defaults
-        .harness
-        .as_deref()
-        .is_none_or(|harness| harness == super::BUILTIN_ID);
+    let builtin_default = defaults.harness.as_deref() == Some(super::BUILTIN_ID);
     if change.id.trim() == super::BUILTIN_ID && change.enabled == Some(false) && builtin_default {
         return Err("choose another default harness before turning RustCode off".to_owned());
     }
@@ -260,17 +257,16 @@ pub(crate) fn apply_change(
         if change.command.is_some() || change.kind.is_some() || change.env.is_some() {
             return Err("the built-in RustCode harness has no command".to_owned());
         }
-        // Turned off, it leaves the app's pickers; the engine itself stays, as it runs every
-        // harness. Only `enabled` is recorded, and only when it says off.
+        // The built-in harness is opt-in (off by default); persist `enabled`
+        // whenever the user turns it on or off.
         if let Some(enabled) = change.enabled {
             match harnesses.iter_mut().find(|entry| entry.id == id) {
-                Some(entry) => entry.enabled = (!enabled).then_some(false),
-                None if !enabled => harnesses.push(HarnessEntry {
+                Some(entry) => entry.enabled = Some(enabled),
+                None => harnesses.push(HarnessEntry {
                     id,
-                    enabled: Some(false),
+                    enabled: Some(enabled),
                     ..Default::default()
                 }),
-                None => {}
             }
         }
         return Ok(());
@@ -356,7 +352,7 @@ pub(crate) fn remember(
     if model.is_some() || effort.is_some() {
         harnesses.push(HarnessEntry {
             id: id.to_owned(),
-            enabled: (!builtin).then_some(false),
+            enabled: Some(false),
             model,
             effort,
             ..Default::default()
@@ -1500,13 +1496,18 @@ config_dir = "~/.claude-paral-2"
     }
 
     #[test]
-    fn the_builtin_harness_turns_off_once_another_is_the_default() {
+    fn the_builtin_harness_is_opt_in_and_turns_off_unless_explicitly_default() {
         let off = |id: &str| HarnessChange {
             id: id.into(),
             enabled: Some(false),
             ..Default::default()
         };
-        let on_builtin = HarnessDefaults::default();
+        let unset = HarnessDefaults::default();
+        assert!(check_default(&unset, &off("rustcode")).is_ok());
+        let on_builtin = HarnessDefaults {
+            harness: Some("rustcode".into()),
+            ..Default::default()
+        };
         assert!(check_default(&on_builtin, &off("rustcode")).is_err());
         let on_claude = HarnessDefaults {
             harness: Some("claude-code".into()),
@@ -1515,9 +1516,6 @@ config_dir = "~/.claude-paral-2"
         assert!(check_default(&on_claude, &off("rustcode")).is_ok());
 
         let mut harnesses = Vec::new();
-        apply_change(&mut harnesses, off("rustcode")).unwrap();
-        assert_eq!(harnesses[0].id, "rustcode");
-        assert!(!harnesses[0].is_enabled());
         assert!(!super::super::resolve_all(&harnesses)[0].enabled);
         apply_change(
             &mut harnesses,
@@ -1528,7 +1526,11 @@ config_dir = "~/.claude-paral-2"
             },
         )
         .unwrap();
+        assert_eq!(harnesses[0].id, "rustcode");
         assert!(harnesses[0].is_enabled());
         assert!(super::super::resolve_all(&harnesses)[0].enabled);
+        apply_change(&mut harnesses, off("rustcode")).unwrap();
+        assert!(!harnesses[0].is_enabled());
+        assert!(!super::super::resolve_all(&harnesses)[0].enabled);
     }
 }

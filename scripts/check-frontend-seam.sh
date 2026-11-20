@@ -3,8 +3,8 @@
 #
 # Usage: scripts/check-frontend-seam.sh [--allowlist FILE] [PATH...]
 # Defaults to scripts/frontend-seam-allowlist.txt and the TUI render layer
-# (rustcode/tui/src/ui + rustcode/tui/src/inline_terminal.rs). The event loop
-# under rustcode/tui/src/runtime is intentionally out of scope: it moves with
+# (harness/src/ui + harness/src/inline_terminal.rs). The event loop
+# under harness/src/runtime is intentionally out of scope: it moves with
 # the frontend and drives turns directly by design.
 set -euo pipefail
 
@@ -34,7 +34,7 @@ while (($# > 0)); do
     esac
 done
 if ((${#paths[@]} == 0)); then
-    paths=("$repo_root/rustcode/tui/src/ui" "$repo_root/rustcode/tui/src/inline_terminal.rs")
+    paths=("$repo_root/harness/src/ui" "$repo_root/harness/src/inline_terminal.rs")
 fi
 [[ -f "$allowlist" ]] || { echo "check-frontend-seam: allow-list not found: $allowlist" >&2; exit 2; }
 # Plain grep, not ripgrep: the guard must run on bare CI images with no

@@ -280,13 +280,13 @@ if [ "$TARGET_OS" = "macos" ]; then
     if [ "$TARGET_ARCH" = "aarch64" ]; then
         ASSET_NAME="rustcode-macos-aarch64.tar.gz"
     else
-        error "Intel macOS is not distributed via prebuilt binaries. Build from source instead: cargo install --path rustcode/tui"
+        error "Intel macOS is not distributed via prebuilt binaries. Build from source instead: cargo install --path rustcode/cli"
     fi
 elif [ "$TARGET_OS" = "linux" ]; then
     # Release binaries link against glibc; musl systems (Alpine, Void musl)
     # cannot run them.
     if ldd --version 2>&1 | grep -qi musl; then
-        error "Prebuilt Linux binaries need glibc; this system uses musl. Build from source instead: cargo install --path rustcode/tui"
+        error "Prebuilt Linux binaries need glibc; this system uses musl. Build from source instead: cargo install --path rustcode/cli"
     fi
     ASSET_NAME="rustcode-linux-${TARGET_ARCH}.tar.gz"
 fi
@@ -385,7 +385,7 @@ select_cli_directory() {
     fi
     mkdir -p "$INSTALL_DIR"
     INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
-    TARGET_EXE="${INSTALL_DIR}/rustcode"
+    TARGET_EXE="${INSTALL_DIR}/rc"
 }
 
 # The web app a hub serves to a browser, in share/rustcode/web beside the
@@ -415,23 +415,27 @@ install_web() {
 }
 
 install_cli() {
-    local archive extracted
-    if ! fetch_verified "$ASSET_NAME"; then
+    local archive extracted cli_asset
+    cli_asset="rc-${ASSET_NAME#rustcode-}"
+    if manifest_asset "^${cli_asset//./\\.}$" >/dev/null && fetch_verified "$cli_asset"; then
+        archive="$VERIFIED_PATH"
+    elif fetch_verified "$ASSET_NAME"; then
+        archive="$VERIFIED_PATH"
+    else
         if [ "$ASSET_NAME" = "rustcode-linux-aarch64.tar.gz" ]; then
-            error "RustCode ${LATEST_TAG} has no Linux ARM64 binary (published from v0.79.0). Build from source instead: cargo install --path rustcode/tui"
+            error "RustCode ${LATEST_TAG} has no Linux ARM64 binary (published from v0.79.0). Build from source instead: cargo install --path rustcode/cli"
         fi
-        error "Could not download ${ASSET_NAME}."
+        error "Could not download ${cli_asset}."
     fi
-    archive="$VERIFIED_PATH"
 
     mkdir -p "${TMP_DIR}/cli"
     if ! run_with_spinner "Extracting archive..." tar -xzf "$archive" -C "${TMP_DIR}/cli"; then
-        error "Could not extract ${ASSET_NAME}."
+        error "Could not extract ${archive}."
     fi
 
-    extracted="$(find "${TMP_DIR}/cli" -type f -name "rustcode*" ! -name "*.tar.gz" | head -n 1)"
+    extracted="$(find "${TMP_DIR}/cli" -type f \( -name "rc*" -o -name "rustcode*" \) ! -name "*.tar.gz" | head -n 1)"
     if [ -z "$extracted" ]; then
-        error "Extracted archive did not contain rustcode binary."
+        error "Extracted archive did not contain rc binary."
     fi
 
     chmod +x "$extracted"
@@ -485,9 +489,9 @@ install_cli() {
     # A previous Cargo or system install can appear earlier in PATH than the
     # freshly installed binary. Detect that explicitly so the user does not keep
     # invoking an older updater after a successful installation.
-    RESOLVED_RUSTCODE="$(command -v rustcode 2>/dev/null || true)"
+    RESOLVED_RUSTCODE="$(command -v rc 2>/dev/null || true)"
     if [ -n "$RESOLVED_RUSTCODE" ] && [ "$RESOLVED_RUSTCODE" != "$TARGET_EXE" ]; then
-        warn "Your shell currently resolves rustcode to ${RESOLVED_RUSTCODE}."
+        warn "Your shell currently resolves rc to ${RESOLVED_RUSTCODE}."
         echo "Run '${TARGET_EXE} --version' now, or put '${INSTALL_DIR}' before it in PATH."
         echo "Then refresh the shell command cache with 'hash -r' or 'rehash'."
     fi
@@ -544,8 +548,10 @@ locally_signed_app() {
     fi
     copy="${TMP_DIR}/signed/RustCode.app"
     mkdir -p "${TMP_DIR}/signed"
+    local engine_bin="rc"
+    [ -x "${original}/Contents/MacOS/rc" ] || engine_bin="rustcode"
     if ditto "$original" "$copy" \
-        && codesign --force --sign "RustCode Local Signing" --identifier org.rustcode.cli "${copy}/Contents/MacOS/rustcode" >/dev/null 2>&1 \
+        && codesign --force --sign "RustCode Local Signing" --identifier org.rustcode.cli "${copy}/Contents/MacOS/${engine_bin}" >/dev/null 2>&1 \
         && codesign --force --sign "RustCode Local Signing" --identifier "$desktop" "${copy}/Contents/MacOS/rustcode-desktop" >/dev/null 2>&1 \
         && codesign --force --sign "RustCode Local Signing" --identifier "$desktop" "$copy" >/dev/null 2>&1 \
         && codesign --verify --deep --strict "$copy" >/dev/null 2>&1; then
@@ -604,12 +610,19 @@ system_webkit_available() {
 }
 
 install_app_linux_system() {
-    local name="$1" stage target data missing icon pending link_stage
+    local name="$1" stage target data missing icon pending link_stage engine_bin
     fetch_verified "$name" || error "Could not download ${name}."
     stage="${TMP_DIR}/system-app"
     mkdir -p "$stage"
     tar -xzf "$VERIFIED_PATH" -C "$stage" || error "Could not extract ${name}."
-    [ -x "$stage/usr/bin/rustcode" ] && [ -x "$stage/usr/bin/rustcode-desktop" ] || error "${name} is missing the app or engine."
+    if [ -x "$stage/usr/bin/rc" ]; then
+        engine_bin="rc"
+    elif [ -x "$stage/usr/bin/rustcode" ]; then
+        engine_bin="rustcode"
+    else
+        engine_bin=""
+    fi
+    [ -n "$engine_bin" ] && [ -x "$stage/usr/bin/rustcode-desktop" ] || error "${name} is missing the app or engine."
     # Check the actual release's dependencies, not just the WebKit SONAME.
     missing="$(ldd "$stage/usr/bin/rustcode-desktop" 2>&1)" || error "Could not inspect app dependencies: ${missing}"
     if printf '%s\n' "$missing" | grep 'not found' >/dev/null; then
@@ -623,10 +636,10 @@ install_app_linux_system() {
     pending="$(mktemp -d "$target/.install.XXXXXX")"
     # Rename each executable rather than overwriting a running file or following
     # an old symlink. The updater recognises this usr/bin layout.
-    for name in rustcode rustcode-desktop; do
+    for name in "$engine_bin" rustcode-desktop; do
         install -m 755 "$stage/usr/bin/$name" "$pending/$name"
     done
-    for name in rustcode rustcode-desktop; do
+    for name in "$engine_bin" rustcode-desktop; do
         mv -fT "$pending/$name" "$target/usr/bin/$name"
     done
     rmdir "$pending"
@@ -647,14 +660,14 @@ DESKTOP
     if [ "$INSTALL_CLI" = 1 ]; then
         select_cli_directory
         link_stage="$(mktemp -d "$INSTALL_DIR/.rustcode-link.XXXXXX")"
-        ln -s "$target/usr/bin/rustcode" "$link_stage/rustcode"
-        mv -fT "$link_stage/rustcode" "$TARGET_EXE"
+        ln -s "$target/usr/bin/$engine_bin" "$link_stage/rc"
+        mv -fT "$link_stage/rc" "$TARGET_EXE"
         rmdir "$link_stage"
         CLI_SHARED=1
         success "CLI linked to the app's engine at ${TARGET_EXE}; no separate CLI download needed."
         case ":$PATH:" in
             *":${INSTALL_DIR}:"*) ;;
-            *) warn "Add ${INSTALL_DIR} to your PATH to run rustcode from the terminal." ;;
+            *) warn "Add ${INSTALL_DIR} to your PATH to run rc from the terminal." ;;
         esac
     fi
     success "RustCode installed to ${target}, using system WebKitGTK and a menu entry."

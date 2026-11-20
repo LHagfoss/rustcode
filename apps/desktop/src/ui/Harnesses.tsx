@@ -485,7 +485,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
   const statusLine = [
     status.label,
     accounts.length ? `${accounts.length} account${accounts.length === 1 ? "" : "s"}` : null,
-    local ? "for the TUI, testing and local models" : null,
+    local ? "optional · standalone TUI and local models" : null,
   ]
     .filter(Boolean)
     .join(" · ");

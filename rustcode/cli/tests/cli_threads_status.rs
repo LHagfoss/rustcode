@@ -12,7 +12,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-const BINARY: &str = env!("CARGO_BIN_EXE_rustcode");
+const BINARY: &str = env!("CARGO_BIN_EXE_rc");
 /// Well-formed ids that no fixture here shares a long prefix with, so one
 /// case's threads never make another case's prefix ambiguous.
 const TITLE_ONE: &str = "018f0000-0000-7000-8000-000000000001";

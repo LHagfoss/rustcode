@@ -28,7 +28,7 @@ class LinuxInstaller(unittest.TestCase):
         self.command("ldd", 'echo "libc.so.6 => /usr/lib/libc.so.6"')
         self.command("update-desktop-database", "exit 0")
         self.archive("RustCode-1.2.3-linux-x86_64.tar.gz", {
-            "./usr/bin/rustcode": b"#!/bin/sh\necho shared-engine\n",
+            "./usr/bin/rc": b"#!/bin/sh\necho shared-engine\n",
             "./usr/bin/rustcode-desktop": b"#!/bin/sh\nexit 0\n",
         })
         self.appimage = self.assets / "RustCode-1.2.3-linux-x86_64.AppImage"
@@ -67,11 +67,11 @@ class LinuxInstaller(unittest.TestCase):
 
     @property
     def engine(self):
-        return self.home / "data/rustcode/desktop/usr/bin/rustcode"
+        return self.home / "data/rustcode/desktop/usr/bin/rc"
 
     def test_auto_shares_engine_and_preserves_link_on_reinstall(self):
         self.run_installer()
-        cli = self.home / "bin/rustcode"
+        cli = self.home / "bin/rc"
         self.assertTrue(cli.is_symlink())
         self.assertEqual(cli.resolve(), self.engine)
         self.assertEqual(subprocess.check_output([str(cli)], text=True).strip(), "shared-engine")
@@ -81,7 +81,7 @@ class LinuxInstaller(unittest.TestCase):
         self.assertIn('Exec="' + str(self.engine.with_name("rustcode-desktop")) + '" %U', entry)
 
     def test_no_cli_preserves_existing_cli(self):
-        cli = self.home / "bin/rustcode"
+        cli = self.home / "bin/rc"
         cli.parent.mkdir()
         cli.write_text("existing CLI")
         self.run_installer("--no-cli", "--system-webkit")
@@ -93,7 +93,7 @@ class LinuxInstaller(unittest.TestCase):
         output = self.run_installer("--system-webkit", success=False)
         self.assertIn("sudo pacman -S webkit2gtk-4.1", output)
         self.assertFalse(self.engine.exists())
-        self.assertFalse((self.home / "bin/rustcode").exists())
+        self.assertFalse((self.home / "bin/rc").exists())
 
     def test_missing_transitive_dependency_stops_before_install(self):
         self.command("ldd", 'echo "libexample.so => not found"')
@@ -107,7 +107,7 @@ class LinuxInstaller(unittest.TestCase):
         self.assertFalse(self.engine.exists())
 
     def test_incomplete_archive_stops_before_install(self):
-        self.archive("RustCode-1.2.3-linux-x86_64.tar.gz", {"./usr/bin/rustcode": b"engine"})
+        self.archive("RustCode-1.2.3-linux-x86_64.tar.gz", {"./usr/bin/rc": b"engine"})
         self.manifest()
         self.run_installer("--system-webkit", success=False)
         self.assertFalse(self.engine.exists())

@@ -3,18 +3,11 @@
 #![recursion_limit = "1024"]
 
 mod cli;
-mod hub_command;
-mod hub_member;
 mod inline_terminal;
-mod machines;
-mod manage_command;
-mod price_estimate;
 mod run;
 mod runtime;
-mod server_command;
 mod terminal_probe;
 mod ui;
-mod up;
 
 #[cfg(test)]
 mod test_isolation;

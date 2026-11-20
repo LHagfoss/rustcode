@@ -1,8 +1,13 @@
 # Command line
 
-Every `rustcode` command, what it does, and what it changes. Each command takes
+RustCode ships two separate binaries:
+
+- **`rc`** (`rustcode/cli`) — the orchestrator CLI and desktop app sidecar (threads, config, harnesses, machines, remote access, background server, usage/data queries, MCP bridges).
+- **`rustcode`** (`harness/`) — the standalone terminal coding agent harness (interactive TUI, `--resume`, `--continue`, `-p`, `--loop`, `--fullscreen`).
+
+Every `rc` command, what it does, and what it changes is listed below. Each command takes
 `--help`. Commands that manage RustCode itself (#3821) go through the running
-server when there is one (`rustcode server`), so the app hears of the change at
+server when there is one (`rc server`), so the app hears of the change at
 once, and work on the files directly when none runs; the **Server** column
 says where a command needs the server. Commands marked **asks** confirm on a
 terminal and need `--yes` (`-y`) in a script. `--json` prints stable JSON on
@@ -13,15 +18,15 @@ the names of their headers and environment variables, never the values. The
 one exception is `outside create`, whose token is the point of the command and
 is shown once.
 
-`cli_doc_lists_every_command` in `rustcode/tui/src/cli.rs` fails when a
+`cli_doc_lists_every_command` in `rustcode/cli/src/cli.rs` fails when a
 command is added without a row here.
 
-`rustcode --help` lists the commands in the groups below: Terminal app,
+`rc --help` lists the commands in the groups below: Orchestrator,
 Threads, Config, Machines & remote, and Server (`HELP_GROUPS` in the same
-file). What RustCode is set up with is under `rustcode config`: settings,
+file). What RustCode is set up with is under `rc config`: settings,
 harness, account, connections, mcp, skill, theme, defaults and sync. Each
-still works under its old top-level name (`rustcode mcp list` is
-`rustcode config mcp list`), so scripts written against those keep working.
+still works under its old top-level name (`rc mcp list` is
+`rc config mcp list`), so scripts written against those keep working.
 
 ## Running RustCode
 
