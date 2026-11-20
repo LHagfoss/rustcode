@@ -44,7 +44,7 @@ export function describeGrantKey(key: string, titleOf: (id: string) => string | 
     case "remove-project":
       return `Remove the project ${tail}`;
     case "schedule":
-      return "Change scheduled work";
+      return "Change loops";
     case "cleanup":
       return `Clean up ${thread(tail)}`;
     case "handoff":

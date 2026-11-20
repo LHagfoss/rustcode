@@ -161,17 +161,57 @@ pub(crate) fn name_from_prompt(prompt: &str) -> String {
     }
 }
 
-/// The fields of a job an answer carries: enough to name it, delete it and
-/// say when it runs next, never its prompt back.
+/// The fields of a job an answer carries: enough to name it, update or delete
+/// it and say when it runs next, never its prompt or webhook secret back.
 fn task(job: &JobRecord) -> Value {
-    json!({
+    let mut entry = json!({
         "id": job.id,
         "name": job.name,
         "paused": job.paused,
         "schedule": job.schedule,
         "workspace": job.workspace,
         "next_due_at": job.next_due_at,
-    })
+    });
+    if let crate::daemon::model::JobAction::Loop {
+        harness,
+        account,
+        model,
+        effort,
+        read_only,
+        thread_id,
+        webhook,
+        machine,
+        ..
+    } = &job.action
+    {
+        entry["kind"] = json!("loop");
+        entry["read_only"] = json!(read_only);
+        if let Some(harness) = harness {
+            entry["harness"] = json!(harness);
+        }
+        if let Some(account) = account {
+            entry["account"] = json!(account);
+        }
+        if let Some(model) = model {
+            entry["model"] = json!(model);
+        }
+        if let Some(effort) = effort {
+            entry["effort"] = json!(effort);
+        }
+        if let Some(thread_id) = thread_id {
+            entry["thread_id"] = json!(thread_id);
+        }
+        if webhook.is_some() {
+            entry["webhook"] = json!(true);
+        }
+        if let Some(machine) = machine {
+            entry["machine"] = json!(machine);
+        }
+        if matches!(job.schedule, ScheduleSpec::Manual) {
+            entry["next_due_at"] = Value::Null;
+        }
+    }
+    entry
 }
 
 /// The client every method asks: the socket `rustcode cron` uses.
@@ -191,8 +231,8 @@ async fn ask(client: &DaemonClient, request: DaemonRequest) -> Result<DaemonResp
 }
 
 /// Why nothing scheduled runs, and how to start it: what a refused call and an
-/// empty list say (issue 3990).
-pub(crate) const DAEMON_STOPPED: &str = "scheduled jobs cannot run because the RustCode scheduler is stopped; ask the user to start it from Scheduled Jobs in the RustCode app, or run `rustcode daemon start`";
+/// empty list say.
+pub(crate) const DAEMON_STOPPED: &str = "loops cannot run because the RustCode scheduler is stopped; ask the user to start it from Loops in the RustCode app, or run `rustcode daemon start`";
 
 pub(crate) async fn list() -> Result<Value, String> {
     list_with(&client()?).await
@@ -479,7 +519,7 @@ mod tests {
             let answer = list_with(&client).await.unwrap();
             assert_eq!(answer["daemon_running"], false);
             assert!(answer["tasks"].as_array().unwrap().is_empty());
-            assert!(answer["hint"].as_str().unwrap().contains("Scheduled Jobs"));
+            assert!(answer["hint"].as_str().unwrap().contains("Loops"));
             let created = create_with(
                 &client,
                 create_job(

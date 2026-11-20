@@ -399,10 +399,33 @@ describe("orchestration rules", () => {
 
   test("the app advertises the version whose arguments it answers", () => {
     // The engine strips `account` below 5, `attachments` below 10, `machine` below 12,
-    // `steer` below 14, `standalone` below 15, `wait` below 17 and transfer `account`/`model`
-    // below 18, and refuses a call that
-    // carries one: the app speaks the newest, so it is offered all of them.
-    expect(CAPABILITY_VERSION).toBe(20);
+    // `steer` below 14, `standalone` below 15, `wait` below 17, transfer `account`/`model`
+    // below 18, `create_loop` below 19, `compact_session` below 20 and `update_loop` below 21,
+    // and refuses a call that carries one: the app speaks the newest, so it is offered all of them.
+    expect(CAPABILITY_VERSION).toBe(21);
+  });
+
+  test("update_loop parses pause, resume, rename, schedule and rejects empty updates", () => {
+    expect(parseCall({ tool: "update_loop", args: { id: "loop-1", paused: true } })).toEqual({
+      tool: "update_loop",
+      id: "loop-1",
+      paused: true,
+    });
+    expect(
+      parseCall({
+        tool: "update_loop",
+        args: { id: "loop-1", name: "Security sweep", schedule: { kind: "manual" } },
+      }),
+    ).toEqual({
+      tool: "update_loop",
+      id: "loop-1",
+      name: "Security sweep",
+      schedule: { kind: "manual" },
+    });
+    expect(parseCall({ tool: "update_loop", args: { id: "loop-1" } })).toMatchObject({ code: "invalid" });
+    expect(
+      parseCall({ tool: "update_loop", args: { id: "loop-1", thread_id: "t-1", harness: "codex" } }),
+    ).toMatchObject({ code: "invalid" });
   });
 
   test("message_session defaults to one-way and can request a reply", () => {

@@ -956,6 +956,7 @@ fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
     match loop_outcome(LoopRunEnd::Finished {
         thread_id: "t-1".into(),
         quiet: false,
+        verdict: None,
     }) {
         RunOutcome::Succeeded { output, .. } => {
             assert_eq!(output.as_deref(), Some(r#"{"thread_id":"t-1"}"#));
@@ -963,8 +964,24 @@ fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
         other => panic!("{other:?}"),
     }
     match loop_outcome(LoopRunEnd::Finished {
+        thread_id: "t-5".into(),
+        quiet: false,
+        verdict: Some("CI broke on main: test_x fails.".into()),
+    }) {
+        RunOutcome::Succeeded { summary, output } => {
+            assert_eq!(summary, "CI broke on main: test_x fails.");
+            let output: serde_json::Value = serde_json::from_str(&output.unwrap()).unwrap();
+            assert_eq!(
+                output,
+                json!({"thread_id": "t-5", "verdict": "CI broke on main: test_x fails."})
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    match loop_outcome(LoopRunEnd::Finished {
         thread_id: "t-3".into(),
         quiet: true,
+        verdict: None,
     }) {
         RunOutcome::Succeeded { summary, output } => {
             assert!(summary.contains("nothing"));
@@ -1002,7 +1019,9 @@ fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
 
 #[test]
 fn a_quiet_loop_reply_starts_with_the_marker() {
-    use crate::orchestration::local_threads::{loop_prompt, loop_reply_is_quiet};
+    use crate::orchestration::local_threads::{
+        loop_prompt, loop_reply_is_quiet, loop_reply_verdict,
+    };
     assert!(loop_prompt("CI", "Check CI", false).contains("“Nothing to report”"));
     assert!(loop_reply_is_quiet(
         "Nothing to report: CI on main is green."
@@ -1013,6 +1032,11 @@ fn a_quiet_loop_reply_starts_with_the_marker() {
         "There is nothing to report except one failure."
     ));
     assert!(!loop_reply_is_quiet(""));
+    assert_eq!(
+        loop_reply_verdict("\n## **CI broke on main: test_x fails.**\nDetails here."),
+        Some("CI broke on main: test_x fails.".to_owned())
+    );
+    assert_eq!(loop_reply_verdict("Nothing to report."), None);
 }
 
 #[test]
@@ -1077,7 +1101,7 @@ fn a_signed_out_run_names_the_login_and_how_to_sign_in() {
         named.contains("CLAUDE_CONFIG_DIR=~/.claude-paral-2 claude auth login"),
         "{named}"
     );
-    assert!(named.contains("resume the job"), "{named}");
+    assert!(named.contains("resume the loop"), "{named}");
     let default = signed_out_message(&harness, None);
     assert!(default.contains("default login (~/.claude)"), "{default}");
 }

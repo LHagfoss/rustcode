@@ -35,6 +35,7 @@ repository depends on them.
 | **Harness** | What runs a thread's turns: RustCode's built-in harness or an external coding agent such as Codex or Claude Code. Chosen when the thread starts ([harnesses.md](harnesses.md)). | The new-thread picker, onboarding, Settings; `_meta.rustcode.harness` in ACP. |
 | **Provider** | A model API the built-in harness calls (OpenAI, Anthropic, Copilot, an OpenAI-compatible server). An external harness has its own models and sign-in, not RustCode's providers. | Settings → providers, `[[providers]]` in the config. |
 | **Machine** | A computer running RustCode that this app can run threads on: this computer, or one paired over a connect code, SSH or an address. Never *environment* ([Machine](#machine)). Code, the shell and the protocol say `machine` too (`Machine`, `machines_*`, `machines.json`, `machines.rs`, `?machines=`). | Settings › Machines, the new-thread Run on selector, the Add machine dialog, `list_machines`. |
+| **Loop** | An automated agent prompt run once, on a schedule, or from a webhook by the scheduler daemon ([daemon.md](daemon.md)). Each run starts a fresh thread (or reuses one chosen thread) on any harness, read-only by default. | The sidebar's *Loops* row, `rustcode loops …` (alias `cron`), MCP tools `list_loops`, `create_loop`, `update_loop`, `run_loop`, `delete_loop`. |
 | **Plan** | The agent's task list (`todo_write`): what it proposes to do, step by step. | The task plan; never proof that a step ran. |
 
 ## Harness, provider, agent

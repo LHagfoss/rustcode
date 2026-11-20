@@ -213,6 +213,20 @@ export type Call =
       threadId?: string;
       readOnly: boolean;
     }
+  | {
+      tool: "update_loop";
+      id: string;
+      paused?: boolean;
+      name?: string;
+      prompt?: string;
+      schedule?: TaskSchedule | { kind: "manual" };
+      harness?: string;
+      account?: string;
+      model?: string;
+      effort?: string;
+      threadId?: string;
+      readOnly?: boolean;
+    }
   | { tool: "list_scheduled_tasks" }
   | { tool: "delete_scheduled_task"; id: string }
   | { tool: "run_scheduled_task_now"; id: string };
@@ -776,6 +790,73 @@ export function parseCall(params: JsonObject): Call | Failure {
         project: s(args.project)?.trim() || undefined,
         name: s(args.name)?.trim() || undefined,
         modelProfile: s(args.model_profile)?.trim() || undefined,
+      };
+    }
+    case "update_loop": {
+      const id = (s(args.id) ?? "").trim();
+      if (!id) return failure("invalid", "id is required");
+      if (args.paused !== undefined && typeof args.paused !== "boolean") {
+        return failure("invalid", "paused must be a boolean");
+      }
+      if (args.read_only !== undefined && typeof args.read_only !== "boolean") {
+        return failure("invalid", "read_only must be a boolean");
+      }
+      let prompt: string | undefined;
+      if (args.prompt !== undefined) {
+        prompt = s(args.prompt) ?? "";
+        if (!prompt.trim()) return failure("invalid", "prompt must not be empty");
+        if (bytes(prompt) > MAX_MESSAGE_BYTES) return failure("invalid", "the prompt is over 32 KiB");
+      }
+      let schedule: TaskSchedule | { kind: "manual" } | undefined;
+      if (args.schedule !== undefined) {
+        const raw =
+          args.schedule && typeof args.schedule === "object" && !Array.isArray(args.schedule)
+            ? (args.schedule as Record<string, unknown>)
+            : {};
+        if (raw.kind === "manual") {
+          schedule = { kind: "manual" };
+        } else {
+          const parsed = parseSchedule(raw);
+          if (typeof parsed === "string") return failure("invalid", parsed);
+          schedule = parsed;
+        }
+      }
+      const name = s(args.name)?.trim() || undefined;
+      const harness = s(args.harness)?.trim() || undefined;
+      const account = s(args.account)?.trim() || undefined;
+      const model = s(args.model)?.trim() || undefined;
+      const effort = s(args.effort)?.trim() || undefined;
+      const threadId = s(args.thread_id)?.trim() || undefined;
+      if (threadId && (harness || account || model || effort)) {
+        return failure("invalid", "an existing thread uses its own harness, account, model and effort");
+      }
+      if (
+        args.paused === undefined &&
+        name === undefined &&
+        prompt === undefined &&
+        schedule === undefined &&
+        args.read_only === undefined &&
+        harness === undefined &&
+        account === undefined &&
+        model === undefined &&
+        effort === undefined &&
+        threadId === undefined
+      ) {
+        return failure("invalid", "give at least one field to update");
+      }
+      return {
+        tool: "update_loop",
+        id,
+        ...(args.paused !== undefined ? { paused: args.paused } : {}),
+        ...(name ? { name } : {}),
+        ...(prompt ? { prompt } : {}),
+        ...(schedule ? { schedule } : {}),
+        ...(harness ? { harness } : {}),
+        ...(account ? { account } : {}),
+        ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
+        ...(threadId ? { threadId } : {}),
+        ...(args.read_only !== undefined ? { readOnly: args.read_only } : {}),
       };
     }
     case "list_scheduled_tasks":

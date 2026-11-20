@@ -24,7 +24,7 @@ mod prompt;
 pub(crate) mod questions;
 mod remote;
 mod rewind;
-mod scheduled;
+pub(crate) mod scheduled;
 mod server_status;
 mod session;
 mod session_load;
@@ -1745,6 +1745,32 @@ async fn serve_connection(
             async move |request: loops::LoopsSetPausedRequest, responder, connection| {
                 connection.spawn(async move {
                     match loops::set_paused(request).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: loops::LoopsRunRequest, responder, connection| {
+                connection.spawn(async move {
+                    match scheduled::run(request.id).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: loops::LoopsDeleteRequest, responder, connection| {
+                connection.spawn(async move {
+                    match scheduled::delete(request.id).await {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder
                             .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),

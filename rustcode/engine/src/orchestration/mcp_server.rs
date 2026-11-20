@@ -229,11 +229,7 @@ const LISTING: &[(&str, &str, Effect)] = &[
         "List pending requests",
         Effect::Reads,
     ),
-    (
-        super::LIST_SCHEDULED_TASKS,
-        "List scheduled tasks",
-        Effect::Reads,
-    ),
+    (super::LIST_SCHEDULED_TASKS, "List loops", Effect::Reads),
     (
         crate::workflow::STATUS_TOOL_NAME,
         "Workflow status",
@@ -256,11 +252,12 @@ const LISTING: &[(&str, &str, Effect)] = &[
     (super::HANDOFF_WORKTREE, "Hand off a worktree", Effect::Adds),
     (super::CREATE_PROJECT, "Create a project", Effect::Adds),
     (super::CLONE_PROJECT, "Clone a project", Effect::Adds),
-    (super::CREATE_LOOP, "Schedule a job", Effect::Adds),
+    (super::CREATE_LOOP, "Create a loop", Effect::Adds),
+    (super::UPDATE_LOOP, "Update a loop", Effect::Sets),
     (super::SCHEDULE_TASK, "Schedule a task", Effect::Adds),
     (
         super::RUN_SCHEDULED_TASK_NOW,
-        "Run a scheduled task now",
+        "Run a loop now",
         Effect::Adds,
     ),
     (
@@ -313,7 +310,7 @@ const LISTING: &[(&str, &str, Effect)] = &[
     (super::REMOVE_PROJECT, "Remove a project", Effect::Removes),
     (
         super::DELETE_SCHEDULED_TASK,
-        "Delete a scheduled task",
+        "Delete a loop",
         Effect::Removes,
     ),
     (

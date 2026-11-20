@@ -1,8 +1,8 @@
-// Scheduled Jobs (issues 3892, 3990; "Loops" in code): prompts the scheduler daemon runs once or on
-// a schedule, each run in a fresh thread (docs/daemon.md › Scheduled Jobs). Reached from the
-// sidebar's Scheduled Jobs row. The list says when each loop runs,
-// when next and how its last run went, with pause/resume, run now, edit and delete; a row opens its
-// prompt and run history. Review lists what loops did on their own that is still worth a look.
+// Loops (issues 3892, 3937): prompts the scheduler daemon runs once, on a schedule, or from a
+// webhook, each run in a fresh thread (docs/daemon.md › Loops). Reached from the sidebar's Loops
+// row. The list says when each loop runs, when next and how its last run went, with pause/resume,
+// run now, edit and delete; a row opens its prompt and run history. Review lists what loops did on
+// their own that is still worth a look.
 
 import { DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -76,7 +76,7 @@ const STATE_BADGE: Record<ReturnType<typeof loopState>, { label: string; tint: s
   active: { label: "Scheduled", tint: "bg-success" },
 };
 
-/** Open the Scheduled Jobs view on one job, expanded: the way back from one of its runs. */
+/** Open the Loops view on one loop, expanded: the way back from one of its runs. */
 export function showJob(id: string): void {
   useLoopThreads.setState({ reveal: id });
   setView({ kind: "loops" });
@@ -373,7 +373,7 @@ function LoopDetail({ loop, now, agent }: { loop: Loop; now: number; agent: stri
                       ? `Started on ${run.machine}`
                       : run.quiet
                         ? "Nothing to report"
-                        : "Finished"
+                        : (run.verdict ?? "Finished")
                 : run.state === "running" || run.state === "claimed"
                   ? "Running"
                   : run.state === "cancelled"
@@ -433,8 +433,7 @@ function ReviewList({
   if (!items.length) {
     return (
       <p className="py-8 text-center text-callout text-fg-muted">
-        Nothing to review. Failed runs and threads scheduled jobs left open in the last {REVIEW_DAYS} days
-        show here.
+        Nothing to review. Failed runs and threads loops left open in the last {REVIEW_DAYS} days show here.
       </p>
     );
   }
@@ -452,7 +451,9 @@ function ReviewList({
               >
                 {kind === "failed"
                   ? `Failed ${agoText(at, now)}${run.error ? `: ${run.error}` : ""}`
-                  : `Its thread is open · ${agoText(at, now)}`}
+                  : run.verdict
+                    ? `${run.verdict} · ${agoText(at, now)}`
+                    : `Its thread is open · ${agoText(at, now)}`}
               </span>
             </div>
             {threadId && (
@@ -573,14 +574,14 @@ export function Loops() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-bg">
-      <ViewHeader title="Scheduled Jobs">
+      <ViewHeader title="Loops">
         <div className="flex items-center gap-2">
           {loops.length > 0 && (
             <Segments
               label="Show"
               value={tab}
               options={[
-                { value: "loops", label: "Jobs" },
+                { value: "loops", label: "Loops" },
                 { value: "review", label: review.length ? `Review ${review.length}` : "Review" },
               ]}
               onChange={setTab}
@@ -589,7 +590,7 @@ export function Loops() {
           {data?.daemonRunning && loops.length > 0 && (
             <Pill prominent onClick={openNew}>
               <Plus size={13} />
-              New job
+              New loop
             </Pill>
           )}
         </div>
@@ -608,21 +609,21 @@ export function Loops() {
                 </Pill>
               }
             >
-              The scheduler is stopped, so scheduled jobs cannot be listed or run. It runs in the background,
-              apart from the app, as <span className="font-mono">rustcode daemon start</span> does.
+              The scheduler is stopped, so loops cannot be listed or run. It runs in the background, apart
+              from the app, as <span className="font-mono">rustcode daemon start</span> does.
             </Callout>
           ) : loops.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-16 text-center">
               <span className="inline-flex size-10 items-center justify-center rounded-full bg-fill text-fg-muted">
                 <Repeat size={18} />
               </span>
-              <h2 className="font-semibold text-title3 text-fg">No scheduled jobs yet</h2>
+              <h2 className="font-semibold text-title3 text-fg">No loops yet</h2>
               <p className="max-w-sm text-callout text-fg-muted">
-                A scheduled job runs a prompt once or on a schedule, like “every 4 hours, check CI on main”,
-                each run in a fresh thread. Runs are read-only unless you say otherwise.
+                A loop runs a prompt once, on a schedule, or from a webhook—like “every 4 hours, check CI on
+                main”—each run in a fresh thread. Runs are read-only unless you say otherwise.
               </p>
               <Pill prominent onClick={openNew}>
-                New job
+                New loop
               </Pill>
             </div>
           ) : tab === "review" ? (
@@ -664,7 +665,7 @@ export function Loops() {
         loop={editing}
         onOpenChange={setDialogOpen}
         onSaved={() => {
-          toast(editing ? "Job saved" : "Job scheduled", "success");
+          toast(editing ? "Loop saved" : "Loop created", "success");
           void reload();
         }}
       />

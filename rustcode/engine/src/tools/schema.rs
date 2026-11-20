@@ -795,8 +795,9 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
 /// setting-gated tool advertised (`schema_budget_tests` loops every version);
 /// the 25 KiB budget below still keeps a plain root prompt lean. It rose to
 /// 62 KiB when the workflow tools (`run_workflow`, `workflow_status`,
-/// `stop_workflow`) joined every version 2 menu (#3943).
-pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 62 * 1024;
+/// `stop_workflow`) joined every version 2 menu (#3943), and to 64 KiB when
+/// `update_loop` joined v21.
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 64 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
@@ -970,6 +971,7 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::REMOVE_PROJECT,
     crate::orchestration::SCHEDULE_TASK,
     crate::orchestration::CREATE_LOOP,
+    crate::orchestration::UPDATE_LOOP,
     crate::orchestration::LIST_SCHEDULED_TASKS,
     crate::orchestration::DELETE_SCHEDULED_TASK,
     crate::orchestration::RUN_SCHEDULED_TASK_NOW,
@@ -1032,6 +1034,8 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_v13_tool(tool.name) && !policy.include_orchestration_v13_tools)
         || (tool.name == crate::orchestration::COMPACT_SESSION
             && policy.orchestration_version < crate::orchestration::COMPACT_VERSION)
+        || (tool.name == crate::orchestration::UPDATE_LOOP
+            && policy.orchestration_version < crate::orchestration::UPDATE_LOOP_VERSION)
         || (tool.name == crate::orchestration::CREATE_LOOP && !policy.include_orchestration_loops)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
