@@ -1,7 +1,7 @@
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
-import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
+import { modelName, projectName, type SessionSummary } from "../acp/types";
 import { formatBinding } from "../lib/keys";
 import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { appPlatform, fileManagerName, trashName } from "../lib/platform";
@@ -112,6 +112,7 @@ import {
   menuSeparator,
   menuSurface,
   noTextHelpers,
+  Skeleton,
   Spinner,
   surfaceCollisionPadding,
   Tooltip,
@@ -576,6 +577,33 @@ function PullMark({ pull }: { pull: PullRequest }) {
   );
 }
 
+function RowMachine({ hostId, unsynced }: { hostId?: string; unsynced?: boolean }) {
+  const host = useMachines((s) => s.machines.find((m) => m.id === hostId));
+  const local = useLocalIdentity();
+  const platform = appPlatform();
+  if (hostId && !host) {
+    return (
+      <span className="flex min-w-0 items-center gap-1">
+        <Skeleton className="size-3 shrink-0 rounded-xs" />
+        <Skeleton className="h-2.5 w-16 rounded-xs" />
+        <span className="sr-only">Loading machine</span>
+      </span>
+    );
+  }
+  const name = host ? machineName(host) : (local.displayName ?? selfName());
+  const glyph = host
+    ? machineGlyph(host)
+    : (local.icon ?? platformIcon(platform === "mac" ? "macos" : platform));
+  const title = unsynced ? `Runs on ${name}. Your change syncs when ${name} is back.` : `Runs on ${name}`;
+  return (
+    <span className="flex min-w-0 items-center gap-1" title={title}>
+      <DeviceGlyphIcon glyph={glyph} tint={host ? machineTint(host) : local.tint} size={13} />
+      <span className="min-w-0 truncate">{name}</span>
+      {unsynced && <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />}
+    </span>
+  );
+}
+
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
 // Compact: a title and state.
 // Comfortable: the project mark and title, then branch or subfolder and model. Hovering swaps the
@@ -628,13 +656,9 @@ export const ThreadRow = memo(function ThreadRow({
   /** Under its project's heading. The row names its computer either way. */
   grouped?: boolean;
 }) {
-  // The computer a thread runs on, when that is not this one: its row carries the glyph and name,
-  // and the hover card says so. A thread from this computer carries nothing.
   const host = useMachines((s) => s.machines.find((m) => m.id === session.host));
   const machine = host ? machineName(host) : undefined;
 
-  const local = useLocalIdentity();
-  const platform = appPlatform();
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => isRunning(s.threads[session.id]));
   const startedAt = useApp((s) => s.threads[session.id]?.turn?.startedAt);
@@ -737,25 +761,6 @@ export const ThreadRow = memo(function ThreadRow({
   // One weight for every title, whatever the thread is doing: the status word says that.
   const titleTint = "min-w-0 flex-1 truncate text-body font-medium text-fg";
   const fromText = from ? originText(from) : undefined;
-  // The computer it runs on: a remote one by its name, this one by its own.
-  const computer =
-    host && machine
-      ? { glyph: machineGlyph(host), tint: machineTint(host), name: machine }
-      : {
-          glyph: local.icon ?? platformIcon(platform === "mac" ? "macos" : platform),
-          tint: local.tint,
-          name: local.displayName ?? selfName(),
-        };
-  const placeTitle = unsynced
-    ? `Runs on ${computer.name}. Your change syncs when ${computer.name} is back.`
-    : `Runs on ${computer.name}`;
-  const machineLabel = (
-    <span className="flex min-w-0 items-center gap-1" title={placeTitle}>
-      <DeviceGlyphIcon glyph={computer.glyph} tint={computer.tint} size={13} />
-      <span className="min-w-0 truncate">{computer.name}</span>
-      {unsynced && <CloudUpload size={12} className="shrink-0" aria-label="Waiting to sync" />}
-    </span>
-  );
   // Line 2's end: the harness mark with its model, never cut.
   const modelMark = (model || harnessName) && (
     <span className="ml-auto flex shrink-0 items-center gap-1" title={harnessName ?? model}>
@@ -938,7 +943,7 @@ export const ThreadRow = memo(function ThreadRow({
                       swap it out), then its marks and its model against the edge. Its branch and
                       folder are on the hover card. */}
                   <span className={cx(ROW_LINE, ROW_INDENT, "gap-1.5 text-sub text-fg-muted")}>
-                    {machineLabel}
+                    <RowMachine hostId={session.host} unsynced={unsynced} />
                     {details}
                     {modelMark && <span className="flex shrink-0">{modelMark}</span>}
                   </span>
@@ -1069,8 +1074,12 @@ export const PendingRow = memo(function PendingRow({
             </span>
           </span>
           {!compact && (
-            <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-              <span className="min-w-0 truncate">{failure ? failure.text : displayPath(pending.cwd)}</span>
+            <span className={cx(ROW_LINE, ROW_INDENT, "gap-1.5 text-sub text-fg-muted")}>
+              {failure ? (
+                <span className="min-w-0 truncate">{failure.text}</span>
+              ) : (
+                <RowMachine hostId={pending.host} />
+              )}
             </span>
           )}
         </button>
