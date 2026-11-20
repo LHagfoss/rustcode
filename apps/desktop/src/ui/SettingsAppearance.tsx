@@ -280,7 +280,7 @@ export function AppearancePage() {
                 <FolderOpen size={12} /> Open themes folder
               </Action>
             )}
-            <Action quiet size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
+            <Action size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
               <Plus size={12} /> New theme
             </Action>
           </div>

@@ -46,7 +46,7 @@ import { Copy, RefreshCw, Smartphone, WifiOff } from "./icons";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
 import { ServerProblems } from "./ServerProblems";
-import { Action, Chip, Group, Row } from "./settingsKit";
+import { Action, Chip, Group, Row, withCode } from "./settingsKit";
 
 /** The page keeps itself current while it is open: pairing counts down in the engine. */
 const POLL_MS = 2500;
@@ -215,7 +215,7 @@ export function RemoteAccessPage() {
         <Row
           title="Gateway address"
           subtitle="What a phone on this network dials."
-          hint="The terminal's `/remote status` shows the same address."
+          hint={withCode("The terminal's `/remote status` shows the same address.")}
           status={
             gateway?.advertisedAddress ? (
               <span>

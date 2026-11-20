@@ -478,7 +478,7 @@ function ServerLog() {
           const el = e.currentTarget;
           follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
         }}
-        className="selectable m-0 h-[360px] overflow-auto p-3 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all"
+        className="selectable m-0 h-[360px] overflow-auto px-4 py-3 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all"
       >
         {shown.length ? (
           shown.map((line, i) => (

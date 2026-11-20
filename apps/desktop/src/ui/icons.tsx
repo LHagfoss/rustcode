@@ -118,8 +118,6 @@ import {
   QuoteDownIcon,
   RefreshIcon,
   RepeatIcon,
-  RotateClockwiseIcon,
-  RotateLeft01Icon,
   Search01Icon,
   SecurityCheckIcon,
   SecurityWarningIcon,
@@ -417,13 +415,11 @@ export const Play = (props: IconProps) => <Rounded name="Play" icon={PlayIcon} {
 export const Plug = (props: IconProps) => <Rounded name="Plug" icon={Plug01Icon} {...props} />;
 export const Plus = (props: IconProps) => <Rounded name="Plus" icon={PlusSignIcon} {...props} />;
 export const RefreshCw = (props: IconProps) => <Rounded name="RefreshCw" icon={RefreshIcon} {...props} />;
-export const RotateCcw = (props: IconProps) => (
-  <Rounded name="RotateCcw" icon={RotateLeft01Icon} {...props} />
-);
+// Reset, restart, retry and refresh are one glyph, the arrow circle: three near-identical arrows
+// read as three different actions.
+export const RotateCcw = (props: IconProps) => <Rounded name="RotateCcw" icon={RefreshIcon} {...props} />;
 export const Repeat = (props: IconProps) => <Rounded name="Repeat" icon={RepeatIcon} {...props} />;
-export const RotateCw = (props: IconProps) => (
-  <Rounded name="RotateCw" icon={RotateClockwiseIcon} {...props} />
-);
+export const RotateCw = (props: IconProps) => <Rounded name="RotateCw" icon={RefreshIcon} {...props} />;
 export const Rows3 = (props: IconProps) => <Rounded name="Rows3" icon={LayoutThreeRowIcon} {...props} />;
 export const Search = (props: IconProps) => <Rounded name="Search" icon={Search01Icon} {...props} />;
 export const Send = (props: IconProps) => <Rounded name="Send" icon={SentIcon} {...props} />;

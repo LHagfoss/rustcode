@@ -4,7 +4,6 @@
 // this app, install the server from this app), else the command to run, and a
 // Dismiss that hides it until its words change (state/settingsAttention.ts).
 
-import type { ReactNode } from "react";
 import { installServer, linkCliToApp, useMachines } from "../state/machines";
 import {
   dismissProblem,
@@ -15,20 +14,7 @@ import {
 } from "../state/settingsAttention";
 import { Copy, Server, SquareTerminal, TriangleAlert, X } from "./icons";
 import { copyText, Spinner } from "./primitives";
-import { Action } from "./settingsKit";
-
-/** A message with its backticked commands and paths set in code type. */
-function withCode(message: string): ReactNode[] {
-  return message.split(/(`[^`]+`)/g).map((part, i) =>
-    part.startsWith("`") && part.endsWith("`") && part.length > 1 ? (
-      <code key={i} className="rounded bg-fill px-1 font-mono text-caption">
-        {part.slice(1, -1)}
-      </code>
-    ) : (
-      part
-    ),
-  );
-}
+import { Action, withCode } from "./settingsKit";
 
 function Fix({ problem }: { problem: ServerProblem }) {
   const linking = useMachines((s) => s.serverLink.status === "running");

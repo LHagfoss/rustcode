@@ -42,7 +42,6 @@ import {
   openSettingAt,
   openSettings,
   request,
-  restartEngine,
   SETTINGS_DEFAULTS,
   type SettingsSection,
   setChatWidth,
@@ -82,7 +81,7 @@ import {
   TerminalSquare,
   X,
 } from "./icons";
-
+import { RestartToApply } from "./RestartToApply";
 import { AboutPage, AdvancedPage, STATUS_READ_MS } from "./SettingsAbout";
 import { AppearancePage } from "./SettingsAppearance";
 import { OrchestrationPage } from "./SettingsOrchestration";
@@ -112,7 +111,6 @@ const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ defa
 
 import { refreshServerService, useMachines } from "../state/machines";
 import { useSettingsAttention } from "../state/settingsAttention";
-import { isRunning } from "../state/thread";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
@@ -126,6 +124,7 @@ import {
   Slider,
   useEngineData,
   useRowResets,
+  withCode,
 } from "./settingsKit";
 
 const UsagePage = lazy(() => import("./UsagePage").then((m) => ({ default: m.UsagePage })));
@@ -491,7 +490,6 @@ function ChatPage() {
   const smartUiPending = useApp((s) => s.smartUiPending);
   const chatWidth = useApp((s) => s.chatWidth);
   const showToolCalls = useApp((s) => s.showToolCalls);
-  const anyRunning = useApp((s) => Object.values(s.threads).some((t) => isRunning(t)));
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
   const [nextPrompt, setNextPromptState] = useState(nextPromptEnabled);
   return (
@@ -532,13 +530,7 @@ function ChatPage() {
       >
         <Switch label="Show tool calls" checked={showToolCalls} onChange={setShowToolCalls} />
       </Row>
-      {smartUiPending && (
-        <Row title="Restart the server to apply" subtitle="The server reads this setting when it starts.">
-          <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-            Restart Server
-          </Action>
-        </Row>
-      )}
+      {smartUiPending && <RestartToApply />}
       <Row
         title="Link previews"
         reset={
@@ -815,7 +807,7 @@ function ConnectionsPage() {
           <Row title="Not signed in" subtitle="Run: gh auth login" />
         )}
       </Group>
-      <Group title="Model accounts" footer="Sign in or out with `/login` in a thread.">
+      <Group title="Model accounts" footer={withCode("Sign in or out with `/login` in a thread.")}>
         {data.accounts.length ? (
           data.accounts.map((a, i) => (
             <Row key={i} title={a.display || a.provider} subtitle={`${a.provider} · ${a.method}`}>
