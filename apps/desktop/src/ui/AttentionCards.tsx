@@ -658,7 +658,7 @@ export function QuestionCard({
       aria-describedby={textId}
       {...(files ? { [QUESTION_DROP_ATTR]: "" } : {})}
       className={cx(
-        "elevated flex flex-col gap-3 p-4 outline-none rc-in",
+        "rc-composer-card flex flex-col gap-3 px-5 py-4 outline-none rc-in",
         dropping && "outline-2 outline-accent/60 outline-dashed -outline-offset-4",
       )}
       onDragOver={(e) => {
