@@ -103,6 +103,12 @@ pub trait Manager {
     /// `launchd`, `systemd`, `scheduled-task` or `run-key`.
     fn kind(&self) -> &'static str;
     fn state(&self) -> Result<State>;
+    /// The program the installed definition runs, `None` when none is
+    /// installed. Read from the definition's file where there is one, without
+    /// asking the manager's tool, so every `rc` start can afford it.
+    fn installed_program(&self) -> Result<Option<PathBuf>> {
+        Ok(self.state()?.program)
+    }
     /// Whether [`install`](Manager::install) can take `definition`, without
     /// changing anything. Asked before a running server is stopped for the
     /// service, so an install that would fail leaves it alone.
@@ -142,13 +148,15 @@ pub fn manager(name: &str) -> Result<Box<dyn Manager>> {
     }
 }
 
-/// The `rustcode` that a service should run. A Homebrew symlink is kept as it
-/// is, so the service follows the formula's upgrades.
+/// The `rc` that a service should run. A Homebrew symlink is kept as it is,
+/// so the service follows the formula's upgrades instead of naming a versioned
+/// Cellar path that the next `brew cleanup` deletes. Since 1.45.0 the
+/// formula's `rustcode` is the standalone harness, so only `rc` is the engine.
 pub fn executable_path() -> Result<PathBuf> {
     let current = std::env::current_exe()?;
     for candidate in [
-        PathBuf::from("/opt/homebrew/bin/rustcode"),
-        PathBuf::from("/usr/local/bin/rustcode"),
+        PathBuf::from("/opt/homebrew/bin/rc"),
+        PathBuf::from("/usr/local/bin/rc"),
     ] {
         if candidate.canonicalize().ok().as_ref() == Some(&current) {
             return Ok(candidate);

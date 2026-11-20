@@ -663,6 +663,9 @@ pub struct InstallReport {
     pub kind: &'static str,
     pub program: PathBuf,
     pub outcome: Installed,
+    /// The program an older release's definition ran, when this install
+    /// replaced it ([`needs_migration`]).
+    pub migrated_from: Option<PathBuf>,
     /// The server that answered once installed.
     pub live: Option<LiveStatus>,
     /// What the user should still do, in order.
@@ -694,7 +697,22 @@ pub async fn install(force_dev: bool, yes: bool) -> Result<InstallReport> {
             wait_until_gone(pid).await;
         }
     }
+    // A definition an older release wrote runs a program that is gone or is
+    // now the harness: the server it started cannot restart itself onto the
+    // new one, so it is restarted here (`needs_migration`).
+    let migrated_from = manager
+        .installed_program()
+        .ok()
+        .flatten()
+        .filter(|installed| {
+            !same_file(installed, &definition.program)
+                && needs_migration(installed, &definition.program, installed.exists())
+        });
     let outcome = manager.install(&definition)?;
+    let mut restart_handed_off = false;
+    if migrated_from.is_some() && outcome == Installed::ChangedWhileActive {
+        restart_handed_off = restart_migrated().await? == MigratedRestart::WhenIdle;
+    }
     let live = wait_for_server(None).await;
     let mut problems = manager.problems();
     if outcome == Installed::Started && live.is_none() {
@@ -706,10 +724,15 @@ pub async fn install(force_dev: bool, yes: bool) -> Result<InstallReport> {
             ),
         ));
     }
-    if outcome == Installed::ChangedWhileActive {
+    if restart_handed_off {
         problems.push(problem(
             "restart-pending",
-            "The service definition changed. The running server keeps the old one until `rustcode server restart --when-idle`.",
+            "The service definition changed. The running server restarts onto it once no turn is running.",
+        ));
+    } else if outcome == Installed::ChangedWhileActive && migrated_from.is_none() {
+        problems.push(problem(
+            "restart-pending",
+            "The service definition changed. The running server keeps the old one until `rc server restart --when-idle`.",
         ));
     }
     if let Some(live) = &live
@@ -727,6 +750,7 @@ pub async fn install(force_dev: bool, yes: bool) -> Result<InstallReport> {
         kind: manager.kind(),
         program: definition.program,
         outcome,
+        migrated_from,
         live,
         problems,
     })
@@ -1080,6 +1104,173 @@ fn terminate(pid: u32) -> Result<()> {
             super::failure(&output)
         );
         Ok(())
+    }
+}
+
+/// The program's name without a directory or `.exe`, lowercased, from either
+/// path separator, so a Windows definition reads the same on every platform.
+fn program_name(program: &Path) -> String {
+    let text = program.to_string_lossy();
+    let name = text.rsplit(['/', '\\']).next().unwrap_or_default();
+    let lower = name.to_ascii_lowercase();
+    lower
+        .strip_suffix(".exe")
+        .map(str::to_owned)
+        .unwrap_or(lower)
+}
+
+/// Whether a service definition that runs `installed` must be pointed at
+/// `current`, the `rc` running now.
+///
+/// Releases before 1.45.0 named the app's CLI `rustcode` and installed the
+/// service as `rustcode server run --service`. Since 1.45.0 `rustcode` is the
+/// standalone harness, which has no `server` command: once an update, an
+/// installer or Homebrew puts the harness at that path, the service fails at
+/// its next start with `unrecognized subcommand 'server'`, and until then the
+/// old server keeps running from the deleted file, too old for the apps that
+/// talk to it. A definition whose program is gone fails the same way.
+///
+/// Another `rc` that is still there is left alone: several copies (the app's,
+/// Homebrew's, an installer's) are normal, and `rc server install` is how a
+/// person chooses between them.
+pub fn needs_migration(installed: &Path, current: &Path, installed_exists: bool) -> bool {
+    if installed == current || program_name(current) != "rc" {
+        return false;
+    }
+    program_name(installed) == "rustcode" || !installed_exists
+}
+
+/// What [`migrate_legacy`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Migration {
+    /// No service is installed, or it runs a program it may keep.
+    Nothing,
+    /// The service needs migrating, but this `rc` is a development build,
+    /// which a service must not run.
+    DevelopmentBuild { installed: PathBuf },
+    /// The definition now runs this `rc`.
+    Migrated {
+        from: PathBuf,
+        to: PathBuf,
+        outcome: Installed,
+    },
+}
+
+impl Migration {
+    /// A server still runs from the old definition and needs a restart onto
+    /// the new one: it cannot restart itself, its binary is gone.
+    pub fn restart_due(&self) -> bool {
+        matches!(
+            self,
+            Migration::Migrated {
+                outcome: Installed::ChangedWhileActive,
+                ..
+            }
+        )
+    }
+
+    /// One line for a person, when something was found.
+    pub fn describe(&self) -> Option<String> {
+        match self {
+            Migration::Nothing => None,
+            Migration::DevelopmentBuild { installed } => Some(format!(
+                "The RustCode server service runs {}, which is no longer the server CLI; \
+                 this rc is a development build, so it was left as it is. \
+                 Run `rc server install` from an installed rc.",
+                installed.display()
+            )),
+            Migration::Migrated { from, to, .. } => Some(format!(
+                "The RustCode server service ran {}, which is no longer the server CLI \
+                 (since 1.45.0 it is `rc`); it now runs {}.",
+                from.display(),
+                to.display()
+            )),
+        }
+    }
+}
+
+/// Point a service an older release installed at this `rc`
+/// ([`needs_migration`]): write the definition, and start the service when it
+/// is not running. A server still running from the old definition is left for
+/// the caller to restart ([`Migration::restart_due`]).
+pub fn migrate_legacy() -> Result<Migration> {
+    let (manager, definition) = current_manager()?;
+    migrate_with(manager.as_ref(), &definition)
+}
+
+fn migrate_with(manager: &dyn Manager, definition: &Definition) -> Result<Migration> {
+    let Some(installed) = manager.installed_program()? else {
+        return Ok(Migration::Nothing);
+    };
+    if same_file(&installed, &definition.program)
+        || !needs_migration(&installed, &definition.program, installed.exists())
+    {
+        return Ok(Migration::Nothing);
+    }
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from);
+    if super::is_dev_binary(&definition.program, target_dir.as_deref()) {
+        return Ok(Migration::DevelopmentBuild { installed });
+    }
+    manager.check(definition)?;
+    let outcome = manager.install(definition)?;
+    Ok(Migration::Migrated {
+        from: installed,
+        to: definition.program.clone(),
+        outcome,
+    })
+}
+
+/// How the server came onto a migrated definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MigratedRestart {
+    /// Restarted now: the server that answered after it.
+    Restarted(Option<LiveStatus>),
+    /// Turns were running, or the caller runs inside the server: a helper
+    /// restarts it once none is.
+    WhenIdle,
+}
+
+/// Restart a server still running from the definition [`migrate_legacy`]
+/// replaced: now when no turn runs, else by a helper that waits for none to,
+/// so no turn is cut off.
+pub async fn restart_migrated() -> Result<MigratedRestart> {
+    let live = live_status().await;
+    let busy = live.as_ref().is_some_and(|live| live.running_turns > 0);
+    let inside = live.as_ref().is_some_and(|live| runs_inside(live.pid));
+    if busy || inside {
+        spawn_detached_restart(true)?;
+        return Ok(MigratedRestart::WhenIdle);
+    }
+    Ok(MigratedRestart::Restarted(restart().await?))
+}
+
+/// Run at every `rc` start: migrate a service an older release installed
+/// ([`migrate_legacy`]) and hand the restart onto it to a helper that waits
+/// for no turn to run, so the command the user asked for is not held up. It
+/// reads one file on macOS and Linux; nothing it finds stops the command.
+pub fn heal_at_startup() {
+    let migration = match migrate_legacy() {
+        Ok(migration) => migration,
+        Err(error) => {
+            crate::dbg_log!("RustCode server service: could not migrate it: {error:#}");
+            return;
+        }
+    };
+    let Some(line) = migration.describe() else {
+        return;
+    };
+    crate::dbg_log!("RustCode server service: {line}");
+    // Standard error may belong to an app reading this process (`server
+    // connect`): only a person at a terminal is told, and only of a change.
+    if matches!(migration, Migration::Migrated { .. })
+        && std::io::IsTerminal::is_terminal(&std::io::stderr())
+    {
+        eprintln!("rc: {line}");
+    }
+    if migration.restart_due()
+        && let Err(error) = spawn_detached_restart(true)
+    {
+        crate::dbg_log!("RustCode server service: could not restart it: {error:#}");
     }
 }
 
@@ -1642,6 +1833,178 @@ mod tests {
         fn uninstall(&self) -> Result<()> {
             unreachable!()
         }
+    }
+
+    /// A manager with a definition on file, recording what is installed.
+    struct OnFile {
+        program: Option<PathBuf>,
+        outcome: Installed,
+        installed: std::cell::RefCell<Vec<Definition>>,
+    }
+
+    impl OnFile {
+        fn new(program: Option<&str>, outcome: Installed) -> Self {
+            Self {
+                program: program.map(PathBuf::from),
+                outcome,
+                installed: Default::default(),
+            }
+        }
+    }
+
+    impl Manager for OnFile {
+        fn kind(&self) -> &'static str {
+            "fake"
+        }
+        fn state(&self) -> Result<State> {
+            unreachable!("migrating reads the definition's program only")
+        }
+        fn installed_program(&self) -> Result<Option<PathBuf>> {
+            Ok(self.program.clone())
+        }
+        fn install(&self, definition: &Definition) -> Result<Installed> {
+            self.installed.borrow_mut().push(definition.clone());
+            Ok(self.outcome)
+        }
+        fn restart(&self) -> Result<()> {
+            unreachable!("migrating leaves the restart to its caller")
+        }
+        fn uninstall(&self) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn a_service_running_the_pre_rename_rustcode_is_migrated_to_rc() {
+        let rc = Path::new("/home/lucas/.local/bin/rc");
+        // The LagosVPS unit: `rustcode server run --service`, where the harness
+        // now lives.
+        assert!(needs_migration(
+            Path::new("/home/lucas/.local/bin/rustcode"),
+            rc,
+            true
+        ));
+        // Homebrew's `rustcode` is the harness too, and a Cellar path an older
+        // release named is the same.
+        assert!(needs_migration(
+            Path::new("/opt/homebrew/bin/rustcode"),
+            Path::new("/opt/homebrew/bin/rc"),
+            true
+        ));
+        assert!(needs_migration(
+            Path::new("/opt/homebrew/Cellar/rustcode/1.44.0/bin/rustcode"),
+            Path::new("/opt/homebrew/bin/rc"),
+            false
+        ));
+        // The Linux app's engine was `usr/bin/rustcode` before 1.45.0.
+        assert!(needs_migration(
+            Path::new("/home/a/.local/share/rustcode/desktop/usr/bin/rustcode"),
+            rc,
+            false
+        ));
+        // Windows, read on any platform.
+        assert!(needs_migration(
+            Path::new(r"C:\Users\Ada\.rustcode\bin\RustCode.exe"),
+            Path::new(r"C:\Users\Ada\.rustcode\bin\rc.exe"),
+            true
+        ));
+        // A program that is gone fails at the next start, whatever its name.
+        assert!(needs_migration(
+            Path::new("/opt/homebrew/Cellar/rustcode/1.45.0/bin/rc"),
+            Path::new("/opt/homebrew/bin/rc"),
+            false
+        ));
+    }
+
+    #[test]
+    fn a_service_on_rc_or_another_present_rc_is_left_alone() {
+        let rc = Path::new("/home/lucas/.local/bin/rc");
+        assert!(!needs_migration(rc, rc, true));
+        // Several copies of `rc` are normal: `rc server install` chooses.
+        assert!(!needs_migration(
+            Path::new("/Applications/RustCode.app/Contents/MacOS/rc"),
+            rc,
+            true
+        ));
+        // Only `rc` migrates a service: never onto a binary of another name.
+        assert!(!needs_migration(
+            Path::new("/usr/bin/rustcode"),
+            Path::new("/usr/bin/rustcode-desktop"),
+            true
+        ));
+        assert!(!needs_migration(
+            Path::new("/usr/bin/rustcode"),
+            Path::new("/usr/bin/rustcode"),
+            true
+        ));
+    }
+
+    #[test]
+    fn migrating_rewrites_the_definition_to_this_rc_and_says_a_restart_is_due() {
+        let rc = definition(
+            Path::new("/home/lucas/.local/bin/rc"),
+            None,
+            "/c/logs/server.log".into(),
+        );
+        let manager = OnFile::new(
+            Some("/home/lucas/.local/bin/rustcode"),
+            Installed::ChangedWhileActive,
+        );
+        let migration = migrate_with(&manager, &rc).expect("migrated");
+        assert_eq!(
+            migration,
+            Migration::Migrated {
+                from: "/home/lucas/.local/bin/rustcode".into(),
+                to: "/home/lucas/.local/bin/rc".into(),
+                outcome: Installed::ChangedWhileActive,
+            }
+        );
+        assert!(migration.restart_due());
+        let line = migration.describe().expect("described");
+        assert!(line.contains("/home/lucas/.local/bin/rustcode"), "{line}");
+        assert!(line.contains("/home/lucas/.local/bin/rc"), "{line}");
+        let installed = manager.installed.borrow();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].program, Path::new("/home/lucas/.local/bin/rc"));
+        assert_eq!(installed[0].args, ["server", "run", "--service"]);
+
+        // A unit in a restart loop is not active: installing starts it, and
+        // nothing is left to restart.
+        let failed = OnFile::new(Some("/home/lucas/.local/bin/rustcode"), Installed::Started);
+        assert!(!migrate_with(&failed, &rc).expect("migrated").restart_due());
+    }
+
+    #[test]
+    fn migrating_leaves_a_current_or_missing_service_and_never_installs_a_dev_build() {
+        let rc = definition(
+            Path::new("/home/lucas/.local/bin/rc"),
+            None,
+            "/c/logs/server.log".into(),
+        );
+        for manager in [
+            OnFile::new(None, Installed::Started),
+            OnFile::new(Some("/home/lucas/.local/bin/rc"), Installed::Started),
+        ] {
+            assert_eq!(
+                migrate_with(&manager, &rc).expect("read"),
+                Migration::Nothing
+            );
+            assert!(manager.installed.borrow().is_empty());
+        }
+        let dev = Definition {
+            program: "/w/rustcode/target/debug/rc".into(),
+            ..rc
+        };
+        let manager = OnFile::new(Some("/home/lucas/.local/bin/rustcode"), Installed::Started);
+        let migration = migrate_with(&manager, &dev).expect("read");
+        assert_eq!(
+            migration,
+            Migration::DevelopmentBuild {
+                installed: "/home/lucas/.local/bin/rustcode".into()
+            }
+        );
+        assert!(!migration.restart_due());
+        assert!(manager.installed.borrow().is_empty());
     }
 
     #[test]

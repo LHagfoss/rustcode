@@ -23,6 +23,7 @@ pub async fn run(command: &ServerCommands) -> ! {
 async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
     match command {
         ServerCommands::Install { force_dev, yes } => install(*force_dev, *yes).await,
+        ServerCommands::Repair { yes } => repair(*yes).await,
         ServerCommands::Status { json } => {
             let report = service::status().await?;
             if *json {
@@ -59,6 +60,12 @@ async fn install(force_dev: bool, yes: bool) -> anyhow::Result<i32> {
         report.kind,
         report.program.display()
     );
+    if let Some(from) = &report.migrated_from {
+        println!(
+            "It ran {}, which is no longer the server CLI (since 1.45.0 it is `rc`).",
+            from.display()
+        );
+    }
     match &report.live {
         Some(live) => println!("Running: version {}, pid {}.", live.version, live.pid),
         None => println!("The server is not running yet."),
@@ -68,6 +75,58 @@ async fn install(force_dev: bool, yes: bool) -> anyhow::Result<i32> {
         println!("{}: {}", problem.code, problem.message);
     }
     Ok(i32::from(report.live.is_none()))
+}
+
+/// `rc server repair`: what `rc` does at every start, said out loud and with
+/// the restart done here. An installer runs it after it puts `rc` in place.
+async fn repair(yes: bool) -> anyhow::Result<i32> {
+    let migration = service::migrate_legacy()?;
+    match &migration {
+        service::Migration::Nothing => {
+            println!("The RustCode server service needs no repair.");
+            return Ok(0);
+        }
+        service::Migration::DevelopmentBuild { .. } => {
+            if let Some(line) = migration.describe() {
+                println!("{line}");
+            }
+            return Ok(1);
+        }
+        service::Migration::Migrated { .. } => {
+            if let Some(line) = migration.describe() {
+                println!("{line}");
+            }
+        }
+    }
+    if !migration.restart_due() {
+        return Ok(0);
+    }
+    if yes {
+        return match service::restart().await? {
+            Some(live) => {
+                println!("Restarted: version {}, pid {}.", live.version, live.pid);
+                Ok(0)
+            }
+            None => {
+                anyhow::bail!("the server did not answer after the restart; see `rc server logs`")
+            }
+        };
+    }
+    match service::restart_migrated().await? {
+        service::MigratedRestart::Restarted(Some(live)) => {
+            println!("Restarted: version {}, pid {}.", live.version, live.pid);
+            Ok(0)
+        }
+        service::MigratedRestart::Restarted(None) => {
+            anyhow::bail!("the server did not answer after the restart; see `rc server logs`")
+        }
+        service::MigratedRestart::WhenIdle => {
+            println!(
+                "Turns are running: the server restarts onto it once none is. See `rc server logs`."
+            );
+            Ok(0)
+        }
+    }
 }
 
 async fn restart(when_idle: bool, yes: bool, detached: bool) -> anyhow::Result<i32> {

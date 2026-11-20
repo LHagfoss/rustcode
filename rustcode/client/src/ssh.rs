@@ -41,6 +41,9 @@ use tokio::io::AsyncWriteExt;
 /// This computer's RustCode release: what a machine set up over SSH gets.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The release that renamed the app's CLI from `rustcode` to `rc`.
+const RC_RENAME_VERSION: &str = "1.45.0";
+
 /// The installers of this release, sent to the other computer.
 const INSTALL_SH: &str = include_str!("../../../scripts/install.sh");
 const INSTALL_PS1: &str = include_str!("../../../scripts/install.ps1");
@@ -332,6 +335,13 @@ pub fn parse_probe(output: &str) -> Option<Probe> {
                     continue;
                 }
                 if parse_version(version).is_none() {
+                    continue;
+                }
+                // Since 1.45.0 `rustcode` is the standalone harness, which has
+                // no `up` or `server`: only an older one is the app's CLI.
+                // Counting the harness made a machine whose server runs
+                // `rustcode` look up to date, and `rustcode up` then failed.
+                if program_name == "rustcode" && !version_older(version, RC_RENAME_VERSION) {
                     continue;
                 }
                 let newer = installed
@@ -952,7 +962,7 @@ async fn start(target: &SshTarget, os: RemoteOs, program: &str) -> Result<UpRepo
         let said = last_line(&output.stderr);
         let message = if said.contains("unrecognized subcommand") {
             format!(
-                "RustCode on {host} is too old for `rustcode up`. Update it there, or allow installing."
+                "RustCode on {host} is too old for `rc up`. Update it there, or allow installing."
             )
         } else {
             format!(
@@ -1278,6 +1288,30 @@ mod tests {
             })
         );
         assert_eq!(parse_probe("'sh' is not recognized"), None);
+    }
+
+    #[test]
+    fn the_standalone_harness_is_not_mistaken_for_the_app_cli() {
+        // LagosVPS: the harness was written over `rustcode`, and no `rc` was
+        // there. RustCode is missing, so the connect installs `rc`.
+        let harness_only = parse_probe(
+            "os\tLinux\narch\tx86_64\nbin\t/home/lucas/.local/bin/rustcode\trustcode 1.45.0\n",
+        )
+        .unwrap();
+        assert_eq!(harness_only.installed, None);
+        assert!(needs_install(&harness_only));
+        // An `rc` beside it is the one that counts, even when it is older.
+        let both = parse_probe(
+            "os\tLinux\narch\tx86_64\nbin\t/home/a/.rustcode/bin/rc\trc 1.44.9\nbin\t/usr/local/bin/rustcode\trustcode 1.46.0\n",
+        )
+        .unwrap();
+        assert_eq!(both.installed.unwrap().path, "/home/a/.rustcode/bin/rc");
+        // A `rustcode` from before the rename is the app's CLI, to update.
+        let legacy = parse_probe(
+            "os\tLinux\narch\tx86_64\nbin\t/home/a/.local/bin/rustcode\trustcode 1.44.0\n",
+        )
+        .unwrap();
+        assert_eq!(legacy.installed.unwrap().version, "1.44.0");
     }
 
     #[test]

@@ -213,6 +213,13 @@ impl Manager for Systemd {
         })
     }
 
+    fn installed_program(&self) -> Result<Option<PathBuf>> {
+        Ok(std::fs::read_to_string(&self.path)
+            .ok()
+            .as_deref()
+            .and_then(program_of))
+    }
+
     fn install(&self, definition: &Definition) -> Result<Installed> {
         if let Some(parent) = definition.log.parent() {
             std::fs::create_dir_all(parent)
@@ -344,6 +351,23 @@ mod tests {
             Some(PathBuf::from("/usr/bin/rustcode"))
         );
         assert_eq!(program_of("[Service]\nType=simple\n"), None);
+    }
+
+    #[test]
+    fn a_unit_an_older_release_wrote_is_rewritten_to_run_rc() {
+        // What 1.44.0 wrote on LagosVPS.
+        let legacy = "[Unit]\nDescription=RustCode server\n\n[Service]\nType=simple\n\
+ExecStart=/home/lucas/.local/bin/rustcode server run --service\nRestart=on-failure\n";
+        let installed = program_of(legacy).expect("program");
+        assert_eq!(installed, PathBuf::from("/home/lucas/.local/bin/rustcode"));
+        let current = PathBuf::from("/home/lucas/.local/bin/rc");
+        assert!(crate::service::server_service::needs_migration(
+            &installed, &current, true
+        ));
+        let unit = render(&definition("/home/lucas/.local/bin/rc"));
+        assert!(unit.contains("ExecStart=/home/lucas/.local/bin/rc server run --service\n"));
+        assert!(!unit.contains("bin/rustcode"));
+        assert_eq!(program_of(&unit), Some(current));
     }
 
     #[test]

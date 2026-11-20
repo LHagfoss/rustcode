@@ -922,6 +922,26 @@ pub(crate) fn print_rows(headers: &[&str], rows: &[Vec<String>]) {
     }
 }
 
+/// Whether this command checks the server service for a definition an older
+/// release wrote. `up` and `server install`/`repair` do it themselves and
+/// restart in the foreground, `server uninstall` removes it anyway, and on
+/// Windows reading the definition asks Task Scheduler, so only `server`
+/// commands pay for it there.
+fn heals_service_at_start(command: Option<&crate::cli::Commands>) -> bool {
+    use crate::cli::{Commands, ServerCommands};
+    match command {
+        Some(Commands::Up { .. }) => false,
+        Some(Commands::Server {
+            command:
+                ServerCommands::Install { .. }
+                | ServerCommands::Repair { .. }
+                | ServerCommands::Uninstall { .. },
+        }) => false,
+        Some(Commands::Server { .. }) => true,
+        _ => !cfg!(windows),
+    }
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = crate::cli::parse();
     // Started by an external harness on the engine's behalf: it speaks MCP
@@ -983,6 +1003,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // anything reads the config directory (#2599). A failure is reported and
     // retried next start; it never stops startup.
     rustcode::storage_migrations::run_at_startup();
+    // A server service an older release installed runs `rustcode`, which is
+    // the standalone harness since 1.45.0, and fails to start with
+    // "unrecognized subcommand 'server'": point it at this `rc`.
+    if heals_service_at_start(cli_args.command.as_ref()) {
+        rustcode::service::server_service::heal_at_startup();
+    }
 
     if let Some(crate::cli::Commands::Usage {
         since,

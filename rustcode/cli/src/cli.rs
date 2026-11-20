@@ -672,6 +672,13 @@ pub enum ServerCommands {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Point a service an older release installed (`rustcode server run`)
+    /// at this rc, and restart the server onto it
+    Repair {
+        /// Restart even if turns are running, instead of once they finish
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Show whether the server is installed and running, its clients and
     /// running turns, and what is wrong
     Status {

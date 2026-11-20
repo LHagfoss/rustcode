@@ -281,10 +281,11 @@ pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> 
 
     let temp_path = temp_dest.into_temp_path();
 
+    let binary = archived_binary_name(asset_name);
     if asset_name.ends_with(".tar.gz") {
-        extract_from_tar_gz(&bytes, &temp_path)?;
+        extract_from_tar_gz(&bytes, &temp_path, binary)?;
     } else if asset_name.ends_with(".zip") {
-        extract_from_zip(&bytes, &temp_path)?;
+        extract_from_zip(&bytes, &temp_path, binary)?;
     } else {
         return Err(format!("unsupported archive format for {asset_name}"));
     }
@@ -462,7 +463,32 @@ fn checksum_for_asset(manifest: &str, asset_name: &str) -> Result<String, String
     found.ok_or_else(|| format!("SHA256SUMS has no entry for {asset_name}"))
 }
 
-fn extract_from_tar_gz(bytes: &[u8], target: &std::path::Path) -> Result<(), String> {
+/// The program an archive holds: `rc` in an `rc-*` asset (`rc-linux-x86_64`
+/// inside), `rustcode` in the harness's. An `rc` that looked for `rustcode*`
+/// in its own archive found nothing and could not update itself.
+fn archived_binary_name(asset_name: &str) -> &'static str {
+    if asset_name.starts_with("rc-") {
+        "rc"
+    } else {
+        "rustcode"
+    }
+}
+
+/// Whether an archive entry named `filename` is the program `binary`:
+/// `rc`, `rc-linux-x86_64` or `rc-windows-x86_64.exe` for `rc`, and never
+/// `rustcode-*` for it (nor `rc-*` for `rustcode`).
+fn is_archived_binary(filename: &str, binary: &str) -> bool {
+    if filename.ends_with(".tar.gz") || filename.ends_with(".zip") {
+        return false;
+    }
+    let stem = filename.strip_suffix(".exe").unwrap_or(filename);
+    stem == binary
+        || stem
+            .strip_prefix(binary)
+            .is_some_and(|rest| rest.starts_with('-'))
+}
+
+fn extract_from_tar_gz(bytes: &[u8], target: &std::path::Path, binary: &str) -> Result<(), String> {
     use flate2::read::GzDecoder;
     use tar::Archive;
 
@@ -479,7 +505,7 @@ fn extract_from_tar_gz(bytes: &[u8], target: &std::path::Path) -> Result<(), Str
             .map_err(|e| format!("invalid entry path: {e}"))?;
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        if filename.starts_with("rustcode") && !filename.ends_with(".tar.gz") {
+        if is_archived_binary(filename, binary) {
             let mut outfile = std::fs::File::create(target)
                 .map_err(|e| format!("failed to write extracted file {}: {e}", target.display()))?;
             std::io::copy(&mut entry, &mut outfile)
@@ -487,10 +513,12 @@ fn extract_from_tar_gz(bytes: &[u8], target: &std::path::Path) -> Result<(), Str
             return Ok(());
         }
     }
-    Err("could not find rustcode executable inside archive".to_string())
+    Err(format!(
+        "could not find the {binary} executable inside the archive"
+    ))
 }
 
-fn extract_from_zip(bytes: &[u8], target: &std::path::Path) -> Result<(), String> {
+fn extract_from_zip(bytes: &[u8], target: &std::path::Path, binary: &str) -> Result<(), String> {
     use std::io::Cursor;
     use zip::ZipArchive;
 
@@ -510,7 +538,7 @@ fn extract_from_zip(bytes: &[u8], target: &std::path::Path) -> Result<(), String
             .and_then(|n| n.to_str())
             .unwrap_or("");
 
-        if filename.starts_with("rustcode") && filename.ends_with(".exe") {
+        if filename.ends_with(".exe") && is_archived_binary(filename, binary) {
             let mut outfile = std::fs::File::create(target)
                 .map_err(|e| format!("failed to write extracted file {}: {e}", target.display()))?;
             std::io::copy(&mut file, &mut outfile)
@@ -518,7 +546,9 @@ fn extract_from_zip(bytes: &[u8], target: &std::path::Path) -> Result<(), String
             return Ok(());
         }
     }
-    Err("could not find rustcode.exe inside zip archive".to_string())
+    Err(format!(
+        "could not find {binary}.exe inside the zip archive"
+    ))
 }
 
 fn replace_binary(
@@ -708,6 +738,33 @@ mod tests {
             builder.append_data(&mut header, path, *data).unwrap();
         }
         builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn rc_updates_itself_from_the_rc_archive_and_never_from_the_harness() {
+        assert_eq!(archived_binary_name("rc-linux-x86_64.tar.gz"), "rc");
+        assert_eq!(archived_binary_name("rc-windows-x86_64.zip"), "rc");
+        assert_eq!(
+            archived_binary_name("rustcode-linux-x86_64.tar.gz"),
+            "rustcode"
+        );
+        assert!(is_archived_binary("rc-linux-x86_64", "rc"));
+        assert!(is_archived_binary("rc-windows-x86_64.exe", "rc"));
+        assert!(is_archived_binary("rc", "rc"));
+        assert!(!is_archived_binary("rustcode-linux-x86_64", "rc"));
+        assert!(!is_archived_binary("rcfoo", "rc"));
+        assert!(!is_archived_binary("rc-linux-x86_64.tar.gz", "rc"));
+        assert!(is_archived_binary("rustcode-linux-x86_64", "rustcode"));
+        assert!(!is_archived_binary("rc-linux-x86_64", "rustcode"));
+
+        // The release's own layout: one `rc-<target>` file.
+        let archive = web_archive(&[("rc-linux-x86_64", b"rc engine")]);
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("rc");
+        extract_from_tar_gz(&archive, &target, "rc").expect("extracted");
+        assert_eq!(std::fs::read(&target).unwrap(), b"rc engine");
+        let error = extract_from_tar_gz(&archive, &target, "rustcode").unwrap_err();
+        assert!(error.contains("rustcode"), "{error}");
     }
 
     #[test]

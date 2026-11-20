@@ -167,6 +167,13 @@ impl Manager for Launchd {
         })
     }
 
+    fn installed_program(&self) -> Result<Option<PathBuf>> {
+        Ok(std::fs::read_to_string(&self.path)
+            .ok()
+            .as_deref()
+            .and_then(program_of))
+    }
+
     fn install(&self, definition: &Definition) -> Result<Installed> {
         if let Some(parent) = definition.log.parent() {
             std::fs::create_dir_all(parent)
@@ -294,6 +301,21 @@ mod tests {
                 "/Applications/Rust Code & Co.app/Contents/MacOS/rustcode"
             ))
         );
+    }
+
+    #[test]
+    fn an_agent_an_older_release_wrote_is_rewritten_to_run_rc() {
+        let legacy = render(&definition("/opt/homebrew/bin/rustcode"));
+        let installed = program_of(&legacy).expect("program");
+        let current = PathBuf::from("/opt/homebrew/bin/rc");
+        assert!(crate::service::server_service::needs_migration(
+            &installed, &current, true
+        ));
+        let plist = render(&definition("/opt/homebrew/bin/rc"));
+        assert!(
+            plist.contains("<string>/opt/homebrew/bin/rc</string>\n\t\t<string>server</string>")
+        );
+        assert_eq!(program_of(&plist), Some(current));
     }
 
     #[test]

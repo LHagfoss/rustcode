@@ -211,6 +211,59 @@ try {
         $script:PathUpdated = $true
     }
 
+    # Before 1.45.0 the app's CLI was `rustcode`, and `rustcode server install`
+    # registered a logon task (or Run entry) that runs `rustcode.exe server run
+    # --service`. Since 1.45.0 `rustcode.exe` is the standalone harness, which
+    # has no `server` command: such a service fails at its next start, and the
+    # old server keeps running, too old for the apps that talk to it.
+
+    # The programs the RustCode server's logon tasks and Run entries start.
+    function Get-ServerServicePrograms {
+        $Programs = @()
+        try {
+            $Programs += @(Get-ScheduledTask -TaskPath '\RustCode\' -ErrorAction Stop |
+                ForEach-Object { $_.Actions } | ForEach-Object { $_.Execute })
+        } catch {}
+        try {
+            $Run = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction Stop
+            foreach ($Entry in $Run.PSObject.Properties) {
+                if ($Entry.Name -notlike 'RustCode-server*') { continue }
+                $Line = "$($Entry.Value)".Trim()
+                if ($Line.StartsWith('"')) {
+                    $Programs += $Line.Substring(1).Split('"')[0]
+                } else {
+                    $Programs += $Line.Split(' ')[0]
+                }
+            }
+        } catch {}
+        @($Programs | Where-Object { $_ } | ForEach-Object { "$_".Trim('"') })
+    }
+
+    # Whether a server service runs a `rustcode.exe` from before the rename, or
+    # a program that is gone.
+    function Test-LegacyServerService {
+        foreach ($Program in Get-ServerServicePrograms) {
+            if ([System.IO.Path]::GetFileNameWithoutExtension($Program) -eq 'rustcode') { return $true }
+            if (-not (Test-Path -PathType Leaf $Program)) { return $true }
+        }
+        return $false
+    }
+
+    # Point such a service at `rc` and restart it: `rc server repair` rewrites
+    # and reloads it the way `rc server install` writes it.
+    function Repair-ServerService ($Rc) {
+        if (-not (Test-Path -PathType Leaf $Rc) -or -not (Test-LegacyServerService)) { return }
+        Write-Warn "The RustCode server service runs the server CLI from before 1.45.0; pointing it at $Rc..."
+        try {
+            & $Rc server repair
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "Could not repair the RustCode server service; run 'rc server install'."
+            }
+        } catch {
+            Write-Warn "Could not repair the RustCode server service ($_); run 'rc server install'."
+        }
+    }
+
     if ($InstallCli) {
         $ManifestNames = @(Get-ManifestNames)
         $SelectedCliAsset = if ($ManifestNames -ccontains $CliAssetName) { $CliAssetName } else { $HarnessAssetName }
@@ -238,6 +291,7 @@ try {
 
         Write-Success "RustCode CLI $LatestTag successfully installed to $DestExe!"
         Add-InstallDirToPath
+        Repair-ServerService $DestExe
     }
 
     if ($InstallHarness) {
@@ -257,11 +311,27 @@ try {
         }
 
         $DestHarnessExe = Join-Path $InstallDir "rustcode.exe"
-        Write-Info "Installing to $DestHarnessExe..."
-        Copy-Item -Path $HarnessExeFile.FullName -Destination $DestHarnessExe -Force
+        # The harness takes the name the server CLI had before 1.45.0: point a
+        # service still running it at rc first, and never replace it while a
+        # service runs it.
+        Repair-ServerService (Join-Path $InstallDir "rc.exe")
+        $ServiceRunsIt = @(Get-ServerServicePrograms | Where-Object { $_ -ieq $DestHarnessExe }).Count -gt 0
+        $IsServerCli = $false
+        if ($ServiceRunsIt -and (Test-Path -PathType Leaf $DestHarnessExe)) {
+            & $DestHarnessExe server --help *> $null
+            $IsServerCli = ($LASTEXITCODE -eq 0)
+        }
+        if ($IsServerCli) {
+            Write-Warn "NOT installing the standalone harness to $DestHarnessExe."
+            Write-Warn "The RustCode server service still runs $DestHarnessExe, the server CLI from before 1.45.0. The harness has no 'server' command, so the service would fail at its next start."
+            Write-Warn "Install rc (run this installer without -NoCli), or run 'rc server install', then install the harness again."
+        } else {
+            Write-Info "Installing to $DestHarnessExe..."
+            Copy-Item -Path $HarnessExeFile.FullName -Destination $DestHarnessExe -Force
 
-        Write-Success "RustCode standalone harness $LatestTag successfully installed to $DestHarnessExe!"
-        Add-InstallDirToPath
+            Write-Success "RustCode standalone harness $LatestTag successfully installed to $DestHarnessExe!"
+            Add-InstallDirToPath
+        }
     }
 
     if ($InstallApp) {
