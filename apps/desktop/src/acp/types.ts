@@ -631,6 +631,7 @@ export type SessionUpdate =
       summary?: string;
       diffs: FileDiff[];
       output?: string;
+      exitCode?: number;
       /** The interactive view (MCP App) the result embeds, drawn next to its text. */
       app?: McpApp;
       /** The harness's own tool name (`_meta.claudeCode.toolName`), such as `Agent`. */
@@ -642,6 +643,7 @@ export type SessionUpdate =
       kind: "toolCallUpdate";
       id: string;
       title?: string;
+      toolKind?: string;
       /** The call's input when it arrives after the call (Claude Code sends a Bash command so). */
       input?: Json;
       status?: ToolStatus;
@@ -795,6 +797,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         summary: str(meta?.summary) ?? str(obj(update.rawInput)?.summary),
         diffs: parseDiffs(update.content),
         output: toolOutput(update),
+        exitCode: num(obj(update.rawOutput)?.exitCode),
         app: toolCallApp(update.content),
         toolName: str(claudeMeta(update)?.toolName),
         parent: str(claudeMeta(update)?.parentToolUseId),
@@ -804,6 +807,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         kind: "toolCallUpdate",
         id: str(update.toolCallId) ?? "",
         title: str(update.title),
+        toolKind: str(update.kind),
         ...(update.rawInput !== undefined && update.rawInput !== null
           ? { input: update.rawInput as Json }
           : {}),

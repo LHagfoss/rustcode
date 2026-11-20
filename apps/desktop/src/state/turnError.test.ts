@@ -8,6 +8,11 @@ import {
 } from "./turnError";
 
 describe("a failed turn in words", () => {
+  test("keeps Antigravity JSON-RPC diagnostics as supplied", () => {
+    const error = 'Antigravity ACP error (-32603): Request failed — {"status":503,"message":"Unavailable"}';
+    expect(readableTurnError(error, 97)).toBe(error);
+  });
+
   test("a JSON body is read for its message, with the harness and the HTTP status", () => {
     expect(readableTurnError('Codex: {"detail":"Bad Request"}')).toBe(
       "Codex rejected the request (HTTP 400 Bad Request).",

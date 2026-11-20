@@ -225,11 +225,20 @@ impl Transcript {
                 .insert(slot.result, (at.to_rfc3339(), duration));
         }
         // The output, from wherever this harness delivers it.
-        let snapshot = fields
-            .content
-            .as_deref()
-            .map(summary)
-            .filter(|text| !text.is_empty());
+        let failure_reason = fields
+            .raw_output
+            .as_ref()
+            .filter(|_| fields.status == Some(ToolCallStatus::Failed))
+            .and_then(|raw| raw.get("content"))
+            .and_then(Value::as_str)
+            .filter(|reason| !reason.is_empty());
+        let snapshot = failure_reason.map(str::to_owned).or_else(|| {
+            fields
+                .content
+                .as_deref()
+                .map(summary)
+                .filter(|text| !text.is_empty())
+        });
         let terminal_delta = meta.and_then(terminal_output);
         let raw = fields
             .raw_output
@@ -256,7 +265,11 @@ impl Transcript {
             message.content = text;
         }
         let failure_text = (fields.status == Some(ToolCallStatus::Failed))
-            .then(|| fields.content.as_deref().map(summary))
+            .then(|| {
+                failure_reason
+                    .map(str::to_owned)
+                    .or_else(|| fields.content.as_deref().map(summary))
+            })
             .flatten();
         let exit_code = exit_code.or_else(|| failure_text.as_deref().and_then(text_exit_code));
         let record = message.tool_result.get_or_insert_with(Default::default);
@@ -287,8 +300,8 @@ impl Transcript {
             record.pending = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
             record.success = matches!(status, ToolCallStatus::Completed);
         }
-        if let Some(code) = exit_code {
-            record.exit_code = Some(code as i32);
+        if let Some(code) = exit_code.and_then(|code| i32::try_from(code).ok()) {
+            record.exit_code = Some(code);
         }
         match fields.status {
             Some(ToolCallStatus::Failed) => {
@@ -359,6 +372,38 @@ impl Transcript {
                 .find(|message| message.role == "user")
                 .and_then(|message| message.content.trim_start().strip_prefix("/compact"))
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+    }
+
+    pub(crate) fn interrupted_tool_updates(&self) -> Vec<SessionUpdate> {
+        let mut pending = self
+            .tools
+            .iter()
+            .filter(|(_, slot)| {
+                self.history[slot.result]
+                    .tool_result
+                    .as_ref()
+                    .is_some_and(|result| result.pending)
+            })
+            .collect::<Vec<_>>();
+        pending.sort_by_key(|(_, slot)| slot.result);
+        pending
+            .into_iter()
+            .map(|(id, _)| {
+                let meta: Meta = [(
+                    "rustcode".to_owned(),
+                    serde_json::json!({"outputDelta": format!("\n{INTERRUPTED_TOOL_DETAIL}")}),
+                )]
+                .into_iter()
+                .collect();
+                SessionUpdate::ToolCallUpdate(
+                    ToolCallUpdate::new(
+                        id.clone(),
+                        ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+                    )
+                    .meta(meta),
+                )
+            })
+            .collect()
     }
 
     /// The turn ended: record its text, and a call that never finished as
@@ -521,7 +566,7 @@ fn text_exit_code(text: &str) -> Option<i64> {
 
 /// The exit code a structured `rawOutput` carries (`exitCode` or
 /// `exit_code`), for a harness that does not use terminal meta.
-fn raw_exit_code(raw: &Value) -> Option<i64> {
+pub(super) fn raw_exit_code(raw: &Value) -> Option<i64> {
     ["exitCode", "exit_code", "exit"]
         .iter()
         .find_map(|key| raw.get(*key).and_then(Value::as_i64))
@@ -620,6 +665,8 @@ fn append_capped(target: &mut String, text: &str, limit: usize) {
     target.push_str(&text[..room]);
     target.push_str("\n… (truncated)");
 }
+
+const INTERRUPTED_TOOL_DETAIL: &str = "Interrupted before the harness reported completion.";
 
 /// Bounds a finished tool message the way a built-in tool result is bounded:
 /// one message, long output cut to the shared limits with the full text saved
@@ -746,9 +793,19 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
                         .map(ToolCallLocation::new)
                         .collect(),
                 );
-                if !message.content.is_empty() {
+                if let Some(code) = record.exit_code {
+                    call = call.raw_output(serde_json::json!({"exitCode": code}));
+                }
+                let text = if record.error_kind.as_deref() == Some("interrupted") {
+                    format!("{}\n{INTERRUPTED_TOOL_DETAIL}", message.content)
+                        .trim_start()
+                        .to_owned()
+                } else {
+                    message.content.clone()
+                };
+                if !text.is_empty() {
                     call = call.content(vec![ToolCallContent::from(ContentBlock::Text(
-                        TextContent::new(message.content.clone()),
+                        TextContent::new(text),
                     ))]);
                 }
                 if let Some(input) = reference
@@ -781,6 +838,32 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::ToolCallUpdate;
+
+    #[test]
+    fn interruption_closes_only_unfinished_tools_without_an_exit_code() {
+        let mut transcript = Transcript::default();
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("running", "Run checks")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress),
+        ));
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("done", "Read file").status(ToolCallStatus::Completed),
+        ));
+        let updates = serde_json::to_value(transcript.interrupted_tool_updates()).unwrap();
+        assert_eq!(updates.as_array().unwrap().len(), 1);
+        assert_eq!(updates[0]["toolCallId"], "running");
+        assert_eq!(updates[0]["status"], "failed");
+        assert!(updates[0].get("rawOutput").is_none());
+        transcript.end_reply();
+        let updates = serde_json::to_value(replay(&transcript.history, None)).unwrap();
+        assert_eq!(updates[0]["kind"], "execute");
+        assert_eq!(
+            updates[0]["content"][0]["content"]["text"],
+            INTERRUPTED_TOOL_DETAIL
+        );
+        assert!(updates[0].get("rawOutput").is_none());
+    }
 
     #[test]
     fn a_compact_command_turn_is_recognised_while_it_runs() {

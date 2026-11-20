@@ -186,6 +186,7 @@ pub(crate) struct AcpAdapter {
     /// Token totals come from each `session/prompt` answer's `usage`. Off
     /// for a harness whose own log is the source (`harness_usage::log_based`).
     prompt_usage: bool,
+    antigravity: bool,
 }
 
 fn lock(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
@@ -530,11 +531,13 @@ impl AcpAdapter {
         out: OutputSender,
     ) -> Result<Self, String> {
         let state = Arc::new(Mutex::new(State::default()));
+        let antigravity = harness.id == "antigravity";
         tokio::spawn(relay(
             incoming,
             Arc::clone(&peer),
             Arc::clone(&state),
             out.clone(),
+            antigravity,
         ));
         let prompt_usage = !crate::harness_usage::log_based(&harness.id);
         let describe = |error: RpcError| format!("{}: {}", harness.name, error.describe());
@@ -707,6 +710,7 @@ impl AcpAdapter {
             steering,
             out,
             prompt_usage,
+            antigravity,
         };
         // Read before the thread's own choice is applied, so each model's
         // default effort is the harness's and not this thread's.
@@ -777,15 +781,20 @@ impl AcpAdapter {
                 "session/prompt",
                 json!({"sessionId": self.native_id, "prompt": prompt}),
             )
-            .await
-            .map_err(|error| error.describe())?;
+            .await;
         // The turn's last updates arrived before its answer; pass them on
         // first.
         self.peer.barrier().await;
+        lock(&self.state).echo_pending.clear();
+        let answer = answer.map_err(|error| {
+            if self.antigravity {
+                prompt_error(&error)
+            } else {
+                error.describe()
+            }
+        })?;
         let usage = {
             let mut state = lock(&self.state);
-            // A half-read echo does not outlive the turn that carried it.
-            state.echo_pending.clear();
             self.prompt_usage
                 .then(|| fold_prompt_usage(&mut state, &answer))
                 .flatten()
@@ -1121,6 +1130,89 @@ impl AcpAdapter {
     }
 }
 
+const FAILURE_DETAIL_BYTES: usize = 2048;
+
+fn failure_detail(text: &str) -> String {
+    let text = crate::network::output::sanitize_tool_output(text);
+    let text = crate::data_store::redact::redact_bearer(&text);
+    let text = crate::orchestration::secret::redact(&text).unwrap_or(text);
+    if crate::network::output::literal_credential_rule(&text).is_some() {
+        return "[REDACTED]".to_owned();
+    }
+    crate::data_store::redact::clip_text(text.trim(), FAILURE_DETAIL_BYTES)
+}
+
+fn prompt_error(error: &RpcError) -> String {
+    let code = error.code;
+    let message = failure_detail(&error.message);
+    match error.data.as_ref().filter(|data| !data.is_null()) {
+        Some(data) => {
+            let data = crate::data_store::redact::redact(data);
+            let detail = failure_detail(data.as_str().unwrap_or(&data.to_string()));
+            format!("Antigravity ACP error ({code}): {message} — {detail}")
+        }
+        None => format!("Antigravity ACP error ({code}): {message}"),
+    }
+}
+
+/// Project a failed call's output onto the existing activity card fields.
+fn normalize_tool_failure(update: &mut Value) {
+    if !matches!(
+        update["sessionUpdate"].as_str(),
+        Some("tool_call" | "tool_call_update")
+    ) || update["status"] != "failed"
+    {
+        return;
+    }
+    let raw = &update["rawOutput"];
+    let exit_code = update
+        .pointer("/_meta/terminal_exit/exit_code")
+        .and_then(Value::as_i64)
+        .or_else(|| super::transcript::raw_exit_code(raw));
+    let reason = ["reason", "error", "message", "stderr", "content", "output"]
+        .iter()
+        .find_map(|key| {
+            let value = &raw[*key];
+            value
+                .as_str()
+                .or_else(|| value["message"].as_str())
+                .filter(|text| !text.trim().is_empty())
+        })
+        .or_else(|| raw.as_str().filter(|text| !text.trim().is_empty()))
+        .map(failure_detail);
+    if let Some(blocks) = update.get_mut("content").and_then(Value::as_array_mut) {
+        let mut remaining = FAILURE_DETAIL_BYTES;
+        for block in blocks {
+            if let Some(text) = block.pointer_mut("/content/text")
+                && let Some(value) = text.as_str()
+            {
+                let safe = failure_detail(value);
+                let clipped = crate::data_store::redact::clip_text(&safe, remaining);
+                remaining -= clipped.len();
+                *text = Value::String(clipped);
+            }
+        }
+    }
+    let mut output = serde_json::Map::new();
+    if let Some(reason) = reason {
+        output.insert("content".to_owned(), Value::String(reason));
+    }
+    if let Some(code) = exit_code {
+        output.insert("exitCode".to_owned(), json!(code));
+    }
+    if let Some(duration) = update["rawOutput"]["durationMs"].as_u64() {
+        output.insert("durationMs".to_owned(), json!(duration));
+    }
+    if output.is_empty() {
+        update
+            .as_object_mut()
+            .expect("tool update is an object")
+            .remove("rawOutput");
+    } else {
+        update["rawOutput"] = Value::Object(output);
+    }
+}
+
 /// Handle what the child sends: updates go out, permission requests are
 /// asked, anything else is refused.
 async fn relay(
@@ -1128,6 +1220,7 @@ async fn relay(
     peer: Arc<RpcPeer>,
     state: Arc<Mutex<State>>,
     out: OutputSender,
+    antigravity: bool,
 ) {
     while let Some(message) = incoming.recv().await {
         match message {
@@ -1138,7 +1231,7 @@ async fn relay(
                     let _ = out.send(Output::Heartbeat);
                     continue;
                 }
-                let Some(update) = params.get("update").cloned() else {
+                let Some(mut update) = params.get("update").cloned() else {
                     let _ = out.send(Output::Heartbeat);
                     continue;
                 };
@@ -1166,6 +1259,9 @@ async fn relay(
                 {
                     let _ = out.send(Output::Heartbeat);
                     continue;
+                }
+                if antigravity {
+                    normalize_tool_failure(&mut update);
                 }
                 let update = match serde_json::from_value::<SessionUpdate>(update) {
                     Ok(update) => update,

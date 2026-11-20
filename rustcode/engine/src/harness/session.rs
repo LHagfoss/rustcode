@@ -1636,10 +1636,21 @@ impl ExternalSession {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = None;
         self.flush().await;
-        self.transcript
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .end_reply();
+        {
+            let mut transcript = self
+                .transcript
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if self.harness.id == "antigravity" {
+                for update in transcript.interrupted_tool_updates() {
+                    let _ = self.out.send(Output::Marker(update));
+                }
+            }
+            transcript.end_reply();
+        }
+        if self.harness.id == "antigravity" {
+            self.flush().await;
+        }
         self.save_history();
         self.record_turn_in_data_store(started_at, history_from, usage_revision, &result)
             .await;

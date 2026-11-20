@@ -168,6 +168,19 @@ describe("ACP types", () => {
     expect(denied({ by: "Claude Code" })).toMatchObject({ kind: "toolCallUpdate", denial: undefined });
   });
 
+  test("replayed failed tool calls keep optional diagnostics", () => {
+    const call = { sessionUpdate: "tool_call", toolCallId: "c", kind: "execute", status: "failed" };
+    const parse = (rawOutput?: { content: string; exitCode: number }) =>
+      parseSessionUpdate({ sessionId: "s", update: { ...call, ...(rawOutput ? { rawOutput } : {}) } });
+    expect(parse({ content: "Permission denied", exitCode: 13 })).toMatchObject({
+      kind: "toolCall",
+      toolKind: "execute",
+      output: "Permission denied",
+      exitCode: 13,
+    });
+    expect(parse()).toMatchObject({ kind: "toolCall", output: undefined, exitCode: undefined });
+  });
+
   test("parses tool call updates with output delta, diff and exit code", () => {
     const update = parseSessionUpdate({
       sessionId: "s",

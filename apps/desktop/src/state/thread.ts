@@ -692,6 +692,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         summary: update.summary,
         diffs: update.diffs,
         output: update.output,
+        exitCode: update.exitCode,
         app: update.app,
         toolName: update.toolName,
         parent: update.parent,
@@ -705,6 +706,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           ...before,
           ...tool,
           toolName: tool.toolName ?? before.toolName,
+          exitCode: tool.exitCode ?? before.exitCode,
           app: tool.app ?? before.app,
           parent: tool.parent ?? before.parent,
           startedAt: before.startedAt,
@@ -733,6 +735,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         parent: item.parent ?? update.parent,
         endedAt: item.endedAt ?? (ended ? now : undefined),
         title: update.title ?? item.title,
+        toolKind: update.toolKind ?? item.toolKind,
         input: update.input ?? item.input,
         status: background
           ? "in_progress"
