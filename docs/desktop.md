@@ -89,7 +89,8 @@ transcript of each thread opened in the last 30 days, capped in size; never a
 token), and a live read replaces it when the machine is back. The same reads also go to this
 computer's disk, through its own engine (`state/machineMirror.ts`, `docs/data-store.md`
 › Thread mirror): every thread a machine listed and the last transcript read
-from each, without the web view's caps, so a wiped web view, a reinstall or a
+from each, filled in for every thread while the machine is connected, not only
+the ones opened here (`state/mirrorBackfill.ts`), without the web view's caps, so a wiped web view, a reinstall or a
 machine that is wiped or removed does not take its threads with it. A machine that is away
 draws the mirrored threads its 200 cached rows lack, and a thread whose transcript
 the web view no longer holds opens from the mirror. It is read-only, never deleted

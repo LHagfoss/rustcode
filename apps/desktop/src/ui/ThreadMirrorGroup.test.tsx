@@ -14,8 +14,13 @@ describe("what the thread copy says it holds", () => {
       a: { threads: 3, transcripts: 1, bytes: 1 },
       b: { threads: 1, transcripts: 0, bytes: 0 },
     };
-    expect(mirrorLine(status(true, hosts))).toBe("Holding 4 threads from 2 machines.");
-    expect(mirrorLine(status(true, { a: { threads: 1, transcripts: 0, bytes: 0 } }))).toBe(
+    expect(mirrorLine(status(true, hosts))).toBe(
+      "Holding 4 threads from 2 machines, 1 of them with its conversation so far.",
+    );
+    expect(mirrorLine(status(true, { a: { threads: 2, transcripts: 2, bytes: 9 } }))).toBe(
+      "Holding 2 threads from 1 machine.",
+    );
+    expect(mirrorLine(status(true, { a: { threads: 1, transcripts: 1, bytes: 1 } }))).toBe(
       "Holding 1 thread from 1 machine.",
     );
   });
@@ -24,7 +29,7 @@ describe("what the thread copy says it holds", () => {
     expect(mirrorLine(status(true, {}))).toBe("Nothing copied yet.");
     expect(mirrorLine(status(false, {}))).toBe("Off. Nothing is copied.");
     expect(mirrorLine(status(false, { a: { threads: 2, transcripts: 0, bytes: 0 } }))).toBe(
-      "Off. Still holding 2 threads from 1 machine; they stay readable.",
+      "Off. Still holding 2 threads from 1 machine, none with its conversation yet; they stay readable.",
     );
   });
 

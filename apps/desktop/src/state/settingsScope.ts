@@ -414,6 +414,9 @@ export function hydrateLocalServerSettings(): Promise<void> {
     if (!connection) return;
     // Machines that follow this computer's settings get them as each one connects.
     void import("./settingsFollow").then((follow) => follow.startSettingsFollow());
+    // Each machine's threads are copied here in full while it is connected (docs/data-store.md ›
+    // Thread mirror).
+    void import("./mirrorBackfill").then((backfill) => backfill.startMirrorBackfill());
     try {
       await seedLocalSettings(LOCAL_HOST);
       const answer = await machineRequest(LOCAL_HOST, "_rustcode/settings/get", {}, 10_000);

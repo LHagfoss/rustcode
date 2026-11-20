@@ -124,6 +124,9 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/session/status",
     "_rustcode/session/snooze",
     "_rustcode/session/repair",
+    // The transcript a load would replay, read without opening the thread:
+    // what keeps a complete copy of this machine's threads on the other.
+    "_rustcode/session/replay",
     "_rustcode/harnesses",
     // A harness's models, listed by starting it briefly when it never ran
     // here: a freshly set up machine has learned none, and its model picker
@@ -461,6 +464,7 @@ mod tests {
                 "_rustcode/session/status",
                 "_rustcode/session/snooze",
                 "_rustcode/session/repair",
+                "_rustcode/session/replay",
                 "_rustcode/harnesses",
                 "_rustcode/harnesses/models",
                 "_rustcode/harnesses/default",
@@ -500,6 +504,7 @@ mod tests {
             "_rustcode/session/status",
             "_rustcode/session/snooze",
             "_rustcode/session/repair",
+            "_rustcode/session/replay",
             "session/load",
             "session/new",
             "session/prompt",

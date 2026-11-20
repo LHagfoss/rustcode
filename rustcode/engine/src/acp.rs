@@ -30,6 +30,7 @@ mod session;
 mod session_load;
 pub(crate) mod session_move;
 mod session_repair;
+mod session_replay;
 pub(crate) mod settings;
 pub(crate) mod steer;
 mod streaming;
@@ -1296,6 +1297,15 @@ async fn serve_connection(
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder.respond_with_error(error),
                     }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: session_replay::ReplaySessionRequest, responder, _connection| {
+                match session_replay::replay_session(&request.session_id) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder.respond_with_error(error),
                 }
             },
             agent_client_protocol::on_receive_request!(),
