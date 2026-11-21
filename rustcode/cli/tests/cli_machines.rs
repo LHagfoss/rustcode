@@ -51,7 +51,6 @@ impl Sandbox {
             .env("RUSTCODE_CONFIG_DIR", self.config_dir())
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("home"))
-            // A private token store: never the developer's keychain.
             .env("RUSTCODE_MACHINE_TOKEN_STORE", "file")
             .env("RUSTCODE_SHELL_PROBE", "1")
             .env("NO_COLOR", "1")
@@ -130,7 +129,6 @@ fn machines_list_says_how_to_add_the_first_one() {
     let text = stdout(&output);
     assert!(text.contains("No machines saved"), "{text}");
     assert!(text.contains("rc machines add"), "{text}");
-    // JSON is a list either way, so a script can read it.
     let output = sandbox.run(&["machines", "list", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output).trim(), "[]");
@@ -139,8 +137,6 @@ fn machines_list_says_how_to_add_the_first_one() {
 #[test]
 fn machines_list_shows_columns_and_reports_an_unreachable_machine() {
     let sandbox = Sandbox::new("offline");
-    // Nothing listens on port 1 of the loopback address: the check must say
-    // offline instead of hanging or failing the command.
     write_machine(
         &sandbox.config_dir(),
         "Studio",
@@ -151,12 +147,10 @@ fn machines_list_shows_columns_and_reports_an_unreachable_machine() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(text.contains("NAME") && text.contains("STATE"), "{text}");
-    // The file says `main: true`, as one written before every machine was a peer does.
     assert!(text.contains("Studio"), "{text}");
     assert!(!text.contains("(main)"), "{text}");
     assert!(text.contains("127.0.0.1:1"), "{text}");
     assert!(text.contains("not paired"), "{text}");
-    // A machine with no token is not dialled at all.
     let output = sandbox.run(&["machines", "list", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let machines: serde_json::Value = serde_json::from_str(stdout(&output).trim()).unwrap();
@@ -189,7 +183,6 @@ fn machines_remove_forgets_a_machine_by_name_or_prefix() {
         serde_json::from_slice(&std::fs::read(sandbox.config_dir().join("machines.json")).unwrap())
             .unwrap();
     assert_eq!(stored["machines"], serde_json::json!([]));
-    // Removing it again fails, and says what is saved.
     let output = sandbox.run(&["machines", "remove", "Studio"]);
     assert!(!output.status.success());
     assert!(
@@ -209,7 +202,6 @@ fn machines_add_needs_an_address_or_discovery() {
         "{}",
         stderr(&output)
     );
-    // A refused scheme fails before anything is dialled or saved.
     let output = sandbox.run(&["machines", "add", "ftp://studio.local:17879"]);
     assert!(!output.status.success());
     assert!(
@@ -232,8 +224,6 @@ fn machines_add_refuses_a_public_address() {
     assert!(text.contains("203.0.113.9"), "{text}");
     assert!(text.contains("public address"), "{text}");
     assert!(!sandbox.config_dir().join("machines.json").exists());
-    // A saved machine whose only route is public says the same instead of
-    // handing over its token.
     write_machine(
         &sandbox.config_dir(),
         "Studio",
@@ -261,7 +251,6 @@ fn machines_add_refuses_a_code_that_is_not_eight_digits() {
         assert!(text.contains("exactly 8 digits"), "{code}: {text}");
         assert!(!text.contains("could not ask"), "{code}: {text}");
     }
-    // The separators a person might type are ignored.
     let output = sandbox.run(&["machines", "add", "127.0.0.1:1", "--code", "4821-9034"]);
     assert!(!output.status.success());
     assert!(
@@ -278,8 +267,6 @@ fn machines_add_reads_a_code_from_standard_input() {
     let sandbox = Sandbox::new("stdin");
     let output = sandbox.run_with_stdin(&["machines", "add", "127.0.0.1:1"], Some("4821-9034\n"));
     assert!(!output.status.success());
-    // Port 1 refuses the connection: the failure names the address, and no
-    // machine is saved from a request that never reached anyone.
     assert!(
         stderr(&output).contains("127.0.0.1:1"),
         "{}",

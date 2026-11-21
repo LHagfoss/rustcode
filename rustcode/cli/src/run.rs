@@ -3,8 +3,6 @@
 //! machines, remote gateway, usage/data queries, and MCP bridges.
 
 fn hydrate_shell_provider_keys() {
-    // Cheap path first: read the workspace config to learn which env names
-    // the user's profiles actually reference.
     let configured: Vec<String> = std::env::current_dir()
         .ok()
         .map(|workspace| rustcode::config::load_config_for_workspace(&workspace).2)
@@ -195,9 +193,6 @@ async fn run_remote_command(
             println!("{}", remote::format_status(Some(&status)));
         }
         RemoteCommands::SessionOwner { session_id } => {
-            // Detached mobile sessions for the built-in harness live in the
-            // standalone `rustcode` harness binary so `rc` carries no TUI or
-            // interactive runtime dependencies.
             let harness_bin = resolve_harness_binary();
             let status = tokio::process::Command::new(&harness_bin)
                 .args(["remote", "session-owner", "--session-id", session_id])
@@ -219,8 +214,6 @@ async fn run_remote_command(
             advertise,
             prefer_interface,
         } => {
-            // A machine that joined a hub keeps its link from here: the one
-            // gateway process a machine runs (#3957).
             let stop = tokio_util::sync::CancellationToken::new();
             tokio::spawn(crate::hub_member::run(config_dir.clone(), stop.clone()));
             let _stop_link = stop.drop_guard();
@@ -571,7 +564,6 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
         None => None,
     };
     rustcode::data_store::ensure_ready()?;
-    // One aggregation, shared with the engine's `thread_usage` tool.
     let answer =
         rustcode::data_store::usage(since.as_deref(), rustcode::data_store::GroupBy::Model, None)?;
     let rows = answer
@@ -667,7 +659,6 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
         .iter()
         .map(|row| count(row, "turns_without_tokens"))
         .sum();
-    // A column no row reported stays blank in the total, not 0.
     let total = |key: &str| {
         let values: Vec<i64> = rows
             .iter()
@@ -687,8 +678,6 @@ fn run_usage_command(since: Option<&str>, json: bool) -> Result<(), String> {
     let missing_cached = missing_column("turns_without_cached_tokens");
     let missing_cache_write = missing_column("turns_without_cache_write_tokens");
     let missing_cost = missing_column("turns_without_cost");
-    // A total is partial when some turns did not report the column: mark it,
-    // as the page does, and explain the marks once under the table.
     let total_cell = |value: Option<i64>, missing: i64| match value {
         Some(value) if missing > 0 && turns > 0 => format!("{}*", thousands(value)),
         Some(value) => thousands(value),
@@ -951,8 +940,6 @@ fn heals_service_at_start(command: Option<&crate::cli::Commands>) -> bool {
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = crate::cli::parse();
-    // Started by an external harness on the engine's behalf: it speaks MCP
-    // on stdio and must not run migrations or print anything else.
     if let Some(crate::cli::Commands::McpOrchestrator {
         session,
         socket,
@@ -971,8 +958,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    // Started by another app (Claude Desktop, Cursor, Codex) from the snippet
-    // Settings › Outside agents gives: MCP on stdio, nothing else on stdout.
     if let Some(crate::cli::Commands::McpConnect { token }) = cli_args.command.as_ref() {
         let token = token
             .clone()
@@ -984,8 +969,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    // A `PreToolUse` hook of Claude Code: the hook call on stdin, the refusal
-    // (if any) on stdout. It never fails the call itself.
     if matches!(
         cli_args.command.as_ref(),
         Some(crate::cli::Commands::GuardCommand)
@@ -1006,13 +989,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Apply user-data migrations a newer release introduced, once, before
-    // anything reads the config directory (#2599). A failure is reported and
-    // retried next start; it never stops startup.
     rustcode::storage_migrations::run_at_startup();
-    // A server service an older release installed runs `rustcode`, which is
-    // the standalone harness since 1.45.0, and fails to start with
-    // "unrecognized subcommand 'server'": point it at this `rc`.
     if heals_service_at_start(cli_args.command.as_ref()) {
         rustcode::service::server_service::heal_at_startup();
     }
@@ -1108,10 +1085,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         command: crate::cli::ServerCommands::Connect,
     }) = cli_args.command.as_ref()
     {
-        // A relay only: the server it reaches, or starts, does the rest.
         let result = rustcode::server::connect(std::env::current_exe()?).await;
-        // Standard input is read on a blocking thread that would hold the
-        // runtime open: leave now that the relay is over.
         let code = match result {
             Ok(()) => 0,
             Err(error) => {
@@ -1132,18 +1106,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         rustcode::serve::run(bind, *port, token.clone(), *allow_remote, workspace).await?;
         return Ok(());
     }
-    // Rotate a debug log left by a previous process before startup emits new
-    // diagnostics. The logger also checks the cap before each append so long-
-    // lived processes remain bounded.
     rustcode::logger::rotate_if_oversized();
-    // Issue #1226: silent mid-stream hangs left zero evidence. A panic hook
-    // preserves the message + location in debug.log even when the process
-    // dies without a crash report.
     rustcode::logger::install_panic_hook();
-    // Provider keys are often exported in `~/.zshrc` (interactive-only) and
-    // invisible to GUI/systemd/IDE launches. Hydrate missing keys from the
-    // login shell once at startup so profiles, MCP servers, and tool shells
-    // all see the same values the user's terminal sees.
     hydrate_shell_provider_keys();
 
     if cli_args.init || matches!(cli_args.command.as_ref(), Some(crate::cli::Commands::Init)) {
@@ -1217,9 +1181,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
             }
-            // `rc sessions` with no subcommand lists sessions, scoped
-            // to the current workspace by default (`list --all` shows every
-            // workspace with its path per entry).
             Some(crate::cli::SessionCommands::List { all }) => {
                 run_sessions_list(*all || cli_args.all);
             }
@@ -1420,7 +1381,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             crate::cli::SyncAction::PullThenPush => {
-                // Default behavior for `rc config sync` (pull then push)
                 println!(
                     "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
                 );
@@ -1484,8 +1444,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         command: crate::cli::ServerCommands::Run { service },
     }) = cli_args.command.as_ref()
     {
-        // Started by launchd, systemd or `server connect` with a bare
-        // environment, as the app's engine is.
         rustcode::shell_env::hydrate_all_missing();
         match rustcode::server::run(cli_args.yolo, *service).await? {
             rustcode::server::RunOutcome::Stopped => rustcode::config::flush_history(),
@@ -1502,16 +1460,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let acp_subcommand = matches!(cli_args.command.as_ref(), Some(crate::cli::Commands::Acp));
     if cli_args.acp || acp_subcommand {
-        // The macOS app launches the engine with the bare launchd environment;
-        // give MCP servers and tool shells everything the login shell exports.
         rustcode::shell_env::hydrate_all_missing();
         rustcode::acp::run_acp(cli_args.yolo).await?;
         rustcode::config::flush_history();
         return Ok(());
     }
 
-    // `rc` is the orchestrator CLI (the interactive TUI lives in the standalone
-    // `rustcode` harness binary). Print grouped help when invoked with no command.
     crate::cli::command().print_help()?;
     println!();
     Ok(())
@@ -1618,8 +1572,6 @@ fn run_sessions_set_status(ids: &[String], change: ThreadStatusChange) {
         if matches!(change, ThreadStatusChange::Unsettle)
             && rustcode::config::session_status(&id) == "review"
         {
-            // Settling is the way out of review; un-settling is not that, so a
-            // mark the user has not looked at yet stays.
             println!("kept {id} review");
             continue;
         }
@@ -1646,10 +1598,6 @@ pub(crate) fn resolve_thread_id(raw: &str, saved: &[String]) -> Result<String, S
     if let Some(id) = saved.iter().find(|id| id.as_str() == wanted) {
         return Ok(id.clone());
     }
-    // A thread the store has a folder for but no transcript yet (settled right
-    // after it was started, or one whose history was lost) is still that
-    // thread: an exact id may name it, as `threads path` does. A prefix may
-    // not, since that would be guessing at a directory that no list vouches for.
     if rustcode::config::get_active_session_dir(wanted).is_some_and(|dir| dir.is_dir()) {
         return Ok(wanted.to_owned());
     }
@@ -1680,8 +1628,6 @@ pub(crate) fn resolve_thread_id(raw: &str, saved: &[String]) -> Result<String, S
 
 fn run_sessions_list(show_all: bool) {
     const LIMIT: usize = 50;
-    // `--all` lists every workspace; the default scope is the store's shared
-    // parent/child rule against the current directory.
     let scope = if show_all {
         rustcode::config::SessionScope::All
     } else {
@@ -1773,7 +1719,6 @@ mod tests {
             resolve_thread_id("018f0000", &threads),
             Ok("018f0000-aaaa".to_owned())
         );
-        // A prefix is trimmed before it is matched.
         assert_eq!(
             resolve_thread_id(" 018fffff-bb ", &threads),
             Ok("018fffff-bbbb".to_owned())

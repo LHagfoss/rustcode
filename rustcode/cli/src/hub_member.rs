@@ -34,9 +34,6 @@ const LAST_RETRY: Duration = Duration::from_secs(300);
 pub async fn run(config_dir: PathBuf, stop: CancellationToken) {
     let mut retry = FIRST_RETRY;
     loop {
-        // Only the gateway that holds this machine's owner lock links, so a
-        // second `remote serve` that is about to give up never replaces the
-        // link the running one keeps.
         let ours = RemoteLifecycle::new(&config_dir).running_pid() == Some(std::process::id());
         let wait = match HubConfig::load(&config_dir).member {
             None => CHECK,
@@ -141,8 +138,6 @@ where
                         });
                     }
                     Ok(HubFrame::HubJoined) => {}
-                    // A revocation or a hub that stopped being one ends the
-                    // link with the gateway's error frame.
                     Err(_) => {
                         if let Ok(HandshakeResponse::Error { message, .. }) =
                             serde_json::from_value::<HandshakeResponse>(frame)
@@ -317,7 +312,6 @@ mod tests {
         };
         drop(tokens);
 
-        // Forwarding: the hub's call runs on the member and its answer returns.
         let stop = CancellationToken::new();
         let first = link(stop.clone());
         let joined = members(&lifecycle, true).await;
@@ -337,7 +331,6 @@ mod tests {
         );
         assert_eq!(seen.recv().await.unwrap().0, "list_sessions");
 
-        // An offline target: a read fails at once, a start waits on the hub.
         stop.cancel();
         first.await.unwrap().unwrap();
         members(&lifecycle, false).await;
@@ -365,7 +358,6 @@ mod tests {
         };
         assert!(success && content.contains("\"queued\":true"), "{content}");
 
-        // The next link delivers it.
         let second = link(CancellationToken::new());
         let (tool, arguments) = tokio::time::timeout(WAIT, seen.recv())
             .await
@@ -374,7 +366,6 @@ mod tests {
         assert_eq!(tool, rustcode_start_session());
         assert_eq!(arguments["prompt"], "go");
 
-        // Hub loss: the link ends with an error, which `run` retries.
         shutdown.cancel();
         let ended = tokio::time::timeout(WAIT, second).await.unwrap().unwrap();
         assert!(ended.is_err());

@@ -61,14 +61,10 @@ impl Sandbox {
         let mut command = Command::new(BINARY);
         command
             .args(args)
-            // The sandbox root doubles as the workspace so project config
-            // discovery and workspace-scoped listings stay off the real repo.
             .current_dir(&self.root)
             .env("RUSTCODE_CONFIG_DIR", self.config_dir())
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("home"))
-            // Mark the process as a shell-probe child so startup skips
-            // spawning the developer's login shell and parsing their dotfiles.
             .env("RUSTCODE_SHELL_PROBE", "1")
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())
@@ -283,7 +279,6 @@ fn unsettle_restores_active_and_review_is_its_own_status() {
     );
     assert_eq!(sandbox.stored_status(TITLE_ONE).as_deref(), Some("review"));
 
-    // Settling a review thread keeps the one stored status the model has.
     assert!(
         sandbox
             .run(&["threads", "settle", TITLE_ONE])
@@ -313,7 +308,6 @@ fn unsettle_leaves_a_review_thread_in_review() {
     assert_eq!(lines(&output), [format!("kept {TITLE_ONE} review")]);
     assert_eq!(sandbox.stored_status(TITLE_ONE).as_deref(), Some("review"));
 
-    // Settled is the state it does move.
     assert!(
         sandbox
             .run(&["threads", "settle", TITLE_ONE])
@@ -347,7 +341,6 @@ fn an_exact_id_settles_a_thread_whose_folder_has_no_transcript_yet() {
     );
     assert_eq!(sandbox.stored_status(OTHER).as_deref(), Some("done"));
 
-    // Only a full id reaches it: a prefix would be guessing at a folder no list vouches for.
     let output = sandbox.run(&["threads", "settle", "018fff"]);
     assert!(!output.status.success(), "a prefix is not a folder lookup");
 }
