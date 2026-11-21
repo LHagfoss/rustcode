@@ -74,15 +74,17 @@ describe("opening a thread that works outside a prompt", () => {
   });
 });
 
-test("retains the engine's phase and activity age across paired replay", async () => {
+test("keeps a turn the engine runs working, timed from its start, across paired replay", async () => {
   const before = Date.now();
   watchMachineConnection(
     LINUX,
-    machineConnection({ state: "idle", background: 0 }, { phase: "writing", activityAgeMs: 30_000 }),
+    machineConnection(
+      { state: "idle", background: 0 },
+      { phase: "waiting", activityAgeMs: 30_000, turnAgeMs: 90_000 },
+    ),
   );
   expect(await openThread(THREAD)).toBeNull();
-  const phase = useApp.getState().threads[THREAD]?.enginePhase;
-  expect(phase?.label).toBe("Writing a reply");
-  expect(phase?.lastActivityAt).toBeGreaterThanOrEqual(before - 30_000);
-  expect(phase?.lastActivityAt).toBeLessThanOrEqual(Date.now() - 30_000);
+  const startedAt = useApp.getState().threads[THREAD]?.enginePhase?.startedAt;
+  expect(startedAt).toBeGreaterThanOrEqual(before - 90_000);
+  expect(startedAt).toBeLessThanOrEqual(Date.now() - 90_000);
 });

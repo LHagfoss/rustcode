@@ -594,7 +594,7 @@ export function Transcript({
         last?.kind === "assistant";
       // With an approval waiting, the turn is not working: the row that asks is the foot.
       const activity = workingLabel(visible);
-      if (!hasEnginePhase && !shows && !waiting && !(settleEnd && activity === "Working"))
+      if (!shows && !waiting && !(settleEnd && activity === "Working"))
         out.push({
           key: "activity",
           activity,
@@ -634,7 +634,6 @@ export function Transcript({
     drawnRows.current = keepUnchangedRows(drawnRows.current, out);
     return drawnRows.current;
   }, [
-    hasEnginePhase,
     visible,
     subagentSteps,
     started,
@@ -1320,8 +1319,7 @@ export function Transcript({
                       <ResumeQueueRow threadId={row.resume.threadId} count={row.resume.count} />
                     ) : row.working ? (
                       <WorkingRow
-                        startedAt={thread.turn?.startedAt}
-                        phase={thread.enginePhase}
+                        startedAt={thread.turn?.startedAt ?? thread.enginePhase?.startedAt}
                         now={now}
                         done={row.working.done}
                         elapsedMs={row.working.elapsedMs}
