@@ -1477,6 +1477,7 @@ export class MockEngine {
       case "_rustcode/scheduled/run":
         return this.loops.run(str(obj(params)?.id) ?? "");
       case "_rustcode/pulls/state": {
+        const FORK_PULL = 999;
         // A project whose remote is on another forge: `gh` knows no pull requests there.
         if (str(obj(params)?.cwd)?.includes("/gitlab-")) {
           return {
@@ -1486,9 +1487,8 @@ export class MockEngine {
             },
           };
         }
-        // A number reads that pull request, whatever branch the folder is on; 999 stands for a fork's.
         const number = num(obj(params)?.number);
-        if (number === 999) {
+        if (number === FORK_PULL) {
           return {
             branch: null,
             pull: null,

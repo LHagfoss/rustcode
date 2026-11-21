@@ -200,8 +200,6 @@ async function mergeTracked(
   if (isFailure(target)) return failureJson(target);
   let state = await delegatePull(target);
   if (tracked?.dropped) return failureJson(droppedFailure());
-  // A number names the pull request even when the thread is on another branch (a
-  // release or orchestrating thread on `main`); the approval card names it.
   if (call.number && !state.note && state.pull?.number !== call.number) {
     state = await pullByNumber(target, call.number);
     if (tracked?.dropped) return failureJson(droppedFailure());
