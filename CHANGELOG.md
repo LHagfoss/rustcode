@@ -1,3 +1,23 @@
+## [v1.46.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.46.0) - 2026-11-21
+
+### Features
+- Fleet: cross-machine orchestration, remote commands and fleet-wide defaults, and threads can move between paired machines. (#4136, #4135)
+- Remote gateway serves its own TLS and pins its certificate. (#4141)
+- Scheduled jobs run with the app closed, and Loops are renamed to Jobs with fixed scheduling and a redesigned page. (#4133, #4123)
+- Workflow tools are exposed to outside agents. (#4132)
+- Smart UI views, tables and diagrams are sharper, stay monochrome, and wrap paths cleanly. (#4142, #4148)
+- Changes and Pull requests move into the side panel's tabs; the sidebar Threads heading gains filter and sort and keeps thread and project order. (#4108, #4118, #4128)
+- Plan usage from paired machines merges by subscription. (#4117)
+- Live ACP turn phase and activity age are shown, autonomous harness turns are tracked, and stalled first turns recover. (#4124, #4131, #4122)
+- Remote threads can be steered, and the machine is shown while a thread starts. (#4127, #4116)
+- `merge_when_green` can merge a numbered PR from a worktree. (#4150)
+- Harnesses are found on the login shell's PATH first, zsh arrays in dotfiles no longer break the shell env, and pre-rc server services migrate to `rc`. (#4111, #4149, #4106)
+- New worktrees install node_modules before checks. (#4137)
+- Model names are formatted everywhere, the new-thread draft is kept, and harness settings are tidier. (#4147, #4129)
+- Smoother selection across replies, Smart UI views and composer links; simpler edit icon; tooltips replace native titles. (#4112, #4121, #4113, #4109)
+- Whole-file edit diffs count only what changed; forwarded ports get overlay timeouts after wake. (#4134, #4130)
+- Outdated machines explain how to update and name `rc` as the CLI; Antigravity's Gemini cost is estimated at list prices. (#4110, #4107)
+- Performance: flat ACP request dispatch, one shared zbus stack, a trimmed Shiki bundle, restored lazy view chunks, and release footprint measured in CI. (#4146, #4143, #4114, #4145, #4138)
 ## [v1.45.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.45.0) - 2026-11-20
 
 ### Features
