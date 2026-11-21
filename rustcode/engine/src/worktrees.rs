@@ -557,6 +557,25 @@ fn abandon_create(
     }
 }
 
+/// The checkout of `dir`'s repository that has `branch` checked out: the main
+/// checkout or any of its worktrees.
+pub(crate) fn checkout_of_branch(dir: &Path, branch: &str) -> Option<PathBuf> {
+    let listed = git(dir, &["worktree", "list", "--porcelain"]).ok()?;
+    checkout_in_porcelain(&listed, branch)
+}
+
+fn checkout_in_porcelain(porcelain: &str, branch: &str) -> Option<PathBuf> {
+    let expected = format!("branch refs/heads/{branch}");
+    porcelain.split("\n\n").find_map(|block| {
+        block.lines().any(|line| line == expected).then(|| {
+            block
+                .lines()
+                .find_map(|line| line.strip_prefix("worktree "))
+                .map(PathBuf::from)
+        })?
+    })
+}
+
 /// Remove the worktree a failed add registered at `path`, if git registered
 /// one there for `branch`. Nothing else at that path is touched: a worktree on
 /// another branch is someone else's, however the paths came to collide.
@@ -2116,6 +2135,20 @@ pub(crate) fn merge_rustcode_meta(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn finds_the_worktree_on_a_branch() {
+        let porcelain = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /wt/fix\nHEAD def\nbranch refs/heads/fix/engine-x\n\nworktree /wt/detached\nHEAD 123\ndetached\n";
+        assert_eq!(
+            checkout_in_porcelain(porcelain, "fix/engine-x"),
+            Some(PathBuf::from("/wt/fix"))
+        );
+        assert_eq!(
+            checkout_in_porcelain(porcelain, "main"),
+            Some(PathBuf::from("/repo"))
+        );
+        assert_eq!(checkout_in_porcelain(porcelain, "fix/engine"), None);
+    }
 
     /// A repository with one commit, in a fresh temporary directory.
     pub(crate) fn repo() -> (tempfile::TempDir, PathBuf) {
