@@ -146,7 +146,7 @@ fn jitter() -> f64 {
 }
 
 /// How this binary was built.
-fn build_kind(program: &Path) -> Build {
+pub(crate) fn build_kind(program: &Path) -> Build {
     let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from);
     if cfg!(debug_assertions) || crate::service::is_dev_binary(program, target_dir.as_deref()) {
         Build::Development

@@ -6,6 +6,7 @@
 // and the beta the user skipped.
 
 import { create } from "zustand";
+import { Method } from "../acp/types";
 import { openExternal } from "../lib/native";
 import { shellCall } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
@@ -366,6 +367,90 @@ export function anyThreadBusy(
   return Object.values(threads).some((t) => isRunning(t) || (t.waiting ?? 0) > 0 || t.permissions.length > 0);
 }
 
+/** What a found update waits for: threads with a running turn or background commands, and threads waiting on the user. */
+export interface BusyThreads {
+  running: number;
+  asking: number;
+}
+
+/** {@link anyThreadBusy}, counted: a thread waiting on an approval or a question counts as asking. */
+export function busyThreads(
+  threads: Record<string, { turn?: ThreadTurn; waiting?: number; permissions: unknown[] }>,
+): BusyThreads {
+  let running = 0;
+  let asking = 0;
+  for (const t of Object.values(threads)) {
+    if (t.permissions.length > 0) asking++;
+    else if (isRunning(t) || (t.waiting ?? 0) > 0) running++;
+  }
+  return { running, asking };
+}
+
+/**
+ * Why a found update has not installed yet, in words: "Waiting for 2 running threads and 1
+ * thread that needs you". An update that waited with no reason on screen looked like no update.
+ */
+export function waitingReason(busy: BusyThreads): string {
+  const parts = [
+    busy.running ? `${busy.running} running ${busy.running === 1 ? "thread" : "threads"}` : null,
+    busy.asking
+      ? `${busy.asking} ${busy.asking === 1 ? "thread that needs" : "threads that need"} you`
+      : null,
+  ].filter(Boolean);
+  return parts.length ? `Waiting for ${parts.join(" and ")}` : "Waiting for threads to finish";
+}
+
+/** The action that skips the wait: threads continue after the restart when that setting is on. */
+export function installNowLabel(resume: boolean): string {
+  return resume ? "Install now and resume threads" : "Install now";
+}
+
+/**
+ * Install a waiting update now. With "Continue threads after a restart" on, the turns it cuts
+ * short continue by themselves once RustCode reopens (`continueThreads.ts`), so it installs at
+ * once; off, it asks first, as Update Now does.
+ */
+export async function installNow(): Promise<string | null> {
+  const { useApp, askConfirm } = await import("./store");
+  if (useApp.getState().resumeAfterRestart) return applyUpdate();
+  askConfirm({
+    title: "Install the update now?",
+    message: UPDATE_BUSY_MESSAGE,
+    action: "Update Now",
+    destructive: true,
+    run: () => {
+      void applyUpdate().then((failed) => {
+        if (failed) void announceFailure(failed);
+      });
+    },
+  });
+  return null;
+}
+
+/**
+ * Another machine asked this one to update (Settings › Machines › Update there): an engine that
+ * lives inside this app leaves the request for the app (`engine/src/acp/machine_update.rs`). The
+ * app takes it and installs once no thread works, as Update When Idle does. An engine without the
+ * method answers an error, which is ignored.
+ */
+export async function claimUpdateRequest(): Promise<boolean> {
+  const { request, toast } = await import("./store");
+  let requested = false;
+  try {
+    const answer = await request(Method.machineUpdate, { action: "claim" }, 5_000);
+    requested =
+      !!answer && typeof answer === "object" && (answer as { requested?: unknown }).requested === true;
+  } catch {
+    return false;
+  }
+  if (!requested) return false;
+  useUpdates.setState({ backoff: null });
+  transition({ type: "wait", reason: "whenIdle" });
+  toast("Another machine asked RustCode to update. It installs once no thread is working.");
+  await checkNow();
+  return true;
+}
+
 /** How long to wait before the next automatic try after `failures` failures, or null to stop and leave it to the sidebar row. */
 export function autoRetryDelay(failures: number): number | null {
   return AUTO_INSTALL_BACKOFF_MS[failures - 1] ?? null;
@@ -515,6 +600,7 @@ export function startUpdateChecks() {
   void whatsNewOnLaunch();
   setTimeout(() => void checkNow(), 5_000);
   setInterval(() => {
+    void claimUpdateRequest();
     const last = useUpdates.getState().checkedAt;
     const hidden = document.visibilityState !== "visible" || !document.hasFocus();
     if (!hidden || !last || Date.now() - last >= UPDATE_CHECK_HIDDEN_MS) void checkNow();

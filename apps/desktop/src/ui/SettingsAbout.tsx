@@ -13,8 +13,11 @@ import {
 import { canUpdate } from "../lib/updater";
 import { APP_VERSION, errorText, request, setOnboarding, toast, useApp } from "../state/store";
 import {
+  busyThreads,
   checkIfStale,
   checkNow,
+  installNow,
+  installNowLabel,
   installProgress,
   loadChannels,
   offersUpdate,
@@ -23,6 +26,7 @@ import {
   setUpdateChannel,
   showWhatsNew,
   useUpdates,
+  waitingReason,
 } from "../state/updates";
 import { Info, RefreshCw } from "./icons";
 import { cx, Spinner, Switch } from "./primitives";
@@ -55,6 +59,8 @@ function AppVersion() {
   const progress = installState.phase === "installing" ? installState.progress : null;
   const background = useUpdates((s) => s.error);
   const waiting = installState.phase === "waiting";
+  const busy = useApp((s) => (waiting ? waitingReason(busyThreads(s.threads)) : null));
+  const resume = useApp((s) => s.resumeAfterRestart);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const shellVersion = useUpdates((s) => s.version);
@@ -86,7 +92,7 @@ function AppVersion() {
     : installing
       ? step
       : waiting
-        ? "Waiting for threads to finish, then reopens."
+        ? `${busy}, then reopens.`
         : info && !info.available
           ? "RustCode is up to date."
           : info?.development
@@ -122,6 +128,16 @@ function AppVersion() {
       }
     >
       {canUpdate() && <Action onClick={() => void showWhatsNew(version)}>What's New</Action>}
+      {waiting && offered && info?.canInstall && !installing && (
+        <Action
+          onClick={() => {
+            setError(null);
+            void installNow().then((failed) => failed && setError(failed));
+          }}
+        >
+          {installNowLabel(resume)}
+        </Action>
+      )}
       {error && offered && info?.canInstall && info.page && (
         <Action onClick={() => openExternal(info.page ?? "")}>Release page</Action>
       )}

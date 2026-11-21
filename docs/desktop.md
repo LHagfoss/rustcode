@@ -2069,7 +2069,12 @@ as usual. **Install updates automatically** (Settings › About, off by default,
 thread is working: no running turn, no background command a turn waits on, no
 pending approval or question (`autoInstallDecision` in `state/updates.ts`).
 While something works it asks again every 10 seconds and never interrupts a
-turn; a skipped beta stays skipped and a dev build never installs. An automatic
+turn; the row and Settings › About say what it waits for (*Waiting for 2
+running threads and 1 thread that needs you*) and offer **Install now and
+resume threads** (just **Install now**, after a confirmation, when *Continue
+threads after a restart* is off). Another machine's **Update** (Settings ›
+Machines, [server.md](server.md#updating-from-another-machine)) puts the app
+in the same wait whatever this setting says; a skipped beta stays skipped and a dev build never installs. An automatic
 install that fails is tried again after 1, 5 and 15 minutes
 (`AUTO_INSTALL_BACKOFF_MS`), and then left to the sidebar row; every failure
 stays on the row (*Retry update to X*, with the reason under it) until the next

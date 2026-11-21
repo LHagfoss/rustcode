@@ -43,6 +43,8 @@ export class MockMachine {
   /** The name it was given from another computer, and when. */
   private ownName: string | null = null;
   private ownNameAt: string | null = null;
+  /** How far an update asked from Settings › Machines got, or null before one. */
+  private updateStep: number | null = null;
 
   constructor(
     private readonly name: string,
@@ -534,6 +536,20 @@ export class MockMachine {
           },
         }),
       ];
+    }
+    if (frame.method === "_rustcode/machine/update") {
+      // Settings › Machines › Update: looking, installing, then a restart that waits for a turn.
+      const action = str(obj(frame.params)?.action) ?? "status";
+      if (action === "start") this.updateStep = 0;
+      else if (this.updateStep !== null) this.updateStep = Math.min(this.updateStep + 1, 3);
+      const steps: JsonObject[] = [
+        { phase: "checking" },
+        { phase: "installing", target: "1.47.0" },
+        { phase: "restarting", target: "1.47.0", runningTurns: 1 },
+        { phase: "restarting", target: "1.47.0", runningTurns: 0 },
+      ];
+      const result = this.updateStep === null ? { phase: "idle" } : steps[this.updateStep];
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: { current: "1.28.0", ...result } })];
     }
     if (frame.method === "_rustcode/skills/add") {
       const params = obj(frame.params);

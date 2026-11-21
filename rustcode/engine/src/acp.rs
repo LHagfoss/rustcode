@@ -13,6 +13,7 @@ mod hosted;
 pub(crate) mod loops;
 pub(crate) mod machine_exec;
 mod machine_sync;
+mod machine_update;
 mod mcp_app;
 mod mirror;
 pub(crate) mod outside;
@@ -1761,6 +1762,19 @@ async fn dispatch_request(
             connection.spawn(async move {
                 match machine_exec::exec(request, tokio_util::sync::CancellationToken::new()).await
                 {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder.respond_with_error(
+                        agent_client_protocol::Error::invalid_params().data(error),
+                    ),
+                }?;
+                Ok(())
+            })
+        }
+        "_rustcode/machine/update" => {
+            let request: machine_update::MachineUpdateRequest = parse_params(params)?;
+
+            connection.spawn(async move {
+                match machine_update::handle(request).await {
                     Ok(answer) => responder.respond(answer),
                     Err(error) => responder.respond_with_error(
                         agent_client_protocol::Error::invalid_params().data(error),
@@ -3789,6 +3803,7 @@ mod dispatch_table_tests {
         );
         assert!(<project_relocate::RelocateRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/project/relocate"), "method mismatch for project_relocate::RelocateRequest");
         assert!(<machine_exec::MachineExecRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/machine/exec"), "method mismatch for machine_exec::MachineExecRequest");
+        assert!(<machine_update::MachineUpdateRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/machine/update"), "method mismatch for machine_update::MachineUpdateRequest");
         assert!(
             <projects::ProjectReadRequest as agent_client_protocol::JsonRpcMessage>::matches_method(
                 "_rustcode/project/read"
