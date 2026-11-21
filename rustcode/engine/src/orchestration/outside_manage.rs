@@ -74,7 +74,7 @@ pub(crate) async fn answer(
     Some(match tool {
         super::INTERRUPT_SESSION => super::local_threads::interrupt(caller, args).await,
         super::UPDATE_SESSION => update_session(caller, args),
-        super::CONFIGURE_SESSION => configure_session(caller, args),
+        super::CONFIGURE_SESSION => configure_session(caller, args).await,
         super::MERGE_WHEN_GREEN => merge_when_green(caller, cancel, args).await,
         super::CLEANUP_WORKTREE => cleanup_worktree(caller, args).await,
         super::LIST_SCHEDULED_TASKS => list_loops().await,
@@ -345,32 +345,17 @@ fn update_session(caller: &str, args: &Value) -> Value {
     })
 }
 
-/// Reports the thread's harness, access, model and effort. Changing them
-/// goes through the app's session controls, which the engine does not drive
-/// for an outside agent.
-fn configure_session(caller: &str, args: &Value) -> Value {
-    let changes = ["model", "effort"]
-        .iter()
-        .any(|key| !matches!(args.get(*key), None | Some(Value::Null)));
-    if changes {
-        return needs_app("configure_session with model or effort");
-    }
+/// Reports the thread's harness, access, model and effort, and changes the
+/// model or effort through the engine's own session controls, as the app's
+/// pickers do (`local_threads::configure`).
+async fn configure_session(caller: &str, args: &Value) -> Value {
     let target = match target_of(caller, args) {
         Ok(target) => target,
         Err(refusal) => return refusal,
     };
-    let harness = crate::harness::store::load(&target)
-        .map(|record| record.harness)
-        .unwrap_or_else(|| crate::harness::BUILTIN_ID.to_owned());
-    let access = crate::config::load_session_access(&target).unwrap_or_else(|| "ask".to_owned());
-    let mut answer = json!({ "session_id": target, "harness": harness, "access": access });
-    if let Some(model) = crate::config::load_session_model(&target) {
-        answer["model"] = json!(model.profile);
-        if let Some(effort) = model.reasoning_effort {
-            answer["effort"] = json!(effort);
-        }
-    }
-    answer
+    let mut args = args.clone();
+    args["session_id"] = json!(target);
+    super::local_threads::configure(caller, &args).await
 }
 
 /// The worktree a thread works in: its path and the branch recorded for it.
@@ -563,11 +548,6 @@ mod tests {
             let answer = update_session("outside:abcd1234", &args);
             assert_eq!(failure(&answer), Some("unavailable"));
         }
-        let answer = configure_session(
-            "outside:abcd1234",
-            &json!({"session_id": "t", "model": "x"}),
-        );
-        assert_eq!(failure(&answer), Some("unavailable"));
     }
 
     #[tokio::test]

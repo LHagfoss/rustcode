@@ -62,7 +62,7 @@ for its own threads, and each one takes the thread's `thread_id` (there is no
 | `merge_when_green` | Waits for the checks of the pull request on the thread's worktree branch and squash-merges it, as `scripts/pr-merge.sh` does. Takes `thread_id`, not a bare PR `number` |
 | `cleanup_worktree` | Removes a merged thread's worktree and branch with the same checks the app makes (clean, merged, nothing unique), and settles the thread unless `settle` is false |
 | `update_thread` | `title`, `pinned` and `status` (`active`, `review`, `settled`). `unread` and `snoozed_until` need the app and are refused |
-| `configure_thread` | Reports the thread's harness, access, model and effort. Changing `model` or `effort` needs the app and is refused |
+| `configure_thread` | Reports the thread's harness, access, model and effort, and changes `model` or `effort` on the thread's own harness; a value the thread does not list is refused with its choices |
 
 Work an outside agent starts is the ceiling of its level: threads are
 standalone threads of yours (not delegates of a thread), and run at Auto-edit
@@ -128,9 +128,8 @@ computer is refused as before.
 ## Not in this release
 
 - Reaching another paired computer (`machine`) from an outside agent on a
-  machine that is not the hub, `unread` and `snoozed_until` in
-  `update_thread`, and changing a thread's model or effort with
-  `configure_thread`: they need the app.
+  machine that is not the hub, and `unread` and `snoozed_until` in
+  `update_thread`: they need the app.
 
 `search_threads` matches titles and what was said; across projects it follows
 the "Let agents read threads in other projects" setting, as `list_threads`

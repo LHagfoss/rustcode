@@ -1103,6 +1103,21 @@ pub enum SessionCommands {
         #[arg(long)]
         model: Option<String>,
     },
+    /// Show a thread's model and effort, or change them on its harness
+    /// (a change needs the running server, which runs the thread)
+    Configure {
+        /// Thread id, or a unique prefix of one
+        id: String,
+        /// The model to continue with, as the thread's model picker lists it
+        #[arg(long)]
+        model: Option<String>,
+        /// The reasoning effort to continue with
+        #[arg(long)]
+        effort: Option<String>,
+        /// Print the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Give a thread a new title
     Rename {
         /// Thread id, or a unique prefix of one
@@ -2479,6 +2494,14 @@ mod tests {
             Some(Commands::Sessions {
                 command: Some(SessionCommands::Move { id, harness, account: Some(account), model: None })
             }) if id == "01ab" && harness == "codex" && account == "work"
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "threads", "configure", "01ab", "--model", "m", "--effort", "high"])
+                .unwrap()
+                .command,
+            Some(Commands::Sessions {
+                command: Some(SessionCommands::Configure { id, model: Some(model), effort: Some(effort), json: false })
+            }) if id == "01ab" && model == "m" && effort == "high"
         ));
         assert!(matches!(
             Cli::try_parse_from(["rustcode", "threads", "pin", "a", "b"]).unwrap().command,
