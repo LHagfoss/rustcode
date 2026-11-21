@@ -670,6 +670,61 @@ fn live_usage_update(used: u64, size: u64) -> SessionUpdate {
     SessionUpdate::UsageUpdate(UsageUpdate::new(used, size).meta(meta))
 }
 
+/// Persist the recorded transcript and latest usage to disk and update the
+/// harness record when `persist` is enabled. Shared by prompt turns and
+/// autonomous woken turns.
+fn persist_transcript(
+    id: &str,
+    persist: bool,
+    record_lock: &StdMutex<HarnessRecord>,
+    transcript_lock: &StdMutex<Transcript>,
+) {
+    let (history, usage) = {
+        let transcript = transcript_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        (transcript.history.clone(), transcript.usage.clone())
+    };
+    let usage_changed = usage.is_some()
+        && usage
+            != record_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .usage;
+    if usage_changed {
+        let saved = {
+            let mut record = record_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            record.usage = usage;
+            record.updated_at = chrono::Utc::now().to_rfc3339();
+            record.clone()
+        };
+        if persist {
+            store::save(id, &saved);
+        }
+    }
+    if !persist || history.is_empty() {
+        return;
+    }
+    crate::config::save_session_history(id, &history);
+    // Written now rather than queued, so `session/list` right after the
+    // turn already shows it.
+    crate::config::flush_history();
+    crate::config::save_session_title_if_absent(id, &history);
+    if let Some(title) = crate::config::load_session_title(id) {
+        let saved = {
+            let mut record = record_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            record.title = Some(title);
+            record.updated_at = chrono::Utc::now().to_rfc3339();
+            record.clone()
+        };
+        store::save(id, &saved);
+    }
+}
+
 /// Count one output of the harness toward the turn's silence deadline
 /// (`watchdog`): its updates, including a thought or a usage report, are
 /// output.
@@ -971,7 +1026,7 @@ pub(crate) struct ExternalSession {
     /// (`_rustcode/session/stop`), so the harness's answer to it is logged
     /// under the same attempt (issue 4086).
     stop_attempt: StdMutex<Option<String>>,
-    record: StdMutex<HarnessRecord>,
+    record: Arc<StdMutex<HarnessRecord>>,
     transcript: Arc<StdMutex<Transcript>>,
     closed: AtomicBool,
     persist: bool,
@@ -1009,12 +1064,18 @@ impl ExternalSession {
         let idle = IdleState::share();
         let thread_id = id.clone();
         let harness_id = harness.id.clone();
+        let session_cwd = record.cwd.clone();
         let guard_cwd = record.cwd.clone();
+        let record = Arc::new(StdMutex::new(record));
         {
             let transcript = Arc::clone(&transcript);
+            let record_shared = Arc::clone(&record);
             let progress = Arc::clone(&progress);
             let idle = Arc::clone(&idle);
             tokio::spawn(async move {
+                let mut in_prompt_turn = false;
+                let mut last_activity_running = false;
+                let mut woken_turn: Option<crate::thread_status::TurnGuard> = None;
                 while let Some(output) = outputs.recv().await {
                     // Anything the thread does renews the idle timer: an update,
                     // a question, a heartbeat (`reap_once`).
@@ -1067,10 +1128,63 @@ impl ExternalSession {
                         Output::Flush(reply) => {
                             let _ = reply.send(());
                         }
-                        Output::Activity(activity) => sink.activity(activity),
+                        Output::Activity(activity) => {
+                            let running = activity.state == "running";
+                            let waiting = activity.state == "waiting";
+                            last_activity_running = running;
+                            if running {
+                                if !in_prompt_turn && woken_turn.is_none() {
+                                    woken_turn = Some(crate::thread_status::turn(&thread_id));
+                                    let history = transcript
+                                        .lock()
+                                        .unwrap_or_else(|error| error.into_inner())
+                                        .history
+                                        .len();
+                                    sink.turn_started(history, String::new());
+                                }
+                                sink.activity(activity);
+                            } else {
+                                if let Some(guard) = woken_turn.take() {
+                                    {
+                                        let mut transcript = transcript
+                                            .lock()
+                                            .unwrap_or_else(|error| error.into_inner());
+                                        if waiting {
+                                            transcript.end_reply_keeping_pending();
+                                        } else {
+                                            transcript.end_reply();
+                                        }
+                                    }
+                                    persist_transcript(
+                                        &thread_id,
+                                        persist,
+                                        &record_shared,
+                                        &transcript,
+                                    );
+                                    sink.turn_ended();
+                                    drop(guard);
+                                }
+                                sink.activity(activity);
+                            }
+                        }
                         Output::ChildActivity(activity) => sink.child_activity(activity),
                         Output::Heartbeat => {}
                         Output::TurnStarted(prompt) => {
+                            if let Some(guard) = woken_turn.take() {
+                                transcript
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .end_reply_keeping_pending();
+                                persist_transcript(
+                                    &thread_id,
+                                    persist,
+                                    &record_shared,
+                                    &transcript,
+                                );
+                                sink.turn_ended();
+                                drop(guard);
+                            }
+                            in_prompt_turn = true;
                             // Counted here, after every update before it.
                             let history = transcript
                                 .lock()
@@ -1079,14 +1193,30 @@ impl ExternalSession {
                                 .len();
                             sink.turn_started(history, prompt);
                         }
-                        Output::TurnEnded => sink.turn_ended(),
+                        Output::TurnEnded => {
+                            in_prompt_turn = false;
+                            sink.turn_ended();
+                            if last_activity_running && woken_turn.is_none() {
+                                woken_turn = Some(crate::thread_status::turn(&thread_id));
+                                let history = transcript
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .history
+                                    .len();
+                                sink.turn_started(history, String::new());
+                            }
+                        }
                     }
+                }
+                if let Some(guard) = woken_turn.take() {
+                    sink.turn_ended();
+                    drop(guard);
                 }
             });
         }
         let session = Arc::new(Self {
             id,
-            cwd: record.cwd.clone(),
+            cwd: session_cwd,
             harness,
             out,
             adapter: Mutex::new(None),
@@ -1094,7 +1224,7 @@ impl ExternalSession {
             turn: Mutex::new(()),
             cancel: StdMutex::new(None),
             stop_attempt: StdMutex::new(None),
-            record: StdMutex::new(record),
+            record,
             transcript,
             closed: AtomicBool::new(false),
             persist,
@@ -1184,27 +1314,7 @@ impl ExternalSession {
     }
 
     fn save_history(&self) {
-        let (history, usage) = {
-            let transcript = self
-                .transcript
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            (transcript.history.clone(), transcript.usage.clone())
-        };
-        if usage.is_some() && usage != self.record().usage {
-            self.save_record(|record| record.usage = usage);
-        }
-        if !self.persist || history.is_empty() {
-            return;
-        }
-        crate::config::save_session_history(&self.id, &history);
-        // Written now rather than queued, so `session/list` right after the
-        // turn already shows it.
-        crate::config::flush_history();
-        crate::config::save_session_title_if_absent(&self.id, &history);
-        if let Some(title) = crate::config::load_session_title(&self.id) {
-            self.save_record(|record| record.title = Some(title));
-        }
+        persist_transcript(&self.id, self.persist, &self.record, &self.transcript);
     }
 
     /// Write the history now: a thread just switched to this harness.
@@ -1641,19 +1751,25 @@ impl ExternalSession {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = None;
         self.flush().await;
+        let waiting_background =
+            matches!(result, Ok(StopReason::EndTurn)) && self.progress.background_running();
         {
             let mut transcript = self
                 .transcript
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if self.harness.id == "antigravity" {
+            if self.harness.id == "antigravity" && !waiting_background {
                 for update in transcript.interrupted_tool_updates() {
                     let _ = self.out.send(Output::Marker(update));
                 }
             }
-            transcript.end_reply();
+            if waiting_background {
+                transcript.end_reply_keeping_pending();
+            } else {
+                transcript.end_reply();
+            }
         }
-        if self.harness.id == "antigravity" {
+        if self.harness.id == "antigravity" && !waiting_background {
             self.flush().await;
         }
         self.save_history();
@@ -2214,6 +2330,13 @@ impl ExternalSession {
             .as_ref()
         {
             cancel.notify_one();
+            return true;
+        }
+        if self.progress.background_running()
+            && let Ok(slot) = self.adapter.try_lock()
+            && let Some(adapter) = slot.as_ref()
+        {
+            adapter.cancel();
             return true;
         }
         false

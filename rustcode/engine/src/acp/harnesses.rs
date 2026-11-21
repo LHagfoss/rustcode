@@ -280,7 +280,8 @@ impl ClientSink for AcpClientSink {
     }
 
     fn turn_started(&self, history: usize, prompt: String) {
-        let turn = self.clients.begin_turn(history, Some(prompt));
+        let prompt = (!prompt.is_empty()).then_some(prompt);
+        let turn = self.clients.begin_turn(history, prompt);
         *self.turn.lock().unwrap_or_else(|error| error.into_inner()) = Some(turn);
     }
 

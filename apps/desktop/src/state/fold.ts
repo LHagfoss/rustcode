@@ -176,8 +176,11 @@ export function foldTurns(
   const rows: FoldRow[] = [];
   let start = 0;
   for (let i = 0; i <= items.length; i++) {
-    // A turn runs from a message you sent up to the next one (or the end).
-    if (i < items.length && (items[i]!.kind !== "user" || i === start)) continue;
+    // A turn runs from a message you sent (or the end of the previous turn, for
+    // a woken continuation with no user message) up to the next boundary.
+    const boundary =
+      i === items.length || (i > start && (items[i]!.kind === "user" || items[i - 1]!.kind === "turnEnd"));
+    if (!boundary) continue;
     pushTurn(items, start, i, running && i === items.length, open, rows, showTools);
     start = i;
   }

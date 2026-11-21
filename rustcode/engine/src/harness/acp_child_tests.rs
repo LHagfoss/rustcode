@@ -1620,3 +1620,251 @@ fn acp_prompt_errors_keep_wire_code_and_optional_redacted_data() {
     assert!(displayed.contains("UNAVAILABLE"));
     assert!(!displayed.contains("example-secret"));
 }
+
+#[tokio::test]
+async fn antigravity_autonomous_wakeup_reports_running_and_persists_reply() {
+    use crate::harness::background::Activity;
+    use crate::harness::session::{ClientSink, ExternalSession, PermissionFuture};
+    use crate::harness::store::HarnessRecord;
+
+    struct RecordingSink {
+        updates: mpsc::UnboundedSender<SessionUpdate>,
+        activities: mpsc::UnboundedSender<Activity>,
+        turn_starts: mpsc::UnboundedSender<(usize, String)>,
+        turn_ends: mpsc::UnboundedSender<()>,
+    }
+
+    impl ClientSink for RecordingSink {
+        fn update(&self, update: SessionUpdate) {
+            let _ = self.updates.send(update);
+        }
+
+        fn request_permission(&self, _request: RequestPermissionRequest) -> PermissionFuture {
+            Box::pin(async { RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled) })
+        }
+
+        fn activity(&self, activity: Activity) {
+            let _ = self.activities.send(activity);
+        }
+
+        fn turn_started(&self, history: usize, prompt: String) {
+            let _ = self.turn_starts.send((history, prompt));
+        }
+
+        fn turn_ended(&self) {
+            let _ = self.turn_ends.send(());
+        }
+    }
+
+    let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
+    let (activities_tx, mut activities_rx) = mpsc::unbounded_channel();
+    let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
+    let (ends_tx, mut ends_rx) = mpsc::unbounded_channel();
+    let (wake_tx, wake_rx) = oneshot::channel::<()>();
+    let (finish_tx, finish_rx) = oneshot::channel::<()>();
+    let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel::<()>();
+
+    let harness = harness("antigravity", HarnessKind::Acp);
+    let session_id = "antigravity-autonomous-wakeup-test";
+    let ((ours, our_incoming), (theirs, mut their_incoming)) = pipe();
+
+    tokio::spawn(async move {
+        fn agy_update(body: Value) -> Value {
+            json!({"sessionId": "agy-1", "update": body})
+        }
+        let mut wake_rx = Some(wake_rx);
+        let mut finish_rx = Some(finish_rx);
+        while let Some(message) = their_incoming.recv().await {
+            match message {
+                Incoming::Request { id, method, .. } => match method.as_str() {
+                    "initialize" => theirs.respond(
+                        id,
+                        Ok(json!({
+                            "protocolVersion": 1,
+                            "agentCapabilities": {"loadSession": true}
+                        })),
+                    ),
+                    "session/new" => theirs.respond(
+                        id,
+                        Ok(json!({"sessionId": "agy-1", "configOptions": options("medium")})),
+                    ),
+                    "session/prompt" => {
+                        theirs.notify(
+                            "session/update",
+                            agy_update(json!({
+                                "sessionUpdate": "tool_call",
+                                "toolCallId": "bg-1",
+                                "title": "Run checks",
+                                "kind": "execute",
+                                "status": "in_progress"
+                            })),
+                        );
+                        theirs.notify(
+                            "session/update",
+                            agy_update(json!({
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": "Running checks..."}
+                            })),
+                        );
+                        theirs.notify(
+                            "session/update",
+                            agy_update(json!({
+                                "sessionUpdate": "usage_update",
+                                "used": 1000,
+                                "size": 200000
+                            })),
+                        );
+                        theirs.respond(id, Ok(json!({"stopReason": "end_turn"})));
+                        if let (Some(wake), Some(finish)) = (wake_rx.take(), finish_rx.take()) {
+                            let peer = Arc::clone(&theirs);
+                            tokio::spawn(async move {
+                                let _ = wake.await;
+                                peer.notify(
+                                    "session/update",
+                                    agy_update(json!({
+                                        "sessionUpdate": "tool_call_update",
+                                        "toolCallId": "bg-1",
+                                        "title": "Run checks",
+                                        "status": "completed"
+                                    })),
+                                );
+                                peer.notify(
+                                    "session/update",
+                                    agy_update(json!({
+                                        "sessionUpdate": "agent_thought_chunk",
+                                        "content": {"type": "text", "text": "reading output"}
+                                    })),
+                                );
+                                let _ = finish.await;
+                                peer.notify(
+                                    "session/update",
+                                    agy_update(json!({
+                                        "sessionUpdate": "agent_message_chunk",
+                                        "content": {"type": "text", "text": "Checks passed."}
+                                    })),
+                                );
+                                peer.notify(
+                                    "session/update",
+                                    agy_update(json!({
+                                        "sessionUpdate": "usage_update",
+                                        "used": 1400,
+                                        "size": 200000
+                                    })),
+                                );
+                            });
+                        }
+                    }
+                    other => theirs.respond(id, Err(RpcError::method_not_found(other))),
+                },
+                Incoming::Notification { method, .. } => {
+                    if method == "session/cancel" {
+                        let _ = cancelled_tx.send(());
+                    }
+                }
+                Incoming::Barrier(done) => {
+                    let _ = done.send(());
+                }
+            }
+        }
+    });
+
+    let sink = Arc::new(RecordingSink {
+        updates: updates_tx,
+        activities: activities_tx,
+        turn_starts: starts_tx,
+        turn_ends: ends_tx,
+    });
+    let session = ExternalSession::new(
+        session_id.to_owned(),
+        harness.clone(),
+        HarnessRecord::new(&harness.id, std::env::temp_dir()),
+        Vec::new(),
+        sink,
+        false,
+    );
+    let adapter = Adapter::connect(
+        &harness,
+        ours,
+        our_incoming,
+        None,
+        &std::env::temp_dir(),
+        StartOptions::default(),
+        session.output(),
+    )
+    .await
+    .expect("antigravity fake starts");
+    session.attach(adapter).await;
+
+    assert_eq!(
+        session.prompt(text("run checks")).await,
+        Ok(StopReason::EndTurn)
+    );
+    // Prompt turn started and ended, and background command moved to `waiting(1)`.
+    assert_eq!(starts_rx.recv().await.unwrap().1, "run checks");
+    ends_rx.recv().await.unwrap();
+    assert_eq!(
+        activities_rx.recv().await,
+        Some(Activity {
+            state: "waiting",
+            background: 1
+        })
+    );
+    assert!(!crate::thread_status::is_running(session_id));
+
+    // Background tool must NOT have been marked failed/interrupted on EndTurn.
+    let prompt_updates = drain(&mut updates_rx);
+    assert!(
+        !prompt_updates
+            .iter()
+            .any(|u| { u["sessionUpdate"] == "tool_call_update" && u["status"] == "failed" }),
+        "background tool should stay open, not interrupted: {prompt_updates:?}"
+    );
+
+    // Trigger autonomous wakeup outside `session/prompt`.
+    let _ = wake_tx.send(());
+    assert_eq!(
+        activities_rx.recv().await,
+        Some(Activity {
+            state: "running",
+            background: 0
+        })
+    );
+    let (_, woken_prompt) = starts_rx.recv().await.unwrap();
+    assert_eq!(woken_prompt, "");
+    assert!(crate::thread_status::is_running(session_id));
+
+    // Stop (`cancel`) reaches the harness while the woken turn runs.
+    assert!(session.cancel());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), cancelled_rx.recv())
+            .await
+            .is_ok(),
+        "cancel should forward session/cancel during a woken turn"
+    );
+
+    // Finish the woken turn with a reply and terminal `usage_update`.
+    let _ = finish_tx.send(());
+    assert_eq!(
+        activities_rx.recv().await,
+        Some(Activity {
+            state: "idle",
+            background: 0
+        })
+    );
+    ends_rx.recv().await.unwrap();
+    assert!(!crate::thread_status::is_running(session_id));
+
+    // Recorded history updated `bg-1` in place and persisted the woken reply.
+    let history = session.recorded_history();
+    let tools: Vec<_> = history.iter().filter(|m| m.role == "tool").collect();
+    assert_eq!(tools.len(), 1);
+    let tool_record = tools[0].tool_result.as_ref().unwrap();
+    assert!(!tool_record.pending);
+    assert!(tool_record.success);
+    assert!(
+        history
+            .last()
+            .is_some_and(|m| m.role == "assistant" && m.content.contains("Checks passed.")),
+        "expected persisted woken reply in history: {history:?}"
+    );
+}
