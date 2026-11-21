@@ -273,7 +273,6 @@ import {
   isWoken,
   localId,
   type ThreadState,
-  TURN_PHASE_LABELS,
   waitingOn,
   wakeTurn,
   withChildActivity,
@@ -1109,11 +1108,14 @@ function onTurnPhase(params: unknown) {
   const p = obj(params);
   const id = str(p?.sessionId);
   if (!id || !get().threads[id]) return;
-  const phase = str(p?.phase);
-  const age = p?.activityAgeMs;
-  if (phase && typeof age === "number" && Object.hasOwn(TURN_PHASE_LABELS, phase)) {
-    const label = TURN_PHASE_LABELS[phase as keyof typeof TURN_PHASE_LABELS];
-    updateThread(id, (t) => ({ ...t, enginePhase: { label, lastActivityAt: Date.now() - age } }));
+  if (str(p?.phase)) {
+    const age = typeof p?.turnAgeMs === "number" ? p.turnAgeMs : undefined;
+    updateThread(id, (t) => {
+      const startedAt = age !== undefined ? Date.now() - age : (t.enginePhase?.startedAt ?? Date.now());
+      // Rounding drift between notifications would make the timer jitter; keep the first start.
+      if (t.enginePhase && Math.abs(t.enginePhase.startedAt - startedAt) < 2_000) return t;
+      return { ...t, enginePhase: { startedAt } };
+    });
   } else if (get().threads[id]?.enginePhase) {
     updateThread(id, (t) => ({ ...t, enginePhase: undefined }));
   }

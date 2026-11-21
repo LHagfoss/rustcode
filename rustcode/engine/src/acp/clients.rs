@@ -232,6 +232,9 @@ struct TurnPhaseNotification {
     session_id: String,
     phase: Option<Phase>,
     activity_age_ms: Option<u64>,
+    /// How long the turn has run, so a window that joins mid-turn shows its real elapsed time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    turn_age_ms: Option<u64>,
 }
 
 struct TurnTiming {
@@ -273,6 +276,7 @@ impl TurnTiming {
                     .map_or(self.started, |(at, _)| at)
                     .elapsed(),
             )),
+            turn_age_ms: Some(millis(self.started.elapsed())),
         }
     }
 
@@ -813,6 +817,7 @@ fn ended_phase(session_id: &str) -> TurnPhaseNotification {
         session_id: session_id.to_owned(),
         phase: None,
         activity_age_ms: None,
+        turn_age_ms: None,
     }
 }
 
