@@ -733,6 +733,31 @@ pub struct SessionWorkspace {
     pub task_workspace_id: Option<String>,
 }
 
+/// What a thread left behind on a computer when it moved to another machine, so
+/// moving it back returns to the same folder, login, and (when no turn ran
+/// elsewhere) native harness session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineOrigin {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub turn_count: usize,
+}
+
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
 /// Versioned information stored alongside a canonical session transcript.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionMetadata {
@@ -771,6 +796,11 @@ pub struct SessionMetadata {
     /// the thread list. Absent for every other thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduled_job: Option<String>,
+    /// Where this thread ran on other machines, keyed by machine id, so moving
+    /// it back restores its folder, harness login, and native session when
+    /// untouched.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub machine_origins: std::collections::BTreeMap<String, MachineOrigin>,
 }
 
 /// The thread above a related one. `id` is absent for a thread an older
@@ -877,6 +907,7 @@ impl SessionMetadata {
             repo: None,
             user_titled: false,
             scheduled_job: None,
+            machine_origins: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -1613,6 +1644,46 @@ impl SessionStore {
     /// The session's recorded model profile and effort, if they were ever set.
     pub fn load_session_model(&self, session_id: &str) -> Option<SessionModel> {
         self.load_session_metadata(session_id)?.model
+    }
+
+    /// Record the machines this thread previously ran on so moving it back
+    /// restores its folder, harness login, and untouched native session.
+    pub fn save_session_machine_origins(
+        &self,
+        session_id: &str,
+        origins: std::collections::BTreeMap<String, MachineOrigin>,
+    ) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            let changed = metadata.machine_origins != origins;
+            metadata.machine_origins = origins;
+            changed
+        })
+    }
+
+    /// The machines this thread previously ran on, keyed by machine id.
+    pub fn load_session_machine_origins(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, MachineOrigin> {
+        self.load_session_metadata(session_id)
+            .map(|metadata| metadata.machine_origins)
+            .unwrap_or_default()
+    }
+
+    /// Remove a session's directory or legacy file inside this store.
+    pub fn delete_session_by_id(&self, session_id: &str) -> bool {
+        if !valid_session_id(session_id) {
+            return false;
+        }
+        let dir = self.session_dir(session_id);
+        if dir.is_dir() && is_session_directory(&dir) {
+            return std::fs::remove_dir_all(&dir).is_ok();
+        }
+        let legacy = threads_dir(&self.root).join(format!("{session_id}.json"));
+        if legacy.is_file() {
+            return std::fs::remove_file(&legacy).is_ok();
+        }
+        false
     }
 
     /// Apply `update` to the session's metadata and write it atomically when

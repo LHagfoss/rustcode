@@ -237,6 +237,9 @@ pub(super) fn replay_history_updates_with_compaction(
     let mut updates = Vec::new();
     for (index, message) in history.iter().enumerate() {
         match message.role.as_str() {
+            role if role == crate::harness::handoff::ROLE => {
+                updates.extend(crate::harness::handoff::divider(message));
+            }
             "system" if message.compaction_boundary.is_some() => {
                 let summary = message
                     .compaction_boundary

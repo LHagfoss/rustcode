@@ -169,6 +169,12 @@ const EXACT_METHODS: &[&str] = &[
     // ("Change Project Folder"): the folder is checked as `session/new`'s is,
     // so it reaches no further than starting a thread there.
     "_rustcode/session/move",
+    // Moving an idle thread between paired machines (`acp/session_transfer.rs`):
+    // chunked export/import under the 1 MiB frame cap, plus removing the source
+    // copy after the destination confirms durable import.
+    "_rustcode/session/export",
+    "_rustcode/session/import",
+    "_rustcode/session/remove",
     "_rustcode/attachments/read",
     "_rustcode/attachments/upload",
     // A thread's plan usage windows (percent used and reset time) for the
@@ -489,6 +495,9 @@ mod tests {
                 "_rustcode/environment/sync",
                 "_rustcode/session/harness",
                 "_rustcode/session/move",
+                "_rustcode/session/export",
+                "_rustcode/session/import",
+                "_rustcode/session/remove",
                 "_rustcode/attachments/read",
                 "_rustcode/attachments/upload",
                 "_rustcode/usage/limits",
@@ -543,6 +552,9 @@ mod tests {
             "_rustcode/worktrees/state",
             "_rustcode/session/harness",
             "_rustcode/session/move",
+            "_rustcode/session/export",
+            "_rustcode/session/import",
+            "_rustcode/session/remove",
             "_rustcode/attachments/read",
             "_rustcode/attachments/upload",
             "_rustcode/usage/limits",

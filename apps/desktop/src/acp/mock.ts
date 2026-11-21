@@ -58,6 +58,7 @@ import {
   MOCK_VIZ,
   mockLinkMeta,
 } from "./mockSmartUi";
+import { handleMockTransfer, isMockTransferMethod } from "./mockTransfer";
 import { mockAntigravityPlan, mockSharedPlans, mockUsage } from "./mockUsage";
 import type { HarnessSnapshot } from "./types";
 
@@ -856,6 +857,19 @@ export class MockEngine {
 
   private async handle(method: string, params: JsonObject): Promise<Json> {
     if (method.startsWith("_rustcode/loops/")) return this.loops.answer(method, obj(params) ?? {});
+    if (isMockTransferMethod(method)) {
+      return handleMockTransfer(method, params, {
+        getThread: (id) => this.thread(id),
+        threads: () => this.threads,
+        setThreads: (next) => {
+          this.threads = next;
+        },
+        isRunning: (id) => this.running.has(id),
+        harnesses: this.harnesses,
+        nextId: () => `mock-imported-${++this.counter}`,
+        notify: (msg) => this.notify(msg),
+      });
+    }
     switch (method) {
       case "initialize": {
         const rc = obj(obj(obj(params.clientCapabilities)?._meta)?.rustcode);
@@ -874,6 +888,7 @@ export class MockEngine {
                 pullRequests: 3,
                 sessionMove: 1,
                 sessionRepair: 1,
+                sessionTransfer: 1,
                 checkpoints: 2,
                 lineage: 1,
               },
@@ -2341,52 +2356,6 @@ export class MockEngine {
       }
       case "_rustcode/harnesses/accounts/check":
         return this.snapshot();
-      case "_rustcode/session/harness": {
-        const thread = this.thread(params.sessionId);
-        const id = str(params.harness) ?? "";
-        const h = this.harnesses.harnesses.find((x) => x.id === id);
-        if (!h || h.builtin) throw Object.assign(new Error(`cannot switch to '${id}'`), { code: -32602 });
-        const account = str(params.account) ?? null;
-        if (account && !(h.accounts ?? []).some((a) => a.id === account))
-          throw Object.assign(new Error(`unknown ${id} account '${account}'`), { code: -32602 });
-        const from = thread.harness;
-        const fromAccount = (this.harnesses.harnesses.find((x) => x.id === from)?.accounts ?? []).find(
-          (a) => a.id === thread.account,
-        )?.name;
-        thread.harness = id;
-        thread.account = account ?? undefined;
-        thread.model = str(params.model) ?? h.models[0]?.id ?? thread.model;
-        const toAccount = (h.accounts ?? []).find((a) => a.id === account)?.name;
-        const label = (name: string, login?: string) => (login ? `${name} · ${login}` : name);
-        const divider = update(thread.id, {
-          sessionUpdate: "agent_message_chunk",
-          content: {
-            type: "text",
-            text: `Switched from ${label(from, fromAccount)} to ${label(id, toAccount)}`,
-          },
-          _meta: {
-            rustcode: {
-              kind: "handoff",
-              from,
-              to: id,
-              from_account: fromAccount ?? null,
-              to_account: toAccount ?? null,
-              model: thread.model,
-            },
-          },
-        });
-        thread.history.push(divider);
-        queueMicrotask(() => this.notify(divider));
-        return {
-          configOptions: configOptions(thread, this.harnesses),
-          _meta: {
-            rustcode: {
-              harness: { id, capabilities: h.capabilities as unknown as Json },
-              ...(account ? { account: { id: account } } : {}),
-            },
-          },
-        };
-      }
       case "_rustcode/harnesses/remember": {
         const id = str(params.harness) ?? "";
         const h = this.harnesses.harnesses.find((x) => x.id === id);

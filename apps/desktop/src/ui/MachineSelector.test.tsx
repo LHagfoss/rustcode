@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Tooltip } from "radix-ui";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Machine } from "../state/machines";
+import { emptyThread, type ThreadState } from "../state/thread";
 import { MachineSelectorView } from "./MachineSelector";
 
 const LAN = { kind: "lan", address: "192.168.1.31:17879", encrypted: false };
@@ -21,10 +22,10 @@ const STUDIO: Machine = {
 };
 const LOCAL = { displayName: "My Mac", icon: null, tint: null };
 
-function render(machines: Machine[], host: string): string {
+function render(machines: Machine[], host: string, thread?: ThreadState): string {
   return renderToStaticMarkup(
     <Tooltip.Provider>
-      <MachineSelectorView machines={machines} local={LOCAL} host={host} />
+      <MachineSelectorView machines={machines} local={LOCAL} host={host} thread={thread} />
     </Tooltip.Provider>,
   );
 }
@@ -32,6 +33,7 @@ function render(machines: Machine[], host: string): string {
 describe("the machine selector", () => {
   test("is hidden until a second computer is paired", () => {
     expect(render([], "")).toBe("");
+    expect(render([], "", emptyThread("t-1", "/repo"))).toBe("");
   });
 
   test("names this computer when the next thread runs here", () => {
@@ -45,5 +47,13 @@ describe("the machine selector", () => {
     expect(render([{ ...STUDIO, displayName: "Office Mac" }], "gw-1")).toContain(
       'aria-label="Run on: Office Mac"',
     );
+  });
+
+  test("renders an interactive machine button for open threads on both local and remote machines", () => {
+    const localThread = emptyThread("t-1", "/Users/lars/code/rustcode");
+    expect(render([STUDIO], "", localThread)).toContain('aria-label="Machine: My Mac"');
+
+    const remoteThread = emptyThread("gw-1/t-2", "/Users/lars/code/rustcode");
+    expect(render([STUDIO], "gw-1", remoteThread)).toContain('aria-label="Machine: Studio"');
   });
 });

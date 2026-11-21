@@ -22,8 +22,12 @@ export class MockMachine {
     cwd: string;
     title: string;
     harness: string;
+    model?: string;
     updatedAt: number;
+    history?: JsonObject[];
+    origins?: Record<string, JsonObject>;
   }[] = [];
+  private readonly removedIds = new Set<string>();
   private createdCount = 0;
   /** The server settings of this machine, differing from this app's own. */
   private settings: JsonObject;
@@ -176,6 +180,184 @@ export class MockMachine {
           ]
         : [];
       return [...gone, JSON.stringify({ jsonrpc: "2.0", id, result: {} })];
+    }
+    if (frame.method === "_rustcode/session/export") {
+      const sessionId = str(obj(frame.params)?.sessionId) ?? "";
+      const found = this.sessions().find((s) => s.sessionId === sessionId);
+      if (!found) {
+        return [
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32602, message: `unknown session: ${sessionId}` },
+          }),
+        ];
+      }
+      const created = this.created.find((entry) => entry.sessionId === sessionId);
+      const history = created?.history ?? [
+        {
+          method: "session/update",
+          params: {
+            sessionId,
+            update: {
+              sessionUpdate: "user_message_chunk",
+              content: { type: "text", text: `Run "${str(found.title) ?? "A thread"}" on ${this.name}.` },
+            },
+          },
+        },
+        {
+          method: "session/update",
+          params: {
+            sessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: {
+                type: "text",
+                text: `This thread lives on ${this.name}. Its workspace, its files and its shell are there; this window reads and drives it over the machine network.`,
+              },
+            },
+          },
+        },
+      ];
+      const meta = obj(found._meta);
+      const rc = obj(meta?.rustcode);
+      const payload = JSON.stringify({
+        version: 1,
+        sessionId,
+        title: str(found.title) ?? "A thread",
+        cwd: str(found.cwd) ?? "",
+        harness: str(rc?.harness) ?? "claude-code",
+        model: str(meta?.model) ?? null,
+        history,
+        origins: created?.origins ?? {},
+      });
+      const data = btoa(unescape(encodeURIComponent(payload)));
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            exportId: `mock-exp-${sessionId}`,
+            offset: 0,
+            nextOffset: payload.length,
+            totalBytes: payload.length,
+            data,
+            done: true,
+          },
+        }),
+      ];
+    }
+    if (frame.method === "_rustcode/session/import") {
+      const params = obj(frame.params) ?? {};
+      if (!params.done) {
+        return [
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            result: { uploadId: str(params.uploadId) ?? "mock-imp-1", receivedBytes: 0, done: false },
+          }),
+        ];
+      }
+      const studio = this.name === MOCK_STUDIO.name;
+      const raw = decodeURIComponent(escape(atob(str(params.data) ?? "")));
+      const bundle = obj(JSON.parse(raw) as Json) ?? {};
+      const sessionId = str(bundle.sessionId) ?? `mock-imp-${++this.createdCount}`;
+      const origins: Record<string, JsonObject> = { ...(obj(bundle.origins) as Record<string, JsonObject>) };
+      const fromId = str(params.fromMachineId);
+      if (fromId) {
+        origins[fromId] = {
+          cwd: str(bundle.cwd) ?? "",
+          harness: str(bundle.harness) ?? "claude-code",
+          model: str(bundle.model) ?? null,
+        };
+      }
+      const toId = str(params.toMachineId) ?? this.name;
+      const prior = obj(origins[toId]);
+      const cwd =
+        str(params.cwd) ||
+        str(prior?.cwd) ||
+        str(params.suggestedCwd) ||
+        (studio ? "/Users/lars/code/rustcode" : "/home/lars/code/rustcode");
+      const snapshot = this.harnessOverride ?? this.harnesses();
+      const fromHarness = str(bundle.harness) ?? "claude-code";
+      const wanted = str(params.harness) ?? fromHarness;
+      const harness =
+        snapshot.harnesses.find((h) => h.id === wanted && h.enabled)?.id ?? snapshot.default.harness;
+      const model =
+        str(params.model) ??
+        snapshot.harnesses.find((h) => h.id === harness)?.models[0]?.id ??
+        (studio ? "sonnet-5.5" : "gpt-5.5-codex");
+      const fromMachine = str(params.fromMachineName) ?? "another machine";
+      const toMachine = str(params.toMachineName) ?? this.name;
+      const history = arr(bundle.history)
+        .map((item) => obj(item))
+        .filter((item): item is JsonObject => item !== null);
+      history.push({
+        method: "session/update",
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: `Moved from ${fromMachine} to ${toMachine}` },
+            _meta: {
+              rustcode: {
+                kind: "handoff",
+                from: fromHarness,
+                to: harness,
+                from_machine: fromMachine,
+                to_machine: toMachine,
+                model,
+              },
+            },
+          },
+        },
+      });
+      const title = str(bundle.title) ?? "Moved thread";
+      this.removedIds.delete(sessionId);
+      const idx = this.created.findIndex((entry) => entry.sessionId === sessionId);
+      const row = { sessionId, cwd, title, harness, model, updatedAt: Date.now(), history, origins };
+      if (idx >= 0) this.created[idx] = row;
+      else this.created.unshift(row);
+      const response = JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          sessionId,
+          cwd,
+          title,
+          harness,
+          model,
+          harnessChanged: harness !== fromHarness,
+          resumedNative: false,
+          usedFallbackCwd: !str(params.cwd) && !str(prior?.cwd) && !str(params.suggestedCwd),
+        },
+      });
+      return this.showsThreads
+        ? [
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "_rustcode/threads/created",
+              params: { sessionId, cwd, title, harness, model },
+            }),
+            response,
+          ]
+        : [response];
+    }
+    if (frame.method === "_rustcode/session/remove") {
+      const sessionId = str(obj(frame.params)?.sessionId) ?? "";
+      const at = this.created.findIndex((entry) => entry.sessionId === sessionId);
+      if (at >= 0) this.created.splice(at, 1);
+      if (sessionId) this.removedIds.add(sessionId);
+      const gone = sessionId
+        ? [
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "_rustcode/threads/deleted",
+              params: { sessionId },
+            }),
+          ]
+        : [];
+      return [...gone, JSON.stringify({ jsonrpc: "2.0", id, result: { sessionId, removed: true } })];
     }
     if (frame.method === "session/load") return this.load(id, frame.params);
     if (frame.method === "session/prompt") {
@@ -388,12 +570,20 @@ export class MockMachine {
     ];
   }
 
-  /** Opening one of its threads: a two-line history, then the answer. */
+  /** Opening one of its threads: imported history if moved here, else a two-line history. */
   private load(id: number, params: Json | undefined): string[] {
     const sessionId = str(obj(params)?.sessionId);
-    const title = this.sessions().find((s) => s.sessionId === sessionId)?.title ?? "A thread";
+    const created = this.created.find((entry) => entry.sessionId === sessionId);
     const update = (u: JsonObject) =>
       JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: u } });
+    if (created?.history?.length) {
+      const frames = created.history.flatMap((entry) => {
+        const u = obj(obj(entry.params)?.update);
+        return u ? [update(u)] : [];
+      });
+      return [...frames, JSON.stringify({ jsonrpc: "2.0", id, result: { configOptions: [] } })];
+    }
+    const title = this.sessions().find((s) => s.sessionId === sessionId)?.title ?? "A thread";
     return [
       update({
         sessionUpdate: "user_message_chunk",
@@ -505,11 +695,14 @@ export class MockMachine {
     // first prompt, and reaches a client through `_rustcode/threads/created` until then.
     const listed = [
       ...this.created.filter((session) => session.title !== "New thread"),
-      ...seeded.slice(0, count).map((session, index) => ({
-        ...session,
-        sessionId: `${studio ? "mock-studio" : "mock-linux"}-${index + 1}`,
-        updatedAt: now,
-      })),
+      ...seeded
+        .slice(0, count)
+        .map((session, index) => ({
+          ...session,
+          sessionId: `${studio ? "mock-studio" : "mock-linux"}-${index + 1}`,
+          updatedAt: now,
+        }))
+        .filter((session) => !this.removedIds.has(session.sessionId)),
     ];
     return listed.map((session, index) => ({
       sessionId: session.sessionId,

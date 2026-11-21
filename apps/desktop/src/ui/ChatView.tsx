@@ -77,6 +77,7 @@ import {
 import { JobRunBar, useJobRun } from "./JobRunBar";
 import { LinkedThreads } from "./Links";
 import { DeviceGlyphIcon } from "./MachineGlyph";
+import { MachineSelector } from "./MachineSelector";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
@@ -312,15 +313,11 @@ function Header({
   const folderKey = useShortcutHint("thread-folder");
   const session = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id) : undefined));
   const listed = session?.title;
-  // A thread on a paired computer: the header says where it runs and
-  // whether that computer is reachable now (docs/desktop.md › Several machines).
+  // A thread on a paired computer: the header says where it runs and opens the machine mover
+  // (docs/desktop.md › Several machines).
   const machine = useMachineOfThread(thread?.id);
   const machineHost = thread ? splitThreadKey(thread.id).host : "";
   const machineEntry = useMachines((s) => s.machines.find((entry) => entry.id === machineHost));
-  const offline = useThreadOffline(thread?.id);
-  const lastUpdated = session?.updatedAt
-    ? new Date(session.updatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : undefined;
   const title = pending?.title ?? (thread ? (thread.title ?? listed ?? "New thread") : "New thread");
   const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
   const newThreadHost = useApp((s) => s.newThreadHost);
@@ -395,26 +392,29 @@ function Header({
           )}
           <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
           {thread && machine && (
-            <Tooltip
-              label={
-                offline
-                  ? `${machine} is not connected${lastUpdated ? `. Last updated ${lastUpdated}` : ""}. Its turns wait until it is back; settling or pinning it syncs then.`
-                  : `This thread runs on ${machine}. Its turns, files and shell are there, not here.`
+            <MachineSelector
+              thread={thread}
+              side="bottom"
+              align="start"
+              trigger={
+                <Pill
+                  size="sm"
+                  aria-label={`Machine: ${machine}`}
+                  className="max-w-[300px] font-normal text-fg-muted data-[state=open]:bg-fill data-[state=open]:text-fg"
+                >
+                  {machineEntry ? (
+                    <DeviceGlyphIcon
+                      glyph={machineGlyph(machineEntry)}
+                      tint={machineTint(machineEntry)}
+                      size={12}
+                    />
+                  ) : (
+                    <Laptop size={12} className="shrink-0" aria-hidden />
+                  )}
+                  <span className="truncate">{machine}</span>
+                </Pill>
               }
-            >
-              <span className="flex max-w-[300px] shrink-0 items-center gap-1 rounded-full bg-fill-subtle px-2 py-0.5 text-callout text-fg-muted">
-                {machineEntry ? (
-                  <DeviceGlyphIcon
-                    glyph={machineGlyph(machineEntry)}
-                    tint={machineTint(machineEntry)}
-                    size={12}
-                  />
-                ) : (
-                  <Laptop size={12} className="shrink-0" aria-hidden />
-                )}
-                <span className="truncate">{machine}</span>
-              </span>
-            </Tooltip>
+            />
           )}
           {/* A fork, a side chat or a delegate links back to the thread it came from. */}
           {thread && <OriginChip threadId={thread.id} />}

@@ -752,7 +752,7 @@ fn should_include_request_message(
     scope: RequestHistoryScope,
     turn_starts: Option<(usize, Option<usize>)>,
 ) -> bool {
-    if message.conversation_recap {
+    if message.conversation_recap || message.role == crate::harness::handoff::ROLE {
         return false;
     }
     // The cancellation marker is turn bookkeeping, not conversation (#1592).
