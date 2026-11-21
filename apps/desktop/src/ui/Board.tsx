@@ -7,26 +7,16 @@ import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SessionSummary } from "../acp/types";
 import { STATUS_LABEL, type ThreadStatus } from "../acp/v2";
-import { appPlatform } from "../lib/platform";
 import type { CostTotals } from "../state/pricing";
-import {
-  selectThread,
-  setThreadStatus,
-  settleThread,
-  startNewThread,
-  statusOf,
-  toggleSidebar,
-  useApp,
-  useShortcutHint,
-} from "../state/store";
+import { selectThread, setThreadStatus, settleThread, statusOf, useApp } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { DelegateTree, useDelegateCosts } from "./DelegateTree";
-import { CircleCheck, Eye, GitBranch, PanelLeft, SquarePen, Undo2 } from "./icons";
-import { HEADER_HEIGHT, SettingsButton } from "./MainHeader";
-import { Cluster, ClusterButton, cx, Pill, Tooltip } from "./primitives";
+import { CircleCheck, Eye, GitBranch, Undo2 } from "./icons";
+import { ViewHeader } from "./MainHeader";
+import { cx, Pill, Tooltip } from "./primitives";
 import { StatusIcon } from "./Status";
-import { useLightsInset } from "./Titlebar";
-import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
+
+export { ViewHeader };
 
 const COLUMNS: { status: ThreadStatus; hint: string }[] = [
   { status: "running", hint: "A turn is running" },
@@ -34,48 +24,6 @@ const COLUMNS: { status: ThreadStatus; hint: string }[] = [
   { status: "review", hint: "Ready for you to look at" },
   { status: "done", hint: "Finished, or its branch merged" },
 ];
-
-/** A header for views that replace the chat: clear of the traffic lights and the window's controls. */
-export function ViewHeader({ title, children }: { title: React.ReactNode; children?: React.ReactNode }) {
-  const sidebarHidden = useApp((s) => s.sidebarHidden);
-  const toggleKey = useShortcutHint("toggle-sidebar");
-  const newKey = useShortcutHint("new-thread");
-  const lightsInset = useLightsInset();
-  const controlsInset = windowControlsInset(appPlatform());
-  const maximizes = appPlatform() === "windows";
-  return (
-    <header
-      data-tauri-drag-region
-      onDoubleClick={maximizes ? onTitleRowDoubleClick : undefined}
-      className={cx("flex shrink-0 items-center gap-2 pr-2", !sidebarHidden && "pl-4")}
-      style={{
-        height: HEADER_HEIGHT,
-        ...(sidebarHidden ? { paddingLeft: lightsInset } : null),
-        ...(controlsInset ? { paddingRight: controlsInset } : null),
-      }}
-    >
-      {sidebarHidden && (
-        <Cluster>
-          <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
-            <PanelLeft size={14} />
-          </ClusterButton>
-          <SettingsButton />
-          <ClusterButton
-            label="New thread"
-            tooltip={`New thread (${newKey})`}
-            onClick={() => startNewThread()}
-          >
-            <SquarePen size={14} />
-          </ClusterButton>
-        </Cluster>
-      )}
-      <h1 className="min-w-0 flex-1 truncate font-semibold text-body" data-tauri-drag-region>
-        {title}
-      </h1>
-      {children}
-    </header>
-  );
-}
 
 function Card({
   session,

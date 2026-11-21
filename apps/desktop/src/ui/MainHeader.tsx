@@ -11,8 +11,15 @@
 import type { ReactNode } from "react";
 import { appPlatform } from "../lib/platform";
 import { useSettingsAttention } from "../state/settingsAttention";
-import { openSettings, type SettingsSection, toggleSidebar, useApp, useShortcutHint } from "../state/store";
-import { Settings as Gear, PanelLeft } from "./icons";
+import {
+  openSettings,
+  type SettingsSection,
+  startNewThread,
+  toggleSidebar,
+  useApp,
+  useShortcutHint,
+} from "../state/store";
+import { Settings as Gear, PanelLeft, SquarePen } from "./icons";
 import { Cluster, ClusterButton, cx } from "./primitives";
 import { TITLEBAR_HEIGHT, useLightsInset } from "./Titlebar";
 import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
@@ -49,6 +56,48 @@ export function SettingsButton() {
 
 /** The header's height: a view under it starts its content this far down. */
 export const HEADER_HEIGHT = TITLEBAR_HEIGHT;
+
+/** A header for views that replace the chat: clear of the traffic lights and the window's controls. */
+export function ViewHeader({ title, children }: { title: ReactNode; children?: ReactNode }) {
+  const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const toggleKey = useShortcutHint("toggle-sidebar");
+  const newKey = useShortcutHint("new-thread");
+  const lightsInset = useLightsInset();
+  const controlsInset = windowControlsInset(appPlatform());
+  const maximizes = appPlatform() === "windows";
+  return (
+    <header
+      data-tauri-drag-region
+      onDoubleClick={maximizes ? onTitleRowDoubleClick : undefined}
+      className={cx("flex shrink-0 items-center gap-2 pr-2", !sidebarHidden && "pl-4")}
+      style={{
+        height: HEADER_HEIGHT,
+        ...(sidebarHidden ? { paddingLeft: lightsInset } : null),
+        ...(controlsInset ? { paddingRight: controlsInset } : null),
+      }}
+    >
+      {sidebarHidden && (
+        <Cluster>
+          <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
+            <PanelLeft size={14} />
+          </ClusterButton>
+          <SettingsButton />
+          <ClusterButton
+            label="New thread"
+            tooltip={`New thread (${newKey})`}
+            onClick={() => startNewThread()}
+          >
+            <SquarePen size={14} />
+          </ClusterButton>
+        </Cluster>
+      )}
+      <h1 className="min-w-0 flex-1 truncate font-semibold text-body" data-tauri-drag-region>
+        {title}
+      </h1>
+      {children}
+    </header>
+  );
+}
 
 export function MainHeader({
   title,

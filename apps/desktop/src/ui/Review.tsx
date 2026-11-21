@@ -40,10 +40,10 @@ import {
   worktreeOf,
 } from "../state/store";
 import { isRunning } from "../state/thread";
-import { ViewHeader } from "./Board";
 import { StatusMark, splitUnifiedDiff } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
 import { ChevronDown, ChevronRight, FileDiff, Folder, MessageSquarePlus, RefreshCw, Send, X } from "./icons";
+import { ViewHeader } from "./MainHeader";
 import { cx, noTextHelpers, Pill, Segments, Select, Skeleton, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 

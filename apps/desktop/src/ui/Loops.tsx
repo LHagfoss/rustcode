@@ -37,8 +37,6 @@ import {
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { selectThread } from "../state/threadOpen";
 import { statusOf } from "../state/threadStatus";
-import { setView } from "../state/viewActions";
-import { ViewHeader } from "./Board";
 import {
   ArrowUpRight,
   ChevronRight,
@@ -53,7 +51,9 @@ import {
   Trash2,
   Webhook,
 } from "./icons";
+import { showJob } from "./JobRunBar";
 import { LoopDialog } from "./LoopDialog";
+import { ViewHeader } from "./MainHeader";
 import {
   Callout,
   cardInset,
@@ -79,11 +79,7 @@ type Tab = "jobs" | "review";
 /** A job that is not paused and has a webhook: a call can start it at any time. */
 const listening = (loop: Loop) => !loop.paused && loop.webhook;
 
-/** Open the Jobs view on one job, expanded: the way back from one of its runs. */
-export function showJob(id: string): void {
-  useLoopThreads.setState({ reveal: id });
-  setView({ kind: "loops" });
-}
+export { showJob };
 
 /** The thread a run went to on this computer; a hub job's thread is on its member. */
 const runThread = (run: { machine?: string; threadId?: string } | undefined) =>
