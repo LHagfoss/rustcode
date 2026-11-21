@@ -7,6 +7,72 @@ fn error(code: &str, message: impl Into<String>) -> Value {
     json!({"error": {"code": code, "message": message.into()}})
 }
 
+/// The checkout, branch and pull request to merge. The thread's folder comes
+/// first; when the caller names a pull request that folder's branch does not
+/// have (the checkout stays on `main` while the work happens in a worktree),
+/// the worktree of the same repository that has that pull request's branch
+/// checked out.
+async fn merge_target(
+    path: std::path::PathBuf,
+    number: Option<u64>,
+) -> Result<
+    (
+        std::path::PathBuf,
+        String,
+        crate::pull_requests::DelegatePull,
+    ),
+    Value,
+> {
+    let probe = path.clone();
+    let branch = tokio::task::spawn_blocking(move || crate::pull_requests::current_branch(&probe))
+        .await
+        .ok()
+        .flatten();
+    let own = match &branch {
+        Some(branch) => crate::pull_requests::for_branch(&path, branch)
+            .await
+            .map_err(|why| error(why.code, why.message))?,
+        None => None,
+    };
+    if let (Some(branch), Some(pull)) = (&branch, own)
+        && number.is_none_or(|number| number == pull.number)
+    {
+        return Ok((path, branch.clone(), pull));
+    }
+    let Some(number) = number else {
+        return Err(match branch {
+            Some(_) => error("not_found", "no pull request matches this thread's branch"),
+            None => error("not_found", "cannot read this thread's current branch"),
+        });
+    };
+    let pull = crate::pull_requests::by_number(&path, number)
+        .await
+        .map_err(|why| error(why.code, why.message))?
+        .ok_or_else(|| {
+            error(
+                "not_allowed",
+                format!("pull request #{number} is not from a branch of this repository"),
+            )
+        })?;
+    let (repo, head) = (path.clone(), pull.branch.clone());
+    let checkout = tokio::task::spawn_blocking(move || {
+        crate::worktrees::checkout_of_branch(&repo, &head)
+    })
+    .await
+    .ok()
+    .flatten()
+    .ok_or_else(|| {
+        error(
+            "not_allowed",
+            format!(
+                "pull request #{number}'s branch {} is not checked out in this thread's folder or any worktree of its repository",
+                pull.branch
+            ),
+        )
+    })?;
+    Ok((checkout, pull.branch.clone(), pull))
+}
+
 pub(super) async fn answer(
     caller: &str,
     args: &Value,
@@ -33,30 +99,11 @@ pub(super) async fn answer(
         .workspace_cwd
         .clone()
         .unwrap_or_else(|| super::local::project_of(target, &meta).into());
-    let probe = path.clone();
-    let Some(branch) =
-        tokio::task::spawn_blocking(move || crate::pull_requests::current_branch(&probe))
-            .await
-            .ok()
-            .flatten()
-    else {
-        return error("not_found", "cannot read this thread's current branch");
+    let number = args.get("number").and_then(Value::as_u64);
+    let (path, branch, pull) = match merge_target(path, number).await {
+        Ok(target) => target,
+        Err(refusal) => return refusal,
     };
-    let pull = match crate::pull_requests::for_branch(&path, &branch).await {
-        Ok(Some(pull)) => pull,
-        Ok(None) => return error("not_found", "no pull request matches this thread's branch"),
-        Err(why) => return error(why.code, why.message),
-    };
-    if args
-        .get("number")
-        .and_then(Value::as_u64)
-        .is_some_and(|number| number != pull.number)
-    {
-        return error(
-            "not_allowed",
-            "the PR number must match this thread's current branch",
-        );
-    }
     let Some(asker) = asker else {
         return error(
             "unavailable",

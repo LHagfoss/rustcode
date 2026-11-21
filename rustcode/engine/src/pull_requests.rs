@@ -1025,6 +1025,14 @@ pub async fn for_branch(cwd: &Path, branch: &str) -> Result<Option<DelegatePull>
     choose_for_branch(&pulls)
 }
 
+/// The pull request numbered `number`, when its head is this repository's
+/// branch (a fork's pull request is never one a thread's worktree holds).
+pub async fn by_number(cwd: &Path, number: u64) -> Result<Option<DelegatePull>, PullError> {
+    let number = number.to_string();
+    let value = gh_json(cwd, &["pr", "view", &number, "--json", LIST_FIELDS]).await?;
+    choose_for_branch(std::slice::from_ref(&value))
+}
+
 /// How often a merge re-reads the checks, and how long it waits for them. The
 /// cap is 25 minutes, like `wait_session`: an MCP client aborts a call that
 /// stays silent for about half an hour, and `pending` lets the caller ask again.
