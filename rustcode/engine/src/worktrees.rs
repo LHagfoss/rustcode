@@ -1202,7 +1202,10 @@ fn harness_local(root: &Path, entry: &str) -> bool {
         return true;
     }
     let prefix = format!("{entry}/");
-    if !HARNESS_LOCAL_FILES.iter().any(|file| file.starts_with(&prefix)) {
+    if !HARNESS_LOCAL_FILES
+        .iter()
+        .any(|file| file.starts_with(&prefix))
+    {
         return false;
     }
     let mut stack = vec![root.join(entry)];
@@ -1437,7 +1440,10 @@ fn cleanup_gone(
     let parent = path
         .parent()
         .and_then(|parent| std::fs::canonicalize(parent).ok());
-    let Some(path) = parent.zip(path.file_name()).map(|(parent, name)| parent.join(name)) else {
+    let Some(path) = parent
+        .zip(path.file_name())
+        .map(|(parent, name)| parent.join(name))
+    else {
         return Err(WorktreeError::failed(format!(
             "invalid path: {} does not exist",
             path.display()
@@ -1473,7 +1479,9 @@ fn cleanup_gone(
     let branch_ref = format!("refs/heads/{branch}");
     if git(&repo, &["rev-parse", "--verify", "--quiet", &branch_ref]).is_err() {
         forget();
-        return Ok(json!({ "removed": true, "already_gone": true, "branch": branch, "branch_removed": false }));
+        return Ok(
+            json!({ "removed": true, "already_gone": true, "branch": branch, "branch_removed": false }),
+        );
     }
     let Some(base) = cleanup_base(&repo, Some(&record)) else {
         return Err(WorktreeError {
@@ -1484,7 +1492,9 @@ fn cleanup_gone(
     let default_branch = git_line(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
     if protected_branch(&branch, &base, default_branch.as_deref()) {
         forget();
-        return Ok(json!({ "removed": true, "already_gone": true, "branch": branch, "branch_removed": false }));
+        return Ok(
+            json!({ "removed": true, "already_gone": true, "branch": branch, "branch_removed": false }),
+        );
     }
     let unknown = |message: String| WorktreeError {
         reason: "unknown",
@@ -2729,7 +2739,7 @@ pub(crate) mod tests {
         let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
         std::fs::write(
             repo.join(".gitignore"),
-            format!("{gitignore}target/\nnode_modules/\ndist/\napps/desktop/src-tauri/gen/\n"),
+            format!("{gitignore}target/\nnode_modules/\ndist/\napps/desktop/src-tauri/gen/\n.expo/\n.claude/\n"),
         )
         .unwrap();
         git(&repo, &["add", "-A"]).unwrap();
@@ -2759,6 +2769,8 @@ pub(crate) mod tests {
             ("apps/desktop/dist/assets", "app.js"),
             ("apps/desktop/src-tauri/target/debug", "build"),
             ("apps/desktop/src-tauri/gen/schemas", "desktop-schema.json"),
+            ("apps/mobile/.expo/web", "cache.json"),
+            (".claude", "settings.local.json"),
         ] {
             std::fs::create_dir_all(worktree.path.join(dir)).unwrap();
             std::fs::write(worktree.path.join(dir).join(file), "built\n").unwrap();
@@ -2772,6 +2784,67 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(answer["removed"], true);
+    }
+
+    #[test]
+    fn a_cleanup_keeps_a_claude_folder_that_holds_more_than_its_settings() {
+        let (_dir, repo) = repo();
+        let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
+        std::fs::write(repo.join(".gitignore"), format!("{gitignore}.claude/\n")).unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "ignore claude"]).unwrap();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        std::fs::create_dir_all(worktree.path.join(".claude/skills")).unwrap();
+        std::fs::write(worktree.path.join(".claude/settings.local.json"), "{}\n").unwrap();
+        std::fs::write(worktree.path.join(".claude/skills/mine.md"), "mine\n").unwrap();
+        let refused =
+            cleanup(&worktree.path, Some(&worktree.branch), None, false, None).unwrap_err();
+        assert_eq!(refused.reason, "ignored_files");
+        assert!(worktree.path.exists());
+    }
+
+    #[test]
+    fn a_cleanup_of_a_gone_worktree_prunes_it_and_deletes_a_merged_branch() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        std::fs::remove_dir_all(&worktree.path).unwrap();
+        let answer = cleanup(&worktree.path, Some(&worktree.branch), None, false, None).unwrap();
+        assert_eq!(answer["removed"], true);
+        assert_eq!(answer["already_gone"], true);
+        assert_eq!(answer["branch_removed"], true);
+        assert!(!branch_exists(&repo, &worktree.branch));
+        assert_eq!(worktree_count(&repo), 1);
+    }
+
+    #[test]
+    fn a_cleanup_of_a_gone_worktree_keeps_a_branch_with_unmerged_work() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        std::fs::write(worktree.path.join("login.txt"), "login\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "add login"]).unwrap();
+        std::fs::remove_dir_all(&worktree.path).unwrap();
+        let refused =
+            cleanup(&worktree.path, Some(&worktree.branch), None, false, None).unwrap_err();
+        assert_eq!(refused.reason, "unmerged");
+        assert!(refused.message.contains("add login"), "{}", refused.message);
+        assert!(branch_exists(&repo, &worktree.branch));
+        assert_eq!(worktree_count(&repo), 1);
     }
 
     #[test]
