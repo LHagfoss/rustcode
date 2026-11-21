@@ -174,11 +174,13 @@ export interface RemoteConnectionRoute {
   /** The `host:port` on this computer the device dialled. */
   localAddress: string;
   /**
-   * The network encrypts the traffic. Only a tunnel does (a VPN, or TLS to the public address's
-   * tunnel edge): the gateway itself speaks plain WebSocket, so a LAN connection is never
-   * encrypted whatever else is reported.
+   * The traffic is encrypted: by a tunnel (a VPN, or TLS to the public address's tunnel edge), or by
+   * the gateway's own TLS (`tls`). A plain LAN connection is never encrypted whatever else is
+   * reported.
    */
   encrypted: boolean;
+  /** The connection is the gateway's own TLS, pinned by the device, on whatever network. */
+  tls?: boolean;
 }
 
 const PROVIDER_LABELS: Record<OverlayProvider, string> = {
@@ -401,13 +403,16 @@ function parseConnectionRoutes(value: Json | undefined): RemoteConnectionRoute[]
       if (!route || !path || !localAddress) return [];
       const receivedProvider = str(route.provider);
       const provider = OVERLAY_PROVIDERS.find((known) => known === receivedProvider);
+      const tls = bool(route.tls) === true;
       return [
         {
           path,
           ...(provider ? { provider } : {}),
           localAddress,
-          // Only a tunnel encrypts; a plain network is never labelled so, whatever the frame says.
-          encrypted: ENCRYPTED_PATHS.includes(path) && bool(route.encrypted) === true,
+          // Only a tunnel or the gateway's own TLS encrypts; a plain network is never labelled so,
+          // whatever the frame says.
+          encrypted: (tls || ENCRYPTED_PATHS.includes(path)) && bool(route.encrypted) === true,
+          ...(tls ? { tls } : {}),
         },
       ];
     }) ?? []

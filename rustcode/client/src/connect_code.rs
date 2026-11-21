@@ -58,6 +58,10 @@ pub enum ConnectCode {
         host_name: Option<String>,
         routes: Vec<HostRoute>,
         credential: Secret,
+        /// The gateway's certificate fingerprint, when the code carries one:
+        /// the code then vouches for the certificate, and the secret goes
+        /// only over TLS pinned to it.
+        tls_fingerprint: Option<String>,
     },
 }
 
@@ -106,6 +110,17 @@ impl ConnectCode {
         }
     }
 
+    /// The certificate fingerprint the code vouches for: only a long code
+    /// from a gateway with its own TLS carries one.
+    pub fn tls_fingerprint(&self) -> Option<&str> {
+        match self {
+            Self::Short { .. } => None,
+            Self::Long {
+                tls_fingerprint, ..
+            } => tls_fingerprint.as_deref(),
+        }
+    }
+
     /// The addresses to try, best first: every route of a long code, the one
     /// address a short code carries, or nothing (the address is given next
     /// to the code).
@@ -133,6 +148,8 @@ struct Link {
     #[serde(default)]
     routes: Vec<HostRoute>,
     credential: Secret,
+    #[serde(default)]
+    tls_fingerprint: Option<String>,
 }
 
 /// Read a connect code in either form.
@@ -179,11 +196,18 @@ fn parse_long(encoded: &str) -> Result<ConnectCode> {
         !link.gateway_id.is_empty() && !link.credential.expose().is_empty(),
         "that connect code is incomplete: copy the whole link again"
     );
+    ensure!(
+        link.tls_fingerprint
+            .as_deref()
+            .is_none_or(crate::transport::is_fingerprint),
+        "that connect code is damaged: copy the whole link again"
+    );
     Ok(ConnectCode::Long {
         gateway_id: link.gateway_id,
         host_name: link.host_name,
         routes: link.routes,
         credential: link.credential,
+        tls_fingerprint: link.tls_fingerprint,
     })
 }
 
@@ -271,6 +295,7 @@ mod tests {
                 provider: None,
             }],
             credential: rustcode::remote_gateway::handshake::Secret::new("credential-value"),
+            tls_fingerprint: Some("ab".repeat(32)),
         };
         let written = gateway::long_code(&link);
         let parsed = parse(&written).unwrap();
@@ -278,6 +303,7 @@ mod tests {
         assert_eq!(parsed.host_name(), Some("Studio"));
         assert_eq!(parsed.secret().expose(), "credential-value");
         assert_eq!(parsed.routes()[0].address, "100.92.13.44:17879");
+        assert_eq!(parsed.tls_fingerprint(), Some("ab".repeat(32).as_str()));
         assert_eq!(parsed.routes()[0].kind, "overlay");
         // Without its prefix, and with stray whitespace around it.
         let bare = written.strip_prefix(LINK_PREFIX).unwrap();

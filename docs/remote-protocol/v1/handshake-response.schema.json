@@ -205,6 +205,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "tls_fingerprint": {
+          "description": "The SHA-256 (lowercase hex) of the certificate this gateway's port\nanswers TLS with. A device that pins it dials TLS from then on and\nnever plain `ws://` again (`docs/remote-security.md`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "type": {
           "const": "described",
           "type": "string"

@@ -113,6 +113,8 @@ rustcode-lifecycle = { path = "rustcode/core/rustcode-lifecycle" }
 rustcode-loop-detect = { path = "rustcode/core/rustcode-loop-detect" }
 rustcode-tasks = { path = "rustcode/core/rustcode-tasks" }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "tls12"] }
 
 [target.'cfg(windows)'.dependencies]
 # Interface addresses for the remote gateway's listen plan; mdns-sd already

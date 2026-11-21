@@ -475,6 +475,11 @@ pub enum HandshakeResponse {
         /// signs in its `authenticate` frame. Spent by that frame.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         challenge: Option<String>,
+        /// The SHA-256 (lowercase hex) of the certificate this gateway's port
+        /// answers TLS with. A device that pins it dials TLS from then on and
+        /// never plain `ws://` again (`docs/remote-security.md`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tls_fingerprint: Option<String>,
     },
     /// The connection request is in front of the host's owner. Wait on the
     /// same socket, sending nothing but pings, for the answer.
@@ -766,6 +771,7 @@ mod tests {
                 .map(|c| (*c).to_owned())
                 .collect(),
             challenge: None,
+            tls_fingerprint: None,
         };
         assert_eq!(
             described.to_text(),

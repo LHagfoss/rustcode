@@ -797,8 +797,8 @@ pub enum ConnectionPath {
 
 /// How one connected device reached this host and whether that path is
 /// encrypted. `encrypted` is the network's doing (a VPN, or TLS to a public
-/// tunnel's edge); the gateway itself has no TLS, so it is never true for
-/// `lan`, `loopback` or `other`.
+/// tunnel's edge) or the gateway's own TLS (`tls`, a certificate the device
+/// pinned); on `lan`, `loopback` or `other` it is true only with `tls`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ConnectionRoute {
     pub path: ConnectionPath,
@@ -808,9 +808,19 @@ pub struct ConnectionRoute {
     /// The local `host:port` the device dialled.
     pub local_address: String,
     pub encrypted: bool,
+    /// The socket is the gateway's own TLS ([`super::tls`]), whatever network
+    /// it crossed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tls: bool,
 }
 
 impl ConnectionRoute {
+    /// Mark the socket as the gateway's own TLS: encrypted on any network.
+    pub fn set_tls(&mut self) {
+        self.tls = true;
+        self.encrypted = true;
+    }
+
     /// The network in a person's words, with whether it is encrypted:
     /// `NetBird (encrypted by the tunnel)`, `LAN (not encrypted)`.
     pub fn label(&self) -> String {
@@ -823,6 +833,7 @@ impl ConnectionRoute {
             (ConnectionPath::Tunnel, _) => "the public address",
         };
         let state = match (self.encrypted, self.path) {
+            (true, _) if self.tls => "encrypted by RustCode",
             (true, ConnectionPath::Tunnel) => "encrypted to the tunnel's edge",
             (true, _) => "encrypted by the tunnel",
             (false, _) => "not encrypted",
@@ -859,6 +870,7 @@ pub fn connection_route(local: SocketAddr, candidates: &[Candidate]) -> Connecti
         provider,
         local_address: SocketAddr::new(address, local.port()).to_string(),
         encrypted: path == ConnectionPath::Overlay,
+        tls: false,
     }
 }
 
@@ -871,6 +883,7 @@ pub fn tunnel_route(local: SocketAddr) -> ConnectionRoute {
         provider: None,
         local_address: local.to_string(),
         encrypted: true,
+        tls: false,
     }
 }
 

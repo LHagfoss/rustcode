@@ -39,6 +39,7 @@ pub mod pairing_watch;
 pub mod qr;
 pub mod router;
 pub mod service;
+pub mod tls;
 mod transport;
 pub mod wire_names;
 pub mod workspace;

@@ -395,13 +395,15 @@ async fn refusals_with(harness: &Harness, reason: RefusalReason) -> Vec<RefusedC
 }
 
 #[tokio::test]
-async fn a_tls_dial_to_the_plain_gateway_is_kept_for_the_owner() {
+async fn a_failed_tls_handshake_is_kept_for_the_owner() {
     let harness = Harness::start().await;
-    // The start of a TLS ClientHello, as a phone dialing `wss://` sends it.
+    // A ClientHello that goes nowhere, as from a device that gives up on the
+    // certificate (one pinned to another install's).
     let mut stream = bounded(TcpStream::connect(harness.addr)).await.unwrap();
     bounded(stream.write_all(&[0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00]))
         .await
         .unwrap();
+    bounded(stream.shutdown()).await.unwrap();
     let refused = refusals_with(&harness, RefusalReason::SecureConnection).await;
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert_eq!(refused[0].remote_addr, "127.0.0.1");
@@ -1894,6 +1896,12 @@ mod device_keys {
             .await;
         let described = client.next_json().await;
         assert_eq!(described["type"], "described", "{described}");
+        // Every gateway offers its own TLS, by the fingerprint clients pin.
+        assert_eq!(
+            described["tls_fingerprint"].as_str().map(str::len),
+            Some(64),
+            "{described}"
+        );
         assert!(
             described["capabilities"]
                 .as_array()

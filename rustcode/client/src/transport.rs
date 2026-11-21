@@ -6,12 +6,14 @@
 //! [`Connection`] for plain remote-protocol frames or switches the socket to
 //! ACP ([`AcpChannel`]).
 //!
-//! The gateway itself has no TLS listener (`docs/remote.md` › Security
-//! posture): on a LAN or a private overlay such as Tailscale or NetBird this
-//! dials plain `ws://`, and the overlay is what encrypts the traffic. A
-//! `wss://` address is a machine's public address, a tunnel (cloudflared) to
-//! its engine's HTTP listener, which relays `/ws` to the gateway: TLS runs
-//! to the tunnel's edge, verified against the operating system's trust store.
+//! The gateway port answers plain `ws://` and its own TLS with a self-signed
+//! certificate (`docs/remote-security.md` › Direct TLS). A machine whose
+//! certificate fingerprint is known is dialled with TLS pinned to it
+//! ([`Connection::open_pinned`]); one whose fingerprint is not known yet is
+//! dialled plain, and the overlay, if any, is what encrypts it. A `wss://`
+//! address is a machine's public address, a tunnel (cloudflared) to its
+//! engine's HTTP listener, which relays `/ws` to the gateway: TLS runs to the
+//! tunnel's edge, verified against the operating system's trust store.
 
 use crate::protocol::{
     AcpClientFrame, AcpServerFrame, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES,
@@ -69,6 +71,125 @@ fn tls_connector() -> Result<tokio_rustls::TlsConnector> {
     }
 }
 
+/// TLS pinned to one certificate: the SHA-256 of its DER must be `fingerprint`
+/// (lowercase hex). Names, dates and issuers are not checked, because the
+/// gateway's certificate is self-signed and only its fingerprint vouches for
+/// it; the handshake signature still proves the peer holds the key.
+#[derive(Debug)]
+struct Pinned {
+    fingerprint: String,
+    provider: Arc<tokio_rustls::rustls::crypto::CryptoProvider>,
+}
+
+impl tokio_rustls::rustls::client::danger::ServerCertVerifier for Pinned {
+    fn verify_server_cert(
+        &self,
+        end_entity: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[tokio_rustls::rustls::pki_types::CertificateDer<'_>],
+        _server_name: &tokio_rustls::rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: tokio_rustls::rustls::pki_types::UnixTime,
+    ) -> Result<tokio_rustls::rustls::client::danger::ServerCertVerified, tokio_rustls::rustls::Error>
+    {
+        if certificate_fingerprint(end_entity) == self.fingerprint {
+            Ok(tokio_rustls::rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(tokio_rustls::rustls::Error::InvalidCertificate(
+                tokio_rustls::rustls::CertificateError::ApplicationVerificationFailure,
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+        dss: &tokio_rustls::rustls::DigitallySignedStruct,
+    ) -> Result<
+        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+        tokio_rustls::rustls::Error,
+    > {
+        tokio_rustls::rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+        dss: &tokio_rustls::rustls::DigitallySignedStruct,
+    ) -> Result<
+        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+        tokio_rustls::rustls::Error,
+    > {
+        tokio_rustls::rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+/// The SHA-256 of a certificate's DER, lowercase hex: what a machine's
+/// `tls_fingerprint` names.
+pub fn certificate_fingerprint(der: &[u8]) -> String {
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, der);
+    hex::encode(digest.as_ref())
+}
+
+/// Whether `fingerprint` reads as one: 64 lowercase hex digits.
+pub fn is_fingerprint(fingerprint: &str) -> bool {
+    fingerprint.len() == 64
+        && fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn pinned_connector(fingerprint: &str) -> Result<tokio_rustls::TlsConnector> {
+    use tokio_rustls::rustls;
+    ensure!(
+        is_fingerprint(fingerprint),
+        "the saved certificate fingerprint is not one; pair again"
+    );
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let verifier = Arc::new(Pinned {
+        fingerprint: fingerprint.to_owned(),
+        provider: Arc::clone(&provider),
+    });
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|error| anyhow::anyhow!("TLS is unavailable on this computer: {error}"))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    Ok(tokio_rustls::TlsConnector::from(Arc::new(config)))
+}
+
+/// The name a pinned dial presents. The gateway serves one certificate
+/// whatever the name, and the pin, not the name, is what is checked.
+const PINNED_SERVER_NAME: &str = "rustcode-gateway";
+
+/// How the socket under the WebSocket is secured.
+#[derive(Clone, Copy)]
+enum Security<'a> {
+    Plain,
+    /// `wss://`: the operating system's trust store, for a public address.
+    Platform,
+    /// The gateway's own certificate, by fingerprint.
+    Pinned(&'a str),
+}
+
 /// Whether `address` is a TLS (`wss://` or `https://`) address: a machine's
 /// public address behind a tunnel.
 pub fn is_tls(address: &str) -> bool {
@@ -84,9 +205,18 @@ pub struct Connection {
     /// The challenge this socket's `described` frame carried, for a machine
     /// that takes device keys; spent by the next `authenticate`.
     challenge: Option<String>,
+    /// The certificate fingerprint this socket's TLS was pinned to, when it
+    /// was dialled with [`Connection::open_pinned`].
+    pinned: Option<String>,
 }
 
 impl Connection {
+    /// The certificate fingerprint this socket is pinned to: `None` on plain
+    /// `ws://` and on a `wss://` public address.
+    pub fn pinned(&self) -> Option<&str> {
+        self.pinned.as_deref()
+    }
+
     /// Keep the challenge the machine's `described` frame carried.
     pub fn set_challenge(&mut self, challenge: Option<String>) {
         self.challenge = challenge;
@@ -107,6 +237,38 @@ impl Connection {
     }
 
     pub async fn open_with_timeout(address: &str, timeout: Duration) -> Result<Self> {
+        let security = if is_tls(address) {
+            Security::Platform
+        } else {
+            Security::Plain
+        };
+        Self::open_secured(address, timeout, security).await
+    }
+
+    /// Dial `address` with TLS pinned to `fingerprint`, the gateway's own
+    /// certificate. Nothing is retried in the clear: a machine that pinned
+    /// TLS and now answers plain, or with another certificate, is refused.
+    /// A `wss://` address keeps the trust store; the pin is the gateway's
+    /// and the tunnel's edge has its own certificate.
+    pub async fn open_pinned(address: &str, fingerprint: &str, timeout: Duration) -> Result<Self> {
+        if is_tls(address) {
+            return Self::open_with_timeout(address, timeout).await;
+        }
+        Self::open_secured(address, timeout, Security::Pinned(fingerprint))
+            .await
+            .with_context(|| {
+                format!(
+                    "{address} did not answer with the certificate saved for this machine, \
+                     so nothing was sent; if RustCode there was reinstalled, pair again"
+                )
+            })
+    }
+
+    async fn open_secured(
+        address: &str,
+        timeout: Duration,
+        security: Security<'_>,
+    ) -> Result<Self> {
         let url = websocket_url(address)?;
         let target = dial_target(address)?;
         let socket = tokio::time::timeout(timeout, TcpStream::connect(target))
@@ -115,17 +277,34 @@ impl Connection {
             .with_context(|| format!("could not connect to {address}"))?;
         // A prompt's worth of output is small; do not wait on Nagle for it.
         let _ = socket.set_nodelay(true);
-        let socket: Box<dyn Stream> = if is_tls(address) {
-            let host = host_part(address).to_owned();
-            let name = tokio_rustls::rustls::pki_types::ServerName::try_from(host)
-                .with_context(|| format!("{address} is not a host name TLS can verify"))?;
-            let tls = tokio::time::timeout(timeout, tls_connector()?.connect(name, socket))
-                .await
-                .with_context(|| format!("{address} did not finish the TLS handshake in time"))?
-                .with_context(|| format!("the TLS handshake with {address} failed"))?;
-            Box::new(tls)
-        } else {
-            Box::new(socket)
+        let (connector, name) = match security {
+            Security::Plain => (None, None),
+            Security::Platform => {
+                let host = host_part(address).to_owned();
+                let name = tokio_rustls::rustls::pki_types::ServerName::try_from(host)
+                    .with_context(|| format!("{address} is not a host name TLS can verify"))?;
+                (Some(tls_connector()?), Some(name))
+            }
+            Security::Pinned(fingerprint) => (
+                Some(pinned_connector(fingerprint)?),
+                Some(tokio_rustls::rustls::pki_types::ServerName::try_from(
+                    PINNED_SERVER_NAME,
+                )?),
+            ),
+        };
+        let pinned = match security {
+            Security::Pinned(fingerprint) => Some(fingerprint.to_owned()),
+            _ => None,
+        };
+        let socket: Box<dyn Stream> = match connector.zip(name) {
+            Some((connector, name)) => {
+                let tls = tokio::time::timeout(timeout, connector.connect(name, socket))
+                    .await
+                    .with_context(|| format!("{address} did not finish the TLS handshake in time"))?
+                    .with_context(|| format!("the TLS handshake with {address} failed"))?;
+                Box::new(tls)
+            }
+            None => Box::new(socket),
         };
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_FRAME_BYTES))
@@ -138,6 +317,7 @@ impl Connection {
         Ok(Self {
             socket,
             challenge: None,
+            pinned,
         })
     }
 

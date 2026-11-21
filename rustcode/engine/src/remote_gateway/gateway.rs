@@ -337,6 +337,8 @@ pub(super) struct Shared {
     reached_since_challenge: AtomicBool,
     /// The members linked to this machine while it is the fleet's hub.
     pub(super) members: super::hub_link::Members,
+    /// The certificate the gateway port answers TLS with ([`super::tls`]).
+    pub(super) tls: super::tls::TlsIdentity,
 }
 
 /// One of the bounded slots for sockets that have not authenticated.
@@ -1366,6 +1368,7 @@ impl Shared {
                 .map(|capability| (*capability).to_owned())
                 .collect(),
             challenge: Some(challenge.to_owned()),
+            tls_fingerprint: Some(self.tls.fingerprint().to_owned()),
         }
     }
 
@@ -1387,6 +1390,7 @@ impl Shared {
             host_name: self.host_name.clone(),
             routes: routes.clone(),
             credential: secrets.credential,
+            tls_fingerprint: Some(self.tls.fingerprint().to_owned()),
         };
         MachineOfferDetails {
             code: Secret::new(connect_code::short_code(address, short_secret)),
@@ -1650,6 +1654,7 @@ impl Gateway {
     pub async fn bind(lifecycle: &RemoteLifecycle, config: GatewayConfig) -> Result<Self> {
         let lock = lifecycle.claim()?;
         let gateway_id = lifecycle.gateway_id(&lock)?;
+        let tls = super::tls::TlsIdentity::load_or_create(&lifecycle.tls_path())?;
         let store = lifecycle.device_store();
         let notes = lifecycle.revocation_notes();
         // Notes a failed revocation write left must be read and applied before
@@ -1743,6 +1748,7 @@ impl Gateway {
             refusals: Mutex::new(Refusals::default()),
             reached_since_challenge: AtomicBool::new(false),
             members: super::hub_link::Members::new(&lifecycle.config_directory()),
+            tls,
         });
         Ok(Self {
             listener,

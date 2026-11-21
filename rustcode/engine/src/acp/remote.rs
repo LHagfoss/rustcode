@@ -1360,7 +1360,8 @@ fn devices_json(
 /// The networks a device's open connections arrived over, one entry each:
 /// `path` (`loopback`, `lan`, `overlay`, `tunnel` or `other`), the overlay's
 /// `provider` when the interface names it, the `localAddress` it dialled and
-/// whether the network `encrypted` the traffic. A gateway that does not
+/// whether the network or the gateway's own TLS (`tls`) `encrypted` the
+/// traffic. A gateway that does not
 /// classify connections yields none.
 fn connection_routes_json(connections: &[ConnectionSummary], device_id: &str) -> Vec<Value> {
     connections
@@ -1372,10 +1373,13 @@ fn connection_routes_json(connections: &[ConnectionSummary], device_id: &str) ->
                 "path": route.path,
                 "provider": route.provider,
                 "localAddress": route.local_address,
-                // Only a tunnel encrypts: whatever else a frame says, a plain
-                // network (or one nothing is known about) never reads as so.
+                "tls": route.tls,
+                // Only a tunnel or the gateway's TLS encrypts: whatever else a
+                // frame says, a plain network (or one nothing is known about)
+                // never reads as so.
                 "encrypted": route.encrypted
-                    && matches!(route.path, ConnectionPath::Overlay | ConnectionPath::Tunnel),
+                    && (route.tls
+                        || matches!(route.path, ConnectionPath::Overlay | ConnectionPath::Tunnel)),
             })
         })
         .collect()
@@ -2476,6 +2480,7 @@ mod tests {
             provider,
             local_address: "100.90.16.237:17879".into(),
             encrypted,
+            tls: false,
         };
         let connections = vec![
             ConnectionSummary {
@@ -2504,12 +2509,26 @@ mod tests {
                 "path": "overlay",
                 "provider": "netbird",
                 "localAddress": "100.90.16.237:17879",
+                "tls": false,
                 "encrypted": true,
             })]
         );
         assert_eq!(
             connection_routes_json(&connections, "bb")[0]["encrypted"],
             false
+        );
+        // The gateway's own TLS encrypts on the LAN too.
+        let mut tls = route(ConnectionPath::Lan, None, false);
+        tls.set_tls();
+        let over_tls = [ConnectionSummary {
+            device_id: "dd".into(),
+            device_name: "laptop".into(),
+            route: Some(tls),
+        }];
+        let listed = connection_routes_json(&over_tls, "dd");
+        assert_eq!(
+            (&listed[0]["encrypted"], &listed[0]["tls"]),
+            (&json!(true), &json!(true))
         );
         assert!(connection_routes_json(&connections, "cc").is_empty());
         assert!(connection_routes_json(&connections, "missing").is_empty());
@@ -2537,6 +2556,7 @@ mod tests {
                 provider: None,
                 local_address: address.into(),
                 encrypted: path == ConnectionPath::Overlay,
+                tls: false,
             }),
         }
     }

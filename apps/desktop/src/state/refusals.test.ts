@@ -45,10 +45,10 @@ describe("a refused connection", () => {
     expect(copy.detail).toContain("Pair it again");
   });
 
-  test("a secure dial to the plain gateway says to drop https/wss", () => {
+  test("a failed TLS handshake says the device did not trust the certificate", () => {
     const copy = refusalCopy(refused({ reason: "secure_connection" }));
-    expect(copy.title).toContain("wss://");
-    expect(copy.detail).toContain("plain WebSocket");
+    expect(copy.title).toContain("certificate");
+    expect(copy.detail).toContain("Pair that device again");
   });
 
   test("a first message nobody understands points at the app version on both sides", () => {

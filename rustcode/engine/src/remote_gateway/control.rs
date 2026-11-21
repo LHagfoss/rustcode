@@ -409,8 +409,11 @@ pub enum RefusalReason {
     /// refused before a single frame arrived: a browser, or an app build older
     /// than the one that sends the native app origin.
     UnexpectedOrigin,
-    /// The device opened a TLS connection (`wss://`, `https://`) to a gateway
-    /// that speaks plain WebSocket, so nothing it sent could be read.
+    /// The device opened a TLS connection whose handshake failed: it does not
+    /// trust this computer's certificate (it pinned another install's, or it
+    /// dialled `wss://` and checked the operating system's trust store).
+    /// The wire name predates the gateway's own TLS, when every TLS dial
+    /// ended here.
     SecureConnection,
     /// The first frame was JSON text the gateway could not read as a pair,
     /// authenticate or connect request: an app build whose handshake differs
@@ -429,7 +432,9 @@ impl RefusalReason {
             Self::TokenReplayed => "pairing revoked (a retired token was used)",
             Self::KeyRequired => "token used for a device that signs in with its key",
             Self::UnexpectedOrigin => "unexpected app origin, refused before any frame",
-            Self::SecureConnection => "TLS (wss://) dial to a plain WebSocket gateway",
+            Self::SecureConnection => {
+                "TLS handshake failed (device does not trust this certificate)"
+            }
             Self::UnrecognizedRequest => "first frame not understood (different app version?)",
         }
     }

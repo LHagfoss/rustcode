@@ -13,6 +13,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use rustcode::remote_gateway::address::plan_listen;
+use rustcode::remote_gateway::control::RefusalReason;
 use rustcode::remote_gateway::gateway::{Gateway, GatewayConfig, Limits};
 use rustcode::remote_gateway::hub::{HubLimits, SessionHub};
 use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
@@ -71,6 +72,18 @@ impl Host {
 
     fn config_dir(&self) -> &Path {
         self.dir.path()
+    }
+
+    /// The fingerprint of the certificate this gateway answers TLS with, read
+    /// from its own file the way nothing on the wire could forge.
+    fn tls_fingerprint(&self) -> String {
+        use base64::Engine as _;
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(self.lifecycle.tls_path()).unwrap()).unwrap();
+        let der = base64::engine::general_purpose::STANDARD
+            .decode(stored["certificate"].as_str().unwrap())
+            .unwrap();
+        transport::certificate_fingerprint(&der)
     }
 
     async fn stop(self) {
@@ -560,6 +573,8 @@ async fn a_revoked_device_is_told_to_pair_again() {
     let config = tempfile::tempdir_in("/tmp").unwrap();
     let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
     let (machine, tokens, _paired) = pair(&host, &connector, config.path()).await;
+    // Refused over the machine's own TLS, which the pairing pinned.
+    assert_eq!(machine.tls_fingerprint, Some(host.tls_fingerprint()));
 
     let revoked = host
         .lifecycle
@@ -883,6 +898,9 @@ async fn a_connect_code_pairs_once_without_an_accept_step() {
     assert_eq!(route.address, host.address());
     let welcome = paired.session.welcome().clone();
     assert_eq!(welcome.gateway_id, status.gateway_id);
+    // The short code carries no fingerprint; the machine offered its own
+    // and the secret went over TLS pinned to it.
+    assert_eq!(welcome.tls_fingerprint, Some(host.tls_fingerprint()));
     drop(paired);
 
     // The device has full thread access: the owner created the code.
@@ -983,14 +1001,18 @@ async fn a_stranger_on_a_saved_address_gets_no_token_and_cannot_unpair() {
         !rustcode_client::needs_new_pairing(&error),
         "a stranger's answer must not end the retries: {error:#}"
     );
+    // The pairing pinned the real machine's certificate, so the stranger's
+    // own fails the TLS handshake before a single frame.
     assert!(
-        format!("{error:#}").contains("token was not sent"),
+        format!("{error:#}").contains("nothing was sent"),
         "{error:#}"
     );
     let seen = stranger.lifecycle.status().await.unwrap().unwrap();
     assert!(
-        seen.refused_connections.is_empty(),
-        "the stranger was sent nothing to refuse: {:?}",
+        seen.refused_connections
+            .iter()
+            .all(|refused| refused.reason == RefusalReason::SecureConnection),
+        "the stranger was sent nothing but a TLS hello: {:?}",
         seen.refused_connections
     );
     // The token is intact: the real machine still takes it.
@@ -1078,4 +1100,189 @@ async fn the_token_gives_way_to_this_installs_key() {
         "{message}"
     );
     host.stop().await;
+}
+
+/// Pairing pins the machine's own certificate (#2651): the request, the code
+/// and the token travel over TLS, every sign-in after it does too, and the
+/// machine reports the connection as its own TLS, encrypted on the LAN.
+#[tokio::test]
+async fn pairing_pins_the_certificate_and_every_sign_in_is_tls() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (machine, tokens, paired) = pair(&host, &connector, config.path()).await;
+    let fingerprint = host.tls_fingerprint();
+    assert_eq!(
+        paired.session.welcome().tls_fingerprint.as_deref(),
+        Some(fingerprint.as_str())
+    );
+    assert_eq!(
+        machine.tls_fingerprint.as_deref(),
+        Some(fingerprint.as_str())
+    );
+    drop(paired);
+
+    let (session, _) = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the pinned machine signs in");
+    assert_eq!(
+        session.welcome().tls_fingerprint.as_deref(),
+        Some(fingerprint.as_str())
+    );
+    let status = host.lifecycle.status().await.unwrap().unwrap();
+    let routes: Vec<_> = status
+        .connections
+        .iter()
+        .filter_map(|connection| connection.route.clone())
+        .collect();
+    assert!(!routes.is_empty(), "{status:?}");
+    assert!(
+        routes.iter().all(|route| route.tls && route.encrypted),
+        "{routes:?}"
+    );
+    drop(session);
+    host.stop().await;
+}
+
+/// A machine paired before the gateway had TLS learns the pin on its next
+/// sign-in: the machine offers its fingerprint, the client dials again over
+/// TLS before sending anything secret, and saves the pin once that sign-in
+/// succeeds.
+#[tokio::test]
+async fn a_machine_paired_in_the_clear_is_pinned_on_its_next_sign_in() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (mut machine, tokens, paired) = pair(&host, &connector, config.path()).await;
+    drop(paired);
+    machine.tls_fingerprint = None;
+    let mut registry = MachineRegistry::load(config.path()).unwrap();
+    registry.insert(machine.clone()).unwrap();
+    // `insert` keeps a pin only from a pairing; this record has none.
+    assert_eq!(
+        MachineRegistry::load(config.path())
+            .unwrap()
+            .get(&machine.host_id)
+            .unwrap()
+            .tls_fingerprint,
+        None
+    );
+
+    let (session, _) = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("connects");
+    assert_eq!(
+        session.welcome().tls_fingerprint,
+        Some(host.tls_fingerprint())
+    );
+    drop(session);
+    let saved = MachineRegistry::load(config.path()).unwrap();
+    assert_eq!(
+        saved.get(&machine.host_id).unwrap().tls_fingerprint,
+        Some(host.tls_fingerprint())
+    );
+    host.stop().await;
+}
+
+/// A certificate other than the pinned one, as after a reinstall or from an
+/// impostor, is refused before anything is sent; the pairing survives it.
+#[tokio::test]
+async fn a_changed_certificate_is_refused_and_nothing_is_sent() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (mut machine, tokens, paired) = pair(&host, &connector, config.path()).await;
+    drop(paired);
+    let real = machine.tls_fingerprint.clone();
+    machine.tls_fingerprint = Some("00".repeat(32));
+
+    let error = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect_err("another certificate is refused");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("certificate saved for this machine"),
+        "{message}"
+    );
+    assert!(message.contains("nothing was sent"), "{message}");
+    // The device's own handshake failure is what the owner sees.
+    let status = host.lifecycle.status().await.unwrap().unwrap();
+    assert!(
+        status
+            .refused_connections
+            .iter()
+            .all(|refused| refused.reason == RefusalReason::SecureConnection),
+        "{:?}",
+        status.refused_connections
+    );
+
+    machine.tls_fingerprint = real;
+    connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the pairing survived");
+    host.stop().await;
+}
+
+/// The downgrade a pin exists to refuse: a pinned machine's address that
+/// answers plain WebSocket, as a gateway without TLS or a spoofer on the LAN
+/// would, gets a TLS hello and nothing else, never a plain `describe`.
+#[tokio::test]
+async fn a_pinned_machine_is_never_dialled_in_the_clear() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        // A plain WebSocket server cannot read a ClientHello as an upgrade.
+        let upgraded = tokio_tungstenite::accept_async(stream).await;
+        let _ = seen_tx.send(upgraded.is_ok());
+        // A second dial would be the fallback; there must not be one.
+        let again = tokio::time::timeout(Duration::from_secs(2), listener.accept()).await;
+        assert!(
+            again.is_err(),
+            "the client dialled again after the pin failed"
+        );
+    });
+
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let mut machine = Machine::new(
+        "gw-pinned-00112233",
+        "Studio",
+        "macos",
+        "0011223344556677",
+        Route::new(addr.to_string()),
+        chrono::Utc::now(),
+    );
+    machine.describes = true;
+    machine.tls_fingerprint = Some("ab".repeat(32));
+    let tokens = TokenStore::in_file(config.path()).unwrap();
+    tokens
+        .set(&machine.host_id, &Secret::new("a-device-token"))
+        .unwrap();
+
+    let error = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect_err("a plain answer is refused");
+    assert!(
+        format!("{error:#}").contains("nothing was sent"),
+        "{error:#}"
+    );
+    assert!(
+        !rustcode_client::needs_new_pairing(&error),
+        "a downgrade is not the machine refusing the pairing: {error:#}"
+    );
+    assert!(
+        !tokio::time::timeout(WAIT, seen_rx).await.unwrap().unwrap(),
+        "the plain server completed a WebSocket upgrade"
+    );
+    tokio::time::timeout(WAIT, server)
+        .await
+        .unwrap()
+        .expect("the client never fell back to plain");
 }
