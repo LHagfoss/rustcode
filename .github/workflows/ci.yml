@@ -251,6 +251,13 @@ jobs:
             - name: Check out repository
               uses: actions/checkout@v7
 
+            - name: Check no new code comments
+              # Ratchet over Rust and TypeScript (docs/adr/0001-comment-ratchet.md):
+              # a file may not gain comment lines, and the baseline shrinks.
+              run: |
+                  python3 scripts/check-comments.py --self-test
+                  python3 scripts/check-comments.py
+
             - name: Install Rust toolchain
               if: env.AFFECTED_PACKAGES != ''
               uses: dtolnay/rust-toolchain@stable

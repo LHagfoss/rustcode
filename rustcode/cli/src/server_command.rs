@@ -131,12 +131,8 @@ async fn repair(yes: bool) -> anyhow::Result<i32> {
 
 async fn restart(when_idle: bool, yes: bool, detached: bool) -> anyhow::Result<i32> {
     if detached {
-        // The helper of a restart started inside the server: let that command
-        // end and its thread record the result before the server stops.
         tokio::time::sleep(service::HELPER_DELAY).await;
     }
-    // A caller that descends from the server cannot restart it: stopping the
-    // server ends the caller before it starts the new one.
     let live = service::live_status().await;
     let inside = live
         .as_ref()
@@ -153,8 +149,6 @@ async fn restart(when_idle: bool, yes: bool, detached: bool) -> anyhow::Result<i
                 return Ok(1);
             }
         }
-        // The turn of a thread inside the server runs until this command
-        // ends, so the helper does the waiting.
         service::RestartPlan::WaitForIdle if run == service::RestartRun::Detached => {}
         service::RestartPlan::WaitForIdle => {
             let _pending = service::mark_restart_pending()?;
@@ -280,7 +274,6 @@ async fn update_cli(json: bool) -> anyhow::Result<i32> {
         copies.push(report);
     }
     if json {
-        // `update_installed_copies` always answers at least one copy.
         let first = copies[0].clone();
         let report = UpdatedCli {
             first,
@@ -457,7 +450,6 @@ async fn show_logs(follow: bool, lines: usize) -> anyhow::Result<i32> {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let new = follower.read_new()?;
         if !new.is_empty() {
-            // A closed pipe (`| head`) ends the command.
             if stdout
                 .write_all(new.as_bytes())
                 .and_then(|()| stdout.flush())

@@ -140,10 +140,11 @@ export function modeLabel(mode: PermissionMode): string {
 /**
  * The option to answer `request` with under `mode`, or null to ask the user.
  * Questions always reach the user, and so does a plan's "switch mode" request:
- * that one is the user's review of the plan, not a safety prompt.
+ * that one is the user's review of the plan, not a safety prompt. So does a
+ * secret: only the user can type its value, and an allow without one fails.
  */
 export function autoAnswer(request: PermissionRequest, mode: PermissionMode): PermissionOption | null {
-  if (mode === "ask" || request.question || request.toolKind === "switch_mode") return null;
+  if (mode === "ask" || request.question || request.secret || request.toolKind === "switch_mode") return null;
   if (mode === "edits" && !EDIT_KINDS.has(kindOf(request))) return null;
   return allowOption(request);
 }
