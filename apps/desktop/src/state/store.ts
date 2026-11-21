@@ -366,7 +366,18 @@ export {
   releaseAnnouncements,
   settleKeptUnlisted,
   tombstoneThread,
+  untombstoneThread,
 } from "./threadListGuards";
+export {
+  moveMachineBlockedReason,
+  moveThreadToMachine,
+  planMachineMoveDestination,
+  rememberedMachineOrigin,
+  rememberMachineOrigin,
+  resetMoveMachineForTests,
+  resolveTargetHarness,
+  useMovingMachine,
+} from "./threadMoveMachine";
 export {
   announceFinished,
   applySnooze,

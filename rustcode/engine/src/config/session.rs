@@ -2,8 +2,8 @@ use super::*;
 use crate::app::ChatMessage;
 use rustcode_session::SessionStore;
 pub use rustcode_session::{
-    HistorySnapshot, SessionMeta, SessionMigrationReport, SessionScope, SessionSearchHit,
-    SessionWorkspace, WorkspaceDescriptor, WorkspaceManager, WorkspaceRequest,
+    HistorySnapshot, MachineOrigin, SessionMeta, SessionMigrationReport, SessionScope,
+    SessionSearchHit, SessionWorkspace, WorkspaceDescriptor, WorkspaceManager, WorkspaceRequest,
 };
 use sha2::Digest;
 use std::collections::HashMap;
@@ -998,6 +998,41 @@ pub fn delete_session_file(path: &Path) {
         crate::checkpoints::delete_session(&cwd, &session_id);
     }
     SessionStore::delete_session_file(path);
+}
+
+/// Remove a thread's directory (and any checkpoint refs) inside the session store.
+pub fn delete_session_by_id(session_id: &str) -> bool {
+    if !rustcode_session::valid_session_id(session_id) {
+        return false;
+    }
+    if let Some(cwd) = crate::checkpoints::thread_cwd(session_id) {
+        crate::checkpoints::delete_session(&cwd, session_id);
+    }
+    store().is_some_and(|session_store| session_store.delete_session_by_id(session_id))
+}
+
+/// Record the machines this thread previously ran on so moving it back
+/// restores its folder, harness login, and untouched native session.
+pub fn save_session_machine_origins(
+    session_id: &str,
+    origins: std::collections::BTreeMap<String, MachineOrigin>,
+) {
+    if !rustcode_session::valid_session_id(session_id) {
+        return;
+    }
+    if let Some(session_store) = store()
+        && let Err(error) = session_store.save_session_machine_origins(session_id, origins)
+    {
+        crate::dbg_log!("failed to record machine origins for session {session_id}: {error}");
+    }
+}
+
+pub fn load_session_machine_origins(
+    session_id: &str,
+) -> std::collections::BTreeMap<String, MachineOrigin> {
+    store()
+        .map(|session_store| session_store.load_session_machine_origins(session_id))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

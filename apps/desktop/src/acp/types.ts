@@ -20,6 +20,9 @@ export const Method = {
   sessionClose: "session/close",
   sessionMove: "_rustcode/session/move",
   sessionRepair: "_rustcode/session/repair",
+  sessionExport: "_rustcode/session/export",
+  sessionImport: "_rustcode/session/import",
+  sessionRemove: "_rustcode/session/remove",
   sessionTurnPhase: "_rustcode/session/turnPhase",
   sessionActivity: "_rustcode/session/activity",
   /** What the processes a harness started do while its turn runs (CPU), sampled by the engine. */
@@ -141,6 +144,8 @@ export interface AgentInfo {
   sessionMove: boolean;
   /** `_rustcode/session/repair`: Repair Thread for one that will not open. */
   sessionRepair: boolean;
+  /** `_rustcode/session/{export,import,remove}`: an idle thread can move between machines. */
+  sessionTransfer: boolean;
   /**
    * `_rustcode/checkpoints/restore` with `keep`: a rewind keeps the state it abandons as a
    * checkpoint, so the attempt it leaves can be returned to.
@@ -179,6 +184,7 @@ export function parseAgentInfo(result: Json): AgentInfo {
     pullRequests: num(meta?.pullRequests) !== undefined,
     sessionMove: num(meta?.sessionMove) !== undefined,
     sessionRepair: num(meta?.sessionRepair) !== undefined,
+    sessionTransfer: num(meta?.sessionTransfer) !== undefined,
     checkpointAttempts: (num(meta?.checkpoints) ?? 0) >= 2,
     lineage: num(meta?.lineage) !== undefined,
   };
@@ -622,8 +628,16 @@ export type SessionUpdate =
    * phase) or `failed` with the reason in `text`.
    */
   | { kind: "compaction"; text: string; phase?: CompactionPhase }
-  /** The thread moved to another harness here (`_meta.rustcode.kind == "handoff"`). */
-  | { kind: "handoff"; from: string; to: string; model?: string }
+  /** The thread moved to another harness or machine here (`_meta.rustcode.kind == "handoff"`). */
+  | {
+      kind: "handoff";
+      from: string;
+      to: string;
+      model?: string;
+      fromMachine?: string;
+      toMachine?: string;
+      resumedNative?: boolean;
+    }
   /** The thread's model or effort changed here (`_meta.rustcode.kind == "switch"`). */
   | { kind: "switch"; change: ChoiceChange }
   | {
@@ -757,11 +771,17 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         };
       }
       if (str(meta?.kind) === "handoff") {
+        const fromMachine = str(meta?.from_machine);
+        const toMachine = str(meta?.to_machine);
+        const resumedNative = bool(meta?.resumed_native);
         return {
           kind: "handoff",
           from: str(meta?.from) ?? "",
           to: str(meta?.to) ?? "",
           model: str(meta?.model),
+          ...(fromMachine ? { fromMachine } : {}),
+          ...(toMachine ? { toMachine } : {}),
+          ...(resumedNative ? { resumedNative } : {}),
         };
       }
       if (str(meta?.kind) === "switch") {

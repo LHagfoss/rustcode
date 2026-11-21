@@ -22,6 +22,7 @@ import {
   useLocalIdentity,
   useMachines,
 } from "../state/machines";
+import { registeredProjects } from "../state/projectBook";
 import { pullState } from "../state/pulls";
 import type { PendingSetup } from "../state/setup";
 import {
@@ -40,6 +41,9 @@ import {
   errorText,
   featureMissing,
   markUnread,
+  moveMachineBlockedReason,
+  moveThreadToMachine,
+  planMachineMoveDestination,
   removeWorktree,
   renameThread,
   repairThread,
@@ -56,9 +60,11 @@ import {
   trashThread,
   unsettleThreads,
   useApp,
+  useMovingMachine,
   worktreeOf,
 } from "../state/store";
 import { formatClock, isRunning, shortAge } from "../state/thread";
+import { splitThreadKey } from "../state/threadKeys";
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { HarnessIcon } from "./HarnessIcon";
 import {
@@ -85,6 +91,7 @@ import {
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  Laptop,
   MessageCircleQuestion,
   MessageSquareQuote,
   Pencil,
@@ -153,8 +160,27 @@ function ThreadMenuItems({
   const canFiles = hasShell();
   // A thread on another computer: its folder, its git and its shell are there, so this menu drops
   // what would act on this computer's copy of the path (`revealPath`, `worktree_remove`, review).
-  const machineName = useMachines((s) => s.machines.find((m) => m.id === session.host)?.name);
+  const machines = useMachines((s) => s.machines);
+  const local = useLocalIdentity();
+  const machineEntry = machines.find((m) => m.id === session.host);
+  const machineNameText = machineEntry ? machineName(machineEntry) : undefined;
   const remote = !!session.host;
+  const host = session.host ?? "";
+  const rawId = splitThreadKey(session.id).id;
+  const movingTo = useMovingMachine(session.id);
+  const threadRunning = useApp(
+    (s) => isRunning(s.threads[session.id]) || statusOf(s, session.id) === "running",
+  );
+  const moveBlocked = moveMachineBlockedReason({
+    running: threadRunning,
+    sourceHost: host,
+    sourceConnected: !host || machineEntry?.state === "connected",
+    sourceMachineName: machineNameText,
+    moving: !!movingTo,
+  });
+  const localProjects = useMemo(() => (machines.length ? registeredProjects() : []), [machines.length]);
+  const platform = appPlatform();
+  const hereGlyph = platformIcon(platform === "mac" ? "macos" : platform);
   // The thread this one was started from, to open from here: the keyboard's way to the row's
   // "from" line, and the only one in compact rows.
   const sessions = useApp((s) => s.sessions);
@@ -240,6 +266,73 @@ function ThreadMenuItems({
         <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
           <Pencil size={13} /> Rename…
         </Item>
+      )}
+      {machines.length > 0 && (
+        <Menu.Sub>
+          <Menu.SubTrigger className={menuItem}>
+            <Laptop size={13} /> Move to Machine
+            <ChevronRight size={12} strokeWidth={2.5} className="ml-auto text-fg-faint" />
+          </Menu.SubTrigger>
+          <Menu.Portal>
+            <Menu.SubContent
+              sideOffset={4}
+              alignOffset={-5}
+              collisionPadding={surfaceCollisionPadding}
+              className={cx(menuSurface, "min-w-[240px]")}
+            >
+              {moveBlocked && <div className="px-2 py-1 text-caption text-fg-muted">{moveBlocked}</div>}
+              {[
+                {
+                  id: "",
+                  name: local.displayName ?? selfName(),
+                  glyph: local.icon ?? hereGlyph,
+                  tint: local.tint,
+                  reachable: true,
+                },
+                ...machines.map((m) => ({
+                  id: m.id,
+                  name: machineName(m),
+                  glyph: machineGlyph(m),
+                  tint: machineTint(m),
+                  reachable: m.state === "connected",
+                })),
+              ]
+                .filter((target) => target.id !== host)
+                .map((target) => {
+                  const dest = target.reachable
+                    ? planMachineMoveDestination({
+                        sessionId: rawId,
+                        fromHost: host,
+                        fromCwd: session.cwd,
+                        toHost: target.id,
+                        sessions,
+                        localProjects,
+                      })
+                    : null;
+                  return (
+                    <Item
+                      key={target.id || "local"}
+                      className={cx(menuItem, "gap-2")}
+                      disabled={!!moveBlocked || !target.reachable}
+                      onSelect={() => void moveThreadToMachine(session.id, target.id)}
+                    >
+                      <DeviceGlyphIcon glyph={target.glyph} tint={target.tint} size={13} />
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate">{target.name}</span>
+                        <span className="truncate text-caption text-fg-faint">
+                          {dest
+                            ? dest.returning
+                              ? `Returns to ${dest.displayFolder}`
+                              : dest.displayFolder
+                            : "Offline"}
+                        </span>
+                      </span>
+                    </Item>
+                  );
+                })}
+            </Menu.SubContent>
+          </Menu.Portal>
+        </Menu.Sub>
       )}
       {snoozed ? (
         <Item className={menuItem} onSelect={() => snoozeThread(session.id, null)}>
@@ -378,9 +471,9 @@ function ThreadMenuItems({
           </Item>
         </>
       )}
-      {remote && machineName && (
+      {remote && machineNameText && (
         <div className="px-2 pt-1 pb-0.5 text-caption text-fg-faint">
-          Files, git and the shell run on {machineName}.
+          Files, git and the shell run on {machineNameText}.
         </div>
       )}
     </>

@@ -50,13 +50,44 @@ pub(crate) fn marker_with(
     message
 }
 
+/// The history message that records a move from `from_machine` to `to_machine`
+/// (and any harness/account change that accompanied it).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn marker_machine(
+    from_harness: &str,
+    from_account: Option<&str>,
+    to_harness: &str,
+    to_account: Option<&str>,
+    from_machine: &str,
+    to_machine: &str,
+    model: Option<&str>,
+    resumed_native: bool,
+) -> ChatMessage {
+    let mut message = ChatMessage::new(
+        ROLE,
+        json!({
+            "from": from_harness,
+            "to": to_harness,
+            "from_account": from_account,
+            "to_account": to_account,
+            "from_machine": from_machine,
+            "to_machine": to_machine,
+            "model": model,
+            "resumed_native": resumed_native,
+        })
+        .to_string(),
+    );
+    message.timestamp = chrono::Local::now().to_rfc3339();
+    message
+}
+
 /// The history message that records a switch from `from` to `to`.
 #[cfg(test)]
 pub(crate) fn marker(from: &str, to: &str, model: Option<&str>) -> ChatMessage {
     marker_with(from, None, to, None, model)
 }
 
-/// The divider the client draws for a recorded switch.
+/// The divider the client draws for a recorded switch or machine move.
 pub(crate) fn divider(marker: &ChatMessage) -> Option<SessionUpdate> {
     let value = serde_json::from_str::<Value>(&marker.content).ok()?;
     let from = value.get("from").and_then(Value::as_str)?;
@@ -64,19 +95,45 @@ pub(crate) fn divider(marker: &ChatMessage) -> Option<SessionUpdate> {
     let model = value.get("model").and_then(Value::as_str);
     let from_account = value.get("from_account").and_then(Value::as_str);
     let to_account = value.get("to_account").and_then(Value::as_str);
-    let text = format!(
-        "Switched from {} to {}",
-        label(from, from_account),
-        label(to, to_account)
-    );
+    let from_machine = value.get("from_machine").and_then(Value::as_str);
+    let to_machine = value.get("to_machine").and_then(Value::as_str);
+    let resumed_native = value
+        .get("resumed_native")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = match (from_machine, to_machine) {
+        (Some(src), Some(dst)) if from == to && from_account == to_account => {
+            format!("Moved from {src} to {dst}")
+        }
+        (Some(src), Some(dst)) => format!(
+            "Moved from {src} ({}) to {dst} ({})",
+            label(from, from_account),
+            label(to, to_account)
+        ),
+        _ => format!(
+            "Switched from {} to {}",
+            label(from, from_account),
+            label(to, to_account)
+        ),
+    };
+    let mut rustcode = serde_json::Map::new();
+    rustcode.insert("kind".to_owned(), json!("handoff"));
+    rustcode.insert("from".to_owned(), json!(from));
+    rustcode.insert("to".to_owned(), json!(to));
+    rustcode.insert("from_account".to_owned(), json!(from_account));
+    rustcode.insert("to_account".to_owned(), json!(to_account));
+    rustcode.insert("model".to_owned(), json!(model));
+    if let Some(src) = from_machine {
+        rustcode.insert("from_machine".to_owned(), json!(src));
+    }
+    if let Some(dst) = to_machine {
+        rustcode.insert("to_machine".to_owned(), json!(dst));
+    }
+    if resumed_native {
+        rustcode.insert("resumed_native".to_owned(), json!(true));
+    }
     let mut meta = serde_json::Map::new();
-    meta.insert(
-        "rustcode".to_owned(),
-        json!({
-            "kind": "handoff", "from": from, "to": to,
-            "from_account": from_account, "to_account": to_account, "model": model,
-        }),
-    );
+    meta.insert("rustcode".to_owned(), Value::Object(rustcode));
     Some(SessionUpdate::AgentMessageChunk(
         ContentChunk::new(ContentBlock::Text(TextContent::new(text))).meta(meta),
     ))
@@ -293,5 +350,61 @@ mod tests {
             value["content"]["text"],
             "Switched from Claude Code to Codex"
         );
+    }
+
+    #[test]
+    fn machine_move_marker_replays_with_machine_names_and_stays_out_of_context() {
+        let same = marker_machine(
+            "claude-code",
+            None,
+            "claude-code",
+            None,
+            "MacBook",
+            "VPS",
+            Some("claude-sonnet-5"),
+            false,
+        );
+        let value = serde_json::to_value(divider(&same).unwrap()).unwrap();
+        assert_eq!(value["_meta"]["rustcode"]["kind"], "handoff");
+        assert_eq!(value["_meta"]["rustcode"]["from_machine"], "MacBook");
+        assert_eq!(value["_meta"]["rustcode"]["to_machine"], "VPS");
+        assert_eq!(value["content"]["text"], "Moved from MacBook to VPS");
+
+        let switched = marker_machine(
+            "claude-code",
+            None,
+            "codex",
+            None,
+            "MacBook",
+            "VPS",
+            Some("gpt-6"),
+            false,
+        );
+        let switched_val = serde_json::to_value(divider(&switched).unwrap()).unwrap();
+        assert_eq!(
+            switched_val["content"]["text"],
+            "Moved from MacBook (Claude Code) to VPS (Codex)"
+        );
+
+        let resumed = marker_machine(
+            "claude-code",
+            None,
+            "claude-code",
+            None,
+            "VPS",
+            "MacBook",
+            None,
+            true,
+        );
+        let resumed_val = serde_json::to_value(divider(&resumed).unwrap()).unwrap();
+        assert_eq!(resumed_val["_meta"]["rustcode"]["resumed_native"], true);
+
+        let ctx = context(
+            &[ChatMessage::new("user", "Hi"), same],
+            "MacBook",
+            "claude-code",
+        )
+        .unwrap();
+        assert!(!ctx.contains("from_machine"));
     }
 }

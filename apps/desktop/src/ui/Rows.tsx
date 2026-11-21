@@ -976,30 +976,7 @@ export function SwitchRow({ item }: { item: Item<"switch"> }) {
   );
 }
 
-/**
- * Where the thread moved to another harness: a quiet divider, `Claude Code → Codex`, with the model it took.
- */
-export function HandoffRow({ item }: { item: Item<"handoff"> }) {
-  const harnesses = useApp((s) => s.harnesses?.harnesses);
-  const name = (id: string) => harnesses?.find((h) => h.id === id)?.name ?? id;
-  return (
-    <div className="flex items-center gap-3 py-1 text-caption text-fg-muted" role="separator">
-      <span className="h-px flex-1 bg-border" />
-      <span className="flex items-center gap-1.5">
-        <HarnessIcon id={item.from} size={12} />
-        {name(item.from)}
-        <ArrowRight size={12} className="text-fg-faint" />
-        <HarnessIcon id={item.to} size={12} />
-        <span className="text-fg">{name(item.to)}</span>
-        {item.model && <span className="text-fg-faint">· {item.model}</span>}
-      </span>
-      <Tooltip label="The new harness gets the conversation so far with your next message">
-        <span className="text-fg-faint">context handed over</span>
-      </Tooltip>
-      <span className="h-px flex-1 bg-border" />
-    </div>
-  );
-}
+export { HandoffRow } from "./HandoffRow";
 
 /**
  * A turn the app woke the thread for: a delegate finished (or a few did), which

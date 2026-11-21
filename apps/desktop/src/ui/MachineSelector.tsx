@@ -1,13 +1,11 @@
-// The machine selector: where a new thread runs (docs/desktop.md › Several machines), after
-// T3 Code's "Run on" selector. This computer first, then each paired machine with its live
-// status and the address it is reached on; one that is away is listed, so the user sees why it
-// cannot be picked, but is not selectable. Its last rows leave the list: "Add machine…" opens
-// the Add machine dialog on Settings › Machines, and "Manage machines" opens the page.
+// The machine selector: picks where a new thread runs ("Run on"), or moves an existing thread to
+// another machine ("Move this thread to") with smart project & harness matching and one-click
+// return (docs/desktop.md › Several machines).
 //
-// Hidden until a second computer is paired: a selector with one choice is noise. A thread that
-// exists already has its machine, so this is the new-thread strip's own control. The composer
-// mounts it and nothing else (`ui/Composer.tsx`).
+// Hidden until a second computer is paired: a selector with one choice is noise. For an open thread
+// on an unpaired host (machine removed), `ThreadMachineChip` in ComposerFooter still labels it.
 
+import { type ReactElement, useMemo } from "react";
 import { appPlatform } from "../lib/platform";
 import {
   type Machine,
@@ -21,15 +19,26 @@ import {
   useLocalIdentity,
   useMachines,
 } from "../state/machines";
-import { openSettings, setNewThreadHost, useApp } from "../state/store";
-import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
+import { registeredProjects } from "../state/projectBook";
+import {
+  moveMachineBlockedReason,
+  moveThreadToMachine,
+  openSettings,
+  planMachineMoveDestination,
+  setNewThreadHost,
+  useApp,
+  useMovingMachine,
+} from "../state/store";
+import { isRunning, type ThreadState } from "../state/thread";
+import { splitThreadKey } from "../state/threadKeys";
+import { CardMenuItem, CardPopover, type CardTriggerProps, menuKeys } from "./cardPopover";
 import { Check, ChevronDown, Plus, Settings2 } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { type MachineChoice, machineChoices } from "./machineLabels";
-import { cx } from "./primitives";
+import { cx, Spinner } from "./primitives";
 
-// The composer footer's button (`footerButton` in ui/Composer.tsx): quiet until hovered, and its
-// fill is its open state.
+// The composer footer's button (`footerButton` in ui/ComposerFooter.tsx): quiet until hovered,
+// and its fill is its open state.
 const footerButton =
   "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong";
 
@@ -40,72 +49,174 @@ const DOT: Record<MachineChoice["status"]["kind"], string> = {
   attention: "bg-warning",
 };
 
-export function MachineSelector() {
+export function MachineSelector({
+  thread,
+  trigger,
+  side = "top",
+  align,
+}: {
+  thread?: ThreadState;
+  /** Optional custom trigger (used by the chat header's machine pill). */
+  trigger?: ReactElement<CardTriggerProps & Record<string, unknown>>;
+  side?: "top" | "bottom";
+  align?: "start" | "center" | "end";
+}) {
   const machines = useMachines((s) => s.machines);
   const local = useLocalIdentity();
-  const host = useApp((s) => s.newThreadHost);
-  return <MachineSelectorView machines={machines} local={local} host={host} />;
+  const newThreadHost = useApp((s) => s.newThreadHost);
+  const host = thread ? splitThreadKey(thread.id).host : newThreadHost;
+  return (
+    <MachineSelectorView
+      machines={machines}
+      local={local}
+      host={host}
+      thread={thread}
+      trigger={trigger}
+      side={side}
+      align={align}
+    />
+  );
 }
 
-/** The selector over what it is given: the store's machines and this computer's own identity. */
+/** The selector over what it is given: the store's machines, this computer's identity, and an optional open thread. */
 export function MachineSelectorView({
   machines,
   local,
   host,
+  thread,
+  trigger,
+  side = "top",
+  align,
 }: {
   machines: Machine[];
   local: MachineIdentity;
-  /** `newThreadHost`: `""` for this computer, else a machine's id. */
+  /** `""` for this computer, else a machine's id. */
   host: string;
+  /** When set, moves this open thread between machines instead of choosing where a new thread starts. */
+  thread?: ThreadState;
+  trigger?: ReactElement<CardTriggerProps & Record<string, unknown>>;
+  side?: "top" | "bottom";
+  align?: "start" | "center" | "end";
 }) {
   const platform = appPlatform();
+  const sessions = useApp((s) => s.sessions);
+  const movingTo = useMovingMachine(thread?.id);
+  const localProjects = useMemo(() => (thread ? registeredProjects() : []), [thread]);
+
   if (!machines.length) return null;
+
   const here = platformIcon(platform === "mac" ? "macos" : platform);
   const current = machines.find((machine) => machine.id === host);
   const choices = machineChoices(machines, { name: local.displayName ?? selfName() }, machineName);
-  const label = current ? machineName(current) : choices[0]!.name;
+  const label = current ? machineName(current) : host ? "Another machine" : choices[0]!.name;
+  const away = !!host && current?.state !== "connected";
   const glyphOf = (id: string) => {
     const machine = machines.find((entry) => entry.id === id);
-    return machine ? machineGlyph(machine) : (local.icon ?? here);
+    return machine ? machineGlyph(machine) : id ? platformIcon(null) : (local.icon ?? here);
   };
   const tintOf = (id: string) => {
     const machine = machines.find((entry) => entry.id === id);
-    return machine ? machineTint(machine) : local.tint;
+    return machine ? machineTint(machine) : id ? null : local.tint;
   };
+
+  const blocked = thread
+    ? moveMachineBlockedReason({
+        running: isRunning(thread),
+        sourceHost: host,
+        sourceConnected: !away,
+        sourceMachineName: label,
+        moving: !!movingTo,
+      })
+    : undefined;
+
+  const sessionId = thread ? splitThreadKey(thread.id).id : "";
+  const menuHeading = thread ? "Move this thread to" : "Run on";
+  const triggerTooltip = thread
+    ? blocked
+      ? `Runs on ${label} · ${blocked}`
+      : `Runs on ${label} · click to move to another machine`
+    : `Run on ${label}`;
+
+  const defaultTrigger = (
+    <button
+      type="button"
+      aria-label={thread ? `Machine: ${label}` : `Run on: ${label}`}
+      aria-busy={!!movingTo || undefined}
+      className={cx(footerButton, "min-w-0 shrink data-[state=open]:bg-fill")}
+    >
+      <span className="relative flex shrink-0">
+        {movingTo ? (
+          <Spinner size={12} />
+        ) : (
+          <DeviceGlyphIcon glyph={glyphOf(host)} tint={tintOf(host)} size={14} />
+        )}
+        {away && !movingTo && (
+          <span className="-right-0.5 -top-0.5 absolute size-1.5 rounded-full bg-warning ring-2 ring-[var(--rc-composer-footer-bg)]" />
+        )}
+      </span>
+      <span className="min-w-0 max-w-[200px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
+        {movingTo ? "Moving…" : label}
+      </span>
+      <ChevronDown size={12} className="shrink-0 text-fg-faint" />
+    </button>
+  );
+
   return (
     <CardPopover
       role="menu"
-      label="Run on"
-      tooltip={`Run on ${label}`}
+      label={menuHeading}
+      tooltip={triggerTooltip}
       onKeyDown={menuKeys}
-      side="top"
-      className="min-w-[260px]"
-      trigger={
-        <button
-          type="button"
-          aria-label={`Run on: ${label}`}
-          className={cx(footerButton, "min-w-0 shrink data-[state=open]:bg-fill")}
-        >
-          <DeviceGlyphIcon glyph={glyphOf(current?.id ?? "")} tint={tintOf(current?.id ?? "")} size={14} />
-          <span className="min-w-0 max-w-[200px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
-            {label}
-          </span>
-          <ChevronDown size={12} className="shrink-0 text-fg-faint" />
-        </button>
-      }
+      side={side}
+      align={align}
+      className="min-w-[270px]"
+      trigger={trigger ?? defaultTrigger}
     >
-      <div role="menu" aria-label="Run on">
-        <div className="px-2 pt-1.5 pb-1 text-caption text-fg-faint">Run on</div>
+      <div role="menu" aria-label={menuHeading}>
+        <div className="px-2 pt-1.5 pb-1 text-caption text-fg-faint">{menuHeading}</div>
+        {blocked && (
+          <p role="note" className="px-2 pb-1.5 text-caption text-fg-muted">
+            {blocked}
+          </p>
+        )}
         {choices.map((choice) => {
           const selected = choice.id === host;
+          // For moving an existing thread, any connected machine is a valid target (even if paused
+          // for *new* threads), unless the thread itself is blocked or already on that machine.
+          const machine = choice.id ? machines.find((entry) => entry.id === choice.id) : undefined;
+          const reachable = !choice.id || machine?.state === "connected";
+          const canSelect = thread ? !blocked && !selected && reachable : choice.available;
+
+          let detail = choice.detail;
+          if (thread) {
+            if (selected) {
+              detail = "Current machine";
+            } else if (!reachable) {
+              detail = choice.status.label;
+            } else {
+              const dest = planMachineMoveDestination({
+                sessionId,
+                fromHost: host,
+                fromCwd: thread.cwd,
+                toHost: choice.id,
+                sessions,
+                localProjects,
+              });
+              detail = dest.returning ? `Returns to ${dest.displayFolder}` : dest.displayFolder;
+            }
+          }
+
           return (
             <CardMenuItem
               key={choice.id || "local"}
               role="menuitemradio"
               aria-checked={selected}
-              disabled={!choice.available}
-              onSelect={() => void setNewThreadHost(choice.id)}
-              className={cx("gap-2", selected && "bg-fill-subtle", !choice.available && "opacity-60")}
+              disabled={!canSelect}
+              onSelect={() => {
+                if (thread) void moveThreadToMachine(thread.id, choice.id);
+                else void setNewThreadHost(choice.id);
+              }}
+              className={cx("gap-2", selected && "bg-fill-subtle", !canSelect && !selected && "opacity-60")}
             >
               <span
                 aria-hidden
@@ -115,9 +226,9 @@ export function MachineSelectorView({
               <DeviceGlyphIcon glyph={glyphOf(choice.id)} tint={tintOf(choice.id)} size={14} />
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-body text-fg">{choice.name}</span>
-                <span className="truncate text-caption text-fg-faint">{choice.detail}</span>
+                <span className="truncate text-caption text-fg-faint">{detail}</span>
               </span>
-              {!choice.available && choice.id && (
+              {!reachable && choice.id && (
                 <span className="shrink-0 text-caption text-fg-faint">{choice.status.label}</span>
               )}
               {selected && <Check size={13} className="shrink-0 text-fg-muted" />}

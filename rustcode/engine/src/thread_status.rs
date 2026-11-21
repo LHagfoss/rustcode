@@ -307,6 +307,31 @@ pub(crate) fn set(session_id: &str, status: &str) -> Result<(), String> {
     set_status(session_id, status, false)
 }
 
+/// Restore persisted status, pin and snooze on a thread imported from another
+/// machine without firing project settle hooks or live notifications.
+pub(crate) fn restore_state(
+    session_id: &str,
+    status: Option<&str>,
+    pinned_flag: bool,
+    snoozed: Option<u64>,
+) {
+    if !rustcode_session::valid_session_id(session_id) {
+        return;
+    }
+    if let Some(raw) = status
+        && let Some(parsed) = Status::storable(raw)
+        && parsed != Status::Idle
+    {
+        let _ = store(session_id, parsed);
+    }
+    if pinned_flag {
+        let _ = set_pinned(session_id, true);
+    }
+    if let Some(until) = snoozed {
+        let _ = set_snoozed(session_id, Some(until));
+    }
+}
+
 pub(crate) fn set_own_status(session_id: &str, status: &str) -> Result<(), String> {
     set_status(session_id, status, true)
 }

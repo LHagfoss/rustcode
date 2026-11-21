@@ -183,6 +183,16 @@ export function ThreadMachineChip({ host }: { host: string }) {
 }
 
 /**
+ * Fallback label when no machines are paired anymore, so a remote thread from a removed machine
+ * still identifies itself instead of looking local (while `MachineSelector` stays hidden).
+ */
+export function OrphanThreadMachineChip({ host }: { host: string }) {
+  const hasMachines = useMachines((s) => s.machines.length > 0);
+  if (hasMachines) return null;
+  return <ThreadMachineChip host={host} />;
+}
+
+/**
 /**
  * The folder button under the composer: the project picker (ui/ProjectPicker.tsx), which starts a
  * new thread in a project or moves the open thread to another one.

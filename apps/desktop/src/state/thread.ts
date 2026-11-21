@@ -151,8 +151,17 @@ export type TranscriptItem =
    * turn ran for it, and the row says so. Not kept by the engine, so a reload drops it.
    */
   | { kind: "status"; id: string; at: number; rows: import("./delegateStatus").DelegateStatusRow[] }
-  /** Where the thread moved to another harness, which got the conversation so far. */
-  | { kind: "handoff"; id: string; from: string; to: string; model?: string }
+  /** Where the thread moved to another harness or machine, which got the conversation so far. */
+  | {
+      kind: "handoff";
+      id: string;
+      from: string;
+      to: string;
+      model?: string;
+      fromMachine?: string;
+      toMachine?: string;
+      resumedNative?: boolean;
+    }
   /** Where the thread's model or effort changed. */
   | { kind: "switch"; id: string; change: import("../acp/types").ChoiceChange }
   | {
@@ -805,7 +814,16 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         ...state,
         items: [
           ...finishThoughts(state.items, now),
-          { kind: "handoff", id: localId("handoff"), from: update.from, to: update.to, model: update.model },
+          {
+            kind: "handoff",
+            id: localId("handoff"),
+            from: update.from,
+            to: update.to,
+            model: update.model,
+            ...(update.fromMachine ? { fromMachine: update.fromMachine } : {}),
+            ...(update.toMachine ? { toMachine: update.toMachine } : {}),
+            ...(update.resumedNative ? { resumedNative: update.resumedNative } : {}),
+          },
         ],
       };
     case "switch": {
