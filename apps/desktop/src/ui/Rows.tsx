@@ -1207,7 +1207,8 @@ export const TurnFoldRow = memo(function TurnFoldRow({
       )}
     >
       {fold.stopped && <SquareStop size={12} className="shrink-0" aria-hidden />}
-      <span className="truncate tabular">{foldLabel(fold, formatDuration)}</span>
+      <span className="shrink-0 tabular">{foldLabel(fold, formatDuration)}</span>
+      {fold.summary && <span className="min-w-0 truncate text-fg-faint">· {fold.summary}</span>}
       {!fold.answered && fold.time !== undefined && (
         <span className="shrink-0 text-caption text-fg-faint tabular">· {messageTime(fold.time)}</span>
       )}

@@ -32,6 +32,8 @@ export interface TurnFold {
   time?: number;
   /** The turn wrote an answer, so the footer under it has something to copy and keeps the time. */
   answered: boolean;
+  /** What a turn that wrote no answer did, `Read 1 file and edited 1 file`: its header is all the reader sees of it. */
+  summary?: string;
 }
 
 /** A run of finished steps shown as one row: `Read 4 files and ran 2 commands`. */
@@ -251,6 +253,7 @@ function pushTurn(
     failed,
     files: files.size,
   };
+  if (!fold.answered) fold.summary = workSummary(work.map((i) => items[i]!));
   const firstWork = work[0]!;
   for (let i = from; i < to; i++) {
     const item = items[i]!;
@@ -301,6 +304,12 @@ function pushLiveTurn(
     if (!showTools && item.kind === "tool" && !staysVisible(item)) continue;
     rows.push({ key: item.id, item });
   }
+}
+
+/** What the folded work did, by its tool calls; thoughts alone say nothing. */
+function workSummary(work: TranscriptItem[]): string | undefined {
+  const kinds = work.flatMap((item) => (item.kind === "tool" ? kindsOf(item) : []));
+  return kinds.length ? toolGroupLabel(kinds) : undefined;
 }
 
 /** The divider's words: `Worked for 1m 3s`, or `You stopped after 12s`. */
