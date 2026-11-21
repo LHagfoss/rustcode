@@ -2322,7 +2322,8 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // adds about 30, so it is 2,350. The `::` shorthand fits in the same cap:
     // the kit markup it writes no longer has to be spelled out here. Badges,
     // values, `:: actions` and the one-short-line rule for cards add about
-    // 150: views came out as walls of card text, so it is 2,500.
+    // 150, and trimming the kit list paid most of it back so the whole
+    // text stays under 4 KB: views came out as walls of card text. 2,500.
     assert!(
         SMART_UI_HARNESS_HINT.len() < 2_500,
         "{}",
