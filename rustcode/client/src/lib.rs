@@ -56,8 +56,9 @@ pub use protocol::{
     HandshakeResponse, PAIRING_CODE_DIGITS, Secret,
 };
 pub use reconnect::{
-    Cause, FOREGROUND_BACKOFF_MAX, IDLE_PROBE_AFTER, SILENCE_LIMIT, answer_deadline, backoff_cap,
-    backoff_delay, backoff_delay_for, network_changed, prefer_last_working, slept,
+    Cause, FOREGROUND_BACKOFF_MAX, FORWARD_CHECK_TIMEOUT, IDLE_PROBE_AFTER, SILENCE_LIMIT,
+    answer_deadline, backoff_cap, backoff_delay, backoff_delay_for, forward_advice,
+    network_changed, prefer_last_working, slept,
 };
 pub use registry::{
     Machine, MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteChange, RouteKind,

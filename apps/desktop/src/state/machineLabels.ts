@@ -223,12 +223,15 @@ export function offlineSinceLabel(at: number | undefined): string | undefined {
 /**
  * Whether a machine that is away is already on its supervisor's retry clock.
  * The app reconnects on its own with backoff (PR 3506), so its state is
- * "reconnecting", not a failure the user has to act on (issue 3487).
+ * "reconnecting", not a failure the user has to act on (issue 3487). An
+ * attempt in flight counts too: after a wake every attempt runs for seconds,
+ * and the chat said "offline since" all that time while the row said
+ * Connecting.
  */
 export function machineReconnecting(
   machine: Pick<Machine, "state" | "retryInSecs"> | null | undefined,
 ): boolean {
-  return machine?.state === "offline" && !!machine.retryInSecs;
+  return machine?.state === "connecting" || (machine?.state === "offline" && !!machine.retryInSecs);
 }
 
 /** The same, for the machine a thread runs on, as its key's host (`state/threadKeys.ts`). */
@@ -380,7 +383,9 @@ export function machineLine(machine: Machine): string {
     case "connected":
       return routeLabel(machine.route);
     case "connecting":
-      return `Connecting over ${routeLabel(machine.route)}`;
+      // A detail while connecting is what the last attempt found and the
+      // owner can fix (a forwarded port's tunnel that is down).
+      return machine.detail ?? `Connecting over ${routeLabel(machine.route)}`;
     case "needsPairing":
       return machine.detail ?? "This machine no longer accepts this computer's pairing. Pair it again.";
     case "offline":

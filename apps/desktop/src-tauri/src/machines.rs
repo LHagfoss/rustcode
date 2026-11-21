@@ -606,8 +606,18 @@ async fn supervise(
         }
     };
     let mut attempt: u32 = 0;
+    // What to run when a tunnel RustCode does not own is why the machine is
+    // away ([`stalled_forward`]). It stays on the row while the next attempt
+    // runs, so it does not flicker away every few seconds.
+    let mut advice: Option<String> = None;
     loop {
-        set_state(&machines, &id, MachineState::Connecting, None, None);
+        set_state(
+            &machines,
+            &id,
+            MachineState::Connecting,
+            advice.clone(),
+            None,
+        );
         let started = Instant::now();
         // Why this attempt did not stay up, in the words the row shows. The
         // countdown is the chip (`retryInSecs`), never the detail, so a reason
@@ -615,11 +625,14 @@ async fn supervise(
         let (cause, answered, reason) =
             match relay_once(&machines, &config_dir, &id, &channel, &mut inbox).await {
                 End::Removed => return,
-                End::Closed => (
-                    Cause::Dropped,
-                    None,
-                    "The machine closed the connection.".to_owned(),
-                ),
+                End::Closed => {
+                    advice = None;
+                    (
+                        Cause::Dropped,
+                        None,
+                        "The machine closed the connection.".to_owned(),
+                    )
+                }
                 End::Failed(error, answered) => {
                     let message = format!("{error:#}");
                     if needs_pairing(&error) {
@@ -635,6 +648,11 @@ async fn supervise(
                         return;
                     }
                     let cause = attempt_cause(&error, answered.is_some());
+                    advice = if cause == Cause::Unreachable {
+                        stalled_forward(&machine).await
+                    } else {
+                        None
+                    };
                     emit_log(
                         &channel,
                         format!(
@@ -661,10 +679,47 @@ async fn supervise(
         } else {
             MachineState::Offline
         };
-        set_state(&machines, &id, state, Some(reason), Some(secs));
+        let detail = advice.clone().unwrap_or(reason);
+        set_state(&machines, &id, state, Some(detail), Some(secs));
         emit_closed(&channel, &format!("Waiting {secs} s before trying again."));
         wait_out(&machines, &id, &channel, &wake, delay).await;
     }
+}
+
+/// What to run to bring back the tunnel behind a machine's forwarded port,
+/// when no route answered and one of them is a port on this computer's
+/// loopback that something outside RustCode forwards (`ssh -L`). `None` when
+/// the machine has no such route, or its tunnel works and the machine behind
+/// it is what is away.
+///
+/// The port is checked with a plain connect. One that refuses is a tunnel
+/// that is not running. One that takes the socket and closes it is a working
+/// `ssh -L` whose far end refused: the tunnel is fine. One that takes it and
+/// then says nothing is a tunnel whose link died, the `ssh -L` a sleep left
+/// behind: RustCode cannot restart it, and without this the row only said
+/// the address did not answer in 5 s.
+async fn stalled_forward(machine: &Machine) -> Option<String> {
+    use tokio::io::AsyncReadExt;
+    let route = machine
+        .routes
+        .iter()
+        .find(|route| route.is_dialable() && route.is_local_forward())?;
+    let wait = rustcode_client::FORWARD_CHECK_TIMEOUT;
+    let connected =
+        tokio::time::timeout(wait, tokio::net::TcpStream::connect(route.address.as_str())).await;
+    let listening = match connected {
+        Ok(Ok(mut socket)) => {
+            let mut byte = [0u8; 1];
+            match tokio::time::timeout(wait, socket.read(&mut byte)).await {
+                // Silent: the forward holds the socket on a dead link.
+                Err(_) => true,
+                // Closed or answered: the tunnel carries traffic.
+                Ok(_) => return None,
+            }
+        }
+        _ => false,
+    };
+    Some(rustcode_client::forward_advice(&route.address, listening))
 }
 
 /// Why one attempt failed. A failure after the handshake went through that

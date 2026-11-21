@@ -32,6 +32,7 @@ import {
   machineGlyph,
   machineLine,
   machineName,
+  machineReconnecting,
   machineTint,
   mergeDiscovered,
   PAIR_DEADLINE_MS,
@@ -475,6 +476,18 @@ describe("machines rows", () => {
       }),
     ).toBe("Not connected. Retrying in 4 s.");
     expect(machineLine({ ...MACHINE, state: "needsPairing", detail: null })).toContain("Pair it again");
+    // What the last attempt found stays under the name while the next one runs.
+    const advice = "127.0.0.1:17880 takes connections but nothing answers behind it.";
+    expect(machineLine({ ...MACHINE, state: "connecting", detail: advice })).toBe(advice);
+  });
+
+  test("an attempt in flight reads as reconnecting, not offline", () => {
+    // After a wake each attempt runs for seconds; the chat said "offline since" all that time.
+    expect(machineReconnecting({ state: "connecting", retryInSecs: null })).toBe(true);
+    expect(machineReconnecting({ state: "offline", retryInSecs: 4 })).toBe(true);
+    expect(machineReconnecting({ state: "offline", retryInSecs: null })).toBe(false);
+    expect(machineReconnecting({ state: "connected", retryInSecs: null })).toBe(false);
+    expect(machineReconnecting(undefined)).toBe(false);
   });
 
   test("platforms read as people say them, and unknown ones say nothing", () => {
