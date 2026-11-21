@@ -71,6 +71,22 @@ interface RemoteRead {
   readAt: number;
 }
 
+/**
+ * Each paired machine's last answer, kept in memory like `state/pageCache.ts`'s,
+ * so reopening the page draws its rows at once and reads again behind them
+ * instead of showing a skeleton (or no Antigravity card) until it answers.
+ */
+const remoteReads: Record<string, RemoteRead> = {};
+
+/**
+ * How soon to ask again when an answer's numbers are the last good read while
+ * a new one runs on the engine (`refreshing`): Antigravity answers at once
+ * from them and reads `agy` behind them, which takes a few seconds.
+ */
+const REFRESHING_REREAD_MS = 4_000;
+
+const isRefreshing = (plans: readonly UsagePlan[]) => plans.some((plan) => plan.refreshing);
+
 export function UsagePage() {
   const status = useApp((s) => s.engine.phase);
   const connectedHosts = useApp((s) => s.connectedHosts);
@@ -79,30 +95,37 @@ export function UsagePage() {
   const [answer, setAnswer] = useState<PageAnswer<UsageAnswer> | null>(
     () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null,
   );
-  const [byHost, setByHost] = useState<Record<string, RemoteRead>>({});
+  const [byHost, setByHost] = useState<Record<string, RemoteRead>>(() => ({ ...remoteReads }));
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const readMachines = useCallback(async (hosts: readonly string[]) => {
+  // `force` is Refresh: the machine reads its Antigravity CLI again now (its
+  // other logins stay on its minute of cache, `_rustcode/usage/shared`).
+  const readMachines = useCallback(async (hosts: readonly string[], force = false) => {
     if (!hosts.length) return;
-    setRemoteLoading(true);
+    // Rows already on screen refresh quietly: only Refresh, or a machine with
+    // nothing drawn yet, spins the button.
+    const spin = force || hosts.some((host) => !remoteReads[host]);
+    if (spin) setRemoteLoading(true);
     try {
       await Promise.all(
         hosts.map(async (host) => {
           const conn = connectionFor(host);
           if (!conn) return;
           try {
-            const result = await conn.request(Method.usageShared, {}, 20_000);
+            const result = await conn.request(Method.usageShared, force ? { force: true } : {}, 20_000);
             const plans = sharedPlans(result);
-            setByHost((was) => ({ ...was, [host]: { plans, readAt: Date.now() } }));
+            const read = { plans, readAt: Date.now() };
+            remoteReads[host] = read;
+            setByHost((was) => ({ ...was, [host]: read }));
           } catch {
             // A machine whose engine predates `_rustcode/usage/shared` or drops mid-read stays silent.
           }
         }),
       );
     } finally {
-      setRemoteLoading(false);
+      if (spin) setRemoteLoading(false);
     }
   }, []);
 
@@ -201,6 +224,26 @@ export function UsagePage() {
     }, PLAN_CACHE_POLL_MS);
     return () => clearInterval(timer);
   }, [connectedHosts, readMachines]);
+  // Numbers answered while a new read runs behind them (`refreshing`): ask
+  // again shortly, so the new ones replace them without a press of Refresh.
+  const localRefreshing = !!answer && isRefreshing(answer.data.plans);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each answer that still says refreshing asks once more
+  useEffect(() => {
+    if (status !== "ready" || !localRefreshing) return;
+    const timer = setTimeout(() => void load(false, false), REFRESHING_REREAD_MS);
+    return () => clearTimeout(timer);
+  }, [status, localRefreshing, answer, load]);
+  const remoteRefreshing = connectedHosts.filter((host) => {
+    const read = byHost[host];
+    return read && isRefreshing(read.plans);
+  });
+  const remoteRefreshingKey = remoteRefreshing.join("\n");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the hosts and their answers
+  useEffect(() => {
+    if (!remoteRefreshing.length) return;
+    const timer = setTimeout(() => void readMachines(remoteRefreshing), REFRESHING_REREAD_MS);
+    return () => clearTimeout(timer);
+  }, [remoteRefreshingKey, byHost, readMachines]);
   // The page keeps itself current: a background read every three minutes while
   // its window is visible, one on coming back after being hidden longer than
   // that, and a longer wait after one that failed. The numbers, the bars and
@@ -305,8 +348,8 @@ export function UsagePage() {
 
   const refreshAll = () => {
     if (effectiveScope === "all" || effectiveScope === LOCAL_HOST) void load(true);
-    if (effectiveScope === "all") void readMachines(connectedHosts);
-    else if (effectiveScope !== LOCAL_HOST) void readMachines([effectiveScope]);
+    if (effectiveScope === "all") void readMachines(connectedHosts, true);
+    else if (effectiveScope !== LOCAL_HOST) void readMachines([effectiveScope], true);
   };
 
   if (view.plans === null && (effectiveScope === "all" || effectiveScope === LOCAL_HOST)) {

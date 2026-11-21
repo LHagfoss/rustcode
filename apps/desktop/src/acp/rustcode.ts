@@ -509,6 +509,11 @@ export interface UsagePlan {
    * lapsed, so they are drawn "as of" then.
    */
   asOf?: number;
+  /**
+   * The numbers are the last good read, answered at once while a new one runs
+   * on the engine (Antigravity), so the page asks again shortly for them.
+   */
+  refreshing?: boolean;
   windows: (UsageWindow & { label: string })[];
 }
 
@@ -573,6 +578,7 @@ export function parsePlans(result: Json | undefined): UsagePlan[] {
         error: str(o.error),
         reason: planFailure(o.reason),
         asOf: read ? read * 1000 : undefined,
+        ...(o.refreshing === true ? { refreshing: true } : {}),
         windows,
       },
     ];

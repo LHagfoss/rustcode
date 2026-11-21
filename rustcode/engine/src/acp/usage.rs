@@ -452,10 +452,20 @@ pub(crate) fn named_claude_accounts<'a>(
 /// lapsed), and an `unavailable` Claude row's `reason` is `expired`, `refused`,
 /// `forbidden`, `denied` or `transient` (see `claude_usage::NoUsage`).
 pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
+    let force = request.force;
+    plans_forcing_antigravity(request, force).await
+}
+
+/// `plans`, with Antigravity's own read forced or not apart from the rest: a
+/// paired computer's Refresh reads `agy` again without forcing a Claude read.
+async fn plans_forcing_antigravity(
+    request: UsagePlansRequest,
+    force_antigravity: bool,
+) -> serde_json::Value {
     let antigravity = async {
         if request.antigravity {
             #[cfg(unix)]
-            return crate::provider_auth::antigravity_usage::plan(request.force).await;
+            return crate::provider_auth::antigravity_usage::plan(force_antigravity).await;
         }
         None::<serde_json::Value>
     };
@@ -476,13 +486,24 @@ pub(crate) async fn plans(request: UsagePlansRequest) -> serde_json::Value {
 )]
 #[request(method = "_rustcode/usage/shared", response = serde_json::Value)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct UsageSharedRequest {}
+pub(crate) struct UsageSharedRequest {
+    /// Settings › Usage's Refresh on the paired computer: read the Antigravity
+    /// CLI again now. Only `agy`'s local report: Claude and Codex stay on the
+    /// engine's minute of cache, so a paired device never forces those reads.
+    #[serde(default)]
+    pub force: bool,
+}
 
 /// Answer `_rustcode/usage/shared`: the `_rustcode/usage/plans` rows for the
 /// Codex login, Antigravity (when installed), and — where reading asks nothing —
-/// every Claude login, from the engine's minute of cache.
-pub(crate) async fn shared_plans() -> serde_json::Value {
-    plans(shared_request(claude_limits_without_asking())).await
+/// every Claude login, from the engine's minute of cache (Antigravity read again
+/// when `force`).
+pub(crate) async fn shared_plans(request: UsageSharedRequest) -> serde_json::Value {
+    plans_forcing_antigravity(
+        shared_request(claude_limits_without_asking()),
+        request.force,
+    )
+    .await
 }
 
 /// What a paired computer's read asks of `plans`: never forced, Antigravity
