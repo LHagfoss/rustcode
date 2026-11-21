@@ -992,12 +992,11 @@ export function ChatView() {
             ref={stackRef}
             // Centred by `mx-auto` and not by a transform, so its children can set their own z-index
             // (LaneItem). An empty thread sits half the stack up from the middle of the column, measured.
-            style={{
-              transition: "bottom 500ms var(--ease-snappy)",
-              ...(isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined),
-            }}
+            // Its `bottom` eases in CSS (`rc-lane-stack`), not inline, so opening the right panel can
+            // ease its `right` with the rest of the lane.
+            style={isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined}
             className={cx(
-              "rc-lane-inset absolute bottom-4 mx-auto flex flex-col gap-2",
+              "rc-lane-inset rc-lane-stack absolute bottom-4 mx-auto flex flex-col gap-2",
               // An empty thread's cards are a dashboard, not a lane: they take the wider measure
               // (up to 1100px) while the field and everything over it keep the chat's own.
               isNew ? "max-w-[1100px]" : "max-w-[var(--rc-chat-content-max-width)]",

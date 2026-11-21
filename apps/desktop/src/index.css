@@ -1338,6 +1338,15 @@
 .rc-panel-moving .rc-lane-center {
   transition-property: opacity, translate, left, bottom;
 }
+/* The composer's stack eases its `bottom` as a new thread fills, and its `right` with the lane. */
+.rc-lane-stack {
+  transition: bottom 500ms var(--ease-snappy);
+}
+.rc-panel-moving .rc-lane-stack {
+  transition:
+    bottom 500ms var(--ease-snappy),
+    right 200ms var(--ease-snappy);
+}
 .rc-composer-fade {
   height: 56px;
   background: linear-gradient(to bottom, transparent 0, var(--rc-bg) 56px);
