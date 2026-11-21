@@ -1059,7 +1059,7 @@ pub(crate) fn protected_branch(branch: &str, base: &str, default: Option<&str>) 
 }
 
 /// Ignored paths that are ordinary build output, which cleanup may delete.
-const IGNORED_BUILD_DIRS: [&str; 9] = [
+const IGNORED_BUILD_DIRS: [&str; 10] = [
     "target",
     "node_modules",
     "dist",
@@ -1069,7 +1069,11 @@ const IGNORED_BUILD_DIRS: [&str; 9] = [
     ".cache",
     "coverage",
     ".venv",
+    ".expo",
 ];
+/// Files a harness writes into a worktree for itself, not the user's work:
+/// Claude Code's per-checkout permission grants.
+const HARNESS_LOCAL_FILES: [&str; 1] = [".claude/settings.local.json"];
 /// Ignored entries one refusal names; the rest are counted.
 const MAX_IGNORED_LISTED: usize = 20;
 
@@ -1173,6 +1177,7 @@ fn ignored_files(path: &Path) -> Result<Vec<String>, String> {
             || entry
                 .split('/')
                 .any(|component| IGNORED_BUILD_DIRS.contains(&component))
+            || harness_local(path, entry)
         {
             continue;
         }
@@ -1187,6 +1192,43 @@ fn ignored_files(path: &Path) -> Result<Vec<String>, String> {
         listed.push("...".to_owned());
     }
     Ok(listed)
+}
+
+/// Whether ignored `entry` holds only files a harness keeps for itself
+/// ([`HARNESS_LOCAL_FILES`]): the file itself, or a folder (git lists an
+/// ignored folder once) with nothing else in it.
+fn harness_local(root: &Path, entry: &str) -> bool {
+    if HARNESS_LOCAL_FILES.contains(&entry) {
+        return true;
+    }
+    let prefix = format!("{entry}/");
+    if !HARNESS_LOCAL_FILES.iter().any(|file| file.starts_with(&prefix)) {
+        return false;
+    }
+    let mut stack = vec![root.join(entry)];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            return false;
+        };
+        for item in read.flatten() {
+            let item_path = item.path();
+            let Ok(kind) = item.file_type() else {
+                return false;
+            };
+            if kind.is_dir() {
+                stack.push(item_path);
+                continue;
+            }
+            let relative = item_path
+                .strip_prefix(root)
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if !HARNESS_LOCAL_FILES.contains(&relative.as_str()) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// The branch a worktree is on. A detached HEAD is its own refusal; a git that
@@ -1370,6 +1412,126 @@ pub(crate) async fn clean_merged(
     }
 }
 
+fn managed(path: &Path) -> bool {
+    root()
+        .and_then(|root| std::fs::canonicalize(root).ok())
+        .is_some_and(|root| path.starts_with(&root) && path != root)
+}
+
+fn not_managed() -> WorktreeError {
+    WorktreeError {
+        reason: "not_managed",
+        message: "only worktrees under RustCode's worktrees folder can be cleaned up".to_owned(),
+    }
+}
+
+/// [`cleanup`] for a worktree whose folder is already gone: nothing
+/// uncommitted is left to lose, so git's record of it is pruned and its branch
+/// deleted under the same proofs, read in the repository its record names.
+fn cleanup_gone(
+    path: &Path,
+    expected_branch: Option<&str>,
+    pr_head: Option<&str>,
+    pr_merged: bool,
+) -> Result<Value, WorktreeError> {
+    let parent = path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok());
+    let Some(path) = parent.zip(path.file_name()).map(|(parent, name)| parent.join(name)) else {
+        return Err(WorktreeError::failed(format!(
+            "invalid path: {} does not exist",
+            path.display()
+        )));
+    };
+    if !managed(&path) {
+        return Err(not_managed());
+    }
+    let record = load_record(&path).ok_or_else(|| {
+        WorktreeError::failed(format!(
+            "{} is already gone and RustCode has no record of its repository",
+            path.display()
+        ))
+    })?;
+    let repo = record.worktree.repo.clone();
+    if !repo.is_dir() {
+        return Err(WorktreeError::failed(format!(
+            "the repository {} is gone",
+            repo.display()
+        )));
+    }
+    let branch = expected_branch
+        .filter(|branch| !branch.trim().is_empty())
+        .unwrap_or(&record.worktree.branch)
+        .to_owned();
+    let _ = git(&repo, &["worktree", "prune"]);
+    let forget = || {
+        move_threads_to_repo(&record.session_ids, &repo);
+        if let Some(file) = record_path(&path) {
+            let _ = std::fs::remove_file(file);
+        }
+    };
+    let branch_ref = format!("refs/heads/{branch}");
+    if git(&repo, &["rev-parse", "--verify", "--quiet", &branch_ref]).is_err() {
+        forget();
+        return Ok(json!({ "removed": true, "already_gone": true, "branch": branch, "branch_removed": false }));
+    }
+    let Some(base) = cleanup_base(&repo, Some(&record)) else {
+        return Err(WorktreeError {
+            reason: "no_base",
+            message: "no base branch to compare the worktree against".to_owned(),
+        });
+    };
+    let default_branch = git_line(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    if protected_branch(&branch, &base, default_branch.as_deref()) {
+        forget();
+        return Ok(json!({ "removed": true, "already_gone": true, "branch": branch, "branch_removed": false }));
+    }
+    let unknown = |message: String| WorktreeError {
+        reason: "unknown",
+        message,
+    };
+    let unique = cherry_commits(&repo, &base, &branch).map_err(unknown)?;
+    let same_content = same_tree(&repo, &base, &branch).map_err(unknown)?;
+    let merged_safe = pr_merged
+        && match pr_head.filter(|head| !head.trim().is_empty()) {
+            Some(head) => unique
+                .iter()
+                .all(|commit| commit_reachable(&repo, &commit.sha, head)),
+            None => unique.is_empty(),
+        };
+    let decision = cleanup_decision(false, unique, same_content, merged_safe);
+    if !decision.safe {
+        return Err(WorktreeError {
+            reason: decision.reason,
+            message: format!(
+                "the worktree folder is already gone, but {branch} has {} commit(s) that are not on {base} and are not part of the merged pull request: {}; the branch was kept",
+                decision.unique.len(),
+                decision
+                    .unique
+                    .iter()
+                    .map(|commit| commit.subject.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        });
+    }
+    if let Ok(head) = git_line(&repo, &["rev-parse", &branch_ref]) {
+        for session_id in &record.session_ids {
+            crate::data_store::record_thread_outcome(session_id, &branch, &head);
+        }
+    }
+    forget();
+    let branch_removed = git(&repo, &["branch", "-D", &branch]).is_ok();
+    Ok(json!({
+        "removed": true,
+        "already_gone": true,
+        "branch": branch,
+        "branch_removed": branch_removed,
+        "base": base,
+        "commit_count": decision.unique.len(),
+    }))
+}
+
 /// Remove a merged delegate's worktree and branch (#3153), refusing when the
 /// worktree is dirty, its commits are not on the base branch, it is on a
 /// different branch than the caller named, or it holds ignored files that are
@@ -1390,17 +1552,13 @@ pub(crate) fn cleanup(
     pr_merged: bool,
     renamed: Option<&RenamedPull>,
 ) -> Result<Value, WorktreeError> {
+    if !path.exists() {
+        return cleanup_gone(path, expected_branch, pr_head, pr_merged);
+    }
     let path = std::fs::canonicalize(path)
         .map_err(|error| WorktreeError::failed(format!("invalid path: {error}")))?;
-    let inside = root()
-        .and_then(|root| std::fs::canonicalize(root).ok())
-        .is_some_and(|root| path.starts_with(&root) && path != root);
-    if !inside {
-        return Err(WorktreeError {
-            reason: "not_managed",
-            message: "only worktrees under RustCode's worktrees folder can be cleaned up"
-                .to_owned(),
-        });
+    if !managed(&path) {
+        return Err(not_managed());
     }
     let record = load_record(&path);
     let repo = main_checkout(&path).ok_or_else(|| WorktreeError {
