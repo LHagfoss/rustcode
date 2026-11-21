@@ -28,10 +28,13 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, ContentBlock, InitializeRequest, LoadSessionRequest,
-    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, StopReason, TextContent,
+    NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, StopReason,
+    TextContent,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo};
+use agent_client_protocol::{
+    Agent, Client, ConnectionTo, JsonRpcMessage, JsonRpcResponse, UntypedMessage,
+};
 use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;
 
@@ -2261,26 +2264,14 @@ impl Engine {
         let (ready, ready_rx) = oneshot::channel();
         let (close, close_rx) = oneshot::channel();
         tokio::spawn(async move {
-            let served = Client
-                .builder()
-                .on_receive_request(
-                    async |request: RequestPermissionRequest, responder, _connection| {
-                        responder.respond(answer_permission(&request, access))
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async |_request: agent_client_protocol::UntypedMessage,
-                           responder,
-                           _connection| { responder.respond(json!({})) },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .connect_with(transport, async move |connection| {
-                    let _ = ready.send(connection);
-                    let _ = close_rx.await;
-                    Ok(())
-                })
-                .await;
+            let served =
+                agent_client_protocol::Builder::new_with(Client, LoopbackClientHandler { access })
+                    .connect_with(transport, async move |connection| {
+                        let _ = ready.send(connection);
+                        let _ = close_rx.await;
+                        Ok(())
+                    })
+                    .await;
             if let Err(error) = served {
                 crate::dbg_log!("local orchestration: the loopback client ended: {error}");
             }
@@ -2316,6 +2307,19 @@ impl Engine {
     where
         R: agent_client_protocol::JsonRpcRequest,
     {
+        let untyped = request.to_untyped_message().map_err(acp_message)?;
+        let method = untyped.method.clone();
+        let value = self.request_untyped(untyped, wait).await?;
+        R::Response::from_value(&method, value).map_err(acp_message)
+    }
+
+    /// Single monomorphized request path so `ConnectionTo::send_request` and
+    /// `SentRequest::block_task` are not instantiated per request type.
+    async fn request_untyped(
+        &self,
+        request: UntypedMessage,
+        wait: Duration,
+    ) -> Result<Value, String> {
         match tokio::time::timeout(wait, self.connection.send_request(request).block_task()).await {
             Err(_) => Err("the engine did not answer in time".to_owned()),
             Ok(Err(error)) => Err(acp_message(error)),
@@ -2327,8 +2331,11 @@ impl Engine {
     /// stop button does. The engine's registry is shared by every connection,
     /// so a thread another client opened is stopped too.
     fn cancel(&self, session_id: &str) -> Result<(), String> {
+        let untyped = CancelNotification::new(session_id.to_owned())
+            .to_untyped_message()
+            .map_err(acp_message)?;
         self.connection
-            .send_notification(CancelNotification::new(session_id.to_owned()))
+            .send_notification(untyped)
             .map_err(acp_message)
     }
 
@@ -2358,10 +2365,53 @@ impl Engine {
             "rustcode".to_owned(),
             json!({ "access": self.access.meta() }),
         )]));
-        match self.connection.send_request(request).block_task().await {
-            Ok(response) => Ok(response.stop_reason),
-            Err(error) => Err(acp_message(error)),
+        let untyped = request.to_untyped_message().map_err(acp_message)?;
+        let value = self
+            .connection
+            .send_request(untyped)
+            .block_task()
+            .await
+            .map_err(acp_message)?;
+        let response = PromptResponse::from_value("session/prompt", value).map_err(acp_message)?;
+        Ok(response.stop_reason)
+    }
+}
+
+struct LoopbackClientHandler {
+    access: Access,
+}
+
+impl agent_client_protocol::HandleDispatchFrom<Agent> for LoopbackClientHandler {
+    fn describe_chain(&self) -> impl std::fmt::Debug {
+        "rustcode::orchestration::local_threads::LoopbackClientHandler"
+    }
+
+    async fn handle_dispatch_from(
+        &mut self,
+        dispatch: agent_client_protocol::Dispatch,
+        _connection: ConnectionTo<Agent>,
+    ) -> Result<
+        agent_client_protocol::Handled<agent_client_protocol::Dispatch>,
+        agent_client_protocol::Error,
+    > {
+        let agent_client_protocol::Dispatch::Request(message, responder) = dispatch else {
+            return Ok(agent_client_protocol::Handled::No {
+                message: dispatch,
+                retry: false,
+            });
+        };
+        if message.method == "session/request_permission" {
+            let request: RequestPermissionRequest = serde_json::from_value(message.params)
+                .map_err(|error| {
+                    agent_client_protocol::Error::invalid_params().data(error.to_string())
+                })?;
+            let value = serde_json::to_value(answer_permission(&request, self.access))
+                .map_err(agent_client_protocol::Error::into_internal_error)?;
+            responder.respond(value)?;
+        } else {
+            responder.respond(json!({}))?;
         }
+        Ok(agent_client_protocol::Handled::Yes)
     }
 }
 
