@@ -27,7 +27,7 @@ export interface PickedThread {
  */
 export function moveBlockedReason(thread: PickedThread | undefined, canMove: boolean): string | undefined {
   if (!thread) return undefined;
-  if (thread.running) return "Stop the running turn to move this thread to another project.";
+  if (thread.running) return "Stop the running turn to move this thread.";
   if (!canMove) return "This server cannot move a thread to another project. Update RustCode.";
   return undefined;
 }

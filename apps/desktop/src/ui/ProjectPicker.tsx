@@ -19,7 +19,17 @@ import { startNewThread, toast, useApp, useMachineOfThread } from "../state/stor
 import type { ThreadState } from "../state/thread";
 import { isRunning } from "../state/thread";
 import { CardMenuItem, CardPopover, type CardTriggerProps, menuKeys } from "./cardPopover";
-import { Check, Code, Copy, FolderOpen, FolderPlus, GitBranch, SquarePen, SquareTerminal } from "./icons";
+import {
+  Check,
+  Code,
+  Copy,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  GitBranch,
+  SquarePen,
+  SquareTerminal,
+} from "./icons";
 import { MachineFolderBrowser } from "./MachineFolderBrowser";
 import { cx, type MenuQuickAction, MenuQuickActions, MenuSearchField, menuSeparator } from "./primitives";
 
@@ -112,13 +122,15 @@ export function ProjectPicker({
       >
         {thread && <FolderActions cwd={cwd} host={host} remote={!!threadMachine} />}
         {thread && (
+          // The path is the trigger's and Copy Path's already: one line says what a row does, or why
+          // it cannot now.
           <div data-menu-static className="px-3 pt-1 pb-0.5">
-            <div className="truncate text-caption text-fg-muted">{middleEllipsis(cwd, PATH_CHARS + 10)}</div>
-            <div className="pt-1.5 text-caption text-fg-faint">Move this thread to</div>
-            {blocked && (
-              <p role="note" className="pt-1 text-caption text-fg-muted">
+            {blocked ? (
+              <p role="note" className="text-caption text-fg-muted">
                 {blocked}
               </p>
+            ) : (
+              <div className="text-caption text-fg-faint">Move to</div>
             )}
           </div>
         )}
@@ -153,7 +165,11 @@ export function ProjectPicker({
               >
                 {/* A worktree is the repo's, not a project of its own: indented under it, marked by
                   the branch it is. */}
-                {row.repo && <GitBranch size={12} className="shrink-0 text-fg-faint" />}
+                {row.repo ? (
+                  <GitBranch size={12} className="shrink-0 text-fg-faint" />
+                ) : (
+                  <Folder size={13} className="shrink-0 text-fg-muted" />
+                )}
                 <span className="min-w-[40%] flex-1 truncate text-body text-fg">
                   {matchSpans(row.name, filter).map((span, i) =>
                     span.hit ? (
@@ -256,7 +272,10 @@ function FolderActions({ cwd, host, remote }: { cwd: string; host: string; remot
       ) : (
         actions.map((action) => (
           <CardMenuItem key={action.label} onSelect={action.onSelect}>
-            {action.icon} {action.description ?? action.label}
+            <span aria-hidden className="flex shrink-0 text-fg-muted [&_svg]:size-[13px]">
+              {action.icon}
+            </span>
+            {action.description ?? action.label}
           </CardMenuItem>
         ))
       )}
