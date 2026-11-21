@@ -46,9 +46,12 @@ describe("shorthand", () => {
     );
   });
 
-  test("a tint may end the title cell, and a third cell is a badge or a value", () => {
+  test("a tint may start or end a title cell, and a third cell is a badge or a value", () => {
     expect(expandShorthand(":: cards\n- Tables {ok} | Copy as CSV. | Small")).toBe(
       '<div class="rc-grid rc-cards"><div class="rc-card rc-ok"><b>Tables</b><span class="rc-badge">Small</span><p>Copy as CSV.</p></div></div>',
+    );
+    expect(expandShorthand(":: cards\n- {warn} Split import | Static import breaks lazy chunk.")).toBe(
+      '<div class="rc-grid rc-cards"><div class="rc-card rc-warn"><b>Split import</b><p>Static import breaks lazy chunk.</p></div></div>',
     );
     expect(expandShorthand(":: list\n- Lazy start {info} | `MAX_LIVE` 6 | done")).toBe(
       '<ul class="rc-list"><li class="rc-item rc-info"><b>Lazy start</b><span class="rc-item-value">done</span><p><code>MAX_LIVE</code> 6</p></li></ul>',
@@ -61,10 +64,16 @@ describe("shorthand", () => {
     );
   });
 
-  test("a table takes its first row as the heading and sorts past eight rows", () => {
-    const small = expandShorthand(":: table\n| Check | Result |\n|---|---|\n| tests | 24 pass |");
+  test("a table takes its first row as the heading, badges tinted cells and sorts past eight rows", () => {
+    const small = expandShorthand(
+      ":: table\n| Check | Result | Status |\n|---|---|---|\n| tests | 24 pass | {ok} Ready |\n| lint | 1 warn | Split {warn} |\n| release | <code>{ok|warn|bad}</code> | {bad} |",
+    );
     expect(small).toBe(
-      '<table class="rc-table"><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody><tr><td>tests</td><td>24 pass</td></tr></tbody></table>',
+      '<table class="rc-table"><thead><tr><th>Check</th><th>Result</th><th>Status</th></tr></thead><tbody>' +
+        '<tr><td>tests</td><td>24 pass</td><td><span class="rc-badge rc-ok">Ready</span></td></tr>' +
+        '<tr><td>lint</td><td>1 warn</td><td><span class="rc-badge rc-warn">Split</span></td></tr>' +
+        '<tr><td>release</td><td><code>{ok|warn|bad}</code></td><td><span class="rc-badge rc-bad">bad</span></td></tr>' +
+        "</tbody></table>",
     );
     const rows = Array.from({ length: 9 }, (_, i) => `r${i} | ${i}`).join("\n");
     expect(expandShorthand(`:: table\nName | N\n${rows}`)).toContain('<table class="rc-table" data-rc-sort>');
@@ -111,8 +120,13 @@ describe("shorthand", () => {
     expect(expandShorthand(":: chart\n- a | 1")).toBe(":: chart\n- a | 1");
   });
 
-  test("cells split outside backticks only, and inline keeps HTML", () => {
+  test("cells split outside backticks and HTML tags/code only, and inline keeps HTML", () => {
     expect(cells("a | `b|c` | d \\| e", 3)).toEqual(["a", "`b|c`", "d | e"]);
+    expect(cells('a | <code>{ok|warn|bad}</code> | <a title="x|y">z</a>', 3)).toEqual([
+      "a",
+      "<code>{ok|warn|bad}</code>",
+      '<a title="x|y">z</a>',
+    ]);
     expect(cells("a | b | c", 2)).toEqual(["a", "b | c"]);
     expect(inline("<span class=rc-badge>x</span> `<b>`")).toBe(
       "<span class=rc-badge>x</span> <code>&lt;b&gt;</code>",
