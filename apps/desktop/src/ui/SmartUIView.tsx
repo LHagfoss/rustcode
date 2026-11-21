@@ -3,6 +3,7 @@
 // and Stop/Run are small icons that appear on hover or focus. See
 // docs/smart-ui.md for the format, limits and security model.
 
+import { Dialog } from "radix-ui";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
 import { KEYBOARD_NAV, TAB_FOCUS_EVENT, tabMovesFocus } from "../lib/focusModality";
@@ -46,7 +47,7 @@ import {
 import { joinSelection } from "../smartui/selection";
 import { expandShorthand } from "../smartui/shorthand";
 import { sendFromView, setSmartUi, toast, useApp } from "../state/store";
-import { Check, Code, Copy, Download, Play, Square } from "./icons";
+import { Check, Code, Copy, Download, Maximize2, Play, Square, X } from "./icons";
 import { CodeBlock } from "./Markdown";
 import { copyText, cx, Pill, Tooltip } from "./primitives";
 
@@ -102,15 +103,21 @@ export function SmartUIView({
   complete,
   streaming,
   threadId,
+  enlarged = false,
 }: {
   source: string;
   complete: boolean;
   /** The reply is streaming in front of the reader now. */
   streaming: boolean;
   threadId?: string;
+  /** Drawn in the wide dialog: its own height and stop state, and no Enlarge button. */
+  enlarged?: boolean;
 }) {
   const enabled = useApp((s) => s.smartUi);
-  const [height, setHeight] = useState(() => rememberedHeight(source) ?? MIN_HEIGHT);
+  // The dialog lays the view out wider, so it keeps a height of its own.
+  const heightKey = enlarged ? `\u0000wide\n${source}` : source;
+  const [height, setHeight] = useState(() => rememberedHeight(heightKey) ?? MIN_HEIGHT);
+  const [large, setLarge] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
   const [page, setPage] = useState<{
@@ -130,8 +137,8 @@ export function SmartUIView({
   // The height the frame is drawn at, with the hover hold (`HoverSize`).
   const sizes = useRef<HoverSize | null>(null);
   const sizeGate = useCallback(
-    () => (sizes.current ??= new HoverSize(rememberedHeight(source) ?? MIN_HEIGHT)),
-    [source],
+    () => (sizes.current ??= new HoverSize(rememberedHeight(heightKey) ?? MIN_HEIGHT)),
+    [heightKey],
   );
 
   const syncFrameFocusModality = useCallback(() => {
@@ -169,7 +176,7 @@ export function SmartUIView({
   const instance = useRef(frameToken());
   const problem = complete ? blockProblem(source) : null;
   const title = blockTitle(source);
-  const haltKey = `${threadId ?? ""}\n${source}`;
+  const haltKey = `${enlarged ? "wide\n" : ""}${threadId ?? ""}\n${source}`;
   const halt = complete ? haltOf(haltKey) : undefined;
   const runnable = enabled && complete && !problem;
   // A view whose fence is still open, being read now: it is drawn as it arrives.
@@ -231,7 +238,7 @@ export function SmartUIView({
       },
       () => autoRun.current.inView,
     );
-    const remembered = rememberedHeight(source);
+    const remembered = rememberedHeight(heightKey);
     if (remembered !== undefined) {
       sizeGate().set(remembered);
       setHeight(remembered);
@@ -247,7 +254,7 @@ export function SmartUIView({
     } else {
       show({ token, srcdoc: html });
     }
-  }, [source, threadId, tearDown, haltWith, sizeGate]);
+  }, [source, heightKey, threadId, tearDown, haltWith, sizeGate]);
 
   const pressRun = () => {
     clearHalt(haltKey);
@@ -378,7 +385,7 @@ export function SmartUIView({
           // Track whether measurements should be ignored while the pointer is inside.
           const next = sizeGate().hover(data.over === true);
           if (next !== null) {
-            rememberHeight(source, next);
+            rememberHeight(heightKey, next);
             setHeight(next);
           }
           break;
@@ -399,7 +406,7 @@ export function SmartUIView({
             const interacted = data.interacted === true || (navigator.userActivation?.isActive ?? false);
             const next = sizeGate().measure(measured, interacted);
             if (next !== null) {
-              rememberHeight(source, next);
+              rememberHeight(heightKey, next);
               setHeight(next);
             }
           }
@@ -492,7 +499,7 @@ export function SmartUIView({
       clearInterval(watch);
       unTheme();
     };
-  }, [page, threadId, source, haltWith, sizeGate]);
+  }, [page, threadId, heightKey, haltWith, sizeGate]);
 
   // Out of sight for 30 s: torn down; it runs again when it comes back.
   useEffect(() => {
@@ -589,6 +596,11 @@ export function SmartUIView({
         <IconButton label="Save as HTML" onClick={() => void saveView(source, title)}>
           <Download size={12} />
         </IconButton>
+        {!enlarged && complete && !problem && (
+          <IconButton label="Enlarge" onClick={() => setLarge(true)}>
+            <Maximize2 size={12} />
+          </IconButton>
+        )}
         <IconButton
           label={showSource ? "Hide source" : "Show source"}
           onClick={() => setShowSource(!showSource)}
@@ -610,7 +622,57 @@ export function SmartUIView({
           <CodeBlock code={source} lang="html" />
         </div>
       )}
+      {large && (
+        <EnlargedView source={source} title={title} threadId={threadId} onClose={() => setLarge(false)} />
+      )}
     </div>
+  );
+}
+
+/**
+ * A view opened wide: dashboards and tables written for the reply's column get
+ * room to lay out. A second page of the same block, so the one in the reply keeps
+ * its state; Esc, the close button or a click outside closes it.
+ */
+function EnlargedView({
+  source,
+  title,
+  threadId,
+  onClose,
+}: {
+  source: string;
+  title: string;
+  threadId?: string;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-6">
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="elevated pointer-events-auto flex max-h-full w-[min(1100px,100%)] flex-col overflow-hidden"
+          >
+            <div className="flex items-center gap-2 px-5 pt-4 pb-2">
+              <Dialog.Title className="min-w-0 flex-1 truncate font-semibold text-body">{title}</Dialog.Title>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  aria-label="Close"
+                  className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+                >
+                  <X size={14} />
+                </button>
+              </Dialog.Close>
+            </div>
+            <div className="min-h-0 overflow-y-auto px-5 pb-5">
+              <SmartUIView source={source} complete streaming={false} threadId={threadId} enlarged />
+            </div>
+          </Dialog.Content>
+        </div>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

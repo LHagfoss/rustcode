@@ -11,14 +11,16 @@
 //   :: bars Why it takes a minute        .rc-bars; `- label | value | shown | tip`
 //   :: stats                             .rc-stats; `- value | label | note`
 //   :: steps                             .rc-steps; `- [x] done`, `[>]` active, `[!]` failed, `[ ]` to do
-//   :: list                              .rc-list; `- Title | detail`
-//   :: cards                             .rc-grid of .rc-card; `- Title | body`
+//   :: list                              .rc-list; `- Title | detail | value`
+//   :: cards                             .rc-grid of .rc-card; `- Title | body | badge`
 //   :: table                             table.rc-table; `a | b` rows, the first is the heading
 //   :: callout info                      .rc-callout tinted ok|warn|bad|info; the lines below are its text
 //   :: sources                           folded sources; `- Title | url`
+//   :: actions                           a row of .rc-chip follow-ups; `- Label | message`
 //
 // A title after a block's name (`:: bars Why …`) draws an h3 over it. An item may end with
-// `{ok}`, `{warn}`, `{bad}` or `{info}` to tint it. In text, `code` and **bold** work and
+// `{ok}`, `{warn}`, `{bad}` or `{info}` to tint it; on a titled item the tint may also end its
+// title cell (`Fast path {ok} | …`), where agents put it as often as at the end. In text, `code` and **bold** work and
 // any HTML is kept; cells split at `|` outside backticks.
 
 const TINTS = new Set(["ok", "warn", "bad", "info"]);
@@ -34,6 +36,7 @@ const BLOCKS = new Set([
   "table",
   "callout",
   "sources",
+  "actions",
 ]);
 const DIRECTIVE = /^\s*::\s*([a-z]+)\b\s*(.*)$/;
 const ITEM = /^\s*[-*]\s+(.*)$/;
@@ -84,6 +87,18 @@ export function cells(line: string, max = Infinity): string[] {
 function tinted(text: string): [string, string] {
   const match = TINT_SUFFIX.exec(text);
   return match ? [text.slice(0, match.index), ` rc-${match[1]}`] : [text, ""];
+}
+
+/** An item's cells with a tint taken from the end of the item or the end of any cell. */
+function tintedCells(item: string, max: number): [string[], string] {
+  const [body, tint] = tinted(item);
+  let found = tint;
+  const parts = cells(body, max).map((cell) => {
+    const [text, own] = tinted(cell);
+    if (own && !found) found = own;
+    return own ? text.trimEnd() : cell;
+  });
+  return [parts, found];
 }
 
 /** The number a bar's value cell starts with: "75", "1,234 ms", "12.5%". */
@@ -141,29 +156,43 @@ function steps(block: Block): string {
   return `${heading(block.arg)}<ol class="rc-steps">${out.join("")}</ol>`;
 }
 
-/** A titled item: `Title | detail`, or one line of text. */
-function titled(item: string): [string, string, string] {
-  const [body, tint] = tinted(item);
-  const [title = "", detail] = cells(body, 2);
-  return detail === undefined ? ["", inline(title), tint] : [inline(title), inline(detail), tint];
+/** A titled item: `Title | detail | aside`, or one line of text. */
+function titled(item: string): { title: string; detail: string; aside: string; tint: string } {
+  const [[title = "", detail, aside], tint] = tintedCells(item, 3);
+  return detail === undefined
+    ? { title: "", detail: inline(title), aside: "", tint }
+    : { title: inline(title), detail: inline(detail), aside: aside ? inline(aside) : "", tint };
 }
 
 function list(block: Block): string {
   const out = block.items.map((item) => {
-    const [title, detail, tint] = titled(item);
-    return title
-      ? `<li class="rc-item${tint}"><b>${title}</b><p>${detail}</p></li>`
-      : `<li class="rc-item rc-prose${tint}">${detail}</li>`;
+    const { title, detail, aside, tint } = titled(item);
+    if (!title) return `<li class="rc-item rc-prose${tint}">${detail}</li>`;
+    const value = aside ? `<span class="rc-item-value">${aside}</span>` : "";
+    const body = detail ? `<p>${detail}</p>` : "";
+    return `<li class="rc-item${tint}"><b>${title}</b>${value}${body}</li>`;
   });
   return `${heading(block.arg)}<ul class="rc-list">${out.join("")}</ul>`;
 }
 
 function cards(block: Block): string {
   const out = block.items.map((item) => {
-    const [title, detail, tint] = titled(item);
-    return `<div class="rc-card${tint}">${title ? `<b>${title}</b>` : ""}<p>${detail}</p></div>`;
+    const { title, detail, aside, tint } = titled(item);
+    const badge = aside ? `<span class="rc-badge">${aside}</span>` : "";
+    const head = title ? `<b>${title}</b>${badge}` : badge;
+    return `<div class="rc-card${tint}">${head}${detail ? `<p>${detail}</p>` : ""}</div>`;
   });
-  return `${heading(block.arg)}<div class="rc-grid">${out.join("")}</div>`;
+  return `${heading(block.arg)}<div class="rc-grid rc-cards">${out.join("")}</div>`;
+}
+
+/** Follow-up chips: `Label | message`, or one line that is both. */
+function actions(block: Block): string {
+  const out = block.items.map((item) => {
+    const [label = "", message] = cells(item, 2);
+    const send = (message || label).replace(/`|\*\*/g, "");
+    return `<button class="rc-chip" data-rc-send="${escapeAttr(send)}">${inline(label)}</button>`;
+  });
+  return `${heading(block.arg)}<div class="rc-row rc-gap-2 rc-actions">${out.join("")}</div>`;
 }
 
 function table(block: Block): string {
@@ -225,6 +254,8 @@ function render(block: Block): string {
       return table(block);
     case "callout":
       return callout(block);
+    case "actions":
+      return actions(block);
     default:
       return sources(block);
   }

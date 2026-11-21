@@ -44,13 +44,16 @@ writes its markup), HTML for the rest; they mix.
 
 A `::` line opens a block, its `- ` items split at `|` (not in backticks), and
 a blank line or a line starting `<` ends it. An item may end `{ok}`, `{warn}`,
-`{bad}` or `{info}`; `code`, **bold** and HTML work in text. A name after a
+`{bad}` or `{info}` (a titled item may put it after its title);
+`code`, **bold** and HTML work in text. Keep a card's or item's text to one
+short line: status goes in its tint, size or effort in its badge. A name after a
 block is an `h3` over it.
 
 - `:: title T` · `:: h Heading` · `:: p` text
 - `:: bars` `- label | value | shown | tip`, scaled to the largest (`%` as written)
 - `:: stats` `- value | label | note` · `:: steps` `- [x]` done, `[>]` active, `[!]` failed, `[ ]` to do
-- `:: list` `- Title | detail` · `:: cards` `- Title | body`
+- `:: list` `- Title | detail | value` · `:: cards` `- Title | body | badge`
+- `:: actions` `- Label | message` (follow-up chips; the message is sent as the user)
 - `:: table` then `a | b` rows, the first the heading; sorts past eight rows
 - `:: callout info|ok|warn|bad` then text · `:: sources` `- Title | url`, last
 
