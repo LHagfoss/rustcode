@@ -1059,7 +1059,7 @@ composer's keys stay outside the table.
   learns the same list from the handshake and reconnects over whichever
   answers. A thread's header carries a chip while it is shared, with its
   attached count.
-- **Git actions.** The header's git pill shows the one action the thread's
+- **Git actions.** The git button on the side panel's Changes tab shows the one action the thread's
   folder calls for: *Commit* (with the number of changed files), *Pull* when
   the branch is behind, *Push* when it has commits the remote lacks or was
   never pushed, and *Create Pull Request* for a pushed branch the open pull
@@ -1293,23 +1293,22 @@ composer's keys stay outside the table.
   scrolls under it; views leave `HEADER_HEIGHT` (the title row's 52 px) at
   their top.
 - **Thread header buttons.** The chat header's buttons come from one
-  registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): status,
-  plan, git, and the side panel's toggle. Settings › Chat › Thread
+  registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): the
+  plan's progress and the side panel's toggle, each on its own with no shared
+  pill behind them. Settings › Chat › Thread
   header buttons lists them as Shown and Hidden: drag a row to reorder it or
   move it across (pointer capture, so the webview's own drops never see it),
   ⌥↑/⌥↓ moves a focused row, and each row's Show/Hide button does the same
   without a pointer. A button's own condition still applies (no plan, no
   pull requests), and hiding every button leaves the title alone. The panel's
   toggle always draws after the rest, so it is the header's last, rightmost
-  control; it opens the panel on the thread's last tab and closes it. The
-  status button keeps its menu icon while a turn runs (the thread list shows
-  the spinner). Changes and Pull requests are tabs of the panel, not header
-  buttons; a layout saved with them drops them. The order
-  is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
-  in a later release shows by default. A fresh install and Reset show status,
-  plan and the panel toggle: Git (driving git by hand; agents commit and open
-  pull requests) is hidden. The terminal and project actions buttons were
-  removed; a layout saved with them drops them. A saved layout keeps
+  control; it opens the panel on the thread's last tab and closes it. Changes
+  and Pull requests are tabs of the panel, not header buttons. The status menu
+  (its actions are on the thread row's menu) and the git button (now on the
+  Changes tab) were removed, as were the terminal and project actions; a
+  layout saved with any of them drops them. The order is kept as
+  `rustcode.headerButtons` (`{shown, known}`), so a button added in a later
+  release shows by default. A saved layout keeps
   what it shows.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the

@@ -43,8 +43,8 @@ describe("the width the card may draw", () => {
     expect(panelWidth(MAX, 1512, 900)).toBe(900 - CHAT_MIN);
     expect(panelWidth(4000, 1512, 1512)).toBe(MAX);
     expect(panelWidth(120, 1512, 1512)).toBe(MIN);
-    // 70% of a 900px window is 630.
-    expect(panelWidth(MAX, 900, 2000)).toBe(630);
+    // 70% of a 600px window is 420.
+    expect(panelWidth(MAX, 600, 2000)).toBe(420);
   });
 
   test("stands as stored before the row is measured", () => {
@@ -53,8 +53,8 @@ describe("the width the card may draw", () => {
   });
 
   test("a narrow window does not overwrite the width it was given", () => {
-    expect(panelWidth(620, 1000, 900)).toBe(Math.min(620, 700, 900 - CHAT_MIN));
-    expect(panelWidth(620, 1600, 1600)).toBe(620);
+    expect(panelWidth(520, 600, 900)).toBe(Math.min(520, 420, 900 - CHAT_MIN));
+    expect(panelWidth(520, 1600, 1600)).toBe(520);
   });
 });
 

@@ -1,19 +1,20 @@
-// The side panel's Details tab: where the thread runs, its branch, lineage, a few plain stats
-// (agent, messages, tool calls, cost, age) and context usage.
+// The side panel's Details tab, in titled sections: where the thread runs, its branch and
+// uncommitted changes, lineage, a few plain stats (agent, messages, tool calls, cost, age) and
+// context usage.
 // Changes and Pull requests are the panel's other tabs (ui/RightPanel.tsx).
 
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { modelName } from "../acp/types";
 import { type GitChanges, gitChangeSummary, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { contextPercent } from "../state/details";
 import { formatCost } from "../state/pricing";
-import { useApp, worktreeOf } from "../state/store";
+import { showPanel, useApp, worktreeOf } from "../state/store";
 import { formatTokens, isRunning, type TranscriptItem } from "../state/thread";
 import { relativeAge } from "../state/threadFormat";
 import { splitThreadKey } from "../state/threadKeys";
 import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
-import { ChevronRight, FolderOpen, GitBranch, Laptop } from "./icons";
+import { ChevronRight, FileDiff, FolderOpen, GitBranch, Laptop } from "./icons";
 import {
   FOLDED_EVENT,
   isFolded as isFoldedOf,
@@ -22,7 +23,8 @@ import {
   toggleFolded,
   writeFolded,
 } from "./overview";
-import { Tooltip } from "./primitives";
+import { cx, Tooltip } from "./primitives";
+import { DiffCount } from "./Rows";
 
 /**
  * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
@@ -121,16 +123,22 @@ export function ThreadDetails() {
   if (counts.startedAt) stats.push(["Started", relativeAge(counts.startedAt)]);
   if (summary?.updatedAt) stats.push(["Last active", relativeAge(summary.updatedAt)]);
 
+  const fileCount = changes?.files.length ?? 0;
+  const added = changes?.files.reduce((sum, f) => sum + f.added, 0) ?? 0;
+  const removed = changes?.files.reduce((sum, f) => sum + f.removed, 0) ?? 0;
+
   const row = "flex min-h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout";
   const action = `${row} hover:bg-fill-subtle`;
   const icon = "shrink-0 text-fg-muted";
 
+  // Titled sections, each a few 32px rows, a hairline between them: the layout T3 Code's thread
+  // details card uses, holding this panel's own facts.
   return (
-    <div className="min-h-0 overflow-y-auto">
-      <div className="px-2 py-1">
+    <div className="min-h-0 overflow-y-auto pb-2">
+      <Section title="Workspace" first>
         <div className={row}>
           <Laptop size={16} className={icon} />
-          <span className="min-w-0 truncate font-medium">
+          <span className="min-w-0 truncate">
             {machine ?? (host ? "Paired computer" : appPlatform() === "mac" ? "This Mac" : "This computer")}
           </span>
         </div>
@@ -141,54 +149,81 @@ export function ThreadDetails() {
             <ChevronRight size={12} className="text-fg-faint" />
           </button>
         )}
-      </div>
+      </Section>
       {branch && (
-        <div className="rule-t [--rc-rule-inset:1rem] px-2 py-1">
+        <Section title="Version control">
           <Tooltip label={branch}>
             <div className={row}>
               <GitBranch size={16} className={icon} />
-              <span className="truncate rounded-md bg-fill-subtle px-2 py-0.5 font-mono text-caption">
+              <span className="min-w-0 truncate rounded-md bg-fill-subtle px-2 py-0.5 font-mono text-caption">
                 {branch}
               </span>
             </div>
           </Tooltip>
-        </div>
+          {changes && (
+            <button type="button" className={action} onClick={() => showPanel("changes")}>
+              <FileDiff size={16} className={icon} />
+              <span className="flex-1">
+                {fileCount
+                  ? `${fileCount} changed file${fileCount === 1 ? "" : "s"}`
+                  : "No uncommitted changes"}
+              </span>
+              {fileCount > 0 && <DiffCount added={added} removed={removed} />}
+              <ChevronRight size={12} className="text-fg-faint" />
+            </button>
+          )}
+        </Section>
       )}
       {delegates > 0 && (
-        <div className="rule-t [--rc-rule-inset:1rem] px-2 py-2">
-          <DelegatePreview
-            threadId={id}
-            expanded={!isFolded("delegates")}
-            onToggle={() => toggle("delegates")}
-          />
-        </div>
+        <Section title="Lineage">
+          <div className="px-2">
+            <DelegatePreview
+              threadId={id}
+              expanded={!isFolded("delegates")}
+              onToggle={() => toggle("delegates")}
+            />
+          </div>
+        </Section>
       )}
-      <dl className="rule-t [--rc-rule-inset:1rem] grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-4 py-3 text-caption">
-        {stats.map(([label, value]) => (
-          <div key={label} className="contents">
-            <dt className="text-fg-faint">{label}</dt>
-            <dd className="min-w-0 truncate text-right text-fg-muted tabular">{value}</dd>
-          </div>
-        ))}
-      </dl>
+      <Section title="Thread">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-2 py-1 text-callout">
+          {stats.map(([label, value]) => (
+            <div key={label} className="contents">
+              <dt className="text-fg-muted">{label}</dt>
+              <dd className="min-w-0 truncate text-right tabular">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </Section>
       {usage && used !== undefined && (
-        <div className="rule-t [--rc-rule-inset:1rem] flex items-center gap-2 px-4 py-3 text-caption text-fg-muted">
-          Context
-          <div
-            role="meter"
-            aria-label="Context used"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={used}
-            className="h-1 flex-1 overflow-hidden rounded-full bg-fill"
-          >
-            <div className="h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
+        <Section title="Context window">
+          <div className="flex min-h-8 items-center gap-2 px-2 text-callout">
+            <div
+              role="meter"
+              aria-label="Context used"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={used}
+              className="h-1 flex-1 overflow-hidden rounded-full bg-fill"
+            >
+              <div className="h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
+            </div>
+            <span className="shrink-0 text-fg-muted tabular">
+              {formatTokens(usage.used)} / {formatTokens(usage.size)}
+            </span>
           </div>
-          <span className="shrink-0 tabular">
-            {formatTokens(usage.used)} / {formatTokens(usage.size)}
-          </span>
-        </div>
+        </Section>
       )}
     </div>
+  );
+}
+
+/** One titled group of rows; every one after the first starts on a hairline. */
+function Section({ title, first, children }: { title: string; first?: boolean; children: ReactNode }) {
+  return (
+    <section className={cx("px-2 pt-2", !first && "rule-t [--rc-rule-inset:1rem] mt-2")}>
+      <h3 className="px-2 pb-1 font-medium text-caption text-fg-faint">{title}</h3>
+      {children}
+    </section>
   );
 }

@@ -1,8 +1,9 @@
 // One resizable card with a tab per view: Details (the default), Changes, Pull
-// requests and the beside thread. Every tab keeps the card's width, so
-// switching tabs never moves the card's edge or the chat beside it. Every view
-// draws on one surface, the chat's own dark ground with a hairline edge, and is only as tall
-// as its content. On a wide window the card floats over the chat's row: the
+// requests and the beside thread. Every tab and every thread share one width,
+// so switching tabs or threads never moves the card's edge or the chat beside
+// it. Every view draws on one surface, the chat's own dark ground with a
+// hairline edge, as tall as its content but never shorter than it is wide
+// (about square), so a short tab does not shrink to a strip. On a wide window the card floats over the chat's row: the
 // transcript keeps the row's full width (its scrollbar stays at the window's
 // edge) and pads its lane by the room the card takes, published on the row as
 // `--rc-panel-room`, so the lane stays centred in what is left. A narrow window
@@ -43,9 +44,9 @@ const PullsPanel = lazy(() => import("./PullRequests").then((m) => ({ default: m
 type Kind = NonNullable<AppState["panel"]>;
 
 /** The card's own bounds, in px, and the width it starts with. */
-export const MIN = 360;
-export const MAX = 640;
-export const DEFAULT_WIDTH = 520;
+export const MIN = 320;
+export const MAX = 560;
+export const DEFAULT_WIDTH = 420;
 /** The room the chat column always keeps of the row, however wide the card asks to be. */
 export const CHAT_MIN = 360;
 /** One press of an arrow key, and with Shift. */
@@ -53,7 +54,7 @@ const STEP = 24;
 const STEP_LARGE = 96;
 /** A window no wider than this has no room for both columns: the panel opens as a sheet. */
 export const SHEET_AT = PANEL_SHEET_AT;
-/** The width the card is kept under, per thread; the shared key is what a thread with none starts at. */
+/** The width the card is kept under: one for every tab and thread. */
 const KEY = "rustcode.rightPanelWidth";
 /** The gap the card keeps from the header's foot and from the window's right and bottom edges. */
 const CARD_GAP = 12;
@@ -122,22 +123,14 @@ export function panelIsSheet(viewport: number): boolean {
   return viewport <= SHEET_AT;
 }
 
-/** The width kept for a thread, else the one last kept for any thread. */
-function storedWidth(threadId: string | null): number {
-  const own = Number(threadId ? readStorage(`${KEY}:${threadId}`) : null);
-  if (own >= MIN && own <= MAX) return own;
-  const shared = Number(readStorage(KEY));
-  if (shared >= MIN && shared <= MAX) return shared;
-  return DEFAULT_WIDTH;
+/** The width kept for the panel, else the default. */
+function storedWidth(): number {
+  const kept = Number(readStorage(KEY));
+  return kept >= MIN && kept <= MAX ? kept : DEFAULT_WIDTH;
 }
 
-/**
- * Kept when it settles: the end of a drag, a key, a reset. Never per frame. It
- * is kept for this thread, and as the width a thread that has none starts at.
- */
-function persist(threadId: string | null, width: number) {
-  // Not kept in a private window.
-  if (threadId) writeStorage(`${KEY}:${threadId}`, String(width));
+/** Kept when it settles: the end of a drag, a key, a reset. Never per frame. */
+function persist(width: number) {
   writeStorage(KEY, String(width));
 }
 
@@ -154,7 +147,6 @@ function headerToggle(): HTMLElement | null {
 
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
-  const threadId = useApp((s) => s.selectedId);
   const panelKey = useShortcutHint("toggle-panel");
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const peekOn = useApp((s) => !!s.peekId);
@@ -165,7 +157,7 @@ export function RightPanel() {
   });
   // What the panel shows: the open one, or while closing the one that was.
   const [shown, setShown] = useState<Kind | null>(panel);
-  const [width, setWidth] = useState(() => storedWidth(threadId));
+  const [width, setWidth] = useState(storedWidth);
   const [viewport, setViewport] = useState(() => window.innerWidth);
   // The row the card shares with the chat, measured on the column that holds it; 0
   // until the first measurement, when the stored width stands as it is.
@@ -183,11 +175,6 @@ export function RightPanel() {
   useEffect(() => {
     if (panel) setShown(panel);
   }, [panel]);
-
-  // A thread keeps its own width; one that has none starts where the last one left off.
-  useEffect(() => {
-    setWidth(storedWidth(threadId));
-  }, [threadId]);
 
   useEffect(() => {
     const onResize = () => setViewport(window.innerWidth);
@@ -269,7 +256,7 @@ export function RightPanel() {
 
   const commit = (next: number) => {
     setWidth(next);
-    persist(threadId, next);
+    persist(next);
   };
 
   // A drag writes the width on the frame it is dragged on and keeps it once the
@@ -498,6 +485,9 @@ export function RightPanel() {
           // window's bottom edge, whatever the composer or anything else in the chat is doing.
           marginBottom: CARD_GAP,
           maxHeight: `calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px)`,
+          // Never shorter than it is wide, so the card stays about square whatever the tab shows;
+          // the window's own height still wins.
+          minHeight: `min(var(--rc-panel-width), calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px))`,
         }}
       >
         {contents}

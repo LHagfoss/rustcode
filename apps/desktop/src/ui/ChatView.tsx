@@ -4,14 +4,12 @@ import { isLoading, openError } from "../state/thread";
 // approval cards — and the right panel docked beside it (ui/RightPanel.tsx). A
 // new thread centres the composer and places its optional overview below it.
 
-import { DropdownMenu, Popover } from "radix-ui";
+import { Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, projectName } from "../acp/types";
-import { STATUS_LABEL } from "../acp/v2";
 import { darkenOverlay, useBanner } from "../lib/banner";
 import { observeSize } from "../lib/resize";
 import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
-import { autoCompactOffFor, setAutoCompactForThread } from "../state/autoCompactRun";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { contextPercent } from "../state/details";
 import { chooseFolder } from "../state/folders";
@@ -36,14 +34,12 @@ import {
   runPrompt,
   seeFailure,
   setThreadStatus,
-  setView,
   statusOf,
   toggleRightPanel,
   useApp,
   useMachineOfThread,
   useShortcutHint,
   useThreadOffline,
-  worktreeOf,
 } from "../state/store";
 import { formatClock, isRunning, type ThreadState } from "../state/thread";
 import { retryStalledFirstMessage, retryThread } from "../state/threadActions";
@@ -55,21 +51,15 @@ import { OriginChip } from "./Branches";
 import { NewThreadLight, ThreadLight } from "./ChatLight";
 import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
-import { GitHeaderButton } from "./GitActions";
 import {
   ChevronDown,
   CircleCheck,
   CircleDashed,
   CircleDot,
-  Eye,
-  FileDiff,
-  GitBranch,
   Laptop,
   ListChecks,
   type LucideIcon,
   PanelRight,
-  SlidersHorizontal,
-  Sparkles,
 } from "./icons";
 import { JobRunBar, useJobRun } from "./JobRunBar";
 import { LinkedThreads } from "./Links";
@@ -83,13 +73,9 @@ import { ProjectMark } from "./ProjectMark";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import {
   Callout,
-  Cluster,
   ClusterButton,
   cx,
   Kbd,
-  MenuContent,
-  menuItem,
-  menuSeparator,
   Pill,
   Skeleton,
   Spinner,
@@ -101,8 +87,7 @@ import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
 import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
-import { StatusChip, useThreadStatus } from "./Status";
-import { ThreadQuickActions } from "./ThreadQuickActions";
+import { useThreadStatus } from "./Status";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
 import { WhileAwayCard } from "./WhileAway";
 
@@ -160,64 +145,6 @@ function PlanButton({ thread }: { thread: ThreadState }) {
   );
 }
 
-/** The thread's status chip; a click marks it for review, settles or unsettles it. */
-function ThreadStatusMenu({ threadId }: { threadId: string }) {
-  const status = useApp((s) => statusOf(s, threadId));
-  const autoCompactOff = useApp((s) => autoCompactOffFor(s, threadId));
-  const wt = useApp((s) => worktreeOf(s, threadId));
-  return (
-    <DropdownMenu.Root>
-      <Tooltip label="Thread actions" side="bottom">
-        <DropdownMenu.Trigger asChild>
-          <button
-            type="button"
-            aria-label={`Thread actions (status: ${STATUS_LABEL[status]})`}
-            className="flex h-6 min-w-8 items-center justify-center gap-1.5 rounded-full px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong data-[state=open]:text-fg"
-          >
-            {wt && (
-              <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">
-                <GitBranch size={12} className="shrink-0" />
-                <span className="truncate">{wt.branch}</span>
-              </span>
-            )}
-            {/* The menu's own icon while idle or running (the thread list already shows a running
-                thread); review and done keep their marker. */}
-            {status === "idle" || status === "running" ? (
-              <SlidersHorizontal size={14} />
-            ) : (
-              <StatusChip status={status} compact className="-mx-1" />
-            )}
-          </button>
-        </DropdownMenu.Trigger>
-      </Tooltip>
-      <MenuContent align="end" className="w-[280px]">
-        <ThreadQuickActions threadId={threadId} />
-        <DropdownMenu.Item className={menuItem} onSelect={() => setView({ kind: "review", threadId })}>
-          <FileDiff size={13} /> Review Changes
-        </DropdownMenu.Item>
-        <DropdownMenu.Separator className={menuSeparator} />
-        {status !== "review" && (
-          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "review")}>
-            <Eye size={13} /> Mark for Review
-          </DropdownMenu.Item>
-        )}
-        {status === "review" && (
-          <DropdownMenu.Item className={menuItem} onSelect={() => void setThreadStatus(threadId, "idle")}>
-            <CircleDashed size={13} /> Clear Status
-          </DropdownMenu.Item>
-        )}
-        <DropdownMenu.Separator className={menuSeparator} />
-        <DropdownMenu.Item
-          className={menuItem}
-          onSelect={() => setAutoCompactForThread(threadId, autoCompactOff)}
-        >
-          <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
-        </DropdownMenu.Item>
-      </MenuContent>
-    </DropdownMenu.Root>
-  );
-}
-
 // The header's buttons, one entry per id in state/headerButtons.ts: the label
 // and icon Settings shows, and the button itself, which decides on its own
 // whether this thread has anything to show (a plan, a pull requests view). The
@@ -228,11 +155,6 @@ interface HeaderButtonEntry {
   label: string;
   icon: LucideIcon;
   Button: (props: { thread?: ThreadState }) => ReactNode;
-}
-
-/** The thread's status menu; a thread of its own, no chip on a new one. */
-function StatusHeaderButton({ thread }: { thread?: ThreadState }) {
-  return thread ? <ThreadStatusMenu threadId={thread.id} /> : null;
 }
 
 /** The plan's progress, while there is a plan. */
@@ -260,18 +182,9 @@ function DetailsHeaderButton() {
 }
 
 export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
-  status: { label: "Status", icon: SlidersHorizontal, Button: StatusHeaderButton },
   plan: { label: "Plan", icon: ListChecks, Button: PlanHeaderButton },
-  git: { label: "Git", icon: GitBranch, Button: GitHeaderButton },
   details: { label: "Side panel", icon: PanelRight, Button: DetailsHeaderButton },
 };
-
-/**
- * The header's controls that read this computer: git and the working tree in the thread's
- * folder. A thread on a paired machine keeps the buttons, disabled, with the machine's name where
- * the action would be (docs/desktop.md › Several machines).
- */
-const LOCAL_ONLY_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["git"]);
 
 function Header({
   thread,
@@ -297,36 +210,14 @@ function Header({
   const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
   const newThreadHost = useApp((s) => s.newThreadHost);
   const moveBlocked = useMoveBlockedReason(pending ? undefined : thread);
-  // The buttons the user keeps, in their order, with the panel's toggle last:
-  // the panel is the last thing beside the chat, so its control is the
-  // rightmost one whatever order the user saved. Each one decides whether this
-  // thread shows it; labelled and icon buttons share one cluster in that order.
-  const right: ReactNode[] = [];
+  // The buttons the user keeps, with the panel's toggle last: the panel is the last thing beside
+  // the chat, so its control is the rightmost one whatever order the user saved. Each one decides
+  // whether this thread shows it. They stand on their own, without a shared pill behind them.
   const kept = [...shown.filter((id) => id !== "details"), ...shown.filter((id) => id === "details")];
-  for (const id of kept) {
-    const entry = HEADER_BUTTONS[id];
-    const Icon = entry.icon;
-    const node =
-      machine && LOCAL_ONLY_BUTTONS.has(id) ? (
-        // A disabled button takes no pointer, so the tooltip hangs on a span that can: it says
-        // where the action lives instead of leaving a dead icon.
-        <Tooltip key={id} label={`Runs on ${machine}`}>
-          <span className="inline-flex">
-            <button
-              type="button"
-              aria-label={entry.label}
-              disabled
-              className="inline-flex h-6 w-8 items-center justify-center rounded-full text-fg-muted opacity-40"
-            >
-              <Icon size={14} />
-            </button>
-          </span>
-        </Tooltip>
-      ) : (
-        <entry.Button key={id} thread={thread} />
-      );
-    right.push(node);
-  }
+  const right = kept.map((id) => {
+    const Button = HEADER_BUTTONS[id].Button;
+    return <Button key={id} thread={thread} />;
+  });
   return (
     <MainHeader
       // Glass like every header; over a new thread's banner a lighter tint, so the picture shows.
@@ -397,7 +288,7 @@ function Header({
           <RemoteThreadIndicator sessionId={thread?.id} />
         </>
       }
-      right={right.length ? <Cluster>{right}</Cluster> : undefined}
+      right={right.length ? right : undefined}
     />
   );
 }

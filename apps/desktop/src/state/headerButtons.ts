@@ -9,25 +9,18 @@
 
 /** The header's buttons, in the order a fresh install shows them. */
 //
-// Changes and Pull requests are not header buttons: they are tabs of the side
-// panel, beside Details, and the panel's toggle opens them. The terminal and
-// project actions were removed. An id a saved layout still names from before
-// is dropped by `sanitizeHeaderButtons`.
-export const HEADER_BUTTON_IDS = ["status", "plan", "git", "details"] as const;
+// The header keeps only the plan's progress (while there is a plan) and the
+// side panel's toggle. Changes and Pull requests are tabs of the side panel,
+// and git's commit, push and pull request actions sit on its Changes tab. The
+// status menu (its actions are on the thread row's menu in the sidebar), the
+// git button, the terminal and project actions were removed: an id a saved
+// layout still names from before is dropped by `sanitizeHeaderButtons`.
+export const HEADER_BUTTON_IDS = ["plan", "details"] as const;
 
 export type HeaderButtonId = (typeof HEADER_BUTTON_IDS)[number];
 
-/**
- * What a fresh install and a reset start from: status, plan and the panel. The
- * Git button (commit, push, open a pull request by hand: agents do that) stays
- * one click away in Settings › Chat › Thread header buttons. A layout the user
- * saved is never touched by this: `sanitizeHeaderButtons` keeps what was stored.
- */
-export const HIDDEN_BY_DEFAULT: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["git"]);
-
-export const DEFAULT_HEADER_BUTTONS: readonly HeaderButtonId[] = HEADER_BUTTON_IDS.filter(
-  (id) => !HIDDEN_BY_DEFAULT.has(id),
-);
+/** What a fresh install and a reset start from: every button. */
+export const DEFAULT_HEADER_BUTTONS: readonly HeaderButtonId[] = [...HEADER_BUTTON_IDS];
 
 /** What `rustcode.headerButtons` holds. */
 export interface StoredHeaderButtons {
