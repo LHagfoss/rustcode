@@ -665,6 +665,17 @@ fn dotfile_paths() -> Vec<PathBuf> {
     paths.into_iter().filter(|p| p.is_file()).collect()
 }
 
+/// zsh arrays tied to a colon-separated scalar (`path` to `PATH`): an
+/// exported `path` would overwrite `PATH` in every zsh child.
+const ZSH_TIED_ARRAYS: &[&str] = &[
+    "path",
+    "fpath",
+    "cdpath",
+    "manpath",
+    "mailpath",
+    "module_path",
+];
+
 /// Parse one dotfile's text into `(KEY, value)` pairs. Handles:
 /// `export FOO=bar`, `FOO=bar`, `typeset -x FOO=bar`, `declare -x FOO=bar`,
 /// `set -gx FOO bar` (fish). Skips command substitutions / backticks since
@@ -695,10 +706,15 @@ fn parse_dotfile_text(text: &str, home: &str) -> Vec<(String, String)> {
             continue;
         };
         let key = key.trim();
-        if !valid_env_name(key) {
+        if !valid_env_name(key) || ZSH_TIED_ARRAYS.contains(&key) {
             continue;
         }
         let mut value = raw_value.trim();
+        // `path=(a b $path)` is an array, not a string: exported as text it
+        // becomes a lowercase `path` that zsh ties back over `PATH`.
+        if value.starts_with('(') {
+            continue;
+        }
         // Strip trailing comments outside quotes (best effort).
         value = strip_trailing_comment(value);
         if value.contains("$(") || value.contains('`') {
@@ -960,6 +976,23 @@ TILDE=~/keys/file
         assert!(!parsed.contains_key("FOO"));
         assert!(!parsed.contains_key("BAR"));
         assert_eq!(parsed["TILDE"], "/home/test/keys/file");
+    }
+
+    #[test]
+    fn skips_zsh_arrays_and_tied_names() {
+        let text = r#"
+typeset -U path PATH
+path=("$HOME/.local/bin" "$HOME/.cargo/bin" "$HOME/.bun/bin" $path)
+fpath=/usr/share/zsh/functions
+LIST=(a b)
+export KEEP=yes
+"#;
+        let parsed: HashMap<String, String> =
+            parse_dotfile_text(text, "/home/test").into_iter().collect();
+        assert!(!parsed.contains_key("path"));
+        assert!(!parsed.contains_key("fpath"));
+        assert!(!parsed.contains_key("LIST"));
+        assert_eq!(parsed["KEEP"], "yes");
     }
 
     #[test]
