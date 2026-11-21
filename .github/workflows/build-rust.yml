@@ -125,7 +125,13 @@ jobs:
                   rc_name="rc-${rc_name#rustcode-}"
                   cp target/${{ matrix.target }}/release/rc "$rc_name"
                   chmod +x "$rc_name"
-                  tar czf "${rc_name}.tar.gz" -C . "$rc_name"
+                  # rc 1.45.0 and older take the first `rustcode*` entry of
+                  # its own archive, so `rc --update` failed with "could not
+                  # find rustcode executable inside archive". This copy keeps
+                  # them updating; newer updaters only take `rc`/`rc-*`. Drop
+                  # it once no machine runs 1.45.0 or older.
+                  cp "$rc_name" rustcode_rc
+                  tar czf "${rc_name}.tar.gz" -C . "$rc_name" rustcode_rc
                   cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
                   chmod +x ${{ matrix.name }}
                   tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
@@ -136,7 +142,9 @@ jobs:
               run: |
                   $rcName = "rc-" + ("${{ matrix.name }}" -replace '^rustcode-', '')
                   Copy-Item "target/${{ matrix.target }}/release/rc.exe" "$rcName.exe"
-                  Compress-Archive -Path "$rcName.exe" -DestinationPath "$rcName.zip"
+                  # Older updaters look for `rustcode*.exe`; see the Linux / macOS step.
+                  Copy-Item "$rcName.exe" "rustcode_rc.exe"
+                  Compress-Archive -Path "$rcName.exe", "rustcode_rc.exe" -DestinationPath "$rcName.zip"
                   Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
                   Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
 
