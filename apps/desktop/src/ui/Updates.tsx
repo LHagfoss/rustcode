@@ -6,9 +6,12 @@ import { Dialog } from "radix-ui";
 import { useMemo, useState } from "react";
 import { openExternal } from "../lib/native";
 import { parseReleaseNotes } from "../lib/releaseNotes";
-import { toast } from "../state/store";
+import { toast, useApp } from "../state/store";
 import {
+  busyThreads,
   closeWhatsNew,
+  installNow,
+  installNowLabel,
   installProgress,
   isPrerelease,
   offersUpdate,
@@ -17,6 +20,7 @@ import {
   updateHint,
   useUpdates,
   type WhatsNew,
+  waitingReason,
 } from "../state/updates";
 import {
   ArrowUpCircle,
@@ -47,6 +51,9 @@ export function UpdateRow() {
   const progress = installState.phase === "installing" ? installState.progress : null;
   const installError = installState.phase === "failed" ? installState.error : null;
   const waiting = installState.phase === "waiting";
+  // What the wait is for, counted, so a waiting update reads as one.
+  const busy = useApp((s) => (waiting ? waitingReason(busyThreads(s.threads)) : null));
+  const resume = useApp((s) => s.resumeAfterRestart);
   // The offer is the selected channel's, and a dev build never shows the row.
   if (!info?.latest || info.development || !offersUpdate(info, channel)) return null;
   const beta = isPrerelease(info.latest);
@@ -109,11 +116,28 @@ export function UpdateRow() {
               : installError
                 ? `Did not install: ${installError}`
                 : waiting
-                  ? "Waiting for threads to finish, then reopens"
+                  ? `${busy}, then reopens`
                   : `${beta ? "Beta · " : ""}${updateHint(info)}`}
           </span>
         </span>
       </button>
+      {waiting && (
+        <button
+          type="button"
+          onClick={() =>
+            void installNow().then(
+              (error) =>
+                error &&
+                toast(`The update did not install: ${error}`, "error", {
+                  action: { label: "Release page", run: () => info.page && openExternal(info.page) },
+                }),
+            )
+          }
+          className="mt-1 w-full rounded px-2 py-1 text-left text-caption text-fg-muted hover:text-fg"
+        >
+          {installNowLabel(resume)}
+        </button>
+      )}
       {beta && !installing && (
         <button
           type="button"

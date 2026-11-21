@@ -475,6 +475,29 @@ The server reads it at each look, so no restart is needed. The app does not show
 this setting for a paired machine yet: it is not part of what a machine reports
 to the app today.
 
+#### Updating from another machine
+
+Settings › Machines shows **Update** on a connected machine that runs an older
+RustCode than this app, and **Update all** when there are several. Update asks
+that machine's engine (`_rustcode/machine/update`, `acp/machine_update.rs`),
+whatever `auto_update` says there, since a person asked for it:
+
+- A server running its own `rc` (the install script's, Homebrew's) installs the
+  newest stable release as `rc --update` does and restarts onto it with
+  `rc server restart --when-idle`. The row says where it stands: looking,
+  installing, *Installed 1.47.0. Restarts when its 2 running turns finish*, then
+  *Updated to 1.47.0* once the machine reconnects on it.
+- An engine inside the RustCode app (a macOS `.app`, a `.deb`, an AppImage) is
+  never replaced in place, which would break the app's signature or package. The
+  request is left in `<config dir>/update-request.json`; the app there takes it
+  within half a minute and installs its own update once no thread works, as
+  *Update When Idle* does. A request older than a day is ignored.
+- A machine whose engine predates the method (1.46 and older) is not a Mac:
+  the row runs `rc --update` there over `_rustcode/machine/exec`, and the server
+  follows its replaced binary (below). An older Mac is updated there once.
+
+A development or prerelease build refuses with the reason, shown on the row.
+
 Whatever `auto_update` says, a server a service manager runs also follows its
 own binary. When something else replaces it with a newer version
 (`rc --update`, `brew upgrade`, the install script, the app), the server
