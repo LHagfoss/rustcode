@@ -388,6 +388,10 @@
     user-select: text;
     -webkit-user-select: text;
   }
+  /* Beats `.selectable *`, so a picture or label inside a control in a reply shows the pointer. */
+  .selectable :where(button, [role="button"]) :where(*) {
+    cursor: inherit;
+  }
 
   /* Keyboard focus only: a 2px ring at 40%, never on a click. `:focus-visible` alone also matches
      a text field, and a control focused from script after a click, so the ring waits for

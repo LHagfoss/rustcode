@@ -234,7 +234,7 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
       <span
         role="img"
         aria-label={alt ? `Loading picture: ${alt}` : "Loading picture"}
-        className="block h-[240px] w-full max-w-[420px] rounded-lg bg-fill-subtle"
+        className="block h-[240px] w-full max-w-[420px] rounded-xl bg-fill-subtle"
       />
     );
   }
@@ -242,7 +242,7 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
     <button
       type="button"
       onClick={() => openLightbox([{ src: url, alt: alt ?? "" }])}
-      className="block max-w-full cursor-zoom-in rounded-lg"
+      className="block max-w-full cursor-pointer rounded-xl"
       aria-label={alt ? `Open picture: ${alt}` : "Open picture"}
     >
       <img
@@ -253,7 +253,7 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
         height={picture?.height || undefined}
         onError={() => setState({ error: "Could not display this picture." })}
         draggable={false}
-        className="h-auto max-h-[360px] max-w-full rounded-lg object-contain"
+        className="h-auto max-h-[360px] max-w-full rounded-xl object-contain"
       />
     </button>
   );
@@ -387,7 +387,7 @@ export function MermaidBlock({ code, fallback }: { code: string; fallback: React
       }
       aria-label="Open diagram"
       className={cx(
-        "rc-mermaid block max-h-[520px] w-full cursor-zoom-in overflow-auto rounded-lg bg-code-bg p-3 text-left",
+        "rc-mermaid block max-h-[520px] w-full cursor-pointer overflow-auto rounded-lg bg-code-bg p-3 text-left",
       )}
       style={floor ? ({ "--mm-floor": floor } as CSSProperties) : undefined}
       // Mermaid's own output, rendered with securityLevel "strict" (no scripts, no click handlers).
