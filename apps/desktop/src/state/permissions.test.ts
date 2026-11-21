@@ -25,6 +25,12 @@ const request = (toolKind: string, extra: Partial<PermissionRequest> = {}): Perm
 });
 
 describe("autoAnswer", () => {
+  test("a secret always reaches the user, even under Full access", () => {
+    const secret = request("other", { secret: { name: "API_KEY" } as never });
+    expect(autoAnswer(secret, "full")).toBeNull();
+    expect(autoAnswer(secret, "edits")).toBeNull();
+  });
+
   test("Ask leaves every request to the user", () => {
     expect(autoAnswer(request("execute"), "ask")).toBeNull();
     expect(autoAnswer(request("edit"), "ask")).toBeNull();
