@@ -578,16 +578,18 @@ verify_workspace_versions() {
 phase_update_lockfile() {
     info "Phase 3: Updating Cargo.lock"
     if $DRY_RUN; then
-        info "[dry-run] (cd $REPO_ROOT && cargo check --manifest-path $REPO_ROOT/Cargo.toml)"
+        info "[dry-run] (cd $REPO_ROOT && cargo metadata --manifest-path $REPO_ROOT/Cargo.toml)"
     else
         local lockfile="$REPO_ROOT/Cargo.lock"
         local backup
         backup="$(mktemp)"
         cp "$lockfile" "$backup"
 
-        # An unlocked check updates the local workspace package entries while
-        # preserving the existing dependency resolution where possible.
-        if ! (cd "$REPO_ROOT" && cargo check --manifest-path "$REPO_ROOT/Cargo.toml"); then
+        # An unlocked resolve updates the local workspace package entries while
+        # preserving the existing dependency resolution where possible. It
+        # compiles nothing: a full `cargo check` here took minutes and is not
+        # allowed on the VPS, and CI builds the release PR anyway.
+        if ! (cd "$REPO_ROOT" && cargo metadata --manifest-path "$REPO_ROOT/Cargo.toml" --format-version 1 >/dev/null); then
             cp "$backup" "$lockfile"
             rm -f -- "$backup"
             die "Cargo could not update Cargo.lock for the new workspace version."
