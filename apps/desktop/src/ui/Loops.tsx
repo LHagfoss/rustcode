@@ -7,6 +7,7 @@
 import { DropdownMenu } from "radix-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type HarnessSnapshot, Method, projectName } from "../acp/types";
+import { catalogModelTitle } from "../lib/modelNames";
 import { lastAccountFor } from "../state/harnessActions";
 import { newThreadAccountOn } from "../state/logins";
 import {
@@ -184,11 +185,10 @@ function jobAgent(
     (!loop.machine && harness ? newThreadAccountOn(harness, lastAccountFor(harness.id), signedOut) : null) ||
     undefined;
   const account = harness?.accounts?.find((item) => item.id === effectiveAccountId);
-  const model = harness?.models.find((item) => item.id === loop.model);
   return [
     harness?.name ?? loop.harness,
     account?.name ?? effectiveAccountId,
-    model?.name ?? loop.model,
+    catalogModelTitle(loop.model, harness),
     loop.effort && `${loop.effort} effort`,
   ]
     .filter(Boolean)

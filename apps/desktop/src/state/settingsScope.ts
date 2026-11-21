@@ -946,6 +946,8 @@ export async function writeHarnessEnabled(host: string, id: string, enabled: boo
   useMachineHarnesses.setState((state) => ({
     byHost: { ...state.byHost, [host]: snapshot },
   }));
+  const { clearNewThreadDraft } = await import("./store");
+  clearNewThreadDraft(host);
 }
 
 /** Set the default harness, model and effort on one machine. */
@@ -966,6 +968,8 @@ export async function writeDefaultHarness(host: string, choice: NewThreadChoice)
   useMachineHarnesses.setState((state) => ({
     byHost: { ...state.byHost, [host]: snapshot },
   }));
+  const { clearNewThreadDraft } = await import("./store");
+  clearNewThreadDraft(host);
 }
 
 export interface ScopedDefaultHarness {

@@ -206,6 +206,16 @@ export function startNewThread(cwd?: string, host?: string) {
     ...setupSelection(s),
     projectCwd,
     newThreadHost: target,
+    // Each host keeps its own unstarted picker draft: visiting a thread (on this machine or
+    // another) and returning to the new-thread screen restores what was picked for this host
+    // rather than reverting to a default or to what a thread ran.
+    newThread: s.newThreadDrafts[target] ?? (s.newThreadHost === target ? s.newThread : null),
+    newThreadAccount:
+      target in s.newThreadAccounts
+        ? (s.newThreadAccounts[target] ?? null)
+        : s.newThreadHost === target
+          ? s.newThreadAccount
+          : null,
     // The panel belongs to a thread: the new-thread screen has none, and a
     // thread picked next restores the panel it had.
     panel: null,
@@ -213,9 +223,6 @@ export function startNewThread(cwd?: string, host?: string) {
     peekId: null,
     settings: null,
     switcherOpen: false,
-    // The picker's choice is the session's draft: leaving the new-thread screen and coming back
-    // shows what was picked, not the default again. `newThread` is only empty on a fresh start,
-    // where the remembered (or default) choice takes over.
     newThreadPermissionMode: null,
     view: { kind: "chat" },
     newWorktree: { on: s.newWorktree.on, branch: "", edited: false },
@@ -277,7 +284,12 @@ export async function setNewThreadHost(host: string): Promise<void> {
   const wasOn = projectAt(s.sessions, s.projectCwd, previous);
   const projects = projectsOn(s.sessions, host);
   const match = matchProject(wasOn, projects);
-  set({ newThreadHost: host, projectCwd: match?.path ?? projects[0]?.path ?? "" });
+  set((st) => ({
+    newThreadHost: host,
+    projectCwd: match?.path ?? projects[0]?.path ?? "",
+    newThread: st.newThreadDrafts[host] ?? null,
+    newThreadAccount: st.newThreadAccounts[host] ?? null,
+  }));
   if (!host) return;
   // A fresh read: a harness or login added on the machine while Run on was elsewhere shows.
   const snapshot = await loadMachineHarnesses(host, { report: false, refresh: true });
@@ -286,7 +298,12 @@ export async function setNewThreadHost(host: string): Promise<void> {
     // The machine went away before it answered: the choice goes back, so the composer keeps a
     // thread it can start rather than a machine that cannot answer.
     // Never the folder the failed move just chose: it belongs to the machine that went away.
-    set({ newThreadHost: previous, projectCwd: wasOn?.path ?? "" });
+    set((st) => ({
+      newThreadHost: previous,
+      projectCwd: wasOn?.path ?? "",
+      newThread: st.newThreadDrafts[previous] ?? null,
+      newThreadAccount: st.newThreadAccounts[previous] ?? null,
+    }));
     toast(`${getName(host)} is not connected. The thread will run on this computer.`, "error");
     return;
   }
@@ -344,7 +361,17 @@ export function setDefaultCwd(cwd: string) {
   set((s) => ({
     defaultCwd: cwd,
     projectCwd: s.selectedId ? s.projectCwd : cwd,
-    ...(s.selectedId ? {} : { newThreadHost: LOCAL_HOST }),
+    ...(s.selectedId
+      ? {}
+      : {
+          newThreadHost: LOCAL_HOST,
+          ...(s.newThreadHost !== LOCAL_HOST
+            ? {
+                newThread: s.newThreadDrafts[LOCAL_HOST] ?? null,
+                newThreadAccount: s.newThreadAccounts[LOCAL_HOST] ?? null,
+              }
+            : {}),
+        }),
   }));
   store(STORAGE.project, cwd);
 }

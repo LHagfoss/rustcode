@@ -7,7 +7,8 @@
 
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { effortLabel, projectName } from "../acp/types";
+import { effortLabel, modelName, projectName } from "../acp/types";
+import { modelTitle } from "../lib/modelNames";
 import { concreteModels, defaultEffort, firstModel, listedModel, restoreChoice } from "../state/harness";
 import { ensureHarnessModels, lastAccountFor } from "../state/harnessActions";
 import { refreshHub, useHub } from "../state/hub";
@@ -410,9 +411,12 @@ export function LoopDialog({
     listedModel(runHarnessId ?? "", models, modelId) ??
     (!draft.model || draft.model === "default" ? firstModel(runHarnessId ?? "", models) : undefined);
   const runModel = chosenModel?.id ?? (draft.model === "default" ? undefined : draft.model);
-  const modelOptions = models.map((model) => ({ value: model.id, label: model.name || model.id }));
+  const modelOptions = models.map((model) => ({
+    value: model.id,
+    label: model.name && model.name !== model.id ? modelTitle(model.name) : (modelName(model.id) ?? model.id),
+  }));
   if (runModel && !chosenModel) {
-    modelOptions.push({ value: runModel, label: runModel });
+    modelOptions.push({ value: runModel, label: modelName(runModel) ?? runModel });
   }
   const effortValues = chosenModel?.efforts ?? (runHarness?.capabilities.effort ? EFFORTS : []);
   const runEffort =

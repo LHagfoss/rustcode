@@ -13,7 +13,7 @@ import {
   type UsageWindow,
   windowTitle,
 } from "../acp/rustcode";
-import type { SessionUsage } from "../acp/types";
+import { modelName, type SessionUsage } from "../acp/types";
 import { useHoverTip } from "../lib/hover";
 import { layoutTiles } from "../lib/treemap";
 import { autoCompactBeforeUsage, autoCompactThresholdFor } from "../state/autoCompactRun";
@@ -456,7 +456,7 @@ function ContextFooter({ usage }: { usage: SessionUsage }) {
   ].filter(Boolean);
   const compactions = usage.context?.compactions ?? 0;
   const notes = [
-    usage.context?.model,
+    modelName(usage.context?.model),
     usage.estimated && "estimated until the next reply",
     compactions > 0 &&
       `compacted ${compactions === 1 ? "once" : `${compactions} times`}${usage.context?.reclaimed ? `, ${formatTokens(usage.context.reclaimed)} freed` : ""}`,

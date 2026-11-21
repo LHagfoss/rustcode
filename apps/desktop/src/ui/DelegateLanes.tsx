@@ -4,6 +4,7 @@
 // its thread.
 
 import { useMemo } from "react";
+import { modelName } from "../acp/types";
 import { useNow } from "../lib/useNow";
 import { delegateLanes, delegateTree } from "../state/delegates";
 import { isActive } from "../state/orchestration";
@@ -38,7 +39,7 @@ export function DelegateLanes({ threadId }: { threadId: string }) {
           <div key={lane.key} className="contents">
             <span className="flex min-w-0 flex-col py-2 pr-2 text-caption">
               <span className="truncate text-fg-muted">{lane.harness}</span>
-              {lane.model && <span className="truncate text-fg-faint">{lane.model}</span>}
+              {lane.model && <span className="truncate text-fg-faint">{modelName(lane.model)}</span>}
             </span>
             {Array.from({ length: columns }, (_, column) => {
               const card = lane.cards.find((c) => c.column === column);

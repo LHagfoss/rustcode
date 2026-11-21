@@ -5,6 +5,7 @@
 // opens it.
 
 import { useState } from "react";
+import { modelName } from "../acp/types";
 import type { WorkflowRun, WorkflowWorker } from "../acp/workflows";
 import { useNow } from "../lib/useNow";
 import { selectThread } from "../state/store";
@@ -75,7 +76,11 @@ function WorkerLine({
       : worker.state === "done"
         ? "Done"
         : "Failed";
-  const detail = [worker.phase ?? "", worker.model ?? worker.harness ?? "", worker.error ?? ""]
+  const detail = [
+    worker.phase ?? "",
+    (worker.model ? modelName(worker.model) : undefined) ?? worker.harness ?? "",
+    worker.error ?? "",
+  ]
     .filter(Boolean)
     .join(" · ");
   const body = (

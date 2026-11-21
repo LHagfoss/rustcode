@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { modelTitle } from "./modelNames";
+import { catalogModelTitle, modelTitle } from "./modelNames";
 
 describe("modelTitle", () => {
   test("reads Claude ids and aliases as their family and version", () => {
@@ -17,6 +17,22 @@ describe("modelTitle", () => {
     expect(modelTitle("Gpt-6.2-sol")).toBe("GPT 6.2 Sol");
     expect(modelTitle("gemini-4-neon")).toBe("Gemini 4 Neon");
     expect(modelTitle("gemini-3.8-flash-lite")).toBe("Gemini 3.8 Flash-Lite");
+    expect(modelTitle("gpt-6.1-codex-mini")).toBe("GPT 6.1 Codex Mini");
+    expect(modelTitle("gemini-4-flash-lite")).toBe("Gemini 4 Flash-Lite");
+    expect(modelTitle("claude-opus-5-5-thinking")).toBe("Opus 5.5 Thinking");
+  });
+
+  test("prefers a catalog name and strips provider prefixes", () => {
+    const harness = {
+      id: "opencode",
+      models: [
+        { id: "default", name: "Default (recommended)" },
+        { id: "openai/gpt-6.1-terra", name: "gpt-6.1-terra" },
+      ],
+    };
+    expect(catalogModelTitle("openai/gpt-6.1-terra", harness)).toBe("GPT 6.1 Terra");
+    expect(catalogModelTitle("anthropic/claude-opus-5-5", harness)).toBe("Opus 5.5");
+    expect(catalogModelTitle(undefined, harness)).toBeUndefined();
   });
 
   test("keeps other names and meaningful hyphens", () => {

@@ -152,7 +152,14 @@ export async function startMachineRouting(): Promise<void> {
         return {
           machineNames: names,
           remoteHarnesses: snapshots,
-          ...(named ? { newThreadHost: LOCAL_HOST, projectCwd: "" } : {}),
+          ...(named
+            ? {
+                newThreadHost: LOCAL_HOST,
+                projectCwd: "",
+                newThread: s.newThreadDrafts[LOCAL_HOST] ?? null,
+                newThreadAccount: s.newThreadAccounts[LOCAL_HOST] ?? null,
+              }
+            : {}),
         };
       });
       mergeMachineLists(state.sessions);
