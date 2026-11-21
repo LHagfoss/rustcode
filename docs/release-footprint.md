@@ -90,8 +90,8 @@ Linux `.text`, measured by the same workflow before (`a1c386dc`) and after
 | `rc` | 2.1 MiB | 1.5 MiB | 63.9 MiB | 63.8 MiB |
 
 The D-Bus crates are `zbus`, `zvariant` (with `zvariant_utils`) and
-`secret_service`. On `rc` the saving is smaller than the drop in D-Bus crates
-because `keyring` 4 brings its own store crates.
+`secret_service`. On `rc` the total drops by less than the D-Bus crates do;
+the report does not show which other crates grew.
 
 ### `rc` startup and peak RSS
 
