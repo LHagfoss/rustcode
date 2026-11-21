@@ -256,6 +256,10 @@ pub(crate) struct PullStateRequest {
     pub cwd: std::path::PathBuf,
     #[serde(default)]
     pub branch: Option<String>,
+    /// Read this pull request instead of the branch's, when its head is a
+    /// branch of the folder's repository (`merge_when_green` with a number).
+    #[serde(default)]
+    pub number: Option<u64>,
 }
 
 /// Merge a pull request once every check passes, as `scripts/pr-merge.sh` does

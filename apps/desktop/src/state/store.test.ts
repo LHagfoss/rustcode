@@ -1990,7 +1990,25 @@ describe("engine controller with the mock engine", () => {
     transport.release();
   });
 
-  test("an own-PR merge refuses a number from another branch before approval", async () => {
+  test("a merge by number reaches a pull request on another branch after approval", async () => {
+    const { parent, transport } = await stagedMerge();
+    const pending = answerOrchestration({
+      sessionId: parent,
+      tool: "merge_when_green",
+      args: { number: 2791 },
+    });
+    await until(() => useApp.getState().grant !== null, 3000);
+    expect(
+      transport.asked(Method.pullState).some((call) => (call.params as JsonObject).number === 2791),
+    ).toBe(true);
+    expect(useApp.getState().grant?.detail).toContain("on chore/release-v9.9.9");
+    resolveGrant("once");
+    expect(await pending).toMatchObject({ number: 2791, state: "watching" });
+    expect(transport.asked(Method.pullMerge)[0]?.params).toMatchObject({ number: 2791 });
+    transport.release();
+  });
+
+  test("a merge by number refuses a fork's pull request before approval", async () => {
     const { parent, transport } = await stagedMerge();
     const result = await answerOrchestration({
       sessionId: parent,

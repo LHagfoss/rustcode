@@ -34,7 +34,7 @@ import {
   stateOf,
   trackCall,
 } from "./host";
-import { delegatePull, pullFailure } from "./hostSchedule";
+import { delegatePull, pullByNumber, pullFailure } from "./hostSchedule";
 import {
   activityOf,
   failure,
@@ -198,18 +198,25 @@ async function mergeTracked(
 ): Promise<JsonObject> {
   const target = call.number ? caller : manageTarget(caller, call.target);
   if (isFailure(target)) return failureJson(target);
-  const state = await delegatePull(target);
+  let state = await delegatePull(target);
   if (tracked?.dropped) return failureJson(droppedFailure());
+  if (call.number && !state.note && state.pull?.number !== call.number) {
+    state = await pullByNumber(target, call.number);
+    if (tracked?.dropped) return failureJson(droppedFailure());
+  }
   if (state.error) return failureJson(state.error);
   if (state.note) return failureJson(failure("not_found", state.note));
   const pull = state.pull;
   if (!pull) {
     return failureJson(
-      failure("not_found", `“${target.title}” has no pull request on ${state.branch ?? "its branch"} yet`),
+      call.number
+        ? failure("not_found", `pull request #${call.number} was not found in this repository`)
+        : failure(
+            "not_found",
+            `“${target.title}” has no pull request on ${state.branch ?? "its branch"} yet`,
+          ),
     );
   }
-  if (call.number && pull.number !== call.number)
-    return failureJson(failure("not_allowed", "the PR number must match this thread’s current branch"));
   if (pull.merged) {
     return {
       session_id: target.id,
@@ -227,7 +234,7 @@ async function mergeTracked(
       caller: caller.id,
       callerTitle: caller.title,
       target: target.title,
-      detail: `It would wait for pull request #${pull.number}'s checks and squash-merge it once every one passes, then delete its branch. A failing check stops it and reports the names.`,
+      detail: `It would wait for the checks of pull request #${pull.number}${pull.title ? ` “${pull.title}”` : ""}${state.branch ? ` on ${state.branch}` : ""} and squash-merge it once every one passes, then delete its branch. A failing check stops it and reports the names.`,
     },
     tracked,
   );

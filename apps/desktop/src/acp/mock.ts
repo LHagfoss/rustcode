@@ -1477,6 +1477,7 @@ export class MockEngine {
       case "_rustcode/scheduled/run":
         return this.loops.run(str(obj(params)?.id) ?? "");
       case "_rustcode/pulls/state": {
+        const FORK_PULL = 999;
         // A project whose remote is on another forge: `gh` knows no pull requests there.
         if (str(obj(params)?.cwd)?.includes("/gitlab-")) {
           return {
@@ -1486,12 +1487,29 @@ export class MockEngine {
             },
           };
         }
-        const branch = str(obj(params)?.branch) || "feat/delegate-pull";
+        const number = num(obj(params)?.number);
+        if (number === FORK_PULL) {
+          return {
+            branch: null,
+            pull: null,
+            error: {
+              code: "not_allowed",
+              message: "pull request #999 is not from a branch of this repository",
+            },
+          };
+        }
+        const branch =
+          number && number !== 2790
+            ? "chore/release-v9.9.9"
+            : str(obj(params)?.branch) || "feat/delegate-pull";
         return {
           branch,
           pull: {
-            number: 2790,
-            title: "feat(mcp): report and finish delegate pull requests",
+            number: number ?? 2790,
+            title:
+              number && number !== 2790
+                ? "chore(release): v9.9.9"
+                : "feat(mcp): report and finish delegate pull requests",
             state: "open",
             merged: false,
             draft: false,
