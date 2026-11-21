@@ -1136,6 +1136,59 @@ impl MachineRegistry {
         })
     }
 
+    /// Hand the tunnel behind a forwarded loopback port to RustCode: save
+    /// `ssh` (an SSH route to the host the forward goes through) and turn the
+    /// forwarded port off, in one write. RustCode then runs `ssh -W` for each
+    /// connection itself, so a tunnel a sleep killed is replaced by a fresh
+    /// one on the next attempt instead of holding every attempt on a dead
+    /// link. The forwarded route stays saved, off, so turning it back on
+    /// undoes this.
+    pub fn take_over_forward(&mut self, host_id: &str, forward: &str, ssh: Route) -> Result<()> {
+        ensure!(
+            ssh.kind == RouteKind::Ssh && ssh.ssh.is_some(),
+            "only an SSH route can take over a forwarded port"
+        );
+        self.mutate(|machines| {
+            let machine = find_machine(machines, host_id)?;
+            let index = machine
+                .routes
+                .iter()
+                .position(|route| same_address(&route.address, forward))
+                .ok_or_else(|| anyhow::anyhow!("{forward} is not one of its routes"))?;
+            ensure!(
+                machine.routes[index].is_local_forward(),
+                "{forward} is not a forwarded port on this computer"
+            );
+            let mut ssh = ssh;
+            ssh.manual = true;
+            ssh.off = false;
+            if let Some(existing) = machine
+                .routes
+                .iter_mut()
+                .find(|existing| same_address(&existing.address, &ssh.address))
+            {
+                existing.off = false;
+                existing.ssh = ssh.ssh;
+            } else {
+                ensure!(
+                    machine.routes.len() < MAX_ROUTES_PER_MACHINE,
+                    "{} already has {MAX_ROUTES_PER_MACHINE} routes; remove one first",
+                    machine.display()
+                );
+                machine.learn_route(ssh);
+            }
+            // Found again by address: learning a route may reorder them.
+            if let Some(route) = machine
+                .routes
+                .iter_mut()
+                .find(|route| same_address(&route.address, forward))
+            {
+                route.off = true;
+            }
+            Ok(())
+        })
+    }
+
     /// Remove one route. A route the machine reports comes back on the next
     /// connection; turn it off instead to keep it from being dialled.
     pub fn remove_route(&mut self, host_id: &str, address: &str) -> Result<()> {
@@ -1386,6 +1439,52 @@ mod tests {
             Route::new(address),
             Utc::now(),
         )
+    }
+
+    #[test]
+    fn rustcode_takes_over_the_tunnel_behind_a_forwarded_port() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-vps", "VPS", "127.0.0.1:17880"))
+            .unwrap();
+        let ssh = Route::ssh(SshRoute {
+            destination: "lars@LagosVPS".to_owned(),
+            port: Some(2222),
+            identity: None,
+            gateway_port: 17879,
+        });
+        // Only a forwarded port is taken over, and only by an SSH route.
+        assert!(
+            store
+                .take_over_forward("gw-vps", "127.0.0.1:17880", Route::new("10.0.0.9:17879"))
+                .is_err()
+        );
+        assert!(
+            store
+                .take_over_forward("gw-vps", "10.0.0.9:17879", ssh.clone())
+                .is_err()
+        );
+        store
+            .take_over_forward("gw-vps", "127.0.0.1:17880", ssh.clone())
+            .unwrap();
+        let vps = load(dir.path()).machines()[0].clone();
+        let forward = vps
+            .routes
+            .iter()
+            .find(|route| route.address == "127.0.0.1:17880")
+            .unwrap();
+        assert!(forward.off, "the forward is kept, off");
+        let dialable: Vec<&Route> = vps.routes.iter().filter(|r| r.is_dialable()).collect();
+        assert_eq!(dialable.len(), 1, "{:?}", vps.routes);
+        assert_eq!(dialable[0].address, "ssh://lars@LagosVPS:2222");
+        assert_eq!(dialable[0].ssh.as_ref().unwrap().gateway_port, 17879);
+        assert!(dialable[0].manual);
+        // Doing it again changes nothing and adds no second SSH route.
+        store
+            .take_over_forward("gw-vps", "127.0.0.1:17880", ssh)
+            .unwrap();
+        assert_eq!(load(dir.path()).machines()[0].routes.len(), 2);
     }
 
     #[test]

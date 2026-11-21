@@ -196,9 +196,42 @@ pub struct MachineView {
     hint: Option<String>,
     /// Seconds until the next attempt, while it waits.
     retry_in_secs: Option<u64>,
+    /// A forwarded port whose tunnel, run outside RustCode, is why the
+    /// machine is away: the row offers to let RustCode manage that tunnel.
+    forward: Option<ForwardView>,
     /// RFC 3339, as the registry stores it.
     added_at: String,
     last_connected_at: Option<String>,
+}
+
+/// The forwarded-port route of a machine whose tunnel is down, and the SSH
+/// route that would replace it when the app found the `ssh -L` behind it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardView {
+    /// The forwarded route's address, e.g. `127.0.0.1:17880`.
+    address: String,
+    /// The host that `ssh -L` signs in to, when found: what the row fills in.
+    ssh: Option<String>,
+    ssh_port: Option<u16>,
+    identity: Option<String>,
+    /// The gateway's port on that host, where the forward pointed.
+    gateway_port: u16,
+}
+
+impl ForwardView {
+    fn of(stalled: &Stalled) -> Self {
+        let ssh = stalled.owner.as_ref();
+        Self {
+            address: stalled.address.clone(),
+            ssh: ssh.map(|ssh| ssh.destination.clone()),
+            ssh_port: ssh.and_then(|ssh| ssh.port),
+            identity: ssh
+                .and_then(|ssh| ssh.identity.as_ref())
+                .map(|path| path.to_string_lossy().into_owned()),
+            gateway_port: ssh.map_or(rustcode_client::DEFAULT_PORT, |ssh| ssh.gateway_port),
+        }
+    }
 }
 
 /// What `machines_discover` answers: the rows the Add sheet lists, and what to
@@ -305,6 +338,9 @@ struct Live {
     /// e.g. a NetBird address blocked while the LAN works (#3202).
     hint: Option<String>,
     retry_in_secs: Option<u64>,
+    /// The forwarded port whose dead tunnel kept the last attempt from
+    /// answering ([`stalled_forward`]).
+    stalled: Option<Stalled>,
     /// Ends the supervisor's backoff early: the app came to the front, a probe
     /// found a route that answers, or an agent asked. Kept across restarts.
     wake: Arc<Notify>,
@@ -324,6 +360,7 @@ impl Live {
             detail: None,
             hint: None,
             retry_in_secs: None,
+            stalled: None,
             wake: Arc::new(Notify::new()),
         }
     }
@@ -523,6 +560,11 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
         detail: live.and_then(|live| live.detail.clone()),
         hint: live.and_then(|live| live.hint.clone()),
         retry_in_secs: live.and_then(|live| live.retry_in_secs),
+        forward: live
+            .filter(|live| live.state != MachineState::Connected)
+            .and_then(|live| live.stalled.as_ref())
+            .filter(|stalled| stalled.offer)
+            .map(ForwardView::of),
         added_at: machine.added_at.to_rfc3339(),
         last_connected_at: machine.last_connected_at.map(|at| at.to_rfc3339()),
     }
@@ -606,8 +648,18 @@ async fn supervise(
         }
     };
     let mut attempt: u32 = 0;
+    // What to run when a tunnel RustCode does not own is why the machine is
+    // away ([`stalled_forward`]). It stays on the row while the next attempt
+    // runs, so it does not flicker away every few seconds.
+    let mut stalled: Option<Stalled> = None;
     loop {
-        set_state(&machines, &id, MachineState::Connecting, None, None);
+        set_state(
+            &machines,
+            &id,
+            MachineState::Connecting,
+            stalled.as_ref().map(|stalled| stalled.advice.clone()),
+            None,
+        );
         let started = Instant::now();
         // Why this attempt did not stay up, in the words the row shows. The
         // countdown is the chip (`retryInSecs`), never the detail, so a reason
@@ -615,11 +667,14 @@ async fn supervise(
         let (cause, answered, reason) =
             match relay_once(&machines, &config_dir, &id, &channel, &mut inbox).await {
                 End::Removed => return,
-                End::Closed => (
-                    Cause::Dropped,
-                    None,
-                    "The machine closed the connection.".to_owned(),
-                ),
+                End::Closed => {
+                    stalled = None;
+                    (
+                        Cause::Dropped,
+                        None,
+                        "The machine closed the connection.".to_owned(),
+                    )
+                }
                 End::Failed(error, answered) => {
                     let message = format!("{error:#}");
                     if needs_pairing(&error) {
@@ -635,6 +690,11 @@ async fn supervise(
                         return;
                     }
                     let cause = attempt_cause(&error, answered.is_some());
+                    stalled = if cause == Cause::Unreachable {
+                        stalled_forward(&config_dir, &id).await
+                    } else {
+                        None
+                    };
                     emit_log(
                         &channel,
                         format!(
@@ -661,10 +721,85 @@ async fn supervise(
         } else {
             MachineState::Offline
         };
-        set_state(&machines, &id, state, Some(reason), Some(secs));
+        set_stalled(&machines, &id, stalled.clone());
+        let detail = stalled
+            .as_ref()
+            .map_or(reason, |stalled| stalled.advice.clone());
+        set_state(&machines, &id, state, Some(detail), Some(secs));
         emit_closed(&channel, &format!("Waiting {secs} s before trying again."));
         wait_out(&machines, &id, &channel, &wake, delay).await;
     }
+}
+
+/// A forwarded port whose tunnel, run outside RustCode, is down.
+#[derive(Clone, Debug)]
+struct Stalled {
+    /// The forwarded route's address.
+    address: String,
+    /// What to run to bring the tunnel back, which the row shows.
+    advice: String,
+    /// The SSH route behind it, when the `ssh -L` that runs it was found.
+    owner: Option<rustcode_client::SshRoute>,
+    /// Whether the row offers to let RustCode manage the tunnel: not when an
+    /// SSH route of RustCode's own is already on.
+    offer: bool,
+}
+
+/// What to run to bring back the tunnel behind a machine's forwarded port,
+/// when no route answered and one of them is a port on this computer's
+/// loopback that something outside RustCode forwards (`ssh -L`). `None` when
+/// the machine has no such route, or its tunnel works and the machine behind
+/// it is what is away.
+///
+/// The port is checked with a plain connect. One that refuses is a tunnel
+/// that is not running. One that takes the socket and closes it is a working
+/// `ssh -L` whose far end refused: the tunnel is fine. One that takes it and
+/// then says nothing is a tunnel whose link died, the `ssh -L` a sleep left
+/// behind: RustCode cannot restart it, and without this the row only said
+/// the address did not answer in 5 s.
+///
+/// The machine is read again, so a forward the user just handed to RustCode
+/// (turned off) is not checked.
+async fn stalled_forward(config_dir: &Path, id: &str) -> Option<Stalled> {
+    use tokio::io::AsyncReadExt;
+    let machine = MachineRegistry::load(config_dir).ok()?.get(id)?.clone();
+    let route = machine
+        .routes
+        .iter()
+        .find(|route| route.is_dialable() && route.is_local_forward())?;
+    let wait = rustcode_client::FORWARD_CHECK_TIMEOUT;
+    let connected =
+        tokio::time::timeout(wait, tokio::net::TcpStream::connect(route.address.as_str())).await;
+    let listening = match connected {
+        Ok(Ok(mut socket)) => {
+            let mut byte = [0u8; 1];
+            match tokio::time::timeout(wait, socket.read(&mut byte)).await {
+                // Silent: the forward holds the socket on a dead link.
+                Err(_) => true,
+                // Closed or answered: the tunnel carries traffic.
+                Ok(_) => return None,
+            }
+        }
+        _ => false,
+    };
+    // The `ssh -L` still runs while its link is dead; one that is gone left
+    // no command line to read, and the row asks for the host instead.
+    let port = rustcode_client::transport::port_or_default(&route.address);
+    let owner = rustcode_client::forward::find_forward_owner(port).await;
+    let offer = !machine
+        .routes
+        .iter()
+        .any(|route| route.kind == rustcode_client::RouteKind::Ssh && route.is_dialable());
+    Some(Stalled {
+        address: route.address.clone(),
+        advice: rustcode_client::forward_advice(
+            &route.address,
+            listening,
+            owner.as_ref().map(|ssh| ssh.destination.as_str()),
+        ),
+        owner,
+        offer,
+    })
 }
 
 /// Why one attempt failed. A failure after the handshake went through that
@@ -1182,6 +1317,13 @@ fn set_state(
         if state != MachineState::Connected {
             entry.route = None;
         }
+    }
+}
+
+/// Keep what [`stalled_forward`] found for the row, or clear it.
+fn set_stalled(machines: &Arc<Machines>, id: &str, stalled: Option<Stalled>) {
+    if let Some(entry) = machines.live.lock().unwrap().get_mut(id) {
+        entry.stalled = stalled;
     }
 }
 
@@ -1868,20 +2010,7 @@ pub async fn machines_route_add(
         address.map(|a| a.trim().to_owned()),
     ) {
         (Some(destination), _) if !destination.is_empty() => {
-            let identity = identity
-                .map(|path| path.trim().to_owned())
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from);
-            let target = rustcode_client::ssh::SshTarget::parse(&destination, ssh_port, identity)
-                .map_err(chain)?;
-            Route::ssh(rustcode_client::SshRoute {
-                destination: target.destination,
-                port: target.port,
-                identity: target.identity,
-                gateway_port: gateway_port
-                    .filter(|port| *port != 0)
-                    .unwrap_or(rustcode_client::DEFAULT_PORT),
-            })
+            ssh_route(&destination, ssh_port, identity, gateway_port)?
         }
         (_, Some(address)) if !address.is_empty() => {
             rustcode_client::transport::dial_target(&address).map_err(chain)?;
@@ -1917,6 +2046,81 @@ pub async fn machines_route_add(
     if answered {
         machines.retry(Some(&id));
     }
+    machines.list()
+}
+
+/// The SSH route the Add route form or a tunnel takeover describes.
+fn ssh_route(
+    destination: &str,
+    ssh_port: Option<u16>,
+    identity: Option<String>,
+    gateway_port: Option<u16>,
+) -> Result<Route, String> {
+    let identity = identity
+        .map(|path| path.trim().to_owned())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    let target =
+        rustcode_client::ssh::SshTarget::parse(destination, ssh_port, identity).map_err(chain)?;
+    Ok(Route::ssh(rustcode_client::SshRoute {
+        destination: target.destination,
+        port: target.port,
+        identity: target.identity,
+        gateway_port: gateway_port
+            .filter(|port| *port != 0)
+            .unwrap_or(rustcode_client::DEFAULT_PORT),
+    }))
+}
+
+/// Let RustCode manage the tunnel behind a forwarded port (`address`): test
+/// an SSH route to `ssh`, the host the user's `ssh -L` signs in to, and once
+/// it answers, save it and turn the forwarded port off. From then on each
+/// connection runs its own `ssh -W`, so after a wake the next attempt opens
+/// a fresh tunnel instead of waiting on the one the sleep killed. Nothing is
+/// saved when the test fails; the error says why. Answers the refreshed
+/// machines.
+#[tauri::command(async)]
+pub async fn machines_forward_take_over(
+    machines: tauri::State<'_, Arc<Machines>>,
+    id: String,
+    address: String,
+    ssh: String,
+    ssh_port: Option<u16>,
+    identity: Option<String>,
+    gateway_port: Option<u16>,
+) -> Result<Vec<MachineView>, String> {
+    let route = ssh_route(ssh.trim(), ssh_port, identity, gateway_port)?;
+    let config_dir = config_dir()?;
+    let connector = Machines::connector(&config_dir)?;
+    let probe = connector.probe_route(&route).await;
+    if probe.outcome != ProbeOutcome::Reachable {
+        let why = probe
+            .detail
+            .clone()
+            .unwrap_or_else(|| "it did not answer in time".to_owned());
+        return Err(format!(
+            "RustCode could not reach the gateway through {}: {why}",
+            route.address
+        ));
+    }
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry
+        .take_over_forward(&id, &address, route)
+        .map_err(chain)?;
+    let machine = registry
+        .get(&id)
+        .ok_or("That machine is no longer saved.")?
+        .clone();
+    let mut probes: Vec<RouteProbe> = machine
+        .probes
+        .iter()
+        .filter(|saved| saved.address != probe.address)
+        .cloned()
+        .collect();
+    probes.push(probe);
+    registry.set_probes(&id, probes).map_err(chain)?;
+    set_stalled(machines.inner(), &id, None);
+    machines.retry(Some(&id));
     machines.list()
 }
 
@@ -2166,6 +2370,52 @@ mod tests {
         assert_eq!(json["routes"][0]["encrypted"], false);
         // Offline, the row still says which route it will try.
         assert_eq!(json["route"]["address"], "192.168.1.20:17879");
+    }
+
+    /// A forwarded port whose `ssh -L` lost its link offers the SSH route
+    /// behind it while the machine is away, and nothing once it is back.
+    #[test]
+    fn a_stalled_forward_offers_its_ssh_host_until_connected() {
+        let saved = machine();
+        let stalled = Stalled {
+            address: "127.0.0.1:17880".into(),
+            advice: "Restart it.".into(),
+            owner: Some(rustcode_client::SshRoute {
+                destination: "LagosVPS".into(),
+                port: Some(2222),
+                identity: None,
+                gateway_port: 17879,
+            }),
+            offer: true,
+        };
+        let away = Live {
+            state: MachineState::Connecting,
+            stalled: Some(stalled.clone()),
+            ..Live::new()
+        };
+        let json = serde_json::to_value(view(&saved, Some(&away))).unwrap();
+        assert_eq!(json["forward"]["address"], "127.0.0.1:17880");
+        assert_eq!(json["forward"]["ssh"], "LagosVPS");
+        assert_eq!(json["forward"]["sshPort"], 2222);
+        assert_eq!(json["forward"]["gatewayPort"], 17879);
+        // An SSH route of RustCode's own is already on: no offer.
+        let owned = Live {
+            state: MachineState::Offline,
+            stalled: Some(Stalled {
+                offer: false,
+                ..stalled.clone()
+            }),
+            ..Live::new()
+        };
+        let json = serde_json::to_value(view(&saved, Some(&owned))).unwrap();
+        assert!(json["forward"].is_null());
+        let back = Live {
+            state: MachineState::Connected,
+            stalled: Some(stalled),
+            ..Live::new()
+        };
+        let json = serde_json::to_value(view(&saved, Some(&back))).unwrap();
+        assert!(json["forward"].is_null());
     }
 
     /// A machine whose gateway answered on NetBird but has no server behind

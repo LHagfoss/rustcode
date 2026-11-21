@@ -868,6 +868,16 @@ process, which ends with it, so no tunnel is left running.
 - A machine reports its own addresses on every connection, so after NetBird
   or Tailscale is up on both computers its address appears under Routes and is
   raced before SSH, with no pairing again.
+- A forwarded port on this computer's loopback (a user-run `ssh -L`) is
+  checked when no route answered: a port that refuses is a tunnel that is not
+  running, one that takes the socket and says nothing is an `ssh -L` whose
+  link died while this computer slept. The machine row then says what to run
+  and offers **Let RustCode manage this tunnel**, with the host filled in from
+  the running `ssh -L` (`ps`; `rustcode/client/src/forward.rs`). It tests an
+  SSH route to that host and, once it answers, saves it and turns the
+  forwarded port off (`machines_forward_take_over`). Each connection then opens
+  its own `ssh -W`, so after a wake the next attempt starts a fresh tunnel.
+  Turning the forwarded port back on undoes it.
 
 #### Mutual access
 

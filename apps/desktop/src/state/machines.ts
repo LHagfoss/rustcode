@@ -214,8 +214,25 @@ export interface Machine {
   hint: string | null;
   /** Seconds until the next attempt, while it waits. */
   retryInSecs: number | null;
+  /**
+   * A forwarded port whose tunnel, run outside RustCode (`ssh -L`), is why the machine is away:
+   * the row offers to let RustCode manage that tunnel. Null when there is nothing to offer.
+   */
+  forward?: MachineForward | null;
   addedAt: string;
   lastConnectedAt: string | null;
+}
+
+/** The forwarded-port route of a machine whose tunnel is down (`ForwardView` in the shell). */
+export interface MachineForward {
+  /** The forwarded route, e.g. `127.0.0.1:17880`. */
+  address: string;
+  /** The host that `ssh -L` signs in to, when the shell found it running; null asks for it. */
+  ssh: string | null;
+  sshPort: number | null;
+  identity: string | null;
+  /** The gateway's port on that host, where the forward pointed. */
+  gatewayPort: number;
 }
 
 /**

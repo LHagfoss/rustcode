@@ -2,7 +2,7 @@
 // address, turn one off, remove one. Each answers the shell's refreshed machine list.
 
 import { shellCallWithin } from "../lib/shell";
-import { type Machine, PROBE_MS, SHELL_READ_MS, useMachines } from "./machines";
+import { type Machine, type MachineForward, PROBE_MS, SHELL_READ_MS, useMachines } from "./machines";
 import { errorText, toast } from "./store";
 
 /** What Add route sends: an SSH host, or a network address. */
@@ -37,6 +37,36 @@ export async function addMachineRoute(machine: Pick<Machine, "id">, route: NewRo
             address: route.address.trim(),
           },
     );
+    useMachines.setState({ machines });
+    return null;
+  } catch (error) {
+    return errorText(error);
+  }
+}
+
+/**
+ * Let RustCode manage the tunnel behind a forwarded port: the shell tests an SSH route to `host`
+ * and, once it answers, saves it and turns the forwarded port off. Answers the error to show beside
+ * the form, or null when RustCode now manages the tunnel.
+ */
+export async function takeOverForward(
+  machine: Pick<Machine, "id">,
+  forward: MachineForward,
+  host: string,
+): Promise<string | null> {
+  const destination = host.trim();
+  if (!destination) return "Type the SSH host the tunnel signs in to.";
+  // The port and key the running `ssh -L` used belong to its host; another host gets none.
+  const same = destination === forward.ssh;
+  try {
+    const machines = await shellCallWithin<Machine[]>(PROBE_MS, "machines_forward_take_over", {
+      id: machine.id,
+      address: forward.address,
+      ssh: destination,
+      sshPort: same ? forward.sshPort : null,
+      identity: same ? forward.identity : null,
+      gatewayPort: forward.gatewayPort,
+    });
     useMachines.setState({ machines });
     return null;
   } catch (error) {

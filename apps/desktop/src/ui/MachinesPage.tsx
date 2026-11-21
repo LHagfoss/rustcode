@@ -60,6 +60,7 @@ import { refreshRemote } from "../state/remoteAccess";
 import { openMachineSettings, useApp } from "../state/store";
 import { AddMachineDialog } from "./AddMachineDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
+import { ForwardTakeover } from "./ForwardTakeover";
 import { HubGroup } from "./HubGroup";
 import { ArrowUpCircle, Plus, RefreshCw, Server, Settings } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
@@ -378,6 +379,7 @@ export function MachineRow({
           ) : (
             skew && <span className="mt-1 block text-warning">{withCode(skew)}</span>
           )}
+          {machine.forward && !connected && <ForwardTakeover machine={machine} forward={machine.forward} />}
         </>
       }
     >

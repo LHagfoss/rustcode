@@ -285,7 +285,11 @@ export class MockTransport implements Transport {
       }
       return this.hubStatus();
     }
-    if (command === "machines_remove" || command.startsWith("machines_route_")) {
+    if (
+      command === "machines_remove" ||
+      command === "machines_forward_take_over" ||
+      command.startsWith("machines_route_")
+    ) {
       this.machineList = mockRouteCommand(command, args, this.machineList);
       return command === "machines_remove" ? null : this.machineList;
     }

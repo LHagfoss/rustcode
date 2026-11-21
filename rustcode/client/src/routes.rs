@@ -304,6 +304,9 @@ where
     };
     let mut failures: Vec<RouteFailure> = Vec::new();
     let mut in_flight: FuturesUnordered<DialFuture<'_, T>> = FuturesUnordered::new();
+    // Every route dialled so far, so the ones still trying at the deadline
+    // are named in what the race lost rather than left out.
+    let mut started: Vec<Route> = Vec::new();
     let mut next_wave = start;
 
     loop {
@@ -311,6 +314,7 @@ where
         if !waves.is_empty() && now >= next_wave {
             if let Some(wave) = waves.pop_front() {
                 for route in wave {
+                    started.push(route.clone());
                     in_flight.push(dial_one(&dial, route));
                 }
             }
@@ -321,6 +325,19 @@ where
             break;
         }
         if now >= deadline {
+            // A route still trying is a route that did not answer in time: a
+            // stale `ssh -L` takes the socket and never says a word, and an
+            // error that named no route left the row saying nothing useful.
+            let limit = deadline.saturating_duration_since(start);
+            for route in started {
+                if !failures.iter().any(|failure| failure.route == route) {
+                    failures.push(RouteFailure {
+                        route,
+                        reason: still_trying(limit),
+                        refusal: None,
+                    });
+                }
+            }
             break;
         }
         let wake = if waves.is_empty() {
@@ -346,6 +363,14 @@ where
         }
     }
     Race::Lost { failures }
+}
+
+/// Why a route that was still trying when the race ended lost.
+fn still_trying(limit: Duration) -> String {
+    format!(
+        "no answer within the {}s time limit",
+        limit.as_secs_f64().round()
+    )
 }
 
 /// What a caller knows about a machine's routes when it asks for the hint to
@@ -674,12 +699,11 @@ mod tests {
         assert!(start.elapsed() >= RACE_DEADLINE);
         match outcome {
             Race::Lost { failures } => {
-                assert_eq!(
-                    failures.len(),
-                    1,
-                    "the overlay attempt was still open: {failures:?}"
-                );
+                assert_eq!(failures.len(), 2, "{failures:?}");
                 assert_eq!(failures[0].reason, "refused");
+                // The overlay attempt was still open: it is named, with why.
+                assert_eq!(failures[1].route.address, "100.90.16.237:17879");
+                assert_eq!(failures[1].reason, "no answer within the 5s time limit");
             }
             other => panic!("expected every route to fail, got {other:?}"),
         }

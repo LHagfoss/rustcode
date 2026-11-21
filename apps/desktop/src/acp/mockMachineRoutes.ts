@@ -4,7 +4,7 @@
 
 import type { JsonObject } from "./jsonrpc";
 
-/** Apply one `machines_remove` or `machines_route_*` command to the mock's machine list and answer the new list. */
+/** Apply one `machines_remove`, `machines_forward_take_over` or `machines_route_*` command to the mock's machine list and answer the new list. */
 export function mockRouteCommand(
   command: string,
   args: Record<string, unknown>,
@@ -45,6 +45,39 @@ export function mockRouteCommand(
       return { ...machine, routes: [...routes, route] };
     });
     return list;
+  }
+  if (command === "machines_forward_take_over") {
+    // The SSH route answers, the forwarded port is turned off, and the machine connects over SSH.
+    const ssh = typeof args.ssh === "string" ? args.ssh.trim() : "";
+    if (!ssh) throw new Error("type the host, like user@host");
+    const at = new Date().toISOString();
+    const route: JsonObject = {
+      kind: "ssh",
+      address: `ssh://${ssh}`,
+      provider: null,
+      encrypted: true,
+      off: false,
+      manual: true,
+      sshDestination: ssh,
+      sshGatewayPort: typeof args.gatewayPort === "number" ? args.gatewayPort : 17879,
+      probe: { outcome: "reachable", latencyMs: 180, detail: null, at },
+    };
+    return list.map((machine) => {
+      if (machine.id !== String(args.id)) return machine;
+      const routes = (machine.routes as JsonObject[])
+        .filter((saved) => saved.address !== route.address)
+        .map((saved) => (saved.address === args.address ? { ...saved, off: true } : saved));
+      return {
+        ...machine,
+        routes: [...routes, route],
+        route,
+        state: "connected",
+        reason: null,
+        detail: null,
+        forward: null,
+        lastConnectedAt: at,
+      };
+    });
   }
   if (command === "machines_route_remove") {
     list = list.map((machine) =>

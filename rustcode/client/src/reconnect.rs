@@ -157,6 +157,53 @@ pub fn slept(monotonic: Duration, wall: Duration) -> bool {
     wall > monotonic.saturating_add(SLEEP_GAP)
 }
 
+/// How long a check of a forwarded port waits for its listener. On this
+/// computer's own loopback a listener answers at once or not at all.
+pub const FORWARD_CHECK_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// What to tell the owner of a machine whose only way in is a port on this
+/// computer's loopback that something else forwards (`ssh -L`, a proxy; see
+/// [`Route::is_local_forward`]), once no route answered. RustCode does not
+/// own that tunnel, so it cannot restart it; the row says what to run.
+///
+/// `host` is the SSH destination behind the forward, when the app found the
+/// `ssh` that runs it ([`crate::forward::find_forward_owner`]).
+///
+/// `listening` is whether the port takes a connection and then holds it
+/// without a word, rather than refusing it. A plain
+/// `ssh -L` survives a sleep with its connection dead: its listener keeps
+/// taking sockets, each one waits on a link that will never answer, and ssh
+/// notices only when TCP gives up, minutes later. Every attempt then ends at
+/// the route timeout with nothing to say why, which is what kept a VPS
+/// "Connecting" for minutes after a five-minute sleep.
+pub fn forward_advice(address: &str, listening: bool, host: Option<&str>) -> String {
+    let port = address
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .unwrap_or(crate::transport::DEFAULT_PORT);
+    let restart = format!(
+        "ssh -N -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L {port}:127.0.0.1:{} {}",
+        crate::transport::DEFAULT_PORT,
+        host.unwrap_or("<host>")
+    );
+    let ssh_route = "Or let RustCode manage this tunnel: it then opens it itself and \
+                     reopens it after a wake.";
+    if listening {
+        format!(
+            "{address} takes connections but nothing answers behind it: the tunnel that \
+             forwards it, started outside RustCode, lost its link (often after this \
+             computer slept). Restart it, keeping it alive with `{restart}`, so it ends \
+             itself within 45 s of losing the link. {ssh_route}"
+        )
+    } else {
+        format!(
+            "Nothing listens on {address}: the tunnel that forwards it to the machine, \
+             started outside RustCode, is not running. Start it again with `{restart}`. \
+             {ssh_route}"
+        )
+    }
+}
+
 /// Why a paired machine is not connected, as a word an agent and the app can
 /// branch on. Only [`Cause::Unreachable`] means no route answered; every other
 /// cause is a machine that is up and said something.
@@ -277,6 +324,31 @@ mod tests {
         // Silence is judged against the gateway's 30 s ping, with room for two
         // lost ones.
         assert!(SILENCE_LIMIT > Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_forwarded_port_says_what_to_run_to_bring_its_tunnel_back() {
+        // A stale `ssh -L`: the port takes the socket, nothing answers.
+        let stale = forward_advice("127.0.0.1:17880", true, None);
+        assert!(
+            stale.starts_with("127.0.0.1:17880 takes connections"),
+            "{stale}"
+        );
+        assert!(stale.contains("-L 17880:127.0.0.1:17879 <host>"), "{stale}");
+        assert!(stale.contains("ServerAliveInterval=15"), "{stale}");
+        assert!(stale.contains("let RustCode manage this tunnel"), "{stale}");
+        // The host behind the forward, when the app found its `ssh`.
+        let named = forward_advice("127.0.0.1:17880", true, Some("LagosVPS"));
+        assert!(
+            named.contains("-L 17880:127.0.0.1:17879 LagosVPS`"),
+            "{named}"
+        );
+        // No tunnel at all: nothing listens.
+        let gone = forward_advice("[::1]:2222", false, None);
+        assert!(gone.starts_with("Nothing listens on [::1]:2222"), "{gone}");
+        assert!(gone.contains("-L 2222:127.0.0.1:17879"), "{gone}");
+        // A name without a port forwards the gateway's own.
+        assert!(forward_advice("localhost", false, None).contains("-L 17879:"));
     }
 
     #[test]
