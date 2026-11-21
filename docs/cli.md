@@ -63,6 +63,7 @@ still works under its old top-level name (`rc mcp list` is
 | `rc threads pin\|unpin <id>…` | Pin a thread to the top of the list | Thread status | |
 | `rc threads rename <id> <title>` | Give a thread a new title | Thread title | |
 | `rc threads move <id> --harness <h> [--account] [--model]` | Continue a thread on another harness, account or model | The thread's harness | Needed |
+| `rc threads configure <id> [--model] [--effort] [--json]` | Show a thread's model and effort, or change them on its own harness; a value its harness does not list is refused | The thread's model and effort | Needed to change |
 | `rc threads export\|migrate` | Export a thread as a zip, or move legacy threads | Files | |
 | `rc worktree list\|status` | RustCode's worktrees of a repository | — | |
 | `rc worktree remove <path> [--force]` | Remove one; uncommitted or unpushed work is kept unless `--force` (**asks**) | The worktree | |

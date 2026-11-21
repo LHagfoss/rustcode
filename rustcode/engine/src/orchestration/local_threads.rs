@@ -29,8 +29,9 @@ use std::time::Duration;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, ContentBlock, InitializeRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, StopReason,
-    TextContent,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions,
+    SetSessionConfigOptionRequest, StopReason, TextContent,
 };
 use agent_client_protocol::{
     Agent, Client, ConnectionTo, JsonRpcMessage, JsonRpcResponse, UntypedMessage,
@@ -959,6 +960,239 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
         "preview": preview,
         "links_left": links_left(caller),
     })
+}
+
+/// What `configure_session` reports about a thread from the records the
+/// engine keeps: its harness, access, model and effort. An external harness
+/// keeps its own model and effort in its record; the built-in harness keeps
+/// them in the thread's config.
+pub(super) fn configured(target: &str) -> Value {
+    let record = crate::harness::store::load(target);
+    let harness = record
+        .as_ref()
+        .map(|record| record.harness.clone())
+        .unwrap_or_else(|| crate::harness::BUILTIN_ID.to_owned());
+    let access = crate::config::load_session_access(target).unwrap_or_else(|| "ask".to_owned());
+    let mut answer = json!({ "session_id": target, "harness": harness, "access": access });
+    let (model, effort) = match record.filter(|record| record.harness != crate::harness::BUILTIN_ID)
+    {
+        Some(record) => (record.model, record.effort),
+        None => crate::config::load_session_model(target)
+            .map(|model| (Some(model.profile), model.reasoning_effort))
+            .unwrap_or_default(),
+    };
+    if let Some(model) = model.filter(|model| !model.is_empty()) {
+        answer["model"] = json!(model);
+    }
+    if let Some(effort) = effort.filter(|effort| !effort.is_empty()) {
+        answer["effort"] = json!(effort);
+    }
+    answer
+}
+
+/// The `model` and `effort` a `configure_session` call asks for, in the order
+/// the app applies them: a model first, since it decides which efforts exist.
+fn config_changes(args: &Value) -> Vec<(&'static str, String)> {
+    ["model", "effort"]
+        .into_iter()
+        .filter_map(|id| {
+            let value = args.get(id).and_then(Value::as_str).map(str::trim)?;
+            (!value.is_empty()).then(|| (id, value.to_owned()))
+        })
+        .collect()
+}
+
+/// `configure_session` with no app attached (issue 4144). Without `model` or
+/// `effort` it reads the thread's settings, which needs no approval. A change
+/// to its own thread is the caller's to make, as in the app; a change to
+/// another thread needs Full access, because nobody is here to approve the
+/// app's card. Reach follows the other thread tools'.
+pub(crate) async fn configure(caller: &str, args: &Value) -> Value {
+    if let Err(remote) = super::local::local_machine(args) {
+        return remote;
+    }
+    let target = args
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(super::local::strip_own_host)
+        .filter(|target| !target.is_empty())
+        .unwrap_or(caller)
+        .to_owned();
+    let Some(meta) = crate::config::session_meta_by_id(&target) else {
+        return error("not_found", "no thread has that id; use list_sessions");
+    };
+    if target != caller && !super::local::may_reach(caller, &target, &meta) {
+        return not_allowed(super::local::reach_refused());
+    }
+    let changes = config_changes(args);
+    if changes.is_empty() {
+        return configured(&target);
+    }
+    if target != caller
+        && let Err(refusal) = delegation(caller, "configure_session")
+    {
+        return refusal;
+    }
+    let engine = match Engine::open(Access::Ask).await {
+        Ok(engine) => engine,
+        Err(refusal) => return refusal,
+    };
+    apply_config(&engine, &target, &meta, &changes).await
+}
+
+/// `rc threads configure`: change a thread's model or effort through the
+/// running server, which owns the thread's harness process, as the app's
+/// pickers do. Reading needs no server.
+pub async fn configure_from_shell(
+    session_id: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Result<Value, String> {
+    let Some(meta) = crate::config::session_meta_by_id(session_id) else {
+        return Err("no thread has that id; `rc threads list --all` lists them".to_owned());
+    };
+    let args = json!({ "model": model, "effort": effort });
+    let changes = config_changes(&args);
+    if changes.is_empty() {
+        return Ok(configured(session_id));
+    }
+    let Some(info) = crate::server::running() else {
+        return Err(
+            "no RustCode server is running, and a thread's model changes in the server that runs it; start the app or `rc server install`, then retry".to_owned(),
+        );
+    };
+    let engine = Engine::open_at(info.endpoint, Access::Ask)
+        .await
+        .map_err(|refusal| refusal_text(&refusal))?;
+    let answer = apply_config(&engine, session_id, &meta, &changes).await;
+    if answer.get("error").is_some() {
+        return Err(refusal_text(&answer));
+    }
+    Ok(answer)
+}
+
+fn refusal_text(refusal: &Value) -> String {
+    refusal
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or("the server refused the change")
+        .to_owned()
+}
+
+/// Open `target` in `engine` and set each of `changes` on it with the same
+/// `session/set_config_option` the app's pickers send, so it takes effect as
+/// a pick in the app does: an idle thread runs its next turn on it.
+/// Values are checked against the options the thread itself lists.
+async fn apply_config(
+    engine: &Engine,
+    target: &str,
+    meta: &crate::config::SessionMeta,
+    changes: &[(&'static str, String)],
+) -> Value {
+    // A thread open in another RustCode process must not be opened again here.
+    if !crate::acp::is_acp_session(target)
+        && let Some(config_dir) = crate::config::get_config_dir()
+        && crate::config::session_open_by(&config_dir, target).is_some()
+    {
+        return unavailable(
+            "that thread is open in another RustCode process, and this engine will not open a second copy of it; change it there, or close it there, and retry. Nothing was changed.",
+        );
+    }
+    let cwd = meta
+        .workspace_cwd
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(project_of(target, meta)));
+    let loaded = match engine
+        .request(
+            LoadSessionRequest::new(target.to_owned(), cwd),
+            LOAD_TIMEOUT,
+        )
+        .await
+    {
+        Ok(loaded) => loaded,
+        Err(message) => {
+            return unavailable(format!(
+                "that thread could not be opened in this engine ({message}). Nothing was changed."
+            ));
+        }
+    };
+    let mut options = loaded.config_options.unwrap_or_default();
+    let mut chosen = Vec::with_capacity(changes.len());
+    for (id, asked) in changes {
+        match config_choice(&options, id, asked) {
+            Ok(value) => chosen.push((*id, value)),
+            Err(refusal) => return refusal,
+        }
+    }
+    for (id, value) in chosen {
+        let request = SetSessionConfigOptionRequest::new(target.to_owned(), id, value.as_str());
+        match engine.request(request, LOAD_TIMEOUT).await {
+            Ok(answer) => options = answer.config_options,
+            Err(message) => {
+                return failed(format!("the {id} was not changed to “{value}”: {message}"));
+            }
+        }
+    }
+    let mut answer = configured(target);
+    for id in ["model", "effort"] {
+        if let Some(current) = select_values(&options, id).map(|(current, _)| current) {
+            answer[id] = json!(current);
+        }
+    }
+    answer
+}
+
+/// A select option's current value and every value it offers.
+fn select_values(
+    options: &[SessionConfigOption],
+    id: &str,
+) -> Option<(String, Vec<(String, String)>)> {
+    let option = options.iter().find(|option| option.id.0.as_ref() == id)?;
+    let SessionConfigKind::Select(select) = &option.kind else {
+        return None;
+    };
+    let listed = match &select.options {
+        SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect::<Vec<_>>(),
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| group.options.iter())
+            .collect(),
+        _ => Vec::new(),
+    };
+    let values = listed
+        .into_iter()
+        .map(|choice| (choice.value.0.to_string(), choice.name.clone()))
+        .collect();
+    Some((select.current_value.0.to_string(), values))
+}
+
+/// The value `asked` names among the thread's own choices for `id`: its exact
+/// value, else one value or name that matches without regard to case.
+fn config_choice(options: &[SessionConfigOption], id: &str, asked: &str) -> Result<String, Value> {
+    let Some((_, values)) = select_values(options, id) else {
+        return Err(not_allowed(format!("that thread has no {id} setting")));
+    };
+    if values.iter().any(|(value, _)| value == asked) {
+        return Ok(asked.to_owned());
+    }
+    let wanted = asked.to_lowercase();
+    let close: Vec<&String> = values
+        .iter()
+        .filter(|(value, name)| value.to_lowercase() == wanted || name.to_lowercase() == wanted)
+        .map(|(value, _)| value)
+        .collect();
+    if let [only] = close.as_slice() {
+        return Ok((*only).clone());
+    }
+    let known: Vec<&str> = values
+        .iter()
+        .take(25)
+        .map(|(value, _)| value.as_str())
+        .collect();
+    Err(error(
+        "invalid",
+        format!("no {id} “{asked}”; choose from {}", known.join(", ")),
+    ))
 }
 
 /// Run `text` as the thread's next turn, in the background, and settle `link`
@@ -3028,5 +3262,241 @@ mod tests {
             answer_permission(&request, Access::Full).outcome,
             RequestPermissionOutcome::Selected(_)
         ));
+    }
+
+    fn forget(ids: &[&String]) {
+        for id in ids {
+            let _ =
+                crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_thread_is_read_without_the_app_and_without_approval() {
+        let project = tempfile::tempdir().unwrap();
+        let caller = test_thread(project.path());
+        crate::config::save_session_yolo(&caller, false);
+        let other = test_thread(project.path());
+        for target in [&caller, &other] {
+            let answer = super::super::local::answer_json(
+                &caller,
+                &tokio_util::sync::CancellationToken::new(),
+                super::super::CONFIGURE_SESSION,
+                &json!({ "session_id": target }),
+            )
+            .await;
+            assert!(answer.get("error").is_none(), "{answer}");
+            assert_eq!(answer["session_id"], json!(target), "{answer}");
+            assert_eq!(
+                answer["harness"],
+                json!(crate::harness::BUILTIN_ID),
+                "{answer}"
+            );
+            assert!(answer["access"].is_string(), "{answer}");
+        }
+        forget(&[&caller, &other]);
+    }
+
+    #[tokio::test]
+    async fn changing_another_threads_model_needs_full_access() {
+        let project = tempfile::tempdir().unwrap();
+        let caller = test_thread(project.path());
+        crate::config::save_session_access(&caller, "ask");
+        let other = test_thread(project.path());
+        let answer = configure(&caller, &json!({ "session_id": other, "model": "m" })).await;
+        let message = answer["error"]["message"].as_str().unwrap_or("");
+        assert!(message.contains("Full access"), "{answer}");
+        forget(&[&caller, &other]);
+    }
+
+    /// An engine of this process, served over a socket pair as the loopback
+    /// endpoint serves it.
+    #[cfg(unix)]
+    async fn served_engine() -> Engine {
+        let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+        let engine = crate::acp::AcpEngine::bare(false).expect("an engine");
+        tokio::spawn(async move {
+            let (read, write) = tokio::io::split(theirs);
+            let _ = engine.serve(read, write).await;
+        });
+        Engine::open_stream(ours, Access::Ask)
+            .await
+            .expect("the engine answers")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_builtin_thread_takes_a_setting_it_lists_and_refuses_one_it_does_not() {
+        let project = tempfile::tempdir().unwrap();
+        let target = test_thread(project.path());
+        let meta = crate::config::session_meta_by_id(&target).expect("the thread is saved");
+        let engine = served_engine().await;
+        let loaded = engine
+            .request(
+                LoadSessionRequest::new(target.clone(), project.path().to_path_buf()),
+                LOAD_TIMEOUT,
+            )
+            .await
+            .expect("the thread loads");
+        let options = loaded.config_options.unwrap_or_default();
+        // The effort when the model offers a choice of them, else the model:
+        // a machine with no model profiles lists neither.
+        let Some((id, (current, listed))) = ["effort", "model"]
+            .into_iter()
+            .find_map(|id| select_values(&options, id).map(|found| (id, found)))
+        else {
+            let refused =
+                apply_config(&engine, &target, &meta, &[("effort", "high".to_owned())]).await;
+            assert_eq!(refused["error"]["code"], json!("not_allowed"), "{refused}");
+            forget(&[&target]);
+            return;
+        };
+
+        let refused =
+            apply_config(&engine, &target, &meta, &[(id, "no-such-value".to_owned())]).await;
+        assert_eq!(refused["error"]["code"], json!("invalid"), "{refused}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("choose from"),
+            "{refused}"
+        );
+
+        let wanted = listed
+            .iter()
+            .map(|(value, _)| value.clone())
+            .find(|value| *value != current)
+            .unwrap_or(current);
+        let answer = apply_config(&engine, &target, &meta, &[(id, wanted.clone())]).await;
+        assert!(answer.get("error").is_none(), "{answer}");
+        assert_eq!(answer[id], json!(wanted), "{answer}");
+        assert_eq!(
+            answer["harness"],
+            json!(crate::harness::BUILTIN_ID),
+            "{answer}"
+        );
+        forget(&[&target]);
+    }
+
+    /// A harness's side of the loopback, as an external harness thread
+    /// answers through the server: it lists a model and an effort and takes
+    /// a change to either. Every `session/set_config_option` it gets is sent
+    /// to `seen`.
+    #[cfg(unix)]
+    fn external_harness(
+        stream: tokio::net::UnixStream,
+        seen: tokio::sync::mpsc::UnboundedSender<Value>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        tokio::spawn(async move {
+            let (read, mut write) = tokio::io::split(stream);
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            let mut current = json!({ "model": "gemini-4-argon", "effort": "medium" });
+            let options = |current: &Value| {
+                json!([
+                    {
+                        "id": "model", "name": "Model", "type": "select",
+                        "currentValue": current["model"],
+                        "options": [
+                            { "value": "gemini-4-argon", "name": "Gemini 4 Argon" },
+                            { "value": "gemini-4-neon", "name": "Gemini 4 Neon" }
+                        ]
+                    },
+                    {
+                        "id": "effort", "name": "Effort", "type": "select",
+                        "currentValue": current["effort"],
+                        "options": [
+                            { "value": "medium", "name": "Medium" },
+                            { "value": "high", "name": "High" }
+                        ]
+                    }
+                ])
+            };
+            while let Ok(Some(line)) = lines.next_line().await {
+                let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                let Some(id) = message.get("id").cloned() else {
+                    continue;
+                };
+                let result = match message["method"].as_str() {
+                    Some("initialize") => {
+                        json!({ "protocolVersion": 1, "agentCapabilities": { "loadSession": true } })
+                    }
+                    Some("session/load") => json!({ "configOptions": options(&current) }),
+                    Some("session/set_config_option") => {
+                        let params = message["params"].clone();
+                        let _ = seen.send(params.clone());
+                        if let Some(config) = params["configId"].as_str() {
+                            current[config] = params["value"].clone();
+                        }
+                        json!({ "configOptions": options(&current) })
+                    }
+                    _ => json!({}),
+                };
+                let answer = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+                if write
+                    .write_all(format!("{answer}\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_external_harness_thread_moves_to_another_model_and_effort() {
+        let project = tempfile::tempdir().unwrap();
+        let target = test_thread(project.path());
+        let meta = crate::config::session_meta_by_id(&target).expect("the thread is saved");
+        let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+        let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
+        external_harness(theirs, seen_tx);
+        let engine = Engine::open_stream(ours, Access::Ask)
+            .await
+            .expect("the harness answers");
+
+        // A model the harness does not list changes nothing, not even the
+        // effort asked beside it.
+        let refused = apply_config(
+            &engine,
+            &target,
+            &meta,
+            &[
+                ("model", "gemini-9".to_owned()),
+                ("effort", "high".to_owned()),
+            ],
+        )
+        .await;
+        assert_eq!(refused["error"]["code"], json!("invalid"), "{refused}");
+        let message = refused["error"]["message"].as_str().unwrap_or("");
+        assert!(message.contains("gemini-4-neon"), "{refused}");
+        assert!(seen.try_recv().is_err(), "nothing was set: {refused}");
+
+        // A model named as the picker shows it is the value it stands for.
+        let answer = apply_config(
+            &engine,
+            &target,
+            &meta,
+            &[
+                ("model", "Gemini 4 Neon".to_owned()),
+                ("effort", "high".to_owned()),
+            ],
+        )
+        .await;
+        assert!(answer.get("error").is_none(), "{answer}");
+        assert_eq!(answer["model"], json!("gemini-4-neon"), "{answer}");
+        assert_eq!(answer["effort"], json!("high"), "{answer}");
+        let first = seen.recv().await.expect("the model was set");
+        assert_eq!(first["configId"], json!("model"));
+        assert_eq!(first["value"], json!("gemini-4-neon"));
+        let second = seen.recv().await.expect("the effort was set");
+        assert_eq!(second["configId"], json!("effort"));
+        assert_eq!(second["value"], json!("high"));
+        forget(&[&target]);
     }
 }
