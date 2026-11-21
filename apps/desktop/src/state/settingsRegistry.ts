@@ -180,7 +180,7 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
     key: "trust-delegate-accounts",
     label: "Let delegates use my named accounts without asking",
     type: "boolean",
-    default: false,
+    default: true,
   },
   { key: "delegate-presets", label: "Delegate presets", type: "list", default: [] },
   { key: "limit-fallback", label: "Switch a delegate at a limit", type: "boolean", default: false },

@@ -71,7 +71,7 @@ import {
   useApp,
 } from "./store";
 import { isRunning, localId } from "./thread";
-import { splitThreadKey } from "./threadKeys";
+import { LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 import { orchestrationTool } from "./toolNames";
 
 /** Checks a harness id against the engine's list; the default when none is named. */
@@ -194,10 +194,24 @@ export function ranWith(id: string): JsonObject {
 /** The project a new thread starts in: the caller's, or one the user has opened before. */
 function projectFor(caller: RuleThread, asked: string | undefined): string | Failure {
   const own = projectOf(caller);
-  if (!asked || sameProject(asked, own)) return own;
-  const known = useApp.getState().sessions.some((x) => sameProject(x.worktree?.repo || x.cwd, asked));
-  if (!known) return failure("not_allowed", "that folder is not a project the user has opened in RustCode");
-  return asked.replace(/\/+$/, "");
+  const crossMachine = splitThreadKey(caller.id).host !== "";
+  if (!crossMachine && (!asked || sameProject(asked, own))) return own;
+  if (asked) {
+    const known = useApp
+      .getState()
+      .sessions.some((x) => !x.host && sameProject(x.worktree?.repo || x.cwd, asked));
+    if (!known && !crossMachine) {
+      return failure("not_allowed", "that folder is not a project the user has opened in RustCode");
+    }
+    return asked.replace(/\/+$/, "");
+  }
+  const local = useApp
+    .getState()
+    .sessions.find((x) => !x.host && sameProject(x.worktree?.repo || x.cwd, own));
+  if (local) return projectOf({ folder: local.cwd, worktree: local.worktree });
+  const fallback = useApp.getState().projectCwd || useApp.getState().defaultCwd;
+  if (fallback) return fallback.replace(/\/+$/, "");
+  return failure("invalid", "pass project with its absolute path on this computer");
 }
 
 /** `session/new` for a link, in a worktree when asked (or by default in a git project). */
@@ -817,10 +831,11 @@ function waitRowRuns(callerId: string, row: string): boolean {
  * an answer already sent — which the engine drops unread — is handed again.
  * `_rustcode/orchestration/cancelled`.
  */
-export function orchestrationCallDropped(params: JsonObject): void {
+export function orchestrationCallDropped(params: JsonObject, host: string = LOCAL_HOST): void {
   const callId = typeof params.callId === "string" ? params.callId : "";
   if (!callId) return;
-  const session = typeof params.sessionId === "string" ? params.sessionId : undefined;
+  const rawSession = typeof params.sessionId === "string" ? params.sessionId : undefined;
+  const session = rawSession ? threadKey(host, rawSession) : undefined;
   const pending = droppable.get(callId);
   if (pending && (session === undefined || pending.caller === session)) {
     pending.dropped = true;

@@ -124,13 +124,14 @@ export function manageTarget(
 ): RuleThread | Failure {
   const target = id ? ruleThread(useApp.getState(), id) : caller;
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
-  if (isRemoteThread(target.id) && !machine) {
+  const crossMachine = splitThreadKey(target.id).host !== splitThreadKey(caller.id).host;
+  if (crossMachine && !machine) {
     return failure(
       "not_allowed",
-      `“${target.title}” runs on ${targetMachine(target.id) ?? "another computer"}: do that there`,
+      `“${target.title}” runs on ${targetMachine(target.id) ?? "another computer"}: pass machine to act there`,
     );
   }
-  if (isRemoteThread(target.id) || acrossProjects) return target;
+  if (crossMachine || isRemoteThread(target.id) || acrossProjects) return target;
   return checkManage(caller, target) ?? target;
 }
 
@@ -712,12 +713,13 @@ export async function read(
   const target = ruleThread(useApp.getState(), targetId);
   // Reading another machine's thread is that machine's to allow; the app adds
   // nothing to the rule, since the user named the machine and approves the read.
+  const crossMachine = splitThreadKey(targetId).host !== splitThreadKey(caller.id).host;
   const refused = checkMessage(
     caller,
     target,
     book(),
     true,
-    useApp.getState().readAcrossProjects || isRemoteThread(targetId),
+    useApp.getState().readAcrossProjects || isRemoteThread(targetId) || crossMachine,
   );
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   // Its project only matters to the user when it is not the caller's.

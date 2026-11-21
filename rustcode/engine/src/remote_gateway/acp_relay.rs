@@ -159,6 +159,9 @@ const EXACT_METHODS: &[&str] = &[
     // The machine fleet's names, versions and last-seen times, exchanged
     // between paired computers (`crate::fleet`): metadata only.
     "_rustcode/environment/sync",
+    // Running a shell command on this machine for another machine in the fleet
+    // (`acp/machine_exec.rs`), subject to this machine's command policy.
+    "_rustcode/machine/exec",
     // A thread's own operations: moving it to another harness or one of the
     // accounts this machine already has (a model of another harness in the
     // picker), and the images its messages carry, read back and sent ahead in

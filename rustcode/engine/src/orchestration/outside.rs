@@ -168,7 +168,8 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
         | CREATE_LOOP
         | UPDATE_LOOP
         | DELETE_SCHEDULED_TASK
-        | RUN_SCHEDULED_TASK_NOW => Scope::Manage,
+        | RUN_SCHEDULED_TASK_NOW
+        | RUN_MACHINE_COMMAND => Scope::Manage,
         _ => return None,
     })
 }
@@ -197,8 +198,11 @@ pub fn implemented(tool: &str) -> bool {
             | READ_SESSION
             | SEARCH_SESSIONS
             | LIST_PROJECTS
+            | READ_PROJECT
+            | LIST_WORKTREES
             | LIST_HARNESSES
             | LIST_MACHINES
+            | RUN_MACHINE_COMMAND
             | THREAD_STATUS
             | WAIT_SESSION
             | THREAD_USAGE
@@ -680,6 +684,8 @@ pub fn summarize(tool: &str, args: &Value) -> String {
     };
     let mut parts: Vec<String> = Vec::new();
     for (key, label, limit) in [
+        ("machine", "on", 60),
+        ("cwd", "in", 120),
         ("project", "in", 120),
         ("harness", "on", 40),
         ("session_id", "thread", 60),
@@ -688,6 +694,9 @@ pub fn summarize(tool: &str, args: &Value) -> String {
         if let Some(value) = text(key, limit) {
             parts.push(format!("{label} {value}"));
         }
+    }
+    if let Some(command) = text("command", 160) {
+        parts.push(format!("`{command}`"));
     }
     if tool == super::CREATE_LOOP {
         for (key, label) in [
@@ -784,7 +793,7 @@ impl Runner for EngineRunner {
             match tool {
                 // An outside agent has no project of its own: list everything,
                 // as far as the cross-project setting allows.
-                super::LIST_SESSIONS | super::SEARCH_SESSIONS => {
+                super::LIST_SESSIONS | super::SEARCH_SESSIONS | super::LIST_WORKTREES => {
                     if args.get("all_projects").is_none() {
                         args["all_projects"] = json!(true);
                     }
@@ -2416,6 +2425,13 @@ mod tests {
         assert!(summary.chars().count() < 260, "{summary}");
         assert!(!summary.contains("secret") && !summary.contains("never shown"));
         assert_eq!(summarize("list_sessions", &json!({})), "list_sessions");
+        let exec_summary = summarize(
+            super::super::RUN_MACHINE_COMMAND,
+            &json!({ "machine": "lagosvps", "cwd": "/home/lucas", "command": "uptime" }),
+        );
+        assert!(exec_summary.contains("on lagosvps"), "{exec_summary}");
+        assert!(exec_summary.contains("in /home/lucas"), "{exec_summary}");
+        assert!(exec_summary.contains("`uptime`"), "{exec_summary}");
     }
 }
 

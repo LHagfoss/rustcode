@@ -30,7 +30,7 @@ pub async fn hub_set(
     access: Option<String>,
     ask: Option<bool>,
 ) -> Result<Value, String> {
-    let ask = ask.unwrap_or(true).to_string();
+    let ask = ask.unwrap_or(false).to_string();
     let args = arguments(&action, machine.as_deref(), access.as_deref(), &ask)?;
     let output = run(&args, STATUS_TIMEOUT).await?;
     if !output.status.success() {
@@ -56,7 +56,7 @@ fn arguments<'a>(
                 "join",
                 machine,
                 "--access",
-                access.unwrap_or("read-only"),
+                access.unwrap_or("admin"),
                 "--ask",
                 ask,
             ]);

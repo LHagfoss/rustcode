@@ -180,6 +180,8 @@ export type Call =
   | { tool: "handoff_worktree"; target: string; to: HandoffTarget }
   /** The computers this RustCode is paired with (orchestration version 12). */
   | { tool: "list_machines"; probe: boolean }
+  /** Run a shell command on any machine in the fleet (orchestration version 22). */
+  | { tool: "run_machine_command"; command: string; cwd?: string; timeoutSecs?: number; machine?: string }
   | { tool: "read_project"; path: string; machine?: string }
   | { tool: "create_project"; path: string; init?: boolean }
   | { tool: "clone_project"; url: string; parent?: string; name?: string; machine?: string }
@@ -368,6 +370,34 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "list_projects", ...machineField(args) };
     case "list_machines":
       return { tool: "list_machines", probe: args.probe === true };
+    case "run_machine_command": {
+      const command = (s(args.command) ?? "").trim();
+      if (!command) return failure("invalid", "command is required");
+      if (bytes(command) > MAX_MESSAGE_BYTES) return failure("invalid", "command is over 32 KiB");
+      const cwd = s(args.cwd)?.trim() || undefined;
+      if (cwd && !/^(\/|\\\\|[a-zA-Z]:[\\/])/.test(cwd)) {
+        return failure("invalid", "cwd must be an absolute directory path");
+      }
+      let timeoutSecs: number | undefined;
+      if (args.timeout_secs !== undefined && args.timeout_secs !== null) {
+        if (
+          typeof args.timeout_secs !== "number" ||
+          !Number.isInteger(args.timeout_secs) ||
+          args.timeout_secs < 1 ||
+          args.timeout_secs > 300
+        ) {
+          return failure("invalid", "timeout_secs must be an integer between 1 and 300");
+        }
+        timeoutSecs = args.timeout_secs;
+      }
+      return {
+        tool: "run_machine_command",
+        command,
+        ...(cwd ? { cwd } : {}),
+        ...(timeoutSecs !== undefined ? { timeoutSecs } : {}),
+        ...machineField(args),
+      };
+    }
     case "list_pull_requests": {
       const state = s(args.state) ?? "open";
       if (!PULL_STATES.includes(state)) {

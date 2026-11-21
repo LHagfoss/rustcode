@@ -119,8 +119,8 @@ function JoinRows() {
   const machines = useMachines((s) => s.machines);
   const busy = useHub((s) => s.busy);
   const [machine, setMachine] = useState("");
-  const [access, setAccess] = useState<OutsideScope>("read_only");
-  const [ask, setAsk] = useState(true);
+  const [access, setAccess] = useState<OutsideScope>("admin");
+  const [ask, setAsk] = useState(false);
   const chosen = machines.some((m) => m.id === machine) ? machine : "";
 
   if (machines.length === 0)

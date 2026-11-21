@@ -48,7 +48,7 @@ export const ALWAYS_ASKS: { title: string; why: string }[] = [
   },
   {
     title: "A delegate on a named account",
-    why: "Starting a thread on a signed-in account spends that account's usage, so each account is approved once per thread, unless you trust this computer's named accounts (Settings › Orchestration › Let delegates use my named accounts without asking). A thread with no RustCode window open is refused instead, and its refusal says where to allow it.",
+    why: "Starting a thread on a signed-in account spends that account's usage. Trusted across your machines by default; turn off Settings › Orchestration › Let delegates use my named accounts without asking to approve each account per thread.",
   },
   {
     title: "Outside apps",
@@ -124,7 +124,8 @@ export function delegationAllowed(
     | "cleanup"
     | "handoff"
     | "project"
-    | "schedule",
+    | "schedule"
+    | "exec",
 ): boolean {
   if (mode === "full") return true;
   // Answering a request grants a delegate what it asked for, so it is not part of editing either.

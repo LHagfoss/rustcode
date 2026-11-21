@@ -11,6 +11,7 @@ mod edit_diff;
 mod harnesses;
 mod hosted;
 pub(crate) mod loops;
+pub(crate) mod machine_exec;
 mod machine_sync;
 mod mcp_app;
 mod mirror;
@@ -19,7 +20,7 @@ mod permissions;
 mod presence;
 mod preview;
 mod project_relocate;
-mod projects;
+pub(crate) mod projects;
 mod prompt;
 pub(crate) mod questions;
 mod remote;
@@ -1619,6 +1620,20 @@ async fn serve_connection(
                             agent_client_protocol::Error::invalid_params().data(error)),
                     }
                 }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: machine_exec::MachineExecRequest, responder, connection| {
+                connection.spawn(async move {
+                    match machine_exec::exec(request, tokio_util::sync::CancellationToken::new()).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params().data(error),
+                        ),
+                    }?;
+                    Ok(())
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
