@@ -5,8 +5,10 @@ import {
   anyThreadBusy,
   autoInstallDecision,
   autoRetryDelay,
+  busyThreads,
   compareVersions,
   failedInstallBackoff,
+  installNowLabel,
   installProgress,
   isPrerelease,
   newerVersion,
@@ -17,6 +19,7 @@ import {
   type UpdateInstall,
   updateHint,
   useUpdates,
+  waitingReason,
 } from "./updates";
 
 describe("updates", () => {
@@ -284,5 +287,36 @@ describe("install transitions", () => {
       failures: 1,
       notBefore: 60_500,
     });
+  });
+});
+
+describe("why a found update waits", () => {
+  const thread = (over: Partial<{ turn: never; waiting: number; permissions: unknown[] }> = {}) => ({
+    permissions: [] as unknown[],
+    ...over,
+  });
+
+  test("counts running threads and threads that need the user apart", () => {
+    const busy = busyThreads({
+      a: thread({ waiting: 1 }),
+      b: thread({ waiting: 2 }),
+      c: thread({ permissions: [{}] }),
+      d: thread(),
+    });
+    expect(busy).toEqual({ running: 2, asking: 1 });
+  });
+
+  test("says what it waits for", () => {
+    expect(waitingReason({ running: 2, asking: 0 })).toBe("Waiting for 2 running threads");
+    expect(waitingReason({ running: 1, asking: 1 })).toBe(
+      "Waiting for 1 running thread and 1 thread that needs you",
+    );
+    expect(waitingReason({ running: 0, asking: 3 })).toBe("Waiting for 3 threads that need you");
+    expect(waitingReason({ running: 0, asking: 0 })).toBe("Waiting for threads to finish");
+  });
+
+  test("Install now promises a resume only when threads continue after a restart", () => {
+    expect(installNowLabel(true)).toBe("Install now and resume threads");
+    expect(installNowLabel(false)).toBe("Install now");
   });
 });

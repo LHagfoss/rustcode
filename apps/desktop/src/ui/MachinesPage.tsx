@@ -49,13 +49,20 @@ import {
   useMachines,
   versionSkew,
 } from "../state/machines";
+import {
+  remoteUpdateLine,
+  updateMachine,
+  updateMachines,
+  updateRunning,
+  useMachineUpdates,
+} from "../state/machineUpdate";
 import { refreshRemote } from "../state/remoteAccess";
 import { openMachineSettings, useApp } from "../state/store";
 import { AddMachineDialog } from "./AddMachineDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
 import { ForwardTakeover } from "./ForwardTakeover";
 import { HubGroup } from "./HubGroup";
-import { Plus, RefreshCw, Server, Settings } from "./icons";
+import { ArrowUpCircle, Plus, RefreshCw, Server, Settings } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import {
   knownMachine,
@@ -88,6 +95,13 @@ export function MachinesPage() {
   );
   const [now, setNow] = useState(() => Date.now());
   const [local, setLocal] = useState<string | null>(null);
+  const updates = useMachineUpdates((s) => s.byMachine);
+  // Every connected machine on an older RustCode than this app, not already updating: one press
+  // updates them all, as each row's Update does.
+  const outdated = machines.filter(
+    (m) =>
+      m.state === "connected" && machineOutdated(m.version, local) && !updateRunning(updates[m.id]?.update),
+  );
 
   // The shell learns about a machine on its own (a retry that worked, a pairing ended
   // there), so the page keeps asking while it is open.
@@ -126,10 +140,18 @@ export function MachinesPage() {
       <Group
         title="Machines"
         action={
-          <Action size="sm" onClick={() => setAddMachineOpen(true)}>
-            <Plus size={12} />
-            Add machine
-          </Action>
+          <span className="flex items-center gap-2">
+            {outdated.length > 1 && (
+              <Action size="sm" onClick={() => updateMachines(outdated)}>
+                <ArrowUpCircle size={12} />
+                Update all ({outdated.length})
+              </Action>
+            )}
+            <Action size="sm" onClick={() => setAddMachineOpen(true)}>
+              <Plus size={12} />
+              Add machine
+            </Action>
+          </span>
         }
         hint="Choose where a thread runs under Run on when you start it. A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing a machine forgets its pairing here; it keeps listing this computer until you revoke it there."
       >
@@ -316,6 +338,10 @@ export function MachineRow({
   ].filter(Boolean);
   // What to do about another version, in the row itself rather than behind the chip.
   const skew = versionSkew(machine.version, local, machine.platform);
+  // An update started from here (Update): where it stands, in place of the advice.
+  const update = useMachineUpdates((s) => s.byMachine[machine.id]?.update);
+  const updating = updateRunning(update);
+  const updateLine = update ? remoteUpdateLine(update, name) : null;
   return (
     <Row
       title={
@@ -343,11 +369,26 @@ export function MachineRow({
       status={
         <>
           <span className="tabular">{facts.join(" · ")}</span>
-          {skew && <span className="mt-1 block text-warning">{withCode(skew)}</span>}
+          {updateLine ? (
+            <span
+              role="status"
+              className={`mt-1 block ${update?.phase === "failed" ? "text-warning" : update?.phase === "done" ? "text-success" : "text-fg-muted"}`}
+            >
+              {withCode(updateLine)}
+            </span>
+          ) : (
+            skew && <span className="mt-1 block text-warning">{withCode(skew)}</span>
+          )}
           {machine.forward && !connected && <ForwardTakeover machine={machine} forward={machine.forward} />}
         </>
       }
     >
+      {(outdated || updating) && connected && (
+        <Action disabled={updating} onClick={() => void updateMachine(machine)}>
+          {updating ? <Spinner /> : <ArrowUpCircle size={12} />}
+          {updating ? "Updating…" : update?.phase === "failed" ? "Retry update" : "Update"}
+        </Action>
+      )}
       {recovery === "pair" ? (
         <PairAgainAction machine={machine} />
       ) : recovery ? (
