@@ -1,3 +1,7 @@
+## [v1.46.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.46.1) - 2026-11-21
+
+### Fixes
+- Fixed `rc --update` on 1.45.0 and older, which could not find the new binary in the release archive. (#4154)
 ## [v1.46.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.46.0) - 2026-11-21
 
 ### Features
