@@ -250,7 +250,7 @@ function TerminalHeaderButton() {
   return (
     <ClusterButton
       label="Terminal"
-      tooltip={`Terminal (${key})`}
+      tooltip={key ? `Terminal (${key})` : "Terminal"}
       on={open}
       onClick={() => setTerminalOpen(!open)}
     >

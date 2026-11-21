@@ -343,7 +343,7 @@ export function TerminalPanel() {
         <Cluster>
           <ClusterButton
             label="Hide terminal"
-            tooltip={`Hide terminal (${terminalKey})`}
+            tooltip={terminalKey ? `Hide terminal (${terminalKey})` : "Hide terminal"}
             onClick={() => setTerminalOpen(false)}
           >
             <X size={13} />

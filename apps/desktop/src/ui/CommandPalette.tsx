@@ -154,6 +154,7 @@ export function baseActions(): PaletteAction[] {
       label: s.view.kind === "loops" ? "Show the chat" : "Show Jobs",
       detail: "Scheduled, one-off and webhook runs",
       icon: Repeat,
+      keys: shortcutHint("jobs") || undefined,
       words: "jobs loops scheduled cron webhook repeat",
       run: () => setView(s.view.kind === "loops" ? { kind: "chat" } : { kind: "loops" }),
     },
