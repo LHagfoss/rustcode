@@ -164,6 +164,23 @@ describe("turn folding", () => {
     ).find((r) => "fold" in r) as { fold: TurnFold };
     expect(blank.fold.answered).toBe(false);
   });
+
+  test("a turn that wrote no answer says what it did in its header", () => {
+    const woken = [
+      thought("t"),
+      { ...tool("r"), toolKind: "read" },
+      { ...tool("w"), toolKind: "edit" },
+      end("e", 13_000),
+    ] as TranscriptItem[];
+    const fold = (rows: ReturnType<typeof foldTurns>) => rows.find((r) => "fold" in r) as { fold: TurnFold };
+    const silent = fold(foldTurns(woken, false, new Set())).fold;
+    expect(silent.summary).toBe("Read 1 file and edited 1 file");
+    expect(
+      fold(foldTurns([user("u"), thought("t"), end("e")], false, new Set())).fold.summary,
+    ).toBeUndefined();
+    const answered = [user("u"), tool("c"), reply("done"), end("e")];
+    expect(fold(foldTurns(answered, false, new Set())).fold.summary).toBeUndefined();
+  });
 });
 
 describe("tool groups", () => {
