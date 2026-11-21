@@ -23,7 +23,8 @@ import { isLoaded } from "../state/thread";
 import { useEffect, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
-import { knownOnly, useFleet, viaName } from "../state/fleet";
+import { readStorage, writeStorage } from "../lib/storage";
+import { type FleetEntry, knownOnly, useFleet, viaName } from "../state/fleet";
 import {
   askInstallServer,
   askMachine,
@@ -64,6 +65,7 @@ import { ForwardTakeover } from "./ForwardTakeover";
 import { HubGroup } from "./HubGroup";
 import { ArrowUpCircle, Plus, RefreshCw, Server, Settings } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
+import { MachinesMap, SELF_NODE } from "./MachinesMap";
 import {
   knownMachine,
   machineOutdated,
@@ -72,13 +74,17 @@ import {
   machineStatus,
   recoveryLabel,
 } from "./machineLabels";
-import { ChromeButton, Spinner } from "./primitives";
+import { ChromeButton, cx, Spinner } from "./primitives";
 import { ServerProblems } from "./ServerProblems";
 import { Action, Chip, Group, Row, withCode } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
 
 /** How often the page asks the shell where the machines stand. */
 const POLL_MS = 3000;
+
+const VIEW_KEY = "rustcode.machinesView";
+
+type MachinesView = "map" | "list";
 
 export function MachinesPage() {
   const ready = useMachines((s) => s.ready);
@@ -95,6 +101,14 @@ export function MachinesPage() {
   );
   const [now, setNow] = useState(() => Date.now());
   const [local, setLocal] = useState<string | null>(null);
+  const [view, setView] = useState<MachinesView>(() => (readStorage(VIEW_KEY) === "list" ? "list" : "map"));
+  const [selected, setSelected] = useState<string | null>(null);
+  const entries = useFleet((s) => s.entries);
+  const known = knownOnly(entries, machines);
+  const chooseView = (next: MachinesView) => {
+    setView(next);
+    writeStorage(VIEW_KEY, next);
+  };
   const updates = useMachineUpdates((s) => s.byMachine);
   // Every connected machine on an older RustCode than this app, not already updating: one press
   // updates them all, as each row's Update does.
@@ -138,7 +152,12 @@ export function MachinesPage() {
       {error && <p className="mb-6 text-callout text-warning">Could not read the machines: {error}</p>}
 
       <Group
-        title="Machines"
+        title={
+          <span className="flex items-center gap-3">
+            Machines
+            <ViewSwitch view={view} onChange={chooseView} />
+          </span>
+        }
         action={
           <span className="flex items-center gap-2">
             {outdated.length > 1 && (
@@ -155,17 +174,40 @@ export function MachinesPage() {
         }
         hint="Choose where a thread runs under Run on when you start it. A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing a machine forgets its pairing here; it keeps listing this computer until you revoke it there."
       >
-        <ThisComputer />
-        {machines.map((machine) => (
-          <MachineRow
-            key={machine.id}
-            machine={machine}
-            count={threadCount(machine, counts)}
-            now={now}
-            local={local}
+        {view === "map" ? (
+          <MachinesMap
+            machines={machines}
+            known={known}
+            selected={selected}
+            onSelect={setSelected}
+            footer={
+              <SelectedMachine
+                id={selected}
+                machines={machines}
+                known={known}
+                counts={counts}
+                now={now}
+                local={local}
+              />
+            }
           />
-        ))}
-        <KnownMachines now={now} local={local} />
+        ) : (
+          <>
+            <ThisComputer />
+            {machines.map((machine) => (
+              <MachineRow
+                key={machine.id}
+                machine={machine}
+                count={threadCount(machine, counts)}
+                now={now}
+                local={local}
+              />
+            ))}
+            {known.map((entry) => (
+              <KnownMachineRow key={entry.hostId} entry={entry} now={now} local={local} />
+            ))}
+          </>
+        )}
         {machines.length === 0 && <NoMachines />}
         {adding && !addOpen && (
           <Row
@@ -252,43 +294,86 @@ function ThisComputer() {
   );
 }
 
+/** Switches the Machines group between the map and the list; the choice is kept. */
+function ViewSwitch({ view, onChange }: { view: MachinesView; onChange: (view: MachinesView) => void }) {
+  return (
+    <span
+      role="tablist"
+      aria-label="Machines view"
+      className="flex items-center gap-0.5 rounded-md bg-fill-subtle p-0.5"
+    >
+      {(["map", "list"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          role="tab"
+          aria-selected={view === option}
+          onClick={() => onChange(option)}
+          className={cx(
+            "h-6 rounded px-2 font-normal text-callout",
+            view === option ? "bg-surface-3 text-fg" : "text-fg-faint hover:text-fg-muted",
+          )}
+        >
+          {option === "map" ? "Map" : "List"}
+        </button>
+      ))}
+    </span>
+  );
+}
+
+/** The list row of the node selected on the map, with the actions the list has for it. */
+function SelectedMachine({
+  id,
+  machines,
+  known,
+  counts,
+  now,
+  local,
+}: {
+  id: string | null;
+  machines: readonly Machine[];
+  known: readonly FleetEntry[];
+  counts: Record<string, number>;
+  now: number;
+  local: string | null;
+}) {
+  if (id === null) return null;
+  if (id === SELF_NODE) return <ThisComputer />;
+  const machine = machines.find((saved) => saved.id === id);
+  if (machine) {
+    return <MachineRow machine={machine} count={threadCount(machine, counts)} now={now} local={local} />;
+  }
+  const entry = known.find((candidate) => candidate.hostId === id);
+  return entry ? <KnownMachineRow entry={entry} now={now} local={local} /> : null;
+}
+
 /**
- * Computers the paired ones are paired with, which this computer is not: listed read-only, with
- * who told us, so the fleet is visible from any one computer. Knowing one is not access to it; it
- * is paired on its own, with **Pair** (`state/fleet.ts`).
+ * A computer a paired one is paired with, which this computer is not: listed read-only, with who
+ * told us, so the fleet is visible from any one computer. Knowing one is not access to it; it is
+ * paired on its own, with **Pair** (`state/fleet.ts`).
  */
-function KnownMachines({ now, local }: { now: number; local: string | null }) {
+function KnownMachineRow({ entry, now, local }: { entry: FleetEntry; now: number; local: string | null }) {
   const machines = useMachines((s) => s.machines);
   const entries = useFleet((s) => s.entries);
-  const known = knownOnly(entries, machines);
+  const row = knownMachine(entry, viaName(entry, machines, entries), local, now);
   return (
-    <>
-      {known.map((entry) => {
-        const row = knownMachine(entry, viaName(entry, machines, entries), local, now);
-        return (
-          <Row
-            key={row.id}
-            title={
-              <>
-                <DeviceGlyphIcon glyph={platformIcon(row.platform)} size={16} />
-                {row.name}
-                {row.outdated && <Chip tone="warn">Outdated</Chip>}
-              </>
-            }
-            subtitle={
-              row.via
-                ? `Known through ${row.via}. Not paired on this computer.`
-                : "Not paired on this computer."
-            }
-            status={row.facts.join(" · ")}
-          >
-            <Action onClick={() => setAddMachineOpen(true)}>
-              <Plus size={12} /> Pair
-            </Action>
-          </Row>
-        );
-      })}
-    </>
+    <Row
+      title={
+        <>
+          <DeviceGlyphIcon glyph={platformIcon(row.platform)} size={16} />
+          {row.name}
+          {row.outdated && <Chip tone="warn">Outdated</Chip>}
+        </>
+      }
+      subtitle={
+        row.via ? `Known through ${row.via}. Not paired on this computer.` : "Not paired on this computer."
+      }
+      status={row.facts.join(" · ")}
+    >
+      <Action onClick={() => setAddMachineOpen(true)}>
+        <Plus size={12} /> Pair
+      </Action>
+    </Row>
   );
 }
 
