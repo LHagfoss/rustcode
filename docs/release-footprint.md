@@ -78,6 +78,21 @@ unwind tables. The desktop shell's Linux `.text` is two thirds larger than
 macOS, almost all of it D-Bus (`zbus` for the keyring's Secret Service and
 notifications).
 
+Until #4140 that was two D-Bus stacks: `keyring` 3's Secret Service backend
+used `zbus` 4, and the notification and single-instance plugins `zbus` 5.
+`keyring` 4 runs its Secret Service store on `zbus` 5, so Linux links one.
+Linux `.text`, measured by the same workflow before (`a1c386dc`) and after
+(`perf/desktop-linux-dbus`):
+
+| Linux binary | D-Bus crates before | D-Bus crates after | Total `.text` before | Total `.text` after |
+| --- | ---: | ---: | ---: | ---: |
+| Desktop shell | 4.0 MiB | 2.5 MiB | 18.0 MiB | 16.3 MiB |
+| `rc` | 2.1 MiB | 1.5 MiB | 63.9 MiB | 63.8 MiB |
+
+The D-Bus crates are `zbus`, `zvariant` (with `zvariant_utils`) and
+`secret_service`. On `rc` the total drops by less than the D-Bus crates do;
+the report does not show which other crates grew.
+
 ### `rc` startup and peak RSS
 
 30 warm samples (after one warm-up) and 5 cold samples, each after dropping

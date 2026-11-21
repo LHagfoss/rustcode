@@ -17,7 +17,7 @@ hex = "0.4"
 # This computer's own interface addresses, for telling an overlay it is on from
 # one a machine reports and it is not (`routes::local_addresses`).
 if-addrs = "0.15"
-keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+keyring = { version = "4.2", default-features = false, features = ["v1"] }
 mdns-sd = { version = "0.21.7", default-features = false }
 rand = "0.10.2"
 # `wss://` routes to a machine's public address (a tunnel such as cloudflared):
