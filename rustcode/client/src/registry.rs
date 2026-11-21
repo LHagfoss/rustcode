@@ -219,6 +219,22 @@ impl Route {
         }
     }
 
+    /// Whether this is a port on this computer's own loopback that something
+    /// else (`ssh -L`, a proxy) forwards to the machine. Its address makes it
+    /// LAN, but it runs over whatever carries the forward, often the internet:
+    /// a sign-in or a ping on it takes as long as on an overlay, and longer
+    /// while the forward reconnects after a wake from sleep.
+    pub fn is_local_forward(&self) -> bool {
+        if self.kind != RouteKind::Lan || self.ssh.is_some() {
+            return false;
+        }
+        let host = crate::transport::host_part(&self.address);
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    }
+
     /// Whether a connection tries this route: not turned off, and allowed to
     /// carry a credential.
     pub fn is_dialable(&self) -> bool {
@@ -1395,6 +1411,15 @@ mod tests {
         assert!(!Route::new("127.0.0.1:17879").is_encrypted());
         assert!(Route::reported("100.90.16.237:17879", "overlay", Some("netbird")).is_encrypted());
         assert!(Route::new("host.tail1234.ts.net").is_encrypted());
+    }
+
+    #[test]
+    fn a_loopback_port_is_a_forward_and_a_lan_address_is_not() {
+        assert!(Route::new("127.0.0.1:17880").is_local_forward());
+        assert!(Route::new("[::1]:17880").is_local_forward());
+        assert!(Route::new("localhost:17880").is_local_forward());
+        assert!(!Route::new("192.168.1.20:17879").is_local_forward());
+        assert!(!Route::new("100.90.16.237:17879").is_local_forward());
     }
 
     #[test]

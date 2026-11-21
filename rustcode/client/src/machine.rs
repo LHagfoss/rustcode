@@ -887,12 +887,16 @@ impl Connector {
             // per-frame timeout, and every other route behind it. Ending it
             // at the route timeout keeps the race's own deadline in charge.
             // A LAN route gets less: the routes waiting behind it joined the
-            // race a grace later and share the same deadline.
-            let sign_in_timeout = if route.kind == RouteKind::Lan && bridge.is_none() {
-                route_timeout.min(LAN_SIGN_IN_TIMEOUT)
-            } else {
-                route_timeout
-            };
+            // race a grace later and share the same deadline. A forwarded
+            // loopback port is LAN by address only: its sign-in crosses
+            // whatever carries the forward, and two seconds after a wake
+            // failed every attempt while that forward reconnected.
+            let sign_in_timeout =
+                if route.kind == RouteKind::Lan && bridge.is_none() && !route.is_local_forward() {
+                    route_timeout.min(LAN_SIGN_IN_TIMEOUT)
+                } else {
+                    route_timeout
+                };
             let resolved = match tokio::time::timeout(
                 sign_in_timeout,
                 self.authenticate_with(Some(opened), address, machine, tokens),
