@@ -101,6 +101,12 @@ pub(crate) fn save(session_id: &str, record: &HarnessRecord) {
     }
 }
 
+pub(crate) fn remove(session_id: &str) {
+    if let Some(path) = record_path(session_id) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

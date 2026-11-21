@@ -102,6 +102,11 @@ export function tombstoneThread(key: string): void {
   keptUnlistedThreads.delete(key);
 }
 
+/** Forget a tombstone for `key`, e.g. when a moved thread returns to a machine it recently left. */
+export function untombstoneThread(key: string): void {
+  deletedThreads.delete(key);
+}
+
 /** Whether `key` was trashed a moment ago; an expired tombstone is dropped here. */
 export function isTombstoned(key: string): boolean {
   const at = deletedThreads.get(key);

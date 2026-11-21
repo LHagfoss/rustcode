@@ -90,9 +90,9 @@ import { ComposerDrawer } from "./ComposerDrawer";
 import {
   FolderMenu,
   LimitWaitRow,
+  OrphanThreadMachineChip,
   PermissionMenu,
   PlusMenu,
-  ThreadMachineChip,
   WorktreeToggle,
 } from "./ComposerFooter";
 import { UsageMeter } from "./ComposerUsage";
@@ -1408,8 +1408,8 @@ export const Composer = memo(function Composer({
           what it says. */}
       <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex items-center gap-4 px-2 pt-[14px] pb-1.5 text-callout text-fg-muted">
         <div className="flex min-w-0 items-center gap-1">
-          {!thread && <MachineSelector />}
-          {thread && <ThreadMachineChip host={host} />}
+          <MachineSelector thread={thread} />
+          {thread && <OrphanThreadMachineChip host={host} />}
           <FolderMenu thread={thread} cwd={cwd} host={host} />
           {!thread && <WorktreeToggle draft={draft} compact={compact} />}
           {thread?.worktree && (

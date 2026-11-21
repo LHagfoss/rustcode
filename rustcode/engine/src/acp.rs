@@ -31,6 +31,7 @@ mod session_load;
 pub(crate) mod session_move;
 mod session_repair;
 mod session_replay;
+mod session_transfer;
 pub(crate) mod settings;
 pub(crate) mod steer;
 mod stop;
@@ -146,6 +147,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "rewind": 1,
                 "sessionMove": 1,
                 "sessionRepair": 1,
+                "sessionTransfer": 1,
                 "sessionActivity": 1,
                 "childActivity": 1,
                 "pullRequests": 3,
@@ -1316,6 +1318,54 @@ async fn serve_connection(
                 match session_replay::replay_session(&request.session_id) {
                     Ok(answer) => responder.respond(answer),
                     Err(error) => responder.respond_with_error(error),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: session_transfer::ExportSessionRequest, responder, _connection| {
+                    match session_transfer::export_session(&server.external, request).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder.respond_with_error(error),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: session_transfer::ImportSessionRequest, responder, _connection| {
+                    match session_transfer::import_session(&server, request).await {
+                        Ok((answer, imported)) => {
+                            if let Some(imported) = imported {
+                                server.announce_thread_created(ThreadCreatedNotification {
+                                    meta: None,
+                                    session_id: imported.session_id,
+                                    cwd: imported.cwd,
+                                    title: imported.title,
+                                    harness: Some(imported.harness),
+                                    model: imported.model,
+                                });
+                            }
+                            responder.respond(answer)
+                        }
+                        Err(error) => responder.respond_with_error(error),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: session_transfer::RemoveSessionRequest, responder, _connection| {
+                    match session_transfer::remove_session(&server, request).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder.respond_with_error(error),
+                    }
                 }
             },
             agent_client_protocol::on_receive_request!(),
