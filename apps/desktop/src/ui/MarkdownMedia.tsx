@@ -13,7 +13,7 @@
 //   appears, themed from the tokens, rendered strictly (no scripts, no
 //   links out), capped in size, and shown as code when it does not parse.
 
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { RpcError } from "../acp/jsonrpc";
 import { openPath, revealPath, threadImage } from "../lib/native";
 import { isAbsolute, join } from "../lib/paths";
@@ -328,6 +328,16 @@ function renderDiagram(code: string, key: string): Promise<string> {
 }
 
 /** A ```mermaid block: the diagram, or its code (with why) when it is too big or does not parse. */
+/** The smallest a diagram is drawn, against its own width, before its box scrolls instead. */
+const MERMAID_MIN_SCALE = 0.6;
+
+/** A rendered diagram's own width, from its viewBox. */
+export function svgWidth(svg: string): number | undefined {
+  const match = /<svg\b[^>]*\bviewBox="\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)/.exec(svg);
+  const width = match ? Number(match[1]) : Number.NaN;
+  return Number.isFinite(width) && width > 0 ? width : undefined;
+}
+
 export function MermaidBlock({ code, fallback }: { code: string; fallback: React.ReactNode }) {
   const themeKey = useApp((s) => `${s.theme}/${s.themeActive}/${s.themes ? 1 : 0}`);
   const [state, setState] = useState<{ svg?: string; error?: string; code?: string }>({});
@@ -364,6 +374,11 @@ export function MermaidBlock({ code, fallback }: { code: string; fallback: React
     );
   }
   const svg = state.svg;
+  // A wide diagram (a long left-to-right flow) used to shrink to the column until its
+  // labels were unreadable. It shrinks to at most 60% of its own width, then scrolls
+  // sideways in its box; a click still opens it whole in the lightbox.
+  const natural = svgWidth(svg);
+  const floor = natural ? `${Math.round(natural * MERMAID_MIN_SCALE)}px` : undefined;
   return (
     <button
       type="button"
@@ -374,6 +389,7 @@ export function MermaidBlock({ code, fallback }: { code: string; fallback: React
       className={cx(
         "rc-mermaid block max-h-[520px] w-full cursor-zoom-in overflow-auto rounded-lg bg-code-bg p-3 text-left",
       )}
+      style={floor ? ({ "--mm-floor": floor } as CSSProperties) : undefined}
       // Mermaid's own output, rendered with securityLevel "strict" (no scripts, no click handlers).
       // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by mermaid in strict mode
       dangerouslySetInnerHTML={{ __html: svg }}

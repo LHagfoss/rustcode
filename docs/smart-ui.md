@@ -64,7 +64,10 @@ with another version all show as text. A malformed, oversized, empty or
 unfinished block shows its source with the reason, except that an unfinished
 block whose reply is still streaming in front of the reader is drawn as it
 arrives (see Streaming below). Copy and Show Source are
-on every card.
+on every card. A finished view also has **Enlarge**, which opens a second page of
+the same block in a dialog up to 1,100 px wide (Esc or a click outside closes it),
+so a dashboard written for the reply's column gets room. That page keeps its own
+height and stop state, so the view in the reply is left as it was.
 
 ### Shorthand
 
@@ -90,10 +93,20 @@ MCP is already in the CLI: `rc mcp add|list`.
 ```
 
 A `::` line opens a block (`title`, `h`, `p`, `bars`, `stats`, `steps`, `list`,
-`cards`, `table`, `callout`, `sources`); its `- ` items split at `|` outside
+`cards`, `table`, `callout`, `sources`, `actions`); its `- ` items split at `|` outside
 backticks; a blank line, the next `::` line or a line that starts with `<`
 ends it. An item may end `{ok}`, `{warn}`, `{bad}` or `{info}`, and a name after
-a block is an `h3` over it. Bars scale to the largest value (values that are
+a block is an `h3` over it. Agents also put the tint after a title
+(`Tables {ok} | …`), which used to show as text, so it is taken from the end of
+any cell too. A tinted card or titled item leads with a dot in its tint.
+
+A card's third cell is a badge at its top right (`- Tables | Copy as CSV. | Small`),
+and a list item's third cell a value at the right of its title; the detail under
+a list title is smaller and muted. Cards sit in `.rc-grid.rc-cards`, at least
+200 px wide: at the grid's 140 px, four one-sentence options were four tall
+towers of text. `:: actions` writes `- Label | message` as `.rc-chip` buttons
+that send the message (the label when there is none). Card and item text is
+taught as one short line: the tint, badge, numbers and bars carry the rest. Bars scale to the largest value (values that are
 all percentages are widths as written); a table sorts past eight rows. In text,
 `` `code` `` and `**bold**` work and HTML is kept as written. Anything else,
 and everything in a `<script>` or `<style>`, passes through, so a view mixes

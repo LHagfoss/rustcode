@@ -2254,6 +2254,8 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         ":: steps",
         ":: table",
         ":: cards",
+        ":: actions",
+        "one short line",
         ":: sources",
         "{ok|warn|bad|info}",
         ".rc-findings",
@@ -2318,9 +2320,11 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // skill, not here), so the cap was 2,300. Answering visually by default
     // (data, results and 4+ items in a view, no Markdown tables, brief text)
     // adds about 30, so it is 2,350. The `::` shorthand fits in the same cap:
-    // the kit markup it writes no longer has to be spelled out here.
+    // the kit markup it writes no longer has to be spelled out here. Badges,
+    // values, `:: actions` and the one-short-line rule for cards add about
+    // 150: views came out as walls of card text, so it is 2,500.
     assert!(
-        SMART_UI_HARNESS_HINT.len() < 2_350,
+        SMART_UI_HARNESS_HINT.len() < 2_500,
         "{}",
         SMART_UI_HARNESS_HINT.len()
     );

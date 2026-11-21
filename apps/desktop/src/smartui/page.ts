@@ -165,12 +165,19 @@ button:active:not(:disabled) { transform: scale(0.97); opacity: 0.85; }
 button.primary, button[data-primary] { background: var(--rc-accent); color: var(--rc-accent-text); border-color: transparent; }
 button:disabled { opacity: 0.45; cursor: default; }
 code, kbd, pre { font-family: var(--rc-mono); font-size: var(--rc-text-size-sm); }
+/* Inline code reads as a token, not a run of mono text: a faint pill, and it breaks only where
+   a path or name does (after / . _ -), not mid-word. */
+:not(pre) > code { padding: 0 4px; border-radius: var(--rc-radius-xs, 4px); overflow-wrap: break-word;
+  background: color-mix(in srgb, var(--rc-text) 8%, transparent); }
 pre { background: var(--rc-surface); padding: 8px 10px; border-radius: var(--rc-radius); overflow: auto; }
 hr { border: 0; border-top: 1px solid var(--rc-separator); }
 canvas { max-width: 100%; }
 .rc-row { display: flex; flex-wrap: wrap; align-items: center; }
 .rc-col { display: flex; flex-direction: column; }
 .rc-grid, .rc-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+/* Cards hold a sentence each: a column narrower than this wrapped a short body to a tall tile
+   of three words a line, so four options read as four towers of text. */
+.rc-cards { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
 .rc-gap-1 { gap: 4px; } .rc-gap-2 { gap: 8px; } .rc-gap-3 { gap: 12px; } .rc-gap-4 { gap: 16px; }
 .rc-mono { font-family: var(--rc-mono); }
 .rc-num { font-variant-numeric: tabular-nums; }
@@ -182,7 +189,11 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
   padding: 12px 14px; background: var(--rc-surface); border-radius: var(--rc-radius); }
 .rc-card > * { flex: 0 0 100%; min-width: 0; margin: 0; }
 .rc-card > :is(b, strong, .rc-badge, .rc-chip) { flex: 0 1 auto; }
-.rc-card > :is(b, strong):first-child { font-weight: 600; }
+.rc-card > :is(b, strong):first-child { font-weight: 600; flex: 1 1 0; }
+/* A tinted card or titled item leads with a dot in its tint, so status reads before the words. */
+:is(.rc-card, .rc-item):is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > :is(b, strong):first-child::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 7px 1px 0; border-radius: 50%;
+  background: var(--rc-tint); vertical-align: middle; }
 .rc-card > .rc-badge { margin-left: auto; }
 .rc-card > :is(p, .rc-lead) { color: var(--rc-muted); font-size: var(--rc-text-size-sm); }
 .rc-card > .rc-stat-value { font-size: var(--rc-text-size-value); font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
@@ -314,6 +325,13 @@ tr:is([data-rc-send], [data-rc-copy]):hover > td { background: color-mix(in srgb
 .rc-item > .rc-badge, .rc-item > .rc-chip { flex: none; }
 .rc-item > :last-child:not(:first-child) { font-variant-numeric: tabular-nums; }
 .rc-item > div, .rc-item > p { flex: 0 0 100%; margin: 0; }
+/* A titled item's detail is the secondary line: smaller and muted, so the titles carry the list. */
+.rc-item > p { color: var(--rc-muted); font-size: var(--rc-text-size-sm); }
+.rc-item > :is(b, strong):first-child { font-weight: 500; }
+.rc-item > .rc-item-value { margin-left: auto; color: var(--rc-tint, var(--rc-muted)); font-size: var(--rc-text-size-sm);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rc-item.rc-prose:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) { padding-left: 10px;
+  box-shadow: inset 2px 0 color-mix(in srgb, var(--rc-tint) 70%, transparent); }
 /* An item written as a sentence (bold lead, words, code) reads as one paragraph: as flex items,
    each bold, code and run of text became its own box, spread across the row. The runtime marks
    any item with bare text in it. A titled point (a <b>, then a <p>) puts its body under the title. */

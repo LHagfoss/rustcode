@@ -2832,7 +2832,8 @@ Pick: a trend → line chart; parts → stacked bar, donut; ranking → bars; op
 Shorthand (the app writes the kit): `::` opens a block, `- ` items split at |, a blank line ends it; items may end {ok|warn|bad|info}; `code`, **bold**, HTML work.
 :: title T · :: h Heading · :: p text · :: callout info|ok|warn|bad / text · :: table / a | b rows, first is heading
 :: bars Heading / - label | 75 | 75 s | tip · :: stats / - 128 | Runs | +12 · :: steps / - [x] done, [>] active, [!] failed, [ ] to do
-:: list / - Title | detail · :: cards / - Title | body · :: sources / - Title | url
+:: list / - Title | detail | value · :: cards / - Title | body | badge · :: actions / - Label | message to send · :: sources / - Title | url
+Text in a card or list item is one short line: let tints, badges, numbers and bars carry it.
 HTML otherwise: set no colours, as little CSS as you can. Numbers → a dashboard, .rc-dash > .rc-head (title, caption); .rc-hero (.rc-label, .rc-hero-value, .rc-hero-delta, p.rc-lead with <b>); hr; .rc-stats.rc-flat (.rc-stat-note: subline); chart. \
 .rc-badge .rc-progress > span; .rc-findings > .rc-finding[data-severity]; .rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span; .rc-spark[data-values]; .rc-chart .rc-donut-total; .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-num .rc-scroll. \
 No script: data-rc-send=\"text\" sends a follow-up (on a <form>, with its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]; table.rc-table[data-rc-sort] sorts. \

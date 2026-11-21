@@ -42,7 +42,22 @@ describe("shorthand", () => {
       '<ul class="rc-list"><li class="rc-item"><b>Two tools</b><p>Extend the old one.</p></li><li class="rc-item rc-prose">Just prose</li></ul>',
     );
     expect(expandShorthand(":: cards\n- Fast | Small, one PR. {info}")).toBe(
-      '<div class="rc-grid"><div class="rc-card rc-info"><b>Fast</b><p>Small, one PR.</p></div></div>',
+      '<div class="rc-grid rc-cards"><div class="rc-card rc-info"><b>Fast</b><p>Small, one PR.</p></div></div>',
+    );
+  });
+
+  test("a tint may end the title cell, and a third cell is a badge or a value", () => {
+    expect(expandShorthand(":: cards\n- Tables {ok} | Copy as CSV. | Small")).toBe(
+      '<div class="rc-grid rc-cards"><div class="rc-card rc-ok"><b>Tables</b><span class="rc-badge">Small</span><p>Copy as CSV.</p></div></div>',
+    );
+    expect(expandShorthand(":: list\n- Lazy start {info} | `MAX_LIVE` 6 | done")).toBe(
+      '<ul class="rc-list"><li class="rc-item rc-info"><b>Lazy start</b><span class="rc-item-value">done</span><p><code>MAX_LIVE</code> 6</p></li></ul>',
+    );
+  });
+
+  test("actions are chips that send their message", () => {
+    expect(expandShorthand(":: actions\n- Do 1 and 2 | Do **1** and 2\n- Plan 4")).toBe(
+      '<div class="rc-row rc-gap-2 rc-actions"><button class="rc-chip" data-rc-send="Do 1 and 2">Do 1 and 2</button><button class="rc-chip" data-rc-send="Plan 4">Plan 4</button></div>',
     );
   });
 

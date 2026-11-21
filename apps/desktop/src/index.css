@@ -1598,6 +1598,8 @@
 /* Mermaid diagrams in replies (ui/MarkdownMedia.tsx): fit the column, flat like the rest of the chat. */
 .rc-mermaid svg {
   max-width: 100%;
+  /* min-width wins over max-width: a wide diagram keeps a readable size and its box scrolls. */
+  min-width: var(--mm-floor, 0px);
   height: auto;
   margin: 0 auto;
   display: block;

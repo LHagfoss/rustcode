@@ -21,6 +21,7 @@ import { highlight, peekHighlight } from "../lib/highlight";
 import { githubRefOf } from "../lib/links";
 import { markdownBlocks } from "../lib/markdownBlocks";
 import { remarkMathAsCode, remarkMoneySafeMath } from "../lib/markdownMath";
+import { numericColumns, readTable, toCsv, toMarkdown } from "../lib/markdownTable";
 import { openExternal, openInEditor } from "../lib/native";
 import { advance, newRevealState, type RevealState, rehypeReveal } from "../lib/reveal";
 import { hasShell } from "../lib/shell";
@@ -125,6 +126,62 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
           {code}
         </pre>
       )}
+    </div>
+  );
+}
+
+/**
+ * A reply's table: columns of figures align right in tabular digits, and on hover
+ * two small buttons copy it back as Markdown or as CSV for a spreadsheet. The
+ * columns are read from the rendered cells after each render, so a table still
+ * streaming in re-aligns as rows arrive.
+ */
+function MarkdownTable({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLTableElement>(null);
+  const [copied, setCopied] = useState<"md" | "csv" | null>(null);
+  useLayoutEffect(() => {
+    const table = ref.current;
+    if (!table) return;
+    const numeric = numericColumns(readTable(table));
+    for (const row of Array.from(table.rows))
+      Array.from(row.cells).forEach((cell, i) => {
+        cell.classList.toggle("text-right", numeric[i] === true);
+        cell.classList.toggle("tabular-nums", numeric[i] === true);
+      });
+  });
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(null), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const copy = (kind: "md" | "csv") => {
+    const table = ref.current;
+    if (!table) return;
+    const plain = readTable(table);
+    void copyText(kind === "csv" ? toCsv(plain) : toMarkdown(plain)).then(() => setCopied(kind));
+  };
+  const button = (kind: "md" | "csv", label: string) => (
+    <button
+      type="button"
+      aria-label={copied === kind ? "Copied" : `Copy as ${label}`}
+      onClick={() => copy(kind)}
+      className="inline-flex h-[22px] items-center gap-1 rounded-md px-1.5 text-caption text-fg-muted hover:bg-fill hover:text-fg"
+    >
+      {copied === kind ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+      {label}
+    </button>
+  );
+  return (
+    <div className="group/table relative">
+      <div className="overflow-x-auto rounded-lg bg-fill-subtle py-1.5">
+        <table ref={ref} className="w-full border-collapse text-left">
+          {children}
+        </table>
+      </div>
+      <div className="absolute top-1 right-1 flex gap-0.5 rounded-md bg-surface opacity-0 shadow-sm transition-opacity duration-100 group-hover/table:opacity-100 focus-within:opacity-100">
+        {button("md", "Markdown")}
+        {button("csv", "CSV")}
+      </div>
     </div>
   );
 }
@@ -324,11 +381,7 @@ const components: Components = {
   ),
   hr: () => <hr className="my-1 border-border" />,
   img: ({ src, alt }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />,
-  table: ({ children }) => (
-    <div className="overflow-x-auto rounded-lg bg-fill-subtle py-1.5">
-      <table className="w-full border-collapse text-left">{children}</table>
-    </div>
-  ),
+  table: ({ children }) => <MarkdownTable>{children}</MarkdownTable>,
   // Rows inside the table's card are parted by a hairline, the way a card's rows are.
   tr: ({ children }) => <tr className="border-b border-border/60 last:border-0">{children}</tr>,
   th: ({ children }) => <th className="border-b border-border px-2 py-1.5 font-semibold">{children}</th>,
