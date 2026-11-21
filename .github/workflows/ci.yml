@@ -50,6 +50,7 @@ jobs:
         outputs:
             code: ${{ steps.filter.outputs.code }}
             packages: ${{ steps.filter.outputs.packages }}
+            release: ${{ steps.filter.outputs.release }}
             scripts: ${{ steps.filter.outputs.scripts }}
             seatbelt: ${{ steps.filter.outputs.seatbelt }}
         steps:
@@ -135,6 +136,7 @@ jobs:
                   changed_files="$(< "$RUNNER_TEMP/changed-files")"
                   if [[ "$RELEASE_METADATA" == "true" ]] && bash scripts/ci-version-only.sh "$BASE_SHA"; then
                       packages=""
+                      echo "release=true" >> "$GITHUB_OUTPUT"
                       echo "Release metadata only; reusing checks from the code PR"
                   else
                       packages="$(bash scripts/ci-affected-packages.sh <<< "$changed_files")"
@@ -173,6 +175,15 @@ jobs:
         steps:
             - name: Check out repository
               uses: actions/checkout@v7
+
+            # A release PR (version literals, lockfiles and the changelog only,
+            # scripts/ci-version-only.sh) reuses the suite that ran on its
+            # code PRs and on main. It runs this instead, in seconds, so the
+            # job still reports: the full suite took ~6 of the release PR's
+            # 6.6 min.
+            - name: Check release version consistency
+              if: needs.changes.outputs.release == 'true'
+              run: bash scripts/ci-version-consistency.sh
 
             - name: Install Rust toolchain
               if: env.AFFECTED_PACKAGES != ''

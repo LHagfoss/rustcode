@@ -7,7 +7,9 @@ on:
     workflow_call:
         inputs:
             matrix:
-                description: JSON list of {os, target, name}
+                # `bin` (optional) builds one binary, `rc` or `rustcode`, and
+                # names the artifact `<name>-<bin>`; without it a job builds both.
+                description: JSON list of {os, target, name, bin?}
                 required: true
                 type: string
 
@@ -16,7 +18,14 @@ permissions:
 
 env:
     CARGO_TERM_COLOR: always
-    SCCACHE_GHA_ENABLED: "true"
+    # Only main writes the shared caches. GitHub scopes caches by ref, so
+    # nothing a tag build saves can be read by a later build, and the v1.46.1
+    # entries (1.9 GB) took the repository past its 10 GB cache budget,
+    # where GitHub evicts the oldest: main's warm entries. A tag build also
+    # compiles nothing sccache could hit: rust-cache restores the
+    # dependencies, and the version bump changes every workspace crate
+    # (0 hits in the v1.46.0 and v1.46.1 builds).
+    SCCACHE_GHA_ENABLED: ${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
     RUSTC_WRAPPER: "sccache"
 
 jobs:
@@ -38,7 +47,10 @@ jobs:
             - name: Rust Cache
               uses: Swatinem/rust-cache@v2
               with:
-                  shared-key: ${{ matrix.target }}
+                  # A key per binary: `rc` alone compiles a smaller dependency
+                  # set, with different features, than both together.
+                  shared-key: ${{ matrix.target }}${{ matrix.bin && format('-{0}', matrix.bin) || '' }}
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
@@ -58,9 +70,17 @@ jobs:
                   # does not survive the wrapper ("The filename or extension
                   # is too long", os error 206). An empty wrapper turns it off.
                   RUSTC_WRAPPER: ${{ runner.os != 'Windows' && 'sccache' || '' }}
-              # Build both shipping binaries: `rc` (orchestrator CLI and desktop
-              # sidecar, zero TUI deps) and `rustcode` (standalone TUI harness).
-              run: cargo build --locked --release --target ${{ matrix.target }} -p rustcode-cli --bin rc -p rustcode-harness --bin rustcode
+                  BIN: ${{ matrix.bin }}
+              # The shipping binaries: `rc` (orchestrator CLI and desktop
+              # sidecar, zero TUI deps) and `rustcode` (standalone TUI harness),
+              # both unless the matrix entry names one.
+              run: |
+                  case "$BIN" in
+                      rc) packages=(-p rustcode-cli --bin rc) ;;
+                      rustcode) packages=(-p rustcode-harness --bin rustcode) ;;
+                      *) packages=(-p rustcode-cli --bin rc -p rustcode-harness --bin rustcode) ;;
+                  esac
+                  cargo build --locked --release --target ${{ matrix.target }} "${packages[@]}"
 
             - name: Show compiler cache stats
               if: always()
@@ -104,11 +124,14 @@ jobs:
                   MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
                   MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
                   MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+                  BIN: ${{ matrix.bin }}
               run: |
-                  scripts/macos-release-signing.sh sign target/${{ matrix.target }}/release/rc
-                  scripts/macos-release-signing.sh sign target/${{ matrix.target }}/release/rustcode
+                  bins=()
+                  if [ "$BIN" != rustcode ]; then bins+=(target/${{ matrix.target }}/release/rc); fi
+                  if [ "$BIN" != rc ]; then bins+=(target/${{ matrix.target }}/release/rustcode); fi
+                  for bin in "${bins[@]}"; do scripts/macos-release-signing.sh sign "$bin"; done
                   mkdir -p "$RUNNER_TEMP/notarize-bins"
-                  cp target/${{ matrix.target }}/release/rc target/${{ matrix.target }}/release/rustcode "$RUNNER_TEMP/notarize-bins/"
+                  cp "${bins[@]}" "$RUNNER_TEMP/notarize-bins/"
                   ditto -c -k --keepParent "$RUNNER_TEMP/notarize-bins" "$RUNNER_TEMP/rustcode-cli-notarize.zip"
                   scripts/macos-release-signing.sh notarize "$RUNNER_TEMP/rustcode-cli-notarize.zip"
 
@@ -120,21 +143,27 @@ jobs:
             - name: Package Linux / macOS binaries
               if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os != 'Windows'
               shell: bash
+              env:
+                  BIN: ${{ matrix.bin }}
               run: |
-                  rc_name="${{ matrix.name }}"
-                  rc_name="rc-${rc_name#rustcode-}"
-                  cp target/${{ matrix.target }}/release/rc "$rc_name"
-                  chmod +x "$rc_name"
-                  # rc 1.45.0 and older take the first `rustcode*` entry of
-                  # its own archive, so `rc --update` failed with "could not
-                  # find rustcode executable inside archive". This copy keeps
-                  # them updating; newer updaters only take `rc`/`rc-*`. Drop
-                  # it once no machine runs 1.45.0 or older.
-                  cp "$rc_name" rustcode_rc
-                  tar czf "${rc_name}.tar.gz" -C . "$rc_name" rustcode_rc
-                  cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
-                  chmod +x ${{ matrix.name }}
-                  tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
+                  if [ "$BIN" != rustcode ]; then
+                      rc_name="${{ matrix.name }}"
+                      rc_name="rc-${rc_name#rustcode-}"
+                      cp target/${{ matrix.target }}/release/rc "$rc_name"
+                      chmod +x "$rc_name"
+                      # rc 1.45.0 and older take the first `rustcode*` entry of
+                      # its own archive, so `rc --update` failed with "could not
+                      # find rustcode executable inside archive". This copy keeps
+                      # them updating; newer updaters only take `rc`/`rc-*`. Drop
+                      # it once no machine runs 1.45.0 or older.
+                      cp "$rc_name" rustcode_rc
+                      tar czf "${rc_name}.tar.gz" -C . "$rc_name" rustcode_rc
+                  fi
+                  if [ "$BIN" != rc ]; then
+                      cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
+                      chmod +x ${{ matrix.name }}
+                      tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
+                  fi
 
             - name: Package Windows binaries
               if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
@@ -152,9 +181,10 @@ jobs:
               if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
               uses: actions/upload-artifact@v7
               with:
-                  name: ${{ matrix.name }}
+                  name: ${{ matrix.name }}${{ matrix.bin && format('-{0}', matrix.bin) || '' }}
+                  if-no-files-found: error
                   # Each runner produces only one archive format (tar.gz or zip),
-                  # holding both `rc` (orchestrator CLI) and `rustcode` (harness).
+                  # for `rc` (orchestrator CLI), `rustcode` (harness) or both.
                   path: |
                       ${{ matrix.name }}.tar.gz
                       ${{ matrix.name }}.zip

@@ -12,7 +12,9 @@ set -euo pipefail
 
 is_release_metadata_path() {
     case "$1" in
-        CHANGELOG.md|Cargo.toml|Cargo.lock|rustcode/*/Cargo.toml|harness/Cargo.toml) ;;
+        # The desktop shell's lockfile pins rustcode-client by path, so a
+        # release bumps it too.
+        CHANGELOG.md|Cargo.toml|Cargo.lock|rustcode/*/Cargo.toml|harness/Cargo.toml|apps/desktop/src-tauri/Cargo.lock) ;;
         *) return 1 ;;
     esac
 }
@@ -39,7 +41,7 @@ while IFS= read -r path; do
 done <<< "$paths"
 
 # A manifest/lockfile edit beyond the literal version bump must run checks.
-if git diff --unified=0 "$base...$head" -- Cargo.toml Cargo.lock harness/Cargo.toml ':(glob)rustcode/**/Cargo.toml' |
+if git diff --unified=0 "$base...$head" -- Cargo.toml Cargo.lock harness/Cargo.toml ':(glob)rustcode/**/Cargo.toml' apps/desktop/src-tauri/Cargo.lock |
     grep -E '^[+-]' |
     grep -Ev '^(\+\+\+ |--- )|^[+-]version = "[^"]+"$'; then
     exit 1
