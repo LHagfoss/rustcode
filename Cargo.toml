@@ -64,7 +64,7 @@ fs2 = "0.4.3"
 globset = "0.4"
 ignore = "0.4"
 jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "aws_lc_rs"] }
-keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+keyring = { version = "4.2", default-features = false, features = ["v1"] }
 qrcode = { version = "0.14.1", default-features = false }
 rand = "0.10.2"
 regex = "1"
