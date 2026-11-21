@@ -4,9 +4,8 @@
 // it was pasted; only a message sent before that keeps a chip in the transcript.
 
 import { pasteLabel } from "../lib/paste";
-import { terminalContextLabel } from "../state/terminalTabs";
 import { CardPopover } from "./cardPopover";
-import { ClipboardPaste, SquareTerminal, X } from "./icons";
+import { ClipboardPaste, X } from "./icons";
 import { cx } from "./primitives";
 
 export function PasteChip({
@@ -19,8 +18,7 @@ export function PasteChip({
   onRemove?: () => void;
   className?: string;
 }) {
-  // Output a terminal tab sent (⌘L) says where it came from; anything else is a paste.
-  const label = terminalContextLabel(text) ?? pasteLabel(text);
+  const label = pasteLabel(text);
   return (
     <span
       className={cx(
@@ -28,15 +26,11 @@ export function PasteChip({
         className,
       )}
     >
-      {label.startsWith("Terminal") ? (
-        <SquareTerminal size={12} className="shrink-0 text-fg-muted" />
-      ) : (
-        <ClipboardPaste size={12} className="shrink-0 text-fg-muted" />
-      )}
+      <ClipboardPaste size={12} className="shrink-0 text-fg-muted" />
       <CardPopover
         role="dialog"
         label={label}
-        tooltip={label.startsWith("Terminal") ? "Show the terminal output" : "Show the pasted text"}
+        tooltip="Show the pasted text"
         // A wide-enough panel for a log's lines, and never wider than the window.
         className="w-[min(560px,calc(100vw-32px))] p-0"
         trigger={

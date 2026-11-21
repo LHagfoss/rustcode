@@ -35,7 +35,6 @@ import {
   retryPendingSetup,
   runPrompt,
   seeFailure,
-  setTerminalOpen,
   setThreadStatus,
   setView,
   statusOf,
@@ -71,8 +70,6 @@ import {
   PanelRight,
   SlidersHorizontal,
   Sparkles,
-  SquareTerminal,
-  Zap,
 } from "./icons";
 import { JobRunBar, useJobRun } from "./JobRunBar";
 import { LinkedThreads } from "./Links";
@@ -82,7 +79,6 @@ import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
 import { boundTips } from "./newThreadTips";
-import { ProjectActionsButton } from "./ProjectActions";
 import { ProjectMark } from "./ProjectMark";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import {
@@ -244,21 +240,6 @@ function PlanHeaderButton({ thread }: { thread?: ThreadState }) {
   return thread ? <PlanButton thread={thread} /> : null;
 }
 
-function TerminalHeaderButton() {
-  const open = useApp((s) => s.terminalOpen);
-  const key = useShortcutHint("toggle-terminal");
-  return (
-    <ClusterButton
-      label="Terminal"
-      tooltip={key ? `Terminal (${key})` : "Terminal"}
-      on={open}
-      onClick={() => setTerminalOpen(!open)}
-    >
-      <SquareTerminal size={14} />
-    </ClusterButton>
-  );
-}
-
 // The side panel's toggle: it opens the panel on this thread's last tab (Details, Changes, Pull
 // requests) and closes whichever is showing. It carries `data-panel-toggle`: a panel that closes
 // with nothing else focused hands the keyboard back to it (ui/RightPanel.tsx).
@@ -282,21 +263,15 @@ export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
   status: { label: "Status", icon: SlidersHorizontal, Button: StatusHeaderButton },
   plan: { label: "Plan", icon: ListChecks, Button: PlanHeaderButton },
   git: { label: "Git", icon: GitBranch, Button: GitHeaderButton },
-  actions: { label: "Project actions", icon: Zap, Button: ProjectActionsButton },
-  terminal: { label: "Terminal", icon: SquareTerminal, Button: TerminalHeaderButton },
   details: { label: "Side panel", icon: PanelRight, Button: DetailsHeaderButton },
 };
 
 /**
- * The header's controls that read this computer: git, the working tree, and a shell in the thread's
+ * The header's controls that read this computer: git and the working tree in the thread's
  * folder. A thread on a paired machine keeps the buttons, disabled, with the machine's name where
  * the action would be (docs/desktop.md › Several machines).
  */
-const LOCAL_ONLY_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>([
-  "git",
-  "actions",
-  "terminal",
-]);
+const LOCAL_ONLY_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["git"]);
 
 function Header({
   thread,

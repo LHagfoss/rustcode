@@ -234,8 +234,6 @@ export interface AppState {
   smartUi: boolean;
   /** The engine learned a different Smart UI setting at initialize: a restart applies the new one. */
   smartUiPending: boolean;
-  /** The workspace terminal under the chat (⌘J). */
-  terminalOpen: boolean;
   /** The panel on the right of the chat. */
   panel: "details" | "changes" | "pulls" | "peek" | null;
   /** The thread shown beside this one in the panel's Thread tab. */

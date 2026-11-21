@@ -11,7 +11,6 @@ export const NEW_THREAD_TIPS = [
   { text: "Toggle the sidebar", command: "toggle-sidebar" },
   { text: "Toggle the right panel", command: "toggle-panel" },
   { text: "Find in a thread", command: "find-in-thread" },
-  { text: "Toggle the terminal", command: "toggle-terminal" },
   { text: "Steer a running turn", command: "composer-steer" },
   { text: "Insert a new line", command: "composer-newline" },
 ] as const;

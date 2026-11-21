@@ -10,20 +10,20 @@
 /** The header's buttons, in the order a fresh install shows them. */
 //
 // Changes and Pull requests are not header buttons: they are tabs of the side
-// panel, beside Details, and the panel's toggle opens them. An id a saved
-// layout still names from before is dropped by `sanitizeHeaderButtons`.
-export const HEADER_BUTTON_IDS = ["status", "plan", "git", "actions", "terminal", "details"] as const;
+// panel, beside Details, and the panel's toggle opens them. The terminal and
+// project actions were removed. An id a saved layout still names from before
+// is dropped by `sanitizeHeaderButtons`.
+export const HEADER_BUTTON_IDS = ["status", "plan", "git", "details"] as const;
 
 export type HeaderButtonId = (typeof HEADER_BUTTON_IDS)[number];
 
 /**
- * What a fresh install and a reset start from: status, plan, terminal and the
- * panel. The buttons for driving git by hand stay one click away in Settings ›
- * Chat › Thread header buttons: Git (commit, push, open a pull request: agents
- * do that) and Project actions. A layout the user saved is never touched by
- * this: `sanitizeHeaderButtons` keeps what was stored.
+ * What a fresh install and a reset start from: status, plan and the panel. The
+ * Git button (commit, push, open a pull request by hand: agents do that) stays
+ * one click away in Settings › Chat › Thread header buttons. A layout the user
+ * saved is never touched by this: `sanitizeHeaderButtons` keeps what was stored.
  */
-export const HIDDEN_BY_DEFAULT: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["git", "actions"]);
+export const HIDDEN_BY_DEFAULT: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["git"]);
 
 export const DEFAULT_HEADER_BUTTONS: readonly HeaderButtonId[] = HEADER_BUTTON_IDS.filter(
   (id) => !HIDDEN_BY_DEFAULT.has(id),

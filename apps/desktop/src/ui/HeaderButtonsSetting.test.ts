@@ -3,13 +3,13 @@ import { reorderHeaderButtons } from "./HeaderButtonsSetting";
 
 describe("header button drops", () => {
   test("reorders without mutating the saved order", () => {
-    const shown = ["status", "plan", "terminal"] as const;
+    const shown = ["status", "plan", "details"] as const;
     expect(reorderHeaderButtons(shown, "status", { list: "shown", index: 2 })).toEqual([
       "plan",
-      "terminal",
+      "details",
       "status",
     ]);
-    expect(shown).toEqual(["status", "plan", "terminal"]);
+    expect(shown).toEqual(["status", "plan", "details"]);
   });
 
   test("moves between groups and clamps the destination", () => {

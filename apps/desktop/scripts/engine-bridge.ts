@@ -8,7 +8,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ServerWebSocket, Subprocess } from "bun";
-import { closePtys, nativeCommands } from "./bridge-native";
+import { nativeCommands } from "./bridge-native";
 
 const PORT = Number(process.env.BRIDGE_PORT ?? 1421);
 const ALLOWED_ORIGINS = new Set(
@@ -112,7 +112,7 @@ if (import.meta.main) {
             send(ws, { type: "reply", id, ok: false, error: `Unknown command ${command}` });
             return;
           }
-          run({ ...args, __socket: ws }).then(
+          run(args).then(
             (value) => send(ws, { type: "reply", id, ok: true, value: value ?? null }),
             (error) => send(ws, { type: "reply", id, ok: false, error: String(error?.message ?? error) }),
           );
@@ -128,7 +128,6 @@ if (import.meta.main) {
         ws.data.engine?.stdin.flush();
       },
       close(ws) {
-        closePtys();
         ws.data.closed = true;
         stop(ws);
       },

@@ -17,7 +17,6 @@ import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
 import { useLoopBadges } from "./ui/LoopBadge";
 import { OutsideApprovals } from "./ui/OutsideApprovals";
-import { ProjectActionsEditor } from "./ui/ProjectActions";
 import { Pill } from "./ui/primitives";
 // Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
 import { Settings } from "./ui/Settings";
@@ -28,7 +27,6 @@ import { useAwayWatch } from "./ui/WhileAway";
 import { WindowControls } from "./ui/WindowControls";
 
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
-const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 const Board = lazy(() => import("./ui/Board").then((m) => ({ default: m.Board })));
 const Loops = lazy(() => import("./ui/Loops").then((m) => ({ default: m.Loops })));
 const Review = lazy(() => import("./ui/Review").then((m) => ({ default: m.Review })));
@@ -217,10 +215,6 @@ export function App() {
                   {view.kind === "compare" && <Compare fanOut={view.fanOut} />}
                 </Suspense>
               )}
-              <Suspense fallback={null}>
-                <TerminalPanel />
-              </Suspense>
-              <ProjectActionsEditor />
             </div>
           </div>
         </div>

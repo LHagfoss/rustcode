@@ -184,7 +184,6 @@ export class WebSocketTransport implements Transport {
       socket.onmessage = (message) => {
         let event:
           | TransportEvent
-          | PtyEvent
           | { type: "reply"; id: number; ok: boolean; value?: unknown; error?: string };
         try {
           event = JSON.parse(String(message.data));
@@ -197,10 +196,6 @@ export class WebSocketTransport implements Transport {
           if (call) clearTimeout(call.timer);
           if (event.ok) call?.resolve(event.value);
           else call?.reject(new Error(event.error ?? "The bridge could not run it."));
-          return;
-        }
-        if (event.type === "pty") {
-          for (const listener of ptyListeners) listener(event);
           return;
         }
         onEvent(event);
@@ -325,14 +320,6 @@ export function signOutOfHub() {
   form.action = "/logout";
   document.body.appendChild(form);
   form.submit();
-}
-
-/** Terminal output and exits the dev bridge streams for `pty_*` sessions. */
-export type PtyEvent = { type: "pty"; id: number; data?: string; exit?: number | null };
-const ptyListeners = new Set<(event: PtyEvent) => void>();
-export function onBridgePty(listener: (event: PtyEvent) => void): () => void {
-  ptyListeners.add(listener);
-  return () => ptyListeners.delete(listener);
 }
 
 export function isTauri(): boolean {

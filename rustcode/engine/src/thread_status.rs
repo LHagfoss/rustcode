@@ -352,8 +352,6 @@ fn set_status(session_id: &str, status: &str, own: bool) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
         }
         crate::orchestration::local_threads::clear_waiting_links(session_id);
-        // The project's settle action (clearing build output) runs in its worktree.
-        crate::project_hooks::on_settle(session_id);
     }
     notify(session_id, own);
     Ok(())

@@ -4,18 +4,18 @@ import { restoreChoice, SETTINGS_AREAS, stepArea, WINDOW_AREAS } from "./focusAr
 const all = new Set<string>(WINDOW_AREAS);
 
 describe("the F6 area cycle", () => {
-  test("goes threads, conversation, message input, panel, terminal and wraps", () => {
+  test("goes threads, conversation, message input, panel and wraps", () => {
     const seen: string[] = [];
     let at: string | null = "threads";
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       at = stepArea(WINDOW_AREAS, all, at, 1);
       seen.push(at ?? "none");
     }
-    expect(seen).toEqual(["main", "composer", "panel", "terminal", "threads"]);
+    expect(seen).toEqual(["main", "composer", "panel", "threads"]);
   });
 
   test("Shift+F6 goes back and wraps", () => {
-    expect(stepArea(WINDOW_AREAS, all, "threads", -1)).toBe("terminal");
+    expect(stepArea(WINDOW_AREAS, all, "threads", -1)).toBe("panel");
     expect(stepArea(WINDOW_AREAS, all, "composer", -1)).toBe("main");
   });
 
@@ -23,9 +23,9 @@ describe("the F6 area cycle", () => {
     const shown = new Set(["main", "composer"]);
     expect(stepArea(WINDOW_AREAS, shown, "composer", 1)).toBe("main");
     expect(stepArea(WINDOW_AREAS, shown, "main", -1)).toBe("composer");
-    const noPanel = new Set(["threads", "main", "composer", "terminal"]);
-    expect(stepArea(WINDOW_AREAS, noPanel, "composer", 1)).toBe("terminal");
-    expect(stepArea(WINDOW_AREAS, noPanel, "terminal", -1)).toBe("composer");
+    const noPanel = new Set(["threads", "main", "composer"]);
+    expect(stepArea(WINDOW_AREAS, noPanel, "composer", 1)).toBe("threads");
+    expect(stepArea(WINDOW_AREAS, noPanel, "threads", -1)).toBe("composer");
   });
 
   test("from outside every area starts at the first shown one, or the last going back", () => {

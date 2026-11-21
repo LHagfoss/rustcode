@@ -99,7 +99,6 @@ export const APP_COMMANDS: readonly AppCommand[] = [
     remappable: true,
   },
   { id: "find-in-thread", label: "Find in thread", binding: "mod+f", group: "View", remappable: true },
-  { id: "toggle-terminal", label: "Terminal", binding: "mod+j", group: "View", remappable: true },
   {
     id: "focus-next-area",
     label: "Focus the next area: threads, conversation, message, panels",

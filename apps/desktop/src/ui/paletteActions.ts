@@ -6,7 +6,6 @@
 import type { PullRequest } from "../acp/rustcode";
 import { projectName, type SessionSummary } from "../acp/types";
 import { pickFolder } from "../lib/native";
-import { projectActions, projectKey } from "../state/projectActions";
 import { registerProject } from "../state/projectBook";
 import { cachedPulls, pullForBranch } from "../state/pulls";
 import {
@@ -35,7 +34,6 @@ import {
   useApp,
 } from "../state/store";
 import { idleSettled } from "../state/thread";
-import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
 import {
   Archive,
   ArrowDownUp,
@@ -47,14 +45,11 @@ import {
   GitPullRequest,
   Layers,
   type LucideIcon,
-  Pencil,
   Pin,
   PinOff,
-  Play,
   Rows3,
   Search,
 } from "./icons";
-import { openProjectActionsEditor, runProjectAction } from "./ProjectActions";
 
 export interface PaletteAction {
   id: string;
@@ -280,39 +275,6 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
           ...snoozeActions(open.id, asleep, now),
         ]
       : []),
-  ];
-}
-
-/**
- * The open thread's project actions (ui/ProjectActions.tsx): `Run: Dev server` for each, and the
- * editor. A thread on another computer has none here: its terminal is there.
- */
-export function projectActionItems(): PaletteAction[] {
-  const s = useApp.getState();
-  const id = s.selectedId;
-  const cwd = id ? s.threads[id]?.cwd : undefined;
-  if (!id || !cwd || splitThreadKey(id).host !== LOCAL_HOST) return [];
-  const project = projectKey(cwd, s.sessions.find((x) => x.id === id)?.repo);
-  const actions = projectActions(project);
-  return [
-    ...actions.map(
-      (action): PaletteAction => ({
-        id: `project-action-${action.id}`,
-        label: `Run: ${action.name}`,
-        detail: action.command,
-        icon: Play,
-        words: `action script command terminal ${action.command}`,
-        run: () => runProjectAction(cwd, action),
-      }),
-    ),
-    {
-      id: "project-actions-edit",
-      label: actions.length ? "Edit project actions…" : "Add a project action…",
-      detail: `Commands for ${projectName(project)}, run in the terminal`,
-      icon: Pencil,
-      words: "action script command terminal run dev build test",
-      run: () => openProjectActionsEditor(project),
-    },
   ];
 }
 

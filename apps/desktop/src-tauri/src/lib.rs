@@ -14,7 +14,6 @@ mod microphone;
 mod native;
 mod notify;
 mod process;
-mod pty;
 mod service;
 mod smartui;
 mod system_setup;
@@ -65,7 +64,6 @@ pub fn run() {
         .manage(Arc::new(Engine::default()) as EngineState)
         .manage(Arc::new(machines::Machines::default()))
         .manage(links::LinkCache::default())
-        .manage(pty::Ptys::default())
         .manage(smartui::SmartUiPages::default())
         .register_uri_scheme_protocol("rcui", |ctx, request| {
             smartui::respond(&ctx.app_handle().state::<smartui::SmartUiPages>(), &request)
@@ -145,10 +143,6 @@ pub fn run() {
             diagnostics::resolve_binaries,
             diagnostics::logs_folder_open,
             diagnostics::diagnostics_save,
-            pty::pty_open,
-            pty::pty_write,
-            pty::pty_resize,
-            pty::pty_close,
             smartui::smartui_page,
             updater::update_check,
             updater::update_channels,
@@ -235,7 +229,6 @@ pub fn run() {
             webview::remember_size_on_exit(handle);
             // The engine closes its sessions when its stdin closes.
             handle.state::<EngineState>().stop();
-            handle.state::<pty::Ptys>().close_all();
         }
     });
 }

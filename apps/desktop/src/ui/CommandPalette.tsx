@@ -21,7 +21,6 @@ import {
   setNewThreadChoice,
   setNewWorktree,
   setSwitcher,
-  setTerminalOpen,
   setTheme,
   setThreadStatus,
   settleThread,
@@ -54,7 +53,6 @@ import {
   Search,
   Sparkles,
   SquarePen,
-  SquareTerminal,
   Sun,
   SunMoon,
   Zap,
@@ -62,7 +60,6 @@ import {
 import {
   matches,
   type PaletteAction,
-  projectActionItems,
   pullOfThread,
   ranked,
   sidebarActions,
@@ -245,13 +242,6 @@ export function baseActions(): PaletteAction[] {
       keys: shortcutHint("toggle-sidebar"),
       run: toggleSidebar,
     },
-    {
-      id: "terminal",
-      label: "Toggle terminal",
-      icon: SquareTerminal,
-      keys: shortcutHint("toggle-terminal"),
-      run: () => setTerminalOpen(!useApp.getState().terminalOpen),
-    },
     ...(Object.entries(SETTINGS) as [SettingsSection, string][]).map(
       ([id, label]): PaletteAction => ({
         id: `settings-${id}`,
@@ -287,7 +277,6 @@ export function baseActions(): PaletteAction[] {
     },
     { id: "theme-dark", label: "Appearance: Dark", icon: Moon, words: "theme", run: () => setTheme("dark") },
     ...sidebarActions(),
-    ...projectActionItems(),
     {
       id: "restart",
       label: "Restart server",

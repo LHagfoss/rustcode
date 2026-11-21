@@ -38,7 +38,6 @@ import { newThreadAccountOn } from "./logins";
 import { loadTranscript, threadFromTranscript } from "./machineCache";
 import { loadMirroredTranscript } from "./machineMirror";
 import { CLAUDE_CODE, markClaudePlansStarted, refreshPlanCache, refreshPlanUsage } from "./planUsage";
-import { projectKey as actionsProjectKey, projectActions, worktreeHooks } from "./projectActions";
 import { projectChoice } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
@@ -685,12 +684,6 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
     const w: JsonObject = { repo: options.worktree.repo };
     if (options.worktree.branch) w.branch = options.worktree.branch;
     if (options.worktree.title) w.title = options.worktree.title;
-    // The project's setup and settle actions (state/projectActions.ts); the engine runs them in the
-    // worktree, the repository's own `.rustcode/actions.json` winning a slot both fill.
-    // They are this computer's settings, keyed by a local folder: a worktree on another machine
-    // runs only that repository's own actions.
-    const hooks = host ? undefined : worktreeHooks(projectActions(actionsProjectKey(options.worktree.repo)));
-    if (hooks) w.hooks = hooks as unknown as JsonObject;
     meta.worktree = w;
   }
   // The engine keeps this in the thread's own metadata, so pruning the link
