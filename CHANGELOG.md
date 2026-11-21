@@ -1,3 +1,24 @@
+## [v1.47.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.47.0) - 2026-11-22
+
+### Features
+- Removed the built-in terminal panel (⌘J) and project quick actions, including actions that ran when a worktree was created or a thread settled. (#4161)
+- Settings › Machines can update an outdated paired machine (Update, Update all), and a waiting app update now says which threads it waits for and offers Install now and resume threads. (#4167)
+- Fix `gh` and GitHub tools failing with a certificate error when a dotfile sets a TLS variable from another variable or inside a condition. (#4165)
+- A machine reached through your own `ssh -L` now says what to run when that tunnel dies after a sleep, and offers "Let RustCode manage this tunnel", which switches it to an SSH route that reconnects by itself after a wake. (#4163)
+- The machine and project pickers are tidier. (#4169)
+- Antigravity quotas show at once and refresh in the background. (#4170)
+- Toasts now sit in the bottom-right corner, dismiss with a click, and leave sooner. (#4171)
+- Agents and `rc threads configure` can now read and change a thread's model and effort on a headless server with no app attached. (#4172)
+- Thread header keeps only the side panel toggle (and plan); git actions move to the Changes tab, the side panel shares one narrower width and the Details tab gets titled sections. (#4173)
+- The macOS sidebar is now frosted glass over the desktop, and a new Transparency slider in Settings › Appearance sets how see-through the sidebar, composer and menus are. (#4174)
+- The working line in chat says `Working for …` again, and it still stays up for as long as the engine runs the turn. (#4168)
+- Fixed: a thread asking for a secret under Full access now shows the secret form instead of failing. (#4184)
+- Added: a bug report from a thread can attach the thread's recent log, redacted, after you preview it. (#4187)
+- Fixed: cleaning up a merged worktree no longer stops at Expo caches or Claude Code settings, or when its folder was already deleted. (#4186)
+- Fixed: `merge_when_green` with a PR number works from a thread on another branch, such as a release thread on `main`. (#4185)
+- Turns that finish without a reply now say what they did ("Read 1 file and edited 1 file") instead of only how long they worked. (#4188)
+- Add automatic desktop crash reporting (on by default with first-run notice and opt-out in Settings › General). (#4189)
+- Settings › Machines has a Map view showing how this computer reaches each machine, route by route. (#4190)
 ## [v1.46.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.46.1) - 2026-11-21
 
 ### Fixes
