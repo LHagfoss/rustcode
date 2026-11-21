@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { ensureDeps } from "./ensure-deps";
 
 const root = join(import.meta.dir, "..");
 // Chrome where it installs on macOS and Linux; `MOCK_WINDOW_CHROME` names another binary.
@@ -699,6 +700,7 @@ async function press(name: string, modifiers: number) {
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   if (command === "open") {
+    ensureDeps();
     const { words, flags } = parseArgs(rest);
     await ensureChrome(flags.has("--show"));
     const server = await ensureServer();

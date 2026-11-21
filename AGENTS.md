@@ -88,7 +88,8 @@ failure. Fix from the CI log and push again.
   `~/.cache/cargo-target`.
 - Desktop app (`apps/desktop`, Tauri + React, bun): `bun run check` in
   `apps/desktop` (typecheck, lint, the bun unit tests and the build, all
-  seconds), and `cargo fmt --check` and `cargo clippy --all-targets --
+  seconds; it runs `bun install --frozen-lockfile` first when a new
+  worktree has no `node_modules`), and `cargo fmt --check` and `cargo clippy --all-targets --
   -D warnings` in `apps/desktop/src-tauri` (its own Cargo workspace; CI runs
   its tests). This is the product: the RustCode orchestrator app. Start from
   `docs/desktop.md` › "Status and roadmap" and follow `docs/design.md`.
