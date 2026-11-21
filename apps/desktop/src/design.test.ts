@@ -401,7 +401,7 @@ describe("design system", () => {
     }
   });
 
-  test("Windows and Linux paint no blur, and no window has a material", () => {
+  test("Windows and Linux paint no blur, and only macOS has a window material", () => {
     const css = readFileSync(join(SRC, "index.css"), "utf8");
     // Windows and Linux take the same solid fallback as Reduce transparency, on every frame.
     const solid = ':root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])';
@@ -447,8 +447,15 @@ describe("design system", () => {
     expect(block(':root:is([data-platform="windows"], [data-platform="linux"]) .rc-reveal')).toContain(
       "animation-name: rc-fade;",
     );
-    // Nothing lets a window material show through the page, and no window asks for one.
-    expect(css).not.toContain("data-material");
+    // Only the macOS window's vibrancy shows through, behind the sidebar alone, in the shared
+    // Transparency, and never under Reduce transparency (lib/material.ts sets the attribute).
+    const material = ":root[data-material]:not(.reduce-transparency)";
+    expect(block(`${material} {`)).toContain(
+      "--rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) calc(100% - var(--rc-transparency)), transparent);",
+    );
+    expect(block(`${material} body {`)).toContain("background: transparent;");
+    expect(css.match(/\[data-material\]/g)).toHaveLength(2);
+    expect(css).toContain("--rc-glass-alpha: calc(100% - var(--rc-transparency));");
     const config = (name: string) =>
       JSON.parse(readFileSync(join(SRC, `../src-tauri/${name}`), "utf8")).app.windows[0];
     expect(config("tauri.windows.conf.json").transparent).toBe(false);

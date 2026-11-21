@@ -27,6 +27,7 @@ import {
   storedFlag,
   storedJson,
   storedThreadLimit,
+  storedTransparency,
 } from "./appState";
 
 export * from "./appState";
@@ -484,6 +485,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   textSize: parseTextSize(stored(STORAGE.textSize)),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
   reduceTransparency: storedFlag(STORAGE.reduceTransparency, SETTINGS_DEFAULTS.reduceTransparency),
+  transparency: storedTransparency(),
   chatWidth: parseChatWidth(stored(STORAGE.chatWidth)),
   showToolCalls: storedFlag(STORAGE.showToolCalls, SETTINGS_DEFAULTS.showToolCalls),
   headerButtons: sanitizeHeaderButtons(storedJson<unknown>(STORAGE.headerButtons, null)),

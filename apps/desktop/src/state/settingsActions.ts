@@ -161,6 +161,11 @@ export function setReduceTransparency(on: boolean) {
   store(STORAGE.reduceTransparency, on ? "1" : "0");
 }
 
+export function setTransparency(percent: number) {
+  set({ transparency: percent });
+  store(STORAGE.transparency, String(percent));
+}
+
 export function setChatWidth(width: ChatWidth) {
   set({ chatWidth: width });
   store(STORAGE.chatWidth, width);

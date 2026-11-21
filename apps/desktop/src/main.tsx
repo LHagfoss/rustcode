@@ -4,11 +4,13 @@ import { App } from "./App";
 import { defaultTransport, isTauri } from "./acp/transport";
 import "./index.css";
 import { installFocusModality } from "./lib/focusModality";
+import { applyMaterial } from "./lib/material";
 import { applyPlatform } from "./lib/platform";
 import { quietNativeChrome } from "./lib/quietNative";
 import { applyCachedTheme } from "./lib/themes";
 import {
   installReduceTransparency,
+  paintTransparency,
   setSystemReduceTransparency,
   setUserReduceTransparency,
 } from "./lib/transparency";
@@ -28,6 +30,10 @@ applyCachedTheme();
 // who asked for that; the system's answer follows below, once the shell has it.
 installReduceTransparency();
 setUserReduceTransparency(store.useApp.getState().reduceTransparency);
+paintTransparency(store.useApp.getState().transparency);
+
+// The window's material shows through the sidebar where there is one (macOS; lib/material.ts).
+applyMaterial(platform);
 
 // Surfaces are opaque (docs/design.md); the few frosted ones go solid under Reduce transparency.
 if (isTauri() && platform === "mac") {

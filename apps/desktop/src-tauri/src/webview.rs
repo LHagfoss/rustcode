@@ -193,6 +193,25 @@ pub fn webview_blur() -> bool {
     }
 }
 
+/// The theme a mode asks the window for: `None` follows the system.
+fn theme_for(mode: Option<&str>) -> Option<tauri::Theme> {
+    match mode {
+        Some("dark") => Some(tauri::Theme::Dark),
+        Some("light") => Some(tauri::Theme::Light),
+        _ => None,
+    }
+}
+
+/// Gives the window the app's own light or dark mode, so the `sidebar` vibrancy behind the page
+/// (tauri.conf.json) is drawn in the tone the sidebar is tinted with (lib/material.ts). `None`
+/// follows the system again. Only macOS has that material; elsewhere this does nothing.
+#[tauri::command]
+pub fn window_theme(window: tauri::WebviewWindow, mode: Option<String>) {
+    if cfg!(target_os = "macos") {
+        let _ = window.set_theme(theme_for(mode.as_deref()));
+    }
+}
+
 /// Save the window's size on quit too, for a quit that does not come from closing the window.
 pub fn remember_size_on_exit(handle: &tauri::AppHandle) {
     remember_size(handle);
@@ -451,6 +470,15 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), keys.len(), "a key is listed twice");
+    }
+
+    // The page's mode picks the window's theme; anything else follows the system.
+    #[test]
+    fn a_mode_picks_the_window_theme() {
+        assert_eq!(theme_for(Some("dark")), Some(tauri::Theme::Dark));
+        assert_eq!(theme_for(Some("light")), Some(tauri::Theme::Light));
+        assert_eq!(theme_for(Some("system")), None);
+        assert_eq!(theme_for(None), None);
     }
 
     // Linux's WebKitGTK paints `backdrop-filter` with accelerated compositing only, and these are

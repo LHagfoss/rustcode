@@ -215,7 +215,9 @@ card. A tip adds only its inset and width: `tipSurface`
 
 One translucency, one recipe, for every floating surface: popovers, menus,
 tooltips, dialogs, toasts, the composer and the lightbox. `--rc-glass-alpha`
-(72%, how much of the surface shows through) is the one token. The fills are
+(how much of the surface shows through) is the one token, read off
+`--rc-transparency` (Settings › Appearance › Transparency, 0–60%, default 28%,
+so 72%). The fills are
 steps off it — `--rc-glass-bg` (`surface-2` at `--rc-glass-alpha`),
 `--rc-glass-bg-strong` at `--rc-glass-alpha-strong` (84%) for popovers, menus
 and floating pills, `--rc-glass-faint-bg` at `--rc-glass-alpha-faint` (24%) for
@@ -233,8 +235,13 @@ transparency (the media query, or the system setting the shell reads) on any
 platform.
 Headers use the same filter tinted with the pane instead of a surface
 (`--rc-glass-pane`, `bg` at 78%; 52% with `.rc-frost` over a new thread's
-banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar stay
-opaque.
+banner), through `.rc-header-glass`. Panes, cards and rows stay opaque. The
+sidebar is opaque too, except in the macOS app: there `lib/material.ts` sets
+`data-material` on `<html>`, the page goes transparent, and the sidebar is
+tinted at the same Transparency over the window's native `sidebar` vibrancy
+(the system's own blur). The window takes the app's light or dark mode
+(`window_theme`) so the material matches the tint. Reduce transparency makes it
+solid.
 
 The one other use of that filter is the scrim a narrow window's side sheet opens
 over, `.rc-scrim`: `bg` at 52%, blurred, with what it covers opaque behind it
@@ -508,7 +515,7 @@ painted there either: the effects worker bakes it into the picture once
 | Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
 | Font smoothing | `antialiased` | system (ClearType) | system |
 | Glass | the recipe above | none: solid `surface-2` | none: solid `surface-2` |
-| Window material | `sidebar` vibrancy (painted over by the solid sidebar) | none (opaque window) | none |
+| Window material | `sidebar` vibrancy, through the sidebar's tint | none (opaque window) | none |
 | Word reveal | fade + 4px blur | fade only | fade only |
 | Popovers, toasts, What's New open | scale + fade | scale + fade | slide/fade, no scale |
 

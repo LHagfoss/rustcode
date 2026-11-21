@@ -44,7 +44,7 @@
   --color-inherit: inherit;
   --color-bg: var(--rc-bg);
   --color-sidebar: var(--rc-sidebar);
-  /* The shell's own sidebar fill (`bg-sidebar-glass`): opaque everywhere, like every surface. */
+  /* The shell's own sidebar fill (`bg-sidebar-glass`): opaque, except over a window material. */
   --color-sidebar-glass: var(--rc-sidebar-bg);
   --color-surface: var(--rc-surface);
   --color-surface-2: var(--rc-surface-2);
@@ -108,9 +108,17 @@
      alpha and the blur are `--rc-glass-alpha` and the shared `glass-filter` (Glass, below), so one
      edit tunes it with every other translucent surface. */
   --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 8%), transparent);
+  --rc-composer-bg-focus: color-mix(
+    in srgb,
+    var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 8%)),
+    transparent
+  );
   /* Over a new thread's picture (`.rc-composer-over`): a panel, not another window on it. */
-  --rc-composer-bg-over: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 12%), transparent);
+  --rc-composer-bg-over: color-mix(
+    in srgb,
+    var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 12%)),
+    transparent
+  );
   --rc-border: #00000008;
   --rc-border-strong: #0000001a;
   --rc-text: #171717;
@@ -141,12 +149,12 @@
     --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
     --rc-composer-bg-focus: color-mix(
       in srgb,
-      var(--rc-sidebar) calc(var(--rc-glass-alpha) + 8%),
+      var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 8%)),
       transparent
     );
     --rc-composer-bg-over: color-mix(
       in srgb,
-      var(--rc-sidebar) calc(var(--rc-glass-alpha) + 12%),
+      var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 12%)),
       transparent
     );
     --rc-border: #ffffff08;
@@ -175,8 +183,16 @@
   --rc-surface-2: #242428;
   --rc-surface-3: #2a2a2e;
   --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
-  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 8%), transparent);
-  --rc-composer-bg-over: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 12%), transparent);
+  --rc-composer-bg-focus: color-mix(
+    in srgb,
+    var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 8%)),
+    transparent
+  );
+  --rc-composer-bg-over: color-mix(
+    in srgb,
+    var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 12%)),
+    transparent
+  );
   --rc-border: #ffffff08;
   --rc-border-strong: #ffffff18;
   --rc-text: #ededed;
@@ -1053,10 +1069,13 @@
  * `glass-filter` below). Reduce transparency makes the pair solid (below).
  */
 :root {
-  --rc-glass-alpha: 72%;
+  /* Settings › Appearance › Transparency (lib/transparency.ts sets it on <html>): how much of the
+     sidebar and the glass shows through. 28% keeps the glass at its designed 72%. */
+  --rc-transparency: 28%;
+  --rc-glass-alpha: calc(100% - var(--rc-transparency));
   /* The two steps a denser or a thinner surface takes are read off the same alpha: a step up for
      popovers, menus and floating pills, and a third of it for a new thread's cards. */
-  --rc-glass-alpha-strong: calc(var(--rc-glass-alpha) + 12%);
+  --rc-glass-alpha-strong: min(100%, calc(var(--rc-glass-alpha) + 12%));
   --rc-glass-alpha-faint: calc(var(--rc-glass-alpha) / 3);
   --rc-glass-bg: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha), transparent);
   --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha-strong), transparent);
@@ -1547,6 +1566,21 @@
 :root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
   .rc-header-glass.rc-frost::before {
   --rc-glass-pane: var(--rc-bg);
+}
+
+/*
+ * The window's own material behind the sidebar: macOS's `sidebar` vibrancy (tauri.conf.json), the
+ * system's real blur of what is behind the window. `data-material` on <html> (lib/material.ts) is
+ * set only where the shell has one, so a browser, Windows and Linux keep the opaque sidebar. The
+ * page itself stays transparent there, the main pane keeps its opaque `bg`, and the sidebar takes
+ * the same Transparency as the glass. Reduce transparency makes it solid again (the rule above,
+ * which this one's `:not` defers to).
+ */
+:root[data-material]:not(.reduce-transparency) {
+  --rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) calc(100% - var(--rc-transparency)), transparent);
+}
+:root[data-material]:not(.reduce-transparency) body {
+  background: transparent;
 }
 
 /*

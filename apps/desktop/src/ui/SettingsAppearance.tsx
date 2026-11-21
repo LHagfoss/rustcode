@@ -1,9 +1,10 @@
 import { useState, useSyncExternalStore } from "react";
 import { revealPath } from "../lib/native";
 import { dirname } from "../lib/paths";
-import { appPlatform } from "../lib/platform";
+import { appPlatform, paintsBlur } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
+import { TRANSPARENCY_MAX, TRANSPARENCY_MIN } from "../lib/transparency";
 import { getZoom, stepZoom, subscribeZoom, ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, zoomLabel } from "../lib/zoom";
 import {
   createTheme,
@@ -14,6 +15,7 @@ import {
   setReduceTransparency,
   setTextSize,
   setTheme,
+  setTransparency,
   toast,
   useApp,
 } from "../state/store";
@@ -22,7 +24,7 @@ import { Check, FolderOpen, Minus, Plus } from "./icons";
 import { LiveBackgroundGroup } from "./LiveBackgroundGroup";
 import { cx, noTextHelpers, Switch } from "./primitives";
 import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
-import { Action, Choice, fieldClass, Group, Row, SectionTitle } from "./settingsKit";
+import { Action, Choice, fieldClass, Group, Row, SectionTitle, Slider } from "./settingsKit";
 
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -181,6 +183,7 @@ export function AppearancePage() {
   const textSize = useApp((s) => s.textSize);
   const animateStreaming = useApp((s) => s.animateStreaming);
   const reduceTransparency = useApp((s) => s.reduceTransparency);
+  const transparency = useApp((s) => s.transparency);
   const active = useApp((s) => s.themeActive);
   const snapshot = useApp((s) => s.themes);
   const supported = useApp((s) => s.features.themes);
@@ -267,6 +270,28 @@ export function AppearancePage() {
         >
           <Switch label="Reduce transparency" checked={reduceTransparency} onChange={setReduceTransparency} />
         </Row>
+        {paintsBlur() && (
+          <Row
+            title="Transparency"
+            reset={
+              transparency !== SETTINGS_DEFAULTS.transparency
+                ? () => setTransparency(SETTINGS_DEFAULTS.transparency)
+                : undefined
+            }
+            subtitle="How much the sidebar, composer and menus let through."
+            hint={reduceTransparency ? "Reduce transparency is on, so everything stays solid." : undefined}
+          >
+            <Slider
+              label="Transparency"
+              value={transparency}
+              min={TRANSPARENCY_MIN}
+              max={TRANSPARENCY_MAX}
+              step={2}
+              unit="%"
+              onChange={setTransparency}
+            />
+          </Row>
+        )}
         <SidebarDensitySetting />
         <SidebarToolbarSetting />
         <SettleAfterSetting />

@@ -1,8 +1,9 @@
 import { Tooltip } from "radix-ui";
 import { lazy, Suspense, useEffect } from "react";
 import { rememberFocus } from "./lib/focusAreas";
+import { matchWindowTheme } from "./lib/material";
 import { applyTheme, resolveTheme } from "./lib/themes";
-import { setUserReduceTransparency } from "./lib/transparency";
+import { paintTransparency, setUserReduceTransparency } from "./lib/transparency";
 import { restoreZoom } from "./lib/zoom";
 import { startDeepLinks } from "./state/deepLinks";
 import { sessionsListed } from "./state/engine";
@@ -46,10 +47,12 @@ function useTheme() {
       const theme = resolveTheme(s.themes, s.themeActive, mode);
       applyTheme(theme);
       document.documentElement.dataset.theme = mode;
+      matchWindowTheme(s.theme === "system" ? null : mode);
       document.documentElement.dataset.font = s.font;
       document.documentElement.dataset.textSize = s.textSize;
       document.documentElement.dataset.chatWidth = s.chatWidth;
       setUserReduceTransparency(s.reduceTransparency);
+      paintTransparency(s.transparency);
     };
     paint();
     media.addEventListener("change", paint);
@@ -61,6 +64,7 @@ function useTheme() {
         s.font !== prev.font ||
         s.textSize !== prev.textSize ||
         s.reduceTransparency !== prev.reduceTransparency ||
+        s.transparency !== prev.transparency ||
         s.chatWidth !== prev.chatWidth
       )
         paint();
