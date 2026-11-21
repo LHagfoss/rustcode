@@ -11,8 +11,10 @@
 //! messaging threads (`start_session`, `message_session`, `fan_out`) open a
 //! loopback ACP connection to this engine and run the same `session/new` and
 //! `session/prompt` the app would ([`local_threads`]), and only at Full
-//! access: with no app there is nobody to approve a card. The management
-//! tools still need the app, and say so by name instead of disappearing.
+//! access: with no app there is nobody to approve a card. `configure_session`
+//! reads a thread's model and effort, and changes them over the same loopback
+//! (`session/set_config_option`). The other management tools still need the
+//! app, and say so by name instead of disappearing.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -138,6 +140,7 @@ pub(crate) async fn answer_json_with_asker(
             super::local_threads::fan_out(session_id, args, asker.as_ref(), cancel).await
         }
         super::UPDATE_SESSION => update_own_session(session_id, args),
+        super::CONFIGURE_SESSION => super::local_threads::configure(session_id, args).await,
         super::THREAD_USAGE => thread_usage(session_id, args),
         super::QUERY_DATA => query_data(args),
         super::MERGE_WHEN_GREEN => {

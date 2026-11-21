@@ -443,10 +443,25 @@ What it does not do, and says so by name:
   stamped again. A settled engine link stays in the book even when
   a stale app copy never saw it.
 
-Management and merge tools (`update_session`, `configure_session`,
-`transfer_session`, `interrupt_session`, `merge_when_green`, `cleanup_worktree`,
-`handoff_worktree` and the rest) still need the app: with no app they are
-listed, and a call answers `{"error": {"code": "unavailable", "message": "…
+- **Model and effort.** `configure_session` works with no app (issue 4144).
+  Without `model` or `effort` it reads the thread's harness, access, model and
+  effort from the engine's records, with no approval. A change opens the thread
+  over the same loopback (`session/load`) and sends the
+  `session/set_config_option` the app's pickers send, for the built-in harness
+  and for external ones, so it takes effect exactly as a pick in the app does
+  (an idle thread runs its next turn on it). Values are checked against the model and
+  effort choices the thread itself lists (an exact value, else one value or
+  name that matches regardless of case); anything else is refused as
+  `invalid` with the choices. Its own thread needs no approval; another
+  thread needs the caller at Full access, and reach follows the thread tools'
+  ("Let agents read threads in other projects" for another project). A thread
+  open in another RustCode process is refused. From a shell,
+  `rc threads configure <id> [--model] [--effort]` does the same through the
+  running server.
+
+Other management and merge tools (`transfer_session`, `interrupt_session`,
+`merge_when_green`, `cleanup_worktree`, `handoff_worktree` and the rest) still
+need the app: with no app they are listed, and a call answers `{"error": {"code": "unavailable", "message": "…
 needs the RustCode app open to approve and run it …"}}` instead of "unknown
 tool".
 
@@ -1030,7 +1045,7 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake). `unread` is two-way: `true` marks it unread, `false` marks it read | `{ session_id, title, pinned, status, snoozed_until, title_kept? }`; `title_kept` when the caller renamed its own thread and the user had named it (the title stays) | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, stopped, status? }`, with `stopped` the links under it that stopped too; a thread cannot stop itself | Asked, allowed by Full access |
-| `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
+| `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads. A value the thread does not list is refused with its choices | Reading and its own thread none. Another: asked, allowed by Full access (with no app: Full access, no card) |
 | `transfer_session` | `{ session_id, harness, account?, model? }` (`account` and `model` from version 18) | `{ session_id, harness, moved, account?, model?, effort? }`; the thread must be idle, and a thread cannot move itself. Another project's thread moves when "Let agents read threads in other projects" is on, and the card names its project. An unknown account is refused with the harness's accounts | Asked, allowed by Full access |
 | `list_pending_requests` | none | `{ requests: [{ session_id, request_id, title, kind, asks, options }] }`: approvals and questions this project's open threads wait on, oldest first. `request_id` is what `answer_request` (v10) takes, and `options` the choices an approval and the answers a question offer, in the order its card lists them | None |
 | `list_projects` | none | `{ projects: [{ path, name, threads, working }] }`: every project the user has a thread in, most recently updated first, at most 50 | None |

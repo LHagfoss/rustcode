@@ -1207,6 +1207,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some(
                 command @ (crate::cli::SessionCommands::Move { .. }
+                | crate::cli::SessionCommands::Configure { .. }
                 | crate::cli::SessionCommands::Rename { .. }
                 | crate::cli::SessionCommands::Pin { .. }
                 | crate::cli::SessionCommands::Unpin { .. }),

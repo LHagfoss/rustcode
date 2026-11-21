@@ -1,4 +1,4 @@
-//! `rc threads move|rename|pin|unpin` and `rc worktree …`
+//! `rc threads move|configure|rename|pin|unpin` and `rc worktree …`
 //! (#3821): the thread and worktree operations the app's own controls use,
 //! from a terminal. Moving a thread needs the running server, which owns the
 //! thread's harness process; the rest change the files the app watches.
@@ -27,6 +27,17 @@ pub async fn move_thread(
             "no RustCode server is running, and a thread moves in the server that runs it; start the app or `rc server install`, then retry".to_owned(),
         ),
     }
+}
+
+/// Read a thread's harness, access, model and effort, or change its model or
+/// effort on the same harness through the running server, as the app's
+/// pickers do. A value the thread's harness does not list is refused.
+pub async fn configure_thread(
+    session_id: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Result<Value, String> {
+    crate::orchestration::local_threads::configure_from_shell(session_id, model, effort).await
 }
 
 /// Pin or unpin a thread in the app's list.

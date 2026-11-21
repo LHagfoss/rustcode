@@ -275,7 +275,7 @@ fn print_list(kind: &str, answer: &Value) {
     }
 }
 
-/// `rc threads move|rename|pin|unpin`.
+/// `rc threads move|configure|rename|pin|unpin`.
 pub async fn thread(command: &SessionCommands) -> Result<(), String> {
     let saved = rustcode::config::session_ids();
     let resolve = |raw: &str| crate::run::resolve_thread_id(raw, &saved);
@@ -304,6 +304,31 @@ pub async fn thread(command: &SessionCommands) -> Result<(), String> {
                     .as_deref()
                     .map(|model| format!(" with {model}"))
                     .unwrap_or_default()
+            );
+        }
+        SessionCommands::Configure {
+            id,
+            model,
+            effort,
+            json,
+        } => {
+            let id = resolve(id)?;
+            let answer = rustcode::manage::threads::configure_thread(
+                &id,
+                model.as_deref(),
+                effort.as_deref(),
+            )
+            .await?;
+            if *json {
+                return print_json(&answer);
+            }
+            let field = |key: &str| answer[key].as_str().unwrap_or("default").to_owned();
+            println!(
+                "{id} runs on {} with model {}, effort {} ({} access).",
+                field("harness"),
+                field("model"),
+                field("effort"),
+                field("access"),
             );
         }
         SessionCommands::Rename { id, title } => {
