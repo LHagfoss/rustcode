@@ -1,12 +1,16 @@
-// The side panel's Details tab: where the thread runs, its branch, lineage and context usage.
+// The side panel's Details tab: where the thread runs, its branch, lineage, a few plain stats
+// (agent, messages, tool calls, cost, age) and context usage.
 // Changes and Pull requests are the panel's other tabs (ui/RightPanel.tsx).
 
 import { useEffect, useMemo, useState } from "react";
+import { modelName } from "../acp/types";
 import { type GitChanges, gitChangeSummary, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { contextPercent } from "../state/details";
+import { formatCost } from "../state/pricing";
 import { useApp, worktreeOf } from "../state/store";
-import { formatTokens, isRunning } from "../state/thread";
+import { formatTokens, isRunning, type TranscriptItem } from "../state/thread";
+import { relativeAge } from "../state/threadFormat";
 import { splitThreadKey } from "../state/threadKeys";
 import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
 import { ChevronRight, FolderOpen, GitBranch, Laptop } from "./icons";
@@ -41,6 +45,21 @@ function useChanges(cwd: string | undefined, running: boolean) {
   return changes && changes.cwd === cwd ? changes.changes : null;
 }
 
+/** What the thread did, counted from its transcript: messages typed, tool calls, first message. */
+export function threadCounts(items: readonly TranscriptItem[]) {
+  let messages = 0;
+  let tools = 0;
+  let startedAt: number | undefined;
+  for (const item of items) {
+    if (item.kind === "user") {
+      if (item.wake || item.continued) continue;
+      messages++;
+      if (startedAt === undefined && item.at) startedAt = item.at;
+    } else if (item.kind === "tool") tools++;
+  }
+  return { messages, tools, startedAt };
+}
+
 export function ThreadDetails() {
   const id = useApp((s) => s.selectedId);
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
@@ -48,6 +67,13 @@ export function ThreadDetails() {
   const links = useApp((s) => s.links.links);
   const host = id ? splitThreadKey(id).host : "";
   const machine = useApp((s) => s.machineNames[host]);
+  const summary = useApp((s) => (s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) : undefined));
+  const harnessId = thread?.harness?.id ?? summary?.harness;
+  const harnessName = useApp((s) =>
+    harnessId ? (s.harnesses?.harnesses.find((h) => h.id === harnessId)?.name ?? harnessId) : undefined,
+  );
+  const items = thread?.items;
+  const counts = useMemo(() => threadCounts(items ?? []), [items]);
   const changes = useChanges(host ? undefined : thread?.cwd, isRunning(thread));
   // Which sections are folded away: the reader's habit, kept for every thread.
   const [folded, setFolded] = useState<SectionId[]>(readFolded);
@@ -78,6 +104,23 @@ export function ThreadDetails() {
 
   const usage = thread.usage;
   const used = contextPercent(usage);
+  const model = modelName(summary?.model);
+  const account = thread.harness?.account ?? summary?.account;
+  const stats: [string, string][] = [];
+  if (harnessName || model) stats.push(["Agent", [harnessName, model].filter(Boolean).join(" · ")]);
+  if (account) stats.push(["Account", account]);
+  stats.push(["Messages", String(counts.messages)]);
+  stats.push(["Tool calls", String(counts.tools)]);
+  if (usage?.inputTokens !== undefined || usage?.outputTokens !== undefined)
+    stats.push([
+      "Tokens",
+      `${formatTokens(usage.inputTokens ?? 0)} in · ${formatTokens(usage.outputTokens ?? 0)} out`,
+    ]);
+  if (usage?.cost !== undefined && (!usage.currency || usage.currency === "USD"))
+    stats.push(["Cost", formatCost(usage.cost)]);
+  if (counts.startedAt) stats.push(["Started", relativeAge(counts.startedAt)]);
+  if (summary?.updatedAt) stats.push(["Last active", relativeAge(summary.updatedAt)]);
+
   const row = "flex min-h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout";
   const action = `${row} hover:bg-fill-subtle`;
   const icon = "shrink-0 text-fg-muted";
@@ -120,6 +163,14 @@ export function ThreadDetails() {
           />
         </div>
       )}
+      <dl className="rule-t [--rc-rule-inset:1rem] grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-4 py-3 text-caption">
+        {stats.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-fg-faint">{label}</dt>
+            <dd className="min-w-0 truncate text-right text-fg-muted tabular">{value}</dd>
+          </div>
+        ))}
+      </dl>
       {usage && used !== undefined && (
         <div className="rule-t [--rc-rule-inset:1rem] flex items-center gap-2 px-4 py-3 text-caption text-fg-muted">
           Context

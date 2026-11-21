@@ -32,7 +32,7 @@ import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../
 import { PANEL_SHEET_AT } from "../state/viewActions";
 import { X } from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
-import { cx, Segments, Tooltip } from "./primitives";
+import { cx, Tooltip } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
@@ -353,7 +353,37 @@ export function RightPanel() {
         <div className="flex min-w-0 items-center overflow-x-auto">
           <div className="flex shrink-0 items-center">
             {tabs.length > 1 ? (
-              <Segments label="Panel" value={kind} options={tabs} onChange={(v) => showPanel(v)} />
+              // Quiet text tabs, not the white segmented pill: the panel is a secondary surface
+              // beside the chat and should not outshine it. The pick is the brighter label with a
+              // hairline under it.
+              <div role="tablist" aria-label="Panel" className="flex items-center gap-0.5">
+                {tabs.map((tab) => {
+                  const on = tab.value === kind;
+                  return (
+                    <button
+                      key={tab.value}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      aria-controls={PANE_ID}
+                      onClick={() => showPanel(tab.value)}
+                      className={cx(
+                        "relative h-7 whitespace-nowrap rounded-md px-2 text-callout",
+                        on ? "text-fg" : "text-fg-faint hover:text-fg-muted",
+                      )}
+                    >
+                      {tab.label}
+                      <span
+                        aria-hidden
+                        className={cx(
+                          "absolute inset-x-2 bottom-0 h-px rounded-full",
+                          on ? "bg-fg-muted" : "bg-transparent",
+                        )}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
             ) : (
               <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
             )}
