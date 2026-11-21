@@ -247,7 +247,8 @@ Use Conventional Commits for branch names, commit messages and PR titles:
      blast radius. Pass `languageFilter: "typescript"` or `"rust"` to get code
      rather than docs, and `fileFilter` once you know the file; verify the
      source before acting. `.socraticodeignore` keeps generated files out of
-     the index.
+     the index. It needs Docker and Qdrant, which the VPS does not run: there,
+     skip it and start at ast-grep.
   2. **ast-grep** (`ast-grep run -p '<pattern>' -l <lang> <path>`) once you
      know the syntactic shape: structural matches ignore comments, strings and
      formatting, support metavariables (`let $A = $B`, `foo($A)`), and can
