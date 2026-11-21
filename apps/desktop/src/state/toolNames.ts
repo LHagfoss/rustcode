@@ -28,6 +28,7 @@ export const ORCHESTRATION_TOOLS = [
   "organize_threads",
   "list_projects",
   "list_machines",
+  "run_machine_command",
   "list_pull_requests",
   "manage_queue",
   "thread_status",
@@ -260,6 +261,15 @@ function orchestrationLabel(
       return { title: "Listed projects", summary: text(args.machine) || undefined };
     case "list_machines":
       return { title: args.probe === true ? "Tested machine routes" : "Listed machines" };
+    case "run_machine_command": {
+      const cmd = text(args.command).split("\n")[0] ?? "";
+      const where = text(args.machine) ? `on ${text(args.machine)}` : "";
+      const summary = [cmd ? cut(cmd, 60) : "", where].filter(Boolean).join(" · ");
+      return {
+        title: running(status) ? "Running machine command" : "Ran machine command",
+        summary: summary || undefined,
+      };
+    }
     case "list_pull_requests": {
       const state = text(args.state) || "open";
       return { title: "Listed pull requests", summary: state };

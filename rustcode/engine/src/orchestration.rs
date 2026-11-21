@@ -86,6 +86,8 @@ pub const RUN_SCHEDULED_TASK_NOW: &str = "run_scheduled_task_now";
 /// Version 12: the other computers this app is paired with, and the machine a
 /// call acts on.
 pub const LIST_MACHINES: &str = "list_machines";
+/// Version 22: run a shell command on any machine in the fleet.
+pub const RUN_MACHINE_COMMAND: &str = "run_machine_command";
 /// Version 13: where a thread's work stands, and moving it to where the user
 /// can continue it (`docs/orchestrator.md` *Worktree handoff*).
 pub const WORKTREE_STATUS: &str = "worktree_status";
@@ -134,7 +136,9 @@ pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// Added by version 13: where a thread's work stands, and handing it over.
 pub const V13_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = UPDATE_LOOP_VERSION;
+pub const VERSION: u8 = MACHINE_EXEC_VERSION;
+/// Version 22 adds running shell commands on any machine in the fleet (`run_machine_command`).
+pub const MACHINE_EXEC_VERSION: u8 = 22;
 /// Version 21 adds updating, pausing and resuming Loops (`update_loop`).
 pub const UPDATE_LOOP_VERSION: u8 = 21;
 pub const COMPACT_VERSION: u8 = 20;
@@ -201,6 +205,8 @@ pub fn machine_version(name: &str) -> Option<u8> {
         Some(MACHINE_VERSION)
     } else if V16_MACHINE_TOOL_NAMES.contains(&name) {
         Some(REMOTE_TOOLS_VERSION)
+    } else if name == RUN_MACHINE_COMMAND {
+        Some(MACHINE_EXEC_VERSION)
     } else {
         None
     }
@@ -443,7 +449,10 @@ pub fn is_tool(name: &str) -> bool {
         || V11_TOOL_NAMES.contains(&name)
         || V12_TOOL_NAMES.contains(&name)
         || V13_TOOL_NAMES.contains(&name)
-        || matches!(name, CREATE_LOOP | UPDATE_LOOP | COMPACT_SESSION)
+        || matches!(
+            name,
+            CREATE_LOOP | UPDATE_LOOP | COMPACT_SESSION | RUN_MACHINE_COMMAND
+        )
 }
 
 /// Whether `name` needs a version 2 client.
@@ -569,9 +578,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             names.push(COMPACT_SESSION);
             names
         }
-        _ => {
+        21 => {
             let mut names = tool_names(20);
             names.push(UPDATE_LOOP);
+            names
+        }
+        _ => {
+            let mut names = tool_names(21);
+            names.push(RUN_MACHINE_COMMAND);
             names
         }
     }
@@ -974,6 +988,28 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             optional_name(args, "model")
         }
         LIST_MACHINES => optional_flag(args, "probe"),
+        RUN_MACHINE_COMMAND => {
+            bounded_text(args, "command")?;
+            match args.get("cwd") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(path)) if absolute_on_any_machine(path) => {}
+                Some(_) => return Err("cwd must be an absolute directory path".to_owned()),
+            }
+            match args.get("timeout_secs") {
+                None | Some(Value::Null) => Ok(()),
+                Some(value)
+                    if value.as_u64().is_some_and(|secs| {
+                        (1..=crate::acp::machine_exec::MAX_TIMEOUT_SECS).contains(&secs)
+                    }) =>
+                {
+                    Ok(())
+                }
+                Some(_) => Err(format!(
+                    "timeout_secs must be 1 to {}",
+                    crate::acp::machine_exec::MAX_TIMEOUT_SECS
+                )),
+            }
+        }
         LIST_PROJECTS | LIST_PENDING_REQUESTS => Ok(()),
         TRANSFER_SESSION => {
             required_name(args, "session_id")?;
@@ -2487,6 +2523,21 @@ mod tests {
         assert!(tool_names(LOOPS_VERSION).contains(&CREATE_LOOP));
         assert!(!tool_names(COMPACT_VERSION).contains(&UPDATE_LOOP));
         assert!(tool_names(UPDATE_LOOP_VERSION).contains(&UPDATE_LOOP));
+        assert!(!tool_names(UPDATE_LOOP_VERSION).contains(&RUN_MACHINE_COMMAND));
+        assert!(tool_names(MACHINE_EXEC_VERSION).contains(&RUN_MACHINE_COMMAND));
+        assert!(ok(
+            RUN_MACHINE_COMMAND,
+            json!({"command": "uname -a", "machine": "vps", "cwd": "/home/user", "timeout_secs": 30})
+        ));
+        assert!(!ok(RUN_MACHINE_COMMAND, json!({"command": "   "})));
+        assert!(!ok(
+            RUN_MACHINE_COMMAND,
+            json!({"command": "ls", "cwd": "relative/dir"})
+        ));
+        assert!(!ok(
+            RUN_MACHINE_COMMAND,
+            json!({"command": "ls", "timeout_secs": 0})
+        ));
         assert!(ok(UPDATE_LOOP, json!({"id": "loop-1", "paused": true})));
         assert!(ok(
             UPDATE_LOOP,

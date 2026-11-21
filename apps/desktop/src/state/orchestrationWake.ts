@@ -979,7 +979,8 @@ export interface GrantAsk {
     | "cleanup"
     | "handoff"
     | "project"
-    | "schedule";
+    | "schedule"
+    | "exec";
   caller: string;
   callerTitle: string;
   /** A request that needs individual approval, even in a Full access thread. */

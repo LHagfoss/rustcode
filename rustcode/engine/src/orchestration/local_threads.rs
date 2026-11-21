@@ -252,7 +252,7 @@ pub(super) fn read_needs_approval(session_id: &str) -> bool {
 
 /// Delegating runs work somewhere the caller cannot see, so it needs Full
 /// access. With no app attached there is no card to ask for anything less.
-fn delegation(caller: &str, what: &str) -> Result<(), Value> {
+pub(super) fn delegation(caller: &str, what: &str) -> Result<(), Value> {
     let access = access_of(caller);
     if access == Access::Full {
         return Ok(());
@@ -798,11 +798,12 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
     if let Err(remote) = super::local::local_machine(args) {
         return remote;
     }
-    let target = args
-        .get("session_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
+    let target = super::local::strip_own_host(
+        args.get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim(),
+    );
     if target == caller {
         return error("not_allowed", "a thread cannot message itself");
     }
@@ -2418,11 +2419,12 @@ pub(crate) async fn interrupt(caller: &str, args: &Value) -> Value {
     if let Err(remote) = super::local::local_machine(args) {
         return remote;
     }
-    let target = args
-        .get("session_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
+    let target = super::local::strip_own_host(
+        args.get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim(),
+    );
     if target.is_empty() {
         return error("invalid", "session_id is required");
     }

@@ -400,9 +400,34 @@ describe("orchestration rules", () => {
   test("the app advertises the version whose arguments it answers", () => {
     // The engine strips `account` below 5, `attachments` below 10, `machine` below 12,
     // `steer` below 14, `standalone` below 15, `wait` below 17, transfer `account`/`model`
-    // below 18, `create_loop` below 19, `compact_session` below 20 and `update_loop` below 21,
-    // and refuses a call that carries one: the app speaks the newest, so it is offered all of them.
-    expect(CAPABILITY_VERSION).toBe(21);
+    // below 18, `create_loop` below 19, `compact_session` below 20, `update_loop` below 21,
+    // and `run_machine_command` below 22, and refuses a call that carries one: the app speaks
+    // the newest, so it is offered all of them.
+    expect(CAPABILITY_VERSION).toBe(22);
+  });
+
+  test("run_machine_command parses command, machine, cwd and timeout and rejects bad values", () => {
+    expect(
+      parseCall({
+        tool: "run_machine_command",
+        args: { command: "uname -a", machine: "lagosvps", cwd: "/home/lucas", timeout_secs: 30 },
+      }),
+    ).toEqual({
+      tool: "run_machine_command",
+      command: "uname -a",
+      machine: "lagosvps",
+      cwd: "/home/lucas",
+      timeoutSecs: 30,
+    });
+    expect(parseCall({ tool: "run_machine_command", args: { command: "   " } })).toMatchObject({
+      code: "invalid",
+    });
+    expect(
+      parseCall({ tool: "run_machine_command", args: { command: "ls", cwd: "relative/path" } }),
+    ).toMatchObject({ code: "invalid" });
+    expect(
+      parseCall({ tool: "run_machine_command", args: { command: "ls", timeout_secs: 0 } }),
+    ).toMatchObject({ code: "invalid" });
   });
 
   test("update_loop parses pause, resume, rename, schedule and rejects empty updates", () => {
@@ -2420,13 +2445,13 @@ describe("delegate account authority", () => {
     expect(accountsNeedApproval(restored, "parent", [key])).toBe(false);
     expect(accountsNeedApproval(restored, "other", [key])).toBe(true);
   });
-  test("trust skips only local named accounts and defaults to asking", () => {
+  test("trust skips named accounts across machines and defaults to asking when disabled", () => {
     const local = delegateAccountKey("local", "codex", "work");
+    const remote = delegateAccountKey("remote", "codex", "work");
     expect(accountsNeedApproval(emptyBook(), "parent", [local])).toBe(true);
     expect(accountsNeedApproval(emptyBook(), "parent", [local], true)).toBe(false);
-    expect(
-      accountsNeedApproval(emptyBook(), "parent", [delegateAccountKey("remote", "codex", "work")], true),
-    ).toBe(true);
+    expect(accountsNeedApproval(emptyBook(), "parent", [remote], true)).toBe(false);
+    expect(accountsNeedApproval(emptyBook(), "parent", [remote], false)).toBe(true);
     expect(
       accountsNeedApproval(emptyBook(), "parent", [delegateAccountKey("local", "codex", null)], true),
     ).toBe(true);

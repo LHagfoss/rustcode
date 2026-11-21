@@ -6,9 +6,11 @@ import {
   machineFields,
   machineOfThread,
   machineThread,
+  machineUnavailable,
   managedOn,
   projectsOnMachine,
   resolveMachine,
+  runMachineCommand,
   scopedTarget,
   sessionsOnMachine,
   startOnMachine,
@@ -146,7 +148,7 @@ import {
   useApp,
 } from "./store";
 import { appendNotice, attachAutoAllowed, autoAllowedNoticeNeeded, isRunning, localId } from "./thread";
-import { isRemoteThread, splitThreadKey } from "./threadKeys";
+import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 
 export {
   answerStatusLocally,
@@ -506,6 +508,8 @@ export function verb(q: GrantAsk): string {
       return `change the project “${q.target}”`;
     case "schedule":
       return q.onceOnly ? `create the loop “${q.target}”` : `change the loop “${q.target}”`;
+    case "exec":
+      return `run a command on ${q.target}`;
   }
 }
 
@@ -533,6 +537,7 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   handoff: "handoff_worktree",
   project: "update_project",
   schedule: "schedule_task",
+  exec: "run_machine_command",
 };
 
 /** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
@@ -551,6 +556,7 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   handoff: "Handed a worktree off",
   project: "Changed a project",
   schedule: "Changed loops",
+  exec: "Ran a machine command",
 };
 
 export async function permitted(
@@ -611,17 +617,24 @@ export async function permitted(
 // ---------------------------------------------------------------- the calls
 
 /** Answer one `_rustcode/orchestration` request: a result, or `{ error }` the agent reads. */
-/** Answer one `_rustcode/orchestration` request: a result, or `{ error }` the agent reads. */
-export async function answerOrchestration(params: JsonObject): Promise<JsonObject> {
+export async function answerOrchestration(
+  params: JsonObject,
+  callerHost: string = LOCAL_HOST,
+): Promise<JsonObject> {
   try {
-    return await answer(params);
+    return await answer(params, callerHost);
   } catch (error) {
     return failureJson(failure("failed", errorText(error)));
   }
 }
 
-async function answer(params: JsonObject): Promise<JsonObject> {
-  const caller = ruleThread(useApp.getState(), typeof params.sessionId === "string" ? params.sessionId : "");
+async function answer(params: JsonObject, callerHost: string = LOCAL_HOST): Promise<JsonObject> {
+  const rawSessionId = typeof params.sessionId === "string" ? params.sessionId : "";
+  const callerId =
+    callerHost && rawSessionId && !splitThreadKey(rawSessionId).host
+      ? threadKey(callerHost, rawSessionId)
+      : rawSessionId;
+  const caller = ruleThread(useApp.getState(), callerId);
   if (!caller) return failureJson(failure("not_found", "the calling thread is not listed"));
   const call = parseCall(params);
   if (isFailure(call)) return failureJson(call);
@@ -775,15 +788,25 @@ async function perform(
   caller: RuleThread,
   call: Exclude<ReturnType<typeof parseCall>, Failure>,
 ): Promise<JsonObject> {
+  const callerHost = splitThreadKey(caller.id).host;
   const acrossProjects = () => useApp.getState().readAcrossProjects;
   const threads = allThreads;
   switch (call.tool) {
     case "list_sessions": {
-      const machine = checkedMachine(call.machine);
+      const machine = resolveMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
-      if (!machine.host && call.allProjects && !acrossProjects()) return reachRefused();
-      if (machine.host) return sessionsOnMachine(machine, caller, call.query, call.allProjects);
-      const listed = listSessions(threads(), caller, call.query, call.allProjects);
+      if (machine.host) {
+        const down = machineUnavailable(machine);
+        if (down) return failureJson(down);
+        return sessionsOnMachine(machine, caller, call.query, call.allProjects);
+      }
+      if (call.allProjects && !acrossProjects()) return reachRefused();
+      const listed = listSessions(
+        threads().filter((t) => splitThreadKey(t.id).host === LOCAL_HOST),
+        caller,
+        call.query,
+        call.allProjects || callerHost !== LOCAL_HOST,
+      );
       return {
         ...machineFields(machine),
         sessions: (Array.isArray(listed.sessions) ? listed.sessions : []).map((entry) => ({
@@ -795,26 +818,20 @@ async function perform(
     case "read_session": {
       // The key names the thread's machine when the call does not: a call on a keyed id
       // from another computer routes there, as every later call on it does.
-      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
-      if (isFailure(machine)) return failureJson(machine);
-      const target = scopedTarget(machine, call.target);
-      if (isFailure(target)) return failureJson(target);
-      // The id decides where the thread runs: an id that carries its machine answers with it
-      // even when the call omitted `machine` (the key every later call routes by).
-      const answer = await read(caller, target, call.lastTurns, call.offset);
-      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
+      const on = machineThread(call.machine, call.target, callerHost);
+      if (isFailure(on)) return failureJson(on);
+      const answer = await read(caller, on.target, call.lastTurns, call.offset);
+      return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
     }
     case "message_session": {
-      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
-      if (isFailure(machine)) return failureJson(machine);
-      const target = scopedTarget(machine, call.target);
-      if (isFailure(target)) return failureJson(target);
-      const answer = await message(caller, target, call.text, call.attachments, call.steer, call.wait);
-      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
+      const on = machineThread(call.machine, call.target, callerHost);
+      if (isFailure(on)) return failureJson(on);
+      const answer = await message(caller, on.target, call.text, call.attachments, call.steer, call.wait);
+      return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
     }
     case "manage_queue": {
       // The queue is this app's own record, so a machine that is away still has it.
-      const on = threadNamedOn(call.machine, call.target);
+      const on = threadNamedOn(call.machine, call.target, callerHost);
       if (isFailure(on)) return failureJson(on);
       const answer = await manageQueue(caller, { ...call, target: on.target });
       return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
@@ -823,7 +840,7 @@ async function perform(
       // A named machine checks where each link runs, not whether it can be reached: a wait on
       // a machine that just went away still reports what its links last said, and settles if
       // they do. Naming the wrong machine for a link is a mistake worth saying.
-      const named = call.machine?.trim() ? resolveMachine(call.machine) : undefined;
+      const named = call.machine?.trim() ? resolveMachine(call.machine, callerHost) : undefined;
       if (named && isFailure(named)) return failureJson(named);
       const links = call.links
         .map((id) => book().links.find((link) => link.id === id))
@@ -843,49 +860,54 @@ async function perform(
       return at ? { ...answer, ...machineFields(at) } : answer;
     }
     case "start_session": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       if (machine.host) return startOnMachine(machine, caller, call);
       const answer = await start(caller, call);
       return answer.error ? answer : { ...answer, ...machineFields(machine) };
     }
     case "fan_out": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       if (machine.host) return fanOutOnMachine(machine, caller, call);
       const answer = await fanOut(caller, call);
       return answer.error ? answer : { ...answer, ...machineFields(machine) };
     }
     case "list_harnesses": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       if (machine.host) return listHarnessesOn(machine, call);
       const answer = await listHarnesses(caller, call);
       return answer.error ? answer : { ...answer, ...machineFields(machine) };
     }
     case "list_machines":
-      return listMachines(call.probe);
+      return listMachines(call.probe, callerHost);
+    case "run_machine_command": {
+      const machine = checkedMachine(call.machine, callerHost);
+      if (isFailure(machine)) return failureJson(machine);
+      return runMachineCommand(machine, caller, call);
+    }
     case "search_sessions": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       if (machine.host) return searchSessions(threads(), caller, call.query, true, machine);
       if (call.allProjects && !acrossProjects()) return reachRefused();
-      return searchSessions(threads(), caller, call.query, call.allProjects);
+      return searchSessions(threads(), caller, call.query, call.allProjects || callerHost !== LOCAL_HOST);
     }
     case "list_worktrees": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       if (machine.host) return listWorktrees(threads(), caller, true, machine);
       if (call.allProjects && !acrossProjects()) return reachRefused();
-      return listWorktrees(threads(), caller, call.allProjects);
+      return listWorktrees(threads(), caller, call.allProjects || callerHost !== LOCAL_HOST);
     }
     case "list_projects": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       return await projectsOnMachine(machine);
     }
     case "read_project": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       if (machine.host) return readProjectOn(machine, call.path);
       return readProject(caller, call.path);
@@ -893,7 +915,7 @@ async function perform(
     case "create_project":
       return createProject(caller, call);
     case "clone_project": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       if (machine.host) return cloneProjectOn(machine, caller, call);
       return cloneProject(caller, call);
@@ -915,41 +937,47 @@ async function perform(
     case "run_scheduled_task_now":
       return runScheduledTaskNow(caller, call.id);
     case "list_pull_requests": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
       return listPullRequests(caller, call.state, machine);
     }
     case "compact_session":
       return compactSession(caller, call.target, call.resume);
     case "update_session": {
-      const on = managedOn(call.machine, call.target);
+      const on = managedOn(call.machine, call.target, callerHost);
       if (isFailure(on)) return failureJson(on);
-      const answer = await updateSession(caller, { ...call, target: on.target }, !!on.machine.host);
+      const answer = await updateSession(
+        caller,
+        { ...call, target: on.target },
+        on.machine.host !== callerHost,
+      );
       return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
     }
     case "interrupt_session": {
-      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
-      if (isFailure(machine)) return failureJson(machine);
-      const target = scopedTarget(machine, call.target);
-      if (isFailure(target)) return failureJson(target);
-      const answer = await interruptSession(caller, target);
-      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
+      const on = machineThread(call.machine, call.target, callerHost);
+      if (isFailure(on)) return failureJson(on);
+      const answer = await interruptSession(caller, on.target);
+      return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
     }
     case "configure_session": {
-      const on = managedOn(call.machine, call.target);
+      const on = managedOn(call.machine, call.target, callerHost);
       if (isFailure(on)) return failureJson(on);
-      const answer = await configureSession(caller, { ...call, target: on.target }, !!on.machine.host);
+      const answer = await configureSession(
+        caller,
+        { ...call, target: on.target },
+        on.machine.host !== callerHost,
+      );
       return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
     }
     case "transfer_session":
       return transferSession(caller, call.target, call.harness, call.account, call.model);
     case "list_pending_requests": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
-      return listPendingRequests(caller, call.machine ? machine : undefined);
+      return listPendingRequests(caller, call.machine || callerHost ? machine : undefined);
     }
     case "answer_request": {
-      const on = machineThread(call.machine, call.target);
+      const on = machineThread(call.machine, call.target, callerHost);
       if (isFailure(on)) return failureJson(on);
       const answer = await answerRequest(caller, { ...call, target: on.target });
       return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
@@ -959,6 +987,7 @@ async function perform(
     case "worktree_status": {
       const machine = checkedMachine(
         call.machine ?? (call.target ? splitThreadKey(call.target).host || undefined : undefined),
+        callerHost,
       );
       if (isFailure(machine)) return failureJson(machine);
       const target = call.target ? scopedTarget(machine, call.target) : undefined;
@@ -971,6 +1000,7 @@ async function perform(
     case "thread_status": {
       const machine = checkedMachine(
         call.machine ?? (call.target ? splitThreadKey(call.target).host || undefined : undefined),
+        callerHost,
       );
       if (isFailure(machine)) return failureJson(machine);
       const target = call.target ? scopedTarget(machine, call.target) : undefined;
@@ -1017,7 +1047,7 @@ async function perform(
       // store read is the one on the computer the thread runs on, so a
       // delegate on a paired machine is read there and not here as an empty
       // list (issue 3525).
-      const on = machineThread(call.machine, call.target);
+      const on = machineThread(call.machine, call.target, callerHost);
       if (isFailure(on)) return failureJson(on);
       const target = ruleThread(useApp.getState(), on.target);
       // Another machine's thread is that machine's to allow, as `read_session` reads it.
@@ -1026,7 +1056,7 @@ async function perform(
         target,
         book(),
         true,
-        acrossProjects() || isRemoteThread(on.target),
+        acrossProjects() || isRemoteThread(on.target) || splitThreadKey(on.target).host !== callerHost,
       );
       if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
       const { answer, error } = await activityFrom(target.id, {

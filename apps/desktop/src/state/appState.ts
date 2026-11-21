@@ -532,7 +532,7 @@ export const SETTINGS_DEFAULTS = {
   orchestration: true,
   threadLimit: DEFAULT_DELEGATES_PER_THREAD,
   totalLimit: DEFAULT_DELEGATES_TOTAL,
-  trustDelegateAccounts: false,
+  trustDelegateAccounts: true,
   readAcrossProjects: true,
   smartUi: true,
   autoCompact: DEFAULT_AUTO_COMPACT,

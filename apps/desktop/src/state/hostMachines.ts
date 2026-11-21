@@ -94,14 +94,18 @@ function machineRef(machine: Machine): MachineRef {
 }
 
 /**
- * The machine a `machine` argument names: this computer when it is absent,
- * else a paired machine by id or name, any case. A name is what the user says
+ * The machine a `machine` argument names: `defaultHost` (the caller's own
+ * computer) when it is absent, else this computer (`local` or its name) or a
+ * paired machine by id or name, any case. A name is what the user says
  * ("Studio"); an id is what a previous answer gave. Several machines with one
  * name are refused rather than guessed between.
  */
-export function resolveMachine(asked: string | undefined): MachineRef | Failure {
+export function resolveMachine(
+  asked: string | undefined,
+  defaultHost: string = LOCAL_HOST,
+): MachineRef | Failure {
   const wanted = asked?.trim().toLowerCase();
-  if (!wanted) return localMachine();
+  if (!wanted) return machineOfHost(defaultHost);
   const local = localMachine();
   if (wanted === LOCAL_MACHINE_ID || wanted === local.name.toLowerCase()) return local;
   const machines = useMachines.getState().machines;
@@ -184,7 +188,7 @@ export function machineFields(machine: MachineRef): JsonObject {
 }
 
 /** A host key ("" is this computer), as an answer about a thread there names it. */
-function machineOfHost(host: string): MachineRef {
+export function machineOfHost(host: string): MachineRef {
   if (!host) return localMachine();
   const saved = useMachines.getState().machines.find((m) => m.id === host);
   return {
@@ -222,24 +226,31 @@ export function scopedTarget(machine: MachineRef, target: string): string | Fail
 }
 
 /** A machine and the connection a call on it needs, or the failure to answer with. */
-export function checkedMachine(asked: string | undefined): MachineRef | Failure {
-  const machine = resolveMachine(asked);
+export function checkedMachine(
+  asked: string | undefined,
+  defaultHost: string = LOCAL_HOST,
+): MachineRef | Failure {
+  const machine = resolveMachine(asked, defaultHost);
   if (isFailure(machine)) return machine;
   return machineUnavailable(machine) ?? machine;
 }
 
 /**
  * The machine and thread key a call on one thread acts on: the machine the
- * call names, else the one the id carries. A connected machine only, so a
- * call never lands on this computer when another was meant.
+ * call names, else the one the id carries, else `defaultHost` (the caller's
+ * machine). A connected machine only, so a call never lands on the wrong
+ * computer.
  */
 export function machineThread(
   asked: string | undefined,
   target: string,
+  defaultHost: string = LOCAL_HOST,
 ): { machine: MachineRef; target: string } | Failure {
-  // An id that carries its machine names it already: connected is all it needs to be.
-  const carried = machineOfThread(target);
-  const machine = asked?.trim() ? checkedMachine(asked) : (machineUnavailable(carried) ?? carried);
+  const targetHost = splitThreadKey(target).host;
+  const carried = targetHost ? machineOfHost(targetHost) : machineOfHost(defaultHost);
+  const machine = asked?.trim()
+    ? checkedMachine(asked, defaultHost)
+    : (machineUnavailable(carried) ?? carried);
   if (isFailure(machine)) return machine;
   const key = scopedTarget(machine, target);
   if (isFailure(key)) return key;
@@ -253,8 +264,14 @@ export function machineThread(
 export function threadNamedOn(
   asked: string | undefined,
   target: string,
+  defaultHost: string = LOCAL_HOST,
 ): { machine: MachineRef; target: string } | Failure {
-  const named = asked?.trim() ? resolveMachine(asked) : machineOfThread(target);
+  const targetHost = splitThreadKey(target).host;
+  const named = asked?.trim()
+    ? resolveMachine(asked, defaultHost)
+    : targetHost
+      ? machineOfHost(targetHost)
+      : machineOfHost(defaultHost);
   if (isFailure(named)) return named;
   const key = scopedTarget(named, target);
   if (isFailure(key)) return key;
@@ -263,19 +280,22 @@ export function threadNamedOn(
 
 /**
  * The thread a management call acts on, on the machine the call names or its
- * id carries: `undefined` is the caller itself, which only this computer has.
+ * id carries: `undefined` is the caller itself, on `defaultHost`.
  */
 export function managedOn(
   asked: string | undefined,
   target: string | undefined,
+  defaultHost: string = LOCAL_HOST,
 ): { machine: MachineRef; target: string | undefined } | Failure {
   if (!target) {
-    const machine = checkedMachine(asked);
+    const machine = checkedMachine(asked, defaultHost);
     if (isFailure(machine)) return machine;
-    if (machine.host) return failure("invalid", `session_id is required for a thread on ${machine.name}`);
+    if (machine.host !== defaultHost) {
+      return failure("invalid", `session_id is required for a thread on ${machine.name}`);
+    }
     return { machine, target };
   }
-  return machineThread(asked, target);
+  return machineThread(asked, target, defaultHost);
 }
 
 /** One request to the engine of `host`: this computer's, or a paired machine's over its connection. */
@@ -344,7 +364,7 @@ const MACHINE_LISTED_MODELS = 8;
  * choosing where to delegate reads this once instead of calling
  * `list_harnesses` and `list_projects` on every machine.
  */
-async function machineEntry(machine: MachineRef): Promise<JsonObject> {
+async function machineEntry(machine: MachineRef, callerHost: string = LOCAL_HOST): Promise<JsonObject> {
   const saved = useMachines.getState().machines.find((m) => m.id === machine.id);
   const connected = !!connectionFor(machine.host);
   const state = machineState(saved, connected);
@@ -365,7 +385,7 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
     ...(saved?.paused ? { paused: true } : {}),
     platform: machine.platform,
     ...(version ? { version } : {}),
-    ...(machine.host ? {} : { current: true }),
+    ...(machine.host === callerHost ? { current: true } : {}),
     state,
     // Why it is not connected, in the words Settings › Machines shows, as a word to branch on
     // (`cause`), and when it tries again.
@@ -480,16 +500,64 @@ async function machineProjectRows(machine: MachineRef, connected: boolean): Prom
  * connected is tried again at once; the answer then says whether it came up,
  * or why not.
  */
-export async function listMachines(probe = false): Promise<JsonObject> {
+export async function listMachines(probe = false, callerHost: string = LOCAL_HOST): Promise<JsonObject> {
   const probed = probe ? await probeMachineRoutes() : undefined;
   if (probe) await reconnectMachines();
   const local = localMachine();
   const machines = [local, ...useMachines.getState().machines.map(machineRef)];
   return {
-    current: local.id,
-    machines: await Promise.all(machines.map(machineEntry)),
+    current: callerHost || local.id,
+    machines: await Promise.all(machines.map((entry) => machineEntry(entry, callerHost))),
     ...(probed === undefined ? {} : { probed }),
   };
+}
+
+/**
+ * `run_machine_command`: run one shell command on any connected machine in the
+ * fleet through its engine's `_rustcode/machine/exec` method. Respects the
+ * caller's access level (Full runs without asking; Ask/Auto-edit prompts) and
+ * the target machine's `.rustcode/command-policy.toml` command guard.
+ */
+export async function runMachineCommand(
+  machine: MachineRef,
+  caller: RuleThread,
+  call: { command: string; cwd?: string; timeoutSecs?: number },
+): Promise<JsonObject> {
+  const callerHost = splitThreadKey(caller.id).host;
+  const cwd = call.cwd ?? (machine.host === callerHost ? projectOf(caller) || undefined : undefined);
+  const crossMachine = machine.host !== callerHost;
+  const no = await permitted(caller, `exec@${machine.id}`, {
+    kind: "exec",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: machine.name,
+    detail: cwd ? `in ${cwd}\n${call.command}` : call.command,
+    ...(crossMachine ? { machine: machine.name } : {}),
+  });
+  if (no) return failureJson(no);
+  const timeoutSecs = call.timeoutSecs ?? 60;
+  try {
+    const result = await requestOn<JsonObject>(
+      machine.host,
+      Method.machineExec,
+      {
+        command: call.command,
+        ...(cwd ? { cwd } : {}),
+        timeoutSecs,
+      },
+      (timeoutSecs + 15) * 1000,
+    );
+    return {
+      ...machineFields(machine),
+      ...(typeof result.cwd === "string" ? { cwd: result.cwd } : {}),
+      success: result.success === true,
+      output: typeof result.output === "string" ? result.output : "",
+    };
+  } catch (error) {
+    return failureJson(
+      failure("failed", `the command on ${machine.name} could not run: ${errorText(error)}`),
+    );
+  }
 }
 
 /**

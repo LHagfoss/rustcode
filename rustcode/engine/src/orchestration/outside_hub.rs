@@ -111,23 +111,49 @@ pub async fn answer_for_hub_with(
     .await
 }
 
-/// The machine `args` names when it is not this computer.
-fn named_machine(args: &Value) -> Option<&str> {
-    let machine = args
+/// The machine `args` names when it is not this computer: either an explicit
+/// `machine` argument, or the `<host_id>/<session_id>` prefix of `session_id`.
+fn named_machine(args: &Value) -> Option<(String, bool)> {
+    if let Some(machine) = args
         .get("machine")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|machine| !machine.is_empty())?;
-    super::local::local_machine(args)
-        .is_err()
-        .then_some(machine)
+        .filter(|machine| !machine.is_empty())
+    {
+        return super::local::local_machine(args)
+            .is_err()
+            .then(|| (machine.to_owned(), false));
+    }
+    let session = args.get("session_id").and_then(Value::as_str)?.trim();
+    let (host, _) = session.split_once('/')?;
+    let host = host.trim();
+    if host.is_empty() || super::local::is_local_machine_name(host) {
+        return None;
+    }
+    Some((host.to_owned(), true))
 }
 
-/// On the hub: send a call that names a member to it. `None` when the call
-/// does not name a member of this hub, which then runs (or is refused) here
-/// as it would without one.
-pub(super) async fn forward(caller: &str, tool: &str, args: &Value) -> Option<CallAnswer> {
-    let machine = named_machine(args)?;
+fn prepare_forwarded_args(args: &Value, strip_session_host: bool) -> Option<Value> {
+    let mut arguments = args.clone();
+    let object = arguments.as_object_mut()?;
+    object.remove("machine");
+    if strip_session_host
+        && let Some(session) = object
+            .get("session_id")
+            .and_then(Value::as_str)
+            .and_then(|value| value.split_once('/').map(|(_, id)| id.to_owned()))
+    {
+        object.insert("session_id".to_owned(), json!(session));
+    }
+    Some(arguments)
+}
+
+async fn forward_to_member(
+    who: &str,
+    machine: &str,
+    tool: &str,
+    arguments: Value,
+) -> Option<CallAnswer> {
     let config_dir = crate::config::get_config_dir()?;
     if !HubConfig::load(&config_dir).hub {
         return None;
@@ -137,11 +163,8 @@ pub(super) async fn forward(caller: &str, tool: &str, args: &Value) -> Option<Ca
     if tool == super::CREATE_LOOP {
         return None;
     }
-    let mut arguments = args.clone();
-    arguments.as_object_mut()?.remove("machine");
-    let who = outside::name_of_caller(caller).unwrap_or_else(|| "an outside agent".to_owned());
     let lifecycle = RemoteLifecycle::new(&config_dir);
-    match lifecycle.hub_call(machine, tool, arguments, &who).await {
+    match lifecycle.hub_call(machine, tool, arguments, who).await {
         Ok(Some(HubCallAnswer::Answered { success, content })) => {
             Some(CallAnswer { success, content })
         }
@@ -161,32 +184,78 @@ pub(super) async fn forward(caller: &str, tool: &str, args: &Value) -> Option<Ca
     }
 }
 
+/// On the hub: send a call that names a member to it. `None` when the call
+/// does not name a member of this hub, which then runs (or is refused) here
+/// as it would without one.
+pub(super) async fn forward(caller: &str, tool: &str, args: &Value) -> Option<CallAnswer> {
+    let (machine, strip_session_host) = named_machine(args)?;
+    let arguments = prepare_forwarded_args(args, strip_session_host)?;
+    let who = outside::name_of_caller(caller).unwrap_or_else(|| "an outside agent".to_owned());
+    forward_to_member(&who, &machine, tool, arguments).await
+}
+
+/// On the hub: send a call from a local RustCode thread (`local.rs`) to a hub
+/// member when `args` targets one. Returns the JSON result shape `local.rs`
+/// uses (`{ ... }` or `{ "error": { ... } }`), or `None` when the target is
+/// not a member of this hub.
+pub(super) async fn forward_from_thread(
+    session_id: &str,
+    tool: &str,
+    args: &Value,
+) -> Option<Value> {
+    let (machine, strip_session_host) = named_machine(args)?;
+    let arguments = prepare_forwarded_args(args, strip_session_host)?;
+    let who = crate::config::load_session_title(session_id)
+        .filter(|title| !title.trim().is_empty())
+        .map(|title| format!("thread “{title}”"))
+        .unwrap_or_else(|| format!("thread {session_id}"));
+    let answer = forward_to_member(&who, &machine, tool, arguments).await?;
+    if answer.success {
+        if let Ok(value) = serde_json::from_str::<Value>(&answer.content) {
+            return Some(value);
+        }
+        return Some(json!({ "output": answer.content }));
+    }
+    let message = answer
+        .content
+        .strip_prefix("error: ")
+        .unwrap_or(&answer.content)
+        .to_owned();
+    Some(json!({ "error": { "code": "failed", "message": message } }))
+}
+
 /// On the hub: the member a call's `machine` names, when it names one. A
 /// Loop saved for it runs on this hub's schedule and is sent there.
 pub(super) fn hub_loop_machine(args: &Value) -> Option<String> {
-    let machine = named_machine(args)?;
+    let (machine, _) = named_machine(args)?;
     let config_dir = crate::config::get_config_dir()?;
     (HubConfig::load(&config_dir).hub
-        && crate::remote_gateway::hub_link::Members::new(&config_dir).knows(machine))
-    .then(|| machine.to_owned())
+        && crate::remote_gateway::hub_link::Members::new(&config_dir).knows(&machine))
+    .then_some(machine)
+}
+
+/// On the hub: add linked and remembered members to a `list_machines` JSON
+/// value in place.
+pub(super) async fn with_members_value(listed: &mut Value) {
+    let Some(config_dir) = crate::config::get_config_dir() else {
+        return;
+    };
+    if !HubConfig::load(&config_dir).hub {
+        return;
+    }
+    let Ok(Some(members)) = RemoteLifecycle::new(&config_dir).hub_members().await else {
+        return;
+    };
+    add_members(listed, &members);
 }
 
 /// On the hub: `list_machines` with the members added, each saying whether
 /// it is linked now, when it was last seen and the access it grants the hub.
 pub(super) async fn with_members(content: String) -> String {
-    let Some(config_dir) = crate::config::get_config_dir() else {
-        return content;
-    };
-    if !HubConfig::load(&config_dir).hub {
-        return content;
-    }
-    let Ok(Some(members)) = RemoteLifecycle::new(&config_dir).hub_members().await else {
-        return content;
-    };
     let Ok(mut listed) = serde_json::from_str::<Value>(&content) else {
         return content;
     };
-    add_members(&mut listed, &members);
+    with_members_value(&mut listed).await;
     listed.to_string()
 }
 

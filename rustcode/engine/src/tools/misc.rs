@@ -1026,6 +1026,29 @@ pub const UPDATE_LOOP: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+pub const RUN_MACHINE_COMMAND: Tool = Tool {
+    name: crate::orchestration::RUN_MACHINE_COMMAND,
+    description: "Run a shell command directly on any machine in the fleet (like SSH, over RustCode's paired connection or hub link) and return its output. Pass `machine` (id or name from list_machines) for another machine, or omit it for this machine. Respects the target machine's command policy and the caller's access level.",
+    arguments: r#"{"command": "uptime && df -h", "machine": "lagosvps", "cwd": "/home/lucas/code/rustcode", "timeout_secs": 60}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "minLength": 1, "maxLength": 32768, "description": "Shell command to run on the target machine"},
+                "machine": {"type": "string", "minLength": 1, "description": "Target machine id or name from list_machines; omit for this machine"},
+                "cwd": {"type": "string", "minLength": 1, "description": "Absolute working directory on the target machine; defaults to the machine's matching project or home folder"},
+                "timeout_secs": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Command timeout in seconds (default 60, max 300)"}
+            },
+            "required": ["command"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 pub const SCHEDULE_TASK: Tool = Tool {
     name: crate::orchestration::SCHEDULE_TASK,
     description: "Schedule a built-in-harness task: a prompt run once at an ISO 8601 time or on a cron. `schedule` is {kind: cron, expression, timezone?} or {kind: at, at}; timezone defaults to the user's. For another harness or Jobs, use create_job. Needs the scheduler running; report its next run. The user approves it.",

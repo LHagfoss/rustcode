@@ -215,6 +215,11 @@ const LISTING: &[(&str, &str, Effect)] = &[
     (super::QUERY_DATA, "Query the data store", Effect::Reads),
     (super::LIST_HARNESSES, "List harnesses", Effect::Reads),
     (super::LIST_MACHINES, "List machines", Effect::Reads),
+    (
+        super::RUN_MACHINE_COMMAND,
+        "Run a command on a machine",
+        Effect::Adds,
+    ),
     (super::LIST_PROJECTS, "List projects", Effect::Reads),
     (super::READ_PROJECT, "Read a project", Effect::Reads),
     (super::LIST_WORKTREES, "List worktrees", Effect::Reads),

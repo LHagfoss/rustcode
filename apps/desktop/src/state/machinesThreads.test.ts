@@ -584,21 +584,37 @@ describe("a remote thread's operations", () => {
     expect(isLoaded(useApp.getState().threads[LINUX_THREAD])).toBe(false);
   });
 
-  test("a machine's delegation is refused instead of starting a thread here", async () => {
+  test("a machine's orchestration call is routed through the app for that remote caller", async () => {
     const { conn, sent } = recordingConnection();
     watchMachineConnection(LINUX, conn);
+    await openThread(LINUX_THREAD);
+    useApp.setState({ orchestration: true });
     conn.receive(
       JSON.stringify({
         jsonrpc: "2.0",
         id: 88,
         method: "_rustcode/orchestration",
+        params: { sessionId: "mock-linux-1", tool: "list_machines", args: {} },
+      }),
+    );
+    await sleep(10);
+    const answer = sent().find((frame) => frame.id === 88);
+    expect(answer?.result).toMatchObject({ current: LINUX });
+    const machines = (answer?.result as { machines?: Array<{ id?: string; current?: boolean }> })?.machines;
+    expect(machines?.some((m) => m.id === LINUX && m.current === true)).toBe(true);
+    expect(machines?.some((m) => m.id === "local")).toBe(true);
+    // An invalid remote call is still refused without starting anything.
+    conn.receive(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 89,
+        method: "_rustcode/orchestration",
         params: { call: { action: "start_session", thread_id: "mock-linux-1" } },
       }),
     );
-    await sleep(5);
-    const answer = sent().find((frame) => frame.id === 88);
-    expect(JSON.stringify(answer)).toContain("not_allowed");
-    // Nothing of this computer's was started for it.
+    await sleep(10);
+    const bad = sent().find((frame) => frame.id === 89);
+    expect(JSON.stringify(bad)).toContain("error");
     expect(isRunning(useApp.getState().threads[LINUX_THREAD])).toBe(false);
   });
 

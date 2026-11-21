@@ -110,6 +110,8 @@ export const Method = {
   projectBrowse: "_rustcode/project/browse",
   projectCreate: "_rustcode/project/create",
   projectClone: "_rustcode/project/clone",
+  /** Run a shell command on a machine in the fleet (`engine/src/acp/machine_exec.rs`). */
+  machineExec: "_rustcode/machine/exec",
   /** The scheduler daemon's work, as `rc cron` asks it (`docs/daemon.md`). */
   scheduledList: "_rustcode/scheduled/list",
   scheduledCreate: "_rustcode/scheduled/create",

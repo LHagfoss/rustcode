@@ -145,8 +145,13 @@ function OrchestrationGroup() {
       <Group title="Orchestration">
         <Row
           title="Let delegates use my named accounts without asking"
-          subtitle="Named logins on this computer."
-          hint="Accounts on other computers still need approval."
+          reset={
+            trustAccounts.mixed || trustAccounts.value === false
+              ? () => void trustAccounts.set(SETTINGS_DEFAULTS.trustDelegateAccounts)
+              : undefined
+          }
+          subtitle="Named logins across your machines."
+          hint="Turn off to approve each named account once per thread."
         >
           <ScopedValue
             mixed={trustAccounts.mixed}
@@ -155,7 +160,7 @@ function OrchestrationGroup() {
           >
             <Switch
               label="Let delegates use my named accounts without asking"
-              checked={Boolean(trustAccounts.value ?? false)}
+              checked={Boolean(trustAccounts.value ?? true)}
               onChange={(value) => void trustAccounts.set(value)}
             />
           </ScopedValue>

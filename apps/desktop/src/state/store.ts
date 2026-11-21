@@ -248,7 +248,7 @@ import { lostTurnStatus, resetLostTurns } from "./lostTurns";
 import { useOutbox } from "./machineOutbox";
 import { flushingOutbox } from "./machineSync";
 import { notifyThread, startNotifications, warmingUp } from "./notify";
-import { CAPABILITY_VERSION, failure, failureJson, WAKE_BATCH_DEFAULT_S } from "./orchestration";
+import { CAPABILITY_VERSION, WAKE_BATCH_DEFAULT_S } from "./orchestration";
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { projectKey } from "./projectBook";
@@ -423,13 +423,15 @@ export type { Toast, ToastTone } from "./toasts";
 
 export const APP_VERSION = "0.1.0";
 
-/** The `initialize` sent a paired machine: its threads drawn with this app's Smart UI and viz, their
- * tool calls unanswered (it refuses a machine's delegations), so that engine serves them itself. */
+/** The `initialize` sent a paired machine: its threads drawn with this app's Smart UI and viz,
+ * and full fleet orchestration hosted by this app (with `engineOrchestration` as fallback while
+ * this app is away). */
 export const machineInitializeParams = (): JsonObject =>
   initializeParams(APP_VERSION, {
     smartUi: useApp.getState().smartUi,
     visualizations: 2,
     threads: 1,
+    orchestration: useApp.getState().orchestration ? CAPABILITY_VERSION : undefined,
     engineOrchestration: useApp.getState().orchestration ? 1 : undefined,
   });
 
@@ -452,7 +454,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   orchestration: storedFlag(STORAGE.orchestration, SETTINGS_DEFAULTS.orchestration),
   threadLimit: storedThreadLimit(STORAGE.threadLimit, SETTINGS_DEFAULTS.threadLimit),
   totalLimit: loadTotalLimit(),
-  trustDelegateAccounts: storedFlag(STORAGE.trustDelegateAccounts, false),
+  trustDelegateAccounts: storedFlag(STORAGE.trustDelegateAccounts, SETTINGS_DEFAULTS.trustDelegateAccounts),
   // On unless turned off: reading knows no project boundary, so an agent asked
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
@@ -1175,7 +1177,8 @@ export async function handleInbound(
       else if (message.method === Method.sessionChildActivity) onChildActivity(message.params);
       else if (message.method === Method.threadCreated) threadCreated(message.params);
       else if (message.method === Method.threadDeleted) threadDeleted(message.params);
-      else if (message.method === V2Method.orchestrationCancelled) orchestrationCallDropped(message.params);
+      else if (message.method === V2Method.orchestrationCancelled)
+        orchestrationCallDropped(message.params, host);
       else if (message.method === PULL_WATCH && conn)
         void deliverPullWatch(conn, message.params, host).catch(() => {});
       else if (message.method === WorkflowMethod.changed) onWorkflowChanged(message.params, host);
@@ -1245,16 +1248,7 @@ export async function handleInbound(
         return;
       }
       if (message.method === V2Method.orchestration) {
-        // A machine's threads are not this app's to orchestrate yet: its `start_session` would
-        // create the child on this computer. Refused until cross-machine delegation lands.
-        if (host) {
-          conn?.respond(
-            message.id,
-            failureJson(failure("not_allowed", "Delegation across machines is not available yet.")),
-          );
-          return;
-        }
-        const result = await answerOrchestration(message.params);
+        const result = await answerOrchestration(message.params, host);
         conn?.respond(message.id, result);
         return;
       }

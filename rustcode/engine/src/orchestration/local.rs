@@ -75,6 +75,29 @@ pub(crate) async fn answer_json_with_asker(
     if let Err(reason) = super::validate(name, args) {
         return error("invalid", format!("invalid {name} call: {reason}"));
     }
+    // On a hub, a thread's call that targets a linked member forwards over the
+    // hub link just as an outside agent's call does, gated by the caller's
+    // own access level.
+    if !super::outside::is_caller(session_id) && targets_remote_machine(args) {
+        let needs_write = super::outside::changes_things(name, args);
+        if needs_write {
+            if let Err(refusal) = super::local_threads::delegation(session_id, name) {
+                return refusal;
+            }
+        } else if read_needs_approval(session_id) {
+            return error(
+                "unavailable",
+                format!(
+                    "{name} needs the RustCode app open to approve the read; this thread runs on a machine whose app is not attached. Open the RustCode app and retry. Nothing was sent."
+                ),
+            );
+        }
+        if let Some(forwarded) =
+            super::outside_hub::forward_from_thread(session_id, name, args).await
+        {
+            return forwarded;
+        }
+    }
     if name == super::START_SESSION {
         return super::local_threads::start(session_id, args, asker.as_ref(), cancel).await;
     }
@@ -104,6 +127,10 @@ pub(crate) async fn answer_json_with_asker(
         super::LIST_PROJECTS => list_projects(args),
         super::LIST_HARNESSES => list_harnesses(args).await,
         super::LIST_MACHINES => list_machines(args).await,
+        super::RUN_MACHINE_COMMAND => run_machine_command(session_id, cancel, args).await,
+        super::LIST_WORKTREES => list_worktrees(session_id, args),
+        super::READ_PROJECT => read_project(session_id, args),
+        super::READ_ACTIVITY => read_activity(session_id, args),
         super::THREAD_STATUS => thread_status(session_id, args),
         super::WAIT_SESSION => wait_session(session_id, cancel, args).await,
         super::MESSAGE_SESSION => super::local_threads::message(session_id, args).await,
@@ -151,11 +178,7 @@ fn app_required(name: &str) -> Value {
 /// tools the engine still cannot answer itself (issue 4094).
 fn cli_instead(name: &str) -> Option<&'static str> {
     Some(match name {
-        super::LIST_WORKTREES => "rc worktree list",
         super::WORKTREE_STATUS => "rc worktree status <path>",
-        super::READ_ACTIVITY => {
-            "rc data query \"SELECT * FROM operational_events WHERE thread_id = '<id>' ORDER BY at\""
-        }
         super::LIST_PULL_REQUESTS => "gh pr list",
         _ => return None,
     })
@@ -264,7 +287,8 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
         .get("session_id")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|target| !target.is_empty());
+        .filter(|target| !target.is_empty())
+        .map(strip_own_host);
     if target.is_some_and(|target| target != session_id) {
         return app_required(super::UPDATE_SESSION);
     }
@@ -355,6 +379,68 @@ fn app_only_fields(fields: &[&str]) -> Value {
     )
 }
 
+/// This computer's gateway id (`remote/gateway.json`), or empty while none exists.
+pub(super) fn own_host_id() -> String {
+    crate::config::get_config_dir()
+        .map(|dir| crate::fleet::own_id(&dir))
+        .unwrap_or_default()
+}
+
+/// Whether `asked` names this computer: `"local"`, its display name, its OS
+/// host name, or its own `gateway_id`.
+pub(super) fn is_local_machine_name(asked: &str) -> bool {
+    let asked = asked.trim();
+    if asked.is_empty() {
+        return true;
+    }
+    if asked.eq_ignore_ascii_case(LOCAL_MACHINE_ID) || asked.eq_ignore_ascii_case(&local_name()) {
+        return true;
+    }
+    if sysinfo::System::host_name()
+        .as_deref()
+        .is_some_and(|os_name| asked.eq_ignore_ascii_case(os_name))
+    {
+        return true;
+    }
+    let own = own_host_id();
+    !own.is_empty() && asked.eq_ignore_ascii_case(&own)
+}
+
+/// Strip `<host_id>/` from a keyed thread id when `<host_id>` names this
+/// computer (for example when a user pastes a remote thread id from the app
+/// into a thread running on that very machine).
+pub(super) fn strip_own_host(id: &str) -> &str {
+    let trimmed = id.trim();
+    if let Some((host, rest)) = trimmed.split_once('/')
+        && !rest.is_empty()
+        && is_local_machine_name(host)
+    {
+        return rest;
+    }
+    trimmed
+}
+
+/// Whether `args` targets a machine other than this computer (via `machine` or
+/// a `<host>/<session_id>` prefix).
+fn targets_remote_machine(args: &Value) -> bool {
+    if let Some(asked) = args
+        .get("machine")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|asked| !asked.is_empty())
+    {
+        return !is_local_machine_name(asked);
+    }
+    if let Some(session) = args.get("session_id").and_then(Value::as_str)
+        && let Some((host, rest)) = session.trim().split_once('/')
+        && !host.is_empty()
+        && !rest.is_empty()
+    {
+        return !is_local_machine_name(host);
+    }
+    false
+}
+
 /// The call's `machine` names this computer, or the tool needs the app to
 /// reach another one.
 pub(super) fn local_machine(args: &Value) -> Result<(), Value> {
@@ -366,13 +452,13 @@ pub(super) fn local_machine(args: &Value) -> Result<(), Value> {
     else {
         return Ok(());
     };
-    if asked.eq_ignore_ascii_case(LOCAL_MACHINE_ID) || asked.eq_ignore_ascii_case(&local_name()) {
+    if is_local_machine_name(asked) {
         return Ok(());
     }
     Err(error(
         "unavailable",
         format!(
-            "reading or acting on {asked} needs the RustCode app open; this engine serves only this computer's threads. Nothing was sent."
+            "reading or acting on {asked} needs the RustCode app open or a hub link; this engine serves only this computer's threads. Nothing was sent."
         ),
     ))
 }
@@ -645,7 +731,7 @@ fn read_session(caller: &str, args: &Value) -> Value {
     if let Err(remote) = local_machine(args) {
         return remote;
     }
-    let target = args.get("session_id").and_then(Value::as_str).unwrap_or("");
+    let target = strip_own_host(args.get("session_id").and_then(Value::as_str).unwrap_or(""));
     if target == caller {
         return error("not_allowed", "a thread cannot read itself");
     }
@@ -1059,7 +1145,7 @@ fn unknown_platform() -> String {
 /// else `offline`. Reachable is not connected: pairing is only checked by the
 /// app.
 async fn list_machines(_args: &Value) -> Value {
-    let mut machines = vec![json!({
+    let mut local_row = json!({
         "id": LOCAL_MACHINE_ID,
         "name": local_name(),
         "display_name": Value::Null,
@@ -1068,7 +1154,12 @@ async fn list_machines(_args: &Value) -> Value {
         "platform": platform(),
         "current": true,
         "state": "connected",
-    })];
+    });
+    let host_id = own_host_id();
+    if !host_id.is_empty() {
+        local_row["host_id"] = json!(host_id);
+    }
+    let mut machines = vec![local_row];
     let saved = crate::config::get_config_dir()
         .and_then(|dir| std::fs::read_to_string(dir.join("machines.json")).ok())
         .and_then(|text| serde_json::from_str::<MachineRegistry>(&text).ok())
@@ -1105,12 +1196,199 @@ async fn list_machines(_args: &Value) -> Value {
         }
         machines.push(row);
     }
-    json!({
+    let mut answer = json!({
         "current": LOCAL_MACHINE_ID,
         "machines": machines,
         "probed": true,
-        "note": "The RustCode app is not attached: paired machines come from machines.json, and each route was tested now with a TCP connect. reachable means its gateway answers, not that this computer can act there; that needs the app open.",
+        "note": "The RustCode app is not attached: paired machines come from machines.json, and each route was tested now with a TCP connect. reachable means its gateway answers; acting on a remote machine needs the RustCode app attached or a hub link.",
+    });
+    super::outside_hub::with_members_value(&mut answer).await;
+    if let Some(dir) = crate::config::get_config_dir()
+        && let Some(rows) = answer.get_mut("machines").and_then(Value::as_array_mut)
+    {
+        for peer in crate::fleet::Fleet::load(&dir).entries {
+            if peer.host_id.is_empty()
+                || peer.host_id == host_id
+                || rows
+                    .iter()
+                    .any(|row| row.get("id").and_then(Value::as_str) == Some(peer.host_id.as_str()))
+            {
+                continue;
+            }
+            let mut row = json!({
+                "id": peer.host_id,
+                "name": peer.name,
+                "platform": peer.platform,
+                "state": "known",
+            });
+            if let Some(version) = peer.version {
+                row["version"] = json!(version);
+            }
+            if let Some(last_seen) = peer.last_seen_at {
+                row["last_seen"] = json!(last_seen);
+            }
+            if let Some(via) = peer.via {
+                row["via"] = json!(via);
+            }
+            rows.push(row);
+        }
+    }
+    answer
+}
+
+/// `run_machine_command`: run a shell command on this computer without the app
+/// (remote hub members are forwarded before reaching here).
+async fn run_machine_command(caller: &str, cancel: &CancellationToken, args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    if let Err(refusal) = super::local_threads::delegation(caller, super::RUN_MACHINE_COMMAND) {
+        return refusal;
+    }
+    let command = args
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let cwd = args
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            crate::config::session_meta_by_id(caller)
+                .map(|meta| project_of(caller, &meta))
+                .filter(|path| !path.is_empty())
+        });
+    let timeout_secs = args.get("timeout_secs").and_then(Value::as_u64);
+    match crate::acp::machine_exec::exec(
+        crate::acp::machine_exec::MachineExecRequest {
+            command,
+            cwd,
+            timeout_secs,
+        },
+        cancel.clone(),
+    )
+    .await
+    {
+        Ok(mut answer) => {
+            if let Some(object) = answer.as_object_mut() {
+                object.insert("machine_id".to_owned(), json!(LOCAL_MACHINE_ID));
+            }
+            answer
+        }
+        Err(reason) => error("failed", reason),
+    }
+}
+
+/// `list_worktrees`: worktree threads on this computer without the app.
+fn list_worktrees(caller: &str, args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    let all_projects = args
+        .get("all_projects")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if all_projects && !read_across_projects() {
+        return error("not_allowed", reach_refused());
+    }
+    let caller_meta = crate::config::session_meta_by_id(caller);
+    let caller_reach = caller_meta.as_ref().map(|meta| reach_of(caller, meta));
+    let mut worktrees = Vec::new();
+    for meta in crate::config::list_sessions() {
+        let Some(id) = crate::config::session_id_from_path(&meta.path) else {
+            continue;
+        };
+        let Some(worktree) = crate::worktrees::list_meta(&id) else {
+            continue;
+        };
+        if !all_projects {
+            let reach = reach_of(&id, &meta);
+            let started_by_caller = crate::config::load_session_parent(&id)
+                .and_then(|parent| parent.id)
+                .is_some_and(|parent| parent == caller);
+            if !same_project(caller_reach.as_deref(), &reach) && !started_by_caller {
+                continue;
+            }
+        }
+        let mut row = json!({
+            "session_id": id,
+            "title": meta.title,
+            "branch": worktree.get("branch").cloned().unwrap_or(Value::Null),
+            "path": worktree.get("path").cloned().unwrap_or(Value::Null),
+        });
+        if all_projects {
+            row["project"] = json!(project_of(&id, &meta));
+        }
+        worktrees.push(row);
+    }
+    json!({
+        "machine": local_name(),
+        "machine_id": LOCAL_MACHINE_ID,
+        "worktrees": worktrees,
     })
+}
+
+/// `read_project`: git facts for one folder on this computer without the app.
+fn read_project(caller: &str, args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .map(clean_path)
+        .unwrap_or_default();
+    if !read_across_projects() {
+        let own = crate::config::session_meta_by_id(caller).map(|meta| reach_of(caller, &meta));
+        if !same_project(own.as_deref(), &path) {
+            return error("not_allowed", reach_refused());
+        }
+    }
+    match crate::acp::projects::read(crate::acp::projects::ProjectReadRequest { path }) {
+        Ok(facts) => json!({
+            "machine": local_name(),
+            "machine_id": LOCAL_MACHINE_ID,
+            "project": facts,
+        }),
+        Err(reason) => error("not_found", reason),
+    }
+}
+
+/// `read_activity`: one thread's recorded activity from this machine's store.
+fn read_activity(caller: &str, args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    let target = strip_own_host(args.get("session_id").and_then(Value::as_str).unwrap_or(""));
+    let Some(meta) = crate::config::session_meta_by_id(target) else {
+        return error("not_found", "no thread has that id; use list_sessions");
+    };
+    if !may_reach(caller, target, &meta) {
+        return error("not_allowed", reach_refused());
+    }
+    let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::to_owned);
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|limit| limit.min(u64::from(u32::MAX)) as u32);
+    match crate::acp::data::activity(crate::acp::data::DataActivityRequest {
+        session_id: target.to_owned(),
+        after: text("after"),
+        order: text("order"),
+        limit,
+    }) {
+        Ok(mut answer) => {
+            if let Some(object) = answer.as_object_mut() {
+                object.insert("machine".to_owned(), json!(local_name()));
+                object.insert("machine_id".to_owned(), json!(LOCAL_MACHINE_ID));
+            }
+            answer
+        }
+        Err(reason) => error("failed", format!("the data store did not answer: {reason}")),
+    }
 }
 
 /// `thread_status`: where this thread's delegates stand, from the link book and
@@ -1124,7 +1402,8 @@ fn thread_status(caller: &str, args: &Value) -> Value {
         .get("session_id")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|id| !id.is_empty());
+        .filter(|id| !id.is_empty())
+        .map(strip_own_host);
     if asked == Some(caller) {
         return error(
             "not_allowed",
@@ -1470,8 +1749,8 @@ fn updated_at(meta: &crate::config::SessionMeta) -> Option<String> {
 
 /// The name this computer reports, as the app's `list_machines` names it.
 fn local_name() -> String {
-    sysinfo::System::host_name()
-        .filter(|name| !name.trim().is_empty())
+    crate::fleet::own_name_override()
+        .or_else(|| sysinfo::System::host_name().filter(|name| !name.trim().is_empty()))
         .unwrap_or_else(|| LOCAL_MACHINE_ID.to_owned())
 }
 
@@ -2083,6 +2362,59 @@ mod tests {
         assert_eq!(clean_path("/tmp/project/"), "/tmp/project");
         assert_eq!(clean_path("/private/tmp/project"), "/tmp/project");
         assert_eq!(clean_path("/a/./b"), "/a/b");
+    }
+
+    #[tokio::test]
+    async fn run_machine_command_runs_at_full_access_and_refuses_at_ask_without_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let caller = super::super::local_threads::test_thread(dir.path());
+        crate::config::save_session_yolo(&caller, true);
+        let ran = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::RUN_MACHINE_COMMAND,
+            &json!({
+                "command": "echo fleet-local-exec",
+                "cwd": dir.path().to_string_lossy(),
+                "timeout_secs": 15,
+            }),
+        )
+        .await;
+        assert_eq!(ran["success"], json!(true), "{ran}");
+        assert!(
+            ran["output"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("fleet-local-exec"),
+            "{ran}"
+        );
+
+        crate::config::save_session_yolo(&caller, false);
+        set_setting("default-permission-mode", json!("ask"));
+        let refused = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::RUN_MACHINE_COMMAND,
+            &json!({ "command": "echo blocked" }),
+        )
+        .await;
+        assert_eq!(refused["error"]["code"], json!("unavailable"), "{refused}");
+        let _ =
+            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
+    }
+
+    #[test]
+    fn strip_own_host_removes_local_prefixes_only() {
+        assert_eq!(strip_own_host("local/abc-123"), "abc-123");
+        assert_eq!(
+            strip_own_host(&format!("{}/abc-123", local_name())),
+            "abc-123"
+        );
+        assert_eq!(
+            strip_own_host("other-machine-id/abc-123"),
+            "other-machine-id/abc-123"
+        );
+        assert_eq!(strip_own_host("abc-123"), "abc-123");
     }
 }
 

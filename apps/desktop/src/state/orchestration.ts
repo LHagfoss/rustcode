@@ -69,8 +69,9 @@ import { formatDuration } from "./thread";
  * Version 19 adds `create_loop`.
  * Version 20 adds `compact_session`.
  * Version 21 adds `update_loop`.
+ * Version 22 adds `run_machine_command` across all connected machines.
  */
-export const CAPABILITY_VERSION = 21;
+export const CAPABILITY_VERSION = 22;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** One `read_session` page. */
@@ -891,14 +892,15 @@ export const hasGrant = (book: LinkBook, caller: string, key: string) =>
 export const delegateAccountKey = (machine: string, harness: string, account: string | null) =>
   JSON.stringify(["delegate-account", machine, harness, account]);
 
-export const accountsNeedApproval = (book: LinkBook, caller: string, keys: string[], trustLocal = false) =>
+export const accountsNeedApproval = (book: LinkBook, caller: string, keys: string[], trustAccounts = false) =>
   keys.some((key) => {
-    if (trustLocal) {
+    if (trustAccounts) {
       try {
         const [kind, machine, , account] = JSON.parse(key);
         if (
           kind === "delegate-account" &&
-          machine === "local" &&
+          typeof machine === "string" &&
+          machine.length > 0 &&
           typeof account === "string" &&
           account.length > 0
         )

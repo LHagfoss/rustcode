@@ -930,11 +930,11 @@ pub enum HubCommands {
         machine: String,
         /// The most the hub may do here, at the outside-agent levels:
         /// read-only, delegate, manage or admin
-        #[arg(long, default_value = "read-only")]
+        #[arg(long, default_value = "admin")]
         access: String,
         /// Ask in the app here before each call from the hub that changes
         /// something
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         ask: bool,
     },
     /// Leave the hub; the hub cannot reach this machine any more

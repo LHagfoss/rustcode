@@ -939,19 +939,130 @@ describe("a delegate that finishes on another machine", () => {
 });
 
 describe("machine handshake", () => {
-  test("advertises Smart UI and rustcode-viz as this app's setting says", async () => {
+  test("advertises Smart UI, rustcode-viz and orchestration as this app's settings say", async () => {
     const { machineInitializeParams } = await import("./store");
+    const { CAPABILITY_VERSION } = await import("./orchestration");
     const meta = () =>
       (machineInitializeParams() as { clientCapabilities: { _meta: { rustcode: Record<string, unknown> } } })
         .clientCapabilities._meta.rustcode;
-    const before = useApp.getState().smartUi;
+    const beforeSmart = useApp.getState().smartUi;
+    const beforeOrch = useApp.getState().orchestration;
     try {
-      useApp.setState({ smartUi: true });
-      expect(meta()).toMatchObject({ smartUi: 1, visualizations: 2, threads: 1 });
-      useApp.setState({ smartUi: false });
+      useApp.setState({ smartUi: true, orchestration: true });
+      expect(meta()).toMatchObject({
+        smartUi: 1,
+        visualizations: 2,
+        threads: 1,
+        orchestration: CAPABILITY_VERSION,
+        engineOrchestration: 1,
+      });
+      useApp.setState({ smartUi: false, orchestration: false });
       expect(meta()).toMatchObject({ smartUi: 0 });
+      expect(meta().orchestration).toBeUndefined();
+      expect(meta().engineOrchestration).toBeUndefined();
     } finally {
-      useApp.setState({ smartUi: before });
+      useApp.setState({ smartUi: beforeSmart, orchestration: beforeOrch });
     }
+  });
+});
+
+describe("fleet access from remote threads and remote command execution", () => {
+  test("a remote thread sees its own machine as current and can reach local threads", async () => {
+    const { conn } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    withRemoteThread();
+    useApp.setState({ readAcrossProjects: true });
+
+    const listed = await answerOrchestration(
+      { sessionId: "remote-1", tool: "list_machines", args: {} },
+      LINUX,
+    );
+    expect(listed.error).toBeUndefined();
+    expect(listed.current).toBe(LINUX);
+    expect(listed.machines).toContainEqual(expect.objectContaining({ id: LINUX, current: true }));
+    expect(listed.machines).toContainEqual(expect.objectContaining({ id: "local" }));
+    expect(
+      (listed.machines as Array<{ id?: string; current?: boolean }>).find((m) => m.id === "local")?.current,
+    ).toBeUndefined();
+
+    // Omitting machine defaults to the remote thread's own machine.
+    const ownSessions = await answerOrchestration(
+      { sessionId: "remote-1", tool: "list_sessions", args: {} },
+      LINUX,
+    );
+    expect(ownSessions.error).toBeUndefined();
+    expect(ownSessions.machine_id).toBe(LINUX);
+
+    // Passing machine: "local" reaches the desktop app's local machine.
+    const localSessions = await answerOrchestration(
+      { sessionId: "remote-1", tool: "list_sessions", args: { machine: "local", all_projects: true } },
+      LINUX,
+    );
+    expect(localSessions.error).toBeUndefined();
+    expect(localSessions.machine_id).toBe("local");
+    expect(localSessions.sessions).toContainEqual(expect.objectContaining({ session_id: CALLER }));
+  });
+
+  test("run_machine_command executes on a remote machine at Full access without prompting", async () => {
+    const { conn, sent } = recordingConnection("remote-1", {
+      "_rustcode/machine/exec": (params) => ({
+        success: true,
+        output: `ran: ${params.command}`,
+        cwd: params.cwd ?? LINUX_PROJECT,
+        machine: LINUX_NAME,
+      }),
+    });
+    watchMachineConnection(LINUX, conn);
+    useApp.setState((s) => ({
+      permissionModes: { ...s.permissionModes, [CALLER]: "full" },
+    }));
+
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "run_machine_command",
+      args: { command: "uname -a", machine: LINUX_NAME, cwd: LINUX_PROJECT, timeout_secs: 30 },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(answer).toMatchObject({
+      success: true,
+      output: "ran: uname -a",
+      machine: LINUX_NAME,
+      machine_id: LINUX,
+    });
+    expect(useApp.getState().grant).toBeNull();
+    const rpc = sent().find((frame) => frame.method === "_rustcode/machine/exec");
+    expect(rpc?.params).toMatchObject({
+      command: "uname -a",
+      cwd: LINUX_PROJECT,
+      timeoutSecs: 30,
+    });
+  });
+
+  test("run_machine_command asks for approval at Ask access and runs once granted", async () => {
+    const { resolveGrant } = await import("./host");
+    const { conn } = recordingConnection("remote-1", {
+      "_rustcode/machine/exec": () => ({
+        success: true,
+        output: "ok",
+        cwd: LINUX_PROJECT,
+        machine: LINUX_NAME,
+      }),
+    });
+    watchMachineConnection(LINUX, conn);
+    useApp.setState((s) => ({
+      permissionModes: { ...s.permissionModes, [CALLER]: "ask" },
+    }));
+
+    const pending = answerOrchestration({
+      sessionId: CALLER,
+      tool: "run_machine_command",
+      args: { command: "hostname", machine: LINUX },
+    });
+    await sleep(10);
+    expect(useApp.getState().grant?.kind).toBe("exec");
+    resolveGrant("once");
+    const answer = await pending;
+    expect(answer.error).toBeUndefined();
+    expect(answer).toMatchObject({ success: true, output: "ok", machine_id: LINUX });
   });
 });

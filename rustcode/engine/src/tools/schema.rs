@@ -972,6 +972,7 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::SCHEDULE_TASK,
     crate::orchestration::CREATE_LOOP,
     crate::orchestration::UPDATE_LOOP,
+    crate::orchestration::RUN_MACHINE_COMMAND,
     crate::orchestration::LIST_SCHEDULED_TASKS,
     crate::orchestration::DELETE_SCHEDULED_TASK,
     crate::orchestration::RUN_SCHEDULED_TASK_NOW,
@@ -1036,6 +1037,8 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
             && policy.orchestration_version < crate::orchestration::COMPACT_VERSION)
         || (tool.name == crate::orchestration::UPDATE_LOOP
             && policy.orchestration_version < crate::orchestration::UPDATE_LOOP_VERSION)
+        || (tool.name == crate::orchestration::RUN_MACHINE_COMMAND
+            && policy.orchestration_version < crate::orchestration::MACHINE_EXEC_VERSION)
         || (tool.name == crate::orchestration::CREATE_LOOP && !policy.include_orchestration_loops)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
