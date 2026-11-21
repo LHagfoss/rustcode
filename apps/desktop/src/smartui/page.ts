@@ -165,40 +165,43 @@ button:active:not(:disabled) { transform: scale(0.97); opacity: 0.85; }
 button.primary, button[data-primary] { background: var(--rc-accent); color: var(--rc-accent-text); border-color: transparent; }
 button:disabled { opacity: 0.45; cursor: default; }
 code, kbd, pre { font-family: var(--rc-mono); font-size: var(--rc-text-size-sm); }
-/* Inline code reads as a token, not a run of mono text: a faint pill, and it breaks only where
-   a path or name does (after / . _ -), not mid-word. */
-:not(pre) > code { padding: 0 4px; border-radius: var(--rc-radius-xs, 4px); overflow-wrap: break-word;
-  background: color-mix(in srgb, var(--rc-text) 8%, transparent); }
+/* Inline code reads as a token, not a run of mono text: a faint pill that keeps its corners when
+   wrapped, and breaks at path/identifier boundaries (after / . _ - : via <wbr>) instead of mid-word. */
+:not(pre) > code { padding: 1px 4px; border-radius: var(--rc-radius-xs, 4px); overflow-wrap: break-word;
+  background: color-mix(in srgb, var(--rc-text) 7%, transparent);
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 pre { background: var(--rc-surface); padding: 8px 10px; border-radius: var(--rc-radius); overflow: auto; }
 hr { border: 0; border-top: 1px solid var(--rc-separator); }
 canvas { max-width: 100%; }
 .rc-row { display: flex; flex-wrap: wrap; align-items: center; }
 .rc-col { display: flex; flex-direction: column; }
 .rc-grid, .rc-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
-/* Cards hold a sentence each: a column narrower than this wrapped a short body to a tall tile
-   of three words a line, so four options read as four towers of text. */
-.rc-cards { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+/* Cards hold a sentence or path each: two balanced columns in the reply width (three when there
+   are exactly three cards, and up to four in the enlarged dialog), never narrow towers of text. */
+.rc-cards { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.rc-cards:has(> :nth-child(3):last-child) { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 .rc-gap-1 { gap: 4px; } .rc-gap-2 { gap: 8px; } .rc-gap-3 { gap: 12px; } .rc-gap-4 { gap: 16px; }
 .rc-mono { font-family: var(--rc-mono); }
 .rc-num { font-variant-numeric: tabular-nums; }
 td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
-/* A card is a tile: a bold title with its badge at the right, then full-width lines (a sentence,
-   a number, a bar) a few pixels apart, not the page's 16 px rhythm. A tint (.rc-ok, .rc-bad…)
-   washes it and rings it, so the recommended option of a grid stands out. */
+/* A card is a quiet neutral tile (docs/design.md): a bold title with its badge at the right, then
+   full-width lines a few pixels apart. Status tint stays on the title's leading dot — never a
+   coloured card background or coloured outline. */
 .rc-card { display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: 8px; min-width: 0;
   padding: 12px 14px; background: var(--rc-surface); border-radius: var(--rc-radius); }
 .rc-card > * { flex: 0 0 100%; min-width: 0; margin: 0; }
 .rc-card > :is(b, strong, .rc-badge, .rc-chip) { flex: 0 1 auto; }
 .rc-card > :is(b, strong):first-child { font-weight: 600; flex: 1 1 0; }
-/* A tinted card or titled item leads with a dot in its tint, so status reads before the words. */
-:is(.rc-card, .rc-item):is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > :is(b, strong):first-child::before {
-  content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 7px 1px 0; border-radius: 50%;
+/* A tinted card, stat or titled item leads with a dot in its tint, so status reads on the title
+   while the surface stays calm monochrome. */
+:is(.rc-card, .rc-item):is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > :is(b, strong):first-child::before,
+.rc-stat:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > .rc-stat-label::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 0; border-radius: 50%;
   background: var(--rc-tint); vertical-align: middle; }
 .rc-card > .rc-badge { margin-left: auto; }
+.rc-card > .rc-badge:not(.rc-ok, .rc-warn, .rc-bad, .rc-info) { --rc-tint: initial; }
 .rc-card > :is(p, .rc-lead) { color: var(--rc-muted); font-size: var(--rc-text-size-sm); }
 .rc-card > .rc-stat-value { font-size: var(--rc-text-size-value); font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
-.rc-card:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) { background: color-mix(in srgb, var(--rc-tint) 9%, var(--rc-surface));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rc-tint) 38%, transparent); }
 .rc-scroll { max-height: 320px; overflow: auto; }
 
 .rc-title { font-size: var(--rc-text-size-title); font-weight: 600; line-height: 1.3; }
@@ -222,15 +225,15 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-ok { --rc-tint: var(--rc-success); } .rc-warn { --rc-tint: var(--rc-warning); }
 .rc-bad { --rc-tint: var(--rc-danger); } .rc-info { --rc-tint: var(--rc-accent); }
 
-.rc-stats { gap: 8px; }
-.rc-stat { display: flex; flex-direction: column; min-width: 0; padding: 12px 14px;
-  border: 1px solid var(--rc-separator); border-radius: var(--rc-radius); }
+.rc-stats { gap: 10px; }
+.rc-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 12px 14px;
+  background: var(--rc-surface); border-radius: var(--rc-radius); }
 .rc-stat-label { order: -1; font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
 .rc-flat { gap: 16px 24px; }
-.rc-flat > .rc-stat { padding: 0; border: 0; border-radius: 0; gap: 2px; }
+.rc-flat > .rc-stat { padding: 0; background: transparent; border-radius: 0; gap: 2px; }
 .rc-flat .rc-stat-value { font-size: 28px; line-height: 1.15; letter-spacing: -0.02em; }
 .rc-stat-value { font-size: var(--rc-text-size-value); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
-.rc-stat-note { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-tint, var(--rc-muted)); }
+.rc-stat-note { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
 
 .rc-badge { display: inline-block; padding: 0 7px; font-size: var(--rc-text-size-xs); line-height: 18px; font-weight: 500; white-space: nowrap;
   border-radius: var(--rc-radius-pill); color: var(--rc-tint, var(--rc-muted));
@@ -245,14 +248,11 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
    small press on click. Buttons and chips have their own states above. */
 :is(.rc-card, .rc-stat, .rc-item, .rc-bar, .rc-callout, tr):is([data-rc-send], [data-rc-copy]) {
   border-radius: var(--rc-radius-sm); transition: background-color 90ms ease-out, transform 90ms ease-out; }
-:is(.rc-stat, .rc-item, .rc-bar, .rc-callout):is([data-rc-send], [data-rc-copy]):hover,
+:is(.rc-item, .rc-bar, .rc-callout):is([data-rc-send], [data-rc-copy]):hover,
 tr:is([data-rc-send], [data-rc-copy]):hover > td { background: color-mix(in srgb, var(--rc-text) 6%, transparent); }
-.rc-card:is([data-rc-send], [data-rc-copy]):hover { background: color-mix(in srgb, var(--rc-text) 6%, var(--rc-surface)); }
-.rc-card:is(.rc-ok, .rc-warn, .rc-bad, .rc-info):is([data-rc-send], [data-rc-copy]):hover {
-  background: color-mix(in srgb, var(--rc-tint) 15%, var(--rc-surface)); }
+:is(.rc-card, .rc-stat):is([data-rc-send], [data-rc-copy]):hover { background: color-mix(in srgb, var(--rc-text) 6%, var(--rc-surface)); }
 :is(.rc-card, .rc-stat, .rc-item, .rc-callout):is([data-rc-send], [data-rc-copy]):active { transform: scale(0.985); }
 .rc-item.rc-item:is([data-rc-send], [data-rc-copy]) { padding-left: 8px; padding-right: 8px; }
-.rc-stat:is([data-rc-send], [data-rc-copy]):hover { border-color: color-mix(in srgb, var(--rc-text) 22%, transparent); }
 
 .rc-progress { height: 8px; overflow: hidden; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--rc-tint, var(--rc-accent)); }
@@ -277,12 +277,13 @@ tr:is([data-rc-send], [data-rc-copy]):hover > td { background: color-mix(in srgb
    draws over the view: that tip opens below its bar instead, where the next bar is. */
 .rc-bar[data-rc-tip]:first-child::after { bottom: auto; top: calc(100% + 2px); }
 
-/* A table wraps its prose at spaces only (anywhere would let the layout squeeze a column to one
-   letter), but code, keys and links break anywhere: one long path or URL is the widest thing in
-   a row, and unbreakable it set a floor wider than the reply, so the box scrolled and clipped the
-   last column. Headings wrap at spaces too. A table that still cannot fit scrolls in its own box. */
+/* A table wraps prose at spaces only (anywhere lets auto layout squeeze a column to one letter).
+   Inline code gets <wbr> at path/identifier boundaries (kit() below) and uses break-word so it
+   wraps at / . _ - : before breaking a word; keys and raw URLs break anywhere so a long URL
+   never widens the table past the reply. A table that still cannot fit scrolls in its own box. */
 .rc-table { overflow-wrap: normal; font-variant-numeric: tabular-nums; }
-.rc-table :is(code, kbd, a) { overflow-wrap: anywhere; }
+.rc-table code { overflow-wrap: break-word; }
+.rc-table :is(kbd, a) { overflow-wrap: anywhere; }
 .rc-table .rc-num { white-space: nowrap; }
 .rc-table-box { overflow-x: auto; overscroll-behavior-x: contain; }
 .rc-table th { position: sticky; top: 0; z-index: 1; font-size: var(--rc-text-size-sm); font-weight: 500; background: var(--rc-bg);
@@ -795,6 +796,25 @@ ${KIT_SCRIPT}
     for (const el of document.querySelectorAll(RC_PRESSABLE)) {
       if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
       if (!el.hasAttribute("role")) el.setAttribute("role", "button");
+    }
+    // Insert soft break points (<wbr>) after / . _ - : inside inline <code> so paths wrap at
+    // boundaries instead of mid-word, without altering copied text.
+    for (const code of document.querySelectorAll(":not(pre) > code:not([data-rc-wbr])")) {
+      code.setAttribute("data-rc-wbr", "");
+      const walk = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      let n;
+      while ((n = walk.nextNode())) nodes.push(n);
+      for (const node of nodes) {
+        const parts = rcCodeParts(node.nodeValue || "");
+        if (parts.length < 2) continue;
+        const frag = document.createDocumentFragment();
+        parts.forEach((part, i) => {
+          if (i > 0) frag.append(document.createElement("wbr"));
+          frag.append(part);
+        });
+        node.replaceWith(frag);
+      }
     }
     for (const link of document.querySelectorAll("a[href]:not(.rc-github-chip)")) {
       const href = link.getAttribute("href");

@@ -56,17 +56,36 @@ export const KIT_SCRIPT = `
       })
       .join(" ");
   };
+  // Split inline code into segments after / . _ - : (keeping repeated delimiters like :: or //
+  // together) so paths and identifiers wrap at boundaries instead of mid-word.
+  const rcCodeParts = (text) => {
+    const raw = String(text == null ? "" : text);
+    const out = [];
+    let last = 0;
+    const re = /[/._:-]+(?=[^\\s/._:-])/g;
+    let match;
+    while ((match = re.exec(raw))) {
+      const end = match.index + match[0].length;
+      if (end < raw.length) {
+        out.push(raw.slice(last, end));
+        last = end;
+      }
+    }
+    out.push(raw.slice(last));
+    return out;
+  };
 `;
 
 /** The helpers in [`KIT_SCRIPT`], for the tests that exercise them directly. */
 export function kitHelpers() {
   return new Function(
-    `${KIT_SCRIPT}; return { rcMeasure, rcCompare, rcHost, rcSparkValues, rcSparkPoints };`,
+    `${KIT_SCRIPT}; return { rcMeasure, rcCompare, rcHost, rcSparkValues, rcSparkPoints, rcCodeParts };`,
   )() as {
     rcMeasure: (text: string) => { value: number; unit: string } | null;
     rcCompare: (a: string, b: string, kind: "number" | "text") => number;
     rcHost: (href: string | null) => string;
     rcSparkValues: (text: string) => number[];
     rcSparkPoints: (values: number[], width: number, height: number) => string;
+    rcCodeParts: (text: string) => string[];
   };
 }

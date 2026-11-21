@@ -41,6 +41,7 @@ const BLOCKS = new Set([
 const DIRECTIVE = /^\s*::\s*([a-z]+)\b\s*(.*)$/;
 const ITEM = /^\s*[-*]\s+(.*)$/;
 const TINT_SUFFIX = /\s*\{(ok|warn|bad|info)\}\s*$/;
+const TINT_PREFIX = /^\s*\{(ok|warn|bad|info)\}(?:\s+|$)/;
 /** Sortable past this many rows, as the kit's guidance says. */
 const SORT_ROWS = 8;
 /** A table's divider row, `|---|:--:|`. */
@@ -61,20 +62,51 @@ export function inline(text: string): string {
     .join("");
 }
 
-/** A row's cells: split at `|` outside backticks (`\|` keeps one), trimmed; at most `max`, the last keeping the rest. */
+/** A row's cells: split at `|` outside backticks and HTML tags/`<code>` (`\|` keeps one), trimmed; at most `max`, the last keeping the rest. */
 export function cells(line: string, max = Infinity): string[] {
   const out: string[] = [];
   let cell = "";
-  let code = false;
+  let backtick = false;
+  let inTag = false;
+  let quote = "";
+  let tagBuf = "";
+  let codeDepth = 0;
   for (let i = 0; i < line.length; i++) {
     const char = line[i]!;
-    if (char === "\\" && line[i + 1] === "|") {
+    if (!inTag && char === "\\" && line[i + 1] === "|") {
       cell += "|";
       i++;
-    } else if (char === "`") {
-      code = !code;
+      continue;
+    }
+    if (!inTag && char === "`") {
+      backtick = !backtick;
       cell += char;
-    } else if (char === "|" && !code && out.length < max - 1) {
+      continue;
+    }
+    if (!backtick) {
+      if (inTag) {
+        tagBuf += char;
+        cell += char;
+        if (quote) {
+          if (char === quote) quote = "";
+        } else if (char === '"' || char === "'") {
+          quote = char;
+        } else if (char === ">") {
+          inTag = false;
+          if (/^<code(?:\s|>)/i.test(tagBuf) && !/\/>\s*$/.test(tagBuf)) codeDepth++;
+          else if (/^<\/code\s*>/i.test(tagBuf)) codeDepth = Math.max(0, codeDepth - 1);
+          tagBuf = "";
+        }
+        continue;
+      }
+      if (char === "<" && /[a-zA-Z/!?]/.test(line[i + 1] ?? "")) {
+        inTag = true;
+        tagBuf = "<";
+        cell += char;
+        continue;
+      }
+    }
+    if (char === "|" && !backtick && !inTag && codeDepth === 0 && out.length < max - 1) {
       out.push(cell.trim());
       cell = "";
     } else cell += char;
@@ -83,20 +115,29 @@ export function cells(line: string, max = Infinity): string[] {
   return out;
 }
 
-/** The tint an item ends with, and the item without it. */
-function tinted(text: string): [string, string] {
-  const match = TINT_SUFFIX.exec(text);
-  return match ? [text.slice(0, match.index), ` rc-${match[1]}`] : [text, ""];
+/** A leading or trailing `{ok|warn|bad|info}` tint name, and the text without it. */
+function extractTint(text: string): [string, string] {
+  const suffix = TINT_SUFFIX.exec(text);
+  if (suffix) return [text.slice(0, suffix.index).trim(), suffix[1]!];
+  const prefix = TINT_PREFIX.exec(text);
+  if (prefix) return [text.slice(prefix[0].length).trim(), prefix[1]!];
+  return [text, ""];
 }
 
-/** An item's cells with a tint taken from the end of the item or the end of any cell. */
+/** The tint an item carries, as a class name (` rc-ok`), and the item without it. */
+function tinted(text: string): [string, string] {
+  const [body, name] = extractTint(text);
+  return name ? [body, ` rc-${name}`] : [text, ""];
+}
+
+/** An item's cells with a tint taken from the item or from the start/end of any cell. */
 function tintedCells(item: string, max: number): [string[], string] {
   const [body, tint] = tinted(item);
   let found = tint;
   const parts = cells(body, max).map((cell) => {
     const [text, own] = tinted(cell);
     if (own && !found) found = own;
-    return own ? text.trimEnd() : cell;
+    return own ? text : cell;
   });
   return [parts, found];
 }
@@ -195,21 +236,30 @@ function actions(block: Block): string {
   return `${heading(block.arg)}<div class="rc-row rc-gap-2 rc-actions">${out.join("")}</div>`;
 }
 
+function tableCell(cell: string): string {
+  const [text, tint] = extractTint(cell);
+  if (tint) return `<span class="rc-badge rc-${tint}">${inline(text || tint)}</span>`;
+  return inline(cell);
+}
+
 function table(block: Block): string {
-  const rows = block.text
+  const raw = block.text
     .filter((line) => !DIVIDER.test(line))
     .map((line) =>
-      cells(
-        line
-          .trim()
-          .replace(/^\|/, "")
-          .replace(/(?<!\\)\|$/, ""),
-      ),
+      line
+        .trim()
+        .replace(/^\|/, "")
+        .replace(/(?<!\\)\|$/, ""),
     );
-  const [head = [], ...body] = rows;
+  const [headLine, ...bodyLines] = raw;
+  const head = headLine === undefined ? [] : cells(headLine);
+  const cols = head.length || Infinity;
+  const body = bodyLines.map((line) => cells(line, cols));
   const sort = body.length > SORT_ROWS ? " data-rc-sort" : "";
   const th = head.map((cell) => `<th>${inline(cell)}</th>`).join("");
-  const tr = body.map((row) => `<tr>${row.map((cell) => `<td>${inline(cell)}</td>`).join("")}</tr>`).join("");
+  const tr = body
+    .map((row) => `<tr>${row.map((cell) => `<td>${tableCell(cell)}</td>`).join("")}</tr>`)
+    .join("");
   return `${heading(block.arg)}<table class="rc-table"${sort}><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
 }
 

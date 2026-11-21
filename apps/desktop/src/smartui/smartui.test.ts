@@ -396,13 +396,28 @@ describe("smart ui", () => {
     expect(BASE_CSS).toContain("~ :where(h1, h2, h3, h4) { margin-top: 24px; }");
   });
 
-  test("a table's long code and links wrap so it fits the reply", () => {
-    // A long path or URL in a cell wraps instead of widening the table past the reply,
-    // and a heading wraps at its spaces; only a table that truly cannot fit scrolls, in its box.
-    expect(BASE_CSS).toContain(".rc-table :is(code, kbd, a) { overflow-wrap: anywhere; }");
+  test("a table's long code and links wrap cleanly so it fits the reply", () => {
+    // Inline code wraps at path/identifier boundaries (<wbr> + break-word) before splitting mid-word,
+    // keys and raw URLs break anywhere, and headings wrap at spaces.
+    expect(BASE_CSS).toContain(".rc-table code { overflow-wrap: break-word; }");
+    expect(BASE_CSS).toContain(".rc-table :is(kbd, a) { overflow-wrap: anywhere; }");
     expect(BASE_CSS).toContain(".rc-table { overflow-wrap: normal;");
     expect(BASE_CSS).toContain(".rc-table-box { overflow-x: auto;");
+    expect(BASE_CSS).toContain("box-decoration-break: clone;");
     expect(BASE_CSS).not.toMatch(/\.rc-table th \{[^}]*white-space: nowrap/);
+    const { rcCodeParts } = kitHelpers();
+    expect(rcCodeParts("apps/desktop/src/ui/JobRunBar.tsx:3")).toEqual([
+      "apps/",
+      "desktop/",
+      "src/",
+      "ui/",
+      "JobRunBar.",
+      "tsx:",
+      "3",
+    ]);
+    expect(rcCodeParts("https://github.com/a/b")).toEqual(["https://", "github.", "com/", "a/", "b"]);
+    expect(rcCodeParts(":: cards")).toEqual([":: cards"]);
+    expect(rcCodeParts("plain")).toEqual(["plain"]);
   });
 
   test("blocks inside a panel, section, column, card or details keep the page's rhythm", () => {
@@ -1123,10 +1138,15 @@ describe("smart ui", () => {
     expect(() => new Function(script)).not.toThrow();
   });
 
-  test("cards, bars and pressable blocks read as visual controls", () => {
-    // A card lays out a title row and full-width lines, and a tint rings the recommended one.
+  test("cards, stats, bars and pressable blocks stay calm monochrome with title status dots", () => {
+    // Cards and stats share the same neutral surface; status tints sit on the title/label dot
+    // rather than washing or outlining the whole tile.
     expect(BASE_CSS).toContain(".rc-card > .rc-badge { margin-left: auto; }");
-    expect(BASE_CSS).toContain(".rc-card:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) {");
+    expect(BASE_CSS).toContain(
+      ":is(.rc-card, .rc-item):is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > :is(b, strong):first-child::before,",
+    );
+    expect(BASE_CSS).toContain(".rc-stat:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > .rc-stat-label::before");
+    expect(BASE_CSS).not.toContain(".rc-card:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) {");
     // Thick bars and taller charts.
     expect(BASE_CSS).toContain("height: 22px; border-radius: 6px;");
     expect(CHART_THEME_SCRIPT).toContain("d.datasets.bar.categoryPercentage = 0.86;");
@@ -1140,6 +1160,7 @@ describe("smart ui", () => {
     );
     expect(script).toContain('el.setAttribute("role", "button")');
     expect(script).toContain("focused.matches(RC_PRESSABLE)");
+    expect(script).toContain("rcCodeParts(");
   });
 
   test("sources fold quietly and charts answer the pointer at once", () => {
