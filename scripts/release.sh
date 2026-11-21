@@ -1222,7 +1222,7 @@ phase_verify_distribution() {
     fi
 
     if $DRY_RUN; then
-        info "[dry-run] Would verify the Homebrew formula, run rustcode --update, and check rustcode --version."
+        info "[dry-run] Would verify the Homebrew formula, run rc --update, and check rc --version."
         return
     fi
 
@@ -1246,17 +1246,18 @@ phase_verify_distribution() {
     fi
     info "  ✓ Homebrew formula: $formula_version"
 
-    local rustcode_bin installed_version
-    rustcode_bin="$(command -v rustcode || true)"
-    if [[ -z "$rustcode_bin" ]]; then
-        die "rustcode is not installed locally; cannot verify the supported updater."
+    # The orchestrator CLI is `rc`; the standalone `rustcode` harness is optional.
+    local rc_bin installed_version
+    rc_bin="$(command -v rc || true)"
+    if [[ -z "$rc_bin" ]]; then
+        die "rc is not installed locally; cannot verify the supported updater."
     fi
-    "$rustcode_bin" --update
-    installed_version="$("$rustcode_bin" --version | awk '{print $2}')"
+    "$rc_bin" --update
+    installed_version="$("$rc_bin" --version | awk '{print $2}')"
     if [[ "$installed_version" != "$VERSION" ]]; then
-        die "Installed rustcode version mismatch after update: expected $VERSION, found ${installed_version:-none}."
+        die "Installed rc version mismatch after update: expected $VERSION, found ${installed_version:-none}."
     fi
-    info "  ✓ Installed rustcode: $installed_version"
+    info "  ✓ Installed rc: $installed_version"
     info "Release v$VERSION complete."
 }
 
