@@ -31,7 +31,10 @@ use agent_client_protocol::schema::v1::{
     ClientCapabilities, ContentBlock, SessionInfoUpdate, SessionNotification, SessionUpdate,
     ToolCallId, ToolCallStatus,
 };
-use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification, JsonRpcRequest};
+use agent_client_protocol::{
+    Client, ConnectionTo, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+    UntypedMessage,
+};
 use serde_json::json;
 
 use super::cursor::{LogMark, Position, UpdateLog, rustcode_meta};
@@ -426,6 +429,7 @@ impl Registry {
     ) -> Result<(), agent_client_protocol::Error> {
         let mut failure = None;
         let mut delivered = false;
+        let mut untyped = None;
         for (id, entry) in &mut self.entries {
             let Some(slot) = entry.sessions.get_mut(session_id) else {
                 continue;
@@ -434,7 +438,11 @@ impl Registry {
                 slot.queued = cursor;
                 continue;
             }
-            match entry.connection.send_notification(notification.clone()) {
+            let message = match &untyped {
+                Some(message) => message,
+                None => untyped.insert(notification.to_untyped_message()?),
+            };
+            match send_untyped_notification(&entry.connection, message.clone()) {
                 Ok(()) => {
                     slot.queued = cursor;
                     delivered = true;
@@ -680,9 +688,13 @@ impl Clients {
             .filter(|entry| to(entry))
             .map(|entry| entry.connection.clone())
             .collect::<Vec<_>>();
-        for connection in connections {
-            let _ = connection.send_notification(notification.clone());
+        if connections.is_empty() {
+            return;
         }
+        let Ok(untyped) = notification.to_untyped_message() else {
+            return;
+        };
+        send_untyped_to_connections(connections, untyped);
     }
 
     fn attach(&self, id: ClientId, session_id: &str) {
@@ -726,16 +738,51 @@ fn audience_of(registry: &Registry, session_id: &str) -> Vec<ConnectionTo<Client
         .collect()
 }
 
+/// Single monomorphized notification send so `ConnectionTo::send_notification`
+/// is not instantiated per notification type.
+fn send_untyped_notification(
+    connection: &ConnectionTo<Client>,
+    notification: UntypedMessage,
+) -> Result<(), agent_client_protocol::Error> {
+    connection.send_notification(notification)
+}
+
+fn send_notification_erased<N: JsonRpcNotification>(
+    connection: &ConnectionTo<Client>,
+    notification: N,
+) -> Result<(), agent_client_protocol::Error> {
+    send_untyped_notification(connection, notification.to_untyped_message()?)
+}
+
+fn send_untyped_to_connections(
+    connections: Vec<ConnectionTo<Client>>,
+    notification: UntypedMessage,
+) {
+    for connection in connections {
+        let _ = send_untyped_notification(&connection, notification.clone());
+    }
+}
+
 /// Send `notification` to each of `connections`. It fails only when every
 /// connection it was sent to failed; with none it goes nowhere.
 fn send_all<N: JsonRpcNotification>(
     connections: Vec<ConnectionTo<Client>>,
     notification: N,
 ) -> Result<(), agent_client_protocol::Error> {
+    if connections.is_empty() {
+        return Ok(());
+    }
+    send_all_untyped(connections, notification.to_untyped_message()?)
+}
+
+fn send_all_untyped(
+    connections: Vec<ConnectionTo<Client>>,
+    notification: UntypedMessage,
+) -> Result<(), agent_client_protocol::Error> {
     let mut failure = None;
     let mut delivered = false;
     for connection in connections {
-        match connection.send_notification(notification.clone()) {
+        match send_untyped_notification(&connection, notification.clone()) {
             Ok(()) => delivered = true,
             Err(error) => failure = Some(error),
         }
@@ -744,6 +791,13 @@ fn send_all<N: JsonRpcNotification>(
         Some(error) if !delivered => Err(error),
         _ => Ok(()),
     }
+}
+
+async fn send_untyped_request(
+    connection: ConnectionTo<Client>,
+    request: UntypedMessage,
+) -> Result<serde_json::Value, agent_client_protocol::Error> {
+    connection.send_request(request).block_task().await
 }
 
 /// A turn running in one session; dropping it ends the turn's record.
@@ -912,26 +966,27 @@ impl Peer {
                 .unwrap_or_default(),
         };
         if reset {
-            self.connection
-                .send_notification(reset_marker(session_id))?;
+            send_notification_erased(&self.connection, reset_marker(session_id))?;
         }
         for update in replay.into_iter().chain(running) {
-            self.connection
-                .send_notification(snapshot(session_id, update))?;
+            send_notification_erased(&self.connection, snapshot(session_id, update))?;
         }
         for (cursor, update) in missed {
-            self.connection
-                .send_notification(notification(session_id, update, cursor))?;
+            send_notification_erased(&self.connection, notification(session_id, update, cursor))?;
         }
         if let Some(activity) = registry.activities.get(session_id) {
-            self.connection
-                .send_notification(activity_notification(session_id, activity))?;
+            send_notification_erased(
+                &self.connection,
+                activity_notification(session_id, activity),
+            )?;
         }
-        self.connection
-            .send_notification(registry.timings.get(session_id).map_or_else(
+        send_notification_erased(
+            &self.connection,
+            registry.timings.get(session_id).map_or_else(
                 || ended_phase(session_id),
                 |timing| timing.notification(session_id),
-            ))?;
+            ),
+        )?;
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
             entry
@@ -970,21 +1025,24 @@ impl Peer {
             return Ok(None);
         };
         for logged in missed {
-            self.connection.send_notification(notification(
-                session_id,
-                logged.update.clone(),
-                logged.cursor,
-            ))?;
+            send_notification_erased(
+                &self.connection,
+                notification(session_id, logged.update.clone(), logged.cursor),
+            )?;
         }
         if let Some(activity) = registry.activities.get(session_id) {
-            self.connection
-                .send_notification(activity_notification(session_id, activity))?;
+            send_notification_erased(
+                &self.connection,
+                activity_notification(session_id, activity),
+            )?;
         }
-        self.connection
-            .send_notification(registry.timings.get(session_id).map_or_else(
+        send_notification_erased(
+            &self.connection,
+            registry.timings.get(session_id).map_or_else(
                 || ended_phase(session_id),
                 |timing| timing.notification(session_id),
-            ))?;
+            ),
+        )?;
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
             entry
@@ -1019,8 +1077,7 @@ impl Peer {
         session_id: &str,
         update: SessionUpdate,
     ) -> Result<(), agent_client_protocol::Error> {
-        self.connection
-            .send_notification(snapshot(session_id, update))
+        send_notification_erased(&self.connection, snapshot(session_id, update))
     }
 }
 
@@ -1212,13 +1269,24 @@ impl SessionClients {
         need: Option<Capability>,
         request: R,
     ) -> Result<R::Response, agent_client_protocol::Error> {
+        let untyped = request.to_untyped_message()?;
+        let method = untyped.method.clone();
+        let value = self.request_untyped(need, untyped).await?;
+        R::Response::from_value(&method, value)
+    }
+
+    async fn request_untyped(
+        &self,
+        need: Option<Capability>,
+        request: UntypedMessage,
+    ) -> Result<serde_json::Value, agent_client_protocol::Error> {
         let Some(connection) = self.requester(need) else {
             return Err(agent_client_protocol::Error::internal_error().data(format!(
                 "no connected client has session {}",
                 self.session_id
             )));
         };
-        connection.send_request(request).block_task().await
+        send_untyped_request(connection, request).await
     }
 }
 
