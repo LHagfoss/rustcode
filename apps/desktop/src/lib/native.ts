@@ -235,6 +235,11 @@ export function openThreadLog(id: string): Promise<string> {
   return invoke<string>("thread_log_open", { id });
 }
 
+/** The last `lines` lines of a thread's logs/debug.log, empty when it has none. */
+export function threadLogTail(id: string, lines: number): Promise<string> {
+  return invoke<string>("thread_log_tail", { id, lines });
+}
+
 /**
  * Saves text where the user picks: the save panel in the app, a download in
  * the browser. Answers where it went, or null when the user cancelled.

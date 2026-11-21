@@ -1433,6 +1433,7 @@ export const Composer = memo(function Composer({
         open={reportOpen}
         onOpenChange={setReportOpen}
         harness={thread ? harness?.name : undefined}
+        threadId={thread?.id}
       />
       {thread && (
         <SendLaterDialog
