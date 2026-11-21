@@ -129,7 +129,7 @@ pub(super) fn call_args(name: &str, args: &mut Value) -> Result<ReplyNames, Call
     if name == "list_loops" {
         return Ok(ReplyNames::LoopAlias);
     }
-    if !super::is_tool(tool) && tool != crate::workflow::STATUS_TOOL_NAME {
+    if !super::is_tool(tool) && !crate::workflow::is_tool(tool) {
         return Ok(ReplyNames::Legacy);
     }
     let mut names = if tool != name {

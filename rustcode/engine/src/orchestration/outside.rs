@@ -127,6 +127,7 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
     use super::*;
     Some(match tool {
         WHOAMI
+        | crate::workflow::STATUS_TOOL_NAME
         | LIST_SESSIONS
         | READ_SESSION
         | SEARCH_SESSIONS
@@ -149,7 +150,9 @@ pub fn required_scope(tool: &str) -> Option<Scope> {
         START_SESSION | MESSAGE_SESSION | FAN_OUT | INTERRUPT_SESSION | MANAGE_QUEUE => {
             Scope::Delegate
         }
-        MERGE_WHEN_GREEN
+        crate::workflow::RUN_TOOL_NAME
+        | crate::workflow::STOP_TOOL_NAME
+        | MERGE_WHEN_GREEN
         | CLEANUP_WORKTREE
         | UPDATE_SESSION
         | CONFIGURE_SESSION
@@ -186,7 +189,10 @@ pub fn implemented(tool: &str) -> bool {
     use super::*;
     matches!(
         tool,
-        WHOAMI
+        crate::workflow::RUN_TOOL_NAME
+            | crate::workflow::STATUS_TOOL_NAME
+            | crate::workflow::STOP_TOOL_NAME
+            | WHOAMI
             | LIST_SESSIONS
             | READ_SESSION
             | SEARCH_SESSIONS
@@ -1108,6 +1114,8 @@ pub(super) async fn answer_granted(
     }
     let checked = if crate::manage::is_tool(tool) {
         crate::manage::validate(tool, args)
+    } else if crate::workflow::is_tool(tool) {
+        validate_workflow(tool, args)
     } else {
         super::validate(tool, args)
     };
@@ -1278,6 +1286,21 @@ pub fn instructions(grant: &Grant) -> String {
     )
 }
 
+fn validate_workflow(tool: &str, args: &Value) -> Result<(), String> {
+    let mut args = args.clone();
+    let target = args
+        .as_object_mut()
+        .and_then(|fields| fields.remove("session_id"));
+    if !target
+        .as_ref()
+        .and_then(Value::as_str)
+        .is_some_and(rustcode_session::valid_session_id)
+    {
+        return Err("thread_id must name the thread that owns the workflow".to_owned());
+    }
+    crate::workflow::validate(tool, &args)
+}
+
 /// The MCP tool entries a grant of `scope` sees: its scope's tools that the
 /// engine can run for it, plus `whoami`.
 pub fn tools_for(scope: Scope) -> Vec<Value> {
@@ -1295,6 +1318,19 @@ pub fn tools_for(scope: Scope) -> Vec<Value> {
         };
         if needed > scope || !implemented(&name) || name == WHOAMI {
             continue;
+        }
+        if crate::workflow::is_tool(&name) {
+            let schema = &mut entry["inputSchema"];
+            schema["properties"]["session_id"] = json!({
+                "type": "string",
+                "description": "Thread that owns the run and its worker threads"
+            });
+            if schema["required"].is_null() {
+                schema["required"] = json!([]);
+            }
+            if let Some(required) = schema["required"].as_array_mut() {
+                required.push(json!("session_id"));
+            }
         }
         if name == super::CREATE_LOOP {
             let schema = &mut entry["inputSchema"];
@@ -1358,7 +1394,10 @@ async fn whoami(
     let mut can: Vec<&str> = Vec::new();
     let mut needs_more: Vec<Value> = Vec::new();
     let mut not_yet: Vec<&str> = Vec::new();
-    for name in super::tool_names(super::VERSION) {
+    for name in super::tool_names(super::VERSION)
+        .into_iter()
+        .chain(crate::workflow::TOOL_NAMES)
+    {
         let Some(needed) = required_scope(name) else {
             continue;
         };
@@ -2255,6 +2294,44 @@ mod tests {
         assert_eq!(value["projects"][0], "/work/app");
         assert!(value.get("tokenHash").is_none() && !answer.content.contains(&token));
         assert_eq!(fixture.ran(), 0, "whoami is answered by the gate");
+    }
+
+    #[test]
+    fn workflow_tools_use_an_explicit_thread_at_their_grant_scope() {
+        use crate::workflow::{RUN_TOOL_NAME, STATUS_TOOL_NAME, STOP_TOOL_NAME};
+
+        for (tool, scope, args) in [
+            (RUN_TOOL_NAME, Scope::Manage, json!({"script": "return 1"})),
+            (STATUS_TOOL_NAME, Scope::ReadOnly, json!({})),
+            (
+                STOP_TOOL_NAME,
+                Scope::Manage,
+                json!({"run_id": "wf-1-aaaaaaaa"}),
+            ),
+        ] {
+            assert_eq!(required_scope(tool), Some(scope));
+            let entry = tools_for(scope)
+                .into_iter()
+                .find(|entry| entry["name"] == tool)
+                .unwrap();
+            let schema = &entry["inputSchema"];
+            assert_eq!(schema["properties"]["thread_id"]["type"], "string");
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("thread_id"))
+            );
+            assert!(validate_workflow(tool, &args).is_err());
+
+            let mut args = args;
+            args["thread_id"] = json!("thread-1");
+            super::super::mcp_names::call_args(tool, &mut args).unwrap();
+            assert_eq!(args["session_id"], "thread-1");
+            assert!(validate_workflow(tool, &args).is_ok());
+            args["session_id"] = json!("../thread-1");
+            assert!(validate_workflow(tool, &args).is_err());
+        }
     }
 
     #[test]

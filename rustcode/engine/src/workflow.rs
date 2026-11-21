@@ -321,7 +321,8 @@ fn spawn(store: Store, runner: Arc<dyn AgentRunner>, record: RunRecord, source: 
 
 /// Answer one workflow tool call made by `thread`: start, read or stop a run.
 /// The engine's hub calls it for a harness's `rustcode` MCP server, and the
-/// built-in harness for its own turn (#3943). Workers start through `client`
+/// built-in harness for its own turn (#3943). Only a tool call from the owning
+/// thread acknowledges a final result. Workers start through `client`
 /// when an app hosts the thread's tools, and the engine's own answer when none
 /// does. Workers are delegates, so a client below version 2 has no runs.
 pub(crate) async fn answer(
@@ -331,6 +332,7 @@ pub(crate) async fn answer(
     cancel: &CancellationToken,
     tool: &str,
     args: &Value,
+    from_owner: bool,
 ) -> Result<String, String> {
     if version < 2 || !is_tool(tool) {
         return Err(format!("unknown tool '{tool}'"));
@@ -342,11 +344,11 @@ pub(crate) async fn answer(
             .get("run_id")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        stop(thread, run_id, true)
+        stop(thread, run_id, from_owner)
             .await
             .map(|answer| answer.to_string())
     } else {
-        status(thread, args, cancel).await
+        status(thread, args, cancel, from_owner).await
     }
 }
 
@@ -465,20 +467,22 @@ fn resume_one(store: &Store, run_id: &str, runner: Arc<dyn AgentRunner>) -> Resu
 }
 
 /// `workflow_status`: one run in full, or this thread's runs in brief.
-pub(crate) async fn status(
+async fn status(
     thread: &str,
     args: &Value,
     cancel: &CancellationToken,
+    from_owner: bool,
 ) -> Result<String, String> {
     let store = Store::for_thread(thread)
         .ok_or_else(|| "this thread has no folder that keeps runs".to_owned())?;
-    status_in(&store, args, cancel).await
+    status_in(&store, args, cancel, from_owner).await
 }
 
 async fn status_in(
     store: &Store,
     args: &Value,
     cancel: &CancellationToken,
+    from_owner: bool,
 ) -> Result<String, String> {
     validate(STATUS_TOOL_NAME, args)?;
     let Some(run_id) = args.get("run_id").and_then(Value::as_str) else {
@@ -496,7 +500,7 @@ async fn status_in(
         let waiting = deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline);
         if record.status.settled() || !waiting || cancel.is_cancelled() {
             // The agent reads how it ended: its thread need not be told again.
-            if record.status.settled() {
+            if from_owner && record.status.settled() {
                 mark_told(store, &record.id);
             }
             return Ok(report(store, &record).to_string());
@@ -1034,7 +1038,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let args = json!({"run_id": record.id, "wait_ms": 300});
         // Nothing drives it: the wait ends at its deadline with the run running.
-        let waited = status_in(&store, &args, &cancel).await.unwrap();
+        let waited = status_in(&store, &args, &cancel, true).await.unwrap();
         let waited: Value = serde_json::from_str(&waited).unwrap();
         assert_eq!(waited["status"], json!("running"));
 
@@ -1052,16 +1056,16 @@ mod tests {
         };
         let args = json!({"run_id": record.id, "wait_ms": 20_000});
         let started = tokio::time::Instant::now();
-        let ended = status_in(&store, &args, &cancel).await.unwrap();
+        let ended = status_in(&store, &args, &cancel, true).await.unwrap();
         settle.await.unwrap();
         let ended: Value = serde_json::from_str(&ended).unwrap();
         assert_eq!(ended["status"], json!("done"));
         assert_eq!(ended["result"], json!({"answer": 42}));
         assert!(started.elapsed() < Duration::from_secs(10));
 
-        let missing = status_in(&store, &json!({"run_id": "wf-0-00000000"}), &cancel).await;
+        let missing = status_in(&store, &json!({"run_id": "wf-0-00000000"}), &cancel, true).await;
         assert!(missing.unwrap_err().contains("no run"));
-        let listed = status_in(&store, &json!({}), &cancel).await.unwrap();
+        let listed = status_in(&store, &json!({}), &cancel, true).await.unwrap();
         assert!(listed.contains(&record.id));
     }
 
@@ -1244,12 +1248,14 @@ mod tests {
         let cancel = CancellationToken::new();
         // Read while it runs: nothing is told yet.
         let args = json!({"run_id": record.id});
-        status_in(&store, &args, &cancel).await.unwrap();
+        status_in(&store, &args, &cancel, true).await.unwrap();
         assert!(!store.load(&record.id).unwrap().woken);
         stop_in(&store, &record.id).await.unwrap();
         assert!(!store.load(&record.id).unwrap().woken);
+        status_in(&store, &args, &cancel, false).await.unwrap();
+        assert!(!store.load(&record.id).unwrap().woken);
         // Read after it ended: the agent has the answer.
-        status_in(&store, &args, &cancel).await.unwrap();
+        status_in(&store, &args, &cancel, true).await.unwrap();
         assert!(store.load(&record.id).unwrap().woken);
         assert!(!claim_wake_in(&store, &record.id).unwrap());
     }
