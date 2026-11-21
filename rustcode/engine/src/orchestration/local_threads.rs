@@ -1710,19 +1710,50 @@ pub(crate) enum LoopRunEnd {
         thread_id: Option<String>,
         error: String,
     },
-    /// Nothing ran, and why: the app is closed, or the Loop's thread was busy.
+    /// Nothing ran because the job's thread was busy or held by another process.
     Skipped(String),
     /// The daemon stopped the run.
     Cancelled { thread_id: Option<String> },
 }
 
-/// The engine a Loop runs on: the one the app started (`run/engine.json`),
-/// else a shared server. Only connecting tells either still runs.
-fn loop_endpoint() -> Option<String> {
-    let run_dir = crate::server::run_dir().ok()?;
-    crate::server::engine_endpoint::published(&run_dir)
-        .map(|info| info.endpoint)
-        .or_else(|| crate::server::running().map(|info| info.endpoint))
+/// Prefer the app's engine, then the shared server. A crash can leave a stale
+/// endpoint description, so try the connection before starting a server.
+async fn open_job_engine(access: Access, thread_id: Option<&str>) -> Result<(Engine, u32), Value> {
+    let run_dir = crate::server::run_dir().map_err(|error| {
+        unavailable(format!(
+            "could not locate the RustCode run directory: {error}"
+        ))
+    })?;
+    let app = crate::server::engine_endpoint::published(&run_dir);
+    let shared = crate::server::running();
+    let mut candidates = [app, shared];
+    // A repeat run should use the engine already holding its thread, even
+    // if the app has been opened since the previous run.
+    if let (Some(thread_id), Some(config_dir)) = (thread_id, crate::config::get_config_dir()) {
+        candidates.sort_by_cached_key(|info| {
+            info.as_ref().is_none_or(|info| {
+                crate::config::session_open_elsewhere(&config_dir, thread_id, info.pid)
+            })
+        });
+    }
+    for info in candidates.into_iter().flatten() {
+        if let Ok(engine) = Engine::open_at(info.endpoint, access).await {
+            return Ok((engine, info.pid));
+        }
+    }
+
+    let program = std::env::current_exe().map_err(|error| {
+        unavailable(format!("could not locate the RustCode executable: {error}"))
+    })?;
+    let stream = crate::server::start_and_connect(&program)
+        .await
+        .map_err(|error| {
+            unavailable(format!("could not start the server for this job: {error}"))
+        })?;
+    let info = crate::server::running()
+        .ok_or_else(|| unavailable("the shared server stopped while the job was connecting"))?;
+    let engine = Engine::open_stream(stream, access).await?;
+    Ok((engine, info.pid))
 }
 
 /// How a Loop run's answer starts when it found nothing for the user; the
@@ -1937,7 +1968,7 @@ fn refusal(value: Value) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
-/// Start one Loop run's thread on the app's engine and wait for its turn to
+/// Start one job run's thread on a local engine and wait for its turn to
 /// end. A read-only run answers every permission request with a refusal, the
 /// way an Ask thread with nobody at the keyboard would; otherwise it runs at
 /// Full access, as a delegate does.
@@ -1952,24 +1983,33 @@ pub(crate) async fn run_loop_thread(
     if !std::path::Path::new(&run.workspace).is_dir() {
         return failed(format!("{} is not a folder", run.workspace));
     }
-    let Some(endpoint) = loop_endpoint() else {
-        return LoopRunEnd::Skipped("RustCode was not open, so the run was skipped".to_owned());
-    };
     let access = if run.read_only {
         Access::Ask
     } else {
         Access::Full
     };
-    let engine = match Engine::open_at(endpoint, access).await {
-        Ok(engine) => engine,
-        Err(value) => return LoopRunEnd::Skipped(refusal(value)),
+    let (engine, engine_pid) = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return LoopRunEnd::Cancelled { thread_id: None },
+        result = open_job_engine(access, run.thread_id.as_deref()) => match result {
+            Ok(engine) => engine,
+            Err(value) => return failed(refusal(value)),
+        },
     };
     let fresh = run.thread_id.is_none();
     // The harness and account a fresh thread started on, for a sign-in error.
     let mut run_login: Option<(crate::harness::ResolvedHarness, Option<String>)> = None;
     let thread_id = match run.thread_id.as_deref() {
         Some(thread_id) => {
-            match open_loop_thread(&engine, thread_id, &run.workspace, &cancellation).await {
+            match open_loop_thread(
+                &engine,
+                engine_pid,
+                thread_id,
+                &run.workspace,
+                &cancellation,
+            )
+            .await
+            {
                 Ok(()) => thread_id.to_owned(),
                 Err(end) => return end,
             }
@@ -2103,6 +2143,7 @@ fn signed_out_error(
 /// process, skips it.
 async fn open_loop_thread(
     engine: &Engine,
+    engine_pid: u32,
     thread_id: &str,
     workspace: &str,
     cancellation: &tokio_util::sync::CancellationToken,
@@ -2121,9 +2162,8 @@ async fn open_loop_thread(
             "the Loop's thread was working on a turn, so the run was skipped".to_owned(),
         ));
     }
-    if !crate::acp::is_acp_session(thread_id)
-        && let Some(config_dir) = crate::config::get_config_dir()
-        && crate::config::session_open_by(&config_dir, thread_id).is_some()
+    if let Some(config_dir) = crate::config::get_config_dir()
+        && crate::config::session_open_elsewhere(&config_dir, thread_id, engine_pid)
     {
         return Err(LoopRunEnd::Skipped(
             "the Loop's thread is open in another RustCode process, so the run was skipped"
@@ -2193,7 +2233,7 @@ impl Engine {
     }
 
     /// Open `endpoint`, which may belong to another local process: the daemon
-    /// reaches the app's engine this way to run a Loop.
+    /// reaches the app's engine or the shared server this way.
     async fn open_at(endpoint: String, access: Access) -> Result<Self, Value> {
         let stream =
             tokio::time::timeout(CONNECT_TIMEOUT, crate::server::listen::connect(&endpoint))
@@ -2208,6 +2248,13 @@ impl Engine {
                         "the engine's local endpoint {endpoint} could not be opened ({error}); open the RustCode app and retry"
                     ))
                 })?;
+        Self::open_stream(stream, access).await
+    }
+
+    async fn open_stream(
+        stream: crate::server::listen::ClientStream,
+        access: Access,
+    ) -> Result<Self, Value> {
         let (read, write) = tokio::io::split(stream);
         let transport = crate::acp::lines_transport(read, write);
         let (ready, ready_rx) = oneshot::channel();

@@ -143,11 +143,24 @@ pub fn hold_primary_session(config_dir: &Path, session_id: &str) {
 /// Whether a live process has `session_id` open, and what kind of process it
 /// is when it said so (`None` inside means it did not). This process counts.
 pub fn session_open_by(config_dir: &Path, session_id: &str) -> Option<Option<SessionHolder>> {
+    session_open_record(config_dir, session_id).map(|record| record.map(|record| record.holder))
+}
+
+/// Skip a run if the thread is held by a process other than its target engine.
+pub(crate) fn session_open_elsewhere(config_dir: &Path, session_id: &str, engine_pid: u32) -> bool {
+    session_open_record(config_dir, session_id)
+        .is_some_and(|record| record.is_none_or(|record| record.pid != engine_pid))
+}
+
+fn session_open_record(config_dir: &Path, session_id: &str) -> Option<Option<OpenRecord>> {
     let path = open_lock_path(config_dir, session_id)?;
     if let Some(entry) = lock(registry()).get(&path)
         && entry.file.is_some()
     {
-        return Some(entry.holders.iter().next().copied());
+        return Some(entry.holders.iter().next().map(|&holder| OpenRecord {
+            pid: std::process::id(),
+            holder,
+        }));
     }
     if !path.exists() {
         return None;
@@ -159,11 +172,7 @@ pub fn session_open_by(config_dir: &Path, session_id: &str) -> Option<Option<Ses
         Err(std::fs::TryLockError::WouldBlock) => {
             let mut text = String::new();
             let _ = file.read_to_string(&mut text);
-            Some(
-                serde_json::from_str::<OpenRecord>(&text)
-                    .ok()
-                    .map(|record| record.holder),
-            )
+            Some(serde_json::from_str(&text).ok())
         }
         Err(std::fs::TryLockError::Error(_)) => None,
     }
@@ -196,6 +205,9 @@ mod tests {
             session_open_by(config.path(), &id),
             Some(Some(SessionHolder::App))
         );
+        let owner = std::process::id();
+        assert!(!session_open_elsewhere(config.path(), &id, owner));
+        assert!(session_open_elsewhere(config.path(), &id, owner ^ 1));
         // This process cannot take it while the other holds it.
         assert!(!hold_session_open(
             config.path(),

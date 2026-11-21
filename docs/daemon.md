@@ -203,10 +203,10 @@ login while named accounts exist.
   the secret and answers 200 without a run. A job saved with
   `{ "kind": "manual" }` has no schedule and runs only from its webhook or
   Run now.
-- **The app must be open.** With no engine to reach, the run is recorded as
-  cancelled with `{"skipped": …}` and does not count as a failure. (A
-  headless engine the daemon starts itself would lift this; not built yet,
-  issue 3937.) A webhook call while the app is closed finds no listener.
+- **Scheduled runs can start with the app closed.** While the scheduler
+  daemon is running, it uses the app's engine when available and starts the
+  shared RustCode server on demand otherwise. The run and its result appear
+  in Jobs when the app reopens. Webhooks still require a running listener.
 - **A missed run fires once.** A job's cron uses the `run_once` misfire
   policy: runs missed while the computer slept coalesce into one.
 - **No overlapping runs.** The scheduler never claims a job with a run still
@@ -238,8 +238,7 @@ machine is offline the hub's mailbox holds the run, for up to seven days.
 - A job for another machine takes no script (the script would run on the
   hub). The editor sends no account, so the member uses its own default
   login; an agent may name one of the member's.
-- A hub with no remote gateway running skips the run, like a local run while
-  the app is closed.
+- A hub with no remote gateway running skips the run.
 
 Editing a job (`DaemonRequest::Update`) keeps its id, creation time, paused
 state and history, moves its next run to what the new schedule says, and is

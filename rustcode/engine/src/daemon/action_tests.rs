@@ -951,7 +951,7 @@ async fn a_loop_run_reaches_the_backend_titled_with_the_loops_name() {
 }
 
 #[test]
-fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
+fn a_loop_run_records_its_thread_and_skip_reason() {
     use crate::orchestration::local_threads::LoopRunEnd;
     match loop_outcome(LoopRunEnd::Finished {
         thread_id: "t-1".into(),
@@ -1022,8 +1022,8 @@ fn a_loop_runs_thread_is_its_output_and_a_closed_app_skips_it() {
         other => panic!("{other:?}"),
     }
     assert!(matches!(
-        loop_outcome(LoopRunEnd::Skipped("RustCode was not open".into())),
-        RunOutcome::Cancelled { output: Some(output) } if output.contains("not open")
+        loop_outcome(LoopRunEnd::Skipped("the job thread was busy".into())),
+        RunOutcome::Cancelled { output: Some(output) } if output.contains("thread was busy")
     ));
 }
 
