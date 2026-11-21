@@ -74,7 +74,6 @@ export function addFeedbackToThread(items: readonly FeedbackItem[], pull: PullRe
     field.focus();
     field.setSelectionRange(field.value.length, field.value.length);
   });
-  toast(`Added ${count(items.length, "comment")} to the composer`, "success");
 }
 
 const tint = (kind: PatchLine["kind"]) =>

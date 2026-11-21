@@ -413,7 +413,7 @@ that change use `tabular`.
   to React state, which is committed once the pointer is up. Animate only
   `transform`, `opacity` and those two; never `filter` or `box-shadow` on
   something that moves every frame.
-- Toasts drop in with `rc-toast-in` (220ms, from 10px above) and lift away
+- Toasts rise in with `rc-toast-in` (220ms, from 10px below) and drop away
   in 140ms `ease-in`; a drag follows the pointer and snaps back or flies off
   in 160ms, and a card shown meanwhile takes the top of the stack. At rest only
   the front card is in flow, the ones behind peeking 6px above it; hovering or
@@ -671,16 +671,17 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   Progress is a 2px accent bar along its foot. `Toaster` shows at most three
   (`state/toasts.ts` enforces the queue), newest on top: at rest only the
   front card is fully shown, the others peeking 6px above it, and hovering or
-  focusing the stack fans them out 8px apart. Centred at the top of the chat
-  column 8px under its header (the window's top over Settings). An
+  focusing the stack fans them out 8px apart, upward. In the window's
+  bottom-right corner, 16px in, away from the transcript being read. An
   auto-dismissing card drains a 1px accent hairline along its foot, which
   stops with its clock; a card replaced in place from spinner to check settles
   onto the check. The same message again refreshes its card and
   restarts its time instead of stacking; past three, the oldest is dropped.
-  Info and success leave after 3s, errors after 7s. The pointer or focus on
+  Info and success leave after 2.5s, errors after 5s. The pointer or focus on
   the stack, a drag, and a window in the background stop every clock, which
-  resumes with what was left. ×, Escape (after a draft or an open overlay has
-  taken it), or a drag past 48px up or sideways dismisses; a drag follows the
+  resumes with what was left. A click anywhere on the card, ×, Escape (after a
+  draft or an open overlay has taken it), or a drag past 48px sideways or 24px
+  down dismisses; a drag follows the
   pointer and snaps back in 160ms, and never selects text. Use a
   toast for what is not tied to a message (copied, engine events, errors of an
   action), not to repeat what the screen already shows (no pin, archive,

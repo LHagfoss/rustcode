@@ -114,19 +114,19 @@ describe("toast queue", () => {
 
   test("pausing keeps what is left, resuming starts from it, and nothing expires while paused", () => {
     let list = add([], "notice", 0);
-    expect(due(list, 2999)).toEqual([]);
-    expect(due(list, 3000)).toEqual([list[0]!.id]);
+    expect(due(list, 2499)).toEqual([]);
+    expect(due(list, 2500)).toEqual([list[0]!.id]);
     list = pause(list, 1000);
     expect(list[0]!.expiresAt).toBeNull();
-    expect(list[0]!.remainingMs).toBe(2000);
+    expect(list[0]!.remainingMs).toBe(1500);
     expect(due(list, 999_999)).toEqual([]);
     // Pausing twice does not eat the remaining time.
     list = pause(list, 5000);
-    expect(list[0]!.remainingMs).toBe(2000);
+    expect(list[0]!.remainingMs).toBe(1500);
     list = resume(list, 5000);
-    expect(list[0]!.expiresAt).toBe(7000);
-    expect(due(list, 6999)).toEqual([]);
-    expect(due(list, 7000)).toEqual([list[0]!.id]);
+    expect(list[0]!.expiresAt).toBe(6500);
+    expect(due(list, 6499)).toEqual([]);
+    expect(due(list, 6500)).toEqual([list[0]!.id]);
   });
 
   test("a persistent toast never expires and is never paused", () => {

@@ -2,7 +2,7 @@
 // draws it). Newest first, at most three: a burst of orchestration notices
 // stacks a few readable cards instead of hiding everything behind one and a
 // "+N". The same message again refreshes its card and timer rather than
-// stacking a copy. Info and success leave after 3 s, errors after 7 s, and
+// stacking a copy. Info and success leave after 2.5 s, errors after 5 s, and
 // nothing expires while the pointer or focus is on the stack, while the window
 // is in the background, or while one is being dragged.
 
@@ -44,8 +44,8 @@ export interface ToastInput {
 
 /** The most cards shown at once. */
 export const TOAST_LIMIT = 3;
-export const TOAST_INFO_MS = 3000;
-export const TOAST_ERROR_MS = 7000;
+export const TOAST_INFO_MS = 2500;
+export const TOAST_ERROR_MS = 5000;
 /** Exit animation of a toast (docs/design.md, Motion). */
 export const TOAST_EXIT_MS = 120;
 

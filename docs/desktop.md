@@ -1372,12 +1372,13 @@ composer's keys stay outside the table.
   restarted in a loop. A turn that lost the network resumes by the internet
   wait above.
 - **Toasts** (`src/ui/Toaster.tsx`, queue in `state/toasts.ts`, `toast()`
-  in `state/store.ts`): up to three, newest on top, centred under the chat
-  column's header (the window's top while Settings is open), frosted like
-  the composer. Info and success leave after 3 s, errors after 7 s; the
+  in `state/store.ts`): up to three, newest in front, in the window's
+  bottom-right corner, frosted like the composer. Info and success leave
+  after 2.5 s, errors after 5 s; the
   pointer or focus on the stack, a drag, and a backgrounded window pause
-  every clock. Hover and focus resume with what was left. A drag past 48px
-  up or sideways, Escape, or the close button dismisses, and a drag never
+  every clock. Hover and focus resume with what was left. A click on the
+  card, a drag past 48px sideways or 24px down, Escape, or the close button
+  dismisses, and a drag never
   selects text. A toast may carry one action. The same text again restarts
   the shown toast, and an `id` replaces one in place (the engine's). Use
   them for copying, errors not tied to a message, and engine events, not
