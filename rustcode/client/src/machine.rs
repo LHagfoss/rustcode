@@ -415,10 +415,19 @@ impl Connector {
     async fn open_described(
         &self,
         address: &str,
-        pin: Option<&str>,
+        pin: Option<Pin<'_>>,
     ) -> Result<(Connection, HandshakeResponse)> {
         let mut connection = match pin {
-            Some(pin) => Connection::open_pinned(address, pin, self.route_timeout).await?,
+            Some(pin) => {
+                Connection::open_pinned(
+                    address,
+                    pin.fingerprint,
+                    pin.source.expected(),
+                    pin.source.hint(),
+                    self.route_timeout,
+                )
+                .await?
+            }
             None => Connection::open_with_timeout(address, self.route_timeout).await?,
         };
         connection.send_handshake(&describe()).await?;
@@ -433,7 +442,11 @@ impl Connector {
         {
             let offered = offered.clone();
             drop(connection);
-            return Box::pin(self.open_described(address, Some(&offered))).await;
+            let pin = Pin {
+                fingerprint: &offered,
+                source: PinSource::Offered,
+            };
+            return Box::pin(self.open_described(address, Some(pin))).await;
         }
         Ok((connection, answer))
     }
@@ -475,6 +488,10 @@ impl Connector {
             let connection = Connection::open_with_timeout(address, self.route_timeout).await?;
             return Ok((connection, Proof::Legacy));
         }
+        let pin = pin.map(|fingerprint| Pin {
+            fingerprint,
+            source: PinSource::Saved,
+        });
         let (mut connection, answer) = self.open_described(address, pin).await?;
         match answer {
             HandshakeResponse::Described {
@@ -1097,7 +1114,13 @@ impl Connector {
             // it: the secret goes only over TLS pinned to it.
             let described = tokio::time::timeout(
                 self.route_timeout,
-                self.open_described(&route.address, code.tls_fingerprint()),
+                self.open_described(
+                    &route.address,
+                    code.tls_fingerprint().map(|fingerprint| Pin {
+                        fingerprint,
+                        source: PinSource::Code,
+                    }),
+                ),
             )
             .await;
             let (connection, answer) = match described {
@@ -1114,7 +1137,8 @@ impl Connector {
                 } => {
                     if expected.is_some_and(|expected| expected != gateway_id) {
                         return Err(DialFailure::unreachable(format!(
-                            "that address answers as {}, not the computer the code was made on;                              nothing was sent",
+                            "that address answers as {}, not the computer the code was made on; \
+                             nothing was sent",
                             host_name.unwrap_or(gateway_id)
                         )));
                     }
@@ -1589,6 +1613,42 @@ impl std::fmt::Debug for Paired {
             .field("rotates", &self.access.is_some())
             .field("session", &self.session)
             .finish()
+    }
+}
+
+/// A certificate fingerprint a dial is pinned to, and where it came from.
+#[derive(Debug, Clone, Copy)]
+struct Pin<'a> {
+    fingerprint: &'a str,
+    source: PinSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PinSource {
+    /// Saved with the machine when it paired, or on its first TLS sign-in.
+    Saved,
+    /// Carried by the connect code being redeemed.
+    Code,
+    /// Offered a moment ago in the machine's plain `described` frame.
+    Offered,
+}
+
+impl PinSource {
+    /// The certificate a refused dial expected, for "did not answer with …".
+    fn expected(self) -> &'static str {
+        match self {
+            Self::Saved => "the certificate saved for this machine",
+            Self::Code => "the certificate the connect code names",
+            Self::Offered => "the certificate it offered a moment before",
+        }
+    }
+
+    /// What to do about it, appended to the refusal.
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Saved => "; if RustCode there was reinstalled, pair again",
+            Self::Code | Self::Offered => "",
+        }
     }
 }
 

@@ -250,17 +250,24 @@ impl Connection {
     /// TLS and now answers plain, or with another certificate, is refused.
     /// A `wss://` address keeps the trust store; the pin is the gateway's
     /// and the tunnel's edge has its own certificate.
-    pub async fn open_pinned(address: &str, fingerprint: &str, timeout: Duration) -> Result<Self> {
+    ///
+    /// `expected` names the certificate in the refusal, as in "did not answer
+    /// with {expected}", and `hint` (empty for none) follows it: where the pin
+    /// came from decides what the owner can do.
+    pub async fn open_pinned(
+        address: &str,
+        fingerprint: &str,
+        expected: &str,
+        hint: &str,
+        timeout: Duration,
+    ) -> Result<Self> {
         if is_tls(address) {
             return Self::open_with_timeout(address, timeout).await;
         }
         Self::open_secured(address, timeout, Security::Pinned(fingerprint))
             .await
             .with_context(|| {
-                format!(
-                    "{address} did not answer with the certificate saved for this machine, \
-                     so nothing was sent; if RustCode there was reinstalled, pair again"
-                )
+                format!("{address} did not answer with {expected}, so nothing was sent{hint}")
             })
     }
 

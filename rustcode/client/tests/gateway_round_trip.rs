@@ -954,10 +954,14 @@ async fn a_connect_link_is_not_redeemed_by_another_gateway() {
         .pair_with_code(&link, Some(&other.address()))
         .await
         .expect_err("another gateway is not the one the link names");
+    // The link names the certificate as well as the gateway, so the other
+    // gateway is refused at the TLS handshake, before `describe`.
+    let message = format!("{error:#}");
     assert!(
-        format!("{error:#}").contains("not the computer the code was made on"),
-        "{error:#}"
+        message.contains("the certificate the connect code names"),
+        "{message}"
     );
+    assert!(message.contains("nothing was sent"), "{message}");
     // The code is still open on its own machine: nothing was presented.
     let status = host.lifecycle.status().await.unwrap().unwrap();
     assert!(status.machine_offer.unwrap().open.is_some());
