@@ -6,12 +6,14 @@ remote access itself is in [remote.md](remote.md); the wire format is in
 [remote-protocol](remote-protocol/README.md). This page is the security view
 of both, for issue #2651.
 
-> **The gateway has no TLS, so a plain LAN WebSocket is authenticated but not
-> encrypted.** Anyone on the same network as the device or the computer can
-> read the traffic (prompts, session output, file contents the agent prints)
-> and, because nothing is signed per frame, alter it. A tunnel such as NetBird,
-> Tailscale or ZeroTier encrypts what it carries; RustCode itself encrypts
-> nothing. Every place the apps show a route says which of the two it is.
+> **A plain LAN WebSocket is authenticated but not encrypted.** The gateway
+> port also answers its own TLS with a self-signed certificate that clients
+> pin ([Direct TLS](#direct-tls-with-a-pinned-certificate)), and other
+> computers use it on every route. The phone app does not yet, so its
+> traffic on a plain LAN can be read (prompts, session output, file contents
+> the agent prints) and, because nothing is signed per frame, altered by
+> anyone on the same network. A tunnel such as NetBird, Tailscale or ZeroTier
+> encrypts what it carries. Every place the apps show a route says which it is.
 
 ## What is protected, and from whom
 
@@ -60,8 +62,10 @@ Authentication is two-way in intent and one-way in proof:
   not a secret and is not signed: it stops an honest mix-up (a recycled DHCP
   address) and not an active attacker on a plain route who forwards the
   handshake. With a tunnel, the tunnel's own peer authentication is what
-  stops that attacker. Direct TLS with a pinned certificate would be the
-  first RustCode-owned host proof.
+  stops that attacker. A computer that pinned the gateway's certificate has a
+  RustCode-owned host proof: the TLS handshake proves the peer holds the key
+  of the certificate it pinned, and a client never dials a pinned machine in
+  the clear ([Direct TLS](#direct-tls-with-a-pinned-certificate)).
 - **Pairing** is bound to the physical presence of the owner: only the local
   user can ask for a challenge (the control socket), and a *connect request*
   needs the owner to press Accept in the app and then to read the code to the
@@ -83,8 +87,8 @@ Authentication is two-way in intent and one-way in proof:
 
 ## Encryption per route
 
-Encryption belongs to the route, not to RustCode. The gateway always speaks
-plain `ws://`. The engine classifies each address it listens on
+Encryption belongs to the route, or to the gateway's own TLS when the device
+dials it. The engine classifies each address it listens on
 (`rustcode/engine/src/remote_gateway/address.rs`: `route_kind_for`,
 `ConnectionRoute`) and reports it; the apps label it.
 
@@ -98,7 +102,7 @@ plain `ws://`. The engine classifies each address it listens on
 | A public address or name on plain `ws://` | `public` | **No** | The client refuses to send a pairing code or token to one (`rustcode/client/src/registry.rs`: `may_send_secrets`). |
 | The machine's public address, `wss://<host>` (a tunnel such as `cloudflared` to the engine's HTTP listener, `/ws`) | `public` on the client; the connection is `tunnel` | **Yes, to the tunnel's edge** | The client verifies the certificate against the operating system's trust store and refuses one it cannot verify. TLS ends at the tunnel provider, **which can read the traffic**; from there it is plain loopback to the engine, which relays it to the gateway. See [The public address](#the-public-address). |
 | Loopback (a Simulator or a client on this computer) | `loopback` | n/a | Never leaves the machine. |
-| TLS (`wss://`) straight at the gateway's port | not supported | n/a | The gateway itself has no TLS listener: it answers a TLS ClientHello with a refusal recorded as `secure_connection` and closes the socket. Nothing is shared. |
+| The gateway's own TLS, on any of the above (a computer that pinned the certificate) | the network's path, with `tls: true` | **Yes, by RustCode** | Self-signed, pinned by its SHA-256 fingerprint. A handshake that fails (another certificate, a device dialling `wss://` with the trust store) is recorded as `secure_connection` and closes the socket before any frame. Nothing is shared. See [Direct TLS](#direct-tls-with-a-pinned-certificate). |
 
 Per connection, the gateway classifies the local address the device dialled and
 reports its `path` (`loopback`, `lan`, `overlay`, `tunnel` or `other`), the
@@ -171,13 +175,16 @@ Where this shows:
   and a route reported `encrypted` on any path but `overlay` is sent as
   unencrypted (`rustcode/engine/src/acp/remote.rs`: `devices_json`).
 
-Downgrade: there is nothing to downgrade from. No encrypted transport exists
-to negotiate, so a client cannot be talked out of one. The two refusals that
-exist are protocol-version mismatch (`unsupported_version`, both directions,
-`rustcode/engine/src/remote_gateway/handshake.rs`) and the public-address
-rule above. When TLS lands, a client that has seen a host offer it must
-refuse a `ws://` fallback for that host; that rule is part of the migration
-below.
+Downgrade: a computer that pinned a machine's certificate dials every route
+to it but a `wss://` public address with TLS pinned to it, and a dial that
+fails is never retried in the clear (`rustcode/client/src/machine.rs`:
+`open_described`). An address that answers plain WebSocket, or TLS with
+another certificate, is refused with "nothing was sent". A pin learned from a
+plain `described` frame is saved only after the sign-in over TLS succeeds.
+The other refusals are protocol-version mismatch (`unsupported_version`, both
+directions, `rustcode/engine/src/remote_gateway/handshake.rs`) and the
+public-address rule above. The desktop never reports a pinned machine's move
+between networks as a downgrade, because none loses encryption.
 
 ## Credential storage and revocation
 
@@ -210,11 +217,41 @@ Revocation, from the quickest to the widest:
 A revoked device is refused with `unauthorized` or `revoked` when it returns,
 and the refusal is listed under *Refused connections* for a quarter of an hour.
 
+## Direct TLS with a pinned certificate
+
+Built as recommended below:
+
+- **The certificate.** The gateway makes a self-signed P-256 certificate the
+  first time it starts and keeps it with its key in `remote/tls.json` (`0600`,
+  like `gateway.json`; `rustcode/engine/src/remote_gateway/tls.rs`). Its
+  validity runs to the year 4096: nothing renews it, and a wrong clock on a
+  device cannot fail it. A file that exists but cannot be read stops the
+  gateway instead of replacing the certificate every device pinned.
+- **One port.** The first byte of a connection says which it is: a TLS record
+  (`0x16`) is a TLS handshake with that certificate, anything else is the
+  plain WebSocket upgrade as before.
+- **The pin.** `described` frames and long connect codes carry
+  `tls_fingerprint`, the SHA-256 of the certificate's DER. A long connect code
+  vouches for it out of band (it travels from the other computer's screen); a
+  short code or a connection request learns it from the machine's first
+  plain `described` frame, which is trust on first use: an active attacker on
+  the LAN at that moment could pin their own certificate, and the machine
+  would then refuse the real one until it is paired again. The client then
+  dials again over TLS pinned to it before the request, code or token goes
+  out, and saves the pin with the machine (`machines.json`,
+  `tls_fingerprint`). Only pairing again replaces it.
+- **Failures.** A changed certificate (RustCode reinstalled, `tls.json`
+  deleted) is refused on every route until the machine is paired again; the
+  host records the failed handshake as `secure_connection`.
+- **The phone app** (`rustcode-mobile`) does not pin yet: the QR payload has no
+  fingerprint, and whether React Native's WebSocket accepts a pinned
+  certificate without a native module is still to be checked there.
+
 ## Direct TLS and the existing VPN options
 
-This compares what the issue asks about. Only the first two columns exist.
+This compares what the issue asks about.
 
-| | Plain LAN | VPN overlay (NetBird, Tailscale, ZeroTier) | Direct TLS on the gateway (not built) |
+| | Plain LAN | VPN overlay (NetBird, Tailscale, ZeroTier) | Direct TLS on the gateway (computers only) |
 | --- | --- | --- | --- |
 | Encrypts traffic | No | Yes, by the tunnel | Yes, by RustCode |
 | Host proof | Weak (`gateway_id` only) | Peer key of the tunnel | Certificate, if the client pins or validates it |
@@ -245,12 +282,11 @@ Certificate options for direct TLS, each with its operational cost:
   dynamic DNS. A public CA does not vouch for a private address, so this
   does not cover the LAN, which is the case that is unencrypted today.
 
-Recommendation, not a decision: keep the overlay recommendation while it is
-the only encrypted route, and design direct TLS as a pinned certificate
-delivered in the pairing payload, because that is the only option that covers
-the LAN with no external service and no CA. That needs an implementation
-plan and an owner-visible consent: nothing here opens a port to the internet
-or contacts a service the user did not set up.
+Decision: direct TLS is a pinned self-signed certificate delivered in the
+pairing payload, because that is the only option that covers the LAN with no
+external service and no CA. It opens no new port and contacts nothing, so
+it needs no consent of its own. The overlay stays the recommendation for the
+phone app until it pins too.
 
 **External services.** RustCode installs, starts and configures no overlay
 network and contacts none: the user installs NetBird, Tailscale or ZeroTier,
@@ -266,11 +302,11 @@ Today's behavior is the baseline everything below must keep working:
    protocol version 1. A device on an older protocol is refused as
    `unsupported_version` with the versions the host supports, and the owner
    sees it under *Refused connections*.
-2. **New client, old host.** A client that tries TLS first and finds a plain
-   gateway reads the first byte of its answer, falls back only if the host has
-   never offered TLS, and records that. A host that has offered TLS before
-   must never be dialled over plain `ws://` again without the owner choosing
-   it: that is the downgrade the issue asks to refuse.
+2. **New client, old host.** A client with no pin asks `describe` in the
+   clear; an old host names no fingerprint, so the connection stays plain as
+   before. A host that has been pinned is never dialled over plain `ws://`
+   again: that is the downgrade the issue asks to refuse, and pairing again
+   is the owner's way to choose otherwise.
 3. **Pairings.** A pairing made over plain `ws://` stays valid; the first
    successful TLS connection pins the certificate fingerprint to it. Nothing
    is re-paired for the upgrade.
@@ -320,14 +356,21 @@ Covered in CI (not by this page):
   (`registry.rs` tests) and in `rc machines list` (`machines.rs`
   tests); a reconnection over the LAN after a tunnel raises a downgrade
   notice (`src-tauri/src/machines.rs`, `state/machines.test.ts`).
+- Direct TLS, against the real gateway (`rustcode/client/tests/gateway_round_trip.rs`):
+  pairing pins the certificate and every sign-in after it is TLS, reported as
+  `tls` and encrypted by the host; a machine paired in the clear is pinned on
+  its next sign-in; a changed certificate is refused with nothing sent and the
+  pairing survives; a pinned machine whose address answers plain WebSocket is
+  never dialled in the clear; a revoked device is refused over TLS; a stranger
+  on a saved address fails the TLS handshake before any frame. The certificate
+  is made once, kept `0600` and never replaced when unreadable (`tls.rs`).
 
 Not covered, and listed so nobody assumes otherwise:
 
 - **A real iPhone.** Local-network permission, Wi-Fi to cellular changes and
   NetBird routing on iOS are verified with the app and a device, not by the
   Simulator or by this repository's tests.
-- **Certificate and identity failures,** because there is no TLS to fail.
-  These tests come with the transport.
+- **The phone app over TLS,** which does not pin yet.
 - **An active attacker on a plain route** (spoofed gateway, injected frames).
   The doc above states the result; no test exercises it.
 - **Older mobile clients** against a gateway that adds fields. The protocol's
@@ -336,11 +379,9 @@ Not covered, and listed so nobody assumes otherwise:
 
 ## Follow-ups
 
-- Choose and build direct TLS with a pinned certificate in the pairing
-  payload (needs the mobile client's capabilities confirmed first).
-- A TLS-aware `describe`/`authenticate` and the downgrade refusal described
-  under Migration, with tests for a changed certificate, an unknown
-  certificate and a revoked device over TLS.
+- The phone app (`rustcode-mobile`): read a fingerprint from the QR payload
+  (the payload gains the field) and pin it, once its WebSocket stack is
+  confirmed to take a pinned certificate.
 - Per-connection route in the phone app (`rc machines list` and the
   desktop show it today).
 - A device-test checklist for an iPhone on LAN, NetBird and cellular.
