@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { defaultTransport, isTauri } from "./acp/transport";
 import "./index.css";
+import { installCrashReporting } from "./lib/crashReport";
 import { installFocusModality } from "./lib/focusModality";
 import { applyMaterial } from "./lib/material";
 import { applyPlatform } from "./lib/platform";
@@ -45,6 +46,8 @@ if (isTauri() && platform === "mac") {
 
 // Focus rings only while the keyboard moves focus: on from a Tab, off at the next click.
 installFocusModality();
+
+installCrashReporting();
 
 // No native title tooltips or Writing Tools: the app has its own tooltips (lib/quietNative.ts).
 quietNativeChrome();

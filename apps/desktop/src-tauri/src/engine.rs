@@ -9,6 +9,7 @@
 //! (`diagnostics.rs`).
 
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
@@ -149,6 +150,8 @@ pub struct LastExit {
     pub expected: bool,
 }
 
+const RECENT_STDERR_MAX: usize = 60;
+
 #[derive(Default)]
 struct RunState {
     pid: Option<u32>,
@@ -157,6 +160,7 @@ struct RunState {
     /// Times the supervisor started the engine again after an exit nobody asked for.
     crash_restarts: u32,
     last_exit: Option<LastExit>,
+    recent_stderr: VecDeque<String>,
 }
 
 /// The engine as Diagnostics shows it.
@@ -364,7 +368,10 @@ impl Engine {
             };
             let expected =
                 self.stopping.load(Ordering::SeqCst) || self.restart_now.load(Ordering::SeqCst);
-            self.record_exit(exit, &reason, expected);
+            let recent_stderr = self.record_exit(exit, &reason, expected);
+            if !expected {
+                crate::crash_report::report_engine_crash(&reason, &recent_stderr);
+            }
             self.emit(EngineEvent::Closed {
                 reason: reason.clone(),
             });
@@ -399,7 +406,7 @@ impl Engine {
         self.supervising.store(false, Ordering::SeqCst);
     }
 
-    fn record_exit(&self, exit: Exit, reason: &str, expected: bool) {
+    fn record_exit(&self, exit: Exit, reason: &str, expected: bool) -> Vec<String> {
         let mut run = self.run.lock().unwrap();
         run.pid = None;
         run.started_at_ms = None;
@@ -410,6 +417,7 @@ impl Engine {
             reason: reason.to_string(),
             expected,
         });
+        run.recent_stderr.iter().cloned().collect()
     }
 
     /// Run one engine process until it exits; returns how it ended.
@@ -432,6 +440,7 @@ impl Engine {
             let mut run = self.run.lock().unwrap();
             run.pid = Some(pid);
             run.started_at_ms = Some(now_ms());
+            run.recent_stderr.clear();
         }
         *self.child.lock().unwrap() = Some(child);
         self.emit(EngineEvent::Log {
@@ -456,11 +465,18 @@ impl Engine {
             }
         });
         let engine = Arc::clone(self);
-        thread::spawn(move || {
+        let err = thread::spawn(move || {
             let mut reader = BufReader::new(stderr);
             while let Ok(Some(line)) = read_log_line(&mut reader) {
                 if cfg!(debug_assertions) {
                     eprintln!("[engine] {line}");
+                }
+                {
+                    let mut run = engine.run.lock().unwrap();
+                    if run.recent_stderr.len() >= RECENT_STDERR_MAX {
+                        run.recent_stderr.pop_front();
+                    }
+                    run.recent_stderr.push_back(line.clone());
                 }
                 engine.emit(EngineEvent::Log { line });
             }
@@ -484,6 +500,7 @@ impl Engine {
         };
         // Every stdout line reaches the page before it hears the engine closed.
         let _ = out.join();
+        let _ = err.join();
         if self.generation.load(Ordering::SeqCst) == generation {
             self.stdin.lock().unwrap().take();
         }

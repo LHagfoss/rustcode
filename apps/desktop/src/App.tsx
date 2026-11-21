@@ -1,5 +1,15 @@
 import { Tooltip } from "radix-ui";
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
+import {
+  CRASH_REPORT_NOTICE_ID,
+  crashReportNoticeSeen,
+  crashReportsConfigured,
+  crashReportsEnabled,
+  markCrashReportNoticeSeen,
+  setCrashReportsEnabled,
+  subscribeCrashReportConfigured,
+  syncCrashReporting,
+} from "./lib/crashReport";
 import { rememberFocus } from "./lib/focusAreas";
 import { matchWindowTheme } from "./lib/material";
 import { applyTheme, resolveTheme } from "./lib/themes";
@@ -8,7 +18,16 @@ import { restoreZoom } from "./lib/zoom";
 import { startDeepLinks } from "./state/deepLinks";
 import { sessionsListed } from "./state/engine";
 import { runShortcut } from "./state/shortcuts";
-import { closeConfirm, openSettings, setOnboarding, setView, shortcutFor, useApp } from "./state/store";
+import {
+  closeConfirm,
+  dismissToast,
+  openSettings,
+  setOnboarding,
+  setView,
+  shortcutFor,
+  toast,
+  useApp,
+} from "./state/store";
 import { startUpdateChecks } from "./state/updates";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
@@ -168,11 +187,54 @@ function ConfirmDialog() {
   );
 }
 
+/**
+ * Syncs crash reporting status with the shell and shows a one-time notice when
+ * automatic crash reporting is active in a build with a configured DSN.
+ */
+function useCrashReportNotice() {
+  const ready = useApp((s) => s.engine.phase === "ready");
+  const onboarding = useApp((s) => s.onboardingOpen);
+  const [configured, setConfigured] = useState(crashReportsConfigured);
+
+  useEffect(() => subscribeCrashReportConfigured(() => setConfigured(crashReportsConfigured())), []);
+
+  useEffect(() => {
+    if (!ready) return;
+    void syncCrashReporting();
+  }, [ready]);
+
+  useEffect(() => {
+    if (!ready || !configured || onboarding) return;
+    if (!crashReportsEnabled() || crashReportNoticeSeen()) return;
+    toast("Anonymous crash reports are on (stack traces, app version, OS — never prompts or code).", "info", {
+      id: CRASH_REPORT_NOTICE_ID,
+      persist: true,
+      action: {
+        label: "Turn off",
+        run: () => {
+          setCrashReportsEnabled(false);
+          dismissToast(CRASH_REPORT_NOTICE_ID);
+          toast("Crash reports turned off.", "info");
+        },
+      },
+    });
+    let shown = true;
+    return useApp.subscribe((state) => {
+      const present = state.toasts.some((t) => t.id === CRASH_REPORT_NOTICE_ID && !t.leaving);
+      if (shown && !present) {
+        shown = false;
+        markCrashReportNoticeSeen();
+      }
+    });
+  }, [ready, configured, onboarding]);
+}
+
 export function App() {
   useEffect(() => startDeepLinks(), []);
   useTheme();
   useShortcuts();
   useAwayWatch();
+  useCrashReportNotice();
   useEffect(() => restoreZoom(), []);
   useEffect(() => startUpdateChecks(), []);
   // The sidebar's Loop badges: which threads loops ran in (issue 3937).
