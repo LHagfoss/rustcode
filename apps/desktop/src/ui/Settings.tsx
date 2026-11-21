@@ -73,6 +73,7 @@ import {
   Palette,
   Plug,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -100,7 +101,7 @@ const OutsideAgentsPage = lazy(() =>
 );
 const PermissionsPage = lazy(() => import("./PermissionsPage").then((m) => ({ default: m.PermissionsPage })));
 
-import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
+import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
 import { SchemeWarning } from "./SchemeWarning";
 import { ScopedHarnessList } from "./ScopedHarnesses";
@@ -650,12 +651,22 @@ function AgentsPage() {
         action={
           thisMachine ? (
             <div className="flex items-center gap-1">
-              <Action quiet size="sm" onClick={() => void runAllHarnessChecks()} disabled={checking}>
-                {checking && <Spinner size={12} />}
-                {checkingAll
-                  ? `Checking ${Math.min(checkingAll.done + 1, checkingAll.total)} of ${checkingAll.total}…`
-                  : "Check all"}
-              </Action>
+              {checkingAll && (
+                <span className="text-caption text-fg-muted tabular-nums">
+                  Checking {Math.min(checkingAll.done + 1, checkingAll.total)} of {checkingAll.total}…
+                </span>
+              )}
+              <Tooltip label="Check all">
+                <button
+                  type="button"
+                  aria-label="Check all harnesses"
+                  onClick={() => void runAllHarnessChecks()}
+                  disabled={checking}
+                  className="inline-flex size-6 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-60"
+                >
+                  {checking ? <Spinner size={12} /> : <RefreshCw size={13} />}
+                </button>
+              </Tooltip>
               <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
                 <Plus size={12} />
                 Add harness
@@ -665,7 +676,7 @@ function AgentsPage() {
         }
         footer={
           thisMachine
-            ? "Each harness signs in on its own. Check confirms it runs and lists its models."
+            ? "Each harness signs in on its own."
             : "A switch here turns a harness on or off on every connected machine."
         }
       >
