@@ -440,11 +440,7 @@ async fn add(
             bail!("name a machine address (`rc machines add <address>`) or pass --discover")
         }
     };
-    let connector = Connector::new(config_dir, ClientKind::Desktop)?;
-    let tokens = std::sync::Arc::new(
-        rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
-            .await?,
-    );
+    let (connector, tokens) = open_store_before_pairing(config_dir).await?;
     let given = code
         .map(|code| parse_code(&code, PAIRING_CODE_DIGITS))
         .transpose()?;
@@ -588,6 +584,32 @@ fn code_text(offer: &rustcode::remote_gateway::control::MachineOfferDetails) -> 
     text
 }
 
+/// The credential store, then the connector every pairing path dials with
+/// (#3325): a store that cannot answer stops pairing before the other machine
+/// is asked, instead of after it has handed out a token nobody can keep.
+async fn open_store_before_pairing(
+    config_dir: &std::path::Path,
+) -> Result<(
+    Connector,
+    std::sync::Arc<rustcode_client::tokens::TokenStore>,
+)> {
+    store_before_connector(
+        rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT),
+        || Connector::new(config_dir, ClientKind::Desktop),
+    )
+    .await
+}
+
+/// [`open_store_before_pairing`] with the store and the connector given, so a
+/// test can stand in for both.
+async fn store_before_connector<S, C>(
+    store: impl std::future::Future<Output = Result<S>>,
+    connector: impl FnOnce() -> Result<C>,
+) -> Result<(C, std::sync::Arc<S>)> {
+    let store = std::sync::Arc::new(store.await?);
+    Ok((connector()?, store))
+}
+
 /// Pair with a connect code created on another computer, and save it.
 async fn connect_code(
     config_dir: &std::path::Path,
@@ -596,11 +618,7 @@ async fn connect_code(
     name: Option<String>,
 ) -> Result<()> {
     let code = rustcode_client::connect_code::parse(code)?;
-    let connector = Connector::new(config_dir, ClientKind::Desktop)?;
-    let tokens = std::sync::Arc::new(
-        rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
-            .await?,
-    );
+    let (connector, tokens) = open_store_before_pairing(config_dir).await?;
     let (paired, route) = connector.pair_with_code(&code, address).await?;
     let machine = save_code_pairing(config_dir, &tokens, &paired, route, name).await?;
     println!(
@@ -753,11 +771,7 @@ async fn add_ssh(
 ) -> Result<()> {
     use rustcode_client::ssh::{self, StepState};
     use std::io::IsTerminal;
-    let connector = Connector::new(config_dir, ClientKind::Desktop)?;
-    let tokens = std::sync::Arc::new(
-        rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
-            .await?,
-    );
+    let (connector, tokens) = open_store_before_pairing(config_dir).await?;
     let host = target.host().to_owned();
     let mut approve = |probe: &ssh::Probe| match install {
         InstallChoice::Yes => true,
@@ -1040,6 +1054,28 @@ fn remove(config_dir: &std::path::Path, selector: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3325: a credential store that cannot answer stops pairing before a
+    /// connector exists, so the other machine is never asked.
+    #[tokio::test]
+    async fn a_store_that_cannot_answer_stops_pairing_before_dialling() {
+        let mut dialled = false;
+        let result = store_before_connector(
+            async { Err::<(), _>(anyhow::anyhow!("the store did not answer")) },
+            || {
+                dialled = true;
+                Ok(())
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(!dialled, "the connector was made after the store failed");
+
+        let (connector, store) = store_before_connector(async { Ok(7) }, || Ok("connector"))
+            .await
+            .unwrap();
+        assert_eq!((connector, *store), ("connector", 7));
+    }
 
     #[test]
     fn access_is_one_way_unless_both_ways_is_chosen_or_agreed_to() {

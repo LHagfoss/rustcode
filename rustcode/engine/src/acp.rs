@@ -1201,14 +1201,14 @@ impl agent_client_protocol::HandleDispatchFrom<agent_client_protocol::Client> fo
         match dispatch {
             agent_client_protocol::Dispatch::Request(message, responder) => {
                 let mut unhandled = None;
-                dispatch_request(
+                Box::pin(dispatch_request(
                     &self.server,
                     self.client_id,
                     message,
                     responder,
                     connection,
                     &mut unhandled,
-                )
+                ))
                 .await?;
                 Ok(match unhandled {
                     Some(dispatch) => agent_client_protocol::Handled::No {

@@ -621,7 +621,6 @@
 11 apps/desktop/src/ui/transcriptHeight.ts
 2 apps/desktop/vite.config.ts
 64 harness/src/inline_terminal.rs
-2 harness/src/main.rs
 48 harness/src/run.rs
 12 harness/src/runtime/composer.rs
 9 harness/src/runtime/detached.rs
@@ -841,7 +840,7 @@
 6 rustcode/engine/src/harness_usage.rs
 8 rustcode/engine/src/home.rs
 2 rustcode/engine/src/keep_awake.rs
-9 rustcode/engine/src/lib.rs
+5 rustcode/engine/src/lib.rs
 74 rustcode/engine/src/logger.rs
 4 rustcode/engine/src/manage.rs
 1 rustcode/engine/src/manage/capabilities.rs
