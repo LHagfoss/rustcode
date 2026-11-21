@@ -518,48 +518,70 @@ export interface DiffLine {
   newNumber?: number;
 }
 
-/** A line diff of a hunk's old and new text (LCS; hunks are small, and big ones fall back to remove+add). */
+/** Unchanged lines a diff keeps around its change, as a unified diff does. */
+const DIFF_CONTEXT = 3;
+
+/**
+ * A line diff of an edit's old and new text. Some harnesses (Antigravity) send the whole file
+ * before and after, so the unchanged lines at either end are trimmed first, keeping
+ * `DIFF_CONTEXT` of them; the rest is an LCS, and a middle too big for one falls back to
+ * remove+add.
+ */
 export function diffLines(diff: FileDiff): DiffLine[] {
   const oldLines = diff.oldText === undefined || diff.oldText === "" ? [] : diff.oldText.split("\n");
   const newLines = diff.newText === "" ? [] : diff.newText.split("\n");
-  const n = oldLines.length;
-  const m = newLines.length;
+  let head = 0;
+  while (head < oldLines.length && head < newLines.length && oldLines[head] === newLines[head]) head++;
+  let tail = 0;
+  while (
+    tail < oldLines.length - head &&
+    tail < newLines.length - head &&
+    oldLines[oldLines.length - 1 - tail] === newLines[newLines.length - 1 - tail]
+  )
+    tail++;
   const out: DiffLine[] = [];
-  if (n * m > 400_000) {
-    oldLines.forEach((text, i) => {
-      out.push({ kind: "removed", text, oldNumber: diff.oldStart + i });
+  const context = (i: number, j: number) =>
+    out.push({
+      kind: "context",
+      text: oldLines[i]!,
+      oldNumber: diff.oldStart + i,
+      newNumber: diff.newStart + j,
     });
-    newLines.forEach((text, i) => {
-      out.push({ kind: "added", text, newNumber: diff.newStart + i });
-    });
-    return out;
-  }
-  const lcs: Uint32Array[] = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      lcs[i]![j] =
-        oldLines[i] === newLines[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
-    }
-  }
-  let i = 0;
-  let j = 0;
-  while (i < n || j < m) {
-    if (i < n && j < m && oldLines[i] === newLines[j]) {
-      out.push({
-        kind: "context",
-        text: oldLines[i]!,
-        oldNumber: diff.oldStart + i,
-        newNumber: diff.newStart + j,
-      });
-      i++;
-      j++;
-    } else if (i < n && (j >= m || lcs[i + 1]![j]! >= lcs[i]![j + 1]!)) {
+  for (let i = Math.max(0, head - DIFF_CONTEXT); i < head; i++) context(i, i);
+  const n = oldLines.length - tail;
+  const m = newLines.length - tail;
+  if ((n - head) * (m - head) > 400_000) {
+    for (let i = head; i < n; i++)
       out.push({ kind: "removed", text: oldLines[i]!, oldNumber: diff.oldStart + i });
-      i++;
-    } else {
+    for (let j = head; j < m; j++)
       out.push({ kind: "added", text: newLines[j]!, newNumber: diff.newStart + j });
-      j++;
+  } else {
+    const width = m - head + 1;
+    const lcs: Uint32Array[] = Array.from({ length: n - head + 1 }, () => new Uint32Array(width));
+    for (let i = n - 1; i >= head; i--) {
+      for (let j = m - 1; j >= head; j--) {
+        const a = i - head;
+        const b = j - head;
+        lcs[a]![b] =
+          oldLines[i] === newLines[j] ? lcs[a + 1]![b + 1]! + 1 : Math.max(lcs[a + 1]![b]!, lcs[a]![b + 1]!);
+      }
+    }
+    let i = head;
+    let j = head;
+    while (i < n || j < m) {
+      if (i < n && j < m && oldLines[i] === newLines[j]) {
+        context(i, j);
+        i++;
+        j++;
+      } else if (i < n && (j >= m || lcs[i + 1 - head]![j - head]! >= lcs[i - head]![j + 1 - head]!)) {
+        out.push({ kind: "removed", text: oldLines[i]!, oldNumber: diff.oldStart + i });
+        i++;
+      } else {
+        out.push({ kind: "added", text: newLines[j]!, newNumber: diff.newStart + j });
+        j++;
+      }
     }
   }
+  for (let k = 0; k < Math.min(tail, DIFF_CONTEXT); k++) context(n + k, m + k);
   return out;
 }

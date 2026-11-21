@@ -434,6 +434,35 @@ describe("helpers", () => {
     ).toEqual({ added: 2, removed: 1 });
   });
 
+  test("a whole-file edit counts and shows only what changed", () => {
+    // Antigravity sends the whole file before and after each edit.
+    const before = Array.from({ length: 2000 }, (_, i) => `line ${i}`);
+    const after = [...before];
+    after[1000] = "changed";
+    const diff = {
+      path: "f",
+      oldText: before.join("\n"),
+      newText: after.join("\n"),
+      oldStart: 1,
+      newStart: 1,
+    };
+    expect(diffCounts([diff])).toEqual({ added: 1, removed: 1 });
+    const lines = diffLines(diff);
+    expect(lines.map((l) => l.kind)).toEqual([
+      "context",
+      "context",
+      "context",
+      "removed",
+      "added",
+      "context",
+      "context",
+      "context",
+    ]);
+    expect(lines[3]).toMatchObject({ text: "line 1000", oldNumber: 1001 });
+    expect(lines[4]).toMatchObject({ text: "changed", newNumber: 1001 });
+    expect(lines[7]).toMatchObject({ oldNumber: 1004, newNumber: 1004 });
+  });
+
   test("a created file is all additions", () => {
     expect(
       diffLines({ path: "f", newText: "x\ny", oldStart: 1, newStart: 1 }).every((l) => l.kind === "added"),
