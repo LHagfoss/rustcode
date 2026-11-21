@@ -49,7 +49,7 @@ check() {
         echo "::error::Developer ID signing is half configured; missing secrets: ${missing[*]}"
         exit 1
     else
-        echo "::notice::Developer ID signing secrets are not set; macOS assets stay ad-hoc signed and are not notarized. See docs/macos-release-signing.md."
+        echo "::warning title=Unsigned macOS build::Developer ID signing secrets (MACOS_*) are not set, so signing and notarization are skipped: macOS assets stay ad-hoc signed and are not notarized. See docs/macos-release-signing.md."
     fi
     echo "enabled=$enabled"
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then echo "enabled=$enabled" >>"$GITHUB_OUTPUT"; fi

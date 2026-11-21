@@ -30,7 +30,8 @@ concurrency:
 
 env:
     CARGO_TERM_COLOR: always
-    SCCACHE_GHA_ENABLED: "true"
+    # Only main writes the shared compiler cache; see build-rust.yml.
+    SCCACHE_GHA_ENABLED: ${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
     RUSTC_WRAPPER: "sccache"
 
 jobs:
@@ -41,7 +42,47 @@ jobs:
         # Quoted: the commit prefix's ": " would end a plain YAML scalar.
         if: "${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore(ci): release v')) }}"
         runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            # To cancel main's cache warm-up when a release starts.
+            actions: write
+        outputs:
+            release-running: ${{ steps.release.outputs.running }}
         steps:
+            # A release and main's warm-up compete for the account's macOS
+            # runners: during v1.46.0 a main build ran for 9.5 min beside the
+            # release. The release wins: a tag cancels main's runs, and a main
+            # push during a release skips its warm-up (the next push warms the
+            # cache instead).
+            - name: Cancel main's cache warm-up
+              if: startsWith(github.ref, 'refs/tags/v')
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/runs?branch=main&event=push&per_page=30" \
+                      --jq '.workflow_runs[] | select(.status != "completed") | .id')"
+                  for id in $ids; do
+                      echo "Cancelling main build $id"
+                      gh run cancel "$id" --repo "$GITHUB_REPOSITORY" || echo "::warning::Could not cancel main build $id"
+                  done
+
+            - name: Look for a release build in progress
+              id: release
+              if: github.ref == 'refs/heads/main'
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  running="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/runs?event=push&per_page=30" \
+                      --jq '[.workflow_runs[] | select(.status != "completed" and (.head_branch | startswith("v")))] | length')"
+                  if [ "$running" != 0 ]; then
+                      echo "::notice::A release build is running; skipping this cache warm-up so it keeps the macOS runners."
+                      echo "running=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "running=false" >> "$GITHUB_OUTPUT"
+                  fi
+
             - name: Check out repository history
               uses: actions/checkout@v7
               with:
@@ -61,19 +102,26 @@ jobs:
                       exit 1
                   fi
 
-    # macOS on its own, so desktop-macos and the release wait only for it.
+    # macOS on its own, so desktop-macos and the release wait only for it,
+    # and one runner per binary. Built together on one 3-core runner, `rc`
+    # and `rustcode` shared it through their thin-LTO codegen for 10.8 of the
+    # build's 14.6 min (v1.46.1), while the dependencies came from a fully
+    # matching cache; desktop-macos needs only `rc`.
     build-macos:
         needs: verify-tag
+        if: needs.verify-tag.outputs.release-running != 'true'
         uses: ./.github/workflows/build-rust.yml
         secrets: inherit
         with:
-            matrix: '[{"os": "macos-latest", "target": "aarch64-apple-darwin", "name": "rustcode-macos-aarch64"}]'
+            matrix: >-
+                [{"os": "macos-latest", "target": "aarch64-apple-darwin", "name": "rustcode-macos-aarch64", "bin": "rc"},
+                 {"os": "macos-latest", "target": "aarch64-apple-darwin", "name": "rustcode-macos-aarch64", "bin": "rustcode"}]
 
     # Skipped for a beta (a `vX.Y.Z-beta.N` tag): a beta ships the
     # macOS CLI and app only, as a GitHub prerelease.
     build:
         needs: verify-tag
-        if: ${{ !(startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-')) }}
+        if: ${{ needs.verify-tag.outputs.release-running != 'true' && !(startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-')) }}
         uses: ./.github/workflows/build-rust.yml
         secrets: inherit
         with:
@@ -109,6 +157,7 @@ jobs:
               uses: Swatinem/rust-cache@v2
               with:
                   workspaces: apps/desktop/src-tauri
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
@@ -127,12 +176,13 @@ jobs:
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
-                  ARTIFACT: rustcode-macos-aarch64
+                  ARTIFACT: rustcode-macos-aarch64-rc
+                  ENGINE_JOB: rustcode-macos-aarch64
               run: |
                   for _ in $(seq 1 160); do
                       names="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[].name')"
                       if grep -qx "$ARTIFACT" <<<"$names"; then exit 0; fi
-                      failed="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select((.name | contains(env.ARTIFACT)) and (.conclusion == "failure" or .conclusion == "cancelled"))] | length')"
+                      failed="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select((.name | contains(env.ENGINE_JOB)) and (.conclusion == "failure" or .conclusion == "cancelled"))] | length')"
                       if [ "$failed" != 0 ]; then echo "The engine build for $ARTIFACT failed."; exit 1; fi
                       sleep 15
                   done
@@ -142,7 +192,7 @@ jobs:
             - name: Download arm64 engine archive
               uses: actions/download-artifact@v8
               with:
-                  name: rustcode-macos-aarch64
+                  name: rustcode-macos-aarch64-rc
                   path: engine
 
             - name: Place the engine sidecar
@@ -273,6 +323,7 @@ jobs:
               uses: Swatinem/rust-cache@v2
               with:
                   workspaces: apps/desktop/src-tauri
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
 
             - name: Configure shared compiler cache
               uses: mozilla-actions/sccache-action@v0.0.11
@@ -295,11 +346,12 @@ jobs:
               env:
                   GH_TOKEN: ${{ github.token }}
                   ARTIFACT: ${{ matrix.engine }}
+                  ENGINE_JOB: ${{ matrix.engine }}
               run: |
                   for _ in $(seq 1 160); do
                       names="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[].name')"
                       if grep -qx "$ARTIFACT" <<<"$names"; then exit 0; fi
-                      failed="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select((.name | contains(env.ARTIFACT)) and (.conclusion == "failure" or .conclusion == "cancelled"))] | length')"
+                      failed="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select((.name | contains(env.ENGINE_JOB)) and (.conclusion == "failure" or .conclusion == "cancelled"))] | length')"
                       if [ "$failed" != 0 ]; then echo "The engine build for $ARTIFACT failed."; exit 1; fi
                       sleep 15
                   done
