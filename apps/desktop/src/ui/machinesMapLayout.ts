@@ -146,10 +146,10 @@ export interface MachinesLayout {
 
 const PAD = 24;
 const HEADER = 28;
-const SELF = { w: 168, h: 48 };
+const SELF = { w: 168, h: 56 };
 const PILL = { w: 116, h: 24, gap: 12 };
 const MACHINE = { w: 220, h: 56, gap: 20 };
-const KNOWN = { w: 200, h: 48, gap: 12 };
+const KNOWN = { w: 200, h: 56, gap: 12 };
 const X = {
   self: PAD,
   pill: PAD + SELF.w + 56,

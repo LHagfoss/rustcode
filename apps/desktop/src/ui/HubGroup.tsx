@@ -33,14 +33,14 @@ export function HubGroup() {
   return (
     <Group
       title="Hub"
-      hint="A hub is a machine that stays on, such as a VPS. The others keep a link to it, so outside agents on the hub reach them with no open port. Threads still run where they started."
+      hint="Optional: machines pair and talk directly without one. A hub is the machine that is always on, such as a VPS. Turn it on there, then join it from each other machine: they keep a link to it, so agents on the hub reach them with no open port, and calls to an offline machine wait on the hub. Threads still run where they started."
     >
       {error && !status && (
         <Row title="Could not read the hub role" status={<span className="text-warning">{error}</span>} />
       )}
       <Row
         title="This computer is the hub"
-        subtitle="Machines that join it keep a link to its remote gateway."
+        subtitle="For a machine that stays on, such as a VPS, rather than a laptop."
         badge={status?.hub ? <Chip tone="ok">Hub</Chip> : undefined}
       >
         <Switch
@@ -133,7 +133,7 @@ function JoinRows() {
 
   return (
     <>
-      <Row title="Join a hub" subtitle="The paired machine that is the fleet's hub.">
+      <Row title="Join a hub" subtitle="The always-on machine you made the hub there, such as a VPS.">
         <Select
           label="Hub"
           value={chosen}

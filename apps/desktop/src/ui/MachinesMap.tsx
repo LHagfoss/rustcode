@@ -90,7 +90,7 @@ export function MachinesMap({
 
   return (
     <div className="flex flex-col" data-machines-map>
-      <div className="flex items-center gap-2 border-border/60 border-b px-3 py-2">
+      <div className="rule-b flex items-center gap-2 px-4 py-3">
         <label className="flex h-7 min-w-0 max-w-64 flex-1 items-center gap-1.5 rounded-md bg-fill-subtle px-2 text-fg-muted">
           <Search size={13} />
           <input
@@ -162,7 +162,6 @@ export function MachinesMap({
               dimmed={dim(selfName())}
               onClick={() => onSelect(selected === SELF_NODE ? null : SELF_NODE)}
               label={`${selfName()}, this computer`}
-              rounded
             >
               <DeviceGlyphIcon
                 glyph={local.icon ?? platformIcon(platform === "mac" ? "macos" : platform)}
@@ -271,7 +270,7 @@ export function MachinesMap({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-border/60 border-t px-3 py-2 text-caption text-fg-muted">
+      <div className="rule-t flex flex-wrap items-center gap-x-4 gap-y-1 py-2 pr-2 pl-4 text-caption text-fg-muted">
         <Legend state="in-use" />
         <Legend state="standby" />
         <Legend state="connecting" />
@@ -290,10 +289,10 @@ export function MachinesMap({
         </span>
       </div>
 
-      <div className="border-border/60 border-t px-4 py-3 text-callout font-medium text-fg" role="status">
+      <div className="rule-t px-4 py-3 text-caption text-fg-muted" role="status">
         {mapSummary(graph)}
       </div>
-      {footer}
+      {footer && <div className="rule-t">{footer}</div>}
     </div>
   );
 }
@@ -304,7 +303,6 @@ function Node({
   dimmed,
   onClick,
   label,
-  rounded,
   dashed,
   children,
 }: {
@@ -313,7 +311,6 @@ function Node({
   dimmed: boolean;
   onClick: () => void;
   label: string;
-  rounded?: boolean;
   dashed?: boolean;
   children: ReactNode;
 }) {
@@ -324,8 +321,7 @@ function Node({
       aria-pressed={selected}
       onClick={onClick}
       className={cx(
-        "absolute flex items-center gap-2 border bg-surface-2 px-3 text-left transition-opacity hover:bg-fill",
-        rounded ? "rounded-full" : "rounded-lg",
+        "absolute flex items-center gap-2 rounded-lg border bg-surface-2 px-3 text-left transition-opacity hover:bg-fill",
         dashed ? "border-dashed border-border" : "border-border",
         selected && "border-accent ring-2 ring-accent/20",
         dimmed && "opacity-30",
