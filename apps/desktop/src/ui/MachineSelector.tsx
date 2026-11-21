@@ -179,62 +179,64 @@ export function MachineSelectorView({
             {blocked}
           </p>
         )}
-        {choices.map((choice) => {
-          const selected = choice.id === host;
-          // For moving an existing thread, any connected machine is a valid target (even if paused
-          // for *new* threads), unless the thread itself is blocked or already on that machine.
-          const machine = choice.id ? machines.find((entry) => entry.id === choice.id) : undefined;
-          const reachable = !choice.id || machine?.state === "connected";
-          const canSelect = thread ? !blocked && !selected && reachable : choice.available;
+        <div className="flex flex-col gap-1">
+          {choices.map((choice) => {
+            const selected = choice.id === host;
+            // For moving an existing thread, any connected machine is a valid target (even if paused
+            // for *new* threads), unless the thread itself is blocked or already on that machine.
+            const machine = choice.id ? machines.find((entry) => entry.id === choice.id) : undefined;
+            const reachable = !choice.id || machine?.state === "connected";
+            const canSelect = thread ? !blocked && !selected && reachable : choice.available;
 
-          let detail = choice.detail;
-          if (thread) {
-            if (selected) {
-              detail = "Current machine";
-            } else if (!reachable) {
-              detail = choice.status.label;
-            } else {
-              const dest = planMachineMoveDestination({
-                sessionId,
-                fromHost: host,
-                fromCwd: thread.cwd,
-                toHost: choice.id,
-                sessions,
-                localProjects,
-              });
-              detail = dest.returning ? `Returns to ${dest.displayFolder}` : dest.displayFolder;
+            let detail = choice.detail;
+            if (thread) {
+              if (selected) {
+                detail = "Current machine";
+              } else if (!reachable) {
+                detail = choice.status.label;
+              } else {
+                const dest = planMachineMoveDestination({
+                  sessionId,
+                  fromHost: host,
+                  fromCwd: thread.cwd,
+                  toHost: choice.id,
+                  sessions,
+                  localProjects,
+                });
+                detail = dest.returning ? `Returns to ${dest.displayFolder}` : dest.displayFolder;
+              }
             }
-          }
 
-          return (
-            <CardMenuItem
-              key={choice.id || "local"}
-              role="menuitemradio"
-              aria-checked={selected}
-              disabled={!canSelect}
-              onSelect={() => {
-                if (thread) void moveThreadToMachine(thread.id, choice.id);
-                else void setNewThreadHost(choice.id);
-              }}
-              className={cx("gap-2", selected && "bg-fill-subtle", !canSelect && !selected && "opacity-60")}
-            >
-              <span
-                aria-hidden
-                data-status={choice.status.kind}
-                className={cx("size-1.5 shrink-0 rounded-full", DOT[choice.status.kind])}
-              />
-              <DeviceGlyphIcon glyph={glyphOf(choice.id)} tint={tintOf(choice.id)} size={14} />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-body text-fg">{choice.name}</span>
-                <span className="truncate text-caption text-fg-faint">{detail}</span>
-              </span>
-              {!reachable && choice.id && (
-                <span className="shrink-0 text-caption text-fg-faint">{choice.status.label}</span>
-              )}
-              {selected && <Check size={13} className="shrink-0 text-fg-muted" />}
-            </CardMenuItem>
-          );
-        })}
+            return (
+              <CardMenuItem
+                key={choice.id || "local"}
+                role="menuitemradio"
+                aria-checked={selected}
+                disabled={!canSelect}
+                onSelect={() => {
+                  if (thread) void moveThreadToMachine(thread.id, choice.id);
+                  else void setNewThreadHost(choice.id);
+                }}
+                className={cx("gap-2", selected && "bg-fill-subtle", !canSelect && !selected && "opacity-60")}
+              >
+                <span
+                  aria-hidden
+                  data-status={choice.status.kind}
+                  className={cx("size-1.5 shrink-0 rounded-full", DOT[choice.status.kind])}
+                />
+                <DeviceGlyphIcon glyph={glyphOf(choice.id)} tint={tintOf(choice.id)} size={14} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-body text-fg">{choice.name}</span>
+                  <span className="truncate text-caption text-fg-faint">{detail}</span>
+                </span>
+                {!reachable && choice.id && (
+                  <span className="shrink-0 text-caption text-fg-faint">{choice.status.label}</span>
+                )}
+                {selected && <Check size={13} className="shrink-0 text-fg-muted" />}
+              </CardMenuItem>
+            );
+          })}
+        </div>
         <div role="separator" className="mx-2 my-1 h-px shrink-0 bg-border" />
         <CardMenuItem
           className="gap-2"
