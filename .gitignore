@@ -20,6 +20,7 @@ docs/superpowers/
 # Generated wire contract: new golden frames must show up as untracked.
 !/docs/remote-protocol/
 !/docs/architecture/
+!/docs/adr/
 
 # impeccable local state
 .impeccable/

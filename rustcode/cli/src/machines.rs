@@ -156,17 +156,11 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
         return Ok(());
     }
     let tokens = TokenStore::open(config_dir)?;
-    // `list` is a glance: a route that does not answer in seconds is skipped
-    // instead of waited on.
     let connector = Connector::new(config_dir, ClientKind::Desktop)?
         .with_timeouts(Duration::from_secs(3), Duration::from_secs(5));
     let mut rows = Vec::new();
-    // Routes and platforms learned from a handshake are saved after the run,
-    // so the loop keeps borrowing the loaded registry.
     let mut learned: Vec<(String, Vec<Route>)> = Vec::new();
     let mut platforms: Vec<(String, String)> = Vec::new();
-    // This computer's own interfaces, so a hint never asks about an overlay
-    // this computer is not on (#3421).
     let local = rustcode_client::local_addresses();
     for machine in registry.ordered() {
         let mut row = Row {
@@ -178,7 +172,6 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
             threads: None,
         };
         if tokens.get(&machine.host_id)?.is_none() {
-            // Nothing to present: do not dial a machine we cannot get into.
             rows.push(row);
             continue;
         }
@@ -193,15 +186,10 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
                 if !connected.learned.is_empty() {
                     learned.push((machine.host_id.clone(), connected.learned.clone()));
                 }
-                // A machine paired while its gateway reported no platform
-                // learns it now, so the row stops saying `unknown` (#3418).
                 if let Some(platform) = connected.session.welcome().platform.clone() {
                     row.machine.platform = platform.clone();
                     platforms.push((machine.host_id.clone(), platform));
                 }
-                // A LAN win stops the race before the overlay attempts start,
-                // so ask about them to say why they are not used (#3202); an
-                // overlay win may instead leave a LAN failure in the race.
                 let probe = connector
                     .probe_overlay_routes(machine, &connected.route)
                     .await;
@@ -214,9 +202,6 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
                 }
             }
             Err(error) => {
-                // A refusal that pairing again fixes reads as an expired
-                // pairing; anything else (a timeout, a different machine at
-                // that address) is offline.
                 let needs_pairing = error
                     .downcast_ref::<rustcode_client::Unreachable>()
                     .is_some_and(rustcode_client::Unreachable::needs_new_pairing);
@@ -333,11 +318,8 @@ fn connection_route(route: &Route, pinned: bool) -> ConnectionRoute {
                 rustcode_client::OverlayProvider::Zerotier => GatewayProvider::Zerotier,
             }),
         ),
-        // `wss://` reaches the machine's public address through its tunnel.
         RouteKind::Public if route.is_tls() => (ConnectionPath::Tunnel, None),
         RouteKind::Public => (ConnectionPath::Other, None),
-        // `ssh -W` connects from the machine itself: its gateway sees its own
-        // loopback, and SSH encrypts the way there.
         RouteKind::Ssh => (ConnectionPath::Loopback, None),
     };
     let mut connection = ConnectionRoute {
@@ -444,8 +426,6 @@ async fn add(
     from_discovery: bool,
     discover_for: Duration,
 ) -> Result<()> {
-    // A connect code where an address was expected: pair with it instead of
-    // asking, as `rc machines connect` does.
     if let Some(given) = address
         && code.is_none()
         && rustcode_client::connect_code::looks_like_code(given)
@@ -461,16 +441,10 @@ async fn add(
         }
     };
     let connector = Connector::new(config_dir, ClientKind::Desktop)?;
-    // The credential store is opened before the machine is asked: a store that
-    // cannot answer has to stop the pairing at this end, not after the other
-    // machine has accepted the request and enrolled this computer (#3325).
     let tokens = std::sync::Arc::new(
         rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
             .await?,
     );
-    // Refuse a mistyped `--code` before asking the machine: the code has
-    // eight digits, and the frame that reports its length arrives only after
-    // the owner has accepted.
     let given = code
         .map(|code| parse_code(&code, PAIRING_CODE_DIGITS))
         .transpose()?;
@@ -497,8 +471,6 @@ async fn add(
         .context("the code was not accepted; ask again and read the new code")?;
     let welcome = paired.session.welcome().clone();
     let machine = rustcode_client::machine_from_pairing(&welcome, Route::new(address), name);
-    // Token first: a saved machine without one would only ever say "pair
-    // again", while a token whose machine was not saved is unreachable.
     rustcode_client::tokens::set_bounded(
         std::sync::Arc::clone(&tokens),
         machine.host_id.clone(),
@@ -512,7 +484,6 @@ async fn add(
         let _ = tokens.remove(&machine.host_id);
         return Err(error).context("the machine is paired but could not be saved");
     }
-    // Pairing is a successful connection; `list` shows when it happened.
     registry.mark_connected(
         &machine.host_id,
         &machine.routes[0].address,
@@ -626,8 +597,6 @@ async fn connect_code(
 ) -> Result<()> {
     let code = rustcode_client::connect_code::parse(code)?;
     let connector = Connector::new(config_dir, ClientKind::Desktop)?;
-    // The credential store before the machine: a store that cannot answer
-    // must stop here, not after the code was spent (#3325).
     let tokens = std::sync::Arc::new(
         rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
             .await?,
@@ -653,7 +622,6 @@ async fn save_code_pairing(
 ) -> Result<Machine> {
     let welcome = paired.session.welcome().clone();
     let mut machine = rustcode_client::machine_from_pairing(&welcome, route, name);
-    // It answered `describe` before the code went out.
     machine.describes = true;
     rustcode_client::tokens::set_bounded(
         std::sync::Arc::clone(tokens),
@@ -786,7 +754,6 @@ async fn add_ssh(
     use rustcode_client::ssh::{self, StepState};
     use std::io::IsTerminal;
     let connector = Connector::new(config_dir, ClientKind::Desktop)?;
-    // The credential store first, as for a connect code (#3325).
     let tokens = std::sync::Arc::new(
         rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
             .await?,
@@ -1058,8 +1025,6 @@ fn remove(config_dir: &std::path::Path, selector: &str) -> Result<()> {
     registry.remove(&machine.host_id)?;
     match TokenStore::open(config_dir).and_then(|tokens| tokens.remove(&machine.host_id)) {
         Ok(()) => {}
-        // The record is gone, which is what the user asked for; the token is
-        // unusable without it, so a failure here is a warning, not an error.
         Err(error) => eprintln!(
             "warning: {} was removed but its token could not be deleted: {error:#}",
             machine.name
@@ -1112,12 +1077,10 @@ mod tests {
             )),
             "NetBird (encrypted by the tunnel)"
         );
-        // The same machine reached over its LAN after a tunnel is plain again.
         assert_eq!(
             label(Route::new("192.168.1.20:17879")),
             "LAN (not encrypted)"
         );
-        // An address nothing is known about is not a tunnel.
         assert_eq!(
             label(Route::new("203.0.113.9:17879")),
             "an unrecognised network (not encrypted)"
@@ -1126,7 +1089,6 @@ mod tests {
             label(Route::new("127.0.0.1:17879")),
             "this computer (not encrypted)"
         );
-        // Pinned to the machine's own certificate, the LAN is encrypted.
         assert_eq!(
             network_label(Some(&connection_route(
                 &Route::new("192.168.1.20:17879"),
@@ -1134,10 +1096,8 @@ mod tests {
             ))),
             "LAN (encrypted by RustCode)"
         );
-        // Not connected: no network.
         assert_eq!(network_label(None), "—");
 
-        // One rule on both ends: the client's own answer never disagrees.
         for address in [
             "192.168.1.20:17879",
             "127.0.0.1:17879",
@@ -1195,11 +1155,9 @@ mod tests {
         let mut reader = std::io::Cursor::new(long).take(MAX_CODE_INPUT_BYTES);
         let error = read_code_from(&mut reader, 8).unwrap_err().to_string();
         assert!(error.contains("exactly 8 digits"), "{error}");
-        // Eight digits behind a wall of spaces are cut away with the rest.
         let padded = format!("{}48219034\n", " ".repeat(200));
         let mut reader = std::io::Cursor::new(padded).take(MAX_CODE_INPUT_BYTES);
         assert!(read_code_from(&mut reader, 8).is_err());
-        // A plain line still reads.
         let mut reader = std::io::Cursor::new("4821 9034\n").take(MAX_CODE_INPUT_BYTES);
         assert_eq!(read_code_from(&mut reader, 8).unwrap(), "48219034");
     }
@@ -1242,8 +1200,6 @@ mod tests {
             chrono::Utc::now(),
         );
         machine.routes.push(netbird.clone());
-        // Both machines on NetBird: this computer has an address in the space
-        // the machine's overlay route is in.
         let here: Vec<std::net::IpAddr> = ["192.168.1.20", "100.92.13.44"]
             .iter()
             .map(|address| address.parse().unwrap())
@@ -1297,7 +1253,6 @@ mod tests {
                 "Bump the version",
             ]
         );
-        // An offline machine says why, and has no threads to print.
         let offline = Row {
             state: State::Offline("connection refused".into()),
             hint: None,
