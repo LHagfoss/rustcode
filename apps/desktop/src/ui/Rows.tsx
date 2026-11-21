@@ -478,7 +478,7 @@ export const AssistantRow = memo(function AssistantRow({
   streaming?: boolean;
   threadId?: string;
 }) {
-  const segments = useMemo(() => splitReply(item.text), [item.text]);
+  const segments = useMemo(() => splitReply(item.text, !streaming), [item.text, streaming]);
   const reveal = useApp((s) => s.animateStreaming);
   // A reply draws no actions of its own: a finished turn keeps one row for the
   // turn, at the foot of its last reply (`TurnEndRow`), and nothing else has any.

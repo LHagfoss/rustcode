@@ -163,6 +163,27 @@ describe("smart ui", () => {
     expect(parts).toEqual([{ kind: "ui", source: "<div>", complete: false, index: 0 }]);
   });
 
+  test("shorthand after a closed fence joins that view", () => {
+    const reply =
+      "Done.\n\n```rustcode-ui v1\n<div>hero</div>\n```\n\n:: bars Time\n- Build | 962\n\n:: callout info\nNo retries.\n\nThanks.";
+    const parts = splitReply(reply);
+    expect(parts.map((p) => p.kind)).toEqual(["markdown", "ui", "markdown"]);
+    expect(parts[1]).toEqual({
+      kind: "ui",
+      source: "<div>hero</div>\n\n:: bars Time\n- Build | 962\n\n:: callout info\nNo retries.",
+      complete: true,
+      index: 0,
+    });
+  });
+
+  test("shorthand with no fence is a view; unknown names stay text", () => {
+    expect(splitReply("Intro\n:: stats\n- 3 | Runs").map((p) => p.kind)).toEqual(["markdown", "ui"]);
+    expect(splitReply(":: chart x\n- a").map((p) => p.kind)).toEqual(["markdown"]);
+    expect(splitReply(":: stats\n- 3 | Runs", false)).toEqual([
+      { kind: "ui", source: ":: stats\n- 3 | Runs", complete: false, index: 0 },
+    ]);
+  });
+
   test("a fence inside another fence is not a block", () => {
     const parts = splitReply("````md\n```rustcode-ui v1\nx\n```\n````");
     expect(parts.map((p) => p.kind)).toEqual(["markdown"]);
