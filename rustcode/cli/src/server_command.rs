@@ -274,7 +274,10 @@ async fn update_cli(json: bool) -> anyhow::Result<i32> {
         copies.push(report);
     }
     if json {
-        let first = copies[0].clone();
+        let first = copies
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("update-cli found no `rustcode` copy to report"))?;
         let report = UpdatedCli {
             first,
             version,
