@@ -44,9 +44,9 @@ use tokio_tungstenite::{
 use tokio_util::either::Either;
 
 /// Plain TCP, or the gateway's own TLS ([`super::tls`]) over it.
-type Stream = Either<TcpStream, TlsStream<TcpStream>>;
+pub(super) type Stream = Either<TcpStream, TlsStream<TcpStream>>;
 
-type Socket = WebSocketStream<Stream>;
+pub(super) type Socket = WebSocketStream<Stream>;
 
 /// How long a closing connection may spend delivering its last error frame.
 const GOODBYE_TIMEOUT: Duration = Duration::from_secs(1);
