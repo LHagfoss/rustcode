@@ -3,6 +3,7 @@
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -14,17 +15,84 @@ const RETRY: Duration = Duration::from_secs(10);
 
 type Read = Result<Vec<Value>, String>;
 static CACHE: Mutex<Option<(Instant, Read)>> = Mutex::const_new(None);
+/// A read behind a stale answer is under way, so another caller does not start one.
+static REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// The last quota groups the CLI reported, kept across engine restarts so the
+/// first look after one draws numbers at once while a new read runs behind them.
+const RECORD_FILE: &str = "antigravity-usage.json";
 
 /// The quota groups, read at most once a minute (ten seconds after a failed
-/// read); `force` reads again now. None when the CLI is not installed.
+/// read); `force` reads again now and waits for it. A good read that went stale
+/// (or the one recorded before the engine started) answers at once while a new
+/// read runs in the background, so a look never waits on `agy` once it has
+/// answered. None when the CLI is not installed.
 pub(crate) async fn read_cached(force: bool) -> Option<Read> {
     let mut cached = CACHE.lock().await;
+    if !force && cached.is_none() {
+        // A fresh engine: what the last one read, marked stale, so the read
+        // below starts in the background instead of keeping this look waiting.
+        if let Some(rows) = crate::harness::config::config_dir()
+            .ok()
+            .and_then(|dir| recorded_in(&dir))
+        {
+            let stale = Instant::now()
+                .checked_sub(FRESH)
+                .unwrap_or_else(Instant::now);
+            *cached = Some((stale, Ok(rows)));
+        }
+    }
     if let Some((at, read)) = cached.as_ref() {
         let fresh = if read.is_ok() { FRESH } else { RETRY };
         if !force && at.elapsed() < fresh {
-            return Some(read.clone());
+            return Some(read.clone().map(|rows| fold_resets(rows, now())));
+        }
+        if !force && let Ok(rows) = read {
+            let rows = fold_resets(rows.clone(), now());
+            drop(cached);
+            configured()?;
+            refresh_in_background();
+            return Some(Ok(rows));
         }
     }
+    let read = read_now().await?;
+    *cached = Some((Instant::now(), read.clone()));
+    Some(read.map(|rows| fold_resets(rows, now())))
+}
+
+/// Whether a read behind a stale answer is still under way: the answer's rows
+/// say `refreshing`, so the app asks again shortly for the new numbers.
+pub(crate) fn refreshing() -> bool {
+    REFRESHING.load(Ordering::Acquire)
+}
+
+/// One read in the background, never two at once. It does not hold the cache
+/// while `agy` runs, so every look meanwhile answers from the stale numbers.
+fn refresh_in_background() {
+    if REFRESHING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    tokio::spawn(async {
+        if let Some(read) = read_now().await {
+            let mut cached = CACHE.lock().await;
+            // A failed read keeps the good numbers on screen; it is retried
+            // after `RETRY` rather than at once.
+            match (&read, cached.as_mut()) {
+                (Err(_), Some((at, Ok(_)))) => {
+                    *at = Instant::now()
+                        .checked_sub(FRESH.saturating_sub(RETRY))
+                        .unwrap_or_else(Instant::now);
+                }
+                _ => *cached = Some((Instant::now(), read)),
+            }
+        }
+        REFRESHING.store(false, Ordering::Release);
+    });
+}
+
+/// One read of the CLI, with its timeout; a good one is recorded. None when
+/// the CLI is not installed.
+async fn read_now() -> Option<Read> {
     let (program, env) = configured()?;
     let read = tokio::time::timeout(TIMEOUT, read(&program, &env))
         .await
@@ -35,15 +103,58 @@ pub(crate) async fn read_cached(force: bool) -> Option<Read> {
                     .to_owned(),
             )
         });
-    if let Err(error) = &read {
-        crate::dbg_log!("antigravity quota: {} failed: {error}", program.display());
+    match &read {
+        Ok(rows) => {
+            if let Ok(dir) = crate::harness::config::config_dir() {
+                record_in(&dir, rows, now());
+            }
+        }
+        Err(error) => {
+            crate::dbg_log!("antigravity quota: {} failed: {error}", program.display());
+        }
     }
-    *cached = Some((Instant::now(), read.clone()));
     Some(read)
 }
 
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// A window whose reset passed since it was read starts over: nothing used, and
+/// no reset time until the next read reports one.
+fn fold_resets(rows: Vec<Value>, now: i64) -> Vec<Value> {
+    rows.into_iter()
+        .map(|mut row| {
+            if row["resetsAt"].as_i64().is_some_and(|at| at <= now) {
+                row["usedPercent"] = json!(0.0);
+                row["resetsAt"] = Value::Null;
+            }
+            row
+        })
+        .collect()
+}
+
+fn recorded_in(dir: &Path) -> Option<Vec<Value>> {
+    let text = std::fs::read_to_string(dir.join(RECORD_FILE)).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    let rows = value["windows"].as_array()?.clone();
+    (!rows.is_empty()).then_some(rows)
+}
+
+fn record_in(dir: &Path, rows: &[Value], read_at: i64) {
+    if rows.is_empty() {
+        return;
+    }
+    let body = json!({ "readAt": read_at, "windows": rows });
+    if let Err(error) =
+        crate::service::write_private(&dir.join(RECORD_FILE), body.to_string().as_bytes())
+    {
+        crate::dbg_log!("antigravity quota: could not record the read: {error:#}");
+    }
+}
+
 /// Settings › Usage's row. An absent CLI has no row. Refresh can bypass the
-/// cache after sign-in.
+/// cache after sign-in. `refreshing` says newer numbers are on the way.
 pub(crate) async fn plan(force: bool) -> Option<Value> {
     let (status, windows, error) = match read_cached(force).await? {
         Ok(windows) => ("ok", windows, None),
@@ -52,6 +163,7 @@ pub(crate) async fn plan(force: bool) -> Option<Value> {
     Some(json!({
         "id": "antigravity", "harness": "antigravity", "name": "Model quotas",
         "via": "Antigravity", "status": status, "windows": windows, "error": error,
+        "refreshing": refreshing(),
     }))
 }
 
@@ -292,6 +404,37 @@ mod tests {
         assert_eq!(rows[1]["usedPercent"], 100.0);
         assert!(rows[1]["resetsAt"].is_null());
         assert!(parse_report(&json!({"status": "SUCCESS", "num_turns": 1})).is_none());
+    }
+
+    #[test]
+    fn a_window_whose_reset_passed_starts_over() {
+        let rows = vec![
+            json!({"label": "a", "usedPercent": 40.0, "resetsAt": 100}),
+            json!({"label": "b", "usedPercent": 40.0, "resetsAt": 300}),
+            json!({"label": "c", "usedPercent": 40.0, "resetsAt": null}),
+        ];
+        let rows = fold_resets(rows, 200);
+        assert_eq!(rows[0]["usedPercent"], 0.0);
+        assert!(rows[0]["resetsAt"].is_null());
+        assert_eq!(rows[1]["usedPercent"], 40.0);
+        assert_eq!(rows[1]["resetsAt"], 300);
+        assert_eq!(rows[2]["usedPercent"], 40.0);
+    }
+
+    #[test]
+    fn a_good_read_is_recorded_for_the_next_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(recorded_in(dir.path()), None);
+        record_in(dir.path(), &[], 1);
+        assert_eq!(recorded_in(dir.path()), None);
+        let rows = vec![json!({"label": "Gemini Models · Weekly", "usedPercent": 56.0})];
+        record_in(dir.path(), &rows, 1);
+        assert_eq!(recorded_in(dir.path()), Some(rows));
+        let mode = std::fs::metadata(dir.path().join(RECORD_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

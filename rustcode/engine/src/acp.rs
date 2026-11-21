@@ -1502,10 +1502,10 @@ async fn dispatch_request(
             })
         }
         "_rustcode/usage/shared" => {
-            let _request: usage::UsageSharedRequest = parse_params(params)?;
+            let request: usage::UsageSharedRequest = parse_params(params)?;
 
             connection.spawn(async move {
-                responder.respond(usage::shared_plans().await)?;
+                responder.respond(usage::shared_plans(request).await)?;
                 Ok(())
             })
         }
