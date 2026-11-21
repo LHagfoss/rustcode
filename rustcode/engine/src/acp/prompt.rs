@@ -675,6 +675,7 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
     let scheduled = turns.schedule();
     drop(turns);
     let turn = scheduled.begin().await;
+    let _status = crate::thread_status::turn(&session_id);
     let _live = wakeup
         .clients
         .begin_turn(wakeup.state.lock().await.history.len(), None);

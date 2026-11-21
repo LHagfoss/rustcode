@@ -575,3 +575,56 @@ describe("Show tool calls off", () => {
     expect(keys(rows)).toContain("read");
   });
 });
+
+describe("woken continuation turns", () => {
+  test("while a woken turn runs, the earlier finished turn stays folded and the woken turn renders live", () => {
+    const items: TranscriptItem[] = [
+      user("u1"),
+      thought("t1"),
+      tool("cmd1"),
+      reply("r1"),
+      end("e1", 12_000),
+      thought("t2"),
+      { kind: "tool", id: "cmd2", title: "cmd2", status: "in_progress", diffs: [] },
+      reply("r2"),
+    ];
+    const rows = foldTurns(items, true, new Set());
+    expect(keys(rows)).toEqual(["u1", `[${turnFoldKey("e1")}]`, "r1", "e1", "t2", "cmd2", "r2"]);
+  });
+
+  test("once a woken turn finishes, it folds under its own divider separate from the earlier turn", () => {
+    const items: TranscriptItem[] = [
+      user("u1"),
+      tool("cmd1"),
+      reply("r1"),
+      end("e1", 12_000),
+      thought("t2"),
+      tool("cmd2"),
+      reply("r2"),
+      end("e2", 5_000),
+    ];
+    const rows = foldTurns(items, false, new Set());
+    expect(keys(rows)).toEqual([
+      "u1",
+      `[${turnFoldKey("e1")}]`,
+      "r1",
+      "e1",
+      `[${turnFoldKey("e2")}]`,
+      "r2",
+      "e2",
+    ]);
+  });
+
+  test("unsolicited work after a turn footer without a second footer does not fold into the earlier turn", () => {
+    const items: TranscriptItem[] = [
+      user("u1"),
+      tool("cmd1"),
+      reply("r1"),
+      end("e1", 12_000),
+      tool("cmd2"),
+      reply("r2"),
+    ];
+    const rows = foldTurns(items, false, new Set());
+    expect(keys(rows)).toEqual(["u1", `[${turnFoldKey("e1")}]`, "r1", "e1", "[fold-cmd2]", "r2"]);
+  });
+});

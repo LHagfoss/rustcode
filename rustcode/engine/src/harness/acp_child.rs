@@ -18,14 +18,19 @@ use agent_client_protocol::schema::v1::{
 };
 use serde_json::{Value, json};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(90);
 /// The client waits this long (10 s) for `_rustcode/steer`; answer before it.
 const STEER_TIMEOUT: Duration = Duration::from_secs(8);
+/// Fallback quiet window to settle an implicit autonomous turn that did not
+/// send a terminal `usage_update`: short after an assistant reply, longer when
+/// quiet without one.
+const IMPLICIT_TURN_MESSAGE_SETTLE: Duration = Duration::from_secs(10);
+const IMPLICIT_TURN_QUIET_SETTLE: Duration = Duration::from_secs(45);
 /// How many models a listing asks for their own thought levels: the models a
 /// person can see, the one a setting or a thread uses, and no more. Each is one
 /// round trip, so this is what bounds a listing's cost.
@@ -768,8 +773,39 @@ impl AcpAdapter {
     }
 
     pub(crate) async fn prompt(&self, prompt: Vec<ContentBlock>) -> Result<StopReason, String> {
+        struct PromptGuard {
+            state: Arc<Mutex<State>>,
+            out: OutputSender,
+            antigravity: bool,
+            finished: bool,
+        }
+
+        impl PromptGuard {
+            fn finish(mut self, completed_normally: bool) {
+                self.finished = true;
+                if let Some(activity) = lock(&self.state)
+                    .background
+                    .end_prompt(completed_normally, self.antigravity)
+                {
+                    let _ = self.out.send(Output::Activity(activity));
+                }
+            }
+        }
+
+        impl Drop for PromptGuard {
+            fn drop(&mut self) {
+                if !self.finished
+                    && let Some(activity) = lock(&self.state)
+                        .background
+                        .end_prompt(false, self.antigravity)
+                {
+                    let _ = self.out.send(Output::Activity(activity));
+                }
+            }
+        }
+
         let mut prompt = prompt;
-        {
+        let started_activity = {
             let mut state = lock(&self.state);
             state.prompted = true;
             // An agent with no client system prompt reads RustCode's setup text
@@ -779,7 +815,17 @@ impl AcpAdapter {
             if let Some(reminder) = state.reminder.take() {
                 super::session::prepend_text(&mut prompt, reminder);
             }
+            state.background.begin_prompt()
+        };
+        if let Some(activity) = started_activity {
+            let _ = self.out.send(Output::Activity(activity));
         }
+        let prompt_guard = PromptGuard {
+            state: Arc::clone(&self.state),
+            out: self.out.clone(),
+            antigravity: self.antigravity,
+            finished: false,
+        };
         let answer = self
             .peer
             .request(
@@ -809,11 +855,13 @@ impl AcpAdapter {
                 .out
                 .send(Output::Update(SessionUpdate::UsageUpdate(usage)));
         }
-        Ok(answer
+        let stop_reason = answer
             .get("stopReason")
             .cloned()
             .and_then(|reason| serde_json::from_value(reason).ok())
-            .unwrap_or(StopReason::EndTurn))
+            .unwrap_or(StopReason::EndTurn);
+        prompt_guard.finish(stop_reason == StopReason::EndTurn);
+        Ok(stop_reason)
     }
 
     pub(crate) fn cancel(&self) {
@@ -1276,7 +1324,57 @@ async fn relay(
     out: OutputSender,
     antigravity: bool,
 ) {
-    while let Some(message) = incoming.recv().await {
+    let pending_permissions = Arc::new(AtomicUsize::new(0));
+    let permission_done = Arc::new(Notify::new());
+    let mut last_was_message = false;
+    loop {
+        let settle_after = {
+            let state = lock(&state);
+            if state.background.implicit_turn_running()
+                && pending_permissions.load(Ordering::Acquire) == 0
+            {
+                if last_was_message {
+                    Some(IMPLICIT_TURN_MESSAGE_SETTLE)
+                } else if !state.background.has_open_tools() {
+                    Some(IMPLICIT_TURN_QUIET_SETTLE)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        let message = match settle_after {
+            Some(delay) => {
+                tokio::select! {
+                    message = incoming.recv() => match message {
+                        Some(message) => message,
+                        None => break,
+                    },
+                    () = permission_done.notified() => continue,
+                    () = tokio::time::sleep(delay) => {
+                        if pending_permissions.load(Ordering::Acquire) == 0
+                            && let Some(activity) = lock(&state)
+                                .background
+                                .settle_implicit_turn(antigravity)
+                        {
+                            let _ = out.send(Output::Activity(activity));
+                        }
+                        last_was_message = false;
+                        continue;
+                    }
+                }
+            }
+            None => {
+                tokio::select! {
+                    message = incoming.recv() => match message {
+                        Some(message) => message,
+                        None => break,
+                    },
+                    () = permission_done.notified() => continue,
+                }
+            }
+        };
         match message {
             Incoming::Notification { method, params } if method == "session/update" => {
                 // Anything the agent sends means it is alive, even when it
@@ -1366,7 +1464,36 @@ async fn relay(
                     }
                     other => other,
                 };
-                let _ = out.send(Output::Update(update));
+                match &update {
+                    SessionUpdate::AgentMessageChunk(_) => last_was_message = true,
+                    SessionUpdate::AgentThoughtChunk(_)
+                    | SessionUpdate::ToolCall(_)
+                    | SessionUpdate::ToolCallUpdate(_)
+                    | SessionUpdate::Plan(_) => last_was_message = false,
+                    _ => {}
+                }
+                let activity = {
+                    let mut state = lock(&state);
+                    state
+                        .prompted
+                        .then(|| state.background.observe_update(&update, antigravity))
+                        .flatten()
+                };
+                // Ordering matters: when an autonomous turn wakes up (`running`),
+                // open its live turn before forwarding the update; when a terminal
+                // `usage_update` ends it (`waiting`/`idle`), forward the usage
+                // before closing and persisting the turn.
+                if let Some(activity) = activity {
+                    if activity.state == "running" {
+                        let _ = out.send(Output::Activity(activity));
+                        let _ = out.send(Output::Update(update));
+                    } else {
+                        let _ = out.send(Output::Update(update));
+                        let _ = out.send(Output::Activity(activity));
+                    }
+                } else {
+                    let _ = out.send(Output::Update(update));
+                }
             }
             Incoming::Notification { .. } => {}
             Incoming::Barrier(done) => {
@@ -1387,6 +1514,17 @@ async fn relay(
                         continue;
                     }
                 };
+                let activity = {
+                    let mut state = lock(&state);
+                    state
+                        .prompted
+                        .then(|| state.background.observe_permission())
+                        .flatten()
+                };
+                if let Some(activity) = activity {
+                    let _ = out.send(Output::Activity(activity));
+                }
+                last_was_message = false;
                 let (reply, answer) = oneshot::channel();
                 if out.send(Output::Permission { request, reply }).is_err() {
                     let response =
@@ -1397,11 +1535,16 @@ async fn relay(
                     );
                     continue;
                 }
+                pending_permissions.fetch_add(1, Ordering::AcqRel);
+                let pending = Arc::clone(&pending_permissions);
+                let done = Arc::clone(&permission_done);
                 let peer = Arc::clone(&peer);
                 tokio::spawn(async move {
                     let response = answer.await.unwrap_or_else(|_| {
                         RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
                     });
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                    done.notify_one();
                     peer.respond(
                         id,
                         Ok(serde_json::to_value(response).unwrap_or(Value::Null)),
@@ -1412,6 +1555,9 @@ async fn relay(
                 peer.respond(id, Err(RpcError::method_not_found(&method)));
             }
         }
+    }
+    if let Some(activity) = lock(&state).background.disconnect() {
+        let _ = out.send(Output::Activity(activity));
     }
 }
 

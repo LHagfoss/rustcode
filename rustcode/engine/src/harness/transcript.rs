@@ -360,7 +360,7 @@ impl Transcript {
             self.tool_metrics.clear();
             self.tool_names.clear();
         }
-        self.end_reply();
+        self.end_reply_keeping_pending();
         self.plan = None;
         self.live = true;
         self.history.push(ChatMessage::new("user", text.to_owned()));
@@ -421,6 +421,33 @@ impl Transcript {
         }
         for (_, slot) in self.tools.drain() {
             finalize_tool_message(&mut self.history[slot.result]);
+        }
+    }
+
+    /// The turn parked while background tool calls keep running: record its
+    /// text and finalize calls that already completed, while keeping pending
+    /// calls tracked so later completion updates modify them in place instead
+    /// of duplicating or marking them interrupted.
+    pub(crate) fn end_reply_keeping_pending(&mut self) {
+        self.live = false;
+        if let Some(reply) = self.take_reply() {
+            self.history.push(reply);
+        }
+        let finished: Vec<String> = self
+            .tools
+            .iter()
+            .filter(|(_, slot)| {
+                !self.history[slot.result]
+                    .tool_result
+                    .as_ref()
+                    .is_some_and(|result| result.pending)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in finished {
+            if let Some(slot) = self.tools.remove(&id) {
+                finalize_tool_message(&mut self.history[slot.result]);
+            }
         }
     }
 
@@ -1576,5 +1603,61 @@ mod tests {
         transcript.end_reply();
         assert_eq!(transcript.history[2].content, "");
         assert!(transcript.history[2].tool_result.as_ref().unwrap().success);
+    }
+
+    #[test]
+    fn pending_tools_survive_end_reply_keeping_pending_and_update_in_place() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("run checks");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("bg-1", "cargo check")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress),
+        ));
+        transcript.observe(&SessionUpdate::AgentMessageChunk(
+            serde_json::from_value(serde_json::json!({
+                "content": {"type": "text", "text": "Running in background."}
+            }))
+            .unwrap(),
+        ));
+        transcript.end_reply_keeping_pending();
+
+        // The reply was flushed, and `bg-1` stayed pending rather than interrupted.
+        let tool_rows: Vec<_> = transcript
+            .history
+            .iter()
+            .filter(|m| m.role == "tool")
+            .collect();
+        assert_eq!(tool_rows.len(), 1);
+        let record = tool_rows[0].tool_result.as_ref().unwrap();
+        assert!(record.pending);
+        assert!(record.error_kind.is_none());
+
+        // Later completion updates the original tool row in place without duplicating it.
+        transcript.observe(&SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "bg-1",
+            ToolCallUpdateFields::new()
+                .title("cargo check")
+                .status(ToolCallStatus::Completed),
+        )));
+        transcript.observe(&SessionUpdate::AgentMessageChunk(
+            serde_json::from_value(serde_json::json!({
+                "content": {"type": "text", "text": "Checks passed."}
+            }))
+            .unwrap(),
+        ));
+        transcript.end_reply();
+
+        let tool_rows: Vec<_> = transcript
+            .history
+            .iter()
+            .filter(|m| m.role == "tool")
+            .collect();
+        assert_eq!(tool_rows.len(), 1);
+        let record = tool_rows[0].tool_result.as_ref().unwrap();
+        assert!(!record.pending);
+        assert!(record.success);
+        assert!(record.error_kind.is_none());
+        assert_eq!(transcript.history.last().unwrap().content, "Checks passed.");
     }
 }
