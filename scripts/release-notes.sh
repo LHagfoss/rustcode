@@ -30,5 +30,8 @@ git -C "$ROOT" log --reverse --format='%s' "$since..origin/main" \
         line="$(gh pr view "$number" --json body --jq .body \
             | awk '/^## Changelog/ { found = 1; next } found && /^## / { exit } found && NF { print; exit }')"
         line="${line#- }"
+        case "$line" in
+            [Nn][Oo][Nn][Ee]|[Nn][Oo][Nn][Ee].|[Nn]/[Aa]|-) continue ;;
+        esac
         printf -- '- %s (#%s)\n' "${line:-$title}" "$number"
     done

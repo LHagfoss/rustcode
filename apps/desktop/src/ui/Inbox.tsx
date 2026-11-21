@@ -26,7 +26,6 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { orderedOptions, QuestionCard } from "./AttentionCards";
-import { ViewHeader } from "./Board";
 import {
   ArrowUpRight,
   CircleAlert,
@@ -37,6 +36,7 @@ import {
   Sparkles,
   X,
 } from "./icons";
+import { ViewHeader } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
 import { cx, Kbd, Pill, Tooltip } from "./primitives";
 import { WhileAwayCard } from "./WhileAway";

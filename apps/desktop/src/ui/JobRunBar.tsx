@@ -4,10 +4,16 @@
 
 import { isJobRunThread, useLoopThreads } from "../state/loops";
 import { useApp } from "../state/store";
+import { setView } from "../state/viewActions";
 import { Repeat } from "./icons";
-import { showJob } from "./Loops";
 import { Pill } from "./primitives";
 import { useThreadStatus } from "./Status";
+
+/** Open the Jobs view on one job, expanded: the way back from one of its runs. */
+export function showJob(id: string): void {
+  useLoopThreads.setState({ reveal: id });
+  setView({ kind: "loops" });
+}
 
 /** The job a thread is a run of, by id and name, or null for any other thread. */
 export function useJobRun(threadId: string): { id?: string; name?: string } | null {
