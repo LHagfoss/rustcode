@@ -65,6 +65,10 @@ export function runShortcut(command: string): boolean {
     case "usage":
       openSettings("usage");
       return true;
+    case "jobs":
+      // Like the inbox: the key that opened Jobs takes you back to the chat.
+      setView(s.view.kind === "loops" ? { kind: "chat" } : { kind: "loops" });
+      return true;
     case "inbox":
       // The row toggles: the shortcut that opened the inbox takes you back to the chat.
       setView(s.view.kind === "inbox" ? { kind: "chat" } : { kind: "inbox" });

@@ -87,6 +87,8 @@ export const APP_COMMANDS: readonly AppCommand[] = [
   },
   { id: "settings", label: "Settings", binding: "mod+,", group: "App", remappable: true },
   { id: "usage", label: "Usage", binding: "mod+u", group: "App", remappable: true },
+  // No key of its own: the user gives it one (⌘J, say, taken from the terminal).
+  { id: "jobs", label: "Jobs", binding: "", group: "App", remappable: true },
   { id: "inbox", label: "Needs you inbox", binding: "mod+shift+i", group: "View", remappable: true },
   { id: "toggle-sidebar", label: "Toggle sidebar", binding: "mod+b", group: "View", remappable: true },
   {
@@ -438,14 +440,10 @@ export function conflictingCommands(
 
 /**
  * Why a binding cannot be used for `id`, in words, or null when it can: the
- * system owns it, it has no modifier and is no function key, or another
- * command already answers it.
+ * system owns it, or it has no modifier and is no function key. A key another
+ * command answers is usable: `assignBinding` moves it.
  */
-export function bindingProblem(
-  overrides: Readonly<Record<string, string>>,
-  id: string,
-  binding: string,
-): string | null {
+export function bindingProblem(id: string, binding: string): string | null {
   const parsed = parseBinding(binding);
   if (!parsed) return "That is not a key this app can use.";
   const text = formatBinding(binding);
@@ -457,9 +455,29 @@ export function bindingProblem(
   if (!hasModifier(parsed) && !isFunctionKey(parsed) && !(isListKey(id) && isPrintableKey(parsed))) {
     return `Add ${currentPlatform() === "mac" ? "⌘" : "Ctrl"} to it, or use a function key like F6.`;
   }
-  const [taken] = conflictingCommands(overrides, id, binding);
-  if (taken) return `${taken.label} already uses ${text}. Reset that one first.`;
   return null;
+}
+
+/**
+ * The overrides after giving `id` the key `binding`: a command that answered that key loses it
+ * (it is left with no shortcut), so a key moves from one command to another in one step, and
+ * `taken` names the commands it came from. The caller has checked `bindingProblem` first.
+ */
+export function assignBinding(
+  overrides: Readonly<Record<string, string>>,
+  id: string,
+  binding: string,
+): { overrides: Record<string, string>; taken: AppCommand[] } {
+  const taken = conflictingCommands(overrides, id, binding);
+  const next = { ...overrides };
+  for (const command of taken) {
+    if (command.binding === "") delete next[command.id];
+    else next[command.id] = "";
+  }
+  const own = APP_COMMANDS.find((command) => command.id === id);
+  if (own && own.binding === binding) delete next[id];
+  else next[id] = binding;
+  return { overrides: next, taken };
 }
 
 /**
@@ -512,15 +530,31 @@ export function parseOverrides(raw: string | null | undefined): Record<string, s
   for (const command of CHANGEABLE_COMMANDS) {
     const stored = (value as Record<string, unknown>)[command.id];
     if (typeof stored !== "string") continue;
+    // "" is a command the user left without a key (it gave its key to another one).
+    if (stored === "") {
+      if (command.binding !== "") out[command.id] = "";
+      continue;
+    }
     const parsed = parseBinding(stored);
     if (!parsed) continue;
     const binding = bindingFromParts(parsed);
     if (RESERVED_BINDINGS.includes(binding) || RESERVED_EDITING.includes(binding)) continue;
     if (!hasModifier(parsed) && !isFunctionKey(parsed) && !(command.list && isPrintableKey(parsed))) continue;
-    if (conflictingCommands(out, command.id, binding).length > 0) continue;
     // A bare default is not an override: the table stays the source of it.
     if (binding === command.binding) continue;
     out[command.id] = binding;
+  }
+  // Two overrides on one key: the later command in the table goes back to its default.
+  for (const command of [...CHANGEABLE_COMMANDS].reverse()) {
+    const binding = out[command.id];
+    if (!binding) continue;
+    const others = conflictingCommands(out, command.id, binding);
+    if (others.some((other) => out[other.id] !== undefined)) delete out[command.id];
+  }
+  // A default another command's override took is left with no key, as Settings left it.
+  for (const command of CHANGEABLE_COMMANDS) {
+    if (out[command.id] !== undefined || command.binding === "") continue;
+    if (conflictingCommands(out, command.id, command.binding).length > 0) out[command.id] = "";
   }
   return out;
 }

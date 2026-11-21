@@ -1,7 +1,15 @@
 // Settings actions on the app store; read it only when called to keep module loading safe.
 
 import type { ChatWidth } from "../lib/chatWidth";
-import { APP_COMMANDS, bindingOf, commandFor, commandHint, type KeyEventLike } from "../lib/keys";
+import {
+  APP_COMMANDS,
+  type AppCommand,
+  assignBinding,
+  bindingOf,
+  commandFor,
+  commandHint,
+  type KeyEventLike,
+} from "../lib/keys";
 import type { AppState } from "./appState";
 import { SETTINGS_DEFAULTS, STORAGE, store, stored } from "./appState";
 import { HEADER_BUTTON_IDS, type HeaderButtonId } from "./headerButtons";
@@ -121,19 +129,26 @@ export function useShortcutHint(id: string): string {
   );
 }
 
-/** Rebinds a command; the caller has already checked the binding (lib/keys.ts). */
-export function setShortcut(id: string, binding: string) {
-  const next = { ...get().shortcuts, [id]: binding };
-  set({ shortcuts: next });
-  store(STORAGE.shortcuts, JSON.stringify(next));
+/**
+ * Rebinds a command; the caller has already checked the binding (lib/keys.ts). A command that
+ * answered the key loses it, and is returned so the page can say where the key came from.
+ */
+export function setShortcut(id: string, binding: string): AppCommand[] {
+  const { overrides, taken } = assignBinding(get().shortcuts, id, binding);
+  set({ shortcuts: overrides });
+  store(STORAGE.shortcuts, JSON.stringify(overrides));
+  return taken;
 }
 
-/** Drops a command's override: its default binding is back. */
-export function resetShortcut(id: string) {
+/** Drops a command's override: its default binding is back, taken from whoever had it since. */
+export function resetShortcut(id: string): AppCommand[] {
+  const own = APP_COMMANDS.find((command) => command.id === id);
+  if (own?.binding) return setShortcut(id, own.binding);
   const next = { ...get().shortcuts };
   delete next[id];
   set({ shortcuts: next });
   store(STORAGE.shortcuts, JSON.stringify(next));
+  return [];
 }
 
 export function setAnimateStreaming(on: boolean) {

@@ -18,8 +18,9 @@ import {
   bindingOf,
   bindingProblem,
   commandHint,
+  formatBinding,
 } from "../lib/keys";
-import { resetShortcut, setShortcut, useApp } from "../state/store";
+import { resetShortcut, setShortcut, toast, useApp } from "../state/store";
 import { cx, Kbd } from "./primitives";
 import { Group, Row } from "./settingsKit";
 
@@ -50,24 +51,24 @@ export function ShortcutsPage() {
       const next = bindingFromEvent(e);
       // A modifier on its own, or a key the table does not name: keep waiting.
       if (!next) return;
-      const why = bindingProblem(overrides, recording, next);
+      const why = bindingProblem(recording, next);
       if (why) {
         setProblem(why);
         return;
       }
-      setShortcut(recording, next);
+      tellMoved(next, setShortcut(recording, next));
       stop();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording, overrides, stop]);
+  }, [recording, stop]);
 
   return (
     <>
       <Group
         title="Shortcuts"
         footer="Click a key to change it, then press the new combination. Esc leaves it as it was."
-        hint="A shortcut needs a modifier unless it is a function key or one of the thread list's marking keys, and it may not take a key another command answers."
+        hint="A shortcut needs a modifier unless it is a function key or one of the thread list's marking keys. A key another command answers moves here, and that command is left with none."
       >
         {APP_COMMANDS.filter((command) => command.remappable).map((command) => (
           <ShortcutRow
@@ -86,7 +87,7 @@ export function ShortcutsPage() {
             }}
             onReset={() => {
               stop();
-              resetShortcut(command.id);
+              tellMoved(command.binding, resetShortcut(command.id));
             }}
           />
         ))}
@@ -100,6 +101,13 @@ export function ShortcutsPage() {
       </Group>
     </>
   );
+}
+
+/** Says where a key came from when giving it to a command took it from others. */
+function tellMoved(binding: string, taken: AppCommand[]) {
+  if (taken.length === 0) return;
+  const from = taken.map((command) => command.label).join(", ");
+  toast(`${formatBinding(binding)} moved from ${from}, which now has no shortcut`, "info");
 }
 
 /** One changeable command: its key, the recorder, and why a key was refused. */
@@ -119,6 +127,7 @@ function ShortcutRow({
   onReset: () => void;
 }) {
   const binding = bindingOf(overrides, command.id);
+  const hint = binding ? commandHint(binding, command) : "None";
   const changed = overrides[command.id] !== undefined;
   return (
     <Row title={command.label} status={problem} reset={changed ? onReset : undefined}>
@@ -128,7 +137,7 @@ function ShortcutRow({
         aria-label={
           recording
             ? `${command.label}: press the new keys, Esc to cancel`
-            : `${command.label}: ${commandHint(binding, command)}. Change it`
+            : `${command.label}: ${hint}. Change it`
         }
         onClick={onToggle}
         className={cx(
@@ -138,8 +147,10 @@ function ShortcutRow({
       >
         {recording ? (
           <span className="text-caption">Press keys…</span>
+        ) : binding ? (
+          <Kbd>{hint}</Kbd>
         ) : (
-          <Kbd>{commandHint(binding, command)}</Kbd>
+          <span className="text-caption">{hint}</span>
         )}
       </button>
     </Row>

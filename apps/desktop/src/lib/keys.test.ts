@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   APP_COMMANDS,
+  assignBinding,
   bindingFromEvent,
   bindingOf,
   bindingProblem,
@@ -133,7 +134,7 @@ describe("matching", () => {
     const overrides = parseOverrides(JSON.stringify({ "toggle-model-picker": "mod+d" }));
     expect(commandFor(overrides, cmd("d"))).toBe("toggle-model-picker");
     expect(commandFor(overrides, cmd("m"))).toBeNull();
-    expect(bindingProblem(overrides, "toggle-model-picker", "mod+m")).toBeNull();
+    expect(bindingProblem("toggle-model-picker", "mod+m")).toBeNull();
   });
 
   test("the list's marking keys are answered by the list, never by the window", () => {
@@ -169,17 +170,17 @@ describe("matching", () => {
 
 describe("what a binding may be", () => {
   test("needs a modifier unless it is a function key", () => {
-    expect(bindingProblem({}, "new-thread", "b")).toContain("function key");
-    expect(bindingProblem({}, "new-thread", "shift+b")).toContain("function key");
-    expect(bindingProblem({}, "new-thread", "f7")).toBeNull();
-    expect(bindingProblem({}, "new-thread", "mod+alt+n")).toBeNull();
+    expect(bindingProblem("new-thread", "b")).toContain("function key");
+    expect(bindingProblem("new-thread", "shift+b")).toContain("function key");
+    expect(bindingProblem("new-thread", "f7")).toBeNull();
+    expect(bindingProblem("new-thread", "mod+alt+n")).toBeNull();
   });
 
   test("a bare letter is usable for a list key, and for nothing else", () => {
-    expect(bindingProblem({}, "pin-thread", "p")).toBeNull();
-    expect(bindingProblem({}, "settle-thread", "d")).toBeNull();
-    expect(bindingProblem({}, "new-thread", "p")).toContain("function key");
-    expect(bindingProblem({}, "pin-thread", "mod+b")).toContain("Toggle sidebar");
+    expect(bindingProblem("pin-thread", "p")).toBeNull();
+    expect(bindingProblem("settle-thread", "d")).toBeNull();
+    expect(bindingProblem("new-thread", "p")).toContain("function key");
+    expect(bindingProblem("pin-thread", "mod+b")).toBeNull();
   });
 
   test("a list key is one printable character, not a key a row already answers", () => {
@@ -198,24 +199,24 @@ describe("what a binding may be", () => {
       "left",
       "right",
     ]) {
-      expect(bindingProblem({}, "pin-thread", key)).toContain("function key");
-      expect(bindingProblem({}, "settle-thread", key)).toContain("function key");
+      expect(bindingProblem("pin-thread", key)).toContain("function key");
+      expect(bindingProblem("settle-thread", key)).toContain("function key");
     }
     // The named keys that are not a row's own are still function keys or modified.
-    expect(bindingProblem({}, "pin-thread", "f7")).toBeNull();
-    expect(bindingProblem({}, "pin-thread", "mod+tab")).toContain("reserved by the system");
+    expect(bindingProblem("pin-thread", "f7")).toBeNull();
+    expect(bindingProblem("pin-thread", "mod+tab")).toContain("reserved by the system");
   });
 
   test("refuses the combinations the system owns", () => {
     for (const binding of RESERVED_BINDINGS) {
-      expect(bindingProblem({}, "new-thread", binding)).toContain("reserved by the system");
+      expect(bindingProblem("new-thread", binding)).toContain("reserved by the system");
     }
     expect(RESERVED_BINDINGS).toEqual(["mod+q", "mod+w", "mod+h", "mod+tab"]);
   });
 
   test("refuses the editing keys a field owns", () => {
     for (const binding of RESERVED_EDITING) {
-      expect(bindingProblem({}, "new-thread", binding)).toContain("text editing");
+      expect(bindingProblem("new-thread", binding)).toContain("text editing");
     }
     expect(parseOverrides(JSON.stringify({ "new-thread": "mod+v" }))).toEqual({});
   });
@@ -236,13 +237,13 @@ describe("what a binding may be", () => {
       "mod+home",
       "mod+end",
     ]) {
-      expect(bindingProblem({}, "new-thread", binding)).not.toBeNull();
+      expect(bindingProblem("new-thread", binding)).not.toBeNull();
     }
     expect(parseOverrides(JSON.stringify({ "toggle-sidebar": "mod+left" }))).toEqual({});
   });
 
-  test("names the command that already answers the key", () => {
-    expect(bindingProblem({}, "new-thread", "mod+b")).toContain("Toggle sidebar");
+  test("names the command that already answers the key, and lets the key move", () => {
+    expect(bindingProblem("new-thread", "mod+b")).toBeNull();
     expect(conflictingCommands({}, "new-thread", "mod+b").map((c) => c.id)).toEqual(["toggle-sidebar"]);
     // Its own binding is not a conflict with itself.
     expect(conflictingCommands({}, "toggle-sidebar", "mod+b")).toEqual([]);
@@ -251,13 +252,32 @@ describe("what a binding may be", () => {
 
   test("an override frees the key it left", () => {
     const overrides = { "toggle-sidebar": "mod+alt+s" };
-    expect(bindingProblem(overrides, "new-thread", "mod+b")).toBeNull();
-    expect(bindingProblem(overrides, "new-thread", "mod+alt+s")).toContain("Toggle sidebar");
+    expect(conflictingCommands(overrides, "new-thread", "mod+b")).toEqual([]);
+    expect(conflictingCommands(overrides, "new-thread", "mod+alt+s").map((c) => c.id)).toEqual([
+      "toggle-sidebar",
+    ]);
+  });
+
+  test("Jobs has no key until given one, and ⌘J can move to it from the terminal", () => {
+    expect(bindingOf({}, "jobs")).toBe("");
+    expect(commandFor({}, cmd("j"))).toBe("toggle-terminal");
+    const { overrides, taken } = assignBinding({}, "jobs", "mod+j");
+    expect(taken.map((c) => c.id)).toEqual(["toggle-terminal"]);
+    expect(overrides).toEqual({ jobs: "mod+j", "toggle-terminal": "" });
+    expect(commandFor(overrides, cmd("j"))).toBe("jobs");
+    // The terminal can get a key of its own again.
+    const back = assignBinding(overrides, "toggle-terminal", "mod+shift+j");
+    expect(back.taken).toEqual([]);
+    expect(commandFor(back.overrides, cmd("J", { shiftKey: true }))).toBe("toggle-terminal");
+    // Its default back takes ⌘J from Jobs, which had no key of its own.
+    const reset = assignBinding(overrides, "toggle-terminal", "mod+j");
+    expect(reset.overrides).toEqual({});
+    expect(reset.taken.map((c) => c.id)).toEqual(["jobs"]);
   });
 
   test("a key this app cannot use says so", () => {
-    expect(bindingProblem({}, "new-thread", "mod+nope")).toContain("not a key");
-    expect(bindingProblem({}, "new-thread", "")).toContain("not a key");
+    expect(bindingProblem("new-thread", "mod+nope")).toContain("not a key");
+    expect(bindingProblem("new-thread", "")).toContain("not a key");
   });
 });
 
@@ -281,6 +301,26 @@ describe("stored overrides", () => {
       "toggle-terminal": 42, // not a string
     });
     expect(parseOverrides(stored)).toEqual({ "toggle-sidebar": "mod+alt+s" });
+  });
+
+  test("a key moved to another command survives a reload", () => {
+    const stored = JSON.stringify({ jobs: "mod+j", "toggle-terminal": "" });
+    const overrides = parseOverrides(stored);
+    expect(overrides).toEqual({ jobs: "mod+j", "toggle-terminal": "" });
+    expect(commandFor(overrides, cmd("j"))).toBe("jobs");
+    // A default taken without the "" stored is left with no key, not answered twice.
+    expect(parseOverrides(JSON.stringify({ jobs: "mod+j" }))).toEqual({
+      jobs: "mod+j",
+      "toggle-terminal": "",
+    });
+    // Two overrides on one key: the earlier command keeps it.
+    expect(
+      parseOverrides(JSON.stringify({ "new-thread": "mod+alt+x", "toggle-sidebar": "mod+alt+x" })),
+    ).toEqual({
+      "new-thread": "mod+alt+x",
+    });
+    // Jobs has no default, so "" for it is no override.
+    expect(parseOverrides(JSON.stringify({ jobs: "" }))).toEqual({});
   });
 
   test("a list key keeps a bare override; no other command does", () => {
