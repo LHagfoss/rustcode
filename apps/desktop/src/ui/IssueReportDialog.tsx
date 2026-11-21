@@ -1,8 +1,8 @@
 import { Dialog } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
-import type { SystemInfo } from "../lib/diagnostics";
-import { clipboardImage, openExternal, systemInfo } from "../lib/native";
+import { redact, type SystemInfo } from "../lib/diagnostics";
+import { clipboardImage, openExternal, systemInfo, threadLogTail } from "../lib/native";
 import { pastedImages } from "../lib/paste";
 import { activeTransport, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
@@ -25,6 +25,14 @@ type Screenshot = { name: string; url: string; file: File };
 const OS_NAMES: Record<string, string> = { macos: "macOS", windows: "Windows", linux: "Linux" };
 
 /** A bug report's `### Where`: the app, the OS and its architecture, and the thread's harness. */
+export const LOG_TAIL_LINES = 200;
+
+/** A thread log for a public issue: redacted and folded, in a fence no log line closes. */
+export function logSection(log: string, home?: string | null): string {
+  const text = redact(log.trim(), home).replaceAll("~~~~", "~~~");
+  return `<details><summary>Thread log (last ${LOG_TAIL_LINES} lines)</summary>\n\n~~~~text\n${text}\n~~~~\n\n</details>`;
+}
+
 export function whereLines(version: string | null, system: SystemInfo | null, harness?: string): string {
   const os = system && [OS_NAMES[system.os] ?? system.os, system.osVersion].filter(Boolean).join(" ");
   return [
@@ -50,11 +58,14 @@ export function IssueReportDialog({
   open,
   onOpenChange,
   harness,
+  threadId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The harness of the thread the report was opened from, for a bug's `### Where`. */
   harness?: string;
+  /** The thread the report was opened from, whose log a bug can attach. */
+  threadId?: string;
 }) {
   const [type, setType] = useState<ReportType>(reportTypes[0]);
   const [title, setTitle] = useState("");
@@ -70,6 +81,9 @@ export function IssueReportDialog({
   const [submitting, setSubmitting] = useState(false);
   const [issue, setIssue] = useState("");
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
+  const [attachLog, setAttachLog] = useState(false);
+  const [readLog, setReadLog] = useState<{ id: string; text: string } | null>(null);
+  const log = readLog && readLog.id === threadId ? readLog.text : null;
   const [imageError, setImageError] = useState("");
   const [savingAll, setSavingAll] = useState(false);
   const titleInput = useRef<HTMLInputElement>(null);
@@ -184,6 +198,27 @@ export function IssueReportDialog({
     onOpenChange(next);
   };
 
+  useEffect(() => {
+    if (open) setAttachLog(false);
+  }, [open]);
+
+  useEffect(() => {
+    if (!attachLog || !threadId || log !== null) return;
+    const id = threadId;
+    let current = true;
+    void threadLogTail(id, LOG_TAIL_LINES).then(
+      (text) => {
+        if (current) setReadLog({ id, text });
+      },
+      () => {
+        if (current) setReadLog({ id, text: "" });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [attachLog, threadId, log]);
+
   const bug = type.kind === "bug";
   const selectedLabels = options?.can_label
     ? [...new Set([type.label, ...labels])].filter((label) => options.labels.includes(label))
@@ -193,6 +228,7 @@ export function IssueReportDialog({
     `### ${bug ? "What happened" : "What are you trying to do?"}\n\n${description.trim()}`,
     details.trim() && `### ${bug ? "Steps to reproduce" : "Idea"}\n\n${details.trim()}`,
     bug && `### Where\n\n${whereLines(version, system, harness)}`,
+    bug && attachLog && log && logSection(log, system?.home),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -317,6 +353,28 @@ export function IssueReportDialog({
                         placeholder={bug ? "How can we reproduce it?" : "Describe how you’d like it to work."}
                       />
                     </label>
+                    {bug && threadId && (
+                      <div className="grid gap-1.5">
+                        <label className="flex items-center gap-1.5 text-callout">
+                          <input
+                            type="checkbox"
+                            checked={attachLog}
+                            onChange={(event) => setAttachLog(event.target.checked)}
+                          />
+                          Attach this thread’s log
+                          <span className="text-fg-faint">(last {LOG_TAIL_LINES} lines, redacted)</span>
+                        </label>
+                        {attachLog && (
+                          <pre className="max-h-32 overflow-auto rounded-lg bg-fill px-3 py-2 text-caption text-fg-muted">
+                            {log === null
+                              ? "Reading the log…"
+                              : log
+                                ? redact(log.trim(), system?.home)
+                                : "This thread has no log yet."}
+                          </pre>
+                        )}
+                      </div>
+                    )}
                     {options?.can_label && (
                       <details className="group">
                         <summary className="flex cursor-pointer list-none items-center gap-2 text-callout font-medium [&::-webkit-details-marker]:hidden">

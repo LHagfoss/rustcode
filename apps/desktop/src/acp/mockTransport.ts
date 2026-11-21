@@ -337,6 +337,8 @@ export class MockTransport implements Transport {
       if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("Not a thread id.");
       return `/Users/lars/.config/rustcode/threads/2026/11/08/${id}/logs/debug.log`;
     }
+    if (command === "thread_log_tail")
+      return "2026-11-08T10:00:00Z INFO turn started\n2026-11-08T10:00:04Z WARN /Users/lars/code/app: request failed (HTTP 429)";
     if (command === "thread_rename")
       return this.engine?.renameThread(String(args.id), String(args.title), args.user === true);
     if (command === "thread_user_titled") return this.engine?.userTitled.has(String(args.id)) ?? false;

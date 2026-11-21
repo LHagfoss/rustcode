@@ -132,6 +132,7 @@ pub fn run() {
             threads::thread_user_titled,
             threads::thread_trash,
             threads::thread_log_open,
+            threads::thread_log_tail,
             diagnostics::server_status,
             diagnostics::system_info,
             service::server_service_status,

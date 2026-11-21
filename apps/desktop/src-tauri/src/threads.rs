@@ -135,6 +135,41 @@ pub fn thread_log_open(id: String) -> Result<String, String> {
     Ok(dir.display().to_string())
 }
 
+/// The last `lines` lines of the thread's `logs/debug.log` (at most
+/// [`MAX_LOG_TAIL_LINES`] and [`MAX_LOG_TAIL_BYTES`]), for a problem report.
+/// Empty when the thread has not logged anything yet.
+#[tauri::command(async)]
+pub fn thread_log_tail(id: String, lines: usize) -> Result<String, String> {
+    let config = crate::diagnostics::config_dir().ok_or("No config folder.")?;
+    let dir = thread_dir(&id)?;
+    let log = dir.join("logs").join("debug.log");
+    if !log.exists() {
+        return Ok(String::new());
+    }
+    let path = file_in_config(&log, &config)
+        .filter(|path| path.starts_with(&dir))
+        .ok_or("The thread log is outside this thread's folder.")?;
+    let raw = std::fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(log_tail(&String::from_utf8_lossy(&raw), lines))
+}
+
+const MAX_LOG_TAIL_LINES: usize = 500;
+const MAX_LOG_TAIL_BYTES: usize = 64 * 1024;
+
+fn log_tail(text: &str, lines: usize) -> String {
+    let all: Vec<&str> = text.lines().collect();
+    let keep = lines.min(MAX_LOG_TAIL_LINES);
+    let mut tail = all[all.len().saturating_sub(keep)..].join("\n");
+    if tail.len() > MAX_LOG_TAIL_BYTES {
+        let mut start = tail.len() - MAX_LOG_TAIL_BYTES;
+        while !tail.is_char_boundary(start) {
+            start += 1;
+        }
+        tail = tail[start..].to_owned();
+    }
+    tail
+}
+
 #[tauri::command(async)]
 pub fn thread_trash(id: String) -> Result<(), String> {
     let dir = thread_dir(&id)?;
@@ -167,6 +202,19 @@ fn trash_error(error: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_log_tail_keeps_the_last_lines_within_the_caps() {
+        let text = (1..=600)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tail = super::log_tail(&text, 3);
+        assert_eq!(tail, "line 598\nline 599\nline 600");
+        assert_eq!(super::log_tail(&text, 10_000).lines().count(), 500);
+        let wide = "é".repeat(super::MAX_LOG_TAIL_BYTES);
+        assert!(super::log_tail(&wide, 1).len() <= super::MAX_LOG_TAIL_BYTES);
+    }
+
     use super::*;
 
     #[test]
