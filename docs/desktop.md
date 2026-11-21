@@ -1083,10 +1083,11 @@ composer's keys stay outside the table.
   config folder; closing the window or quitting writes it, and a missing or
   nonsense file falls back to the default in `tauri.conf.json`).
 - **Smart UI.** See below.
-- **Look.** Neutral and opaque, after [design.md](design.md): the
-  sidebar and every surface paint solid token colours, so greys no longer
-  pick up the wallpaper through the window's material (`windowEffects` is
-  still set in `tauri.conf.json` but nothing shows it). What floats (the
+- **Look.** Neutral and opaque, after [design.md](design.md): every pane
+  paints solid token colours. In the macOS app the sidebar alone lets the
+  window's `sidebar` vibrancy (`windowEffects` in `tauri.conf.json`) show
+  through its tint; Settings › Appearance › Transparency sets how much, for
+  the sidebar and the glass together. What floats (the
   composer, popovers, menus, tooltips, dialogs, toasts, the lightbox)
   shares one glass, `--rc-glass-bg` + the shared `glass-filter` on macOS; Windows and Linux paint
   no blur at all and keep every surface solid (design.md › Platforms). Reduce transparency

@@ -151,6 +151,7 @@ pub fn run() {
             updater::release_notes,
             webview::display_info,
             webview::webview_blur,
+            webview::window_theme,
         ])
         .setup(|app| {
             // Release Cmd+W to Settle and Cmd+M to the model picker.

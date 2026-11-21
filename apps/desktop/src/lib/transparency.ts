@@ -87,3 +87,14 @@ export function installReduceTransparency() {
       .then(setShellCompositing)
       .catch(() => undefined);
 }
+
+/** Settings › Appearance › Transparency, in percent: how much of the sidebar and the glass shows. */
+export const TRANSPARENCY_MIN = 0;
+export const TRANSPARENCY_MAX = 60;
+
+/** Sets `--rc-transparency` on <html> (index.css), kept to the slider's range. */
+export function paintTransparency(percent: number) {
+  if (typeof document === "undefined") return;
+  const value = Math.min(TRANSPARENCY_MAX, Math.max(TRANSPARENCY_MIN, Math.round(percent)));
+  document.documentElement.style.setProperty("--rc-transparency", `${value}%`);
+}
