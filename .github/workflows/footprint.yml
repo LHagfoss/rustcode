@@ -1,0 +1,135 @@
+name: Release footprint
+
+# Measures what docs/release-footprint.md records: which crates make up the
+# release `rc` and desktop shell binaries (cargo-bloat), `rc` warm and cold
+# startup and memory, and the macOS desktop app's launch and resident memory.
+# Release builds, so it runs on demand and when this workflow or its script
+# changes, never on every pull request. The report is the job summary and an
+# artifact.
+on:
+    workflow_dispatch:
+    pull_request:
+        branches: [main]
+        paths:
+            - .github/workflows/footprint.yml
+            - scripts/footprint.py
+
+concurrency:
+    group: footprint-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    measure:
+        name: Footprint (${{ matrix.name }})
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: macOS
+                      os: macos-26
+                    - name: Linux
+                      os: ubuntu-24.04
+        timeout-minutes: 60
+        env:
+            # cargo-bloat needs the symbols the release profile strips; the
+            # measured binaries are stripped copies, as shipped.
+            CARGO_PROFILE_RELEASE_STRIP: "false"
+            REPORT: ${{ github.workspace }}/footprint-${{ matrix.name }}.md
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Install Linux shell dependencies
+              if: runner.os == 'Linux'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+
+            - name: Install Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Install cargo-bloat
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-bloat
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.3.14
+
+            - name: Build the desktop UI
+              working-directory: apps/desktop
+              run: |
+                  bun install --frozen-lockfile
+                  bun run build
+
+            - name: Crates in the release CLI
+              shell: bash
+              run: |
+                  {
+                      echo "# Release footprint, ${{ matrix.name }}"
+                      echo
+                      echo "Revision \`$(git rev-parse HEAD)\`, $(rustc --version)."
+                      echo
+                      echo "## Crates in \`rc\` (cargo bloat --release -p rustcode-cli --bin rc --crates -n 25)"
+                      echo
+                      echo '```'
+                      cargo bloat --locked --release -p rustcode-cli --bin rc --crates -n 25
+                      echo '```'
+                      echo
+                  } >> "$REPORT"
+                  strip -o "$RUNNER_TEMP/rc" target/release/rc
+
+            # `tauri build` turns on tauri/custom-protocol, which serves the
+            # built UI instead of the dev server.
+            - name: Crates in the release desktop shell
+              shell: bash
+              working-directory: apps/desktop/src-tauri
+              run: |
+                  {
+                      echo "## Crates in \`rustcode-desktop\` (cargo bloat --release --features tauri/custom-protocol --crates -n 25)"
+                      echo
+                      echo '```'
+                      cargo bloat --locked --release --features tauri/custom-protocol --crates -n 25
+                      echo '```'
+                      echo
+                  } >> "$REPORT"
+                  strip -o "$RUNNER_TEMP/rustcode-desktop" target/release/rustcode-desktop
+                  ls -l target/release/rustcode-desktop "$RUNNER_TEMP/rustcode-desktop"
+
+            - name: CLI startup and memory
+              shell: bash
+              run: |
+                  {
+                      echo "## \`rc\` startup and memory (stripped)"
+                      echo
+                      python3 scripts/footprint.py cli "$RUNNER_TEMP/rc" --samples 30 --cold 5
+                  } >> "$REPORT"
+
+            - name: Desktop launch and memory
+              if: runner.os == 'macOS'
+              shell: bash
+              run: |
+                  {
+                      echo "## Desktop launch and memory (stripped)"
+                      echo
+                      python3 scripts/footprint.py desktop "$RUNNER_TEMP/rustcode-desktop" "$RUNNER_TEMP/rc" --seconds 20
+                  } >> "$REPORT"
+
+            - name: Publish the report
+              if: always()
+              shell: bash
+              run: |
+                  touch "$REPORT"
+                  cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+                  cat "$REPORT"
+
+            - uses: actions/upload-artifact@v7
+              if: always()
+              with:
+                  name: footprint-${{ matrix.name }}
+                  path: footprint-${{ matrix.name }}.md
