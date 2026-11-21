@@ -1296,13 +1296,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   A pane's header row is a 44px band with a segmented switch between the views and
   a close button, with no rule under it; a view adds one slim toolbar (`h-9`):
   Changes says the file count and `+/−` lines, the Unified/Split switch when the
-  pane is wide enough for split, and a reload. The card draws
-  520px wide by default and never wider than 640, 70% of the window, or the row
-  less the 360px the chat column always keeps, nor narrower than 360; it is
+  pane is wide enough for split, the git button (commit, push, pull, open a pull
+  request) and a reload. The card draws
+  420px wide by default and never wider than 560, 70% of the window, or the row
+  less the 360px the chat column always keeps, nor narrower than 320; it is
   fitted down when the window or the row cannot hold what was asked and comes back
-  when it can. The width is kept per thread, with the last one used as what a
-  thread that has none starts at. A view scrolls inside the card and takes the
-  height it has, so no view sizes the card. Opening and closing animate the
+  when it can. One width is kept for every tab and thread. The card is never
+  shorter than it is wide (about square) unless the window is shorter; a view
+  scrolls inside the card and takes the height it has. The Details tab is laid
+  out in titled sections (Workspace, Version control, Lineage, Thread, Context
+  window) of 32px rows with a hairline between them. Opening and closing animate the
   dock's width over 200ms (see Motion) with the content pinned to the card's right
   edge, so the chat uncovers it instead of the card sliding. The left edge drags
   and answers the keyboard too: ←/→ 24px from the width on screen (Shift 96px),

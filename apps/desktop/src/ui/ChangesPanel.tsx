@@ -11,7 +11,9 @@ import { type GitChanges, gitChanges } from "../lib/native";
 import { parsePatch } from "../state/diff";
 import { useApp } from "../state/store";
 import { isRunning } from "../state/thread";
+import { splitThreadKey } from "../state/threadKeys";
 import { Patch } from "./DiffView";
+import { GitActionsButton } from "./GitActions";
 import { ChevronRight, CircleCheck, RefreshCw } from "./icons";
 import { ClusterButton, cx, Segments, Spinner } from "./primitives";
 import { DiffCount } from "./Rows";
@@ -131,6 +133,9 @@ function FileSection({
 export function ChangesPanel() {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
   const running = useApp((s) => (s.selectedId ? isRunning(s.threads[s.selectedId]) : false));
+  const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
+  // Git runs in this computer's folder: a thread on a paired machine gets no git button.
+  const local = useApp((s) => !!s.selectedId && !splitThreadKey(s.selectedId).host);
   // What was read, and for which folder: an answer for another thread's folder
   // is not drawn with this thread's name, even for the frame before it is
   // dropped.
@@ -203,8 +208,9 @@ export function ChangesPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* One bar: what changed, the layout when there is room for two columns, and a reload. The
-          panel's tab already says "Changes", and the branch is on the Details card. */}
+      {/* One bar: what changed, the layout when there is room for two columns, git's actions
+          (commit, push, open a pull request) and a reload. The panel's tab already says "Changes",
+          and the branch is on the Details card. */}
       <div className="flex h-9 shrink-0 items-center gap-2 px-3 text-callout tabular">
         {data && !error ? (
           <>
@@ -227,6 +233,7 @@ export function ChangesPanel() {
             ]}
           />
         )}
+        {local && thread && <GitActionsButton thread={thread} />}
         <ClusterButton
           label="Reload"
           tooltip={readAt ? `Reload (read at ${readAt})` : "Reload"}

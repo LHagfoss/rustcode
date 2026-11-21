@@ -1,4 +1,4 @@
-// The thread header's git button (issue 3724): one primary action that follows the repository's state
+// The git button on the side panel's Changes tab (issue 3724): one primary action that follows the repository's state
 // (Commit, Push, Pull, Create Pull Request), a menu with the rest, and the commit sheet. The engine
 // runs git in the thread's folder (state/gitActions.ts), never the agent, so hooks and signing apply.
 
@@ -87,7 +87,7 @@ const ICON: Record<GitAction, typeof GitBranch> = {
 };
 
 /** Keyed by the thread, so a thread switch never carries the last thread's sheet or action over. */
-export function GitHeaderButton({ thread }: { thread?: ThreadState }) {
+export function GitActionsButton({ thread }: { thread?: ThreadState }) {
   return <GitButton key={thread?.id ?? ""} thread={thread} />;
 }
 

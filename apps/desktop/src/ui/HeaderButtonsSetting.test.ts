@@ -3,26 +3,22 @@ import { reorderHeaderButtons } from "./HeaderButtonsSetting";
 
 describe("header button drops", () => {
   test("reorders without mutating the saved order", () => {
-    const shown = ["status", "plan", "details"] as const;
-    expect(reorderHeaderButtons(shown, "status", { list: "shown", index: 2 })).toEqual([
-      "plan",
-      "details",
-      "status",
-    ]);
-    expect(shown).toEqual(["status", "plan", "details"]);
+    const shown = ["plan", "details"] as const;
+    expect(reorderHeaderButtons(shown, "plan", { list: "shown", index: 1 })).toEqual(["details", "plan"]);
+    expect(shown).toEqual(["plan", "details"]);
   });
 
   test("moves between groups and clamps the destination", () => {
-    expect(reorderHeaderButtons(["status", "plan"], "status", { list: "hidden", index: 0 })).toEqual([
+    expect(reorderHeaderButtons(["plan", "details"], "plan", { list: "hidden", index: 0 })).toEqual([
+      "details",
+    ]);
+    expect(reorderHeaderButtons(["details"], "plan", { list: "shown", index: 99 })).toEqual([
+      "details",
       "plan",
     ]);
-    expect(reorderHeaderButtons(["status"], "plan", { list: "shown", index: 99 })).toEqual([
-      "status",
+    expect(reorderHeaderButtons(["details"], "plan", { list: "shown", index: -1 })).toEqual([
       "plan",
-    ]);
-    expect(reorderHeaderButtons(["status"], "plan", { list: "shown", index: -1 })).toEqual([
-      "plan",
-      "status",
+      "details",
     ]);
   });
 });
