@@ -1351,17 +1351,17 @@
   height: 56px;
   background: linear-gradient(to bottom, transparent 0, var(--rc-bg) 56px);
 }
-/* A toast drops in from under the header and lifts away. */
+/* A toast rises into the window's bottom-right corner and drops away. */
 @keyframes rc-toast-in {
   from {
     opacity: 0;
-    transform: translateY(-10px) scale(0.98);
+    transform: translateY(10px) scale(0.98);
   }
 }
 @keyframes rc-toast-out {
   to {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(8px);
   }
 }
 .rc-toast-in {
@@ -1373,10 +1373,10 @@
 /*
  * The stack: only the front card is in flow, so the stack is one card tall; the cards behind
  * it are absolute, 6px higher and a touch smaller each, so they peek over its top edge and
- * fan down over each other when the pointer or the keyboard is on the stack.
+ * fan up over each other when the pointer or the keyboard is on the stack.
  */
 .rc-toast-slot {
-  transform-origin: top center;
+  transform-origin: bottom center;
   transition: transform 220ms var(--ease-snappy);
 }
 /* An auto-dismissing card's clock, along its foot: a 1px accent hairline that drains. */
@@ -1584,7 +1584,7 @@
 @keyframes rc-toast-in-flat {
   from {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(10px);
   }
 }
 /* Windows and Linux paint no blur, decorative ones included: the reveal fades without its 4px. */

@@ -842,17 +842,6 @@ export function ChatView() {
   // message and the composer sits at the foot, where the thread's own will be.
   const showsPending = !!setup && (!selectedId || !!held);
   const isNew = !selectedId && !showsPending;
-  // Toasts sit centred at the top of the chat column, under its header (ui/Toaster.tsx).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-place when the column resizes, which opening the right panel also does
-  useEffect(() => {
-    const root = laneRef.current;
-    if (!root) return;
-    const r = root.getBoundingClientRect();
-    const doc = document.documentElement.style;
-    doc.setProperty("--rc-toast-center", `${Math.round(r.left + r.width / 2)}px`);
-    doc.setProperty("--rc-toast-top", `${Math.round(r.top + HEADER_HEIGHT + 8)}px`);
-  }, [isNew, stackHeight, width, height]);
-
   // A thread whose computer is away: read-only, and the lane says so before the field does.
   const offline = useThreadOffline(thread?.id);
   const offMachine = useMachineOfThread(thread?.id);

@@ -1,14 +1,21 @@
-// Up to three toasts, newest on top (state/toasts.ts keeps the queue), frosted
-// like the composer and centred at the top of the chat column under its header
-// (ChatView publishes `--rc-toast-center` and `--rc-toast-top`), or the window's
-// top while Settings is open. Info and success leave after 3 s, errors after
-// 7 s. The pointer or focus on the stack, a drag, or the window in the
-// background stops the clock. A click on ×, Escape, or a drag past 48px (up or
-// sideways) dismisses; a drag never selects text anywhere.
+// Up to three toasts, newest in front (state/toasts.ts keeps the queue), frosted
+// like the composer, in the window's bottom-right corner, away from the
+// transcript being read. Info and success leave after 2.5 s, errors after 5 s.
+// The pointer or focus on the stack, a drag, or the window in the background
+// stops the clock. A click anywhere on the card, ×, Escape, or a drag past 48px
+// sideways or 24px down dismisses; a drag never selects text anywhere.
 
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { observeSize } from "../lib/resize";
-import { dragExit, dragOpacity, dragState, holdSelection, startsDrag, TOAST_DRAG_MS } from "../lib/toastDrag";
+import {
+  dragExit,
+  dragOpacity,
+  dragState,
+  holdSelection,
+  isClick,
+  startsDrag,
+  TOAST_DRAG_MS,
+} from "../lib/toastDrag";
 import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
 import { nextExpiry, toastTtl } from "../state/toasts";
 import { CircleAlert, CircleCheck, Info, X } from "./icons";
@@ -18,6 +25,8 @@ import { cx, Pill, Spinner } from "./primitives";
 const TOAST_PEEK = 6;
 const TOAST_SHRINK = 0.04;
 /** The 8px between fanned-out cards. */
+/** The stack's distance from the window's bottom and right edges. */
+const TOAST_INSET = 16;
 const TOAST_GAP = 8;
 /** A quiet settle on the check after a spinner finishes. */
 const TOAST_SETTLE_MS = 320;
@@ -69,7 +78,7 @@ function ToastCard({
       if (flyOut && session && el) {
         const { dx, direction } = dragState(session.dx, session.dy);
         el.style.transition = `transform ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms ease-out`;
-        el.style.transform = dragExit(direction ?? "up", dx);
+        el.style.transform = dragExit(direction ?? "down", dx);
         el.style.opacity = "0";
         setFlung(true);
         dismissToast(toast.id);
@@ -129,6 +138,12 @@ function ToastCard({
     if (!session || session.pointerId !== e.pointerId) return;
     session.dx = e.clientX - session.x;
     session.dy = e.clientY - session.y;
+    if (isClick(session.dx, session.dy)) {
+      // A click on the card's body (not its buttons, which never start a drag) dismisses it.
+      end(false);
+      dismissToast(toast.id);
+      return;
+    }
     end(dragState(session.dx, session.dy).dismiss);
   };
 
@@ -163,7 +178,7 @@ function ToastCard({
       onPointerCancel={onPointerCancel}
       onLostPointerCapture={onLostPointerCapture}
       className={cx(
-        "rc-toast pointer-events-auto relative flex w-[380px] max-w-[calc(100vw-32px)] cursor-grab touch-none items-start gap-2 overflow-hidden rounded-xl py-1.5 pr-1.5 pl-3 text-callout select-none active:cursor-grabbing",
+        "rc-toast pointer-events-auto relative flex w-[380px] max-w-[calc(100vw-32px)] cursor-pointer touch-none items-start gap-2 overflow-hidden rounded-xl py-1.5 pr-1.5 pl-3 text-callout select-none active:cursor-grabbing",
         toast.leaving ? (flung ? "" : "rc-toast-out") : "rc-toast-in",
       )}
     >
@@ -227,7 +242,6 @@ function ToastCard({
 
 export function Toaster() {
   const toasts = useApp((s) => s.toasts);
-  const settings = useApp((s) => s.settings !== null);
   const section = useRef<HTMLElement>(null);
   const [hovering, setHovering] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -308,12 +322,8 @@ export function Toaster() {
     <section
       ref={section}
       aria-label="Notifications"
-      className="pointer-events-none fixed z-50 flex w-[380px] max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col items-stretch"
-      style={
-        settings
-          ? { left: "50%", top: 16 }
-          : { left: "var(--rc-toast-center, 50%)", top: "var(--rc-toast-top, 56px)" }
-      }
+      className="pointer-events-none fixed z-50 flex w-[380px] max-w-[calc(100vw-32px)] flex-col items-stretch"
+      style={{ right: TOAST_INSET, bottom: TOAST_INSET }}
       onPointerEnter={() => setHovering(true)}
       onPointerLeave={() => setHovering(false)}
       onFocus={() => setFocused(true)}
@@ -323,10 +333,10 @@ export function Toaster() {
     >
       <div className="relative w-full">
         {/* The fan leaves the section's own box; this keeps the pointer inside it on the way
-            down to a card behind, so the stack does not fold before it is reached. */}
+            up to a card behind, so the stack does not fold before it is reached. */}
         {expanded && stackHeight > 0 && (
           <span
-            className="pointer-events-auto absolute inset-x-0 top-0"
+            className="pointer-events-auto absolute inset-x-0 bottom-0"
             style={{ height: stackHeight }}
             aria-hidden
           />
@@ -336,11 +346,11 @@ export function Toaster() {
             key={toast.id}
             id={toast.id}
             onHeight={measure}
-            className={index === 0 ? "relative" : "absolute inset-x-0 top-0"}
+            className={index === 0 ? "relative" : "absolute inset-x-0 bottom-0"}
             style={{
               zIndex: toasts.length - index,
               transform: expanded
-                ? `translateY(${offsets[index]}px) scale(1)`
+                ? `translateY(${-(offsets[index] ?? 0)}px) scale(1)`
                 : `translateY(${-index * TOAST_PEEK}px) scale(${Math.max(0.9, 1 - index * TOAST_SHRINK)})`,
             }}
           >

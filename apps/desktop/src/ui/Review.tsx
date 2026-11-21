@@ -39,7 +39,6 @@ import {
   useApp,
   worktreeOf,
 } from "../state/store";
-import { isRunning } from "../state/thread";
 import { StatusMark, splitUnifiedDiff } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
 import { ChevronDown, ChevronRight, FileDiff, Folder, MessageSquarePlus, RefreshCw, Send, X } from "./icons";
@@ -435,7 +434,6 @@ export function Review({ threadId }: { threadId: string }) {
     selectThread(threadId);
     void submit(reviewMessage(label, comments, note)).then((sent) => {
       if (sent) {
-        toast(isRunning(thread) ? "Queued for the agent" : "Sent to the agent", "success");
         setComments([]);
         setNote("");
       }
