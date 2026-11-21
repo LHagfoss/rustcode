@@ -496,6 +496,7 @@ mod tests {
                 "_rustcode/project/create",
                 "_rustcode/worktrees/state",
                 "_rustcode/environment/sync",
+                "_rustcode/machine/exec",
                 "_rustcode/session/harness",
                 "_rustcode/session/move",
                 "_rustcode/session/export",
