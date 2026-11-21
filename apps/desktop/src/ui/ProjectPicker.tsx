@@ -146,7 +146,7 @@ export function ProjectPicker({
             />
           </div>
         )}
-        <div className="scroll-stable min-h-0 flex-1">
+        <div className="scroll-stable flex min-h-0 flex-1 flex-col gap-1">
           {rows.map((row) => {
             const current = isCurrentProject(picked, cwd, row.path);
             // The thread's own project is no move; while a move is blocked no row is one either.
