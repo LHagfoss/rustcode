@@ -19,6 +19,12 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { CHAT_WIDTH_LABEL, type ChatWidth } from "../lib/chatWidth";
+import {
+  CRASH_REPORTS_DEFAULT,
+  crashReportsEnabled,
+  setCrashReportsEnabled,
+  subscribeCrashReports,
+} from "../lib/crashReport";
 import { HAPTICS_DEFAULT, haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
 import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { pickFolder } from "../lib/native";
@@ -280,6 +286,8 @@ function GeneralPage() {
   const recapHours = useApp((s) => s.recapHours);
   const [tabFocus, setTabFocus] = useState(tabMovesFocus);
   const [haptics, setHapticsState] = useState(hapticsEnabled);
+  const [crashReports, setCrashReportsState] = useState(crashReportsEnabled);
+  useEffect(() => subscribeCrashReports(() => setCrashReportsState(crashReportsEnabled())), []);
   return (
     <>
       <SettingsScopeBar />
@@ -481,6 +489,27 @@ function GeneralPage() {
             />
           </Row>
         )}
+        <Row
+          title="Send crash reports"
+          reset={
+            crashReports !== CRASH_REPORTS_DEFAULT
+              ? () => {
+                  setCrashReportsEnabled(CRASH_REPORTS_DEFAULT);
+                  setCrashReportsState(CRASH_REPORTS_DEFAULT);
+                }
+              : undefined
+          }
+          subtitle="Sends stack traces, app version and OS when RustCode crashes. Never prompts, code, file paths or secrets."
+        >
+          <Switch
+            label="Send crash reports"
+            checked={crashReports}
+            onChange={(value) => {
+              setCrashReportsEnabled(value);
+              setCrashReportsState(value);
+            }}
+          />
+        </Row>
       </Group>
     </>
   );

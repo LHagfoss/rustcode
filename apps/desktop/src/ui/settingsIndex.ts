@@ -111,6 +111,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "keyboard navigation accessibility focus",
   },
   { section: "general", title: "Trackpad haptics", keywords: "haptic tap feedback force touch" },
+  {
+    section: "general",
+    title: "Send crash reports",
+    keywords: "crash error report sentry panic telemetry privacy opt out",
+  },
 
   // ------------------------------------------------------------ Chat
   {

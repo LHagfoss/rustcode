@@ -4,6 +4,7 @@
 //! Diagnostics page). Every argument from the webview is validated here.
 
 mod banner;
+mod crash_report;
 mod diagnostics;
 mod engine;
 mod hub;
@@ -53,6 +54,7 @@ fn engine_stop(engine: State<'_, EngineState>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    crash_report::install_panic_hook();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             webview::show_main_window(app);
@@ -153,6 +155,9 @@ pub fn run() {
             webview::display_info,
             webview::webview_blur,
             webview::window_theme,
+            crash_report::crash_report_status,
+            crash_report::crash_report_set_enabled,
+            crash_report::crash_report_send,
         ])
         .setup(|app| {
             // Release Cmd+W to Settle and Cmd+M to the model picker.
@@ -202,6 +207,7 @@ pub fn run() {
             std::thread::spawn(service::catch_up_after_update);
             // The per-OS setup steps (docs/system-setup.md), once for each version of the app.
             let version = app.package_info().version.to_string();
+            crash_report::CrashReporter::global().set_version(version.clone());
             std::thread::spawn(move || system_setup::run_after_update(&version));
             // Link previews cached by earlier runs: the expired and the oldest past the cap go.
             if let Ok(dir) = app.path().app_cache_dir() {

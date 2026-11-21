@@ -29,6 +29,8 @@ export class MockTransport implements Transport {
   /** Whether the RustCode server is installed as a service (`?machines=connect` starts without it). */
   private serverInstalled: boolean;
 
+  private crashReportsEnabled = true;
+
   /** `<config>/hub.json` as `machines hub status --json` answers it. */
   private hub: { hub: boolean; member: JsonObject | null } = { hub: false, member: null };
 
@@ -331,6 +333,12 @@ export class MockTransport implements Transport {
           : null,
       );
     if (command === "logs_folder_open") return null;
+    if (command === "crash_report_status") return { enabled: this.crashReportsEnabled, configured: false };
+    if (command === "crash_report_set_enabled") {
+      this.crashReportsEnabled = args.enabled !== false;
+      return { enabled: this.crashReportsEnabled, configured: false };
+    }
+    if (command === "crash_report_send") return null;
     if (command === "diagnostics_save") return `/Users/lars/Downloads/${String(args.name)}`;
     if (command === "thread_log_open") {
       const id = String(args.id);

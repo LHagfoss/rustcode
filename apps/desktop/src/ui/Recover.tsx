@@ -6,7 +6,8 @@ import { primaryModifier } from "../lib/platform";
 // instead of a blank window. A webview reload would hand the page a fresh
 // engine (src-tauri/src/engine.rs), stopping what runs.
 
-import { Component, type ReactNode, useEffect, useState } from "react";
+import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from "react";
+import { reportWebError } from "../lib/crashReport";
 import { refreshHarnesses } from "../state/store";
 import { RotateCw } from "./icons";
 import { Pill } from "./primitives";
@@ -24,8 +25,9 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
-  componentDidCatch(error: Error) {
+  componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("The interface failed to render:", error);
+    reportWebError(error, { source: "react", componentStack: info.componentStack ?? undefined });
   }
   render() {
     const { error } = this.state;

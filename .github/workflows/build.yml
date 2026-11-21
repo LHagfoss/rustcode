@@ -164,6 +164,8 @@ jobs:
 
             - name: Compile the app while the engine builds
               working-directory: apps/desktop
+              env:
+                  RUSTCODE_SENTRY_DSN: ${{ vars.RUSTCODE_SENTRY_DSN || secrets.RUSTCODE_SENTRY_DSN }}
               run: |
                   mkdir -p src-tauri/binaries
                   printf '#!/bin/sh\n' > src-tauri/binaries/rc-aarch64-apple-darwin
@@ -227,6 +229,8 @@ jobs:
             # (tauri.bundle.conf.json's signingIdentity "-").
             - name: Build RustCode.app
               working-directory: apps/desktop
+              env:
+                  RUSTCODE_SENTRY_DSN: ${{ vars.RUSTCODE_SENTRY_DSN || secrets.RUSTCODE_SENTRY_DSN }}
               run: |
                   bun install --frozen-lockfile
                   if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then export APPLE_SIGNING_IDENTITY="$MACOS_SIGN_IDENTITY"; fi
@@ -331,6 +335,8 @@ jobs:
             - name: Compile the app while the engine builds
               shell: bash
               working-directory: apps/desktop
+              env:
+                  RUSTCODE_SENTRY_DSN: ${{ vars.RUSTCODE_SENTRY_DSN || secrets.RUSTCODE_SENTRY_DSN }}
               run: |
                   mkdir -p src-tauri/binaries
                   sidecar=src-tauri/binaries/rc-${{ matrix.triple }}
@@ -380,6 +386,8 @@ jobs:
             - name: Build the installer
               shell: bash
               working-directory: apps/desktop
+              env:
+                  RUSTCODE_SENTRY_DSN: ${{ vars.RUSTCODE_SENTRY_DSN || secrets.RUSTCODE_SENTRY_DSN }}
               run: |
                   bun install --frozen-lockfile
                   bun run bundle:app --bundles ${{ matrix.bundles }}
