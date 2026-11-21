@@ -411,8 +411,9 @@ link’s delivery cursor. Threads end their turn; watch notifications deliver
 changes through the existing notice queue. Newly observed failed checks fetch
 bounded `gh run view --log-failed` tails where GitHub Actions URLs are available.
 
-`merge_when_green({number})` targets the calling thread’s current-branch PR,
-rejects a mismatching number, and uses the existing merge approval. After approval
+`merge_when_green({number})` targets that PR in the calling thread’s repository:
+its current-branch PR, or one on another branch (a release thread on `main`). A
+fork’s PR is refused. It uses the existing merge approval, which names the PR. After approval
 it returns immediately; the app delivers the engine’s result as a queued message.
 The delegate `session_id` form retains its cancellable synchronous behavior.
 Own-PR merges currently require the app to remain connected; durable release

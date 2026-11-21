@@ -152,7 +152,7 @@ profile and stale dependency version leaves artifacts behind.
 - Do not sleep-poll `gh pr checks`: every poll resends the whole context, and
   one thread spent 17.7M input tokens on 70 sleeps.
 - When the user asked for merging, call `merge_when_green` with `number` for
-  this thread's current-branch PR (delegate merges go by `session_id`). The
+  a PR in this thread's repository, even one on another branch (delegate merges go by `session_id`). The
   user approves once; the call returns and RustCode delivers the outcome in a
   later turn. A timeout or disconnected app is not proof of a merge: inspect
   the PR before retrying.

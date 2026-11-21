@@ -1486,12 +1486,30 @@ export class MockEngine {
             },
           };
         }
-        const branch = str(obj(params)?.branch) || "feat/delegate-pull";
+        // A number reads that pull request, whatever branch the folder is on; 999 stands for a fork's.
+        const number = num(obj(params)?.number);
+        if (number === 999) {
+          return {
+            branch: null,
+            pull: null,
+            error: {
+              code: "not_allowed",
+              message: "pull request #999 is not from a branch of this repository",
+            },
+          };
+        }
+        const branch =
+          number && number !== 2790
+            ? "chore/release-v9.9.9"
+            : str(obj(params)?.branch) || "feat/delegate-pull";
         return {
           branch,
           pull: {
-            number: 2790,
-            title: "feat(mcp): report and finish delegate pull requests",
+            number: number ?? 2790,
+            title:
+              number && number !== 2790
+                ? "chore(release): v9.9.9"
+                : "feat(mcp): report and finish delegate pull requests",
             state: "open",
             merged: false,
             draft: false,

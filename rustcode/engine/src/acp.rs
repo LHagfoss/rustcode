@@ -2914,6 +2914,18 @@ async fn dispatch_request(
             let request: PullStateRequest = parse_params(params)?;
 
             connection.spawn(async move {
+                    if let Some(number) = request.number {
+                        let answer = match crate::pull_requests::by_number(&request.cwd, number).await {
+                            Ok(Some(pull)) => serde_json::json!({ "branch": pull.branch.clone(), "pull": pull }),
+                            Ok(None) => serde_json::json!({
+                                "branch": null,
+                                "pull": null,
+                                "error": { "code": "not_allowed", "message": format!("pull request #{number} is not from a branch of this repository") }
+                            }),
+                            Err(error) => serde_json::json!({ "branch": null, "error": error }),
+                        };
+                        return responder.respond(answer);
+                    }
                     let asked = request
                         .branch
                         .filter(|branch| !branch.trim().is_empty());

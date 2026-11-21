@@ -402,6 +402,31 @@ export async function delegatePull(
 }
 
 /**
+ * Pull request `number` in `target`'s repository, whatever branch the thread is on: a
+ * release or orchestrating thread stays on `main` while the pull request it merges is on
+ * another branch. A fork's pull request is refused by the engine.
+ */
+export async function pullByNumber(
+  target: RuleThread,
+  number: number,
+): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure }> {
+  const cwd = target.worktree?.path ?? projectOf(target);
+  if (!cwd) return { error: failure("failed", "this thread has no project folder") };
+  try {
+    const answer = parsePullState(
+      await requestOn(splitThreadKey(target.id).host, Method.pullState, { cwd, number }, 60_000),
+    );
+    if (answer.error?.code === "not_allowed") return { error: failure("not_allowed", answer.error.message) };
+    if (answer.error) return { error: pullFailure(answer.error) };
+    return { branch: answer.branch, pull: answer.pull };
+  } catch (error) {
+    return {
+      error: failure("target_unavailable", `the pull request could not be read: ${errorText(error)}`),
+    };
+  }
+}
+
+/**
  * The delegates a thread has on `host` ("" is this computer): the targets of
  * its links, newest first, one row each, capped so the gh reads stay well
  * inside the request timeout.
