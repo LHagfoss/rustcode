@@ -126,10 +126,13 @@ pub const SILENCE_LIMIT: Duration = Duration::from_secs(75);
 /// How long a connected machine has to answer a ping sent after a wake from
 /// sleep, a network change or [`IDLE_PROBE_AFTER`] of quiet: a LAN answers in
 /// milliseconds, while an overlay over a relay can take seconds on a live
-/// socket.
+/// socket. A port forwarded to the machine on this computer's loopback is LAN
+/// by address only: its ping crosses whatever carries the forward, and right
+/// after a wake that forward may still be reconnecting, so it gets the
+/// overlay's deadline rather than dropping a link that is about to answer.
 pub fn answer_deadline(route: &Route) -> Duration {
     match route.kind {
-        crate::registry::RouteKind::Lan => Duration::from_secs(3),
+        crate::registry::RouteKind::Lan if !route.is_local_forward() => Duration::from_secs(3),
         _ => Duration::from_secs(10),
     }
 }
@@ -258,6 +261,11 @@ mod tests {
         );
         assert_eq!(
             answer_deadline(&Route::with_kind(RouteKind::Vpn, "100.90.27.158:17879")),
+            Duration::from_secs(10)
+        );
+        // A forwarded loopback port crosses the forward's network, not a LAN.
+        assert_eq!(
+            answer_deadline(&Route::new("127.0.0.1:17880")),
             Duration::from_secs(10)
         );
         // A quiet overlay link is asked and judged within about 20 s.
