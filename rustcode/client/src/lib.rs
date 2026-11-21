@@ -22,6 +22,8 @@
 //! - [`connect_code`]: the connect codes another computer's owner creates
 //!   there and this computer redeems.
 //! - [`discovery`]: Bonjour, for machines that take a desktop client.
+//! - [`forward`]: the `ssh -L` behind a forwarded loopback port, so an app
+//!   can replace it with an SSH route it reopens itself after a wake.
 //! - [`ssh`]: connect over SSH: install RustCode on a computer this one
 //!   reaches with `ssh`, start its server and pair with it in one step.
 //! - [`protocol`]: the remote protocol v1 frames this client sends, mirrored
@@ -34,6 +36,7 @@ pub mod config;
 pub mod connect_code;
 pub mod device_key;
 pub mod discovery;
+pub mod forward;
 pub mod machine;
 pub mod protocol;
 pub mod reconnect;

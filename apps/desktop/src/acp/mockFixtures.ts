@@ -169,10 +169,12 @@ export interface MockOptions {
    * RustCode reached over NetBird so the Add sheet has found machines to list
    * (one of them needing an update) and the server not installed, `offline` a
    * machine the shell keeps retrying, and `revoked` one whose pairing the
-   * machine ended. The default is the paired, connected machine the happy path
-   * shows.
+   * machine ended, and `forward` a VPS reached through a user-run `ssh -L`
+   * that lost its link while this computer slept, with the offer to let
+   * RustCode manage that tunnel. The default is the paired, connected machine
+   * the happy path shows.
    */
-  machines?: "paired" | "connect" | "offline" | "revoked";
+  machines?: "paired" | "connect" | "offline" | "revoked" | "forward";
   /**
   /**
    * `?notices=repeat`: the default thread ends on six identical quiet notices, the shape an

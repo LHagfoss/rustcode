@@ -166,6 +166,9 @@ pub const FORWARD_CHECK_TIMEOUT: Duration = Duration::from_secs(1);
 /// [`Route::is_local_forward`]), once no route answered. RustCode does not
 /// own that tunnel, so it cannot restart it; the row says what to run.
 ///
+/// `host` is the SSH destination behind the forward, when the app found the
+/// `ssh` that runs it ([`crate::forward::find_forward_owner`]).
+///
 /// `listening` is whether the port takes a connection and then holds it
 /// without a word, rather than refusing it. A plain
 /// `ssh -L` survives a sleep with its connection dead: its listener keeps
@@ -173,17 +176,18 @@ pub const FORWARD_CHECK_TIMEOUT: Duration = Duration::from_secs(1);
 /// notices only when TCP gives up, minutes later. Every attempt then ends at
 /// the route timeout with nothing to say why, which is what kept a VPS
 /// "Connecting" for minutes after a five-minute sleep.
-pub fn forward_advice(address: &str, listening: bool) -> String {
+pub fn forward_advice(address: &str, listening: bool, host: Option<&str>) -> String {
     let port = address
         .rsplit_once(':')
         .and_then(|(_, port)| port.parse::<u16>().ok())
         .unwrap_or(crate::transport::DEFAULT_PORT);
     let restart = format!(
-        "ssh -N -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L {port}:127.0.0.1:{} <host>",
-        crate::transport::DEFAULT_PORT
+        "ssh -N -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L {port}:127.0.0.1:{} {}",
+        crate::transport::DEFAULT_PORT,
+        host.unwrap_or("<host>")
     );
-    let ssh_route = "Or add an SSH route in this machine's settings: RustCode then opens \
-                     the tunnel itself and reopens it after a wake.";
+    let ssh_route = "Or let RustCode manage this tunnel: it then opens it itself and \
+                     reopens it after a wake.";
     if listening {
         format!(
             "{address} takes connections but nothing answers behind it: the tunnel that \
@@ -325,20 +329,26 @@ mod tests {
     #[test]
     fn a_forwarded_port_says_what_to_run_to_bring_its_tunnel_back() {
         // A stale `ssh -L`: the port takes the socket, nothing answers.
-        let stale = forward_advice("127.0.0.1:17880", true);
+        let stale = forward_advice("127.0.0.1:17880", true, None);
         assert!(
             stale.starts_with("127.0.0.1:17880 takes connections"),
             "{stale}"
         );
-        assert!(stale.contains("-L 17880:127.0.0.1:17879"), "{stale}");
+        assert!(stale.contains("-L 17880:127.0.0.1:17879 <host>"), "{stale}");
         assert!(stale.contains("ServerAliveInterval=15"), "{stale}");
-        assert!(stale.contains("SSH route"), "{stale}");
+        assert!(stale.contains("let RustCode manage this tunnel"), "{stale}");
+        // The host behind the forward, when the app found its `ssh`.
+        let named = forward_advice("127.0.0.1:17880", true, Some("LagosVPS"));
+        assert!(
+            named.contains("-L 17880:127.0.0.1:17879 LagosVPS`"),
+            "{named}"
+        );
         // No tunnel at all: nothing listens.
-        let gone = forward_advice("[::1]:2222", false);
+        let gone = forward_advice("[::1]:2222", false, None);
         assert!(gone.starts_with("Nothing listens on [::1]:2222"), "{gone}");
         assert!(gone.contains("-L 2222:127.0.0.1:17879"), "{gone}");
         // A name without a port forwards the gateway's own.
-        assert!(forward_advice("localhost", false).contains("-L 17879:"));
+        assert!(forward_advice("localhost", false, None).contains("-L 17879:"));
     }
 
     #[test]

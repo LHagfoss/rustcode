@@ -358,8 +358,10 @@ export async function defaultTransport(): Promise<Transport> {
       ),
       // Remote access states the happy path does not reach (`?remote=disconnected|expired|connect|refused`).
       remote: (["disconnected", "expired", "connect", "refused"] as const).find((f) => f === q.get("remote")),
-      // This app paired with other computers (`?machines=paired|connect|offline|revoked`).
-      machines: (["paired", "connect", "offline", "revoked"] as const).find((f) => f === q.get("machines")),
+      // This app paired with other computers (`?machines=paired|connect|offline|revoked|forward`).
+      machines: (["paired", "connect", "offline", "revoked", "forward"] as const).find(
+        (f) => f === q.get("machines"),
+      ),
       // Six identical quiet notices after the first thread's turn (`?notices=repeat`).
       notices: q.get("notices") === "repeat" ? "repeat" : undefined,
       // Tool row cases on a thread of their own (`?tools=background`).

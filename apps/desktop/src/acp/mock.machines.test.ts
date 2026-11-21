@@ -1,5 +1,5 @@
 // The mock's machines, which is what Settings › Machines reads under
-// `VITE_TRANSPORT=mock`: the four `?machines=` states, and the ACP one saved
+// `VITE_TRANSPORT=mock`: the `?machines=` states, and the ACP one saved
 // machine answers in process (`MockMachine`), since the mock has no shell to
 // dial a real machine through.
 
@@ -49,6 +49,26 @@ describe("mock machines", () => {
     const machines = await machineList("revoked");
     expect(machines[0]!.state).toBe("needsPairing");
     expect(String(machines[0]!.detail)).toContain("Pair it again");
+  });
+
+  test("?machines=forward offers to let RustCode manage a dead ssh -L, and doing it connects over SSH", async () => {
+    const transport = new MockTransport({ machines: "forward" });
+    const [vps] = (await call(transport, "machines_list")) as JsonObject[];
+    expect(vps!.state).toBe("connecting");
+    expect(String(vps!.detail)).toContain("-L 17880:127.0.0.1:17879 LagosVPS");
+    const forward = vps!.forward as JsonObject;
+    expect(forward.ssh).toBe("LagosVPS");
+    const [after] = (await call(transport, "machines_forward_take_over", {
+      id: vps!.id,
+      address: forward.address,
+      ssh: "LagosVPS",
+      gatewayPort: 17879,
+    })) as JsonObject[];
+    expect(after!.state).toBe("connected");
+    expect(after!.forward).toBeNull();
+    const routes = after!.routes as JsonObject[];
+    expect(routes.find((route) => route.address === "127.0.0.1:17880")?.off).toBe(true);
+    expect(routes.find((route) => route.kind === "ssh")?.address).toBe("ssh://LagosVPS");
   });
 
   test("?machines=paired is a Mac just saved, a Windows PC, and a machine that is away", async () => {

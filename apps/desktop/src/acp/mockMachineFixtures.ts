@@ -138,6 +138,49 @@ export function mockWindows(state: "connected" | "offline", addedAt: number): Js
   };
 }
 
+/** The forwarded port `?machines=forward` reaches its VPS on, and the advice the shell gives for it. */
+export const MOCK_FORWARD = {
+  address: "127.0.0.1:17880",
+  host: "LagosVPS",
+  advice:
+    "127.0.0.1:17880 takes connections but nothing answers behind it: the tunnel that forwards it, started outside RustCode, lost its link (often after this computer slept). Restart it, keeping it alive with `ssh -N -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L 17880:127.0.0.1:17879 LagosVPS`, so it ends itself within 45 s of losing the link. Or let RustCode manage this tunnel: it then opens it itself and reopens it after a wake.",
+};
+
+/**
+ * A VPS reached only through a user-run `ssh -L` whose link died while this computer slept
+ * (`?machines=forward`): Connecting, with what to run and the offer to let RustCode manage the
+ * tunnel (`stalled_forward` in `src-tauri/src/machines.rs`).
+ */
+function mockForwardedVps(addedAt: number): JsonObject {
+  const route = { kind: "lan", address: MOCK_FORWARD.address, encrypted: false };
+  return {
+    id: "gw-3a9c51d0e7b24f18",
+    name: "LagosVPS",
+    displayName: null,
+    icon: null,
+    iconTint: null,
+    paused: false,
+    platform: "linux",
+    version: "1.28.0",
+    routes: [route],
+    route,
+    state: "connecting",
+    reason: "unreachable",
+    detail: MOCK_FORWARD.advice,
+    hint: null,
+    retryInSecs: null,
+    forward: {
+      address: MOCK_FORWARD.address,
+      ssh: MOCK_FORWARD.host,
+      sshPort: null,
+      identity: null,
+      gatewayPort: 17879,
+    },
+    addedAt: new Date(addedAt).toISOString(),
+    lastConnectedAt: new Date(Date.now() - 1000 * 60 * 7).toISOString(),
+  };
+}
+
 /** The saved machines `?machines=` starts with. */
 export function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
   const savedAt = Date.now() - 1000 * 60 * 60 * 24 * 6;
@@ -156,6 +199,8 @@ export function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
       return [mockMachine("offline", savedAt)];
     case "revoked":
       return [mockMachine("needsPairing", savedAt)];
+    case "forward":
+      return [mockForwardedVps(savedAt)];
     case "paired":
       // The sidebar's own happy path: this Mac, a Windows PC with threads, and a machine
       // that is away, saved during this session so the Mac and the PC read as just saved.

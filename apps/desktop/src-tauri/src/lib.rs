@@ -87,6 +87,7 @@ pub fn run() {
             machines::machines_retry,
             machines::machines_set_paused,
             machines::machines_route_add,
+            machines::machines_forward_take_over,
             machines::machines_route_remove,
             machines::machines_route_set_off,
             machines::machines_set_display_name,
