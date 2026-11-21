@@ -513,9 +513,10 @@ fn grouped_commands(root: &clap::Command) -> String {
             }
             out.push_str(&format!("{header}{group}:{header:#}\n"));
         } else {
-            // Braces would read as template tags.
-            let about = about.replace('{', "(").replace('}', ")");
-            out.push_str(&format!("  {literal}{name:<width$}{literal:#}  {about}\n"));
+            let template_safe_about = about.replace('{', "(").replace('}', ")");
+            out.push_str(&format!(
+                "  {literal}{name:<width$}{literal:#}  {template_safe_about}\n"
+            ));
         }
     }
     out
@@ -1632,7 +1633,6 @@ mod tests {
                 command: Some(SessionCommands::Review { ids })
             }) if ids == ["a".to_owned()]
         ));
-        // Several ids are the point; none is a usage error.
         assert!(Cli::try_parse_from(["rc", "threads", "settle"]).is_err());
     }
 
@@ -2113,7 +2113,6 @@ mod tests {
                 ..
             }
         ));
-        // An address and --discover are two ways to name the same machine.
         assert!(machines(&["add", "10.0.0.2", "--discover"]).is_err());
         assert!(matches!(
             machines(&["remove", "Studio"]).unwrap(),
@@ -2122,7 +2121,6 @@ mod tests {
         assert!(machines(&["discover", "--json", "--secs", "2"]).is_ok());
         assert!(machines(&["remove"]).is_err());
         assert!(machines(&[]).is_err());
-        // `machine` is the singular alias, and the subcommand keeps its name.
         assert!(matches!(
             Cli::try_parse_from(["rustcode", "machine", "list"])
                 .unwrap()
@@ -2393,7 +2391,6 @@ mod tests {
         assert_eq!(server.headers["Authorization"], "Bearer token");
         assert!(server.enabled);
 
-        // The transport is inferred from the URL when the flag is omitted.
         assert_eq!(
             mcp_add(&["paral-x", "https://mcp.example.test/mcp"])
                 .unwrap()

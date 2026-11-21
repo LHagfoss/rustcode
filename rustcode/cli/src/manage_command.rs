@@ -353,7 +353,6 @@ pub async fn thread(command: &SessionCommands) -> Result<(), String> {
     Ok(())
 }
 
-/// `rc worktree …`.
 pub fn worktree(command: &WorktreeCommands) -> Result<(), String> {
     let here = || std::env::current_dir().map_err(|error| error.to_string());
     match command {

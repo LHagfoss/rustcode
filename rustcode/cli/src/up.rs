@@ -159,7 +159,6 @@ async fn ensure_server(
                     if problem.code == "linger-disabled" && enable_linger() {
                         continue;
                     }
-                    // `up` handles a server of another version itself, below.
                     if problem.code == "restart-pending" {
                         continue;
                     }

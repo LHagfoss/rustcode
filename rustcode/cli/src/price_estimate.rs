@@ -164,9 +164,9 @@ output = 25.0
                    "input_tokens": 5, "output_tokens": 5}),
         ];
         assert_eq!(table.annotate(&mut rows), 2);
-        // 1M uncached at 1.25, 1M cached at 0.125, 0.1M output at 10.
+        let uncached_cached_output = 1.0 * 1.25 + 1.0 * 0.125 + 0.1 * 10.0;
         let codex = rows[0]["estimated_cost_usd"].as_f64().unwrap();
-        assert!((codex - 2.375).abs() < 1e-9);
+        assert!((codex - uncached_cached_output).abs() < 1e-9);
         let per_merged = rows[0]["estimated_cost_per_merged_pr"].as_f64().unwrap();
         assert!((per_merged - 1.1875).abs() < 1e-9);
         let claude = rows[1]["estimated_cost_usd"].as_f64().unwrap();
