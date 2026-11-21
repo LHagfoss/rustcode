@@ -683,7 +683,11 @@ export async function setConfigOption(
     const thread = useApp.getState().threads[id];
     if (thread && options.remember !== false && (configId === "model" || configId === "effort")) {
       const current = (option: string) => thread.configOptions.find((o) => o.id === option)?.current ?? null;
-      noteChoice(thread.harness?.id ?? "rustcode", { model: current("model"), effort: current("effort") });
+      noteChoice(
+        thread.harness?.id ?? "rustcode",
+        { model: current("model"), effort: current("effort") },
+        splitThreadKey(id).host,
+      );
       rememberModelEffort(thread.harness?.id ?? "rustcode", current("model"), current("effort"));
     }
   } catch (error) {

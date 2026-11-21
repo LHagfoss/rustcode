@@ -8,6 +8,7 @@
 
 import { type ReactNode, useMemo } from "react";
 import { type ConfigOption, effortLabel, modelName, projectName } from "../acp/types";
+import { modelTitle } from "../lib/modelNames";
 import { revealPath } from "../lib/native";
 import { selectOption } from "../state/harness";
 import { modeLabel } from "../state/permissions";
@@ -129,7 +130,8 @@ export function PropertiesSection({
   const inheritedAccess = useApp((s) => s.permissionModes[thread.id] === undefined);
   const picked = useMemo(() => choiceOf(thread.configOptions, "model"), [thread.configOptions]);
   const pickedEffort = useMemo(() => choiceOf(thread.configOptions, "effort"), [thread.configOptions]);
-  const model = picked.name ?? modelName(picked.value);
+  const model =
+    picked.name && picked.name !== picked.value ? modelTitle(picked.name) : modelName(picked.value);
   const effort = pickedEffort.name ?? (pickedEffort.value ? effortLabel(pickedEffort.value) : undefined);
   const base = thread.worktree?.base;
 

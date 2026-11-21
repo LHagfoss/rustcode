@@ -1082,7 +1082,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
    */
   const pickAccount = (id: string | null) => {
     if (!harness) return;
-    if (isNew) pickNewThreadAccount(id);
+    if (isNew) pickNewThreadAccount(id, host);
     // The row of the login the thread is already on asks nothing of the engine.
     else if (thread && !isRunning(thread) && (thread.harness?.account ?? null) !== id)
       void switchThreadAccount(thread.id, id);
@@ -1219,7 +1219,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         model: value,
         effort: clampEffort(entry, levels, null, remembered),
       });
-      pickNewThreadAccount(newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut));
+      pickNewThreadAccount(
+        newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut),
+        host,
+      );
     } else if (thread) {
       // The harness's remembered login goes with the model, as a login row would, and the model
       // brings the level it was last left on once the switch lands. That harness never keeps

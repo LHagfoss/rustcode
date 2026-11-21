@@ -148,10 +148,16 @@ export function accountSlug(name: string): string {
 }
 
 /** The user picked an account for new threads on the current harness. */
-export function pickNewThreadAccount(account: string | null) {
-  const harness = newThreadChoice(get())?.harness;
+export function pickNewThreadAccount(account: string | null, host = get().newThreadHost) {
+  const s = get();
+  const harness = newThreadChoice({ ...s, newThreadHost: host })?.harness;
   if (harness === CLAUDE_CODE) markClaudePlansStarted();
-  set({ newThreadAccount: account });
+  const newThreadAccounts = { ...s.newThreadAccounts, [host]: account };
+  set((st) => ({
+    newThreadAccounts,
+    ...(st.newThreadHost === host ? { newThreadAccount: account } : {}),
+  }));
+  store(STORAGE.newThreadAccounts, JSON.stringify(newThreadAccounts));
   if (harness) storeAccount(harness, account);
   // The login picked may never have been read: its own meter numbers come now.
   void refreshPlanCache();
@@ -163,10 +169,13 @@ export function pickNewThreadAccount(account: string | null) {
  * model and effort it was last left on.
  */
 export function pickNewThreadAccountOn(harness: string, account: string) {
+  const host = get().newThreadHost;
   if (harness === CLAUDE_CODE) markClaudePlansStarted();
   storeAccount(harness, account);
   if (newThreadChoice(get())?.harness !== harness) switchNewThreadHarness(harness);
-  set({ newThreadAccount: account });
+  const newThreadAccounts = { ...get().newThreadAccounts, [host]: account };
+  set({ newThreadAccount: account, newThreadAccounts });
+  store(STORAGE.newThreadAccounts, JSON.stringify(newThreadAccounts));
   void refreshPlanCache();
 }
 
@@ -234,7 +243,7 @@ export async function setDefaultHarness(choice: NewThreadChoice): Promise<Harnes
     model: choice.model,
     effort: choice.effort,
   });
-  if (snapshot) set({ newThread: null });
+  if (snapshot) clearNewThreadDraft(LOCAL_HOST);
   return snapshot;
 }
 export const completeOnboarding = async () => {
@@ -375,8 +384,20 @@ function ensureMachineHarnessModels(id: string, host: string): Promise<void> {
   return asked;
 }
 
-export function setNewThreadChoice(choice: NewThreadChoice | null) {
-  set({ newThread: choice });
+export function setNewThreadChoice(choice: NewThreadChoice | null, host = get().newThreadHost) {
+  const newThreadDrafts = { ...get().newThreadDrafts };
+  if (choice) newThreadDrafts[host] = choice;
+  else delete newThreadDrafts[host];
+  set((s) => ({
+    newThreadDrafts,
+    ...(s.newThreadHost === host ? { newThread: choice } : {}),
+  }));
+  store(STORAGE.newThreadDrafts, JSON.stringify(newThreadDrafts));
+}
+
+/** Drops the persisted new-thread draft for `host`, so its default takes over again. */
+export function clearNewThreadDraft(host = LOCAL_HOST) {
+  setNewThreadChoice(null, host);
 }
 
 /**
@@ -458,8 +479,24 @@ export function appChoices(snapshot: HarnessSnapshot): Record<string, HarnessLas
 }
 
 /** Mirror a harness's last choice: in the snapshot, and in app storage when the engine does not keep it. */
-export function noteChoice(harness: string, last: HarnessLast) {
+export function noteChoice(harness: string, last: HarnessLast, host = LOCAL_HOST) {
   const value = last.model || last.effort ? last : null;
+  if (host) {
+    set((s) => {
+      const snapshot = s.remoteHarnesses[host];
+      if (!snapshot) return s;
+      return {
+        remoteHarnesses: {
+          ...s.remoteHarnesses,
+          [host]: {
+            ...snapshot,
+            harnesses: snapshot.harnesses.map((h) => (h.id === harness ? { ...h, last: value } : h)),
+          },
+        },
+      };
+    });
+    return;
+  }
   set((s) =>
     s.harnesses
       ? {
@@ -483,14 +520,14 @@ export function noteChoice(harness: string, last: HarnessLast) {
 /**
  * The user picked a model or effort in the new-thread picker: it is the choice, and the harness's
  * remembered one (`_rustcode/harnesses/remember`, else app storage), so switching harness and back,
- * or a restart, starts there again. The model keeps its own effort for the next time it is picked.
- * `host` is the computer the thread runs on: a machine's own last choice is its to keep, so only
- * this computer is asked to remember it.
+ * navigating into a thread and back, or a restart, starts there again. The model keeps its own
+ * effort for the next time it is picked. `host` is the computer the thread runs on: each host keeps
+ * its own unstarted draft, and only this computer is asked to remember its engine-side choice.
  */
 export function pickNewThreadChoice(choice: NewThreadChoice, host = LOCAL_HOST) {
-  set({ newThread: choice });
+  setNewThreadChoice(choice, host);
   const last = { model: choice.model, effort: choice.effort };
-  if (!host) noteChoice(choice.harness, last);
+  noteChoice(choice.harness, last, host);
   rememberModelEffort(choice.harness, choice.model, choice.effort);
   if (host || !get().harnesses?.remembers || !connectionFor("")) return;
   void engine()
@@ -501,15 +538,25 @@ export function pickNewThreadChoice(choice: NewThreadChoice, host = LOCAL_HOST) 
 /** Switch the new-thread picker to `harness`, on the model and effort it was last left on. */
 export function switchNewThreadHarness(harness: string) {
   // The machine the thread will run on has its own harnesses and its own defaults.
-  const snapshot = harnessesOn(get(), get().newThreadHost);
+  const s = get();
+  const host = s.newThreadHost;
+  const snapshot = harnessesOn(s, host);
   if (!snapshot) return;
   const next = snapshot.harnesses.find((h) => h.id === harness);
   const remembered = lastAccountFor(harness);
+  const choice = restoreChoice(snapshot, harness, appChoices(snapshot), effortMemory());
+  // A harness with named accounts never starts on its own sign-in.
+  const account = newThreadAccountOn(next, remembered, s.signedOutLogins);
+  const newThreadDrafts = { ...s.newThreadDrafts, [host]: choice };
+  const newThreadAccounts = { ...s.newThreadAccounts, [host]: account };
   set({
-    newThread: restoreChoice(snapshot, harness, appChoices(snapshot), effortMemory()),
-    // A harness with named accounts never starts on its own sign-in.
-    newThreadAccount: newThreadAccountOn(next, remembered, get().signedOutLogins),
+    newThread: choice,
+    newThreadAccount: account,
+    newThreadDrafts,
+    newThreadAccounts,
   });
+  store(STORAGE.newThreadDrafts, JSON.stringify(newThreadDrafts));
+  store(STORAGE.newThreadAccounts, JSON.stringify(newThreadAccounts));
   if (harness === CLAUDE_CODE) markClaudePlansStarted();
   // Another harness means another login, whose meter may have no numbers yet.
   void refreshPlanCache();

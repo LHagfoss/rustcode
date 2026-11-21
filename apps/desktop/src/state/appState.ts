@@ -153,6 +153,10 @@ export interface AppState {
   newThread: NewThreadChoice | null;
   /** The account a new thread on that harness starts on; null is its default login. */
   newThreadAccount: string | null;
+  /** Unstarted new-thread model/effort drafts by host (`LOCAL_HOST` or machine id). */
+  newThreadDrafts: Record<string, NewThreadChoice>;
+  /** Unstarted new-thread account drafts by host (`LOCAL_HOST` or machine id). */
+  newThreadAccounts: Record<string, string | null>;
   harnesses: HarnessSnapshot | null;
   /**
    * The computer the next new thread runs on: `LOCAL_HOST` for this one, or a paired
@@ -494,6 +498,10 @@ export const STORAGE = {
   harnessChoices: "rustcode.harnessChoices",
   /** Each harness's last account picked for new threads, by harness id. */
   harnessAccountChoices: "rustcode.harnessAccountChoices",
+  /** Unstarted new-thread model/effort drafts by host, kept across navigation and restarts. */
+  newThreadDrafts: "rustcode.newThreadDrafts",
+  /** Unstarted new-thread account drafts by host, kept across navigation and restarts. */
+  newThreadAccounts: "rustcode.newThreadAccounts",
   /** Each harness's last advertised slash commands, so a new thread's drawer is filled in. */
   harnessCommands: "rustcode.harnessCommands",
   /** Auto-compaction's mode and threshold (Settings › General › Threads). */
@@ -606,5 +614,40 @@ export function storedJson<T>(key: string, fallback: T): T {
     return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {
     return fallback;
+  }
+}
+
+/** Reads persisted per-host new-thread model drafts, dropping corrupt entries. */
+export function parseNewThreadDrafts(raw: string | null): Record<string, NewThreadChoice> {
+  try {
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, NewThreadChoice> = {};
+    for (const [host, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const entry = value as Record<string, unknown>;
+      if (typeof entry.harness !== "string" || !entry.harness) continue;
+      const model = typeof entry.model === "string" && entry.model ? entry.model : null;
+      const effort = typeof entry.effort === "string" && entry.effort ? entry.effort : null;
+      out[host] = { harness: entry.harness, model, effort };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Reads persisted per-host new-thread account drafts, dropping corrupt entries. */
+export function parseNewThreadAccounts(raw: string | null): Record<string, string | null> {
+  try {
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string | null> = {};
+    for (const [host, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (value === null || (typeof value === "string" && value)) out[host] = value;
+    }
+    return out;
+  } catch {
+    return {};
   }
 }

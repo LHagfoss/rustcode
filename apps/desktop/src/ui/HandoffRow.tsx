@@ -1,5 +1,6 @@
 // Transcript divider for harness handoffs and machine moves. Split out of ui/Rows.tsx.
 
+import { modelName } from "../acp/types";
 import { useApp } from "../state/store";
 import type { TranscriptItem } from "../state/thread";
 import { HarnessIcon } from "./HarnessIcon";
@@ -38,7 +39,7 @@ export function HandoffRow({ item }: { item: HandoffItem }) {
                 {name(item.to)}
               </span>
             )}
-            {item.model && <span className="text-fg-faint">· {item.model}</span>}
+            {item.model && <span className="text-fg-faint">· {modelName(item.model)}</span>}
           </>
         ) : (
           <>
@@ -47,7 +48,7 @@ export function HandoffRow({ item }: { item: HandoffItem }) {
             <ArrowRight size={12} className="text-fg-faint" />
             <HarnessIcon id={item.to} size={12} />
             <span className="text-fg">{name(item.to)}</span>
-            {item.model && <span className="text-fg-faint">· {item.model}</span>}
+            {item.model && <span className="text-fg-faint">· {modelName(item.model)}</span>}
           </>
         )}
       </span>

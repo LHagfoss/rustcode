@@ -33,6 +33,7 @@ import {
   renameThread,
   resetForTests,
   runCommandAction,
+  setNewThreadChoice,
   setNewThreadHost,
   startMachineRouting,
   startNewThread,
@@ -395,5 +396,25 @@ describe("a machine's own operations", () => {
     await setNewThreadHost(old);
     expect(useApp.getState().newThreadHost).toBe(old);
     watchMachineConnection(old, null);
+  });
+});
+
+describe("the new-thread picker's draft", () => {
+  test("survives visiting a thread and another machine's new-thread screen", async () => {
+    localThreads();
+    const draft = { harness: "claude-code", model: "claude-opus-5-5", effort: "high" };
+    setNewThreadChoice(draft);
+    // Open a thread, then come back with New thread: the picked model is still there.
+    useApp.setState({ selectedId: "local-1" });
+    startNewThread();
+    expect(useApp.getState().newThread).toEqual(draft);
+
+    // A machine's new-thread screen has its own draft, and this computer's comes back after.
+    await setNewThreadHost(STUDIO);
+    expect(useApp.getState().newThread).not.toEqual(draft);
+    startNewThread();
+    expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
+    expect(useApp.getState().newThread).toEqual(draft);
+    setNewThreadChoice(null);
   });
 });

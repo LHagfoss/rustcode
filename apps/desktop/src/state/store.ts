@@ -18,6 +18,8 @@ import {
   type AppState,
   type CachedPlan,
   loadTotalLimit,
+  parseNewThreadAccounts,
+  parseNewThreadDrafts,
   SETTINGS_DEFAULTS,
   STORAGE,
   store,
@@ -86,6 +88,7 @@ export {
   addHarnessAccount,
   appChoices,
   checkHarnessAccounts,
+  clearNewThreadDraft,
   completeOnboarding,
   discardCustomHarness,
   effortMemory,
@@ -437,6 +440,8 @@ export const machineInitializeParams = (): JsonObject =>
 
 // Engine lines are applied a frame at a time; see batch.ts.
 const batcher = createBatcher<AppState>();
+const initialNewThreadDrafts = parseNewThreadDrafts(stored(STORAGE.newThreadDrafts));
+const initialNewThreadAccounts = parseNewThreadAccounts(stored(STORAGE.newThreadAccounts));
 
 export const useApp = create<AppState>((_set, _get, api) => ({
   // Lets `batcher.batch` defer subscribers (adds no state).
@@ -532,8 +537,10 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   selectedId: null,
   projectCwd: stored(STORAGE.project) ?? "",
   defaultCwd: stored(STORAGE.project) ?? "",
-  newThread: null,
-  newThreadAccount: null,
+  newThread: initialNewThreadDrafts[LOCAL_HOST] ?? null,
+  newThreadAccount: initialNewThreadAccounts[LOCAL_HOST] ?? null,
+  newThreadDrafts: initialNewThreadDrafts,
+  newThreadAccounts: initialNewThreadAccounts,
   newThreadHost: LOCAL_HOST,
   remoteHarnesses: {},
   harnesses: null,
@@ -1591,6 +1598,9 @@ export function resetForTests() {
     projectCwd: "",
     defaultCwd: "",
     newThread: null,
+    newThreadAccount: null,
+    newThreadDrafts: {},
+    newThreadAccounts: {},
     newThreadHost: LOCAL_HOST,
     remoteHarnesses: {},
     harnesses: null,

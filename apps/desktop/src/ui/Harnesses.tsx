@@ -4,7 +4,14 @@
 
 import { Popover } from "radix-ui";
 import { type ReactNode, useEffect, useMemo, useReducer, useState } from "react";
-import { effortLabel, type Harness, type HarnessAccount, type HarnessSnapshot } from "../acp/types";
+import {
+  effortLabel,
+  type Harness,
+  type HarnessAccount,
+  type HarnessSnapshot,
+  modelName,
+} from "../acp/types";
+import { modelTitle } from "../lib/modelNames";
 import { canOpenTerminal, openInTerminal } from "../lib/native";
 import {
   addRowOpen,
@@ -771,13 +778,17 @@ export function DefaultsForm({
           onChange={(model) => set({ model })}
           options={
             models.length
-              ? models.map((m) => ({ value: m.id, label: m.name }))
+              ? models.map((m) => ({
+                  value: m.id,
+                  label: m.name && m.name !== m.id ? modelTitle(m.name) : (modelName(m.id) ?? m.id),
+                }))
               : [
                   {
                     value: "",
                     label: listing
                       ? "Loading models…"
-                      : (value.model !== "default" && value.model) || "Managed by harness",
+                      : (value.model !== "default" && modelName(value.model ?? undefined)) ||
+                        "Managed by harness",
                   },
                 ]
           }

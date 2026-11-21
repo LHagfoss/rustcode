@@ -1,8 +1,9 @@
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
-import { modelName, projectName, type SessionSummary } from "../acp/types";
+import { projectName, type SessionSummary } from "../acp/types";
 import { formatBinding } from "../lib/keys";
+import { catalogModelTitle } from "../lib/modelNames";
 import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { appPlatform, fileManagerName, trashName } from "../lib/platform";
 import { hasShell } from "../lib/shell";
@@ -40,6 +41,7 @@ import {
   dismissPendingSetup,
   errorText,
   featureMissing,
+  harnessesOn,
   markUnread,
   moveMachineBlockedReason,
   moveThreadToMachine,
@@ -760,7 +762,7 @@ export const ThreadRow = memo(function ThreadRow({
   const worktree = useApp((s) => worktreeOf(s, session.id));
   const checkout = useCheckoutBranch(session, host?.state, !worktree);
   const gitBranch = worktree?.branch || checkout?.branch;
-  const harnesses = useApp((s) => s.harnesses);
+  const harnesses = useApp((s) => harnessesOn(s, session.host) ?? s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
   // A settle or pin made while its machine was away, waiting to be sent (state/machineOutbox.ts).
   const unsynced = useOutbox((o) => hasPendingChange(o.byHost, session.id));
@@ -803,7 +805,7 @@ export const ThreadRow = memo(function ThreadRow({
   const project = projectName(worktree?.repo || session.cwd || "");
   // What the row cannot spell out, on its hover card (ui/ThreadHoverCard.tsx).
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
-  const model = modelName(session.model);
+  const model = catalogModelTitle(session.model, harness);
   const startRename = () => {
     // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
     // says so instead of opening an editor whose save would only be refused (store.ts).
