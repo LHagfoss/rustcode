@@ -272,6 +272,18 @@ describe("remote access", () => {
       expect(connectionRouteLabel(claimed)).toBe("VPN · Unencrypted");
     });
 
+    test("the gateway's own TLS encrypts a LAN connection", () => {
+      const route = only([{ path: "lan", localAddress: "192.168.1.24:17879", encrypted: true, tls: true }]);
+      expect(route).toEqual({ path: "lan", localAddress: "192.168.1.24:17879", encrypted: true, tls: true });
+      expect(connectionRouteLabel(route)).toBe("LAN · Encrypted");
+      expect(connectionRouteTone(route)).toBe("ok");
+      // TLS the engine does not call encrypted is not shown as encrypted either.
+      const claimed = only([
+        { path: "lan", localAddress: "192.168.1.24:17879", encrypted: false, tls: true },
+      ]);
+      expect(claimed.encrypted).toBe(false);
+    });
+
     test("the public address reads as encrypted to its tunnel", () => {
       const route = only([{ path: "tunnel", localAddress: "127.0.0.1:52011", encrypted: true }]);
       expect(connectionRouteLabel(route)).toBe("Public address · Encrypted");

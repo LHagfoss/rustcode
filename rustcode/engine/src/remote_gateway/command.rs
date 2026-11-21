@@ -1121,6 +1121,7 @@ mod tests {
                     provider: None,
                     local_address: "192.168.31.237:17879".into(),
                     encrypted: false,
+                    tls: false,
                 }),
             }],
             pairing_open: true,

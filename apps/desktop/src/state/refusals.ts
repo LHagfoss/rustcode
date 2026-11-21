@@ -89,9 +89,9 @@ export function refusalCopy(refused: RemoteRefusedConnection): { title: string; 
       };
     case "secure_connection":
       return {
-        title: "A device tried a secure (wss://) connection to this computer",
+        title: "A device did not trust this computer's certificate",
         detail:
-          "The remote gateway speaks plain WebSocket on the local network, so a secure connection cannot be read. Update the RustCode app on the phone, or enter the address as shown here without https:// or wss://, and connect again.",
+          "It opened a secure connection and gave up on the certificate: it saved the certificate of an earlier RustCode install here, or it dialled wss:// expecting a public one. Pair that device again; nothing was shared.",
       };
     case "unrecognized_request":
       return {

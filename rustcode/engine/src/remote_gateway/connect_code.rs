@@ -52,6 +52,11 @@ pub struct ConnectLink {
     /// Every address the gateway answers on, best first.
     pub routes: Vec<HostRoute>,
     pub credential: Secret,
+    /// The gateway's certificate fingerprint ([`super::tls`]): the device
+    /// dials TLS pinned to it, so the code's secret never goes out in the
+    /// clear and the certificate is vouched for by the code itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_fingerprint: Option<String>,
 }
 
 /// The short form, grouped by four: `K7MQ-29XH-TP4W-NRD6`. `address` is left
@@ -160,6 +165,7 @@ mod tests {
             host_name: Some("Studio".into()),
             routes: vec![route("192.168.1.20:17879", HostRouteKind::Lan)],
             credential: Secret::new("cred"),
+            tls_fingerprint: None,
         };
         let code = long_code(&link);
         let encoded = code.strip_prefix(LINK_PREFIX).unwrap();

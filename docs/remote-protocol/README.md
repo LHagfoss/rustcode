@@ -194,6 +194,18 @@ Host → client:
   access. A gateway that records them lists `desktops` in its Bonjour `caps`
   and in the `sessions` result's `capabilities`; an older one ignores them.
 
+### The gateway's own TLS
+
+Every `described` frame carries `tls_fingerprint`: the SHA-256, lowercase hex,
+of the DER certificate the same port answers TLS with. A connection whose
+first byte is a TLS record (`0x16`) is a TLS handshake with that self-signed
+certificate, and the WebSocket and every frame run inside it unchanged. A
+client that reads the field dials again over TLS, checks only that the
+certificate's fingerprint matches (not its name or dates), and from then on
+never dials that machine in the clear. A long connect code (`rustcode://connect/…`)
+carries the same `tls_fingerprint`. A client that ignores the field keeps
+plain WebSocket, as before. See `docs/remote-security.md` › Direct TLS.
+
 ### Device keys
 
 A gateway that lists `key_auth` in its `described` capabilities lets a device

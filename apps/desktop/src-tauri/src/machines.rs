@@ -85,9 +85,9 @@ pub struct RouteView {
     /// `netbird`, `tailscale` or `zerotier` when the machine named the overlay
     /// the address is on; the app labels the route with it.
     provider: Option<&'static str>,
-    /// The network itself encrypts the traffic (Tailscale, a VPN); a plain LAN
-    /// route does not. Read from the gateway's own classification (#3701),
-    /// so only a tunnel is ever true.
+    /// The traffic is encrypted: by the network itself (Tailscale, a VPN), or
+    /// by the machine's own TLS once its certificate is pinned, on any route.
+    /// A plain LAN route to a machine that is not pinned never is (#3701).
     encrypted: bool,
     /// What the last test of this route found, or none if it was never tested.
     probe: Option<ProbeView>,
@@ -106,7 +106,7 @@ impl RouteView {
             kind: route.kind.as_str(),
             address: route.address.clone(),
             provider: route.provider.map(OverlayProvider::as_str),
-            encrypted: route.is_encrypted(),
+            encrypted: machine.route_encrypted(route),
             probe: machine.probe_for(&route.address).map(ProbeView::of),
             off: route.off,
             manual: route.manual,
@@ -511,7 +511,9 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
                 seq: shift.seq,
                 from: RouteView::of(&shift.from, machine),
                 to: RouteView::of(&shift.to, machine),
-                downgrade: shift.downgrade,
+                // A pinned machine is dialled over its own TLS on every
+                // route, so no move between networks loses encryption.
+                downgrade: shift.downgrade && machine.tls_fingerprint.is_none(),
             }),
         state: live.map_or(MachineState::Stopped, |live| live.state),
         reason: live

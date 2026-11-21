@@ -508,6 +508,14 @@ pub struct Machine {
     /// Cleared by pairing again, which makes a new device record.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub signs: bool,
+    /// The SHA-256 (lowercase hex) of the machine's gateway certificate,
+    /// learned from a connect code or the first TLS sign-in. From then on
+    /// every route but a `wss://` public address is dialled with TLS pinned
+    /// to it and never plain `ws://`: a machine that answers in the clear or
+    /// with another certificate is refused (#2651). Replaced only by pairing
+    /// again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_fingerprint: Option<String>,
 }
 
 fn unknown_platform() -> String {
@@ -542,9 +550,17 @@ impl Machine {
             paused: false,
             describes: false,
             signs: false,
+            tls_fingerprint: None,
         };
         machine.normalize_routes();
         machine
+    }
+
+    /// Whether traffic to this machine over `route` is encrypted: by the
+    /// network ([`Route::is_encrypted`]) or by the machine's own TLS, which a
+    /// pinned machine is dialled with on every route.
+    pub fn route_encrypted(&self, route: &Route) -> bool {
+        self.tls_fingerprint.is_some() || route.is_encrypted()
     }
 
     /// The name this app shows: the local display name when one is set, else
@@ -794,6 +810,12 @@ impl MachineRegistry {
                     } else {
                         existing.signs = machine.signs;
                     }
+                    // Pairing again is the owner vouching for the machine
+                    // anew, so its certificate, or none, replaces the pin.
+                    if machine.tls_fingerprint.is_some() || existing.device_id != machine.device_id
+                    {
+                        existing.tls_fingerprint = machine.tls_fingerprint;
+                    }
                     existing.device_id = machine.device_id;
                     existing.describes |= machine.describes;
                     for route in machine.routes {
@@ -905,6 +927,25 @@ impl MachineRegistry {
             let changed = !machine.describes;
             machine.describes = true;
             Ok(changed)
+        })
+    }
+
+    /// Pin `host_id`'s gateway certificate, the first time a TLS sign-in to it
+    /// succeeds. A pin that is already there stays: only pairing again
+    /// replaces it ([`Self::insert`]). True when that changed.
+    pub fn set_tls_fingerprint(&mut self, host_id: &str, fingerprint: &str) -> Result<bool> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            if machine.tls_fingerprint.is_some() {
+                return Ok(false);
+            }
+            machine.tls_fingerprint = Some(fingerprint.to_owned());
+            Ok(true)
         })
     }
 

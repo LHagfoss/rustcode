@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::Instant;
+use tokio_rustls::server::TlsStream;
 use tokio_tungstenite::{
     WebSocketStream, accept_hdr_async_with_config,
     tungstenite::{
@@ -40,8 +41,12 @@ use tokio_tungstenite::{
         protocol::WebSocketConfig,
     },
 };
+use tokio_util::either::Either;
 
-type Socket = WebSocketStream<TcpStream>;
+/// Plain TCP, or the gateway's own TLS ([`super::tls`]) over it.
+pub(super) type Stream = Either<TcpStream, TlsStream<TcpStream>>;
+
+pub(super) type Socket = WebSocketStream<Stream>;
 
 /// How long a closing connection may spend delivering its last error frame.
 const GOODBYE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -67,8 +72,8 @@ pub(super) async fn serve_connection(
             upgrade(&shared, socket, &slot, config),
         ) => upgraded,
     };
-    let mut socket = match upgraded {
-        Ok(Some(socket)) => socket,
+    let (mut socket, tls) = match upgraded {
+        Ok(Some(upgraded)) => upgraded,
         _ => return,
     };
     let first = tokio::select! {
@@ -140,7 +145,11 @@ pub(super) async fn serve_connection(
     match (arrival, local) {
         (Arrival::Tunnel, Some(local)) => connection.set_route(tunnel_route(local)),
         (Arrival::Direct, Some(local)) => {
-            connection.set_route(connection_route(local, &candidate_addresses()))
+            let mut route = connection_route(local, &candidate_addresses());
+            if tls {
+                route.set_tls();
+            }
+            connection.set_route(route)
         }
         (_, None) => {}
     }
@@ -162,29 +171,40 @@ pub(super) async fn serve_connection(
     session(&shared, socket, connection, sink, queue, thread_names).await;
 }
 
-/// Upgrade a TCP connection to a WebSocket, keeping the refusals its owner can
-/// act on. `None` when the connection is over.
+/// Upgrade a TCP connection to a WebSocket, over the gateway's TLS when the
+/// device opened with a ClientHello, keeping the refusals its owner can act on.
+/// The socket and whether it is TLS; `None` when the connection is over.
 async fn upgrade(
     shared: &Shared,
     socket: TcpStream,
     slot: &UnauthenticatedSlot,
     config: WebSocketConfig,
-) -> Option<Socket> {
+) -> Option<(Socket, bool)> {
     // A TLS record starts with the handshake content type, which no HTTP
-    // request line does. A phone dialing `wss://` at this plain gateway
-    // otherwise looks like a connection that went nowhere, and its owner has no
-    // way to learn that from the host.
+    // request line does, so one port serves both. A TLS handshake that fails
+    // is a device that does not trust this certificate (one pinned to the
+    // certificate of an earlier install, or a phone dialing `wss://` with the
+    // operating system's trust store); it would otherwise look like a
+    // connection that went nowhere, and its owner has no way to learn that.
     let mut first = [0u8; 1];
-    if matches!(socket.peek(&mut first).await, Ok(1)) && first[0] == TLS_HANDSHAKE_RECORD {
-        shared.record_refusal(
-            slot.ip(),
-            RefusalReason::SecureConnection,
-            &DeviceHint::default(),
-        );
-        return None;
-    }
-    match accept_hdr_async_with_config(socket, refuse_browsers, Some(config)).await {
-        Ok(socket) => Some(socket),
+    let tls = matches!(socket.peek(&mut first).await, Ok(1)) && first[0] == TLS_HANDSHAKE_RECORD;
+    let stream = if tls {
+        match shared.tls.acceptor().accept(socket).await {
+            Ok(stream) => Either::Right(stream),
+            Err(_) => {
+                shared.record_refusal(
+                    slot.ip(),
+                    RefusalReason::SecureConnection,
+                    &DeviceHint::default(),
+                );
+                return None;
+            }
+        }
+    } else {
+        Either::Left(socket)
+    };
+    match accept_hdr_async_with_config(stream, refuse_browsers, Some(config)).await {
+        Ok(socket) => Some((socket, tls)),
         Err(WsError::Http(response)) => {
             // The upgrade is refused before any frame, so the device is told
             // nothing. A native app built before it sent the native app origin

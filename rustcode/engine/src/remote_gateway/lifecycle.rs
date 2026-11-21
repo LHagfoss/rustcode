@@ -335,6 +335,10 @@ impl RemoteLifecycle {
     pub fn identity_path(&self) -> PathBuf {
         self.directory.join("gateway.json")
     }
+    /// The gateway's TLS certificate and key ([`super::tls`]).
+    pub fn tls_path(&self) -> PathBuf {
+        self.directory.join("tls.json")
+    }
     /// The gateway's durable settings, written whenever one starts.
     pub fn settings_path(&self) -> PathBuf {
         self.directory.join("settings.json")

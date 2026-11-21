@@ -329,7 +329,20 @@ impl Connector {
         if !may_send_secrets(address) {
             return Err(plain_ws_refusal(address));
         }
-        let mut connection = Connection::open_with_timeout(address, self.route_timeout).await?;
+        // The code and the token travel on this socket: over the machine's own
+        // TLS when it offers it, so a machine that does is asked over TLS.
+        let mut connection = match self.open_described(address, None).await? {
+            (connection, HandshakeResponse::Described { .. }) => connection,
+            // A machine that predates `describe` closes after it.
+            (
+                _,
+                HandshakeResponse::Error {
+                    code: crate::protocol::ErrorCode::InvalidFrame,
+                    ..
+                },
+            ) => Connection::open_with_timeout(address, self.route_timeout).await?,
+            (_, other) => return Err(handshake_failure("describe", other)),
+        };
         let request = HandshakeRequest::ConnectRequest {
             protocol_version: HANDSHAKE_PROTOCOL_VERSION,
             device_name: self.identity.device_name.clone(),
@@ -386,8 +399,71 @@ impl Connector {
         }
         let first = self.open_proven(address, machine, None).await?;
         let _serialized = self.credentials.lock().await;
-        self.authenticate_with(Some(first), address, machine, tokens)
-            .await
+        let session = self
+            .authenticate_with(Some(first), address, machine, tokens)
+            .await?;
+        self.remember_pin(machine, &session);
+        Ok(session)
+    }
+
+    /// Dial `address` and send `describe`, over TLS whenever the machine's
+    /// certificate is known: pinned to `pin`, or to the fingerprint the
+    /// machine offers in its plain `described` frame, which is dialled again
+    /// over TLS before anything else goes on the wire. A pinned dial that
+    /// fails is never retried in the clear: that would be the downgrade a
+    /// pin exists to refuse. The socket and its answer, unchecked.
+    async fn open_described(
+        &self,
+        address: &str,
+        pin: Option<Pin<'_>>,
+    ) -> Result<(Connection, HandshakeResponse)> {
+        let mut connection = match pin {
+            Some(pin) => {
+                Connection::open_pinned(
+                    address,
+                    pin.fingerprint,
+                    pin.source.expected(),
+                    pin.source.hint(),
+                    self.route_timeout,
+                )
+                .await?
+            }
+            None => Connection::open_with_timeout(address, self.route_timeout).await?,
+        };
+        connection.send_handshake(&describe()).await?;
+        let answer = connection.next_handshake(self.timeout).await?;
+        if pin.is_none()
+            && !crate::transport::is_tls(address)
+            && let HandshakeResponse::Described {
+                tls_fingerprint: Some(offered),
+                ..
+            } = &answer
+            && crate::transport::is_fingerprint(offered)
+        {
+            let offered = offered.clone();
+            drop(connection);
+            let pin = Pin {
+                fingerprint: &offered,
+                source: PinSource::Offered,
+            };
+            return Box::pin(self.open_described(address, Some(pin))).await;
+        }
+        Ok((connection, answer))
+    }
+
+    /// Pin the certificate a session's TLS proved, the first time a sign-in
+    /// to `machine` over its own TLS succeeds. Best effort, like
+    /// [`Self::remember_describes`]: a registry that cannot be written pins
+    /// it on the next connection.
+    fn remember_pin(&self, machine: &Machine, session: &Session) {
+        if machine.tls_fingerprint.is_some() {
+            return;
+        }
+        if let Some(pinned) = session.welcome.tls_fingerprint.as_deref()
+            && let Ok(mut registry) = MachineRegistry::load(&self.config_dir)
+        {
+            let _ = registry.set_tls_fingerprint(&machine.host_id, pinned);
+        }
     }
 
     /// Open a socket to `address` and ask who answers before anything secret
@@ -405,12 +481,19 @@ impl Connector {
         machine: &Machine,
         before: Option<Proof>,
     ) -> Result<(Connection, Proof)> {
-        let mut connection = Connection::open_with_timeout(address, self.route_timeout).await?;
-        if before == Some(Proof::Legacy) {
+        let pin = machine.tls_fingerprint.as_deref();
+        // A pinned machine answers `describe` over TLS; it never goes back to
+        // the old handshake, which would be plain.
+        if before == Some(Proof::Legacy) && pin.is_none() {
+            let connection = Connection::open_with_timeout(address, self.route_timeout).await?;
             return Ok((connection, Proof::Legacy));
         }
-        connection.send_handshake(&describe()).await?;
-        match connection.next_handshake(self.timeout).await? {
+        let pin = pin.map(|fingerprint| Pin {
+            fingerprint,
+            source: PinSource::Saved,
+        });
+        let (mut connection, answer) = self.open_described(address, pin).await?;
+        match answer {
             HandshakeResponse::Described {
                 gateway_id,
                 host_name,
@@ -433,7 +516,7 @@ impl Connector {
             HandshakeResponse::Error {
                 code: crate::protocol::ErrorCode::InvalidFrame,
                 ..
-            } if !machine.describes && before.is_none() => {
+            } if !machine.describes && before.is_none() && pin.is_none() => {
                 drop(connection);
                 let connection = Connection::open_with_timeout(address, self.route_timeout).await?;
                 Ok((connection, Proof::Legacy))
@@ -767,6 +850,7 @@ impl Connector {
                 .await
                 .context("acknowledge the rotated refresh token")?;
         }
+        let pinned = connection.pinned().map(str::to_owned);
         Ok(Session {
             connection,
             welcome: Welcome {
@@ -780,6 +864,7 @@ impl Connector {
                 version,
                 platform,
                 routes: learned_routes(&routes),
+                tls_fingerprint: pinned,
             },
             access,
             described: proof == Some(Proof::Described),
@@ -943,6 +1028,7 @@ impl Connector {
                 if value.described && !machine.describes {
                     self.remember_describes(machine);
                 }
+                self.remember_pin(machine, &value);
                 Ok(Connected {
                     learned: value.welcome.routes.clone(),
                     session: value,
@@ -1024,13 +1110,18 @@ impl Connector {
             crate::routes::ordered_for_this_computer(&usable, &crate::routes::local_addresses());
         let expected = code.gateway_id();
         let outcome = race(&usable, &RaceSettings::default(), |route| async move {
-            let described = tokio::time::timeout(self.route_timeout, async {
-                let mut connection =
-                    Connection::open_with_timeout(&route.address, self.route_timeout).await?;
-                connection.send_handshake(&describe()).await?;
-                let answer = connection.next_handshake(self.timeout).await?;
-                anyhow::Ok((connection, answer))
-            })
+            // A code that carries the certificate's fingerprint vouches for
+            // it: the secret goes only over TLS pinned to it.
+            let described = tokio::time::timeout(
+                self.route_timeout,
+                self.open_described(
+                    &route.address,
+                    code.tls_fingerprint().map(|fingerprint| Pin {
+                        fingerprint,
+                        source: PinSource::Code,
+                    }),
+                ),
+            )
             .await;
             let (connection, answer) = match described {
                 Ok(Ok(described)) => described,
@@ -1046,7 +1137,8 @@ impl Connector {
                 } => {
                     if expected.is_some_and(|expected| expected != gateway_id) {
                         return Err(DialFailure::unreachable(format!(
-                            "that address answers as {}, not the computer the code was made on;                              nothing was sent",
+                            "that address answers as {}, not the computer the code was made on; \
+                             nothing was sent",
                             host_name.unwrap_or(gateway_id)
                         )));
                     }
@@ -1452,6 +1544,7 @@ fn paired_from(connection: Connection, answer: HandshakeResponse) -> Result<Pair
                 let access = access_token
                     .zip(parse_expiry(access_expires_at.as_deref()))
                     .map(|(token, expires_at)| Access::new(token, expires_at));
+                let pinned = connection.pinned().map(str::to_owned);
                 Ok(Paired {
                     secret,
                     access,
@@ -1468,6 +1561,7 @@ fn paired_from(connection: Connection, answer: HandshakeResponse) -> Result<Pair
                             version,
                             platform,
                             routes: learned_routes(&routes),
+                            tls_fingerprint: pinned,
                         },
                         access: None,
                         described: true,
@@ -1522,6 +1616,42 @@ impl std::fmt::Debug for Paired {
     }
 }
 
+/// A certificate fingerprint a dial is pinned to, and where it came from.
+#[derive(Debug, Clone, Copy)]
+struct Pin<'a> {
+    fingerprint: &'a str,
+    source: PinSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PinSource {
+    /// Saved with the machine when it paired, or on its first TLS sign-in.
+    Saved,
+    /// Carried by the connect code being redeemed.
+    Code,
+    /// Offered a moment ago in the machine's plain `described` frame.
+    Offered,
+}
+
+impl PinSource {
+    /// The certificate a refused dial expected, for "did not answer with …".
+    fn expected(self) -> &'static str {
+        match self {
+            Self::Saved => "the certificate saved for this machine",
+            Self::Code => "the certificate the connect code names",
+            Self::Offered => "the certificate it offered a moment before",
+        }
+    }
+
+    /// What to do about it, appended to the refusal.
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Saved => "; if RustCode there was reinstalled, pair again",
+            Self::Code | Self::Offered => "",
+        }
+    }
+}
+
 /// The machine's answer when a pairing is accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Welcome {
@@ -1546,6 +1676,10 @@ pub struct Welcome {
     /// Empty from a gateway before the handshake carried them, and from a
     /// loopback-only listener no other machine can reach.
     pub routes: Vec<Route>,
+    /// The certificate fingerprint the socket's TLS was pinned to: what the
+    /// saved machine pins after this sign-in or pairing. `None` over plain
+    /// `ws://` and over a `wss://` public address.
+    pub tls_fingerprint: Option<String>,
 }
 
 impl Welcome {
@@ -1963,6 +2097,7 @@ pub fn machine_from_pairing(welcome: &Welcome, route: Route, name: Option<String
     for learned in &welcome.routes {
         machine.learn_route(learned.clone());
     }
+    machine.tls_fingerprint = welcome.tls_fingerprint.clone();
     machine
 }
 
@@ -2233,6 +2368,7 @@ mod tests {
                 Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879"),
                 Route::with_kind(RouteKind::Lan, "192.168.1.20:17879"),
             ],
+            tls_fingerprint: None,
         };
         let mut machine = machine_from_pairing(&welcome, Route::new("192.168.1.20:17879"), None);
         assert_eq!(machine.host_id, "gw-8e1f4b7a");
@@ -2254,6 +2390,14 @@ mod tests {
             Some("the Mac".into()),
         );
         assert_eq!(named.name, "the Mac");
+        assert_eq!(named.tls_fingerprint, None);
+        // A pairing over the machine's own TLS pins its certificate.
+        let pinned = Welcome {
+            tls_fingerprint: Some("ab".repeat(32)),
+            ..welcome.clone()
+        };
+        let machine = machine_from_pairing(&pinned, Route::new("192.168.1.20:17879"), None);
+        assert_eq!(machine.tls_fingerprint, Some("ab".repeat(32)));
     }
 
     #[test]
@@ -2269,6 +2413,7 @@ mod tests {
             version: None,
             platform: None,
             routes: Vec::new(),
+            tls_fingerprint: None,
         };
         let mut machine = Machine::new(
             "gw-a",

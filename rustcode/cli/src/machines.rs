@@ -185,7 +185,10 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
         match connector.connect_raced(machine, &tokens).await {
             Ok(connected) => {
                 row.route = connected.route.address.clone();
-                row.network = Some(connection_route(&connected.route));
+                row.network = Some(connection_route(
+                    &connected.route,
+                    connected.session.welcome().tls_fingerprint.is_some(),
+                ));
                 row.state = State::Connected;
                 if !connected.learned.is_empty() {
                     learned.push((machine.host_id.clone(), connected.learned.clone()));
@@ -306,9 +309,11 @@ fn print_rows(rows: &[Row]) {
 
 /// A route this computer dialled as the gateway describes a connection it
 /// accepted (#3701), so both ends use the same words and the same rule: only
-/// a tunnel encrypts (a VPN, or TLS to a public tunnel's edge). A client cannot see the interface it used, so the kind
-/// of address it dialled stands in; a public or unknown address is `other`.
-fn connection_route(route: &Route) -> ConnectionRoute {
+/// a tunnel encrypts (a VPN, or TLS to a public tunnel's edge), or the
+/// machine's own TLS when the connection was pinned to its certificate
+/// (`pinned`). A client cannot see the interface it used, so the kind of
+/// address it dialled stands in; a public or unknown address is `other`.
+fn connection_route(route: &Route, pinned: bool) -> ConnectionRoute {
     let loopback = route.address.parse::<std::net::SocketAddr>().map_or_else(
         |_| {
             rustcode_client::transport::host_part(&route.address)
@@ -335,13 +340,18 @@ fn connection_route(route: &Route) -> ConnectionRoute {
         // loopback, and SSH encrypts the way there.
         RouteKind::Ssh => (ConnectionPath::Loopback, None),
     };
-    ConnectionRoute {
+    let mut connection = ConnectionRoute {
         path,
         provider,
         local_address: route.address.clone(),
         encrypted: matches!(path, ConnectionPath::Overlay | ConnectionPath::Tunnel)
             || route.kind == RouteKind::Ssh,
+        tls: false,
+    };
+    if pinned {
+        connection.set_tls();
     }
+    connection
 }
 
 /// The network a connected machine is on and whether it is encrypted, in the
@@ -1089,7 +1099,7 @@ mod tests {
     /// gateway's own words, and never calls a plain or unknown one encrypted.
     #[test]
     fn the_network_column_says_whether_the_route_is_encrypted() {
-        let label = |route: Route| network_label(Some(&connection_route(&route)));
+        let label = |route: Route| network_label(Some(&connection_route(&route, false)));
         assert_eq!(
             label(Route::new("192.168.1.20:17879")),
             "LAN (not encrypted)"
@@ -1116,6 +1126,14 @@ mod tests {
             label(Route::new("127.0.0.1:17879")),
             "this computer (not encrypted)"
         );
+        // Pinned to the machine's own certificate, the LAN is encrypted.
+        assert_eq!(
+            network_label(Some(&connection_route(
+                &Route::new("192.168.1.20:17879"),
+                true
+            ))),
+            "LAN (encrypted by RustCode)"
+        );
         // Not connected: no network.
         assert_eq!(network_label(None), "—");
 
@@ -1131,7 +1149,7 @@ mod tests {
         ] {
             let route = Route::new(address);
             assert_eq!(
-                connection_route(&route).encrypted,
+                connection_route(&route, false).encrypted,
                 route.is_encrypted(),
                 "{address}"
             );

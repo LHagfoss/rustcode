@@ -22,13 +22,15 @@ The plan this implements is
 The older `rustcode serve` transport in [mobile.md](mobile.md) is separate and
 unchanged.
 
-> **Plain LAN traffic is not encrypted.** The gateway has no TLS. Devices are
-> authenticated, but on an ordinary LAN anyone on that network can read and
-> alter the traffic, including your prompts and the session output. **NetBird
-> is the recommended path**: its tunnel encrypts the traffic between phone and
-> Mac. Use a plain LAN address only on a network you trust. Never forward the
-> port to the internet. The threat model, what each route protects and the
-> comparison with direct TLS are in [remote-security.md](remote-security.md).
+> **Plain LAN traffic is not encrypted.** The gateway port answers its own TLS
+> with a pinned certificate, and other computers (the desktop app and `rc
+> machines`) use it on every route. The phone app does not yet: it speaks plain
+> WebSocket, so on an ordinary LAN anyone on that network can read and alter
+> its traffic, including your prompts and the session output. **NetBird is the
+> recommended path for a phone**: its tunnel encrypts the traffic between
+> phone and Mac. Use a plain LAN address only on a network you trust. Never
+> forward the port to the internet. The threat model, what each route protects
+> and how the certificate is pinned are in [remote-security.md](remote-security.md).
 
 ## Quick start
 
@@ -490,7 +492,7 @@ address and app counted rather than listed again.
 | `token_replayed` | A retired refresh token was presented, so the whole pairing was removed. | Pair the device again. |
 | `key_required` | A token was presented for a device that signs in with its key: an old copy of its token. | If it was your device, update the RustCode app on it; if not, revoke the device and pair it again. |
 | `unexpected_origin` | The WebSocket upgrade carried an `Origin` no native app sends, so it was refused before a frame arrived. | That is a RustCode app from before it sent the native app origin, or a web page trying the port: update the app. Nothing was shared either way. |
-| `secure_connection` | The device opened a TLS connection (`wss://`, `https://`) to the gateway, which speaks plain WebSocket, so its first bytes could not be read. | Update the app on the device, or enter the address without `https://` or `wss://`. A `wss://` address works only at the machine's public address, through its tunnel ([remote-security.md › The public address](remote-security.md#the-public-address)). |
+| `secure_connection` | The device opened a TLS connection and the handshake failed: it does not trust this computer's certificate. It pinned the certificate of an earlier install here (a reinstall or a deleted `remote/tls.json` makes a new one), or it dialled `wss://` expecting a certificate from a public authority. | Pair the device again. A `wss://` address works only at the machine's public address, through its tunnel ([remote-security.md › The public address](remote-security.md#the-public-address)). |
 | `unrecognized_request` | The device reached the gateway and sent JSON text, but its first frame is not a `pair`, `authenticate` or `connect_request` this host reads: an app build whose handshake differs. | Update RustCode on the device and on this computer so both are the latest. |
 
 Settings › Remote access lists them under *Refused connections*, with the
@@ -526,10 +528,19 @@ to its engine's HTTP listener ([The public address](remote-security.md#the-publi
 the port defaults to `443` and the path to `/ws`, and the certificate must
 verify against this computer's trust store.
 
-**A machine token travels unencrypted on the LAN**, exactly like the phone
-app's: the gateway has no TLS, so anything on that network can read a prompt,
-a thread and — during pairing — the code. Use a network you trust, or put both
-machines on Tailscale or NetBird, whose tunnel encrypts the traffic. Because a
+**Machine connections use the machine's own TLS.** The first `describe` on a
+socket names the gateway's certificate fingerprint; the client dials again
+over TLS pinned to it before the request, the code or a token goes on the
+wire, and saves the pin with the machine (`tls_fingerprint` in
+`machines.json`). A long connect code carries the fingerprint itself, so the
+code vouches for the certificate. From then on every route but a `wss://`
+public address is dialled with TLS pinned to that certificate and never plain
+`ws://`: an address that answers in the clear or with another certificate is
+refused, nothing is sent, and `rc machines list` says the LAN is
+`encrypted by RustCode`. A machine whose certificate changed (RustCode
+reinstalled there) must be paired again. A machine older than this answers no
+fingerprint and is still dialled plain, its token readable on the LAN like the
+phone app's. Because a
 *public* address has no trusted network around it, this client refuses to pair
 over a plain `ws://` one, or to send a saved machine's token to one, and says
 so instead. A `wss://` public address is allowed: TLS protects it as far as
@@ -1187,8 +1198,10 @@ the gateway's TCP port; Windows asks the first time the gateway listens.
 
 ## Security posture
 
-- **Transport:** no TLS (the full threat model is in [remote-security.md](remote-security.md)). On a plain LAN anyone on the network can read and
-  alter the traffic. Use it only on a network you trust; NetBird encrypts the
+- **Transport:** the gateway's own TLS for computers, pinned by fingerprint;
+  plain WebSocket for the phone app (the full threat model is in
+  [remote-security.md](remote-security.md)). On a plain LAN anyone on the
+  network can read and alter a plain connection. Use it only on a network you trust; NetBird encrypts the
   traffic end to end and is the recommended path off the home LAN. Never
   forward the port to the internet. The app shows an unencrypted-LAN banner
   for a plain address.
@@ -1377,7 +1390,7 @@ the member answers `hub_result {call_id, success, content}`.
 
 ## Not covered yet
 
-- No TLS; see the warning at the top.
+- No TLS in the phone app yet; see the warning at the top.
 - The terminal owns execution. Closing it ends the session's availability. A
   session started or reopened from a device is owned by its session owner
   process instead.

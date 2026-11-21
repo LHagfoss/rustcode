@@ -11,5 +11,6 @@
     "machine_codes",
     "key_auth"
   ],
-  "challenge": "n3Vd0lq9YzN8cBf2kX7tR4wJ1eHs6uAa5oPiGmLy0Zc"
+  "challenge": "n3Vd0lq9YzN8cBf2kX7tR4wJ1eHs6uAa5oPiGmLy0Zc",
+  "tls_fingerprint": "3f6a1c9e0b7d2e45a8c1f0e9d6b3a2715c4e8f9a0b1c2d3e4f5a6b7c8d9e0f1a"
 }

@@ -211,6 +211,10 @@ pub enum HandshakeResponse {
         /// This socket's challenge, which a device with a key signs.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         challenge: Option<String>,
+        /// The SHA-256 (lowercase hex) of the certificate the gateway's port
+        /// answers TLS with: pin it and dial TLS from then on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tls_fingerprint: Option<String>,
     },
     /// The request is in front of the machine's owner. Wait on the same socket.
     ConnectPending {

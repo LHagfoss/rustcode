@@ -17,7 +17,9 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
-type Socket = WebSocketStream<TcpStream>;
+// The device's socket, plain or over the gateway's own TLS.
+use super::transport::Socket;
+
 const OUTBOUND_FRAMES: usize = 1024;
 const OUTBOUND_BYTES: usize = 16 * 1024 * 1024;
 
@@ -361,7 +363,12 @@ pub(crate) async fn serve_browser(
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_FRAME_BYTES))
         .max_frame_size(Some(MAX_FRAME_BYTES));
-    let socket = WebSocketStream::from_raw_socket(stream, Role::Server, Some(config)).await;
+    let socket = WebSocketStream::from_raw_socket(
+        tokio_util::either::Either::Left(stream),
+        Role::Server,
+        Some(config),
+    )
+    .await;
     let (mut writer, mut reader) = socket.split();
     let control = Arc::new(ConnectionControl::new(
         tokio_util::sync::CancellationToken::new(),
