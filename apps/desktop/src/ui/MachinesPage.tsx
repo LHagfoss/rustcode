@@ -24,7 +24,15 @@ import { useEffect, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
-import { type FleetEntry, knownOnly, useFleet, viaName } from "../state/fleet";
+import {
+  type FleetEntry,
+  knownOnly,
+  setKnownHidden,
+  showHiddenKnown,
+  useFleet,
+  useHiddenKnown,
+  viaName,
+} from "../state/fleet";
 import {
   askInstallServer,
   askMachine,
@@ -63,7 +71,7 @@ import { AddMachineDialog } from "./AddMachineDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
 import { ForwardTakeover } from "./ForwardTakeover";
 import { HubGroup } from "./HubGroup";
-import { ArrowUpCircle, Plus, RefreshCw, Server, Settings } from "./icons";
+import { ArrowUpCircle, EyeOff, Plus, RefreshCw, Server, Settings } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachinesMap, SELF_NODE } from "./MachinesMap";
 import {
@@ -104,7 +112,9 @@ export function MachinesPage() {
   const [view, setView] = useState<MachinesView>(() => (readStorage(VIEW_KEY) === "list" ? "list" : "map"));
   const [selected, setSelected] = useState<string | null>(null);
   const entries = useFleet((s) => s.entries);
-  const known = knownOnly(entries, machines);
+  const hidden = useHiddenKnown((s) => s.ids);
+  const known = knownOnly(entries, machines, hidden);
+  const hiddenCount = knownOnly(entries, machines).length - known.length;
   const chooseView = (next: MachinesView) => {
     setView(next);
     writeStorage(VIEW_KEY, next);
@@ -209,6 +219,16 @@ export function MachinesPage() {
           </>
         )}
         {machines.length === 0 && <NoMachines />}
+        {hiddenCount > 0 && (
+          <Row
+            title={hiddenCount === 1 ? "1 hidden machine" : `${hiddenCount} hidden machines`}
+            subtitle="Known through another machine and hidden here."
+          >
+            <Action size="sm" onClick={showHiddenKnown}>
+              Show
+            </Action>
+          </Row>
+        )}
         {adding && !addOpen && (
           <Row
             title="Adding a machine…"
@@ -366,10 +386,15 @@ function KnownMachineRow({ entry, now, local }: { entry: FleetEntry; now: number
         </>
       }
       subtitle={
-        row.via ? `Known through ${row.via}. Not paired on this computer.` : "Not paired on this computer."
+        row.via
+          ? `Paired with ${row.via}, not with this computer. To remove it everywhere, remove it on ${row.via}.`
+          : "Not paired on this computer."
       }
       status={row.facts.join(" · ")}
     >
+      <Action onClick={() => setKnownHidden(entry.hostId, true)}>
+        <EyeOff size={12} /> Hide
+      </Action>
       <Action onClick={() => setAddMachineOpen(true)}>
         <Plus size={12} /> Pair
       </Action>

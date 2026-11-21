@@ -14,6 +14,7 @@
 import { create } from "zustand";
 import { type AcpConnection, arr, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { hasShell, shellCallWithin } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import {
   cleanMachineName,
   type Machine,
@@ -109,11 +110,41 @@ export function wireEntry(entry: FleetEntry): JsonObject {
 export function knownOnly(
   entries: readonly FleetEntry[],
   machines: readonly Pick<Machine, "id">[],
+  hidden: readonly string[] = [],
 ): FleetEntry[] {
   const paired = new Set(machines.map((machine) => machine.id));
   return entries
-    .filter((entry) => !paired.has(entry.hostId))
+    .filter((entry) => !paired.has(entry.hostId) && !hidden.includes(entry.hostId))
     .sort((left, right) => left.name.localeCompare(right.name) || left.hostId.localeCompare(right.hostId));
+}
+
+const HIDDEN_KEY = "rustcode.hiddenKnownMachines";
+
+function readHidden(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(readStorage(HIDDEN_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Known machines hidden on this computer. A known machine cannot be removed here: it is paired
+ * with another machine, which keeps reporting it, so Hide only stops listing it on this one.
+ */
+export const useHiddenKnown = create<{ ids: string[] }>(() => ({ ids: readHidden() }));
+
+export function setKnownHidden(hostId: string, hidden: boolean) {
+  const current = useHiddenKnown.getState().ids.filter((id) => id !== hostId);
+  const ids = hidden ? [...current, hostId] : current;
+  useHiddenKnown.setState({ ids });
+  writeStorage(HIDDEN_KEY, ids.length > 0 ? JSON.stringify(ids) : null);
+}
+
+export function showHiddenKnown() {
+  useHiddenKnown.setState({ ids: [] });
+  writeStorage(HIDDEN_KEY, null);
 }
 
 /** The name of the computer an entry was learned through: a paired machine's, else its own entry's. */
