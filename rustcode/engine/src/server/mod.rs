@@ -299,10 +299,7 @@ windows_signal!(
 pub async fn connect(program: PathBuf) -> anyhow::Result<()> {
     let stream = match connect_running().await {
         Ok(stream) => stream,
-        Err(_) => {
-            start_in_background(&program, false)?;
-            wait_for_server().await?
-        }
+        Err(_) => start_and_connect(&program).await?,
     };
     bridge(stream, tokio::io::stdin(), tokio::io::stdout()).await?;
     Ok(())
@@ -384,6 +381,12 @@ pub async fn ask_running(method: &str, params: serde_json::Value) -> Asked {
             "the RustCode server did not answer within 15s",
         )),
     }
+}
+
+/// Start the shared server and wait for its private ACP socket to accept clients.
+pub(crate) async fn start_and_connect(program: &Path) -> anyhow::Result<listen::ClientStream> {
+    start_in_background(program, false)?;
+    wait_for_server().await
 }
 
 async fn wait_for_server() -> anyhow::Result<listen::ClientStream> {
