@@ -1,5 +1,5 @@
 // F6 / Shift+F6: move focus between the window's areas (the Threads sidebar, the conversation,
-// the message input, the right panel, the terminal), or in Settings between the section list
+// the message input, the right panel), or in Settings between the section list
 // and the open section. Each area is a labelled landmark marked with `data-focus-area`; the
 // order is fixed here rather than read from the DOM, which puts the docked right panel inside
 // the chat row. An area gets back the control that last had focus in it.
@@ -14,7 +14,7 @@ export const FOCUS_DEFAULT_ATTR = "data-focus-default";
 export const FOCUS_SCOPE_ATTR = "data-focus-scope";
 
 /** The window's areas, in F6 order. "main" is the conversation, or the open view's content. */
-export const WINDOW_AREAS = ["threads", "main", "composer", "panel", "terminal"] as const;
+export const WINDOW_AREAS = ["threads", "main", "composer", "panel"] as const;
 /** Settings' areas, in F6 order. */
 export const SETTINGS_AREAS = ["sections", "section"] as const;
 

@@ -56,7 +56,6 @@ pub use orchestration::outside_passkey as owner_passkeys;
 pub use orchestration::outside_web as owner_web_sessions;
 mod platform;
 pub mod preview;
-mod project_hooks;
 pub mod prompt_commands;
 pub mod provider_auth;
 pub mod pull_requests;

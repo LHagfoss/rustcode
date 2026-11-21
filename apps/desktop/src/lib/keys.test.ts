@@ -99,7 +99,6 @@ describe("shortcut bindings", () => {
       settings: "mod+,",
       "toggle-sidebar": "mod+b",
       "find-in-thread": "mod+f",
-      "toggle-terminal": "mod+j",
       "toggle-model-picker": "mod+m",
       "stop-turn": "mod+.",
       "pin-thread": "p",
@@ -258,19 +257,19 @@ describe("what a binding may be", () => {
     ]);
   });
 
-  test("Jobs has no key until given one, and ⌘J can move to it from the terminal", () => {
+  test("Jobs has no key until given one, and ⌘M can move to it from the model picker", () => {
     expect(bindingOf({}, "jobs")).toBe("");
-    expect(commandFor({}, cmd("j"))).toBe("toggle-terminal");
-    const { overrides, taken } = assignBinding({}, "jobs", "mod+j");
-    expect(taken.map((c) => c.id)).toEqual(["toggle-terminal"]);
-    expect(overrides).toEqual({ jobs: "mod+j", "toggle-terminal": "" });
-    expect(commandFor(overrides, cmd("j"))).toBe("jobs");
-    // The terminal can get a key of its own again.
-    const back = assignBinding(overrides, "toggle-terminal", "mod+shift+j");
+    expect(commandFor({}, cmd("m"))).toBe("toggle-model-picker");
+    const { overrides, taken } = assignBinding({}, "jobs", "mod+m");
+    expect(taken.map((c) => c.id)).toEqual(["toggle-model-picker"]);
+    expect(overrides).toEqual({ jobs: "mod+m", "toggle-model-picker": "" });
+    expect(commandFor(overrides, cmd("m"))).toBe("jobs");
+    // The model picker can get a key of its own again.
+    const back = assignBinding(overrides, "toggle-model-picker", "mod+shift+m");
     expect(back.taken).toEqual([]);
-    expect(commandFor(back.overrides, cmd("J", { shiftKey: true }))).toBe("toggle-terminal");
-    // Its default back takes ⌘J from Jobs, which had no key of its own.
-    const reset = assignBinding(overrides, "toggle-terminal", "mod+j");
+    expect(commandFor(back.overrides, cmd("M", { shiftKey: true }))).toBe("toggle-model-picker");
+    // Its default back takes ⌘M from Jobs, which had no key of its own.
+    const reset = assignBinding(overrides, "toggle-model-picker", "mod+m");
     expect(reset.overrides).toEqual({});
     expect(reset.taken.map((c) => c.id)).toEqual(["jobs"]);
   });
@@ -298,20 +297,20 @@ describe("stored overrides", () => {
       "new-thread": "n", // no modifier
       "default-folder": "mod+q", // reserved
       "stop-turn": "mod+nope", // not a key
-      "toggle-terminal": 42, // not a string
+      "toggle-model-picker": 42, // not a string
     });
     expect(parseOverrides(stored)).toEqual({ "toggle-sidebar": "mod+alt+s" });
   });
 
   test("a key moved to another command survives a reload", () => {
-    const stored = JSON.stringify({ jobs: "mod+j", "toggle-terminal": "" });
+    const stored = JSON.stringify({ jobs: "mod+m", "toggle-model-picker": "" });
     const overrides = parseOverrides(stored);
-    expect(overrides).toEqual({ jobs: "mod+j", "toggle-terminal": "" });
-    expect(commandFor(overrides, cmd("j"))).toBe("jobs");
+    expect(overrides).toEqual({ jobs: "mod+m", "toggle-model-picker": "" });
+    expect(commandFor(overrides, cmd("m"))).toBe("jobs");
     // A default taken without the "" stored is left with no key, not answered twice.
-    expect(parseOverrides(JSON.stringify({ jobs: "mod+j" }))).toEqual({
-      jobs: "mod+j",
-      "toggle-terminal": "",
+    expect(parseOverrides(JSON.stringify({ jobs: "mod+m" }))).toEqual({
+      jobs: "mod+m",
+      "toggle-model-picker": "",
     });
     // Two overrides on one key: the earlier command keeps it.
     expect(

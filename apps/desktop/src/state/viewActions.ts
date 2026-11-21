@@ -141,10 +141,6 @@ export function sendFromView(id: string, text: string) {
   void runPrompt(id, text, emptyExtras, { fromView: true });
 }
 
-export function setTerminalOpen(open: boolean) {
-  set({ terminalOpen: open });
-}
-
 /** A panel view: one of the side views, never closed. */
 export type PanelKind = NonNullable<AppState["panel"]>;
 

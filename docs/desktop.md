@@ -9,7 +9,7 @@ see [harnesses.md](harnesses.md)) runs a thread through the same UI.
 
 Status: usable day to day. A chat for a thread on any harness with
 approvals, attachments, link chips, Smart UI views, thread actions, find,
-rewind, subagents, pull requests, plan usage and a terminal. A few things
+rewind, subagents, pull requests and plan usage. A few things
 the SwiftUI app had are not ported yet; see [Not yet ported](#not-yet-ported).
 
 ## Status and roadmap
@@ -99,7 +99,7 @@ and lists projects to leave out. The chat says
 "‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
 updates when the machine is back.", the composer is disabled, and the
 header shows the machine glyph and name; the controls that read
-this computer (terminal, working tree, pull requests, Finder, worktrees,
+this computer (working tree, pull requests, Finder, worktrees,
 checkpoints and undo) stay disabled with "Runs on ‹machine›" where the action
 would be. Settling a thread there (or Review, Unsettle, pin and unpin) still
 works: the row changes at once, the toast says "Syncs when ‹machine› is back",
@@ -417,8 +417,6 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
     app does them: the folder comes from `rc threads path <id>` and
     must be that thread's folder in the store. Rename writes `title.txt`;
     Trash moves the folder to `~/.Trash` after `session/close`.
-  - `pty.rs`: `pty_open|write|resize|close`, the login shell in a PTY
-    (portable-pty) in an existing folder; at most 8; killed on quit.
   - `smartui.rs`: `smartui_page` and the `rcui://` scheme that serves a
     Smart UI page once, with its own CSP header (see Smart UI below).
   - `notify.rs`: `notify_show`, `notify_permission` and `notify_badge`, the
@@ -522,7 +520,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   by Shiki with Xcode's colours.
 
 Keys: ⌘N new thread, ⌘O the folder of the thread in front (a new thread starts there; an open one moves there through `_rustcode/session/move`, closed and reopened; also a click on the header's path), ⌘⇧O the default folder for new threads (also Settings › General; picking a folder for one new thread no longer changes it), ⌘K command palette (threads, and actions with `>`), ⌘, Settings, ⌘B sidebar, ⌘⇧B right panel, ⌘F find
-in thread, ⌘J terminal, ⌘+ / ⌘- / ⌘0 text zoom, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
+in thread, ⌘+ / ⌘- / ⌘0 text zoom, ⏎ send (or queue while a turn runs), ⌘⏎ steer the
 running turn, ⇧⏎ newline, ⌫ at the start of the field takes back the
 command token, Esc clears the draft and then stops the
 turn (⌘. stops it too), 1–9 answer the visible approval or question.
@@ -541,14 +539,13 @@ its own choices has no field and no files.
 
 F6 moves focus to the next area and ⇧F6 to the previous one, wrapping: the
 Threads sidebar, the conversation (or the open view: Needs you, the board,
-a review, a comparison), the message input, then the right panel and the
-terminal when they are shown; a hidden area is skipped. Each area gets back
+a review, a comparison), the message input, then the right panel when it is
+shown; a hidden area is skipped. Each area gets back
 the control that last had focus in it, else its default (the highlighted
 thread row, the message field) or its first focusable control. In Settings F6
 moves between the section list and the open section. It does nothing while a
-dialog, a menu, the command palette or a shortcut recorder has the keyboard;
-in the terminal it reaches the app like the other app shortcuts, and the shell
-does not receive it. Each area is a labelled landmark (`data-focus-area`, the
+dialog, a menu, the command palette or a shortcut recorder has the keyboard.
+Each area is a labelled landmark (`data-focus-area`, the
 order and the restore in `src/lib/focusAreas.ts`), so a screen reader names
 where focus went.
 
@@ -565,7 +562,7 @@ never share one. Only the overrides are kept, as `rustcode.shortcuts`
 value or a binding equal to the default is dropped, and the rest of the table
 stays the default it ships with. `state/shortcuts.ts` runs a matched command;
 the transcript matches "find in thread" against the same table. ⌘W (Ctrl+W elsewhere) settles the current thread with Undo and keeps the window
-open, including from the terminal; with no selected thread it does nothing.
+open; with no selected thread it does nothing.
 ⌘M (Ctrl+M elsewhere) opens the composer's model picker and focuses its search.
 Press it again to close the picker. On macOS, Window › Minimize remains available.
 On macOS the native menu (`src-tauri/src/lib.rs`) keeps the default editing
@@ -1062,15 +1059,6 @@ composer's keys stay outside the table.
   learns the same list from the handshake and reconnects over whichever
   answers. A thread's header carries a chip while it is shared, with its
   attached count.
-- **Terminal.** ⌘J: xterm.js on shell PTYs in the thread's folder, following
-  the app's colours. Each folder has tabs (`state/terminalTabs.ts`, at most
-  8): **+** or ⌘T adds a shell, ⌘W closes the focused one, ⌘⇧[ / ⌘⇧] move
-  between them, and a tab takes the title the shell sets (`bun run dev`).
-  Tabs keep running while the panel is hidden or another thread is open.
-  Selecting output shows *Add to message* (⌘L): the selection goes to the
-  composer as a chip (`Terminal · 24 lines`, its last 400 lines at most),
-  sent as a fenced block naming the tab, and focus returns to the field.
-  A project action opens in its own tab, named after it, and reuses it.
 - **Git actions.** The header's git pill shows the one action the thread's
   folder calls for: *Commit* (with the number of changed files), *Pull* when
   the branch is behind, *Push* when it has commits the remote lacks or was
@@ -1090,41 +1078,6 @@ composer's keys stay outside the table.
   it was read for, so a thread switch shows *Reading git…* until the new
   folder's answer is in, and a late answer to an older read is dropped. A thread on another computer shows
   the pill disabled.
-- **Project actions.** The header's ⚡ menu lists the project's quick
-  actions (named commands such as *Dev server* · `bun run dev`); picking one
-  opens the terminal and runs it in the action's own tab in the thread's
-  folder. *Add Action…* /
-  *Edit Actions…* open an editor of name and command rows (⌘⏎ saves). A
-  main checkout and its worktrees share one list (keyed by the session's
-  `repo`), kept in this app's storage only (`rustcode.projectActions`,
-  `state/projectActions.ts`). ⌘K lists them as `Run: ‹name›` with *Edit
-  project actions…*. A thread on another computer shows the button disabled,
-  like the terminal.
-- **Worktree setup and settle actions.** In the actions editor one action
-  can be marked *Run when a worktree is created* (optionally *Agent waits for
-  it*) and one *Run when the thread settles*. A repository can share them in
-  `.rustcode/actions.json`:
-  `{ "actions": [{ "name": "Install", "command": "bun install",
-  "runOnWorktreeCreate": true, "wait": true }, { "name": "Clean", "command":
-  "rm -rf dist", "runOnSettle": true }] }`. The file wins a slot both fill.
-  The app sends its own in `session/new` (`_meta.rustcode.worktree.hooks`);
-  the engine merges them, records them on the worktree and runs them there
-  (`engine/src/project_hooks.rs`), so delegates started by `start_session`
-  get the same setup. Repository commands show the normal approval card:
-  *Run once*, *Always for this project*, or *Don't run*. Consent is stored
-  outside the repository for the exact command and project; changing the
-  command asks again. Fork PR branches use separate consent per worktree,
-  even for a command already approved in the main checkout. Declining skips
-  the action and reports it in the thread. App-defined actions do not need
-  extra approval. Old saved actions without provenance ask again as well.
-  The create action starts after the thread attaches;
-  with *wait* the thread's first turn is held through approval and execution
-  (each limited to 10 minutes), and a failure is told to the agent at the top of that turn with
-  the output tail. The settle action runs in the background when the thread
-  is marked settled. Only one settle action runs per project at a time;
-  another settle while it runs is skipped. The ten-minute execution limit
-  kills the action's process group (the process tree on Windows), including
-  children holding its output pipes.
 - **Window.** The window opens at the size it was last closed with
   (`webview.rs` keeps it as logical points in `window.json` under the app's
   config folder; closing the window or quitting writes it, and a missing or
@@ -1341,7 +1294,7 @@ composer's keys stay outside the table.
   their top.
 - **Thread header buttons.** The chat header's buttons come from one
   registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): status,
-  plan, git, project actions, terminal, and the side panel's toggle. Settings › Chat › Thread
+  plan, git, and the side panel's toggle. Settings › Chat › Thread
   header buttons lists them as Shown and Hidden: drag a row to reorder it or
   move it across (pointer capture, so the webview's own drops never see it),
   ⌥↑/⌥↓ moves a focused row, and each row's Show/Hide button does the same
@@ -1354,8 +1307,9 @@ composer's keys stay outside the table.
   buttons; a layout saved with them drops them. The order
   is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
   in a later release shows by default. A fresh install and Reset show status,
-  plan, terminal and the panel toggle: Git and Project actions (driving git by
-  hand; agents commit and open pull requests) are hidden. A saved layout keeps
+  plan and the panel toggle: Git (driving git by hand; agents commit and open
+  pull requests) is hidden. The terminal and project actions buttons were
+  removed; a layout saved with them drops them. A saved layout keeps
   what it shows.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the

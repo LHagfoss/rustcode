@@ -42,8 +42,6 @@ sha2 = "0.10"
 # Link previews: fetched here, never by the webview (src/links.rs).
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["net", "time", "sync", "process", "io-util"] }
-# The workspace terminal (src/pty.rs).
-portable-pty = "0.9"
 # The picture on the system clipboard (src/native.rs `clipboard_image`): WebKitGTK on Linux shows a
 # copied screenshot to no paste event at all, so the composer asks the shell for it. Wayland needs
 # its data-control protocol; without it the read goes through X11.

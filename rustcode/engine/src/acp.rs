@@ -1301,12 +1301,6 @@ async fn dispatch_request(
                                 harness,
                                 model: None,
                             });
-                            if let Some(tree) = &worktree {
-                                crate::project_hooks::attach(
-                                    announced.clients.session(&response.session_id.to_string()),
-                                    &tree.path,
-                                );
-                            }
                             respond_typed(
                                 responder,
                                 crate::worktrees::finish_new(response, worktree.as_ref()),
@@ -1326,12 +1320,6 @@ async fn dispatch_request(
                 harness: Some(crate::harness::BUILTIN_ID.to_owned()),
                 model: None,
             });
-            if let Some(tree) = &worktree {
-                crate::project_hooks::attach(
-                    server.clients.session(&response.session_id.to_string()),
-                    &tree.path,
-                );
-            }
             respond_typed(
                 responder,
                 crate::worktrees::finish_new(response, worktree.as_ref()),
@@ -3289,9 +3277,6 @@ async fn dispatch_request(
             let session_id = request.session_id.to_string();
             let peer = server.clients.peer(client_id, &connection);
             let response = acp_load_session(&server, request, &peer).await?;
-            if let Some(tree) = crate::worktrees::of_session(&session_id) {
-                crate::project_hooks::attach(server.clients.session(&session_id), &tree.path);
-            }
             let response = crate::worktrees::finish_load(response, &session_id);
             respond_typed(responder, response)
         }
@@ -3513,18 +3498,7 @@ async fn dispatch_request(
                 // it runs on if the client goes, and only its answer
                 // is lost.
                 spawn_turn(async move {
-                    // A worktree whose setup the project waits for holds the
-                    // turn until it is done; a failure is the agent's first read.
-                    let mut prompt = request.prompt;
-                    if let Some(note) = crate::project_hooks::wait_setup(&turn_session).await {
-                        prompt.insert(
-                            0,
-                            ContentBlock::Text(
-                                agent_client_protocol::schema::v1::TextContent::new(note),
-                            ),
-                        );
-                    }
-                    let result = external.prompt(prompt).await;
+                    let result = external.prompt(request.prompt).await;
                     remote.note_turn_returned(&turn_session);
                     match result {
                         Ok(stop_reason) => {
@@ -3616,12 +3590,6 @@ async fn dispatch_request(
             // The turn belongs to the engine, not this connection: it
             // runs on if the client goes, and only its answer is lost.
             spawn_turn(async move {
-                // A worktree whose setup the project waits for holds the turn
-                // until it is done; a failure is the agent's first read.
-                let text = match crate::project_hooks::wait_setup(&session_id).await {
-                    Some(note) => format!("{note}{text}"),
-                    None => text,
-                };
                 let result = prompt::run_prompt(
                     Arc::clone(&state),
                     cwd,

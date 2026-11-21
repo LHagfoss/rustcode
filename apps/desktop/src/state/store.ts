@@ -519,7 +519,6 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   backgroundSetups: {},
   smartUi: storedFlag(STORAGE.smartUi, SETTINGS_DEFAULTS.smartUi),
   smartUiPending: false,
-  terminalOpen: false,
   panel: null,
   peekId: null,
   panelByThread: parsePanels(storedJson<unknown>(STORAGE.panelByThread, {})),

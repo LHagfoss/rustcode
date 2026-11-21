@@ -13,7 +13,6 @@ import {
   cancel,
   openSettings,
   setSwitcher,
-  setTerminalOpen,
   settleThread,
   setView,
   startNewThread,
@@ -78,9 +77,6 @@ export function runShortcut(command: string): boolean {
       return true;
     case "toggle-panel":
       toggleRightPanel();
-      return true;
-    case "toggle-terminal":
-      setTerminalOpen(!s.terminalOpen);
       return true;
     case "focus-next-area":
     case "focus-previous-area":
