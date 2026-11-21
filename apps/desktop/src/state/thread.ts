@@ -398,13 +398,6 @@ export const toolInFlight = (status: ToolStatus | undefined, turnRunning: boolea
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
 
-export const TURN_PHASE_LABELS = {
-  waiting: "Waiting for an update",
-  writing: "Writing a reply",
-  tool: "Running a tool",
-  approval: "Waiting for approval",
-} as const;
-
 export interface ThreadState {
   id: string;
   cwd: string;
@@ -434,8 +427,12 @@ export interface ThreadState {
    * {@link isRunning}, {@link isWoken} and {@link isQuiet}.
    */
   turn?: ThreadTurn;
-  /** Timing from the engine, including turns started by another window. */
-  enginePhase?: { label: string; lastActivityAt: number };
+  /**
+   * The engine says a turn runs on this thread (`_rustcode/session/turnPhase`), including one
+   * another window started. It keeps the working line up until the engine says the turn ended, so
+   * a quiet stretch never reads as stopped; `startedAt` times it when this window has no turn.
+   */
+  enginePhase?: { startedAt: number };
   /**
    * Background commands the turn parked on; it resumes when they finish. Not part of {@link turn}:
    * the engine reports it while a turn of the app still runs and after it ended. Only a new
