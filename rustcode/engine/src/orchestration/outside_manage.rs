@@ -82,6 +82,30 @@ pub(crate) async fn answer(
         super::UPDATE_LOOP => update_loop(caller, args).await,
         super::DELETE_SCHEDULED_TASK => delete_loop(args).await,
         super::RUN_SCHEDULED_TASK_NOW => run_loop(args).await,
+        _ if crate::workflow::is_tool(tool) => match target_of(caller, args) {
+            Ok(target) => {
+                let mut workflow_args = args.clone();
+                if let Some(fields) = workflow_args.as_object_mut() {
+                    fields.remove("session_id");
+                }
+                match crate::workflow::answer(
+                    &target,
+                    None,
+                    super::VERSION,
+                    cancel,
+                    tool,
+                    &workflow_args,
+                    false,
+                )
+                .await
+                {
+                    Ok(answer) => serde_json::from_str(&answer)
+                        .unwrap_or_else(|reason| error("failed", reason.to_string())),
+                    Err(reason) => error("failed", reason),
+                }
+            }
+            Err(refusal) => refusal,
+        },
         _ => return None,
     })
 }

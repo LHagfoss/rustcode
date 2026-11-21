@@ -555,6 +555,7 @@ async fn workflow_call(
         cancel,
         &request.tool,
         &request.args,
+        true,
     )
     .await;
     match outcome {

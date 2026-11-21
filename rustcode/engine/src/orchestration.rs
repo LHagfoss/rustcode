@@ -1605,7 +1605,7 @@ pub async fn execute_workflow(
             false,
         );
     }
-    match crate::workflow::answer(&session_id, client, version, cancel, name, args).await {
+    match crate::workflow::answer(&session_id, client, version, cancel, name, args, true).await {
         Ok(content) => ToolExecutionOutput::success(content),
         Err(reason) => ToolExecutionOutput::failure(format!("error: {name} failed: {reason}")),
     }
