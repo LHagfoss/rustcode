@@ -369,8 +369,10 @@ fn shell_import() -> Arc<ShellEnv> {
     // Our own probe child (a dotfile re-execing rustcode): dotfiles only, and
     // no `shell_env.probe` event, which would ask this import again.
     if std::env::var_os(PROBE_MARKER).is_some() {
+        let mut vars = parse_dotfiles();
+        drop_missing_tls_paths(&mut vars);
         let fallback = Arc::new(ShellEnv {
-            vars: parse_dotfiles(),
+            vars,
             probed: false,
         });
         *cache_lock() = Some(Arc::clone(&fallback));
@@ -378,7 +380,7 @@ fn shell_import() -> Arc<ShellEnv> {
     }
     // Probing under no lock: it takes seconds, and another thread asking at
     // the same time gets an answer just as good as this one.
-    let (imported, outcome, elapsed) = probe_env(PROBE_TIMEOUT);
+    let (imported, outcome, elapsed, dropped) = probe_env(PROBE_TIMEOUT);
     let loaded = Arc::new(imported);
     {
         let mut slot = cache_lock();
@@ -389,7 +391,7 @@ fn shell_import() -> Arc<ShellEnv> {
     }
     // Logged once the cache answers, so anything the logger asks the
     // environment for does not start another probe.
-    emit_probe_event(outcome, elapsed, "launch");
+    emit_probe_event(outcome, elapsed, "launch", &dropped);
     loaded
 }
 
@@ -402,19 +404,21 @@ pub(crate) fn retry_failed_probe() -> bool {
     if shell_import().probed {
         return true;
     }
-    let (imported, outcome, elapsed) = probe_env(RETRY_PROBE_TIMEOUT);
+    let (imported, outcome, elapsed, dropped) = probe_env(RETRY_PROBE_TIMEOUT);
     let succeeded = imported.probed;
     if succeeded {
         *cache_lock() = Some(Arc::new(imported));
     }
-    emit_probe_event(outcome, elapsed, "retry");
+    emit_probe_event(outcome, elapsed, "retry", &dropped);
     succeeded
 }
 
 /// Run the probe once and merge its answer over the static dotfile fallback:
 /// the live shell wins, and the dotfiles fill the gaps a running shell did not
-/// source (a file the shell skips, or one from another shell).
-fn probe_env(timeout: Duration) -> (ShellEnv, ProbeOutcome, Duration) {
+/// source (a file the shell skips, or one from another shell). TLS path
+/// variables that point nowhere are dropped from the result and named in the
+/// last element.
+fn probe_env(timeout: Duration) -> (ShellEnv, ProbeOutcome, Duration, Vec<&'static str>) {
     let started = Instant::now();
     let (answer, outcome) = probe_login_shell(timeout);
     let mut vars = parse_dotfiles();
@@ -422,22 +426,30 @@ fn probe_env(timeout: Duration) -> (ShellEnv, ProbeOutcome, Duration) {
     if let Some(answer) = answer {
         vars.extend(answer);
     }
+    let dropped = drop_missing_tls_paths(&mut vars);
     let imported = ShellEnv {
         vars,
         probed: outcome == ProbeOutcome::Ok,
     };
-    (imported, outcome, started.elapsed())
+    (imported, outcome, started.elapsed(), dropped)
 }
 
 /// Report what the probe answered and how long it took, so a report about a
-/// missing command has evidence instead of a guess.
-fn emit_probe_event(outcome: ProbeOutcome, elapsed: Duration, phase: &str) {
+/// missing command has evidence instead of a guess, and name the TLS path
+/// variables dropped because they point nowhere.
+fn emit_probe_event(outcome: ProbeOutcome, elapsed: Duration, phase: &str, dropped: &[&str]) {
+    for name in dropped {
+        crate::dbg_log!(
+            "shell_env: not importing {name} from the login shell: no such path; using the system certificates"
+        );
+    }
     crate::logger::operational_event(
         "shell_env.probe",
         serde_json::json!({
             "outcome": outcome.label(),
             "duration_ms": elapsed.as_millis() as u64,
             "phase": phase,
+            "dropped_tls_vars": dropped,
         }),
     );
 }
@@ -619,16 +631,15 @@ fn valid_env_name(name: &str) -> bool {
 /// broken rc that exits non-zero under `-i`, probe timeout). Parses simple
 /// assignments without executing anything.
 fn parse_dotfiles() -> HashMap<String, String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    // What a login shell starts from: the inherited environment, then each
+    // file's assignments in order.
+    let mut known: HashMap<String, String> = std::env::vars().collect();
     let mut merged = HashMap::new();
     for path in dotfile_paths() {
-        if let Ok(text) = std::fs::read_to_string(&path)
-            && let Ok(home) = std::env::var("HOME")
-        {
-            for (k, v) in parse_dotfile_text(&text, &home) {
-                merged.insert(k, v);
-            }
-        } else if let Ok(text) = std::fs::read_to_string(&path) {
-            for (k, v) in parse_dotfile_text(&text, "") {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let fish = path.extension().is_some_and(|ext| ext == "fish");
+            for (k, v) in parse_dotfile_text(&text, &home, fish, &mut known) {
                 merged.insert(k, v);
             }
         }
@@ -678,56 +689,182 @@ const ZSH_TIED_ARRAYS: &[&str] = &[
 
 /// Parse one dotfile's text into `(KEY, value)` pairs. Handles:
 /// `export FOO=bar`, `FOO=bar`, `typeset -x FOO=bar`, `declare -x FOO=bar`,
-/// `set -gx FOO bar` (fish). Skips command substitutions / backticks since
-/// those require execution (covered by the live shell probe instead).
-fn parse_dotfile_text(text: &str, home: &str) -> Vec<(String, String)> {
+/// `set -gx FOO bar` (fish).
+///
+/// A value is expanded the way the shell would from `known` (the environment
+/// so far, updated with each assignment), and an assignment is skipped rather
+/// than recorded wrong when it needs anything the parser cannot know: a
+/// command substitution, an unknown or special variable, or a condition. An
+/// assignment inside `if`/`case`/a loop/a function body depends on a test or
+/// a call, so it is skipped and its name is forgotten: a later
+/// `export SSL_CERT_DIR="$ZEROBREW_PREFIX/..."` must not export the
+/// literal text or a branch the shell never took.
+fn parse_dotfile_text(
+    text: &str,
+    home: &str,
+    fish: bool,
+    known: &mut HashMap<String, String>,
+) -> Vec<(String, String)> {
     let mut out = Vec::new();
+    let mut depth = 0usize;
     for raw_line in text.lines() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        // fish: `set -gx FOO bar baz...` / `set -x FOO "bar"`
-        if line.starts_with("set ") && (line.contains(" -g") || line.contains(" -x")) {
-            if let Some((k, v)) = parse_fish_set(line, home) {
-                out.push((k, v));
-            }
-            continue;
-        }
-        let mut rest = line;
-        for prefix in ["export ", "typeset -x ", "typeset -gx ", "declare -x "] {
-            if let Some(stripped) = rest.strip_prefix(prefix) {
-                rest = stripped.trim();
-                break;
-            }
-        }
-        // `export FOO` without `=` carries no value here.
-        let Some((key, raw_value)) = rest.split_once('=') else {
+        let inside_block = depth > 0;
+        depth = block_depth_after(line, depth, fish);
+        let Some((key, value)) = parse_assignment(line, home, known) else {
             continue;
         };
-        let key = key.trim();
-        if !valid_env_name(key) || ZSH_TIED_ARRAYS.contains(&key) {
-            continue;
+        match value {
+            Some(value) if !inside_block => {
+                known.insert(key.clone(), value.clone());
+                out.push((key, value));
+            }
+            // The shell sets it to something this parser cannot work out:
+            // what it knew before is no longer the value either.
+            _ => {
+                known.remove(&key);
+            }
         }
-        let mut value = raw_value.trim();
-        // `path=(a b $path)` is an array, not a string: exported as text it
-        // becomes a lowercase `path` that zsh ties back over `PATH`.
-        if value.starts_with('(') {
-            continue;
-        }
-        // Strip trailing comments outside quotes (best effort).
-        value = strip_trailing_comment(value);
-        if value.contains("$(") || value.contains('`') {
-            continue; // needs execution; live probe covers it
-        }
-        let unquoted = unquote_with_home(value, home);
-        out.push((key.to_string(), expand_home(&unquoted, home)));
     }
     out
 }
 
-fn parse_fish_set(line: &str, home: &str) -> Option<(String, String)> {
-    // Tokenize respecting simple quotes.
+/// The variable a line assigns, with its expanded value, or `None` for the
+/// value when it cannot be worked out without running the shell. `None`
+/// overall when the line assigns nothing this parser imports.
+fn parse_assignment(
+    line: &str,
+    home: &str,
+    known: &HashMap<String, String>,
+) -> Option<(String, Option<String>)> {
+    // fish: `set -gx FOO bar baz...` / `set -x FOO "bar"`
+    if line.starts_with("set ") && (line.contains(" -g") || line.contains(" -x")) {
+        return parse_fish_set(line, home, known);
+    }
+    let mut rest = line;
+    for prefix in ["export ", "typeset -x ", "typeset -gx ", "declare -x "] {
+        if let Some(stripped) = rest.strip_prefix(prefix) {
+            rest = stripped.trim();
+            break;
+        }
+    }
+    // `export FOO` without `=` carries no value here.
+    let (key, raw_value) = rest.split_once('=')?;
+    let key = key.trim();
+    if !valid_env_name(key) || ZSH_TIED_ARRAYS.contains(&key) {
+        return None;
+    }
+    let value = raw_value.trim();
+    // `path=(a b $path)` is an array, not a string: exported as text it
+    // becomes a lowercase `path` that zsh ties back over `PATH`.
+    if value.starts_with('(') {
+        return None;
+    }
+    // Strip trailing comments outside quotes (best effort).
+    let value = strip_trailing_comment(value);
+    Some((key.to_string(), expand_word(value, home, known)))
+}
+
+/// Block keywords opened and closed by a line, from `depth` before it.
+/// Words are only keywords in command position, outside quotes and
+/// comments. sh/bash/zsh close `if`/`case`/loops with `fi`/`esac`/`done`
+/// and function bodies with `}`; fish closes every block with `end`, and
+/// its `else if` continues the open `if`.
+fn block_depth_after(line: &str, mut depth: usize, fish: bool) -> usize {
+    let words = control_words(line);
+    let mut command_position = true;
+    let mut previous = "";
+    for word in &words {
+        let word = word.as_str();
+        let at_command = command_position;
+        command_position = match word {
+            ";" | "&" | "|" | "(" | ")" => true,
+            "then" | "do" | "else" | "elif" | "!" | "time" | "{" => at_command,
+            // `name() {`: the brace after a function name opens its body.
+            _ if word.ends_with("()") => at_command,
+            "if" | "while" | "until" => at_command,
+            _ => false,
+        };
+        let (opens, closes) = if fish {
+            (
+                at_command
+                    && (matches!(word, "while" | "for" | "switch" | "begin" | "function")
+                        || (word == "if" && previous != "else")),
+                at_command && word == "end",
+            )
+        } else {
+            (
+                // A function body's `{` follows its name, not a command
+                // position: `function name {`.
+                word == "{"
+                    || (at_command
+                        && matches!(word, "if" | "while" | "until" | "case" | "for" | "select")),
+                at_command && matches!(word, "fi" | "esac" | "done" | "}"),
+            )
+        };
+        if opens {
+            depth += 1;
+        } else if closes {
+            depth = depth.saturating_sub(1);
+        }
+        previous = word;
+    }
+    depth
+}
+
+/// The words of one line for [`block_depth_after`]: quoted text becomes a
+/// `"` placeholder, so it is never a keyword, and the comment is dropped.
+fn control_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut chars = line.chars().peekable();
+    let flush = |word: &mut String, words: &mut Vec<String>| {
+        if !word.is_empty() {
+            words.push(std::mem::take(word));
+        }
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+                word.push('"');
+            }
+            '\'' | '"' => {
+                for inner in chars.by_ref() {
+                    if inner == c {
+                        break;
+                    }
+                }
+                word.push('"');
+            }
+            '#' if word.is_empty() => break,
+            ';' | '&' | '|' | '(' | ')' => {
+                // `name()` stays one word, so a function definition is seen.
+                if c == '(' && chars.peek() == Some(&')') && !word.is_empty() {
+                    chars.next();
+                    word.push_str("()");
+                    continue;
+                }
+                flush(&mut word, &mut words);
+                words.push(c.to_string());
+            }
+            c if c.is_whitespace() => flush(&mut word, &mut words),
+            c => word.push(c),
+        }
+    }
+    flush(&mut word, &mut words);
+    words
+}
+
+fn parse_fish_set(
+    line: &str,
+    home: &str,
+    known: &HashMap<String, String>,
+) -> Option<(String, Option<String>)> {
+    // Tokenize respecting quotes, which expansion still needs to see.
     let tokens = shell_split(line);
     if tokens.len() < 3 || tokens[0] != "set" {
         return None;
@@ -743,48 +880,44 @@ fn parse_fish_set(line: &str, home: &str) -> Option<(String, String)> {
     if !valid_env_name(&key) {
         return None;
     }
-    let value = tokens[idx + 1..].join(" ");
-    if value.contains("$(") || value.contains('`') {
-        return None;
-    }
-    Some((key, expand_home(&value, home)))
+    // fish exports a list joined by spaces, a `…PATH` list by colons.
+    let separator = if key.ends_with("PATH") { ":" } else { " " };
+    let value = tokens[idx + 1..]
+        .iter()
+        .map(|token| expand_word(token, home, known))
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.join(separator));
+    Some((key, value))
 }
 
-/// Minimal quote-aware splitter for fish `set` lines.
+/// Quote-aware splitter for fish `set` lines. Quotes stay in the tokens.
 fn shell_split(line: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
-    let mut in_token = false;
     for ch in line.chars() {
         match quote {
             Some(q) => {
                 if ch == q {
                     quote = None;
-                } else {
-                    cur.push(ch);
                 }
-                in_token = true;
+                cur.push(ch);
             }
             None => match ch {
                 '\'' | '"' => {
                     quote = Some(ch);
-                    in_token = true;
+                    cur.push(ch);
                 }
                 c if c.is_whitespace() => {
-                    if in_token {
+                    if !cur.is_empty() {
                         tokens.push(std::mem::take(&mut cur));
-                        in_token = false;
                     }
                 }
-                _ => {
-                    cur.push(ch);
-                    in_token = true;
-                }
+                _ => cur.push(ch),
             },
         }
     }
-    if in_token || !cur.is_empty() {
+    if !cur.is_empty() {
         tokens.push(cur);
     }
     tokens
@@ -808,58 +941,231 @@ fn strip_trailing_comment(value: &str) -> &str {
     value
 }
 
-fn unquote_with_home(value: &str, home: &str) -> String {
-    let value = value.trim();
-    if value.len() >= 2 {
-        let bytes = value.as_bytes();
-        if (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
-            || (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
-        {
-            return expand_inline_vars(&value[1..value.len() - 1], home);
-        }
-    }
-    // `export PATH=$HOME/bin:$PATH` — expand the common prefixes inline.
-    expand_inline_vars(value, home)
-}
-
-fn expand_home(value: &str, home: &str) -> String {
-    if value == "~" {
-        return home.to_string();
-    }
-    if let Some(rest) = value.strip_prefix("~/") {
-        return format!("{home}/{rest}");
-    }
-    expand_inline_vars(value, home)
-}
-
-fn expand_inline_vars(value: &str, home: &str) -> String {
-    let mut out = value.to_string();
-    // Prefer the explicitly passed home (dotfile parse context); fall back
-    // to the process HOME for direct callers.
-    let home_owned;
-    let home = if home.is_empty() {
-        match std::env::var("HOME") {
-            Ok(h) => {
-                home_owned = h;
-                home_owned.as_str()
+/// Expand one shell word the way the shell would when sourcing it: quotes
+/// removed, `~` and `$NAME`/`${NAME}`/`${NAME:-default}`/`${NAME-default}`
+/// substituted from `known` (`$HOME` from `home` first). `None` when it
+/// needs anything else: an unknown or special variable, another parameter
+/// operator, a command substitution, `~user`, an unclosed quote, or more
+/// than one word. So a returned value never holds an unexpanded variable;
+/// only single quotes keep a literal `$`, as the shell does.
+fn expand_word(word: &str, home: &str, known: &HashMap<String, String>) -> Option<String> {
+    let chars: Vec<char> = word.chars().collect();
+    let mut out = String::new();
+    let mut in_double = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_double {
+            match c {
+                '"' => {
+                    in_double = false;
+                    i += 1;
+                }
+                '\\' => match chars.get(i + 1) {
+                    Some(&next @ ('$' | '`' | '"' | '\\')) => {
+                        out.push(next);
+                        i += 2;
+                    }
+                    _ => {
+                        out.push('\\');
+                        i += 1;
+                    }
+                },
+                '$' => i = expand_parameter(&chars, i, home, known, &mut out)?,
+                '`' => return None,
+                _ => {
+                    out.push(c);
+                    i += 1;
+                }
             }
-            Err(_) => return out,
+            continue;
         }
-    } else {
-        home
-    };
-    out = out.replace("$HOME", home).replace("${HOME}", home);
-    if let Some(tilde) = out.strip_prefix("~/") {
-        out = format!("{home}/{tilde}");
-    } else if out == "~" {
-        out = home.to_string();
+        match c {
+            '\'' => {
+                let len = chars[i + 1..].iter().position(|&ch| ch == '\'')?;
+                out.extend(&chars[i + 1..i + 1 + len]);
+                i += len + 2;
+            }
+            '"' => {
+                in_double = true;
+                i += 1;
+            }
+            '\\' => {
+                out.push(*chars.get(i + 1)?);
+                i += 2;
+            }
+            '$' => i = expand_parameter(&chars, i, home, known, &mut out)?,
+            '`' => return None,
+            // In an assignment the shell expands `~` at the start and after
+            // each `:` (`PATH=~/bin:~/.local/bin`).
+            '~' if i == 0 || chars[i - 1] == ':' => {
+                if home.is_empty() || !matches!(chars.get(i + 1), None | Some('/' | ':')) {
+                    return None;
+                }
+                out.push_str(home);
+                i += 1;
+            }
+            // A second word or another command: not a plain assignment.
+            c if c.is_whitespace() || matches!(c, ';' | '&' | '|' | '<' | '>' | '(' | ')') => {
+                return None;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
     }
-    out
+    (!in_double).then_some(out)
+}
+
+/// Expand the parameter starting at the `$` at `chars[start]` into `out` and
+/// return the index after it, or `None` when it cannot be expanded.
+fn expand_parameter(
+    chars: &[char],
+    start: usize,
+    home: &str,
+    known: &HashMap<String, String>,
+    out: &mut String,
+) -> Option<usize> {
+    match chars.get(start + 1) {
+        Some('{') => {
+            let mut nesting = 0usize;
+            let mut close = None;
+            for (j, &c) in chars.iter().enumerate().skip(start + 1) {
+                match c {
+                    '{' => nesting += 1,
+                    '}' => {
+                        nesting -= 1;
+                        if nesting == 0 {
+                            close = Some(j);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let close = close?;
+            let inner: String = chars[start + 2..close].iter().collect();
+            out.push_str(&expand_braced(&inner, home, known)?);
+            Some(close + 1)
+        }
+        Some(&c) if c == '_' || c.is_ascii_alphabetic() => {
+            let end = chars[start + 1..]
+                .iter()
+                .position(|&c| !(c == '_' || c.is_ascii_alphanumeric()))
+                .map_or(chars.len(), |len| start + 1 + len);
+            let name: String = chars[start + 1..end].iter().collect();
+            out.push_str(&lookup_var(&name, home, known)?);
+            Some(end)
+        }
+        // `$1`, `$@`, `$$`, `$(…)`, `$'…'` or a bare `$`.
+        _ => None,
+    }
+}
+
+/// `${…}` without the braces: `NAME`, `NAME:-word`, `NAME:=word`,
+/// `NAME-word` or `NAME=word`.
+fn expand_braced(inner: &str, home: &str, known: &HashMap<String, String>) -> Option<String> {
+    let name_len = inner
+        .find(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
+        .unwrap_or(inner.len());
+    let (name, operator) = inner.split_at(name_len);
+    if !valid_env_name(name) {
+        return None;
+    }
+    let value = lookup_var(name, home, known);
+    if operator.is_empty() {
+        return value;
+    }
+    let (default, use_when_empty) = if let Some(word) = operator
+        .strip_prefix(":-")
+        .or_else(|| operator.strip_prefix(":="))
+    {
+        (word, true)
+    } else if let Some(word) = operator
+        .strip_prefix('-')
+        .or_else(|| operator.strip_prefix('='))
+    {
+        (word, false)
+    } else {
+        return None;
+    };
+    match value {
+        Some(value) if !(use_when_empty && value.is_empty()) => Some(value),
+        _ if default.is_empty() => Some(String::new()),
+        _ => expand_word(default, home, known),
+    }
+}
+
+fn lookup_var(name: &str, home: &str, known: &HashMap<String, String>) -> Option<String> {
+    if name == "HOME" && !home.is_empty() {
+        return Some(home.to_string());
+    }
+    known.get(name).cloned()
+}
+
+/// Variables that name a CA bundle file or a certificate directory. One that
+/// points nowhere does not fall back to the system roots: Go (`gh`) then
+/// trusts nothing and fails with "certificate signed by unknown authority",
+/// and curl fails to open the bundle.
+const TLS_PATH_VARS: &[(&str, TlsPath)] = &[
+    ("SSL_CERT_DIR", TlsPath::Dirs),
+    ("SSL_CERT_FILE", TlsPath::File),
+    ("CURL_CA_BUNDLE", TlsPath::File),
+    ("REQUESTS_CA_BUNDLE", TlsPath::File),
+];
+
+#[derive(Clone, Copy)]
+enum TlsPath {
+    /// A colon-separated list of directories; one that exists is enough.
+    Dirs,
+    File,
+}
+
+/// Remove TLS path variables that point at nothing, so the system default
+/// applies. Returns the names removed, for the log.
+fn drop_missing_tls_paths(vars: &mut HashMap<String, String>) -> Vec<&'static str> {
+    let mut dropped = Vec::new();
+    for &(name, kind) in TLS_PATH_VARS {
+        let Some(value) = vars.get(name) else {
+            continue;
+        };
+        let exists = match kind {
+            TlsPath::Dirs => {
+                std::env::split_paths(value).any(|dir| !dir.as_os_str().is_empty() && dir.is_dir())
+            }
+            TlsPath::File => Path::new(value).is_file(),
+        };
+        if !exists {
+            vars.remove(name);
+            dropped.push(name);
+        }
+    }
+    dropped
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn known(vars: &[(&str, &str)]) -> HashMap<String, String> {
+        vars.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// A shell dotfile parsed with `vars` as the environment it starts from.
+    fn parse(text: &str, vars: &[(&str, &str)]) -> HashMap<String, String> {
+        parse_dotfile_text(text, "/home/test", false, &mut known(vars))
+            .into_iter()
+            .collect()
+    }
+
+    fn parse_fish(text: &str, vars: &[(&str, &str)]) -> HashMap<String, String> {
+        parse_dotfile_text(text, "/home/test", true, &mut known(vars))
+            .into_iter()
+            .collect()
+    }
 
     #[test]
     fn well_known_dirs_follow_the_platform() {
@@ -968,8 +1274,7 @@ BAR=`other`  # skipped too
 export EMPTY_OK=""
 TILDE=~/keys/file
 "#;
-        let parsed: HashMap<String, String> =
-            parse_dotfile_text(text, "/home/test").into_iter().collect();
+        let parsed = parse(text, &[]);
         assert_eq!(parsed["OPENAI_API_KEY"], "sk-live-123");
         assert_eq!(parsed["ANTHROPIC_API_KEY"], "sk-ant-456");
         assert_eq!(parsed["GEMINI_API_KEY"], "gem-789");
@@ -987,8 +1292,7 @@ fpath=/usr/share/zsh/functions
 LIST=(a b)
 export KEEP=yes
 "#;
-        let parsed: HashMap<String, String> =
-            parse_dotfile_text(text, "/home/test").into_iter().collect();
+        let parsed = parse(text, &[]);
         assert!(!parsed.contains_key("path"));
         assert!(!parsed.contains_key("fpath"));
         assert!(!parsed.contains_key("LIST"));
@@ -998,10 +1302,182 @@ export KEEP=yes
     #[test]
     fn parses_fish_set_lines() {
         let text = "set -gx OPENCODE_API_KEY oc-123\nset -x TINKER_API_KEY tink-456\n";
-        let parsed: HashMap<String, String> =
-            parse_dotfile_text(text, "/home/test").into_iter().collect();
+        let parsed = parse_fish(text, &[]);
         assert_eq!(parsed["OPENCODE_API_KEY"], "oc-123");
         assert_eq!(parsed["TINKER_API_KEY"], "tink-456");
+    }
+
+    /// The `.zshrc` from the report (#4164): every assignment depends on a
+    /// test the parser cannot evaluate, so it records none of them, and never
+    /// the literal `$ZEROBREW_PREFIX/...` text.
+    const SSL_CERT_SNIPPET: &str = r#"
+if [ -z "${SSL_CERT_DIR:-}" ]; then
+  if [ -d "$ZEROBREW_PREFIX/etc/ca-certificates" ]; then
+    export SSL_CERT_DIR="$ZEROBREW_PREFIX/etc/ca-certificates"
+  elif [ -d "$ZEROBREW_PREFIX/etc/openssl/certs" ]; then
+    export SSL_CERT_DIR="$ZEROBREW_PREFIX/etc/openssl/certs"
+  else
+    export SSL_CERT_DIR="$ZEROBREW_PREFIX/share/ca-certificates"
+  fi
+fi
+export AFTER="$ZEROBREW_PREFIX/bin"
+"#;
+
+    #[test]
+    fn skips_assignments_inside_conditionals() {
+        let parsed = parse(SSL_CERT_SNIPPET, &[]);
+        assert!(!parsed.contains_key("SSL_CERT_DIR"), "{parsed:?}");
+        // `ZEROBREW_PREFIX` is unknown, so the line after the block is
+        // skipped too rather than exported half-expanded.
+        assert!(!parsed.contains_key("AFTER"), "{parsed:?}");
+
+        let parsed = parse(SSL_CERT_SNIPPET, &[("ZEROBREW_PREFIX", "/opt/zb")]);
+        assert!(!parsed.contains_key("SSL_CERT_DIR"), "{parsed:?}");
+        assert_eq!(parsed["AFTER"], "/opt/zb/bin");
+        assert!(parsed.values().all(|value| !value.contains('$')));
+    }
+
+    #[test]
+    fn a_conditional_assignment_hides_the_value_known_before() {
+        let text = r#"
+export PREFIX=/opt/a
+if [ -d /opt/b ]; then
+  PREFIX=/opt/b
+fi
+export TOOL_HOME="$PREFIX/tool"
+"#;
+        let parsed = parse(text, &[]);
+        assert_eq!(parsed["PREFIX"], "/opt/a");
+        assert!(!parsed.contains_key("TOOL_HOME"), "{parsed:?}");
+    }
+
+    #[test]
+    fn skips_function_bodies_loops_and_case_arms() {
+        let text = r#"
+work() {
+  export IN_FUNCTION=1
+}
+function other {
+  export IN_OTHER=1
+}
+for dir in a b; do
+  export IN_LOOP=$dir
+done
+case "$OSTYPE" in
+  darwin*) export IN_CASE=mac ;;
+esac
+[ -d /opt ] && export ONE_LINE=1
+export MSG="if this then that"
+export KEPT=yes
+"#;
+        let parsed = parse(text, &[("OSTYPE", "darwin")]);
+        for name in ["IN_FUNCTION", "IN_OTHER", "IN_LOOP", "IN_CASE", "ONE_LINE"] {
+            assert!(!parsed.contains_key(name), "{name}: {parsed:?}");
+        }
+        assert_eq!(parsed["MSG"], "if this then that");
+        assert_eq!(parsed["KEPT"], "yes");
+    }
+
+    #[test]
+    fn expands_variables_from_the_environment_so_far() {
+        let text = r#"
+export BASE=/opt/base
+export PLAIN=$BASE/bin
+export BRACED="${BASE}/lib"
+export DEFAULTED="${UNSET_VAR:-$BASE/default}/x"
+export SET_WINS=${BASE:-/nope}
+export EMPTY_DEFAULT="${UNSET_VAR:-}"
+export DASH_DEFAULT=${UNSET_VAR-fallback}
+export FROM_PROCESS="$INHERITED:extra"
+export WITH_HOME="$HOME/.local"
+export PATH="$HOME/bin:$PATH"
+export LITERAL='$NOT_EXPANDED'
+export ESCAPED="cost \$5"
+"#;
+        let parsed = parse(text, &[("INHERITED", "from-env"), ("PATH", "/usr/bin")]);
+        assert_eq!(parsed["PLAIN"], "/opt/base/bin");
+        assert_eq!(parsed["BRACED"], "/opt/base/lib");
+        assert_eq!(parsed["DEFAULTED"], "/opt/base/default/x");
+        assert_eq!(parsed["SET_WINS"], "/opt/base");
+        assert_eq!(parsed["EMPTY_DEFAULT"], "");
+        assert_eq!(parsed["DASH_DEFAULT"], "fallback");
+        assert_eq!(parsed["FROM_PROCESS"], "from-env:extra");
+        assert_eq!(parsed["WITH_HOME"], "/home/test/.local");
+        assert_eq!(parsed["PATH"], "/home/test/bin:/usr/bin");
+        // Single quotes and escapes keep a `$` literally, as the shell does.
+        assert_eq!(parsed["LITERAL"], "$NOT_EXPANDED");
+        assert_eq!(parsed["ESCAPED"], "cost $5");
+    }
+
+    #[test]
+    fn skips_values_it_cannot_expand() {
+        let text = r#"
+export UNKNOWN="$NOT_SET/share"
+export UNKNOWN_BRACED=${NOT_SET}/x
+export POSITIONAL=$1
+export PID=$$
+export SUBSTITUTED="${NOT_SET:+set}"
+export LENGTH=${#HOME}
+export TWO_WORDS=a b
+export TILDE_USER=~bob/x
+export UNCLOSED="abc
+"#;
+        let parsed = parse(text, &[]);
+        assert!(parsed.is_empty(), "{parsed:?}");
+    }
+
+    #[test]
+    fn fish_blocks_and_expansion() {
+        let text = r#"
+set -gx BASE /opt/base
+set -gx PATH $BASE/bin $PATH
+if test -d /opt
+    set -gx IN_IF 1
+else if test -d /srv
+    set -gx IN_ELSE_IF 1
+end
+function greet
+    set -gx IN_FUNCTION 1
+end
+set -gx UNKNOWN $NOT_SET/x
+set -gx KEPT 'two words'
+"#;
+        let parsed = parse_fish(text, &[("PATH", "/usr/bin")]);
+        assert_eq!(parsed["PATH"], "/opt/base/bin:/usr/bin");
+        for name in ["IN_IF", "IN_ELSE_IF", "IN_FUNCTION", "UNKNOWN"] {
+            assert!(!parsed.contains_key(name), "{name}: {parsed:?}");
+        }
+        assert_eq!(parsed["KEPT"], "two words");
+    }
+
+    #[test]
+    fn drops_tls_paths_that_point_nowhere() {
+        let existing_dir = std::env::temp_dir();
+        let existing_file = std::env::current_exe().expect("test binary path");
+        let missing = existing_dir.join("rustcode-shell-env-no-such-path");
+        let joined = std::env::join_paths([missing.clone(), existing_dir.clone()])
+            .expect("join paths")
+            .into_string()
+            .expect("utf-8 paths");
+        let missing = missing.to_string_lossy().into_owned();
+        let existing_file = existing_file.to_string_lossy().into_owned();
+
+        let mut vars = known(&[
+            ("SSL_CERT_DIR", missing.as_str()),
+            ("SSL_CERT_FILE", missing.as_str()),
+            ("CURL_CA_BUNDLE", existing_file.as_str()),
+            ("OTHER", missing.as_str()),
+        ]);
+        let mut dropped = drop_missing_tls_paths(&mut vars);
+        dropped.sort_unstable();
+        assert_eq!(dropped, vec!["SSL_CERT_DIR", "SSL_CERT_FILE"]);
+        assert!(vars.contains_key("CURL_CA_BUNDLE"));
+        assert!(vars.contains_key("OTHER"), "only TLS variables are checked");
+
+        // One existing directory in the list is enough.
+        let mut vars = known(&[("SSL_CERT_DIR", joined.as_str())]);
+        assert!(drop_missing_tls_paths(&mut vars).is_empty());
+        assert_eq!(vars["SSL_CERT_DIR"], joined);
     }
 
     #[test]
