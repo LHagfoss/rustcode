@@ -9,6 +9,7 @@ import {
   groupTools,
   inferToolKind,
   newestTurnEnd,
+  QUICK_REPLY_MS,
   type TurnFold,
   toolGroupLabel,
   turnChangeLine,
@@ -540,9 +541,27 @@ describe("collapseRepeats", () => {
 });
 
 test("a turn under a second reads as 1s", () => {
-  const rows = foldTurns([user("u"), reply("r"), end("e", 300)], false, new Set());
+  const rows = foldTurns([user("u"), tool("c"), reply("r"), end("e", 300)], false, new Set());
   const fold = rows.find((r) => "fold" in r);
   expect(fold && "fold" in fold ? foldLabel(fold.fold, (ms) => `${ms / 1000}s`) : "").toBe("Worked for 1s");
+});
+
+test("a quick reply with no work draws no Worked for line", () => {
+  const quick = foldTurns([user("u"), reply("r"), end("e", QUICK_REPLY_MS - 1)], false, new Set());
+  expect(keys(quick)).toEqual(["u", "r", "e"]);
+  const slow = foldTurns([user("u"), reply("r"), end("e", QUICK_REPLY_MS)], false, new Set());
+  expect(keys(slow)).toEqual(["u", "[fold-e]", "r", "e"]);
+});
+
+test("the harness's ToolSearch plumbing is left out of the transcript", () => {
+  const search: TranscriptItem = { ...tool("s"), title: "ToolSearch" } as TranscriptItem;
+  const rows = foldTurns([user("u"), search, tool("c"), reply("r"), end("e")], false, new Set(["fold-e"]));
+  expect(keys(rows)).toEqual(["u", "[fold-e]", "c", "r", "e"]);
+  // A failed one says something went wrong, so it stays.
+  const failed = { ...search, status: "failed" } as TranscriptItem;
+  expect(keys(foldTurns([user("u"), failed, reply("r"), end("e")], false, new Set(["fold-e"])))).toContain(
+    "s",
+  );
 });
 
 describe("Show tool calls off", () => {

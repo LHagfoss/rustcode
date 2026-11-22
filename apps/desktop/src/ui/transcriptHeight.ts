@@ -25,6 +25,7 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (row.childRequest) return row.childRequest.request.question ? 240 : 52;
   if (row.plan) return 260;
   if (row.fold || row.group) return 26;
+  if (row.updates) return 26;
   if (row.queued) return 96;
   if (row.resume) return 30;
   if (row.branch) return 24;

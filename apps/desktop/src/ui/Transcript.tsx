@@ -70,6 +70,7 @@ import {
   turnCompletion,
   workingLabel,
 } from "../state/thread";
+import { foldUpdateRuns, type UpdateRun } from "../state/updateRuns";
 import { useWaiting, type Waiting, waitingLabel } from "../state/waiting";
 import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
@@ -104,6 +105,7 @@ import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from 
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
 import { estimatedRowHeight } from "./transcriptHeight";
+import { UpdatesRow } from "./UpdatesRow";
 
 export { estimatedRowHeight } from "./transcriptHeight";
 
@@ -132,6 +134,8 @@ export type Row = {
   childKeys?: boolean;
   fold?: TurnFold;
   group?: ToolGroup;
+  /** A run of short automatic turns, folded (state/updateRuns.ts). */
+  updates?: UpdateRun;
   inFold?: string;
   /** An approval the thread is waiting on, shown at the call it is about. */
   approval?: PermissionRequest;
@@ -496,7 +500,9 @@ export function Transcript({
     // and the same quiet notice said back to back reads as one row with its count.
     const shown = searching ? ALL_OPEN : open;
     const grouped: Row[] = collapseRepeats(
-      collapseNotices(groupTools(foldTurns(visible, running, shown, { showTools }), shown)),
+      collapseNotices(
+        foldUpdateRuns(groupTools(foldTurns(visible, running, shown, { showTools }), shown), shown) as Row[],
+      ),
       (item) => item.kind === "user" && item.text === RESUME_TEXT,
     ).filter(
       // The turn that just finished keeps its live header for a moment instead of its fold
@@ -1311,6 +1317,8 @@ export function Transcript({
                       />
                     ) : row.group ? (
                       <ToolGroupRow group={row.group} onToggle={toggleFold} />
+                    ) : row.updates ? (
+                      <UpdatesRow run={row.updates} onToggle={toggleFold} />
                     ) : row.branch ? (
                       <BranchRow branch={row.branch} />
                     ) : row.waiting ? (
