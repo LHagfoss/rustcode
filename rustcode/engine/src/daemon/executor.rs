@@ -436,47 +436,28 @@ impl ActionBackend for ProductionActions {
                     settings,
                     ..
                 } => {
-                    let mut state = match crate::raw_cli::build_scheduled_state(
-                        &prompt,
-                        std::path::Path::new(&workspace),
-                        model_profile.as_deref(),
-                        &session,
-                        settings.as_ref(),
-                    ) {
-                        Ok(state) => state,
-                        Err(error)
-                            if error.starts_with("unknown model profile:")
-                                || error.starts_with("recorded MCP credential unavailable:") =>
-                        {
-                            return transient(error);
-                        }
-                        Err(error) => return permanent(error),
+                    let job = crate::acp::builtin::ScheduledPrompt {
+                        prompt,
+                        workspace: std::path::PathBuf::from(workspace),
+                        model_profile,
+                        session,
+                        settings,
                     };
-                    // The recorded session is an input. Persist daemon output in
-                    // a separate session, never over the interactive transcript.
-                    static NEXT_SESSION: std::sync::atomic::AtomicU64 =
-                        std::sync::atomic::AtomicU64::new(0);
-                    state.active_session_id = format!(
-                        "daemon-{}-{}-{}",
-                        std::process::id(),
-                        chrono::Utc::now().timestamp_micros(),
-                        NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    );
-                    match crate::raw_cli::run_scheduled_turn(
-                        state,
-                        std::path::Path::new(&workspace),
-                        cancellation,
-                    )
-                    .await
+                    match crate::acp::builtin::runtime()
+                        .run_scheduled(job, cancellation)
+                        .await
                     {
                         Ok(output) => RunOutcome::Succeeded {
                             summary: "Headless turn completed".into(),
                             output: Some(output),
                         },
-                        Err(crate::raw_cli::ScheduledTurnError::Transient(error)) => {
+                        Err(crate::acp::builtin::ScheduledPromptError::Permanent(error)) => {
+                            permanent(error)
+                        }
+                        Err(crate::acp::builtin::ScheduledPromptError::Transient(error)) => {
                             transient(error)
                         }
-                        Err(crate::raw_cli::ScheduledTurnError::Ambiguous(error)) => {
+                        Err(crate::acp::builtin::ScheduledPromptError::Ambiguous(error)) => {
                             ambiguous(error, None)
                         }
                     }

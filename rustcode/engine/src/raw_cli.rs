@@ -274,6 +274,58 @@ pub(crate) async fn run_scheduled_turn(
         .await
 }
 
+/// The built-in agent's headless runner, as [`crate::acp::builtin::BuiltinRuntime`].
+pub(crate) struct HeadlessRuntime;
+
+impl crate::acp::builtin::BuiltinRuntime for HeadlessRuntime {
+    fn run_scheduled(
+        &self,
+        job: crate::acp::builtin::ScheduledPrompt,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::acp::builtin::AgentFuture<
+        'static,
+        Result<String, crate::acp::builtin::ScheduledPromptError>,
+    > {
+        Box::pin(run_scheduled_prompt(job, cancellation))
+    }
+}
+
+async fn run_scheduled_prompt(
+    job: crate::acp::builtin::ScheduledPrompt,
+    cancellation: tokio_util::sync::CancellationToken,
+) -> Result<String, crate::acp::builtin::ScheduledPromptError> {
+    use crate::acp::builtin::ScheduledPromptError;
+    let mut state = build_scheduled_state(
+        &job.prompt,
+        &job.workspace,
+        job.model_profile.as_deref(),
+        &job.session,
+        job.settings.as_ref(),
+    )
+    .map_err(|error| {
+        if error.starts_with("unknown model profile:")
+            || error.starts_with("recorded MCP credential unavailable:")
+        {
+            ScheduledPromptError::Transient(error)
+        } else {
+            ScheduledPromptError::Permanent(error)
+        }
+    })?;
+    static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    state.active_session_id = format!(
+        "daemon-{}-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_micros(),
+        NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    run_scheduled_turn(state, &job.workspace, cancellation)
+        .await
+        .map_err(|error| match error {
+            ScheduledTurnError::Transient(error) => ScheduledPromptError::Transient(error),
+            ScheduledTurnError::Ambiguous(error) => ScheduledPromptError::Ambiguous(error),
+        })
+}
+
 pub(crate) enum ScheduledTurnError {
     Transient(String),
     Ambiguous(String),

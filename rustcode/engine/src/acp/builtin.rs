@@ -237,3 +237,40 @@ pub(crate) struct Published {
     /// A prompt is queued and no turn runs, so the turn loop should start.
     pub(crate) queued_while_idle: bool,
 }
+
+/// A scheduled job's prompt, which the agent runs headless in a daemon
+/// session of its own.
+pub(crate) struct ScheduledPrompt {
+    pub(crate) prompt: String,
+    pub(crate) workspace: PathBuf,
+    pub(crate) model_profile: Option<String>,
+    /// The thread the job was recorded from: an input, never written to.
+    pub(crate) session: String,
+    pub(crate) settings: Option<crate::sessions::SessionSettingsSnapshot>,
+}
+
+/// Why a scheduled prompt did not finish, by whether running it again can
+/// help.
+pub(crate) enum ScheduledPromptError {
+    Permanent(String),
+    Transient(String),
+    /// The turn may have had effects before it failed.
+    Ambiguous(String),
+}
+
+/// What the engine runs on the built-in agent outside an ACP thread.
+pub(crate) trait BuiltinRuntime: Send + Sync {
+    /// Run a scheduled job's prompt to its end and return the reply.
+    fn run_scheduled(
+        &self,
+        prompt: ScheduledPrompt,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> AgentFuture<'static, Result<String, ScheduledPromptError>>;
+}
+
+/// The built-in agent's runtime. The agent lives in this crate until ADR
+/// 0008's last step, so this is its headless runner; after that the binary
+/// registers it at startup.
+pub(crate) fn runtime() -> &'static dyn BuiltinRuntime {
+    &crate::raw_cli::HeadlessRuntime
+}
