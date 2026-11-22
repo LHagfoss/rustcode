@@ -1888,8 +1888,14 @@ mod tests {
             Some(rustcode::remote::protocol::RemoteTurnOutcome::Failed)
         );
         assert!(failed.ended_at.is_some() && failed.elapsed_work_ms.is_some());
+        tokio::time::timeout(WAIT, async {
+            while runtime.app_state().await.active_turn_id.is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the failed turn releases its identity");
         let state = runtime.app_state().await;
-        assert!(state.active_turn_id.is_none());
         assert!(state.history.iter().any(|message| {
             message.turn.as_ref().is_some_and(|turn| {
                 turn.turn_id == failed.turn_id
