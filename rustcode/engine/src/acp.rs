@@ -666,18 +666,6 @@ impl AcpServer {
             .map(|session| Arc::clone(&session.agent))
     }
 
-    /// An open session's state and working directory.
-    async fn session_handle(
-        &self,
-        session_id: &str,
-    ) -> Option<(Arc<Mutex<crate::app::AppState>>, std::path::PathBuf)> {
-        self.sessions
-            .lock()
-            .await
-            .get(session_id)
-            .map(|session| (Arc::clone(&session.state), session.cwd.clone()))
-    }
-
     /// An open built-in thread's agent and working directory.
     async fn builtin_agent_and_cwd(
         &self,

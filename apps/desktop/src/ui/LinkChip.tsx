@@ -43,13 +43,25 @@ export function LinkChip({
   const { title, host, showsHost, tag, github } = linkChipLabel(url, meta);
   const tint = meta?.color;
   const inline = variant === "inline";
+  const short = inline && !onRemove && !!github;
   const padding = inline ? "pr-[5px] pl-1" : "pr-1 pl-1.5";
   // A favicon that will not decode is the same as no favicon: a globe, never a gap. The URL is
   // what is remembered, so a chip that later gets another icon tries that one.
   const [brokenIcon, setBrokenIcon] = useState<string | null>(null);
   const icon = meta?.icon === brokenIcon ? undefined : meta?.icon;
   return (
-    <Tooltip label={<span className="break-all">{url}</span>}>
+    <Tooltip
+      label={
+        short ? (
+          <span className="flex flex-col gap-0.5">
+            <span>{title}</span>
+            <span className="break-all text-fg-faint">{url}</span>
+          </span>
+        ) : (
+          <span className="break-all">{url}</span>
+        )
+      }
+    >
       <span
         // Never a drag source: a press on a chip and a drag across it select the words around
         // it, instead of starting a drag of the URL that no text selection survives.
@@ -124,9 +136,15 @@ export function LinkChip({
               "titlehost": the host is the faint tail of the same words, and the whole run
               truncates to the chip's cap. */}
           <span className="truncate">
-            {tag && <span className="font-medium">{tag} </span>}
-            <span className={tag ? undefined : "font-medium"}>{title}</span>
-            {showsHost && <span className="text-caption text-fg-faint"> {host}</span>}
+            {short ? (
+              <span className="font-medium tabular">#{github?.number}</span>
+            ) : (
+              <>
+                {tag && <span className="font-medium">{tag} </span>}
+                <span className={tag ? undefined : "font-medium"}>{title}</span>
+                {showsHost && <span className="text-caption text-fg-faint"> {host}</span>}
+              </>
+            )}
           </span>
           {!onRemove && (
             <ArrowUpRight

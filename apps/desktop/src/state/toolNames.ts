@@ -115,7 +115,7 @@ export function splitToolName(name: string): { server?: string; tool: string } {
   const at = trimmed.search(/[./:]/);
   if (at > 0) {
     const server = trimmed.slice(0, at);
-    const tool = trimmed.slice(at + 1);
+    const tool = trimmed.slice(at + 1).trimStart();
     if (KNOWN_SERVERS.has(server) && IDENT.test(tool)) return { server, tool };
   }
   const sep = trimmed.indexOf("__");
@@ -393,6 +393,11 @@ const TOOL_ERROR_TAG = /<\/?tool_use_error>/g;
 export function unwrapToolError(output: string | undefined): string | undefined {
   if (output === undefined) return undefined;
   return output.replace(TOOL_ERROR_TAG, "").trim();
+}
+
+export function printedExitCode(output: string | undefined): number | undefined {
+  const match = /^\s*Exit code (-?\d+)\b/.exec(unwrapToolError(output) ?? "");
+  return match ? Number(match[1]) : undefined;
 }
 
 /**

@@ -46,6 +46,7 @@ import {
   displayTool,
   failureReason,
   orchestrationTool,
+  printedExitCode,
   runIdOf,
   sessionIdOf,
   usefulSummary,
@@ -826,10 +827,11 @@ export const ToolRow = memo(function ToolRow({
   // A command whose title already is the command line shows it once.
   const shownDetail = trimmed && !title.includes(trimmed) ? trimmed : undefined;
   // Why it failed, on the row itself: the first line of what it printed, when no exit code says it.
+  const exitCode = item.exitCode ?? (failed ? printedExitCode(item.output) : undefined);
   const reason =
     failed && item.denial
       ? `Denied by ${item.denial.by}`
-      : failed && item.exitCode === undefined
+      : failed && exitCode === undefined
         ? failureReason(item.output)
         : "";
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
@@ -869,7 +871,7 @@ export const ToolRow = memo(function ToolRow({
           {item.background === "command" && (
             <span className="shrink-0 text-caption text-fg-faint">Started in background</span>
           )}
-          {failed && item.exitCode === undefined && (
+          {failed && exitCode === undefined && (
             <span
               className="min-w-0 max-w-[45%] shrink truncate text-caption text-danger"
               title={reason || undefined}
@@ -878,9 +880,9 @@ export const ToolRow = memo(function ToolRow({
             </span>
           )}
           <DiffCount {...counts} />
-          {item.exitCode !== undefined && item.exitCode !== 0 && (
+          {exitCode !== undefined && exitCode !== 0 && (
             <span className="shrink-0 whitespace-nowrap font-mono text-caption text-danger">
-              exit {item.exitCode}
+              exit {exitCode}
             </span>
           )}
           {item.autoAllowed && (

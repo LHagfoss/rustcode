@@ -809,32 +809,27 @@ pub(super) async fn attach_open_builtin(
     peer: &clients::Peer,
 ) -> Result<Option<LoadSessionResponse>, agent_client_protocol::Error> {
     let session_id = request.session_id.to_string();
-    let Some((state, cwd)) = server.session_handle(&session_id).await else {
+    let Some((agent, cwd)) = server.builtin_agent_and_cwd(&session_id).await else {
         return Ok(None);
     };
     if canonical_acp_cwd(&request.cwd, "session/load")? != cwd {
         return Err(agent_client_protocol::Error::invalid_params()
             .data("session/load cwd does not match the open session"));
     }
-    let compaction = state.lock().await.last_compaction.clone();
+    let compaction = agent.attach_snapshot().await.compaction;
     let position = attach_with_replay(
         peer,
         &session_id,
         cursor::requested_cursor(request),
-        || {
-            let state = Arc::clone(&state);
-            async move { state.lock().await.history.clone() }
-        },
+        || agent.history(),
         |history| replay_history_updates_with_compaction(history, Some(&cwd), compaction.as_ref()),
     )
     .await?;
-    let (config_options, usage) = {
-        let state = state.lock().await;
-        (
-            build_session_config_options(&state),
-            usage::usage_update(&state),
-        )
-    };
+    let super::builtin::AttachSnapshot {
+        config_options,
+        usage,
+        ..
+    } = agent.attach_snapshot().await;
     // A resumed client has these already: changes to them were updates.
     if !position.resumed {
         let title = crate::sessions::session_meta_by_id(&session_id)

@@ -418,6 +418,21 @@ impl super::builtin::BuiltinAgent for StateAgent {
         })
     }
 
+    fn history(&self) -> super::builtin::AgentFuture<'_, rustcode_core::History> {
+        Box::pin(async move { self.state.lock().await.history.clone() })
+    }
+
+    fn attach_snapshot(&self) -> super::builtin::AgentFuture<'_, super::builtin::AttachSnapshot> {
+        Box::pin(async move {
+            let state = self.state.lock().await;
+            super::builtin::AttachSnapshot {
+                compaction: state.last_compaction.clone(),
+                config_options: super::config::build_session_config_options(&state),
+                usage: super::usage::usage_update(&state),
+            }
+        })
+    }
+
     fn usage_limits(&self) -> super::builtin::AgentFuture<'_, serde_json::Value> {
         Box::pin(super::usage::limits(&self.state))
     }

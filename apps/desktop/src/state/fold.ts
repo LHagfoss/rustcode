@@ -170,12 +170,13 @@ export interface FoldOptions {
  * the turns the reader opened. The last turn while `running` never folds.
  */
 export function foldTurns(
-  items: TranscriptItem[],
+  all: TranscriptItem[],
   running: boolean,
   open: ReadonlySet<string>,
   { showTools = true }: FoldOptions = {},
 ): FoldRow[] {
   const rows: FoldRow[] = [];
+  const items = all.filter((item) => !isPlumbing(item));
   let start = 0;
   for (let i = 0; i <= items.length; i++) {
     // A turn runs from a message you sent (or the end of the previous turn, for
@@ -187,6 +188,14 @@ export function foldTurns(
     start = i;
   }
   return rows;
+}
+
+export const QUICK_REPLY_MS = 5_000;
+
+const PLUMBING = new Set(["ToolSearch"]);
+
+export function isPlumbing(item: TranscriptItem): boolean {
+  return item.kind === "tool" && item.status === "completed" && PLUMBING.has(item.title.trim());
 }
 
 function pushTurn(
@@ -219,7 +228,10 @@ function pushTurn(
   if (!work.length) {
     // A turn that only replied still says how long it took, over its answer: a divider with
     // nothing to open (`steps: 0`).
-    const timed = end?.kind === "turnEnd" && end.elapsedMs !== undefined ? end : undefined;
+    const timed =
+      end?.kind === "turnEnd" && end.elapsedMs !== undefined && end.elapsedMs >= QUICK_REPLY_MS
+        ? end
+        : undefined;
     const at = answerFrom < to ? answerFrom : items.indexOf(end as TranscriptItem, from);
     for (let i = from; i < to; i++) {
       if (timed && i === at)

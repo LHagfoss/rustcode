@@ -6,6 +6,7 @@ import {
   humanizeTool,
   keptTitle,
   orchestrationTool,
+  printedExitCode,
   sessionIdOf,
   splitToolName,
   unwrapCallTool,
@@ -26,6 +27,8 @@ describe("tool names", () => {
     expect(splitToolName("rustcode.start_session")).toEqual({ server: "rustcode", tool: "start_session" });
     expect(splitToolName("rustcode/start_session")).toEqual({ server: "rustcode", tool: "start_session" });
     expect(splitToolName("rustcode:start_session")).toEqual({ server: "rustcode", tool: "start_session" });
+    expect(splitToolName("rustcode: compact_thread")).toEqual({ server: "rustcode", tool: "compact_thread" });
+    expect(displayTool("rustcode: compact_thread").title).toBe("Requested compaction");
     expect(splitToolName("rustcode__start_session")).toEqual({ server: "rustcode", tool: "start_session" });
     // Titles that happen to hold a separator are not MCP calls.
     expect(splitToolName("bin/run_tests")).toEqual({ tool: "bin/run_tests" });
@@ -171,6 +174,13 @@ describe("why a call failed (issue 3711)", () => {
     expect(failureReason(empty)).toBe("The tool gave no reason");
     expect(failureReason(empty)).not.toContain("tool_use_error");
     expect(failureReason(undefined)).toBe("");
+  });
+
+  test("an exit code printed as the first line reads as the code", () => {
+    expect(printedExitCode("Exit code 1\nfatal: not a git repository")).toBe(1);
+    expect(printedExitCode("<tool_use_error>Exit code 128\nboom</tool_use_error>")).toBe(128);
+    expect(printedExitCode("fatal: Exit code 1")).toBeUndefined();
+    expect(printedExitCode(undefined)).toBeUndefined();
   });
 });
 

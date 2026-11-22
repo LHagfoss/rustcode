@@ -59,7 +59,12 @@ describe("a link chip", () => {
   test("an issue or pull request shows which it is and its number before the title arrives", () => {
     const pull = drawn("https://github.com/acme/app/pull/12");
     expect(pull).toContain('data-icon="GitPullRequest"');
-    expect(pull).toContain("acme/app#12");
+    expect(pull).toContain(">#12<");
     expect(drawn("https://github.com/acme/app/issues/7")).toContain('data-icon="CircleDot"');
+  });
+
+  test("in text an issue or pull request is its number alone; the composer keeps the repository", () => {
+    expect(drawn("https://github.com/acme/app/pull/12")).not.toContain("acme/app#12");
+    expect(drawn("https://github.com/acme/app/pull/12", "token")).toContain("acme/app#12");
   });
 });
