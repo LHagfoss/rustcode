@@ -24,7 +24,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::app::ChatMessage;
+use rustcode_core::ChatMessage;
 
 /// The most threads one read returns: what the app's `list_sessions` lists.
 const MAX_SESSIONS: usize = 50;
@@ -47,7 +47,7 @@ pub(crate) async fn answer(
     cancel: &CancellationToken,
     name: &str,
     args: &Value,
-) -> crate::tools::ToolExecutionOutput {
+) -> rustcode_tools::ToolExecutionOutput {
     super::output(name, answer_json(session_id, cancel, name, args).await)
 }
 

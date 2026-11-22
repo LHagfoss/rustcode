@@ -20,7 +20,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::preview::{PreviewClient, decode_screenshot, one_line, page_errors};
-use crate::tools::{ToolErrorKind, ToolExecutionOutput};
+use rustcode_core::ToolErrorKind;
+use rustcode_tools::ToolExecutionOutput;
 
 pub const PREVIEW_TOOL_NAME: &str = "smart_ui_preview";
 /// The extension request the app answers.

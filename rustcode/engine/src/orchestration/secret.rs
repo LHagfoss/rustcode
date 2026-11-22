@@ -79,7 +79,7 @@ pub fn redact(text: &str) -> Option<String> {
 }
 /// Mask held secrets in a tool's result before it reaches the model, the
 /// transcript or history.
-pub fn redact_output(output: &mut crate::tools::ToolExecutionOutput) {
+pub fn redact_output(output: &mut rustcode_tools::ToolExecutionOutput) {
     if let Some(content) = redact(&output.content) {
         output.content = content;
     }
@@ -453,7 +453,8 @@ mod tests {
         let value = "history-canary-31415";
         set_thread_env(thread, "DEPLOY_TOKEN", value);
         let echoed = || {
-            let mut output = crate::tools::ToolExecutionOutput::success(format!("token {value}\n"));
+            let mut output =
+                rustcode_tools::ToolExecutionOutput::success(format!("token {value}\n"));
             output.command = Some(format!("echo {value}"));
             output
         };
@@ -507,7 +508,7 @@ pub async fn execute(
     state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
     cancel: &tokio_util::sync::CancellationToken,
     args: &Value,
-) -> crate::tools::ToolExecutionOutput {
+) -> rustcode_tools::ToolExecutionOutput {
     let (root, asker, id) = {
         let state = state.lock().await;
         (
@@ -531,8 +532,8 @@ pub async fn execute(
     )
     .await;
     if result.success {
-        crate::tools::ToolExecutionOutput::success(result.content)
+        rustcode_tools::ToolExecutionOutput::success(result.content)
     } else {
-        crate::tools::ToolExecutionOutput::failure(result.content)
+        rustcode_tools::ToolExecutionOutput::failure(result.content)
     }
 }

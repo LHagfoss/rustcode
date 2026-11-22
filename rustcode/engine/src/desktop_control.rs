@@ -1,6 +1,7 @@
 //! Client-owned native desktop automation. The client enforces user consent
 //! and snapshot provenance; the engine never executes desktop commands itself.
-use crate::tools::{ToolErrorKind, ToolExecutionOutput};
+use rustcode_core::ToolErrorKind;
+use rustcode_tools::ToolExecutionOutput;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;

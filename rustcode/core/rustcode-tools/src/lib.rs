@@ -7,6 +7,10 @@
 //! now because their ignore/walk policy is coupled to the search orchestration;
 //! directory listing is intentionally small enough to share this boundary.
 
+mod output;
+
+pub use output::ToolExecutionOutput;
+
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 

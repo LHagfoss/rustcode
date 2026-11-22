@@ -2797,8 +2797,8 @@ pub(super) fn test_thread(dir: &std::path::Path) -> String {
     crate::sessions::save_session_history(
         &id,
         &vec![
-            crate::app::ChatMessage::new("user", "a test thread"),
-            crate::app::ChatMessage::new("assistant", "ok"),
+            rustcode_core::ChatMessage::new("user", "a test thread"),
+            rustcode_core::ChatMessage::new("assistant", "ok"),
         ],
     );
     crate::sessions::flush_history();
