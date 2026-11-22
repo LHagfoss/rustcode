@@ -827,7 +827,6 @@ export const ToolRow = memo(function ToolRow({
   // A command whose title already is the command line shows it once.
   const shownDetail = trimmed && !title.includes(trimmed) ? trimmed : undefined;
   // Why it failed, on the row itself: the first line of what it printed, when no exit code says it.
-  // A harness that prints `Exit code 1` instead of reporting it gets the same short `exit 1`.
   const exitCode = item.exitCode ?? (failed ? printedExitCode(item.output) : undefined);
   const reason =
     failed && item.denial

@@ -43,8 +43,6 @@ export function LinkChip({
   const { title, host, showsHost, tag, github } = linkChipLabel(url, meta);
   const tint = meta?.color;
   const inline = variant === "inline";
-  // An issue or pull request in a reply is its number: a title cut to fit pushed the sentence
-  // around it apart, and the prose already says what it is. The title is a hover away.
   const short = inline && !onRemove && !!github;
   const padding = inline ? "pr-[5px] pl-1" : "pr-1 pl-1.5";
   // A favicon that will not decode is the same as no favicon: a globe, never a gap. The URL is

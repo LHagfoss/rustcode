@@ -27,7 +27,6 @@ describe("tool names", () => {
     expect(splitToolName("rustcode.start_session")).toEqual({ server: "rustcode", tool: "start_session" });
     expect(splitToolName("rustcode/start_session")).toEqual({ server: "rustcode", tool: "start_session" });
     expect(splitToolName("rustcode:start_session")).toEqual({ server: "rustcode", tool: "start_session" });
-    // Claude Code's own spelling, with a space after the colon.
     expect(splitToolName("rustcode: compact_thread")).toEqual({ server: "rustcode", tool: "compact_thread" });
     expect(displayTool("rustcode: compact_thread").title).toBe("Requested compaction");
     expect(splitToolName("rustcode__start_session")).toEqual({ server: "rustcode", tool: "start_session" });

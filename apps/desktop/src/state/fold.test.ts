@@ -557,7 +557,6 @@ test("the harness's ToolSearch plumbing is left out of the transcript", () => {
   const search: TranscriptItem = { ...tool("s"), title: "ToolSearch" } as TranscriptItem;
   const rows = foldTurns([user("u"), search, tool("c"), reply("r"), end("e")], false, new Set(["fold-e"]));
   expect(keys(rows)).toEqual(["u", "[fold-e]", "c", "r", "e"]);
-  // A failed one says something went wrong, so it stays.
   const failed = { ...search, status: "failed" } as TranscriptItem;
   expect(keys(foldTurns([user("u"), failed, reply("r"), end("e")], false, new Set(["fold-e"])))).toContain(
     "s",
