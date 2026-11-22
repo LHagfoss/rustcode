@@ -874,8 +874,8 @@ fn legacy_model_state_becomes_a_model_option() {
     assert_eq!(option["options"][1]["value"], "b");
 }
 
-fn orchestrator() -> crate::orchestration::hub::Launch {
-    crate::orchestration::hub::Launch::new(
+fn orchestrator() -> crate::orchestration::tool_socket::Launch {
+    crate::orchestration::tool_socket::Launch::new(
         "/opt/rustcode/bin/rustcode".into(),
         "thread-1",
         std::path::Path::new("/tmp/run/orchestrator-1.sock"),

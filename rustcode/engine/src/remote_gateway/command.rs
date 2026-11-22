@@ -5,10 +5,10 @@ use super::control::{GatewayStatus, OfferDetails};
 use super::devices::DeviceRecord;
 use super::discovery::{self, Advertisement, RECHECK_INTERVAL, Refresh, Watchdog};
 use super::gateway::{Gateway, GatewayConfig, Limits};
-use super::hub::{HubLimits, SessionHub};
 use super::lifecycle::{GatewayOwner, GatewaySettings, RemoteLifecycle, Revocation};
 use super::pairing_watch::{self, PairingWatch, format_progress};
 use super::qr;
+use super::session_registry::{HubLimits, SessionHub};
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
@@ -1351,7 +1351,7 @@ mod tests {
 
     #[test]
     fn the_asking_terminal_finds_its_own_session_marked() {
-        use crate::remote_gateway::hub::SessionSummary;
+        use crate::remote_gateway::session_registry::SessionSummary;
         let mut status = running("127.0.0.1:1", "127.0.0.1:1", &[]);
         let session = |id: &str, attached: &[&str]| SessionSummary {
             session_id: id.to_owned(),

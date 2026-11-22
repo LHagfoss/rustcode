@@ -1402,9 +1402,9 @@ mod tests {
     async fn remote_registers_with_a_running_gateway_and_shows_how_to_pair() {
         use rustcode::remote_gateway::address::plan_listen;
         use rustcode::remote_gateway::gateway::{Gateway, GatewayConfig, Limits};
-        use rustcode::remote_gateway::hub::{HubLimits, SessionHub};
         use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
         use rustcode::remote_gateway::owner_client::GatewayConnector;
+        use rustcode::remote_gateway::session_registry::{HubLimits, SessionHub};
 
         // A gateway on a loopback port in its own configuration directory.
         let dir = std::path::PathBuf::from(format!(

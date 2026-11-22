@@ -37,7 +37,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::hub::{CallAnswer, CallRequest};
+use super::tool_socket::{CallAnswer, CallRequest};
 
 /// The caller id an outside agent's calls carry inside the engine, so the
 /// thread machinery (links, `wait_session`) can tell it from a thread.
@@ -529,7 +529,7 @@ pub fn name_of_caller(caller: &str) -> Option<String> {
 /// find it. Nothing on a platform without the hub's socket.
 pub async fn ensure_hub() {
     #[cfg(unix)]
-    if let Err(error) = super::hub::shared().await {
+    if let Err(error) = super::tool_socket::shared().await {
         crate::dbg_log!("outside agents: {error}");
     }
 }
@@ -554,7 +554,7 @@ pub fn snippet(platform: &str, command: &str, token: &str) -> Value {
     if platform == "codex" {
         let text = format!(
             "[mcp_servers.rustcode]\ncommand = {command_json}\nargs = [\"mcp-connect\"]\n# A call can wait for you to approve it in RustCode.\ntool_timeout_sec = {}\n\n[mcp_servers.rustcode.env]\n{TOKEN_ENV} = {token_json}\n",
-            super::hub::TOOL_TIMEOUT_SECS
+            super::tool_socket::TOOL_TIMEOUT_SECS
         );
         return json!({
             "format": "toml",

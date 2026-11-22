@@ -110,7 +110,7 @@ pub(crate) struct StartOptions {
     /// What the client that opened this thread can render.
     pub client_display: super::ClientDisplay,
     /// The `rustcode mcp-orchestrator` to add to the harness's session.
-    pub orchestrator: Option<crate::orchestration::hub::Launch>,
+    pub orchestrator: Option<crate::orchestration::tool_socket::Launch>,
     /// The MCP servers the user configured for this workspace, so a thread on any harness has the
     /// same servers as a RustCode thread (docs/configuration.md).
     pub mcp: Vec<crate::config::McpServerConfig>,
@@ -1035,7 +1035,7 @@ pub(crate) struct ExternalSession {
     /// (`harness::requested_full_access`). `None` until a prompt says: the harness keeps the
     /// policy it started with.
     full_access: StdMutex<Option<bool>>,
-    orchestrator: StdMutex<Option<crate::orchestration::hub::Launch>>,
+    orchestrator: StdMutex<Option<crate::orchestration::tool_socket::Launch>>,
     /// The turn in flight's progress, for the silence deadline.
     progress: Arc<watchdog::Progress>,
     /// How long a turn may send nothing with nothing running. `None` reads
@@ -1267,7 +1267,10 @@ impl ExternalSession {
     }
 
     /// Give the harness the orchestration tools from its next start.
-    pub(crate) fn set_orchestrator(&self, launch: Option<crate::orchestration::hub::Launch>) {
+    pub(crate) fn set_orchestrator(
+        &self,
+        launch: Option<crate::orchestration::tool_socket::Launch>,
+    ) {
         *self
             .orchestrator
             .lock()

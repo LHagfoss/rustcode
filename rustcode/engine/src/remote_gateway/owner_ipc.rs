@@ -123,8 +123,8 @@ pub(super) use server::serve_owner;
 mod server {
     use super::*;
     use crate::daemon::protocol::{read_async_frame_with_buffer, write_async_frame};
-    use crate::remote_gateway::hub::SessionHub;
     use crate::remote_gateway::local_socket::{LocalStream, LocalWriteHalf};
+    use crate::remote_gateway::session_registry::SessionHub;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::io::BufReader;

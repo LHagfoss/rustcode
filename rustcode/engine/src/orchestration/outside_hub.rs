@@ -7,8 +7,8 @@
 //! membership in place of a grant ([`answer_for_hub`]): its access is the
 //! ceiling the owner set when joining, and `ask` asks in the app here.
 
-use super::hub::CallAnswer;
 use super::outside::{self, EngineRunner, Grant, Runner, Scope, Settings};
+use super::tool_socket::CallAnswer;
 use crate::remote_gateway::hub_link::{HubCallAnswer, HubConfig, Membership};
 use crate::remote_gateway::lifecycle::RemoteLifecycle;
 use serde_json::{Value, json};

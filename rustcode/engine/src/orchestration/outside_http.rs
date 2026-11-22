@@ -7,7 +7,7 @@
 //! one-time code from `rc outside code`. Secrets are never logged;
 //! restarting discards unexchanged authorization codes.
 use super::outside_signin::{self, Consent, Outcome, PAGE_HEADERS};
-use super::{hub::CallRequest, mcp_names, outside};
+use super::{mcp_names, outside, tool_socket::CallRequest};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};

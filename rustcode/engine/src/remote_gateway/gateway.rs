@@ -26,12 +26,12 @@ use super::handshake::{
     DeviceHint, ErrorCode, GATEWAY_CAPABILITIES, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
     HandshakeResponse, PairingMethod, Secret, device_hint,
 };
-use super::hub::{HubIdentity, SessionHub};
 use super::lifecycle::{GatewayRegistration, RemoteLifecycle};
 use super::local_socket::{LocalListener, LocalStream};
 use super::owner_ipc;
 use super::pairing::{PairingError, PairingState};
 use super::router::{ConnectionControl, DeviceContext, FrameQueue, FrameRouter, FrameSink};
+use super::session_registry::{HubIdentity, SessionHub};
 use super::transport;
 use crate::daemon::private_files::remove_if_exists;
 use crate::daemon::protocol::{read_async_frame, write_async_frame};

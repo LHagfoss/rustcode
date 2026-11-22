@@ -898,7 +898,7 @@
 22 rustcode/engine/src/network/verification.rs
 139 rustcode/engine/src/orchestration.rs
 2 rustcode/engine/src/orchestration/ask_user.rs
-18 rustcode/engine/src/orchestration/hub.rs
+18 rustcode/engine/src/orchestration/tool_socket.rs
 33 rustcode/engine/src/orchestration/local.rs
 2 rustcode/engine/src/orchestration/local_merge.rs
 81 rustcode/engine/src/orchestration/local_threads.rs
@@ -948,8 +948,8 @@
 93 rustcode/engine/src/remote_gateway/gateway/tests.rs
 20 rustcode/engine/src/remote_gateway/handshake.rs
 43 rustcode/engine/src/remote_gateway/host.rs
-35 rustcode/engine/src/remote_gateway/hub.rs
-67 rustcode/engine/src/remote_gateway/hub/tests.rs
+35 rustcode/engine/src/remote_gateway/session_registry.rs
+67 rustcode/engine/src/remote_gateway/session_registry/tests.rs
 12 rustcode/engine/src/remote_gateway/hub_link.rs
 19 rustcode/engine/src/remote_gateway/lifecycle.rs
 5 rustcode/engine/src/remote_gateway/local_socket.rs

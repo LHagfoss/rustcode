@@ -1614,7 +1614,7 @@ pub(super) fn elicitation(params: &Value) -> Elicitation {
         return Elicitation::Decline;
     }
     let server = str_field(params, "serverName").unwrap_or_default();
-    if server == crate::orchestration::hub::SERVER_NAME {
+    if server == crate::orchestration::tool_socket::SERVER_NAME {
         return Elicitation::Accept;
     }
     let message = str_field(params, "message")
