@@ -18,15 +18,14 @@ use std::time::Duration;
 const RETRY: Duration = Duration::from_secs(60);
 
 /// Run the scheduler as a task of `rc server run` for as long as the server
-/// lives.
+/// lives. Without a Tokio runtime (a test, a CLI path that never serves) it
+/// does nothing. Why it could not run is logged once per reason, not every
+/// minute.
 pub fn spawn() {
-    // A server with no runtime (a test, a CLI path that never serves) must
-    // not panic here.
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
         return;
     };
     runtime.spawn(async {
-        // Said once per reason, not every minute.
         let mut said = String::new();
         loop {
             if let Some(config_directory) = crate::config::get_config_dir() {
