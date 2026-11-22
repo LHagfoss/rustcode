@@ -410,7 +410,7 @@ describe("design system", () => {
       expect(start).toBeGreaterThanOrEqual(0);
       return css.slice(start, css.indexOf("}", start));
     };
-    // Opaque fills: surface-2 for the glass and popovers, sidebar for the composer, bg for scrims.
+    // Opaque fills: surface-2 for the glass and popovers, the composer hue for the composer, bg for scrims.
     const tokens = block(`${solid} {`);
     for (const token of [
       "--rc-sidebar-bg: var(--rc-sidebar);",
@@ -419,7 +419,7 @@ describe("design system", () => {
       "--rc-glass-faint-bg: var(--rc-surface-2);",
       "--rc-scrim-bg: var(--rc-bg);",
       "--rc-lightbox-scrim-bg: var(--rc-bg);",
-      "--rc-composer-bg: var(--rc-sidebar);",
+      "--rc-composer-bg: var(--rc-composer-hue);",
     ])
       expect(tokens, token).toContain(token);
     // Both filters are taken away, the header's pseudo-element included, on every surface that

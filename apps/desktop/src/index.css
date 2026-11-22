@@ -104,19 +104,19 @@
   --rc-surface: #eaeaea;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e4e4e6;
-  /* The composer shares the sidebar surface, in the shared glass: the hue is the sidebar's, and the
-     alpha and the blur are `--rc-glass-alpha` and the shared `glass-filter` (Glass, below), so one
-     edit tunes it with every other translucent surface. */
-  --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
+  /* The composer shares the sidebar surface, in the shared glass: the hue is the sidebar's a step
+     lighter (`--rc-composer-hue`), and the alpha and the blur are `--rc-glass-alpha` and the shared
+     `glass-filter` (Glass, below), so one edit tunes it with every other translucent surface. */
+  --rc-composer-bg: color-mix(in srgb, var(--rc-composer-hue) var(--rc-glass-alpha), transparent);
   --rc-composer-bg-focus: color-mix(
     in srgb,
-    var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 8%)),
+    var(--rc-composer-hue) min(100%, calc(var(--rc-glass-alpha) + 8%)),
     transparent
   );
   /* Over a new thread's picture (`.rc-composer-over`): a panel, not another window on it. */
   --rc-composer-bg-over: color-mix(
     in srgb,
-    var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 12%)),
+    var(--rc-composer-hue) min(100%, calc(var(--rc-glass-alpha) + 12%)),
     transparent
   );
   --rc-border: #00000008;
@@ -146,15 +146,15 @@
     --rc-surface-2: #242428;
     --rc-surface-3: #2a2a2e;
     /* The composer shares the sidebar surface, in the shared glass (see the light theme above). */
-    --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
+    --rc-composer-bg: color-mix(in srgb, var(--rc-composer-hue) var(--rc-glass-alpha), transparent);
     --rc-composer-bg-focus: color-mix(
       in srgb,
-      var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 8%)),
+      var(--rc-composer-hue) min(100%, calc(var(--rc-glass-alpha) + 8%)),
       transparent
     );
     --rc-composer-bg-over: color-mix(
       in srgb,
-      var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 12%)),
+      var(--rc-composer-hue) min(100%, calc(var(--rc-glass-alpha) + 12%)),
       transparent
     );
     --rc-border: #ffffff08;
@@ -182,15 +182,15 @@
   --rc-surface: #1d1d20;
   --rc-surface-2: #242428;
   --rc-surface-3: #2a2a2e;
-  --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
+  --rc-composer-bg: color-mix(in srgb, var(--rc-composer-hue) var(--rc-glass-alpha), transparent);
   --rc-composer-bg-focus: color-mix(
     in srgb,
-    var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 8%)),
+    var(--rc-composer-hue) min(100%, calc(var(--rc-glass-alpha) + 8%)),
     transparent
   );
   --rc-composer-bg-over: color-mix(
     in srgb,
-    var(--rc-sidebar) min(100%, calc(var(--rc-glass-alpha) + 12%)),
+    var(--rc-composer-hue) min(100%, calc(var(--rc-glass-alpha) + 12%)),
     transparent
   );
   --rc-border: #ffffff08;
@@ -1073,6 +1073,9 @@
      sidebar and the glass shows through. 28% keeps the glass at its designed 72%. */
   --rc-transparency: 28%;
   --rc-glass-alpha: calc(100% - var(--rc-transparency));
+  /* The composer's hue: the sidebar's, lifted by a touch of white so the box reads a step lighter
+     than the surface it floats on, in every theme. Its glass and solid fills both take it. */
+  --rc-composer-hue: color-mix(in srgb, #ffffff 6%, var(--rc-sidebar));
   /* The two steps a denser or a thinner surface takes are read off the same alpha: a step up for
      popovers, menus and floating pills, and a third of it for a new thread's cards. */
   --rc-glass-alpha-strong: min(100%, calc(var(--rc-glass-alpha) + 12%));
@@ -1493,9 +1496,9 @@
     --rc-glass-faint-bg: var(--rc-surface-2);
     --rc-scrim-bg: var(--rc-bg);
     --rc-lightbox-scrim-bg: var(--rc-bg);
-    --rc-composer-bg: var(--rc-sidebar);
-    --rc-composer-bg-focus: var(--rc-sidebar);
-    --rc-composer-bg-over: var(--rc-sidebar);
+    --rc-composer-bg: var(--rc-composer-hue);
+    --rc-composer-bg-focus: var(--rc-composer-hue);
+    --rc-composer-bg-over: var(--rc-composer-hue);
   }
   :root,
   .rc-header-glass.rc-frost::before {
@@ -1533,9 +1536,9 @@
   --rc-glass-faint-bg: var(--rc-surface-2);
   --rc-scrim-bg: var(--rc-bg);
   --rc-lightbox-scrim-bg: var(--rc-bg);
-  --rc-composer-bg: var(--rc-sidebar);
-  --rc-composer-bg-focus: var(--rc-sidebar);
-  --rc-composer-bg-over: var(--rc-sidebar);
+  --rc-composer-bg: var(--rc-composer-hue);
+  --rc-composer-bg-focus: var(--rc-composer-hue);
+  --rc-composer-bg-over: var(--rc-composer-hue);
 }
 :root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) .rc-composer:focus-within,
 :root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
