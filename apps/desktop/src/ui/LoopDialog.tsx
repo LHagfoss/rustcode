@@ -27,12 +27,12 @@ import {
   localDateTime,
   onceOfForm,
   type Repeat,
+  runLoopNow,
   type ScheduleForm,
   saveLoop,
   timeZoneChoices,
   userTimeZone,
   WEEKDAYS,
-  WEEKENDS,
   withRunAccount,
 } from "../state/loops";
 import { projectsOn } from "../state/projects";
@@ -43,9 +43,12 @@ import { Callout, cx, inputClass, noTextHelpers, Pill, Segments, Select, Switch 
 
 const EFFORTS = ["low", "medium", "high"];
 
-const REPEATS: { value: Repeat; label: string }[] = [
+type RepeatChoice = Exclude<Repeat, "days"> | "daily" | "weekly";
+
+const REPEATS: { value: RepeatChoice; label: string }[] = [
   { value: "hours", label: "Hourly" },
-  { value: "days", label: "Daily" },
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
   { value: "monthly", label: "Monthly" },
   { value: "once", label: "Once" },
   { value: "cron", label: "Cron" },
@@ -61,12 +64,6 @@ const DAY_TOGGLES = [
   { day: 5, label: "Fri" },
   { day: 6, label: "Sat" },
   { day: 0, label: "Sun" },
-];
-
-const DAY_SHORTCUTS = [
-  { label: "Every day", days: EVERY_DAY },
-  { label: "Weekdays", days: WEEKDAYS },
-  { label: "Weekends", days: WEEKENDS },
 ];
 
 interface LoopTemplate {
@@ -280,7 +277,6 @@ export function LoopDialog({
   const [draft, setDraft] = useState<LoopDraft>(() => draftOf(loop, projectCwd, duplicate));
   const [form, setForm] = useState<ScheduleForm>(() => formOf(loop));
   const [target, setTarget] = useState<"fresh" | "one">("fresh");
-  const [customDays, setCustomDays] = useState(false);
   // The optional script stays folded until asked for, or when the job already has one.
   const [scriptOpen, setScriptOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -334,7 +330,6 @@ export function LoopDialog({
     setDraft(draftOf(loop, fallbackProject, duplicate));
     setForm(formOf(loop));
     setTarget(loop?.threadId ? "one" : "fresh");
-    setCustomDays(false);
     setScriptOpen(Boolean(loop?.script));
     setError(null);
     setSaving(false);
@@ -374,10 +369,26 @@ export function LoopDialog({
     () => timeZoneChoices(timezone).map((zone) => ({ value: zone, label: zone })),
     [timezone],
   );
-  const daysChoice =
-    DAY_SHORTCUTS.find(
-      ({ days }) => days.length === form.days.length && days.every((day) => form.days.includes(day)),
-    )?.label ?? "Custom days";
+  const repeatChoice: RepeatChoice =
+    form.repeat === "days" ? (form.days.length === EVERY_DAY.length ? "daily" : "weekly") : form.repeat;
+  const chooseRepeat = (choice: RepeatChoice) => {
+    if (choice === "daily") return patchForm({ repeat: "days", days: [...EVERY_DAY] });
+    if (choice === "weekly")
+      return patchForm({
+        repeat: "days",
+        days: form.repeat === "days" && form.days.length < EVERY_DAY.length ? form.days : [...WEEKDAYS],
+      });
+    // Switching to Cron starts from what the other choices made, to edit by hand.
+    patchForm(choice === "cron" && form.repeat !== "once" ? { repeat: choice, cron } : { repeat: choice });
+  };
+  const zone = timezone ? (
+    <Select
+      label="Time zone"
+      value={timezone}
+      options={timeZoneOptions}
+      onChange={(tz) => patch({ timezone: tz })}
+    />
+  ) : null;
   const projectOptions = projects.map((project) => ({ value: project.path, label: project.name }));
   if (draft.workspace && !projectOptions.some((option) => option.value === draft.workspace)) {
     projectOptions.unshift({ value: draft.workspace, label: projectName(draft.workspace) });
@@ -435,7 +446,7 @@ export function LoopDialog({
     !cronError &&
     (target === "fresh" || threadId);
 
-  const save = async () => {
+  const save = async (runAfter = false) => {
     if (!ready || saving) return;
     setSaving(true);
     setError(null);
@@ -449,6 +460,7 @@ export function LoopDialog({
         once: once ?? undefined,
         manual,
       });
+      if (runAfter && loop?.id) await runLoopNow(loop.id);
       onSaved();
       if (made) setMadeWebhook(made);
       else onOpenChange(false);
@@ -487,7 +499,7 @@ export function LoopDialog({
                   <p className="text-caption text-fg-muted">
                     {remote
                       ? `This hub keeps the schedule and sends each run to ${draft.machine}. While it’s offline, runs wait here.`
-                      : "Runs while RustCode is open."}
+                      : "Runs on this computer while the scheduler is on, even with RustCode closed."}
                   </p>
                 </div>
                 <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-4">
@@ -557,7 +569,7 @@ export function LoopDialog({
                                 : [{ value: "", label: "No projects yet" }]
                             }
                             onChange={(workspace) => patch({ workspace, threadId: undefined })}
-                            className="h-8 max-w-full justify-between rounded-md bg-fill-subtle"
+                            className="h-8! max-w-full justify-between rounded-md bg-fill-subtle"
                           />
                         )}
                       </Field>
@@ -574,7 +586,7 @@ export function LoopDialog({
                       />
                     </Field>
                     {remote ? null : scriptOpen ? (
-                      <Field label="Script (optional)">
+                      <Field label="Pre-check script (optional)">
                         <textarea
                           value={draft.script ?? ""}
                           onChange={(e) => patch({ script: e.target.value })}
@@ -596,25 +608,21 @@ export function LoopDialog({
                         className="-mx-1 flex items-center gap-1 self-start rounded-md px-1 py-0.5 text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg"
                       >
                         <ChevronRight size={12} />
-                        Run a script first, and start the agent only when it prints something
+                        Pre-check script
+                        <span className="text-fg-faint">· start the agent only when it prints something</span>
                       </button>
                     )}
                   </Section>
                   <Section title="When it runs">
-                    <Field label="Repeat">
+                    <Field label="Schedule">
                       <Segments
-                        label="Repeat"
-                        value={form.repeat}
+                        label="Schedule"
+                        value={repeatChoice}
                         options={REPEATS}
-                        onChange={(repeat) =>
-                          // Switching to Cron starts from what the other choices made, to edit by hand.
-                          patchForm(
-                            repeat === "cron" && form.repeat !== "once" ? { repeat, cron } : { repeat },
-                          )
-                        }
+                        onChange={chooseRepeat}
                       />
                       {form.repeat === "hours" && (
-                        <div className="flex items-center gap-2 text-callout text-fg-muted">
+                        <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
                           <span>Every</span>
                           <Select
                             label="Hours between runs"
@@ -625,60 +633,44 @@ export function LoopDialog({
                             }))}
                             onChange={(n) => patchForm({ everyHours: Number(n) })}
                           />
+                          {zone}
+                        </div>
+                      )}
+                      {repeatChoice === "weekly" && (
+                        <div role="group" aria-label="Days" className="flex flex-wrap gap-1">
+                          {DAY_TOGGLES.map(({ day, label }) => {
+                            const on = form.days.includes(day);
+                            return (
+                              <Pill
+                                key={day}
+                                size="sm"
+                                prominent={on}
+                                aria-pressed={on}
+                                className="w-11"
+                                onClick={() =>
+                                  setForm((f) => ({
+                                    ...f,
+                                    days: f.days.includes(day)
+                                      ? f.days.filter((d) => d !== day)
+                                      : [...f.days, day],
+                                  }))
+                                }
+                              >
+                                {label}
+                              </Pill>
+                            );
+                          })}
                         </div>
                       )}
                       {form.repeat === "days" && (
-                        <>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Select
-                              label="Days to run"
-                              value={customDays ? "Custom days" : daysChoice}
-                              options={[
-                                ...DAY_SHORTCUTS.map(({ label }) => ({ value: label, label })),
-                                {
-                                  value: "Custom days",
-                                  label: "Custom days",
-                                },
-                              ]}
-                              onChange={(value) => {
-                                const preset = DAY_SHORTCUTS.find(({ label }) => label === value);
-                                setCustomDays(!preset);
-                                if (preset) patchForm({ days: [...preset.days] });
-                              }}
-                            />
-                            <span className="text-callout text-fg-muted">at</span>
-                            <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
-                          </div>
-                          {(customDays || daysChoice === "Custom days") && (
-                            <div role="group" aria-label="Days" className="flex flex-wrap gap-1">
-                              {DAY_TOGGLES.map(({ day, label }) => {
-                                const on = form.days.includes(day);
-                                return (
-                                  <Pill
-                                    key={day}
-                                    size="sm"
-                                    prominent={on}
-                                    aria-pressed={on}
-                                    className="w-11"
-                                    onClick={() =>
-                                      setForm((f) => ({
-                                        ...f,
-                                        days: f.days.includes(day)
-                                          ? f.days.filter((d) => d !== day)
-                                          : [...f.days, day],
-                                      }))
-                                    }
-                                  >
-                                    {label}
-                                  </Pill>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </>
+                        <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
+                          <span>At</span>
+                          <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
+                          {zone}
+                        </div>
                       )}
                       {form.repeat === "monthly" && (
-                        <div className="flex items-center gap-2 text-callout text-fg-muted">
+                        <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
                           <span>On the</span>
                           <Select
                             label="Day of the month"
@@ -688,6 +680,7 @@ export function LoopDialog({
                           />
                           <span>at</span>
                           <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
+                          {zone}
                         </div>
                       )}
                       {form.repeat === "once" && (
@@ -713,31 +706,26 @@ export function LoopDialog({
                         </div>
                       )}
                       {form.repeat === "cron" && (
-                        <input
-                          value={form.cron}
-                          onChange={(e) => patchForm({ cron: e.target.value })}
-                          placeholder="0 9 * * MON-FRI"
-                          aria-label="Cron expression"
-                          {...noTextHelpers}
-                          className={cx(inputClass, "font-mono")}
-                        />
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={form.cron}
+                            onChange={(e) => patchForm({ cron: e.target.value })}
+                            placeholder="0 9 * * MON-FRI"
+                            aria-label="Cron expression"
+                            {...noTextHelpers}
+                            className={cx(inputClass, "min-w-0 flex-1 font-mono")}
+                          />
+                          {zone}
+                        </div>
                       )}
-                      <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                      {(cronError || form.repeat === "cron" || once || manual) && (
                         <p
                           aria-live="polite"
-                          className={cx("text-caption", cronError ? "text-danger" : "text-fg-muted")}
+                          className={cx("pt-0.5 text-caption", cronError ? "text-danger" : "text-fg-muted")}
                         >
                           {cronError ?? words ?? `Cron ${cron}`}
                         </p>
-                        {!once && !manual && timezone && (
-                          <Select
-                            label="Time zone"
-                            value={timezone}
-                            options={timeZoneOptions}
-                            onChange={(tz) => patch({ timezone: tz })}
-                          />
-                        )}
-                      </div>
+                      )}
                     </Field>
                     <ToggleRow
                       label="Webhook"
@@ -797,7 +785,7 @@ export function LoopDialog({
                         <p className="text-caption text-fg-muted">
                           {target === "one"
                             ? "Sends the prompt to this thread when it’s idle."
-                            : "Archives the thread when there’s nothing to report."}
+                            : "Starts a new thread each time, and archives it when there’s nothing to report."}
                         </p>
                       </Field>
                     )}
@@ -882,6 +870,11 @@ export function LoopDialog({
                     </p>
                   )}
                   <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
+                  {isEditing && (
+                    <Pill disabled={!ready || saving} onClick={() => void save(true)}>
+                      Save and run
+                    </Pill>
+                  )}
                   <Pill prominent disabled={!ready || saving} onClick={() => void save()}>
                     {saving ? "Saving…" : isEditing ? "Save changes" : "Create job"}
                   </Pill>

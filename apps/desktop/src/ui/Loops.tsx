@@ -35,7 +35,7 @@ import {
   startScheduler,
   useLoopThreads,
 } from "../state/loops";
-import { askConfirm, errorText, toast, useApp } from "../state/store";
+import { askConfirm, errorText, openSettings, toast, useApp } from "../state/store";
 import { selectThread } from "../state/threadOpen";
 import { statusOf } from "../state/threadStatus";
 import {
@@ -43,6 +43,7 @@ import {
   ChevronRight,
   Copy,
   Ellipsis,
+  Pause,
   Pencil,
   Play,
   Plus,
@@ -66,7 +67,6 @@ import {
   Pill,
   Segments,
   Spinner,
-  Switch,
   Tooltip,
 } from "./primitives";
 import { Loading, useEngineData } from "./settingsKit";
@@ -93,7 +93,7 @@ const OUTCOME_TEXT: Record<"ok" | "bad" | "muted", string> = {
 };
 
 function runDotTint(run: LoopRun | undefined): string {
-  if (!run) return "bg-fg-faint";
+  if (!run) return "border border-fg-faint";
   if (run.state === "running" || run.state === "claimed") return "bg-accent";
   if (run.state === "failed" || run.state === "ambiguous") return "bg-danger";
   if (run.state === "cancelled") return "bg-fg-faint";
@@ -106,12 +106,14 @@ function IconAction({
   children,
   disabled,
   tone,
+  className,
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
   disabled?: boolean;
   tone?: "danger";
+  className?: string;
 }) {
   return (
     <Tooltip label={label}>
@@ -126,6 +128,7 @@ function IconAction({
         className={cx(
           "inline-flex size-7 items-center justify-center rounded-md disabled:opacity-40",
           tone === "danger" ? "text-danger hover:bg-danger/12" : "text-fg-muted hover:bg-fill hover:text-fg",
+          className,
         )}
       >
         {children}
@@ -158,16 +161,42 @@ const FULL_RUN_FORMAT = new Intl.DateTimeFormat(undefined, {
 });
 const WEEK_MS = 6 * 86_400_000;
 
-/** "In 20 min · 09:59" today, "In 2 d · Mon 08:00" this week, then the date. */
-function nextRunLine(loop: Loop, next: number, now: number): string {
-  const left = nextRunText(loop, now);
+/** "Next 09:59" today, "Next Mon 08:00" this week, then the date; how long until it is the tooltip. */
+function nextRunLine(next: number, now: number): string {
   const when =
     new Date(next).toDateString() === new Date(now).toDateString()
       ? NEXT_RUN_TIME
       : next - now < WEEK_MS
         ? NEXT_RUN_WEEKDAY
         : NEXT_RUN_FORMAT;
-  return `${left[0]?.toUpperCase()}${left.slice(1)} · ${when.format(next)}`;
+  return `Next ${when.format(next)}`;
+}
+
+const HISTORY_DOTS = 5;
+
+function RunHistory({ runs }: { runs: readonly LoopRun[] }) {
+  const recent = runs.slice(0, HISTORY_DOTS).reverse();
+  const slot = "flex w-[38px] shrink-0 items-center justify-end gap-0.5";
+  if (recent.length < 2) {
+    return (
+      <span aria-hidden className={slot}>
+        <span className={cx("size-1.5 rounded-full", runDotTint(runs[0]))} />
+      </span>
+    );
+  }
+  const failed = recent.filter((run) => run.state === "failed" || run.state === "ambiguous").length;
+  const label = failed
+    ? `${failed} of the last ${recent.length} runs failed`
+    : `The last ${recent.length} runs, oldest first`;
+  return (
+    <Tooltip label={label}>
+      <span role="img" aria-label={label} className={slot}>
+        {recent.map((run) => (
+          <span key={run.id} className={cx("size-1.5 rounded-full", runDotTint(run))} />
+        ))}
+      </span>
+    </Tooltip>
+  );
 }
 
 function jobAgent(
@@ -277,7 +306,7 @@ function JobRow({
   const quietResult = latestRun?.state === "succeeded" && (latestRun.quiet || latestRun.silent);
   const secondarySchedule =
     next !== undefined
-      ? `Next: ${nextRunLine(loop, next, now)}`
+      ? nextRunLine(next, now)
       : loop.paused
         ? "Paused"
         : waiting
@@ -292,7 +321,7 @@ function JobRow({
   };
 
   return (
-    <li data-loop={loop.id} className="flex flex-col rounded-lg bg-surface">
+    <li data-loop={loop.id} className="group/job flex flex-col rounded-lg bg-surface">
       {/* Full-row hover & expand target; action buttons opt out via data-row-action. */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: expand toggle also lives on the accessible button inside */}
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users activate the button inside */}
@@ -318,7 +347,11 @@ function JobRow({
           </button>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <span className="truncate font-medium text-body text-fg">{loop.name}</span>
+              <span
+                className={cx("truncate font-medium text-body", loop.paused ? "text-fg-muted" : "text-fg")}
+              >
+                {loop.name}
+              </span>
               <StatusChip state={state} waiting={waiting} completed={completed} />
             </div>
             <div className="flex min-w-0 items-center gap-1.5 text-caption text-fg-muted">
@@ -345,9 +378,9 @@ function JobRow({
         </div>
 
         {/* Outcome first, next run second: aligned across rows. */}
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:max-w-[270px] sm:basis-64">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", runDotTint(latestRun))} />
+        <div className="grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1.5 gap-y-0.5 sm:max-w-[300px] sm:basis-72">
+          <RunHistory runs={loop.runs} />
+          <div className="flex min-w-0 items-center">
             {lastThread ? (
               <Tooltip label="Open the last run's thread">
                 <button
@@ -380,17 +413,17 @@ function JobRow({
           {next !== undefined ? (
             <time
               dateTime={new Date(next).toISOString()}
-              title={NEXT_RUN_FORMAT.format(next)}
-              className="tabular truncate pl-3 text-caption text-fg-faint"
+              title={`${nextRunText(loop, now)} · ${FULL_RUN_FORMAT.format(next)}`}
+              className="tabular col-start-2 truncate text-caption text-fg-faint"
             >
               {secondarySchedule}
             </time>
           ) : (
-            <span className="truncate pl-3 text-caption text-fg-faint">{secondarySchedule}</span>
+            <span className="col-start-2 truncate text-caption text-fg-faint">{secondarySchedule}</span>
           )}
         </div>
 
-        {/* Compact right controls: Stop/Run, Pause switch, and overflow menu. */}
+        {/* Compact right controls: Stop, or Run now on hover, and the menu with Pause in it. */}
         <div data-row-action className="flex shrink-0 items-center gap-1.5">
           {running ? (
             <IconAction
@@ -402,22 +435,18 @@ function JobRow({
             </IconAction>
           ) : (
             <IconAction
-              label={loop.paused ? "Resume to run now" : "Run now"}
+              label="Run now"
               disabled={loop.paused}
               onClick={() => act("Started a run", () => runLoopNow(loop.id))}
+              className={
+                loop.paused
+                  ? "invisible"
+                  : "opacity-0 focus-visible:opacity-100 group-focus-within/job:opacity-100 group-hover/job:opacity-100"
+              }
             >
               <Play size={14} />
             </IconAction>
           )}
-          <Tooltip label={loop.paused ? "Paused — click to enable" : "Enabled — click to pause"}>
-            <span className="inline-flex px-1">
-              <Switch
-                label={loop.paused ? `Resume ${loop.name}` : `Pause ${loop.name}`}
-                checked={!loop.paused}
-                onChange={(on) => act(on ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !on))}
-              />
-            </span>
-          </Tooltip>
           <DropdownMenu.Root modal={false}>
             <DropdownMenu.Trigger asChild>
               <button
@@ -429,6 +458,19 @@ function JobRow({
               </button>
             </DropdownMenu.Trigger>
             <MenuContent align="end">
+              <DropdownMenu.Item
+                className={menuItem}
+                onSelect={() =>
+                  act(loop.paused ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !loop.paused))
+                }
+              >
+                {loop.paused ? (
+                  <Play size={13} className="text-fg-muted" />
+                ) : (
+                  <Pause size={13} className="text-fg-muted" />
+                )}
+                {loop.paused ? "Resume" : "Pause"}
+              </DropdownMenu.Item>
               <DropdownMenu.Item className={menuItem} disabled={running} onSelect={onEdit}>
                 <Pencil size={13} className="text-fg-muted" /> {running ? "Edit (wait for run)" : "Edit"}
               </DropdownMenu.Item>
@@ -450,7 +492,16 @@ function JobRow({
       </div>
 
       {reason && (
-        <Callout className="mx-4 mb-3 bg-bg">
+        <Callout
+          className="mx-4 mb-3 bg-bg"
+          action={
+            loop.runs[0]?.signedOut ? (
+              <Pill size="sm" onClick={() => openSettings("agents")}>
+                Sign in
+              </Pill>
+            ) : undefined
+          }
+        >
           {/* A signed-out login's reason already says how to sign in. */}
           {loop.runs[0]?.signedOut ? reason : `${reason}. Fix the cause, then resume it.`}
         </Callout>
@@ -592,9 +643,11 @@ function JobDetail({
                       className="group/run -mx-2 flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-caption hover:bg-fill-subtle"
                     >
                       {body}
-                      <span className="flex shrink-0 items-center gap-1 text-fg-faint group-hover/run:text-fg">
-                        Open <ArrowUpRight size={12} />
-                      </span>
+                      <ArrowUpRight
+                        size={12}
+                        aria-label="Open thread"
+                        className="shrink-0 text-fg-faint opacity-0 group-hover/run:opacity-100 group-focus-visible/run:opacity-100"
+                      />
                     </button>
                   ) : (
                     <div className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-caption">{body}</div>
@@ -792,29 +845,26 @@ export function Loops() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-bg">
-      <ViewHeader title="Jobs">
-        <div className="flex items-center gap-2">
-          {loops.length > 0 && (
-            <Segments
-              label="Show"
-              value={tab}
-              options={[
-                { value: "jobs", label: "Jobs" },
-                { value: "review", label: review.length ? `Review ${review.length}` : "Review" },
-              ]}
-              onChange={setTab}
-            />
-          )}
-          {data?.daemonRunning && loops.length > 0 && (
-            <Pill prominent onClick={openNew}>
-              <Plus size={13} />
-              New job
-            </Pill>
-          )}
-        </div>
-      </ViewHeader>
+      <ViewHeader title="Jobs" />
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 pt-2 pb-8">
+          {data?.daemonRunning && loops.length > 0 && (
+            <div className="flex items-center justify-between gap-2 pb-1">
+              <Segments
+                label="Show"
+                value={tab}
+                options={[
+                  { value: "jobs", label: "Jobs" },
+                  { value: "review", label: review.length ? `Review ${review.length}` : "Review" },
+                ]}
+                onChange={setTab}
+              />
+              <Pill prominent onClick={openNew}>
+                <Plus size={13} />
+                New job
+              </Pill>
+            </div>
+          )}
           {!data ? (
             <Loading error={error} onRetry={() => void reload()} />
           ) : !data.daemonRunning ? (
@@ -854,7 +904,9 @@ export function Loops() {
               (group) =>
                 group.loops.length > 0 && (
                   <section key={group.title} aria-label={group.title} className="flex flex-col gap-2 pb-3">
-                    <h2 className="px-1 font-medium text-caption text-fg-muted">{group.title}</h2>
+                    {upcoming.length > 0 && inactive.length > 0 && (
+                      <h2 className="px-1 font-medium text-caption text-fg-muted">{group.title}</h2>
+                    )}
                     <ul className="flex flex-col gap-2">
                       {group.loops.map((loop) => (
                         <JobRow
