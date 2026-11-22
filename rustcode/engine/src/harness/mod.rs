@@ -235,6 +235,14 @@ pub(crate) struct KnownHarness {
     pub lists_models: bool,
 }
 
+/// The npm adapters the Claude Code and Pi harnesses start through, pinned to
+/// a tested release. Unpinned, `npx -y` resolved the newest version at every
+/// thread start: one upstream release could break every thread at once, and
+/// each start waited on the registry. `--prefer-offline` starts a cached copy
+/// without asking the registry. Bump a version here after trying it.
+const CLAUDE_AGENT_ACP: &str = "@agentclientprotocol/claude-agent-acp@0.109.1";
+const PI_ACP: &str = "pi-acp@0.0.35";
+
 pub(crate) const KNOWN: &[KnownHarness] = &[
     KnownHarness {
         id: "cursor",
@@ -273,7 +281,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         id: "claude-code",
         name: "Claude Code",
         kind: HarnessKind::Acp,
-        command: &["npx", "-y", "@agentclientprotocol/claude-agent-acp"],
+        command: &["npx", "--prefer-offline", "-y", CLAUDE_AGENT_ACP],
         login_command: Some(&["claude", "/login"]),
         install_hint: Some(crate::install_hints::host_hint(
             crate::install_hints::Tool::Claude,
@@ -320,7 +328,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         id: "pi",
         name: "Pi",
         kind: HarnessKind::Acp,
-        command: &["npx", "-y", "pi-acp"],
+        command: &["npx", "--prefer-offline", "-y", PI_ACP],
         login_command: Some(&["pi"]),
         install_hint: Some(crate::install_hints::host_hint(
             crate::install_hints::Tool::Pi,
@@ -1656,7 +1664,7 @@ mod tests {
         );
         assert_eq!(
             resolve(&entries, "claude-code").unwrap().command,
-            ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
+            ["npx", "--prefer-offline", "-y", CLAUDE_AGENT_ACP]
         );
     }
 
