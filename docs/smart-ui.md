@@ -69,7 +69,12 @@ the same block in a dialog up to 1,100 px wide (Esc or a click outside closes it
 so a dashboard written for the reply's column gets room. That page keeps its own
 height and stop state, so the view in the reply is left as it was.
 
-### Shorthand
+### Shorthand: the component catalog
+
+The shorthand is the view's component catalog, the idea [A2UI](https://a2ui.org/)
+calls a locked catalog: the agent names a block and gives its data, and the app
+owns the markup, the style and the behaviour, so two views of the same kind come
+out alike whichever harness wrote them. HTML stays for what no block covers.
 
 Most views are a handful of kit blocks, and in HTML every row repeats the same
 class names: a bar row is about 105 characters of markup for 27 of content. So a
@@ -92,8 +97,7 @@ MCP is already in the CLI: `rc mcp add|list`.
 - rustcode | https://github.com/LHagfoss/rustcode
 ```
 
-A `::` line opens a block (`title`, `h`, `p`, `bars`, `stats`, `steps`, `list`,
-`cards`, `table`, `callout`, `sources`, `actions`); its `- ` items split at `|` outside
+A `::` line opens a block; its `- ` items split at `|` outside
 backticks and HTML tags/`<code>`; a blank line, the next `::` line or a line that starts with `<`
 ends it. An item may carry `{ok}`, `{warn}`, `{bad}` or `{info}` at the start or end of a cell
 (or the end of the line), and a name after a block is an `h3` over it. In `:: table`, a leading or
@@ -111,9 +115,38 @@ all percentages are widths as written); a table sorts past eight rows. In text,
 `` `code` `` and `**bold**` work and HTML is kept as written. Anything else,
 and everything in a `<script>` or `<style>`, passes through, so a view mixes
 shorthand and HTML freely and a view without `::` lines is untouched. An
-unknown name (`:: chart`) stays text. Shorthand blocks written outside a fence
-still draw: right after a view (only blank lines between) they join it, otherwise
-they are a view of their own.
+unknown name (`:: gauge`) stays text, and `smart_ui_check` names it. Shorthand
+blocks written outside a fence still draw: right after a view (only blank lines
+between) they join it, otherwise they are a view of their own.
+
+The catalog (`BLOCKS` in `shorthand.ts`; `CATALOG` in
+`rustcode/engine/src/smart_ui.rs` must list the same names):
+
+| Block | Items or lines | Draws |
+| --- | --- | --- |
+| `title T`, `head Title \| caption`, `h`, `p`, `divider` | one line | `<title>`, `.rc-head`, `h3`, `p`, `hr` |
+| `callout info\|ok\|warn\|bad` | text | `.rc-callout` |
+| `details Summary \| aside` | text or `- ` items | a `.rc-details` fold |
+| `tab Name` … `end` | the blocks between | `.rc-tabs`; consecutive tabs are one set |
+| `hero Label` | `- 503 \| 3.4x \| sentence` | `.rc-hero` |
+| `stats` | `- value \| label \| note \| 1,4,2` | `.rc-stats`; a fourth cell of numbers is a sparkline |
+| `bars` | `- label \| value \| shown \| tip` | `.rc-bars` |
+| `progress` | `- label \| 72% \| note` (or `3/5`) | labelled `.rc-progress` meters |
+| `chart line\|area\|bar\|stacked\|hbar\|donut\|pie Title \| size= \| line= \| band= \| end` | `x \| series…` heading, then rows | Chart.js from data, no script; a donut gets its total and a legend with values |
+| `table`, `compare`, `heatmap` | `a \| b` rows, the first the heading | `.rc-table`; `compare` turns yes/no/partial into marks, `heatmap` shades numbers from smallest to largest |
+| `list`, `kv`, `cards` | `- Title \| detail \| value`, `- Key \| value`, `- Title \| body \| badge` | `.rc-list`, a key-value `dl.rc-kv`, `.rc-cards` |
+| `steps`, `timeline` | `- [x] text`, `- 10:02 \| event \| detail` | `.rc-steps`; a timeline's dot takes the item's tint |
+| `findings` | `- high \| where \| finding \| note` | `.rc-findings`; `{ok}` marks the note fixed |
+| `files`, `tags` | `- path \| +12 -3 \| note`, `- label` | `.rc-file` rows with coloured counts, a row of badges |
+| `term`, `code lang` | lines as written | `.rc-term`, `pre` |
+| `actions` | `- Label \| message` | `.rc-chip` follow-ups |
+| `form Message \| Button` | `- select\|choice\|text\|number\|date\|check\|range name \| Label \| extra` | a `form[data-rc-send]` of labelled fields; a slider shows its value |
+| `sources` | `- Title \| url` | the folded sources |
+
+A `:: chart` writes its whole config into `canvas[data-rc-chart]` and the chart
+theme script builds it once the page has parsed, so a chart costs a heading row
+and a row per point, not a script. A chart block without a heading row (its
+first row is numbers) names no series.
 
 The same reconnect view is 1,700 characters in kit HTML and 1,089 in shorthand
 (36% fewer; `MOCK_RECONNECT_HTML` and `MOCK_RECONNECT_SHORTHAND` in
@@ -149,9 +182,11 @@ is not a blank "Building an interactive view…" for a whole turn.
 - When the fence closes, the finished page replaces the preview in the same
   frame slot: Chart.js inlined, the script run once, the height kept. Anything
   typed into the preview is lost with it, since a preview runs no script.
-- A block that names `rustcode-lib:chart.js` is **not** previewed: a preview
-  runs no script and carries no library, so its canvases could only be empty
-  boxes where the chart is the content. It shows the one-line "Building an
+- A block with a hand-written `<script src="rustcode-lib:chart.js">` is **not**
+  previewed: a preview runs no script and carries no library, so its canvases
+  could only be empty boxes where the chart is the content. A `:: chart` block
+  is: it is one block among others with a fixed height, so the rest of the view
+  streams in around its quiet box. It shows the one-line "Building an
   interactive view…" until its finished page is ready (`previewable`). A
   canvas in any other preview is a quiet box of the same size, not a blank one.
 
@@ -285,8 +320,7 @@ gained forms and charts, and lost a longer sentence about when to reach for a
 view (250 bytes before, 197 now).
 
 The `smart-ui` skill is built into the engine
-(`rustcode/engine/src/skills_builtin/smart-ui.md`, 2,188 estimated tokens
-with its front matter; a test keeps it under 2,300) and is
+(`rustcode/engine/src/skills_builtin/smart-ui.md`, about 6.8 KB, roughly 1,800 estimated tokens, since the catalog replaced most of its HTML examples; a test keeps it under 2,500) and is
 listed with the other skills as `<built-in>/smart-ui`. It holds the rule, the
 pick-by-question table (a trend is a line chart, parts of a whole a stacked bar
 or donut, a ranking `.rc-bars`, options side by side a `.rc-grid` of `.rc-card`s, many
@@ -317,15 +351,16 @@ prompt and has no `use_skill`, so it learns Smart UI from
 `harness_instructions` (`rustcode/engine/src/tools/schema.rs`), which Codex
 takes as `developerInstructions` and a Claude Code adapter as its appended
 system prompt. While the setting is on it carries a `# Smart UI` block with
-what the skill would have given: the fence, inline `<style>` and `<script>`,
-the rule, the kit's class names and the `data-rc-*` attributes with the
-instruction to use them rather than write CSS, `rustcode-lib:chart.js`, the main
-`--rc-*` variables, no card chrome, no `vh`. It carries no `rustcode-viz` types.
+what the skill would have given: the fence, the rule, every catalog block with
+its item shape, HTML only for what no block covers (kit classes, no colours of
+its own, `data-rc-send`), no card chrome, no `vh`. It carries no `rustcode-viz` types.
 While the setting is off it carries the same off note as
 the root prompt, so the agent points at Settings › Chat instead of inventing a
 fence. A client that never advertised `smartUi` hears nothing about it.
 
-The block is 1,982 bytes, and a test caps it under 2,000. It was 1,589; the
+The block is 2,194 bytes, and a test caps it under 2,500: the catalog replaced
+the kit's class list, which the catalog writes itself. Before the catalog it was
+1,982 bytes. It was 1,589; the
 pick-by-question rule and the kit's chart, sparkline, sortable-table and hover
 pieces cost about 390, paid on every turn of every external thread, so it is
 written as tightly as the rule allows and the cap is a guard against drift.
@@ -392,6 +427,8 @@ all. It reports:
   `XMLHttpRequest`, sockets, storage, `document.write`, `@import`, `vh` units,
   and `CanvasText`/`AccentColor` inside a script (a canvas draws nothing with a
   system colour);
+- a `::` name that is not in the catalog (it would show as text), with the line
+  and the blocks there are;
 - style the kit already sets, with the line: a colour written out (hex, `rgb()`,
   `hsl()`, or a `color`/`background`/`border-color` value that is not a
   `var(--rc-*)`), a `font-size` or `font-family`, a fixed `height` in px, and a

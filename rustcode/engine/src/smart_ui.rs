@@ -161,6 +161,23 @@ fn shorthand_title(line: &str) -> Option<&str> {
         .filter(|title| !title.is_empty())
 }
 
+/// The shorthand catalog the desktop app draws (`apps/desktop/src/smartui/shorthand.ts`,
+/// `BLOCKS`); any other `::` name stays text in the view.
+const CATALOG: &[&str] = &[
+    "title", "head", "h", "p", "callout", "divider", "tab", "end", "details", "hero", "stats",
+    "bars", "progress", "chart", "heatmap", "table", "compare", "list", "kv", "cards", "steps",
+    "timeline", "findings", "files", "tags", "term", "code", "actions", "form", "sources",
+];
+
+/// A `::` line whose name is not in [`CATALOG`], with that name.
+fn unknown_block(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("::")?.trim_start();
+    let name = &rest[..rest
+        .find(|c: char| !c.is_ascii_lowercase())
+        .unwrap_or(rest.len())];
+    (!name.is_empty() && !CATALOG.contains(&name)).then_some(name)
+}
+
 /// The value of `name` in one tag, unquoted when it is quoted.
 fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     // `to_ascii_lowercase` keeps every byte offset, so the offsets index `tag` too.
@@ -376,6 +393,13 @@ pub(crate) fn check(args: &Value) -> ToolExecutionOutput {
             if trimmed.starts_with("::") {
                 in_sources = trimmed[2..].trim_start().starts_with("sources");
                 shorthand_titled = shorthand_titled.or_else(|| shorthand_title(line));
+                if let Some(name) = unknown_block(line) {
+                    problems.push(format!(
+                        "line {}: `:: {name}` is not a catalog block and shows as text; the blocks are {}",
+                        index + 1,
+                        CATALOG.join(", ")
+                    ));
+                }
             } else if trimmed.is_empty() || trimmed.starts_with('<') {
                 in_sources = false;
             }
@@ -893,6 +917,18 @@ mod tests {
             text.contains("line 2:") && text.contains("network"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_check_names_a_block_the_catalog_does_not_have() {
+        let text = checked(":: title X\n:: chart line Runs\nday | runs\nMon | 3\n\n:: gauge\n- 40")
+            .content;
+        assert!(
+            text.contains("line 6: `:: gauge` is not a catalog block"),
+            "{text}"
+        );
+        assert!(!text.contains("`:: chart`"), "{text}");
+        assert!(!text.contains("`:: title`"), "{text}");
     }
 
     #[test]

@@ -184,7 +184,7 @@
 7 apps/desktop/src/smartui/page.ts
 7 apps/desktop/src/smartui/parse.ts
 17 apps/desktop/src/smartui/selection.ts
-24 apps/desktop/src/smartui/shorthand.ts
+8 apps/desktop/src/smartui/shorthand.ts
 85 apps/desktop/src/smartui/smartui.test.ts
 6 apps/desktop/src/state/accountSignIn.ts
 3 apps/desktop/src/state/activityReplay.test.ts

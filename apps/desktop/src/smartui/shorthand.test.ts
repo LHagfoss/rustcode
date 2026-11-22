@@ -117,7 +117,7 @@ describe("shorthand", () => {
   });
 
   test("an unknown name stays text", () => {
-    expect(expandShorthand(":: chart\n- a | 1")).toBe(":: chart\n- a | 1");
+    expect(expandShorthand(":: widget\n- a | 1")).toBe(":: widget\n- a | 1");
   });
 
   test("cells split outside backticks and HTML tags/code only, and inline keeps HTML", () => {
