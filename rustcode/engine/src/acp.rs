@@ -1,5 +1,6 @@
 mod agents;
 mod attachments;
+pub(crate) mod builtin;
 mod capabilities;
 pub(crate) mod clients;
 mod commands;
@@ -3555,7 +3556,7 @@ async fn dispatch_request(
                 .get(&session_id)
                 .map(|session| {
                     (
-                        Arc::clone(&session.state),
+                        Arc::clone(&session.agent),
                         session.cwd.clone(),
                         Arc::clone(&session.turns),
                         Arc::clone(&session.task_events),
@@ -3565,7 +3566,7 @@ async fn dispatch_request(
                     )
                 });
             let Some((
-                state,
+                agent,
                 cwd,
                 turns,
                 task_events,
@@ -3582,10 +3583,8 @@ async fn dispatch_request(
                 .iter()
                 .any(|block| matches!(block, ContentBlock::Image(_)));
             if has_images {
-                if let Some(message) = state.lock().await.image_support_error() {
-                    return Err(
-                        agent_client_protocol::Error::invalid_params().data(message.to_string())
-                    );
+                if let Some(message) = agent.image_support_error().await {
+                    return Err(agent_client_protocol::Error::invalid_params().data(message));
                 }
             }
             let text = prompt_input(&request.prompt)
@@ -3603,7 +3602,7 @@ async fn dispatch_request(
             if !has_images && commands::is_report(&text) {
                 let session_clients = server.clients.session(&session_id);
                 connection.spawn(async move {
-                    match prompt::run_report(&state, &session_id, &text, &session_clients).await {
+                    match agent.report(&session_id, &text, &session_clients).await {
                         Ok(stop_reason) => {
                             respond_typed(responder, PromptResponse::new(stop_reason))?
                         }
@@ -3626,31 +3625,31 @@ async fn dispatch_request(
             // The turn belongs to the engine, not this connection: it
             // runs on if the client goes, and only its answer is lost.
             spawn_turn(async move {
-                let result = prompt::run_prompt(
-                    Arc::clone(&state),
-                    cwd,
-                    scheduled_turn,
-                    session_id.clone(),
-                    task_events,
-                    known_task_ids,
-                    terminal_backlog,
-                    terminal_overflow,
-                    text,
-                    origin,
-                    session_clients,
-                    prompt_server.client,
-                    prompt_server.auto_approve,
-                    Some(prompt_server.remote.clone()),
-                    wakeup_turns,
-                )
-                .await;
+                let result = agent
+                    .prompt(builtin::BuiltinTurn {
+                        session_id: session_id.clone(),
+                        cwd,
+                        text,
+                        origin,
+                        scheduled: scheduled_turn,
+                        turns: wakeup_turns,
+                        task_events,
+                        known_task_ids,
+                        terminal_backlog,
+                        terminal_overflow,
+                        clients: session_clients,
+                        client: prompt_server.client,
+                        auto_approve: prompt_server.auto_approve,
+                        remote: Some(prompt_server.remote.clone()),
+                    })
+                    .await;
                 prompt_server
                     .presence
                     .turn_finished(&session_id, &presence_cwd);
 
                 // Steers the turn ended before reading go back to the
                 // client, which sends them next.
-                let unused = steer::end(&mut *state.lock().await, &session_id);
+                let unused = agent.end_steers(&session_id).await;
                 match result {
                     Ok(stop_reason) => {
                         respond_typed(
