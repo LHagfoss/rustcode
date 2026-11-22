@@ -556,6 +556,14 @@ export function Kbd({ children }: { children: ReactNode }) {
  * A switch: a pill knob as tall as its track (docs/design.md › Active controls), so the
  * button's own box is the track's 20 px and the row it sits in does not grow.
  */
+/** How far the switch's knob travels, in px: the track's width less the knob's and both insets. */
+const SWITCH_TRAVEL = 16;
+
+/**
+ * A switch. A press toggles it; the knob can also be dragged across and let go on either side.
+ * Held down, the knob stretches toward the side it would move to, so the press reads before the
+ * release. Keyboard Space and Enter toggle it as a button does.
+ */
 export function Switch({
   checked,
   onChange,
@@ -567,6 +575,20 @@ export function Switch({
   label: string;
   disabled?: boolean;
 }) {
+  const [pressed, setPressed] = useState(false);
+  // The knob's offset while it is dragged (0 off, SWITCH_TRAVEL on); null when it rests.
+  const [drag, setDrag] = useState<number | null>(null);
+  const gesture = useRef<{ x: number; moved: boolean } | null>(null);
+  const end = (commit: boolean, x?: number) => {
+    const g = gesture.current;
+    gesture.current = null;
+    setPressed(false);
+    setDrag(null);
+    if (!commit || !g) return;
+    const next = g.moved && x !== undefined ? knobAt(x, g.x, checked) > SWITCH_TRAVEL / 2 : !checked;
+    if (next !== checked) onChange(next);
+  };
+  const offset = drag ?? (checked ? SWITCH_TRAVEL : 0);
   return (
     <button
       type="button"
@@ -574,20 +596,48 @@ export function Switch({
       aria-checked={checked}
       aria-label={label}
       disabled={disabled}
-      onClick={() => onChange(!checked)}
+      // A pointer toggles on release (below); a click with no pointer behind it is the keyboard's.
+      onClick={(e) => {
+        if (e.detail === 0) onChange(!checked);
+      }}
+      onPointerDown={(e) => {
+        if (e.button !== 0 || disabled) return;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        gesture.current = { x: e.clientX, moved: false };
+        setPressed(true);
+      }}
+      onPointerMove={(e) => {
+        const g = gesture.current;
+        if (!g) return;
+        if (!g.moved && Math.abs(e.clientX - g.x) < 3) return;
+        g.moved = true;
+        setDrag(knobAt(e.clientX, g.x, checked));
+      }}
+      onPointerUp={(e) => end(true, e.clientX)}
+      onPointerCancel={() => end(false)}
+      onLostPointerCapture={() => gesture.current && end(false)}
       className={cx(
-        "relative inline-flex h-5 w-11 shrink-0 items-center rounded-full transition-[background-color] duration-200 ease-snappy disabled:opacity-40",
-        checked ? "bg-accent" : "bg-fill-strong",
+        "relative inline-flex h-5 w-11 shrink-0 touch-none items-center rounded-full transition-[background-color] duration-200 ease-snappy disabled:opacity-40",
+        (drag === null ? checked : drag > SWITCH_TRAVEL / 2) ? "bg-accent" : "bg-fill-strong",
       )}
     >
       <span
         className={cx(
-          "absolute top-0.5 left-0.5 h-4 w-6 rounded-full bg-knob shadow-knob transition-transform duration-200 ease-snappy",
-          checked ? "translate-x-4" : "translate-x-0",
+          "absolute top-0.5 left-0.5 h-4 rounded-full bg-knob shadow-knob ease-snappy",
+          // Pressed, the knob grows 4px toward the free side; its offset gives back what the growth
+          // takes as it travels, so the stretched knob stays inside the track all the way across.
+          pressed ? "w-7" : "w-6",
+          drag === null ? "transition-[transform,width] duration-200" : "transition-[width] duration-150",
         )}
+        style={{ transform: `translateX(${pressed ? offset - (4 * offset) / SWITCH_TRAVEL : offset}px)` }}
       />
     </button>
   );
+}
+
+/** The knob's offset for a pointer at `x` that went down at `start`, clamped to the track. */
+function knobAt(x: number, start: number, checked: boolean): number {
+  return Math.min(SWITCH_TRAVEL, Math.max(0, (checked ? SWITCH_TRAVEL : 0) + x - start));
 }
 
 /**
@@ -605,6 +655,7 @@ export function Segments<T extends string>({
   onIntent,
   fill,
   tabs,
+  size = "sm",
 }: {
   value: T;
   options: { value: T; label: string; disabled?: boolean }[];
@@ -616,16 +667,41 @@ export function Segments<T extends string>({
   fill?: boolean;
   /** A tab strip: the id of the panel the tabs control. */
   tabs?: { controls: string };
+  /** `md` is a settings row's control (24px segments), `sm` a toolbar's (20px). */
+  size?: "sm" | "md";
 }) {
+  const height = size === "md" ? "h-6" : "h-5";
   // The selected segment's pill slides to the new one instead of jumping.
   const group = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
   const intent = useIntentRest((next: T) => onIntent?.(next));
+  // A press on the track (not a tab strip): the thumb swells while held and follows the pointer
+  // across the segments; the release picks the one it is over. `shown` is that segment mid-gesture.
+  const [held, setHeld] = useState<T | null>(null);
+  const pressing = useRef(false);
+  const shown = held ?? value;
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures when the choice or labels change
   useLayoutEffect(() => {
     const el = group.current?.querySelector<HTMLElement>("[data-on]");
     setThumb(el ? { left: el.offsetLeft, width: el.offsetWidth } : null);
-  }, [value, options.map((o) => o.label).join()]);
+  }, [shown, options.map((o) => o.label).join()]);
+  const optionAt = (x: number): T | undefined => {
+    const buttons = group.current?.querySelectorAll<HTMLButtonElement>("button[data-value]") ?? [];
+    let best: { value: T; distance: number } | undefined;
+    for (const button of buttons) {
+      if (button.disabled) continue;
+      const r = button.getBoundingClientRect();
+      const distance = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
+      if (!best || distance < best.distance) best = { value: button.dataset.value as T, distance };
+    }
+    return best?.value;
+  };
+  const release = (commit: boolean) => {
+    if (!pressing.current) return;
+    pressing.current = false;
+    if (commit && held !== null && held !== value) onChange(held);
+    setHeld(null);
+  };
   // The pick's label sits on the white pill, so it takes the pill's dark fg. Before the first
   // measure the button draws the pill itself; a measured pill with no width (a track measured while
   // hidden) draws none, so its label keeps the track's own fg instead of dark on dark.
@@ -640,41 +716,64 @@ export function Segments<T extends string>({
     <div
       ref={group}
       {...{ role: tabs ? "tablist" : "radiogroup", "aria-label": label }}
+      {...(!tabs && {
+        onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+          const at = e.button === 0 ? optionAt(e.clientX) : undefined;
+          if (at === undefined) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          pressing.current = true;
+          setHeld(at);
+        },
+        onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+          if (!pressing.current) return;
+          const at = optionAt(e.clientX);
+          if (at !== undefined && at !== held) setHeld(at);
+        },
+        onPointerUp: () => release(true),
+        onPointerCancel: () => release(false),
+        onLostPointerCapture: () => release(false),
+      })}
       className={cx(
         "relative",
-        tabs ? "gap-1" : "rounded-full bg-fill p-[2px]",
-        fill ? "flex w-full" : "inline-flex w-fit",
+        tabs ? "gap-1" : "touch-none rounded-full bg-fill p-[3px]",
+        fill ? "flex w-full" : "inline-flex w-fit shrink-0",
       )}
     >
       {thumb && (
         <span
           aria-hidden
           className={cx(
-            "absolute top-0 left-0 transition-[transform,width] duration-200 ease-snappy",
-            tabs ? "h-7 rounded-lg bg-fill" : "h-5 rounded-full bg-knob shadow-knob",
+            "absolute top-0 left-0 transition-[translate,width,scale] duration-200 ease-snappy",
+            tabs ? "h-7 rounded-lg bg-fill" : cx(height, "rounded-full bg-knob shadow-knob"),
+            held !== null && "scale-[1.04]",
           )}
-          style={{ transform: `translate(${thumb.left}px, ${tabs ? 0 : 2}px)`, width: thumb.width }}
+          style={{ translate: `${thumb.left}px ${tabs ? 0 : 3}px`, width: thumb.width }}
         />
       )}
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
-          data-on={o.value === value || undefined}
+          data-value={o.value}
+          data-on={o.value === shown || undefined}
           {...(tabs
             ? { role: "tab", "aria-selected": o.value === value, "aria-controls": tabs.controls }
             : { role: "radio", "aria-checked": o.value === value })}
           disabled={o.disabled}
-          onClick={() => onChange(o.value)}
+          // On the track a pointer picks on release (above); a click with no pointer behind it is
+          // the keyboard's. A tab strip picks on click.
+          onClick={(e) => {
+            if (tabs || e.detail === 0) onChange(o.value);
+          }}
           onPointerEnter={() => intent.start(o.value)}
           onPointerLeave={intent.cancel}
           onFocus={() => intent.start(o.value)}
           onBlur={intent.cancel}
           className={cx(
             "relative whitespace-nowrap font-medium disabled:opacity-40",
-            tabs ? "h-7 rounded-lg px-3 text-callout" : "h-5 rounded-full px-2 text-caption",
+            tabs ? "h-7 rounded-lg px-3 text-callout" : cx(height, "rounded-full px-2 text-caption"),
             fill && "min-w-0 flex-1",
-            o.value === value ? selected : "text-fg-muted hover:text-fg",
+            o.value === shown ? selected : "text-fg-muted hover:text-fg",
           )}
         >
           {o.label}

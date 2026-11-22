@@ -189,6 +189,23 @@ knob and the track's fill answer a toggle over 200 ms. The button's own box is
 the track's 20 px, so a switch in a Settings row does not make the row taller
 than its neighbours.
 
+A segmented track is inset 3 px around its pill (`Segments`; `Choice` is its
+24 px size), so the pill reads as sitting inside the track rather than filling
+it.
+
+Knobs answer the press, not just the release:
+
+- Held, a knob swells: a switch's grows to 28 px toward the side it would move
+  to (staying inside the track), a segmented pill scales to 104%, a slider's
+  thumb to 115%, each over 200 ms `--ease-snappy`.
+- A switch and a segmented track can be dragged as well as pressed. A
+  segmented pill follows the pointer to the segment under it and picks it on
+  release. A switch's knob follows the pointer and lands on the side it is
+  let go nearer; a press without a drag toggles. A cancelled gesture changes
+  nothing.
+- The keyboard still picks with a click (Space, Enter, arrows), so a pointer
+  gesture commits once, on release, and never twice.
+
 ## Focus
 
 - Controls normally use `:focus-visible` for a ring: 2px `focus` at 40%, offset 2px. It is
@@ -457,7 +474,7 @@ that change use `tabular`.
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
-  selection slides (`transform`) to the new segment. A count that changes rolls
+  selection slides (`translate`) to the new segment. A count that changes rolls
   its digits vertically in 220ms `--ease-snappy` (`ui/RollingNumber.tsx`),
   keeping each column's place from the right, so 9 → 10 rolls the units and
   grows a tens.

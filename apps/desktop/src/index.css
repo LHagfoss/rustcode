@@ -1021,6 +1021,11 @@
   border-radius: 9999px;
   background: var(--rc-knob);
   box-shadow: var(--rc-knob-shadow);
+  transition: scale 200ms var(--ease-snappy);
+}
+/* Held, the thumb swells like the switch's knob and the segmented control's pill. */
+.rc-range:active::-webkit-slider-thumb {
+  scale: 1.15;
 }
 .rc-range::-moz-range-track {
   height: 8px;
@@ -1040,6 +1045,10 @@
   border-radius: 9999px;
   background: var(--rc-knob);
   box-shadow: var(--rc-knob-shadow);
+  transition: scale 200ms var(--ease-snappy);
+}
+.rc-range:active::-moz-range-thumb {
+  scale: 1.15;
 }
 
 /*
