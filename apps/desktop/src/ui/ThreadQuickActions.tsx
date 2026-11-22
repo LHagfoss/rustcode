@@ -46,7 +46,12 @@ export function ThreadQuickActions({
           checked: done,
           onSelect: () => (done ? void setThreadStatus(threadId, "idle") : settleThread(threadId)),
         },
-        { label: "Copy Link", icon: <Copy />, onSelect: () => copyThreadLink(threadId) },
+        {
+          label: "Copy",
+          description: "Copy Link",
+          icon: <Copy />,
+          onSelect: () => copyThreadLink(threadId),
+        },
       ]}
     />
   );
