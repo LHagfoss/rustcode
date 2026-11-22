@@ -416,7 +416,7 @@
 4 apps/desktop/src/state/themeActions.ts
 41 apps/desktop/src/state/thread.test.ts
 41 apps/desktop/src/state/thread.ts
-29 apps/desktop/src/state/threadActions.ts
+27 apps/desktop/src/state/threadActions.ts
 18 apps/desktop/src/state/threadFormat.ts
 8 apps/desktop/src/state/threadKeys.ts
 5 apps/desktop/src/state/threadListGuards.ts
@@ -565,7 +565,7 @@
 13 apps/desktop/src/ui/ShortcutSettings.tsx
 180 apps/desktop/src/ui/Sidebar.tsx
 2 apps/desktop/src/ui/SidebarDensitySetting.tsx
-57 apps/desktop/src/ui/SidebarThreadRow.tsx
+55 apps/desktop/src/ui/SidebarThreadRow.tsx
 2 apps/desktop/src/ui/SidebarToolbar.tsx
 43 apps/desktop/src/ui/SmartUIView.tsx
 18 apps/desktop/src/ui/StatisticsCharts.tsx
