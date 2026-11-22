@@ -47,3 +47,7 @@ docs/superpowers/
 
 # Thread-tools eval transcripts (each run writes one).
 /scripts/evals/thread-tools/runs/
+
+# per-user agent skills live in ~/.agents/skills
+/.agents/
+/.claude/

@@ -27,8 +27,9 @@ silently, and an excuse in a comment lets a hack pass review.
     `prettier-ignore`, `rustfmt::…`) and a first-line shebang.
 - An existing comment is removed by its kind: a tautology or stale note is
   deleted; an excuse is deleted and the hack gets an issue; a decision moves
-  into an ADR here or the doc for its area. `/delete-comment`
-  (`.agents/skills/delete-comment/SKILL.md`) runs the pass on one area.
+  into an ADR here or the doc for its area. The global
+  `/delete-comment` skill (`~/.agents/skills/delete-comment`) runs the pass
+  on one area.
 
 ## Consequences
 
