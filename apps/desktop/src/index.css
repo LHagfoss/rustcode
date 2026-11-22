@@ -1789,3 +1789,34 @@
     var(--rc-bg) 100%
   );
 }
+
+/*
+ * An opened row's header pinned under the thread header while what it opened scrolls under it
+ * (ui/StuckFold.tsx). Pinned, it reads as a bar floating over the text: the sidebar's solid hue
+ * (a step lifted off the pane, as the composer's drawer), a hairline ring and the composer's slight
+ * shadow, a little wider than the lane so its words keep their place. An in-row header draws the
+ * bar behind itself, so pinning it changes no row's height.
+ */
+.rc-sticky-head {
+  position: relative;
+  z-index: 5;
+  isolation: isolate;
+}
+.rc-stuck,
+.rc-sticky-head[data-stuck]::before {
+  border-radius: 10px;
+  background: var(--rc-sidebar);
+  box-shadow:
+    0 3px 12px -4px var(--rc-shadow-soft),
+    0 0 0 1px var(--rc-separator);
+}
+.rc-stuck {
+  margin-inline: -12px;
+  padding-inline: 12px;
+}
+.rc-sticky-head[data-stuck]::before {
+  content: "";
+  position: absolute;
+  inset: -4px -12px;
+  z-index: -1;
+}
