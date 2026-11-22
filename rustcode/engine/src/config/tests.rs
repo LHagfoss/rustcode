@@ -1,6 +1,6 @@
 use super::*;
-use crate::app::ChatMessage;
 use crate::sessions::*;
+use rustcode_core::ChatMessage;
 
 #[test]
 fn sandbox_modes_round_trip_and_default_to_trusted() {
@@ -113,10 +113,7 @@ fn anthropic_is_configured_for_api_key_authentication_only() {
         provider.base_url.as_deref(),
         Some("https://api.anthropic.com/v1")
     );
-    assert_eq!(
-        provider.auth_methods,
-        vec![crate::provider_auth::AuthMethod::ApiKey]
-    );
+    assert_eq!(provider.auth_methods, vec![AuthMethod::ApiKey]);
 }
 
 #[test]
@@ -142,10 +139,10 @@ auth_methods = []
 #[test]
 fn project_model_cannot_replace_user_credential_binding() {
     let mut config = AppConfig::default();
-    config.models[0].credential = Some(crate::provider_auth::CredentialRef {
+    config.models[0].credential = Some(CredentialRef {
         provider: "openai".into(),
         account: "user-account-id".into(),
-        method: crate::provider_auth::AuthMethod::ChatGpt,
+        method: AuthMethod::ChatGpt,
     });
     let project: TomlConfig = toml::from_str(
         r#"[[models]]
@@ -1449,7 +1446,7 @@ fn test_queued_history_writes_coalesce_and_flush() {
 fn revisioned_history_write_skips_an_identical_pending_snapshot() {
     let dir = temp_dir("history-queue-dedup");
     let path = dir.join(HISTORY_FILE);
-    let mut history = crate::app::History::default();
+    let mut history = rustcode_core::History::default();
     history.push(ChatMessage::new("user", "same"));
     let revision = history.revision();
 
