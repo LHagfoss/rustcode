@@ -251,8 +251,8 @@ function ThreadMenuItems({
       </>
     );
   }
-  // Quick actions first, then rename, snooze, the thread's state and what it changed,
-  // then the worktree's own actions; the occasional tools sit under More, and Trash last.
+  // Quick actions first, then rename and snooze, then the worktree's own actions; review and
+  // the occasional tools sit under More, and Trash last.
   return (
     <>
       <ThreadQuickActions threadId={session.id} Item={Item} />
@@ -369,25 +369,6 @@ function ThreadMenuItems({
           </Menu.Portal>
         </Menu.Sub>
       )}
-      <Separator className={menuSeparator} />
-      {status !== "review" && (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "review")}>
-          <Eye size={13} /> Mark for Review
-        </Item>
-      )}
-      {status === "review" && (
-        <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
-          <CircleDashed size={13} /> Clear Status
-        </Item>
-      )}
-      {statusMissing && (
-        <div className="px-2 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
-      )}
-      {!remote && (
-        <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
-          <FileDiff size={13} /> Review Changes
-        </Item>
-      )}
       {worktree && (
         <>
           <Separator className={menuSeparator} />
@@ -428,6 +409,25 @@ function ThreadMenuItems({
             collisionPadding={surfaceCollisionPadding}
             className={menuSurface}
           >
+            {status !== "review" && (
+              <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "review")}>
+                <Eye size={13} /> Mark for Review
+              </Item>
+            )}
+            {status === "review" && (
+              <Item className={menuItem} onSelect={() => void setThreadStatus(session.id, "idle")}>
+                <CircleDashed size={13} /> Clear Status
+              </Item>
+            )}
+            {statusMissing && (
+              <div className="px-2 pb-1 text-caption text-fg-faint">Kept by the app: {statusMissing}</div>
+            )}
+            {!remote && (
+              <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
+                <FileDiff size={13} /> Review Changes
+              </Item>
+            )}
+            <Separator className={menuSeparator} />
             <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
               <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
             </Item>
