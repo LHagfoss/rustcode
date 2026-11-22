@@ -70,11 +70,6 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
     "a glyph in the machine icon picker; its fill marks the one chosen",
   ],
   ["ui/ShortcutSettings.tsx", "recording ?", "the keycap button; its fill marks recording"],
-  [
-    "ui/settingsKit.tsx",
-    "enabled:hover:bg-fill enabled:active:bg-fill-strong",
-    "a settings row's Action: one control shape in a card",
-  ],
   ["ui/Settings.tsx", "aria-current={s.id === section", "a settings section row"],
 ];
 
