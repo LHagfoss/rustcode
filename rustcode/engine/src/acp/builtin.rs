@@ -124,4 +124,18 @@ pub(crate) trait BuiltinAgent: Send + Sync {
         &self,
         approvals: Vec<crate::config::TimedCommandApproval>,
     ) -> AgentFuture<'_, ()>;
+
+    /// The thread's transcript.
+    fn history(&self) -> AgentFuture<'_, rustcode_core::History>;
+
+    /// What a client joining the open thread gets besides its transcript.
+    fn attach_snapshot(&self) -> AgentFuture<'_, AttachSnapshot>;
+}
+
+/// What a client joining an open built-in thread gets besides its transcript.
+pub(crate) struct AttachSnapshot {
+    /// The thread's last compaction, shown where it happened in the replay.
+    pub(crate) compaction: Option<crate::app::CompactionStats>,
+    pub(crate) config_options: Vec<SessionConfigOption>,
+    pub(crate) usage: agent_client_protocol::schema::v1::SessionUpdate,
 }
