@@ -104,10 +104,10 @@ import { useStuckFold } from "./StuckFold";
 import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
-import { estimatedRowHeight } from "./transcriptHeight";
+import { estimatedRowHeight, rowGap } from "./transcriptHeight";
 import { UpdatesRow } from "./UpdatesRow";
 
-export { estimatedRowHeight } from "./transcriptHeight";
+export { estimatedRowHeight, rowGap } from "./transcriptHeight";
 
 export type Row = {
   key: string;
@@ -279,24 +279,6 @@ function selecting(): boolean {
   return !!s && s.rangeCount > 0 && !s.isCollapsed;
 }
 
-/**
- * The air above a row, from the transcript's own two values: a turn starts and a footer ends on the
- * wide one, everything inside a turn sits on the narrow one, and the first line under a divider
- * takes the narrow one. The rows draw it and so does `estimateSize`, because a row that mounts with
- * a size that leaves this out measures a gap taller a frame later — and the pinned transcript takes
- * that difference back in one step, moving every row above it, the message just sent included.
- */
-export function rowGap(rows: readonly Row[], index: number): number {
-  if (index <= 0) return 0;
-  const item = rows[index]?.item;
-  const prev = rows[index - 1]?.item;
-  // A divider is the turn's own first line, and a sent bubble already ends on the 24px line its
-  // time and actions keep (`META_LINE`): the row under either takes the narrow gap, or the air
-  // between a message and its turn came to 52px where every other turn break is 28.
-  if ((prev?.kind === "notice" && prev.tone === "info") || prev?.kind === "user") return ITEM_GAP;
-  return item?.kind === "user" ? TURN_GAP : ITEM_GAP;
-}
-
 function searchable(item: TranscriptItem): string {
   switch (item.kind) {
     case "user":
@@ -349,15 +331,6 @@ function paintMatches(root: HTMLElement | null, query: string, current: HTMLElem
  */
 const LANE_MOTION = "transition-[translate] duration-200 ease-snappy";
 
-/**
- * The transcript's vertical rhythm, in two values: 14px between the items of a
- * turn (narration, a tool row, a group, the answer) and 28px between turns, which
- * is where a message starts and a footer ends. A row draws no air of its own, so
- * these two decide every gap in the lane and nothing reserves room for a hover.
- */
-const ITEM_GAP = 14;
-const TURN_GAP = 28;
-
 /** The air above the transcript's first row, under the glass header. */
 export const FIRST_ROW_PAD = 20;
 
@@ -390,6 +363,7 @@ const TurnFooter = memo(function TurnFooter({
   checkpoint,
   items,
   model,
+  latest,
 }: {
   item: Extract<TranscriptItem, { kind: "turnEnd" }>;
   folded: boolean;
@@ -400,10 +374,12 @@ const TurnFooter = memo(function TurnFooter({
   checkpoint?: Checkpoint;
   items?: TranscriptItem[];
   model?: string;
+  latest?: boolean;
 }) {
   return (
     <TurnEndRow
       item={item}
+      latest={latest}
       folded={folded}
       timeInFold={timeInFold}
       threadId={threadId}
@@ -1400,6 +1376,7 @@ export function Transcript({
                         {...footerLineOf(item.id)}
                         items={turnItems[item.id]}
                         model={model}
+                        latest={item.id === latestEndId && !!turnReply.byEnd[item.id]?.text}
                       />
                     ) : null}
                   </div>

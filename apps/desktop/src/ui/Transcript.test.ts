@@ -24,12 +24,12 @@ const thought = (id: string, text: string, done: boolean): Row => ({
 });
 
 describe("the air above a transcript row", () => {
-  test("a turn starts and ends on the wide gap, work inside it on the narrow one", () => {
+  test("a turn starts and ends on the wide gap, its steps sit tight", () => {
     const rows = [user("m1"), tool("c1"), tool("c2"), user("m2")];
     expect(rowGap(rows, 0)).toBe(0);
     // A sent bubble ends on its own 24px time line, so the turn under it takes the narrow gap.
-    expect(rowGap(rows, 1)).toBe(14);
-    expect(rowGap(rows, 2)).toBe(14);
+    expect(rowGap(rows, 1)).toBe(12);
+    expect(rowGap(rows, 2)).toBe(4);
     // The message that starts the next turn takes the wide gap again.
     expect(rowGap(rows, 3)).toBe(28);
   });
@@ -41,18 +41,27 @@ describe("the air above a transcript row", () => {
       { key: "w", item: { kind: "user", id: "w", text: "A delegate finished", wake: true } },
       tool("c2"),
     ];
-    expect(rowGap(rows, 1)).toBe(14);
+    expect(rowGap(rows, 1)).toBe(12);
     // A wake row starts a turn, so it takes the wide gap itself.
     expect(rowGap(rows, 2)).toBe(28);
     // A wake divider is the turn's own first line: the work under it sits on it.
-    expect(rowGap(rows, 3)).toBe(14);
+    expect(rowGap(rows, 3)).toBe(12);
+  });
+
+  test("an answer's footer sits 16px under it, and an opened fold 8px over its steps", () => {
+    const reply: Row = { key: "r", item: { kind: "assistant", id: "r", text: "Done." } };
+    const end: Row = { key: "e", item: { kind: "turnEnd", id: "e", outcome: "completed" } };
+    expect(rowGap([reply, end], 1)).toBe(16);
+    const fold = { key: "f", fold: { key: "f" } } as Row;
+    expect(rowGap([fold, tool("c1")], 1)).toBe(4);
+    expect(rowGap([fold, reply], 1)).toBe(8);
   });
 });
 
 describe("the height a row is reserved at", () => {
   test("a sent message is its bubble and the time line under it", () => {
-    // 12px of padding each way, one line, then the 22px line the time keeps.
-    expect(estimatedRowHeight(user("m1"))).toBe(12 * 2 + 23 + 24);
+    // 8px of padding each way, one 24px line, then the line the time keeps.
+    expect(estimatedRowHeight(user("m1"))).toBe(8 * 2 + 24 + 24);
     // Pictures and files add their chip row above the bubble.
     expect(estimatedRowHeight(user("m1", "hi")) + 32).toBe(
       estimatedRowHeight({
@@ -85,9 +94,9 @@ describe("the height a row is reserved at", () => {
       { key: "activity", activity: "Working" },
     ];
     const reserved = rows.map((row, i) => rowGap(rows, i) + estimatedRowHeight(row));
-    expect(reserved[1]).toBe(28 + 12 * 2 + 23 + 24);
-    expect(reserved[2]).toBe(14 + 35);
-    expect(reserved[3]).toBe(14 + 24);
+    expect(reserved[1]).toBe(28 + 8 * 2 + 24 + 24);
+    expect(reserved[2]).toBe(12 + 35);
+    expect(reserved[3]).toBe(12 + 24);
   });
 
   test("a footer nothing draws takes no room, gap included", () => {

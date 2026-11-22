@@ -84,6 +84,21 @@
   --radius-2xl: var(--rc-radius-2xl);
   --radius-3xl: var(--rc-radius-3xl);
   --radius-full: 9999px;
+  /* The same steps named by role, so a component picks its role and never a value
+     (docs/design.md › Radius): inline code and keycaps, compact controls (H20–28),
+     standard controls and single-line rows (H32–40), code blocks, diffs and file
+     cards, message bubbles and independent cards, and the composer, dialogs and panels. */
+  --radius-inline: max(2px, calc(var(--rc-radius-xs) - 2px));
+  --radius-chip: var(--rc-radius-sm);
+  --radius-row: var(--rc-radius-lg);
+  --radius-block: var(--rc-radius-xl);
+  --radius-bubble: var(--rc-radius-2xl);
+  --radius-panel: var(--rc-radius-3xl);
+
+  /* The chat's reading lines, riding the text size: a reply and a sent message on 24px at
+     14px, a row's secondary line on 20px at 13px (docs/design.md › Type). */
+  --leading-chat: calc(var(--text-body) + 10px);
+  --leading-chat-sub: calc(var(--text-callout) + 7px);
 
   /* Two levels of elevation, each with the 1px edge ring. */
   --shadow-*: initial;

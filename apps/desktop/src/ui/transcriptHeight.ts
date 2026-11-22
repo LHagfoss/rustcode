@@ -6,8 +6,8 @@ import type { Row } from "./Transcript";
  * The pieces an estimate is made of, in the sizes the rows are drawn at: a sent bubble's padding and
  * the line it sits on, the time line under it, and the chips above it when it carries pictures or files.
  */
-const BUBBLE_PADDING = 12;
-const BODY_LINE = 23;
+const BUBBLE_PADDING = 8;
+const BODY_LINE = 24;
 const META_LINE = 24;
 const ATTACHMENT_CHIPS = 32;
 /** A row of picture thumbnails (ui/Rows.tsx `THUMBNAIL`, 120px) and the 6px under it. */
@@ -42,8 +42,8 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (item.kind === "status") return 34 + item.rows.length * 44;
   // Thoughts start collapsed; the virtualizer measures the row when expanded.
   if (item.kind === "thought") return 17;
-  // A sent bubble: its pictures and files above it, 12px of padding each way, its text, and the
-  // 22px line under it that holds the time (shown on hover, laid out always). A long one folds at
+  // A sent bubble: its pictures and files above it, 8px of padding each way, its text, and the
+  // 24px line under it that holds the time (shown on hover, laid out always). A long one folds at
   // `COLLAPSED_MESSAGE_HEIGHT` and keeps its "Show full message" pill, so its estimate never
   // reserves a screenful the row will not use.
   if (item.kind === "user") {
@@ -67,4 +67,36 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
 /** The lines a string wraps to in the lane, near enough for an estimate. */
 function lines(text: string, perLine: number): number {
   return Math.max(1, Math.ceil(text.length / perLine));
+}
+
+/** The transcript's vertical rhythm (docs/design.md › Type). */
+const FLOW_GAP = 4;
+const FOLD_GAP = 8;
+const ITEM_GAP = 12;
+const FOOTER_GAP = 16;
+const TURN_GAP = 28;
+
+/** A step of the work: one line of the turn's process, not its answer. */
+function flowRow(row: Row | undefined): boolean {
+  if (!row) return false;
+  if (row.group || row.agents || row.threads) return true;
+  return row.item?.kind === "tool" || row.item?.kind === "thought";
+}
+
+/**
+ * The air above a row, from the transcript's rhythm (above): a turn starts and a footer ends on the
+ * wide gap, the steps of the work sit tight, and the first line under a divider takes the narrow
+ * gap. The rows draw it and so does `estimateSize`, because a row that mounts with a size that
+ * leaves this out measures a gap taller a frame later — and the pinned transcript takes that
+ * difference back in one step, moving every row above it, the message just sent included.
+ */
+export function rowGap(rows: readonly Row[], index: number): number {
+  if (index <= 0) return 0;
+  const item = rows[index]?.item;
+  const prev = rows[index - 1]?.item;
+  if (flowRow(rows[index]) && (flowRow(rows[index - 1]) || rows[index - 1]?.fold)) return FLOW_GAP;
+  if (rows[index - 1]?.fold) return FOLD_GAP;
+  if (item?.kind === "turnEnd" && prev?.kind === "assistant") return FOOTER_GAP;
+  if ((prev?.kind === "notice" && prev.tone === "info") || prev?.kind === "user") return ITEM_GAP;
+  return item?.kind === "user" ? TURN_GAP : ITEM_GAP;
 }

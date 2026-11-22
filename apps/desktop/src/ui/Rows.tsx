@@ -240,7 +240,7 @@ export const UserRow = memo(function UserRow({
     return <NoticeRow item={{ kind: "notice", id: item.id, text: noticeLine(item.text), tone: "info" }} />;
   }
   return (
-    <div className="group ml-auto flex w-fit max-w-[80%] flex-col items-end">
+    <div className="group ml-auto flex w-fit max-w-[70%] flex-col items-end">
       {(attachments.length > 0 || stored.length > 0 || gone > 0) && (
         <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
           {attachments.map((a, i) =>
@@ -292,7 +292,7 @@ export const UserRow = memo(function UserRow({
         className={cx(
           // A card a step off the pane, not a fill that moves with the text colour. Messages sent
           // one after another soften the corners they share, so they read as one run.
-          "relative max-w-full selectable rounded-2xl bg-message p-3",
+          "relative max-w-full selectable rounded-bubble bg-message px-4 py-2 leading-chat",
           // A message after this one continues the run: the bottom-right corner joins it.
           after && "rounded-br-md",
           before && "rounded-tr-md",
@@ -447,7 +447,7 @@ function ReplyForkButton({ threadId }: { threadId: string }) {
         type="button"
         aria-label="Fork chat"
         onClick={() => void forkThread(threadId)}
-        className="inline-flex size-5 items-center justify-center rounded-md text-fg-faint hover:bg-fill hover:text-fg"
+        className="inline-flex size-6 items-center justify-center rounded-chip text-fg-faint hover:bg-fill hover:text-fg"
       >
         <GitFork size={12} />
       </button>
@@ -466,7 +466,7 @@ function ReplySideChatButton({ threadId, reply }: { threadId: string; reply: str
         type="button"
         aria-label="Ask in a side chat"
         onClick={() => void openSideChat(threadId, reply)}
-        className="inline-flex size-5 items-center justify-center rounded-md text-fg-faint hover:bg-fill hover:text-fg"
+        className="inline-flex size-6 items-center justify-center rounded-chip text-fg-faint hover:bg-fill hover:text-fg"
       >
         <MessageSquareQuote size={12} />
       </button>
@@ -644,7 +644,7 @@ function TextBox({
         <span className="font-semibold text-caption text-fg-muted">{label}</span>
         {text.trim() && <CopyButton text={text} iconOnly label={`Copy ${label.toLowerCase()}`} />}
       </div>
-      <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-md bg-fill-subtle p-2 font-mono text-caption leading-[15px] whitespace-pre-wrap break-all">
+      <pre className="selectable m-0 max-h-[420px] overflow-auto rounded-block bg-code-bg px-4 py-3 font-mono text-caption leading-[16px] whitespace-pre-wrap break-all">
         {styled ? <StyledLines lines={shown as AnsiLine[]} /> : (shown as string[]).join("\n")}
       </pre>
       {folds && (
@@ -687,7 +687,7 @@ function ArgRows({ rows }: { rows: ArgRow[] }) {
   return (
     <div>
       <span className="mb-1 block font-semibold text-caption text-fg-muted">Arguments</span>
-      <dl className="m-0 flex flex-col gap-1 rounded-md bg-fill-subtle p-2 text-caption">
+      <dl className="m-0 flex flex-col gap-1 rounded-block bg-code-bg px-4 py-3 text-caption">
         {rows.map((row) => (
           <div
             key={row.key}
@@ -842,12 +842,12 @@ export const ToolRow = memo(function ToolRow({
           type="button"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          className="-mx-0.5 flex min-h-6 w-fit max-w-[calc(100%+4px)] items-center gap-1.5 rounded-sm px-0.5 text-left leading-relaxed hover:bg-fill-subtle"
+          className="-mx-0.5 flex min-h-6 w-fit max-w-[calc(100%+4px)] items-center gap-1.5 rounded-chip px-0.5 text-left leading-chat hover:bg-fill-subtle"
         >
           <span className="flex w-[18px] shrink-0 justify-center">
             {running ? (
               <Spinner size={14} />
-            ) : failed ? (
+            ) : failed && exitCode === undefined ? (
               <CircleX size={16} className="text-danger" />
             ) : (
               <Icon size={16} className="text-fg-muted" />
@@ -856,7 +856,14 @@ export const ToolRow = memo(function ToolRow({
           <span className="min-w-0 max-w-full shrink truncate text-body text-fg-muted" title={item.title}>
             {title}
           </span>
-          {summary && <span className="min-w-0 shrink truncate text-body text-fg-faint">{summary}</span>}
+          {summary && (
+            <>
+              <span aria-hidden className="size-0.5 shrink-0 rounded-full bg-fg-faint" />
+              <span className="min-w-0 shrink truncate text-callout leading-chat-sub text-fg-faint">
+                {summary}
+              </span>
+            </>
+          )}
           {shownDetail && (
             <span
               className={cx(
@@ -881,8 +888,10 @@ export const ToolRow = memo(function ToolRow({
           )}
           <DiffCount {...counts} />
           {exitCode !== undefined && exitCode !== 0 && (
-            <span className="shrink-0 whitespace-nowrap font-mono text-caption text-danger">
-              exit {exitCode}
+            <span className="flex h-[18px] shrink-0 items-center gap-1 rounded-full bg-fill px-1.5 font-mono text-caption text-fg-muted tabular">
+              <span aria-hidden className="size-1.5 rounded-full bg-danger" />
+              <span className="sr-only">Exit code </span>
+              {exitCode}
             </span>
           )}
           {item.autoAllowed && (
@@ -1188,7 +1197,7 @@ export const TurnFoldRow = memo(function TurnFoldRow({
     return (
       <div
         className={cx(
-          "flex w-full items-center gap-1.5 pt-0 pb-2 text-body text-fg-muted",
+          "flex w-full items-center gap-1.5 pt-0 pb-2 text-body leading-chat text-fg-faint",
           rule && "border-border/60 border-b",
         )}
       >
@@ -1208,7 +1217,7 @@ export const TurnFoldRow = memo(function TurnFoldRow({
       aria-expanded={fold.open}
       onClick={() => onToggle(fold.key)}
       className={cx(
-        "group flex w-full items-center gap-1.5 pt-0 pb-2 text-left text-body text-fg-muted hover:text-fg",
+        "group flex w-full items-center gap-1.5 pt-0 pb-2 text-left text-body leading-chat text-fg-faint hover:text-fg-muted",
         rule && "border-border/60 border-b",
       )}
     >
@@ -1221,7 +1230,7 @@ export const TurnFoldRow = memo(function TurnFoldRow({
       {fold.failedTurn && <CircleX size={12} className="shrink-0 text-danger" aria-label="The turn failed" />}
       <ChevronRight
         size={12}
-        className={cx("shrink-0 text-fg-faint transition-transform duration-200", fold.open && "rotate-90")}
+        className={cx("shrink-0 text-fg-faint transition-transform duration-100", fold.open && "rotate-90")}
       />
     </button>
   );
@@ -1250,7 +1259,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({
         aria-expanded={group.open}
         onClick={() => onToggle(group.key)}
         data-kind={group.kind}
-        className="group -mx-0.5 flex min-h-6 w-fit max-w-[calc(100%+4px)] items-center gap-1.5 rounded-sm px-0.5 text-left leading-relaxed hover:bg-fill-subtle"
+        className="group -mx-0.5 flex min-h-6 w-fit max-w-[calc(100%+4px)] items-center gap-1.5 rounded-chip px-0.5 text-left leading-chat hover:bg-fill-subtle"
       >
         <span className="flex w-[18px] shrink-0 justify-center">
           {(() => {
@@ -1286,6 +1295,7 @@ export function TurnEndRow({
   folded,
   timeInFold,
   threadId,
+  latest,
 }: {
   item: Item<"turnEnd">;
   /** The turn's work is folded into a summary row that already says how long it took. */
@@ -1302,10 +1312,11 @@ export function TurnEndRow({
   trace?: ReactNode;
   /** The thread, so the footer's fork can copy its conversation. */
   threadId?: string;
+  latest?: boolean;
 }) {
-  // One row for the turn, always in view: its outcome and time, copy and fork, then the changes
-  // chip. It is the turn's only action row (nothing hovers in, nothing holds room): the reply
-  // above it draws none, and a turn still running has no footer yet.
+  // The turn's only action row: outcome and time, copy and fork, then the changes chip. The newest
+  // answer keeps its actions in view; an older turn's fade in under the pointer or focus, in room
+  // the row always keeps (docs/design.md › Type).
   const row = turnActions({ text: reply, at: item.at, threadId });
   const sideChat = useApp(
     (s) => s.sessions.find((session) => session.id === threadId)?.parent?.relationship === "side_chat",
@@ -1334,20 +1345,31 @@ export function TurnEndRow({
     ...(timeInFold ? [] : [messageTime(item.at)]),
   ].filter(Boolean);
   return (
-    <div className="-mt-1.5">
+    <div>
       {completion && <CompletionCard completion={completion} />}
-      <div className="mt-1 flex h-5 items-center gap-2 text-caption text-fg-faint">
+      <div
+        className={cx(
+          "group/foot flex h-6 items-center gap-2 text-callout text-fg-faint",
+          completion && "mt-1",
+        )}
+      >
         {item.outcome === "cancelled" && !folded && <SquareStop size={12} />}
         {parts.length > 0 && <span className="tabular">{parts.join(" · ")}</span>}
         {(row.copy || row.fork || row.sideChat) && (
-          <span className="flex items-center gap-1 [&>button]:size-5 [&>button]:text-fg-faint">
+          <span
+            className={cx(
+              "flex items-center gap-2 [&>button]:size-6 [&>button]:rounded-chip [&>button]:text-fg-faint",
+              !latest &&
+                "opacity-0 transition-opacity duration-100 focus-within:opacity-100 group-hover/foot:opacity-100 pointer-coarse:opacity-100",
+            )}
+          >
             {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
             {sideChat && row.copy && (
               <Tooltip label="Send to main thread">
                 <button
                   type="button"
                   aria-label="Send to main thread"
-                  className="inline-flex size-5 items-center justify-center rounded-md text-fg-faint hover:bg-fill hover:text-fg"
+                  className="inline-flex size-6 items-center justify-center rounded-chip text-fg-faint hover:bg-fill hover:text-fg"
                   onClick={() => sendSideChatToParent(threadId!, row.copy!)}
                 >
                   <ArrowRight size={12} />

@@ -1,11 +1,11 @@
 // The one action row a turn has: copy, fork, a side chat and the time, at the foot of the
-// turn's final reply, always in view.
+// turn's final reply. The newest answer keeps its actions in view; an older turn's fade in
+// on hover or focus (ui/Rows.tsx `TurnEndRow`).
 //
 // No other row draws actions. An intermediate message, a thought or a tool row
 // only narrates what the turn is doing, and while a turn runs its reply has no
-// row yet (the footer arrives with the turn's end). Nothing here holds a
-// hover's room either: a row that only fills in under the pointer leaves a gap
-// in the transcript that reads as a mistake.
+// row yet (the footer arrives with the turn's end). Faded or not, the row keeps
+// the actions' room, so nothing in the transcript moves (docs/design.md › Type).
 //
 // Copy puts the reply's own Markdown on the clipboard (`CopyButton` takes the
 // text as it is), and only when it has something past whitespace.

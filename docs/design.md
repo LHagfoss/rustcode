@@ -114,6 +114,21 @@ the accent marks state (on, selected, linked), it does not shout.
 | 3xl | 26 | `rounded-3xl` | The largest floating surface (nothing uses it yet) |
 | full | — | `rounded-full` | Switches, avatars, dots, trackbars and labelled buttons |
 
+In the chat a component names its **role** instead of a step; each role is
+one of the steps above, so a theme's radius still scales it:
+
+| Role | Step (default px) | Tailwind | Used by |
+|---|---|---|---|
+| inline | xs − 2 (4) | `rounded-inline` | Inline code and file references in a reply, keycaps |
+| chip | sm (8) | `rounded-chip` | Compact controls H20–28: footer actions, tool rows' hover fill, thread chips |
+| row | lg (12) | `rounded-row` | Standard controls H32–40 and single-line rows |
+| block | xl (16) | `rounded-block` | Code blocks, diffs, tool output bodies, tables, file and preview cards |
+| bubble | 2xl (20) | `rounded-bubble` | A sent message's bubble, independent cards |
+| panel | 3xl (26) | `rounded-panel` | The composer, dialogs, panels |
+
+A nested inset takes the outer radius minus the inset, and a hover fill keeps
+its container's radius, so no crescent shows between them.
+
 A theme's `radius` (`sharp`, `default`, `round`) scales the steps
 (`sharp`: 2/3/4/6/8/10/12, `round`: 8/10/12/16/20/26/32); components only ever
 name a step. No arbitrary radii (`rounded-[14px]`), no `rounded-4xl`. A child
@@ -372,6 +387,20 @@ semibold, a step bigger than the body so a long reply scans by its headings:
 | `text-title2` | 18/23 · 19/24 · 20/25 | Onboarding, a document's headings |
 | `text-title` | 23/29 · 24/30 · 25/31 | Empty-state heading |
 | `text-[26px]`, `text-[21px]` | 26/31, 21/26 | A reply's `h1`, `h2` (`Markdown.tsx`) |
+
+The chat reads on two named line heights that follow the text size:
+`leading-chat` (body + 10px, 24px at Default) for replies and sent messages,
+and `leading-chat-sub` (callout + 7px, 20px) for a row's secondary line. Its
+rhythm is tight, then airy (`ui/transcriptHeight.ts`): the steps of the work
+(tool rows, thoughts, groups) sit 4px apart, 8px under an opened `Worked for …`,
+other items of a turn 12px apart, a reply's blocks 16px apart, the footer 16px
+under the answer and turns 28px apart. A sent message is `px-4 py-2` on
+`rounded-bubble`, at most 70% of the lane. A tool row is its 16px icon, the
+title, a 2px dot and a `text-callout` summary in `fg-faint`, on one line; a
+failed command keeps its title grey and ends on a neutral capsule with a red
+dot and the exit code, which never truncates. The footer's actions stay in view
+on the newest turn when it ends in a reply; an older turn's fade in (100ms) on
+hover or focus in room the row keeps, and stay visible on touch.
 
 Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
 that change use `tabular`.
