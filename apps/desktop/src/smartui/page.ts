@@ -423,6 +423,73 @@ pre.rc-term { white-space: pre-wrap; }
   background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-sm);
   visibility: hidden; opacity: 0; transition: opacity 80ms ease-out; }
 .rc-tip:hover > span, .rc-tip:focus > span { visibility: visible; opacity: 1; }
+/* The shorthand catalog's own parts (shorthand.ts). Each one is built from the kit above: the
+   same surfaces, tints, type scale and rhythm, so a block the agent names looks like the rest. */
+.rc-meters { display: grid; gap: 12px; }
+.rc-meter { display: grid; gap: 4px; min-width: 0; }
+.rc-meter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: var(--rc-text-size-sm); }
+.rc-meter-head > span { color: var(--rc-muted); min-width: 0; }
+.rc-meter-head > b { font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rc-meter-note { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
+.rc-meter:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > .rc-meter-head > span::before { content: ""; display: inline-block; width: 6px; height: 6px;
+  margin: 0 7px 1px 0; border-radius: 50%; background: var(--rc-tint); vertical-align: middle; }
+.rc-stat > .rc-spark { width: 100%; height: 22px; margin-top: 6px; }
+.rc-kv { display: grid; grid-template-columns: fit-content(42%) minmax(0, 1fr); gap: 0; margin: 0; font-size: var(--rc-text-size-sm); }
+.rc-kv > dt, .rc-kv > dd { margin: 0; padding: 6px 0; border-bottom: 1px solid var(--rc-separator); min-width: 0; }
+.rc-kv > dt { padding-right: 16px; color: var(--rc-muted); }
+.rc-kv > dd { font-variant-numeric: tabular-nums; }
+.rc-kv > :nth-last-child(-n+2) { border-bottom: 0; }
+.rc-timeline .rc-step::before { background: var(--rc-tint, var(--rc-faint)); }
+.rc-timeline .rc-step > b { font-weight: 500; }
+.rc-timeline .rc-step > p { color: var(--rc-muted); font-size: var(--rc-text-size-sm); }
+.rc-time { display: block; font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); font-variant-numeric: tabular-nums; }
+.rc-files { display: flex; flex-direction: column; }
+.rc-files > .rc-file { align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--rc-separator); font-family: var(--rc-font); }
+.rc-files > .rc-file:last-child { border-bottom: 0; }
+.rc-files > .rc-file > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.rc-files code { padding: 0; background: transparent; }
+.rc-file:is(.rc-ok, .rc-warn, .rc-bad, .rc-info) > span:first-child::before { content: ""; display: inline-block; width: 6px; height: 6px;
+  margin: 0 7px 1px 0; border-radius: 50%; background: var(--rc-tint); vertical-align: middle; }
+.rc-file-note { margin-left: 8px; font-size: var(--rc-text-size-xs); color: var(--rc-muted); }
+.rc-file > :last-child:not(:first-child) { font: var(--rc-text-size-sm)/18px var(--rc-mono); font-variant-numeric: tabular-nums; }
+.rc-add { color: var(--rc-success); } .rc-del { color: var(--rc-danger); }
+.rc-mark { font-weight: 600; color: var(--rc-tint); }
+.rc-compare td:not(:first-child), .rc-compare th:not(:first-child) { text-align: center; }
+.rc-compare td > b { font-weight: 500; }
+.rc-heatmap td.rc-heat { background: color-mix(in srgb, var(--rc-accent) var(--rc-heat, 0%), transparent); }
+.rc-heatmap tbody tr:hover > td.rc-heat { background: color-mix(in srgb, var(--rc-accent) calc(var(--rc-heat, 0%) + 8%), transparent); }
+.rc-heatmap td { border-bottom-color: var(--rc-bg); }
+.rc-chart-split { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+.rc-chart-split > .rc-chart { flex: 0 0 160px; width: 160px; }
+.rc-legend { display: grid; flex: 1 1 160px; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: var(--rc-text-size-sm); }
+.rc-legend > li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.rc-legend > li > span { color: var(--rc-muted); min-width: 0; }
+.rc-legend > li > span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin: 0 7px 0 0; border-radius: 50%;
+  background: var(--rc-tint); }
+.rc-legend > li > b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.rc-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 16px; align-items: start; }
+.rc-form > .rc-row { grid-column: 1 / -1; }
+.rc-field { display: grid; gap: 4px; min-width: 0; }
+.rc-field > span:first-child { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
+.rc-field > :is(input:not([type=checkbox], [type=radio]), select) { width: 100%; min-width: 0; }
+.rc-field.rc-check { display: flex; align-items: center; gap: 8px; min-height: 28px; cursor: pointer; }
+.rc-field.rc-check > input { flex: none; margin: 0; }
+.rc-field.rc-check > span { font-size: var(--rc-text-size); color: var(--rc-text); }
+.rc-range { display: flex; align-items: center; gap: 8px; }
+.rc-range > input { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; }
+.rc-range > output { min-width: 3ch; text-align: right; font-size: var(--rc-text-size-sm); }
+.rc-choice { display: inline-flex; flex-wrap: wrap; width: fit-content; max-width: 100%; gap: 2px; padding: 2px;
+  background: var(--rc-surface); border-radius: var(--rc-radius-sm); }
+.rc-choice > label { position: relative; cursor: pointer; }
+.rc-choice input { position: absolute; opacity: 0; pointer-events: none; }
+.rc-choice span { display: block; padding: 1px 10px; font-size: var(--rc-text-size-sm); line-height: 20px; color: var(--rc-muted);
+  border-radius: var(--rc-radius-xs); }
+.rc-choice label:hover span { color: var(--rc-text); }
+.rc-choice input:checked + span { color: var(--rc-text); background: var(--rc-bg); }
+:root[data-keyboard-nav] .rc-choice input:focus-visible + span { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); }
+pre[data-lang] { position: relative; }
+pre[data-lang]::before { content: attr(data-lang); position: absolute; top: 6px; right: 10px; font: var(--rc-text-size-xs)/1 var(--rc-font);
+  color: var(--rc-faint); }
 @media (prefers-reduced-motion: reduce) { details > summary::before, .rc-bar[data-rc-tip]::after, button, [data-rc-send], [data-rc-copy] { transition: none; }
   :is(button, [data-rc-send], [data-rc-copy]):active { transform: none; } }
 `;
@@ -694,6 +761,13 @@ ${KIT_SCRIPT}
     if (form && form.hasAttribute("data-rc-send")) {
       sendForm(form, (form.getAttribute("data-rc-send") || "").trim());
     }
+  });
+  // A slider the kit drew (\`:: form\` range) shows its value beside it as it moves.
+  document.addEventListener("input", (event) => {
+    const input = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!input || !input.hasAttribute("data-rc-out")) return;
+    const out = input.nextElementSibling;
+    if (out && out.tagName === "OUTPUT") out.textContent = input.value;
   });
   // A link never navigates the frame, which would replace the view. A web or mail link
   // asks the app to open it in the browser, only from a click.
@@ -1122,6 +1196,18 @@ export const CHART_THEME_SCRIPT = `(() => {
   };
   apply();
   Chart.register({ id: "rcSeries", beforeUpdate: paint, afterRender: refit }, marks);
+  // A \`:: chart\` block carries its whole config as data (shorthand.ts): no script of the
+  // view's own. They are built once the page has parsed, so a canvas after this script counts.
+  const build = () => {
+    if (typeof document.querySelectorAll !== "function") return;
+    for (const canvas of document.querySelectorAll("canvas[data-rc-chart]")) {
+      if (canvas.$rcBuilt) continue;
+      canvas.$rcBuilt = true;
+      try { new Chart(canvas, JSON.parse(canvas.getAttribute("data-rc-chart") || "{}")); } catch (e) { console.error(e); }
+    }
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", build);
+  else build();
   window.__rcThemeCharts = () => {
     apply();
     for (const chart of Object.values(Chart.instances || {})) {
@@ -1142,10 +1228,13 @@ export const CHART_THEME_SCRIPT = `(() => {
 
 const CHART_TAG = /<script\b[^>]*\bsrc\s*=\s*["']rustcode-lib:chart\.js["'][^>]*>\s*<\/script>/gi;
 
-/** Whether the block names the bundled Chart.js. */
+/** A `:: chart` block, which writes the Chart.js tag when it is expanded. */
+const CHART_SHORTHAND = /^\s*::\s*chart\b/m;
+
+/** Whether the block names the bundled Chart.js, itself or through a `:: chart` block. */
 export const usesChart = (source: string) => {
   CHART_TAG.lastIndex = 0;
-  return CHART_TAG.test(source);
+  return CHART_TAG.test(source) || CHART_SHORTHAND.test(source);
 };
 
 /**
@@ -1154,7 +1243,12 @@ export const usesChart = (source: string) => {
  * view whose content is a chart waits for its finished page instead of showing
  * empty boxes where the charts will be.
  */
-export const previewable = (source: string) => !usesChart(source);
+export const previewable = (source: string) => {
+  CHART_TAG.lastIndex = 0;
+  // A `:: chart` is one block among others and holds its own size, so the rest of the view
+  // streams in around a quiet box where it will draw; a hand-written chart script waits.
+  return !CHART_TAG.test(source);
+};
 
 /** Inline text inside a `<script>` element must not close it. */
 const scriptSafe = (code: string) => code.replace(/<\/script/gi, "<\\/script");

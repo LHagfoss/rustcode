@@ -2826,18 +2826,17 @@ pub(crate) fn skills_reminder(note: &str) -> String {
 /// The format itself is `docs/smart-ui.md`.
 pub(crate) const SMART_UI_HARNESS_HINT: &str = "\
 # Smart UI
-Views run in chat: a ```rustcode-ui v1 fence with a title, in shorthand and HTML (inline <style> or <script> only if needed), no imports or network, max 64 KB. \
+Views run in chat: a ```rustcode-ui v1 fence with a title, built from the `::` catalog (the app draws each block; HTML only for what it lacks), no imports or network, max 64 KB. \
 Answer visually, asked or not: data, numbers, results, status, comparisons, plans or 4+ items go in a view (chart, bars, stats, table), never a Markdown table. Only short explanations, one fact, code and diffs stay Markdown. Be brief: one line with the finding before the view, nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown.
-Pick: a trend → line chart; parts → stacked bar, donut; ranking → bars; options → cards; exact rows → table.
-Shorthand: `::` opens a block, `- ` items split at |, a blank line ends it; items may end {ok|warn|bad|info}; `code`, **bold**, HTML work.
-:: title T · :: h Heading · :: p text · :: callout info|ok|warn|bad / text · :: table / a | b rows, first is heading
-:: bars Heading / - label | 75 | 75 s | tip · :: stats / - 128 | Runs | +12 · :: steps / - [x] done, [>] active, [!] failed, [ ] to do
-:: list / - Title | detail | value · :: cards / - Title | body | badge · :: actions / - Label | message · :: sources / - Title | url. Card and item text: one short line.
-HTML otherwise: set no colours, as little CSS as you can. Numbers → a dashboard, .rc-dash > .rc-head; .rc-hero (.rc-label, .rc-hero-value, .rc-hero-delta, p.rc-lead with <b>); hr; .rc-stats.rc-flat; chart. \
-.rc-badge .rc-progress > span; .rc-findings > .rc-finding[data-severity]; .rc-details; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span; .rc-spark[data-values]; .rc-chart .rc-donut-total; .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-num .rc-scroll. \
-No script: data-rc-send=\"text\" sends a follow-up (on a <form>, with its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]; table.rc-table[data-rc-sort] sorts. \
-Variables: --rc-muted --rc-accent --rc-separator --rc-series-1…8. Chart.js: <script src=\"rustcode-lib:chart.js\"></script> in .rc-chart (data-size sm|lg|xl): legend toggles; line option plugins.rcMarks {band:[lo,hi], line:n, lineLabel, end:true}. \
-No outer border, background or repeated title; no vh. If `smart_ui_check` is listed, run it first.
+Pick: a trend → line chart; parts → stacked bar, donut; ranking → bars; options → cards; exact rows → table; a choice → form.
+Catalog: `::` opens a block, `- ` items split at |, a blank line ends it; items may end {ok|warn|bad|info}; `code`, **bold** work. A name after a block is its heading.
+:: title T · :: head Title | caption · :: h · :: p · :: callout info|ok|warn|bad · :: divider · :: details Summary · :: tab Name … :: end
+:: hero Label / - 503 | 3.4x | sentence · :: stats / - 128 | Runs | +12 | 1,4,2 (spark) · :: bars / - label | 75 | 75 s | tip · :: progress / - EU | 72% | note
+:: chart line|bar|stacked|hbar|donut Title | size=lg | line=150 normal | band=75-270 | end / x | series… heading row, then rows · :: heatmap, :: compare (yes|no|partial), :: table / a | b rows
+:: list / - Title | detail | value · :: kv / - Key | value · :: cards / - Title | body | badge · :: steps / - [x] [>] [!] [ ] · :: timeline / - 10:02 | event | detail
+:: findings / - high | file:line | finding | note · :: files / - path | +12 -3 · :: tags · :: term · :: code lang · :: actions / - Label | message · :: sources / - Title | url
+:: form Message | Button / - select|choice name | Label | a, *b · - text|number|date name | Label · - check name | Label · - range name | Label | 0-100 = 40
+Card and item text: one short line. HTML otherwise: kit classes (.rc-*), no colours, fonts or heights of your own; data-rc-send=\"text\" sends a follow-up. No outer border, background or repeated title; no vh. If `smart_ui_check` is listed, run it first.
 
 ";
 
@@ -2919,7 +2918,7 @@ pub(crate) fn append_visualization_hint(
 /// Guidance for `rustcode-ui v1` blocks (#2484), sent only to frontends that
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
-This app runs small views in replies: a ```rustcode-ui v1 fence of self-contained HTML that reads like chat. \
+This app runs small views in replies: a ```rustcode-ui v1 fence built from its `::` component catalog that reads like chat. \
 Answer visually, asked or not: data, numbers, results, status, comparisons, plans or 4+ items go in a view (chart, bars, stats, table), never a Markdown table. \
 Only short explanations, one fact, code and diffs stay Markdown. Be brief: one line with the finding before the view, nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown. \
 First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
