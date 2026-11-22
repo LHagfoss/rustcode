@@ -212,6 +212,22 @@ profile and stale dependency version leaves artifacts behind.
   `RUSTCODE_CONFIG_DIR`. A token refresh there rotates the OpenAI refresh
   token, and the user's real sign-in then fails with "OpenAI token request
   failed (HTTP 400)" (#2765). For live model turns, ask the user first.
+- When the user asks for a live or public link to try a UI change, put a
+  static mock build behind a Cloudflare quick tunnel. Do not tunnel the dev
+  server: it serves the source tree and refuses unknown hosts. Do not tunnel
+  the engine, the gateway or anything with the user's data. In
+  `apps/desktop`, with `DIR` a scratch directory outside the worktree:
+
+  ```sh
+  VITE_TRANSPORT=mock bunx vite build --emptyOutDir --outDir "$DIR/site"
+  python3 -I -m http.server 8787 --bind 127.0.0.1 --directory "$DIR/site"  # background
+  cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8787           # background; prints https://<words>.trycloudflare.com
+  ```
+
+  Check the URL with `curl` before handing it over, and say it shows mock
+  data. To update it, run the build again into the same directory: the URL
+  stays the same. Stop both processes when the user is done or the thread is
+  settled. If `cloudflared` is missing, ask before installing it.
 
 ## Naming
 
