@@ -25,7 +25,9 @@ pub enum AttachPlan {
 }
 
 /// Decide from this build's version, the running server (if any) and
-/// whether a service manager runs it.
+/// whether a service manager runs it. A `development` (debug) build carries
+/// the release's version number but not its code, so it never joins or
+/// replaces the user's real server.
 pub fn plan_attach(
     own_version: &str,
     development: bool,
@@ -33,8 +35,6 @@ pub fn plan_attach(
     installed: bool,
 ) -> AttachPlan {
     if development {
-        // A debug build carries the release's version number but not its
-        // code: it must never join, or replace, the user's real server.
         return AttachPlan::Standalone("this is a development build".to_owned());
     }
     let Some(live) = live else {
