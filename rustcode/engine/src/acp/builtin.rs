@@ -139,6 +139,17 @@ pub(crate) trait BuiltinAgent: Send + Sync {
         approvals: Vec<crate::config::TimedCommandApproval>,
     ) -> AgentFuture<'_, ()>;
 
+    /// Take the next queued prompt of `session_id` to run, when it is the
+    /// thread's open session and no turn is running.
+    fn take_queued<'a>(&'a self, session_id: &'a str) -> AgentFuture<'a, Option<String>>;
+
+    /// Move the steers the last turn of `session_id` did not read onto the
+    /// prompt queue.
+    fn promote_steers<'a>(&'a self, session_id: &'a str) -> AgentFuture<'a, ()>;
+
+    /// Whether a queued prompt waits and no turn is running.
+    fn has_queued_work(&self) -> AgentFuture<'_, bool>;
+
     /// The thread's transcript.
     fn history(&self) -> AgentFuture<'_, rustcode_core::History>;
 

@@ -137,6 +137,7 @@ pub(crate) struct RemoteRevokeRequest {
 pub(crate) struct RemoteSession {
     pub session_id: String,
     pub state: Arc<Mutex<AppState>>,
+    pub agent: Arc<dyn super::builtin::BuiltinAgent>,
     pub cwd: PathBuf,
     pub turns: Arc<SessionTurnState>,
     pub task_events: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<TaskEvent>>>,
@@ -167,6 +168,7 @@ impl RemoteSession {
         Arc::new(Self {
             session_id,
             state: Arc::clone(&session.state),
+            agent: Arc::clone(&session.agent),
             cwd: session.cwd.clone(),
             turns: Arc::clone(&session.turns),
             task_events: Arc::clone(&session.task_events),
@@ -208,18 +210,7 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
         if !session.sharing.load(Ordering::Acquire) {
             break;
         }
-        let prompt = {
-            let mut state = session.state.lock().await;
-            if state.active_session_id != session.session_id
-                || state.pending_queue.is_empty()
-                || state.has_active_turn()
-            {
-                None
-            } else {
-                Some(state.pending_queue.remove(0))
-            }
-        };
-        let Some(prompt) = prompt else {
+        let Some(prompt) = session.agent.take_queued(&session.session_id).await else {
             break;
         };
         if prompt.starts_with("__task_wakeup__:") {
@@ -237,24 +228,25 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
         session
             .presence
             .turn_started(&session.session_id, &session.cwd);
-        let result = super::prompt::run_prompt(
-            Arc::clone(&session.state),
-            session.cwd.clone(),
-            scheduled_turn,
-            session.session_id.clone(),
-            Arc::clone(&session.task_events),
-            Arc::clone(&session.known_task_ids),
-            Arc::clone(&session.terminal_backlog),
-            Arc::clone(&session.terminal_overflow),
-            prompt,
-            None,
-            session.clients.clone(),
-            Arc::clone(&session.client),
-            session.auto_approve,
-            Some(session.remote.clone()),
-            Arc::downgrade(&session.turns),
-        )
-        .await;
+        let result = session
+            .agent
+            .prompt(super::builtin::BuiltinTurn {
+                session_id: session.session_id.clone(),
+                cwd: session.cwd.clone(),
+                text: prompt,
+                origin: None,
+                scheduled: scheduled_turn,
+                turns: Arc::downgrade(&session.turns),
+                task_events: Arc::clone(&session.task_events),
+                known_task_ids: Arc::clone(&session.known_task_ids),
+                terminal_backlog: Arc::clone(&session.terminal_backlog),
+                terminal_overflow: Arc::clone(&session.terminal_overflow),
+                clients: session.clients.clone(),
+                client: Arc::clone(&session.client),
+                auto_approve: session.auto_approve,
+                remote: Some(session.remote.clone()),
+            })
+            .await;
         session
             .presence
             .turn_finished(&session.session_id, &session.cwd);
@@ -264,20 +256,13 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
             )));
             let _ = session.clients.update(update);
         }
-        {
-            let mut state = session.state.lock().await;
-            state.promote_pending_steers_to_queue(&session.session_id);
-        }
+        session.agent.promote_steers(&session.session_id).await;
     }
     session.runner.store(false, Ordering::Release);
     // A prompt queued between the last check and the flag clear would
     // otherwise sit until the next status poll.
     if session.sharing.load(Ordering::Acquire) {
-        let has_work = {
-            let state = session.state.lock().await;
-            !state.pending_queue.is_empty() && !state.has_active_turn()
-        };
-        if has_work {
+        if session.agent.has_queued_work().await {
             session.ensure_runner();
         }
     }

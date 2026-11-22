@@ -364,6 +364,38 @@ impl super::builtin::BuiltinAgent for StateAgent {
         })
     }
 
+    fn take_queued<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> super::builtin::AgentFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            if state.active_session_id != session_id
+                || state.pending_queue.is_empty()
+                || state.has_active_turn()
+            {
+                return None;
+            }
+            Some(state.pending_queue.remove(0))
+        })
+    }
+
+    fn promote_steers<'a>(&'a self, session_id: &'a str) -> super::builtin::AgentFuture<'a, ()> {
+        Box::pin(async move {
+            self.state
+                .lock()
+                .await
+                .promote_pending_steers_to_queue(session_id);
+        })
+    }
+
+    fn has_queued_work(&self) -> super::builtin::AgentFuture<'_, bool> {
+        Box::pin(async move {
+            let state = self.state.lock().await;
+            !state.pending_queue.is_empty() && !state.has_active_turn()
+        })
+    }
+
     fn last_active(&self) -> Option<String> {
         self.state.try_lock().ok().and_then(|state| {
             state
