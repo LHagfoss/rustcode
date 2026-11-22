@@ -392,6 +392,42 @@ impl super::builtin::BuiltinAgent for StateAgent {
     fn usage_limits(&self) -> super::builtin::AgentFuture<'_, serde_json::Value> {
         Box::pin(super::usage::limits(&self.state))
     }
+
+    fn agents<'a>(
+        &'a self,
+        cwd: &'a std::path::Path,
+        client: &'a reqwest::Client,
+        action: super::agents::AgentsAction,
+    ) -> super::builtin::AgentFuture<'a, Result<serde_json::Value, agent_client_protocol::Error>>
+    {
+        Box::pin(super::agents::answer(&self.state, cwd, client, action))
+    }
+
+    fn mcp_app(
+        &self,
+        request: super::mcp_app::McpAppRequest,
+        builtin: bool,
+        clients: SessionClients,
+        auto_approve: bool,
+    ) -> super::builtin::AgentFuture<'static, Result<serde_json::Value, agent_client_protocol::Error>>
+    {
+        Box::pin(super::mcp_app::handle(
+            request,
+            builtin,
+            Arc::clone(&self.state),
+            clients,
+            auto_approve,
+        ))
+    }
+
+    fn set_timed_command_approvals(
+        &self,
+        approvals: Vec<crate::config::TimedCommandApproval>,
+    ) -> super::builtin::AgentFuture<'_, ()> {
+        Box::pin(async move {
+            self.state.lock().await.config.timed_command_approvals = approvals;
+        })
+    }
 }
 
 /// Sends a report's answer and ends its prompt.

@@ -164,15 +164,6 @@ fn server_capabilities() -> AgentCapabilities {
         )]))
 }
 
-/// `_rustcode/rewind` for a checkpoint restore that also rewinds the chat.
-pub(crate) fn rewind_chat(
-    state: &mut crate::app::AppState,
-    user_index: usize,
-    text: &str,
-) -> Result<serde_json::Value, agent_client_protocol::Error> {
-    rewind::rewind(state, user_index, text)
-}
-
 fn session_id_is_active(sessions: &HashMap<String, AcpSession>, session_id: &str) -> bool {
     sessions.contains_key(session_id)
 }
@@ -696,6 +687,18 @@ impl AcpServer {
             .await
             .get(session_id)
             .map(|session| (Arc::clone(&session.state), session.cwd.clone()))
+    }
+
+    /// An open built-in thread's agent and working directory.
+    async fn builtin_agent_and_cwd(
+        &self,
+        session_id: &str,
+    ) -> Option<(Arc<dyn builtin::BuiltinAgent>, std::path::PathBuf)> {
+        self.sessions
+            .lock()
+            .await
+            .get(session_id)
+            .map(|session| (Arc::clone(&session.agent), session.cwd.clone()))
     }
 
     fn new(auto_approve: bool) -> Result<Self, agent_client_protocol::Error> {
@@ -2094,10 +2097,10 @@ async fn dispatch_request(
             let server = server.clone();
             let request: agents::AgentsRequest = parse_params(params)?;
 
-            let Some((state, cwd)) = server.session_handle(&request.session_id).await else {
+            let Some((agent, cwd)) = server.builtin_agent_and_cwd(&request.session_id).await else {
                 return responder.respond_with_error(unknown_session(&request.session_id));
             };
-            match agents::answer(&state, &cwd, &server.client, request.action).await {
+            match agent.agents(&cwd, &server.client, request.action).await {
                 Ok(answer) => responder.respond(answer),
                 Err(error) => responder.respond_with_error(error),
             }
@@ -2108,7 +2111,7 @@ async fn dispatch_request(
             let server = server.clone();
             let request: mcp_app::McpAppRequest = parse_params(params)?;
 
-            let Some((state, _)) = server.session_handle(&request.session_id).await else {
+            let Some(agent) = server.builtin_agent(&request.session_id).await else {
                 return responder.respond_with_error(unknown_session(&request.session_id));
             };
             let builtin = harnesses::get(&server.external, &request.session_id)
@@ -2117,7 +2120,7 @@ async fn dispatch_request(
             let clients = server.clients.session(&request.session_id);
             let auto_approve = server.auto_approve;
             connection.spawn(async move {
-                match mcp_app::handle(request, builtin, state, clients, auto_approve).await {
+                match agent.mcp_app(request, builtin, clients, auto_approve).await {
                     Ok(answer) => responder.respond(answer)?,
                     Err(error) => responder.respond_with_error(error)?,
                 }
@@ -2705,8 +2708,10 @@ async fn dispatch_request(
             // Open sessions hold their own copy of the user config: the
             // one that answers a call must stop covering it now.
             for session in server.sessions.lock().await.values() {
-                session.state.lock().await.config.timed_command_approvals =
-                    config.timed_command_approvals.clone();
+                session
+                    .agent
+                    .set_timed_command_approvals(config.timed_command_approvals.clone())
+                    .await;
             }
             responder.respond(answer)
         }
@@ -2831,13 +2836,10 @@ async fn dispatch_request(
             let request: crate::checkpoints::RestoreRequest = parse_params(params)?;
 
             // Only an open built-in thread rewinds its conversation.
-            let state = server
-                .session_handle(&request.session_id)
-                .await
-                .map(|(state, _)| state);
+            let agent = server.builtin_agent(&request.session_id).await;
             let clients = server.clients.clone();
             connection.spawn(async move {
-                match crate::checkpoints::answer_restore(&request, state).await {
+                match crate::checkpoints::answer_restore(&request, agent).await {
                     Ok(answer) => {
                         // A restore may cut the chat without an update.
                         clients.invalidate_cursors(&request.session_id);

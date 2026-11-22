@@ -707,7 +707,7 @@ pub(crate) fn answer_diff(request: &DiffRequest) -> Result<Value, agent_client_p
 /// checkpointed first, and answered as `kept`.
 pub(crate) async fn answer_restore(
     request: &RestoreRequest,
-    state: Option<std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>>,
+    agent: Option<std::sync::Arc<dyn crate::acp::builtin::BuiltinAgent>>,
 ) -> Result<Value, agent_client_protocol::Error> {
     if crate::thread_status::is_running(&request.session_id) {
         return Err(invalid("the thread is busy; restore once its turn ends"));
@@ -741,12 +741,14 @@ pub(crate) async fn answer_restore(
     let mut conversation = "kept";
     let mut rewind_error = None;
     if request.rewind
-        && let Some(state) = state.as_ref()
+        && let Some(agent) = agent.as_ref()
         && let Some(user_index) = checkpoint.user_index
     {
         // Rewind first: it refuses a busy chat, and then nothing changed.
-        let mut state = state.lock().await;
-        match crate::acp::rewind_chat(&mut state, user_index, &checkpoint.full_prompt) {
+        match agent
+            .rewind(user_index, &checkpoint.full_prompt, false)
+            .await
+        {
             Ok(_) => conversation = "rewound",
             Err(error) => rewind_error = Some(error.to_string()),
         }
