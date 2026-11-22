@@ -211,8 +211,6 @@ function ToastCard({
         <p className="line-clamp-3 min-w-0 flex-1 py-1 text-fg">{toast.text}</p>
         <div className="flex shrink-0 items-center gap-0.5">
           {toast.action && (
-            // The one thing to do about the message, in the accent as text: it reads as the
-            // card's action without outweighing the message the way a filled pill did.
             <button
               type="button"
               tabIndex={compact ? -1 : undefined}
@@ -392,8 +390,6 @@ function ToastSlot({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    // The card's body keeps its natural height while a compact card is clamped to the front
-    // one's, so the fanned-out offsets are known before the stack opens.
     const body = el.querySelector<HTMLElement>("[data-toast-body]") ?? el;
     const report = () => onHeight(id, body.offsetHeight);
     report();
