@@ -51,10 +51,10 @@ describe("blocks in a reply", () => {
 });
 
 describe("the inline pills in a reply", () => {
-  test("code and file references share a pill shape", () => {
-    // One radius and one padding scale (ui/Markdown.tsx `PILL`), in em of the text around them.
+  test("code and file references share the inline-code shape", () => {
+    // The inline-code radius and one padding scale (ui/Markdown.tsx `PILL`), in em of the text around them.
     for (const out of [drawn("run `bun run check` now"), drawn("see `src/lib/keys.ts:12`")]) {
-      expect(out).toContain("rounded-full px-[0.5em] py-[0.25em]");
+      expect(out).toContain("rounded-inline px-[0.4em] py-[0.15em]");
     }
   });
 

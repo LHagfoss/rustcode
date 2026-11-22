@@ -6,8 +6,8 @@ import type { Row } from "./Transcript";
  * The pieces an estimate is made of, in the sizes the rows are drawn at: a sent bubble's padding and
  * the line it sits on, the time line under it, and the chips above it when it carries pictures or files.
  */
-const BUBBLE_PADDING = 12;
-const BODY_LINE = 23;
+const BUBBLE_PADDING = 8;
+const BODY_LINE = 24;
 const META_LINE = 24;
 const ATTACHMENT_CHIPS = 32;
 /** A row of picture thumbnails (ui/Rows.tsx `THUMBNAIL`, 120px) and the 6px under it. */
@@ -67,4 +67,47 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
 /** The lines a string wraps to in the lane, near enough for an estimate. */
 function lines(text: string, perLine: number): number {
   return Math.max(1, Math.ceil(text.length / perLine));
+}
+
+/**
+ * The transcript's vertical rhythm, tight then airy: 4px between the steps of the work (tool
+ * rows, thoughts, a group of calls), 8px under an opened `Worked for …`, 12px between the other
+ * items of a turn (narration, the answer), 16px from the answer to its footer and 28px between
+ * turns, which is where a message starts and a footer ends. A row draws no air of its own, so
+ * these decide every gap in the lane and nothing reserves room for a hover.
+ */
+const FLOW_GAP = 4;
+const FOLD_GAP = 8;
+const ITEM_GAP = 12;
+const FOOTER_GAP = 16;
+const TURN_GAP = 28;
+
+/** A step of the work: one line of the turn's process, not its answer. */
+function flowRow(row: Row | undefined): boolean {
+  if (!row) return false;
+  if (row.group || row.agents || row.threads) return true;
+  return row.item?.kind === "tool" || row.item?.kind === "thought";
+}
+
+/**
+ * The air above a row, from the transcript's rhythm (above): a turn starts and a footer ends on the
+ * wide gap, the steps of the work sit tight, and the first line under a divider takes the narrow
+ * gap. The rows draw it and so does `estimateSize`, because a row that mounts with a size that
+ * leaves this out measures a gap taller a frame later — and the pinned transcript takes that
+ * difference back in one step, moving every row above it, the message just sent included.
+ */
+export function rowGap(rows: readonly Row[], index: number): number {
+  if (index <= 0) return 0;
+  const item = rows[index]?.item;
+  const prev = rows[index - 1]?.item;
+  // Steps of the work sit tight under each other and under the `Worked for …` that opened them;
+  // the answer and the footer under it get air of their own.
+  if (flowRow(rows[index]) && (flowRow(rows[index - 1]) || rows[index - 1]?.fold)) return FLOW_GAP;
+  if (rows[index - 1]?.fold) return FOLD_GAP;
+  if (item?.kind === "turnEnd" && prev?.kind === "assistant") return FOOTER_GAP;
+  // A divider is the turn's own first line, and a sent bubble already ends on the 24px line its
+  // time and actions keep (`META_LINE`): the row under either takes the narrow gap, or the air
+  // between a message and its turn came to 52px where every other turn break is 28.
+  if ((prev?.kind === "notice" && prev.tone === "info") || prev?.kind === "user") return ITEM_GAP;
+  return item?.kind === "user" ? TURN_GAP : ITEM_GAP;
 }

@@ -109,20 +109,20 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   return (
     // The code surface is `code-bg`, the same one diffs, terminals and diagrams use, so a
     // fenced block reads as code rather than as a lighter card in the prose.
-    <div className="my-0.5 overflow-hidden rounded-lg bg-code-bg">
-      <div className="flex items-center justify-between pt-1.5 pr-1.5 pl-3">
+    <div className="overflow-hidden rounded-block bg-code-bg">
+      <div className="flex items-center justify-between pt-1.5 pr-1.5 pl-4">
         <span className="font-mono text-caption text-fg-muted">{lang || "code"}</span>
         <CopyButton text={code} />
       </div>
       {html ? (
         <div
-          className="selectable overflow-x-auto px-3 pt-1.5 pb-3 font-mono text-callout leading-[18px] [&_pre]:m-0"
+          className="selectable overflow-x-auto px-4 pt-1 pb-3 font-mono text-callout leading-[20px] [&_pre]:m-0"
           // Shiki escapes the code; the HTML holds only spans with colour variables.
           // biome-ignore lint/security/noDangerouslySetInnerHtml: highlighted, escaped output
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <pre className="selectable m-0 overflow-x-auto px-3 pt-1.5 pb-3 font-mono text-callout leading-[18px]">
+        <pre className="selectable m-0 overflow-x-auto px-4 pt-1 pb-3 font-mono text-callout leading-[20px]">
           {code}
         </pre>
       )}
@@ -173,7 +173,7 @@ function MarkdownTable({ children }: { children: ReactNode }) {
   );
   return (
     <div className="group/table relative">
-      <div className="overflow-x-auto rounded-lg bg-fill-subtle py-1.5">
+      <div className="overflow-x-auto rounded-block bg-fill-subtle py-1.5">
         <table ref={ref} className="w-full border-collapse text-left">
           {children}
         </table>
@@ -271,9 +271,10 @@ const Formula = memo(function Formula({ tex, display }: { tex: string; display: 
   );
 });
 
-// Code, file references and thread mentions share the same pill padding.
-// Use em units so the padding scales with the text around the pill.
-const PILL = "rounded-full px-[0.5em] py-[0.25em]";
+// Code and file references are inline code (`rounded-inline`), thread mentions a chip; they share
+// the padding, in em units so it scales with the text around them.
+const INLINE_PAD = "px-[0.4em] py-[0.15em]";
+const PILL = `rounded-inline ${INLINE_PAD}`;
 
 /** A thread a message points at, as the composer writes it: `#[Title](rustcode://thread/<id>)`. */
 const THREAD_LINK = /^rustcode:\/\/thread\/([^/?#\s]+)$/;
@@ -291,7 +292,8 @@ function ThreadChip({ id, label }: { id: string; label?: string }) {
         type="button"
         onClick={() => selectThread(id)}
         className={cx(
-          PILL,
+          "rounded-chip",
+          INLINE_PAD,
           "inline-flex max-w-full cursor-pointer items-center gap-1 bg-fill-strong align-baseline text-fg hover:bg-accent/12",
         )}
       >
@@ -567,10 +569,10 @@ export const Markdown = memo(function Markdown({
   return (
     <div
       ref={root}
-      // Replies read at 14px on 1.625 (22.75px), the transcript's own leading; the app's rows keep
+      // Replies read at 14px on 24px (`leading-chat`) with 16px between blocks; the app's rows keep
       // the body's 19px (docs/design.md › Type).
       className={cx(
-        "selectable flex flex-col gap-2 text-body leading-relaxed text-fg/90 break-words",
+        "selectable flex flex-col gap-4 text-body leading-chat text-fg/90 break-words",
         className,
       )}
     >
