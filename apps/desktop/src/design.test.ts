@@ -447,7 +447,7 @@ describe("design system", () => {
     expect(block(':root:is([data-platform="windows"], [data-platform="linux"]) .rc-reveal')).toContain(
       "animation-name: rc-fade;",
     );
-    // Only the macOS window's vibrancy shows through, behind the sidebar alone, in the shared
+    // Only the macOS window's vibrancy shows through, behind the sidebar alone, in its own
     // Transparency, and never under Reduce transparency (lib/material.ts sets the attribute).
     const material = ":root[data-material]:not(.reduce-transparency)";
     expect(block(`${material} {`)).toContain(
@@ -455,7 +455,7 @@ describe("design system", () => {
     );
     expect(block(`${material} body {`)).toContain("background: transparent;");
     expect(css.match(/\[data-material\]/g)).toHaveLength(2);
-    expect(css).toContain("--rc-glass-alpha: calc(100% - var(--rc-transparency));");
+    expect(css).toContain("--rc-glass-alpha: 72%;");
     const config = (name: string) =>
       JSON.parse(readFileSync(join(SRC, `../src-tauri/${name}`), "utf8")).app.windows[0];
     expect(config("tauri.windows.conf.json").transparent).toBe(false);

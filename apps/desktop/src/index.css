@@ -1070,9 +1070,9 @@
  */
 :root {
   /* Settings › Appearance › Transparency (lib/transparency.ts sets it on <html>): how much of the
-     sidebar and the glass shows through. 28% keeps the glass at its designed 72%. */
+     window shows through the sidebar. The glass keeps its designed 72% whatever the slider says. */
   --rc-transparency: 28%;
-  --rc-glass-alpha: calc(100% - var(--rc-transparency));
+  --rc-glass-alpha: 72%;
   /* The composer's hue: the sidebar's, lifted by a touch of white so the box reads a step lighter
      than the surface it floats on, in every theme. Its glass and solid fills both take it. */
   --rc-composer-hue: color-mix(in srgb, #ffffff 6%, var(--rc-sidebar));
@@ -1561,7 +1561,7 @@
  * system's real blur of what is behind the window. `data-material` on <html> (lib/material.ts) is
  * set only where the shell has one, so a browser, Windows and Linux keep the opaque sidebar. The
  * page itself stays transparent there, the main pane keeps its opaque `bg`, and the sidebar takes
- * the same Transparency as the glass. Reduce transparency makes it solid again (the rule above,
+ * Settings › Appearance › Transparency, which applies to it alone. Reduce transparency makes it solid again (the rule above,
  * which this one's `:not` defers to).
  */
 :root[data-material]:not(.reduce-transparency) {
