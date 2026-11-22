@@ -73,15 +73,15 @@ async fn persist_task_event_once(
             call_id.as_deref(),
             output,
         ));
-        crate::config::save_session_history(&event_session_id, &state.history);
+        crate::sessions::save_session_history(&event_session_id, &state.history);
     } else {
-        let mut history = crate::config::load_session_history_direct(&event_session_id);
+        let mut history = crate::sessions::load_session_history_direct(&event_session_id);
         history.push(crate::background_task_history_message(
             &task_id,
             call_id.as_deref(),
             output,
         ));
-        crate::config::save_session_history(&event_session_id, &history);
+        crate::sessions::save_session_history(&event_session_id, &history);
     }
 }
 
@@ -121,7 +121,7 @@ pub fn build_scheduled_state(
     workspace: &std::path::Path,
     model_profile: Option<&str>,
     session_id: &str,
-    settings: Option<&crate::config::SessionSettingsSnapshot>,
+    settings: Option<&crate::sessions::SessionSettingsSnapshot>,
 ) -> Result<AppState, String> {
     if !workspace.is_absolute() || !workspace.is_dir() {
         return Err("scheduled workspace must be an existing absolute directory".into());
@@ -136,7 +136,7 @@ pub fn build_scheduled_state(
     let mut state = AppState::new_with_workspace_session(workspace, Some(session_id));
     let saved = settings
         .cloned()
-        .or_else(|| crate::config::load_session_settings(session_id));
+        .or_else(|| crate::sessions::load_session_settings(session_id));
     if let Some(snapshot) = &saved {
         let mut recorded: crate::config::AppConfig =
             serde_json::from_value(snapshot.config.clone())
@@ -220,7 +220,7 @@ pub fn build_scheduled_state(
     state.verbosity = state.config.verbosity.clone();
     state.workspace_root = Some(workspace.to_path_buf());
     state.task_working_directory = Some(workspace.to_path_buf());
-    state.history = crate::config::load_session_history_direct(session_id).into();
+    state.history = crate::sessions::load_session_history_direct(session_id).into();
     state
         .history
         .push(ChatMessage::new("user", prompt.to_owned()));

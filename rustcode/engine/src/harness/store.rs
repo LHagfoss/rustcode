@@ -57,7 +57,7 @@ fn record_path(session_id: &str) -> Option<PathBuf> {
     if !rustcode_session::valid_session_id(session_id) {
         return None;
     }
-    crate::config::get_active_session_dir(session_id).map(|dir| dir.join(RECORD_FILE))
+    crate::sessions::get_active_session_dir(session_id).map(|dir| dir.join(RECORD_FILE))
 }
 
 /// The record of `session_id`, when it runs on an external harness.
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn restart_keeps_the_saved_login_and_native_session_or_reports_damage() {
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         let mut record = HarnessRecord::new("claude-code", std::env::temp_dir());
         record.account = Some("personal-1".into());
         record.native_session_id = Some("native-session".into());
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn records_round_trip_beside_the_thread() {
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         assert!(load(&session_id).is_none());
         let mut record = HarnessRecord::new("codex", PathBuf::from("/tmp/project"));
         record.native_session_id = Some("thread-1".into());
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn a_record_keeps_everything_a_resume_needs() {
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         let mut record = HarnessRecord::new("claude-code", PathBuf::from("/tmp/project"));
         record.account = Some("paral-2".into());
         record.native_session_id = Some("native-7".into());

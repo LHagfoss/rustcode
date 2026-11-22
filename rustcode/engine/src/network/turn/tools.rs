@@ -921,7 +921,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             ctx.response.final_content_persisted = false;
             ctx.lifecycle.task_completed = false;
             ctx.lifecycle.stop_reason = Some(reason);
-            crate::config::save_session_history(&s.active_session_id, &s.history);
+            crate::sessions::save_session_history(&s.active_session_id, &s.history);
             s.clear_current_response();
             drop(s);
             ctx.lifecycle.turn_machine.abandon_tool_phase();
@@ -931,7 +931,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             "system",
             super::recovery::TRUNCATED_TOOL_CALL_GUIDANCE,
         ));
-        crate::config::save_session_history(&s.active_session_id, &s.history);
+        crate::sessions::save_session_history(&s.active_session_id, &s.history);
         s.clear_current_response();
         s.status = AppStatus::Streaming;
         s.stream_tracker = Some(StreamTracker::new());
@@ -1004,7 +1004,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 repeat_guidance
             ),
         ));
-        crate::config::save_session_history(&s.active_session_id, &s.history);
+        crate::sessions::save_session_history(&s.active_session_id, &s.history);
         s.clear_current_response();
         s.status = AppStatus::Streaming;
         drop(s);
@@ -1136,7 +1136,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             s.history.as_mut_vec(),
                             recovery_prompt.to_string(),
                         );
-                        crate::config::save_session_history(&s.active_session_id, &s.history);
+                        crate::sessions::save_session_history(&s.active_session_id, &s.history);
                         s.clear_current_response();
                         s.status = AppStatus::Streaming;
                         s.stream_tracker = Some(StreamTracker::new());
@@ -1166,7 +1166,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         ctx.response.final_content_persisted = true;
                         s.history
                             .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
-                        crate::config::save_session_history(&s.active_session_id, &s.history);
+                        crate::sessions::save_session_history(&s.active_session_id, &s.history);
                         s.clear_current_response();
                         drop(s);
                         ctx.lifecycle.turn_machine.abandon_tool_phase();
@@ -1250,7 +1250,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 ctx.response.final_content_persisted = true;
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 // An approval prompt for the batch waited on the user, not on
                 // the harness (#1891).
                 let approval_wait = std::mem::take(&mut s.approval_wait);
@@ -1465,7 +1465,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     s.history
                         .push(ChatMessage::new("system", "Request cancelled by user"));
                 }
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 ctx.lifecycle.turn_machine.finish_tools_if_executing();
                 return ToolHandlingOutcome::Stop;
             }
@@ -2216,7 +2216,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .collect(),
             );
             if let Some(workspace) = s.effective_workspace_root() {
-                let session_dirs = crate::config::get_active_session_dir(turn_session_id)
+                let session_dirs = crate::sessions::get_active_session_dir(turn_session_id)
                     .into_iter()
                     .collect::<Vec<_>>();
                 for index in &selected_call_indices {
@@ -2311,7 +2311,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         )
                     },
                 ));
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 drop(s);
                 ctx.response.final_content = if boundary_stop {
@@ -2489,7 +2489,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             s.history.as_mut_vec(),
                             format!("{evidence}\n{recovery_prompt}"),
                         );
-                        crate::config::save_session_history(&s.active_session_id, &s.history);
+                        crate::sessions::save_session_history(&s.active_session_id, &s.history);
                         s.clear_current_response();
                         s.status = AppStatus::Streaming;
                         s.stream_tracker = Some(StreamTracker::new());
@@ -2514,7 +2514,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             "system",
                             format!("{evidence}\n{FORCE_ANSWER_PROMPT}"),
                         ));
-                        crate::config::save_session_history(&s.active_session_id, &s.history);
+                        crate::sessions::save_session_history(&s.active_session_id, &s.history);
                         s.clear_current_response();
                         drop(s);
                         ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
@@ -2533,7 +2533,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     "system",
                     "[Finish blocked — this response included a dropped, unresolved, or incomplete tool result. Re-issue the affected tool call and inspect a complete result before reporting completion.]",
                 ));
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 drop(s);
                 ctx.lifecycle.turn_machine.finish_tools_if_executing();
@@ -2551,7 +2551,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 // remains intact as the hard backstop.
                 ctx.recovery.loop_detector.reset();
                 push_or_replace_recovery_notice(s.history.as_mut_vec(), replan);
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
@@ -2580,7 +2580,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     "system",
                     completion_block_message(ctx.progress.failed_mutations),
                 ));
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 drop(s);
                 ctx.lifecycle.turn_machine.finish_tools_if_executing();
@@ -2598,7 +2598,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             evidence.command, evidence.exit_code
                         ),
                     ));
-                    crate::config::save_session_history(&s.active_session_id, &s.history);
+                    crate::sessions::save_session_history(&s.active_session_id, &s.history);
                     s.clear_current_response();
                     drop(s);
                     ctx.lifecycle.turn_machine.finish_tools_if_executing();
@@ -2636,7 +2636,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                             "[Finish blocked — {reason} Run the relevant project verification command after the latest edit, inspect its result, then report completion.]"
                         ),
                     ));
-                    crate::config::save_session_history(&s.active_session_id, &s.history);
+                    crate::sessions::save_session_history(&s.active_session_id, &s.history);
                     s.clear_current_response();
                     drop(s);
                     ctx.lifecycle.turn_machine.finish_tools_if_executing();
@@ -2695,7 +2695,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                                              Compiler errors:\n{errors}]"
                                         ),
                                     ));
-                            crate::config::save_session_history(&s.active_session_id, &s.history);
+                            crate::sessions::save_session_history(&s.active_session_id, &s.history);
                             s.clear_current_response();
                             drop(s);
                             ctx.lifecycle.turn_machine.finish_tools_if_executing();
@@ -2747,7 +2747,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 ctx.lifecycle.turn_machine.finish_tools_if_executing();
                 return ToolHandlingOutcome::Stop;
             }
-            crate::config::save_session_history(&s.active_session_id, &s.history);
+            crate::sessions::save_session_history(&s.active_session_id, &s.history);
             s.clear_current_response();
             drop(s);
             ctx.lifecycle.turn_machine.finish_tools_if_executing();
@@ -2801,7 +2801,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         );
 
         s.history.push(ChatMessage::new("tool", feedback));
-        crate::config::save_session_history(&s.active_session_id, &s.history);
+        crate::sessions::save_session_history(&s.active_session_id, &s.history);
         s.clear_current_response();
         s.status = AppStatus::Streaming;
         s.stream_tracker = Some(StreamTracker::new());

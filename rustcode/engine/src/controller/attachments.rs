@@ -166,7 +166,7 @@ pub fn read_thread_image_chunk(
     if !rustcode_session::valid_session_id(session_id) {
         return Err("no such thread".to_owned());
     }
-    let workspace = crate::config::load_session_workspace(session_id);
+    let workspace = crate::sessions::load_session_workspace(session_id);
     let cwd = workspace
         .as_ref()
         .map(|workspace| workspace.cwd.clone())
@@ -175,7 +175,7 @@ pub fn read_thread_image_chunk(
     if let Some(workspace) = workspace {
         roots.extend(workspace.additional_directories);
     }
-    roots.extend(crate::config::get_active_session_dir(session_id));
+    roots.extend(crate::sessions::get_active_session_dir(session_id));
     let home = crate::home::home_dir();
     // Where the thread's harness saves its own output (Antigravity's session folder).
     if let (Some(record), Some(home)) = (crate::harness::store::load(session_id), &home) {

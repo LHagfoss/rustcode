@@ -345,7 +345,7 @@ pub async fn generate_conversation_recap(
             );
             live.recap_retry_after = None;
             live.recap_failed_turn_count = None;
-            crate::config::save_session_history(&session_id, &live.history);
+            crate::sessions::save_session_history(&session_id, &live.history);
         } else {
             live.recap_retry_after = (live.recap_failed_turn_count != Some(turns))
                 .then(|| Instant::now() + Duration::from_secs(30));
@@ -741,7 +741,7 @@ mod request_tests {
         assert_eq!(&live.history[..original.len()], &original[..]);
         assert_eq!(live.history.len(), original.len() + 1);
         assert!(parse_recap(&live.history.last().unwrap().content).is_some());
-        if let Some(directory) = crate::config::get_active_session_dir(&temporary_id) {
+        if let Some(directory) = crate::sessions::get_active_session_dir(&temporary_id) {
             assert!(!directory.join("history.json").exists());
             assert!(!directory.join("settings.json").exists());
         }

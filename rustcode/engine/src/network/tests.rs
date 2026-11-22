@@ -4,13 +4,13 @@ use super::*;
 #[test]
 fn zoom_context_dispatch_appends_recalled_data_without_rewriting_the_request_prefix() {
     let original = vec![ChatMessage::new("user", "Correction: use port 5433.")];
-    let archive = crate::config::archive_history_prefix(&original).unwrap();
+    let archive = crate::sessions::archive_history_prefix(&original).unwrap();
     let session = rustcode_session::next_session_id();
     let mut transcript = vec![
         compaction::durable_compaction_record_message("Database setup discussed", &[], &archive),
         ChatMessage::new("user", "Recover my exact correction"),
     ];
-    crate::config::save_session_history(&session, &transcript);
+    crate::sessions::save_session_history(&session, &transcript);
     crate::tools::set_active_session_id(Some(session));
     let mut prefix = RequestPrefixCache::default();
     let initial = history::to_messages(&transcript, "static system prompt");

@@ -277,7 +277,7 @@ fn print_list(kind: &str, answer: &Value) {
 
 /// `rc threads move|configure|rename|pin|unpin`.
 pub async fn thread(command: &SessionCommands) -> Result<(), String> {
-    let saved = rustcode::config::session_ids();
+    let saved = rustcode::sessions::session_ids();
     let resolve = |raw: &str| crate::run::resolve_thread_id(raw, &saved);
     match command {
         SessionCommands::Move {
@@ -337,7 +337,7 @@ pub async fn thread(command: &SessionCommands) -> Result<(), String> {
             if title.is_empty() {
                 return Err("the title is empty".to_owned());
             }
-            rustcode::config::save_session_title(&id, title);
+            rustcode::sessions::save_session_title(&id, title);
             println!("renamed {id} {title}");
         }
         SessionCommands::Pin { ids } | SessionCommands::Unpin { ids } => {

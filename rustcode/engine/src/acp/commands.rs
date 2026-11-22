@@ -410,7 +410,7 @@ where
         .collect::<Vec<_>>();
     if !added.is_empty() {
         let session_id = state.active_session_id.clone();
-        crate::config::save_session_history(&session_id, &state.history);
+        crate::sessions::save_session_history(&session_id, &state.history);
         return added.join("\n\n");
     }
     state
@@ -422,15 +422,15 @@ where
 
 /// Copy this chat into a new one beside it, leaving the open session as is.
 fn fork(state: &crate::app::AppState) -> String {
-    if !crate::config::session_has_content(&state.history) {
+    if !crate::sessions::session_has_content(&state.history) {
         return "There is nothing to fork yet.".into();
     }
-    let session_id = crate::config::create_detached_session();
+    let session_id = crate::sessions::create_detached_session();
     if session_id.is_empty() {
         return "Session storage is unavailable, so the chat cannot be forked.".into();
     }
     // The fork shares the source checkout, never the task worktree.
-    let workspace = crate::config::load_session_workspace(&state.active_session_id)
+    let workspace = crate::sessions::load_session_workspace(&state.active_session_id)
         .map(|workspace| rustcode_session::SessionWorkspace {
             task_workspace_id: None,
             ..workspace
@@ -446,14 +446,14 @@ fn fork(state: &crate::app::AppState) -> String {
                 })
         });
     if let Some(workspace) = workspace {
-        let _ = crate::config::save_session_workspace(&session_id, &workspace);
+        let _ = crate::sessions::save_session_workspace(&session_id, &workspace);
     }
-    crate::config::record_session_settings(&session_id, &state.config);
-    crate::config::save_session_history(&session_id, &state.history);
-    let title = crate::config::load_session_title(&state.active_session_id)
+    crate::sessions::record_session_settings(&session_id, &state.config);
+    crate::sessions::save_session_history(&session_id, &state.history);
+    let title = crate::sessions::load_session_title(&state.active_session_id)
         .map(|title| format!("{title} (fork)"))
         .unwrap_or_else(|| "Forked chat".into());
-    crate::config::save_session_title(&session_id, &title);
+    crate::sessions::save_session_title(&session_id, &title);
     // Where the fork came from, so the app nests it under this chat and the
     // fork can link back (the title is as it is now, kept if this one is renamed).
     crate::thread_parent::record(
@@ -461,7 +461,7 @@ fn fork(state: &crate::app::AppState) -> String {
         &state.active_session_id,
         rustcode_session::SessionRelationship::Fork,
     );
-    crate::config::flush_history();
+    crate::sessions::flush_history();
     format!("Forked this chat into **{title}**. Open it from the chat list.")
 }
 
@@ -799,12 +799,12 @@ mod tests {
         let reply = fork(&state);
         assert!(reply.contains("Forked this chat"), "{reply}");
         assert_eq!(state.active_session_id, open);
-        let forked = crate::config::list_sessions()
+        let forked = crate::sessions::list_sessions()
             .into_iter()
-            .filter_map(|meta| crate::config::session_id_from_path(&meta.path))
+            .filter_map(|meta| crate::sessions::session_id_from_path(&meta.path))
             .filter(|id| *id != open)
             .find(|id| {
-                crate::config::load_session_by_id(id).is_some_and(|(_, history)| {
+                crate::sessions::load_session_by_id(id).is_some_and(|(_, history)| {
                     history
                         .iter()
                         .any(|message| message.content == "original answer")
@@ -812,7 +812,7 @@ mod tests {
             });
         let forked = forked.expect("the fork is saved as its own session");
         let parent =
-            crate::config::load_session_parent(&forked).expect("the fork records its parent");
+            crate::sessions::load_session_parent(&forked).expect("the fork records its parent");
         assert_eq!(parent.id.as_deref(), Some(open.as_str()));
         assert_eq!(
             parent.relationship,

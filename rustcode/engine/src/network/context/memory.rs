@@ -762,7 +762,7 @@ pub(super) fn compact_with_structured_memory_at(
         );
         return false;
     };
-    let history_archive = match crate::config::archive_history_prefix(archival_prefix) {
+    let history_archive = match crate::sessions::archive_history_prefix(archival_prefix) {
         Ok(path) => path,
         Err(error) => {
             crate::dbg_log!(

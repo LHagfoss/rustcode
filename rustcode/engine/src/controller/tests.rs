@@ -346,7 +346,7 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
     };
     let saved_id = started.session_id.expect("session ID");
     assert_eq!(
-        crate::config::load_session_workspace(&saved_id).map(|record| record.cwd),
+        crate::sessions::load_session_workspace(&saved_id).map(|record| record.cwd),
         Some(
             workspace
                 .path()
@@ -467,7 +467,7 @@ async fn lifecycle_lists_saved_sessions_and_resumes_them_in_the_chosen_workspace
             .is_none(),
         "shutdown should finish worker"
     );
-    let persisted = crate::config::load_session_history_direct(&saved_id);
+    let persisted = crate::sessions::load_session_history_direct(&saved_id);
     assert!(
         persisted
             .iter()
@@ -1689,8 +1689,8 @@ async fn starting_workspace_and_submitting_forwards_ordered_turn_and_persists_hi
     );
     let provider_request = request.await.expect("provider task");
     assert!(provider_request.contains("hello controller"));
-    crate::config::flush_history();
-    let history = crate::config::load_session_history_direct(&session_id);
+    crate::sessions::flush_history();
+    let history = crate::sessions::load_session_history_direct(&session_id);
     assert!(
         history
             .iter()
@@ -2169,7 +2169,7 @@ mod render_state_tests {
         let mut state = AppState::new();
         state
             .history_picker_sessions
-            .push(crate::config::SessionMeta {
+            .push(crate::sessions::SessionMeta {
                 path: std::path::PathBuf::from("session.json"),
                 title: "A session title".to_owned(),
                 message_count: 3,

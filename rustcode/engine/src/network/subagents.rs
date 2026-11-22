@@ -841,7 +841,7 @@ async fn project_subagent_completion(
             .find(|agent| agent.id == completion.id.raw())
             .and_then(|agent| agent.workspace_root.as_ref())
             .and_then(|workspace| {
-                crate::config::write_subagent_review_manifest(workspace, completion.id.raw())
+                crate::sessions::write_subagent_review_manifest(workspace, completion.id.raw())
             })
     };
     let workspace_lifecycle = match completion.status {
@@ -865,7 +865,7 @@ async fn project_subagent_completion(
             .and_then(|agent| agent.workspace_root.clone())
     };
     if let Some(path) = workspace_path
-        && let Some(manager) = crate::config::workspace_manager()
+        && let Some(manager) = crate::sessions::workspace_manager()
         && let Ok(Some(descriptor)) = manager.find_by_workspace_path(&path)
     {
         let _ = manager.set_lifecycle(&descriptor.id, workspace_lifecycle);
@@ -1057,7 +1057,7 @@ pub(crate) fn launch_subagent_turn(
                 .find(|agent| agent.id == agent_id)
                 .and_then(|agent| agent.workspace_root.clone());
             if let Some(path) = workspace_path
-                && let Some(manager) = crate::config::workspace_manager()
+                && let Some(manager) = crate::sessions::workspace_manager()
                 && let Ok(Some(descriptor)) = manager.find_by_workspace_path(&path)
             {
                 let _ = manager.set_lifecycle(
@@ -1399,7 +1399,7 @@ async fn handle_agent_tool_for_parent(
                             .filter(|value| !value.trim().is_empty())
                             .unwrap_or(&id.to_string())
                             .to_string();
-                        let mut request = crate::config::WorkspaceRequest::for_task(
+                        let mut request = crate::sessions::WorkspaceRequest::for_task(
                             source_cwd,
                             name,
                             base_sha,
@@ -1432,7 +1432,7 @@ async fn handle_agent_tool_for_parent(
             let (plan, working_directory, workspace_note) =
                 plan.or_shared_outside_git(working_directory);
             let workspace_root = match plan {
-                SubagentWorkspacePlan::Named(request) => match crate::config::workspace_manager()
+                SubagentWorkspacePlan::Named(request) => match crate::sessions::workspace_manager()
                     .ok_or_else(|| "workspace persistence unavailable".to_string())
                     .and_then(|manager| manager.create(&request).map_err(|error| error.to_string()))
                 {
@@ -1444,7 +1444,7 @@ async fn handle_agent_tool_for_parent(
                     }
                 },
                 SubagentWorkspacePlan::Worktree(repo) => {
-                    match crate::config::create_subagent_workspace(
+                    match crate::sessions::create_subagent_workspace(
                         &owner_session_id,
                         reserved_id.raw(),
                         &repo,
@@ -1895,7 +1895,7 @@ async fn handle_agent_tool_for_parent(
                     .find(|agent| agent.id == id)
                     .and_then(|agent| agent.workspace_root.clone());
                 workspace.and_then(|path| {
-                    crate::config::workspace_manager().and_then(|manager| {
+                    crate::sessions::workspace_manager().and_then(|manager| {
                         manager.handoff_for_workspace_path(&path).ok().flatten()
                     })
                 })
@@ -2193,7 +2193,7 @@ enum SubagentWorkspacePlan {
     /// when the child writes.
     Shared,
     /// A named workspace from the workspace manager at an explicit base.
-    Named(Box<crate::config::WorkspaceRequest>),
+    Named(Box<crate::sessions::WorkspaceRequest>),
     /// A detached worktree of this repository's HEAD.
     Worktree(std::path::PathBuf),
 }
@@ -2215,7 +2215,7 @@ impl SubagentWorkspacePlan {
         working_directory: Option<std::path::PathBuf>,
     ) -> (Self, Option<std::path::PathBuf>, Option<String>) {
         match self.source() {
-            Some(source) if !crate::config::is_git_work_tree(source) => {
+            Some(source) if !crate::sessions::is_git_work_tree(source) => {
                 let note = format!(
                     "shared: {} is not a git repository, so the agent works there directly within allowed_paths",
                     source.display()

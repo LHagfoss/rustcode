@@ -716,7 +716,7 @@ const DETERMINISTIC_RECORD_MAX_CHARS: usize = 6_000;
 
 fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32) -> bool {
     compact_history_deterministically_inner(history, budget, |prefix| {
-        crate::config::archive_history_prefix(prefix)
+        crate::sessions::archive_history_prefix(prefix)
     })
 }
 
@@ -1586,7 +1586,7 @@ async fn prepare_turn_request_pass(
             if history_changed {
                 // Freeze the title before the first prompt can be summarized
                 // away, as `/compact` does.
-                crate::config::save_session_title_if_absent(
+                crate::sessions::save_session_title_if_absent(
                     &live_session_id,
                     captured_history.as_slice(),
                 );
@@ -1600,7 +1600,7 @@ async fn prepare_turn_request_pass(
                 s.recent_read_calls.clear();
                 s.recent_read_outputs.clear();
                 s.read_file_mtimes.clear();
-                crate::config::save_session_history(&live_session_id, &s.history);
+                crate::sessions::save_session_history(&live_session_id, &s.history);
                 // Record what this cost, for the context modal and /context.
                 // Plan-backed profiles, local engines and mid-turn rounds
                 // never run the summarizer, so their result is the reduced
@@ -1634,7 +1634,7 @@ async fn prepare_turn_request_pass(
                 // persists the messages appended since the previous round.
                 // Save under this state's own session, never the process-wide
                 // pointer: an ACP server holds several sessions at once.
-                crate::config::save_session_history(&live_session_id, &s.history);
+                crate::sessions::save_session_history(&live_session_id, &s.history);
             }
         } else {
             if matches!(
@@ -1912,7 +1912,7 @@ async fn prepare_turn_request_pass(
                 let session_id = guard.active_session_id.clone();
                 let current_cache = guard.image_analysis_cache.clone();
                 drop(guard);
-                crate::config::save_session_image_cache(&session_id, &current_cache);
+                crate::sessions::save_session_image_cache(&session_id, &current_cache);
                 preprocessing?;
             }
         }
@@ -2308,7 +2308,7 @@ async fn prepare_turn_request_pass(
         let mut s = state.lock().await;
         if s.active_session_id == request_session_id {
             s.history.push(ChatMessage::new("system", notice.clone()));
-            crate::config::save_session_history(&request_session_id, &s.history);
+            crate::sessions::save_session_history(&request_session_id, &s.history);
         }
         return Err(format!("{CONTEXT_PREFLIGHT_STOP_PREFIX}{notice}"));
     }

@@ -21,11 +21,11 @@ pub(crate) struct RepairSessionRequest {
 pub(crate) fn repair_session(session_id: &str) -> Result<Value, agent_client_protocol::Error> {
     let invalid = |message: String| agent_client_protocol::Error::invalid_params().data(message);
     let record = crate::harness::store::load(session_id);
-    let history = crate::config::load_session_by_id(session_id);
+    let history = crate::sessions::load_session_by_id(session_id);
     if record.is_none() && history.is_none() {
         return Err(invalid(format!("unknown session: {session_id}")));
     }
-    let workspace = crate::config::load_session_workspace(session_id);
+    let workspace = crate::sessions::load_session_workspace(session_id);
     let mut fixed = Vec::new();
     let mut problems = Vec::new();
     // The workspace is what a move writes first, so it wins over the record.
@@ -91,7 +91,7 @@ mod tests {
         let (old, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let id = "acp-repair-record";
         seed(id);
-        crate::config::save_session_workspace(
+        crate::sessions::save_session_workspace(
             id,
             &rustcode_session::SessionWorkspace {
                 cwd: new.path().to_path_buf(),
@@ -124,7 +124,7 @@ mod tests {
         let id = "acp-repair-gone";
         seed(id);
         let gone = tempfile::tempdir().unwrap().path().to_path_buf();
-        crate::config::save_session_workspace(
+        crate::sessions::save_session_workspace(
             id,
             &rustcode_session::SessionWorkspace {
                 cwd: gone,

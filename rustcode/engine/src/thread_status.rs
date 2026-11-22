@@ -79,7 +79,7 @@ pub(crate) fn set_notifier(notify: impl Fn(String, SessionUpdate) + Send + Sync 
 }
 
 fn stored(session_id: &str) -> Option<Status> {
-    let dir = crate::config::get_active_session_dir(session_id)?;
+    let dir = crate::sessions::get_active_session_dir(session_id)?;
     let text = std::fs::read_to_string(dir.join(STATUS_FILE)).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
     match value.get("status")?.as_str()? {
@@ -89,7 +89,7 @@ fn stored(session_id: &str) -> Option<Status> {
 }
 
 fn store(session_id: &str, status: Status) -> Result<(), String> {
-    let dir = crate::config::get_active_session_dir(session_id)
+    let dir = crate::sessions::get_active_session_dir(session_id)
         .ok_or_else(|| "session storage is unavailable".to_owned())?;
     let path = dir.join(STATUS_FILE);
     if status == Status::Idle {
@@ -187,7 +187,7 @@ pub(crate) const FIRST_RESPONSE_TIMEOUT: std::time::Duration = std::time::Durati
 
 /// Older engines left only the user message if an external harness never answered.
 fn unanswered_first_prompt(session_id: &str) -> bool {
-    let Some(dir) = crate::config::get_active_session_dir(session_id) else {
+    let Some(dir) = crate::sessions::get_active_session_dir(session_id) else {
         return false;
     };
     let old_enough = dir
@@ -201,7 +201,7 @@ fn unanswered_first_prompt(session_id: &str) -> bool {
         && crate::harness::store::load(session_id).is_some_and(|record| {
             record.harness != crate::harness::BUILTIN_ID && record.usage.is_none()
         })
-        && has_only_first_prompt(&crate::config::load_session_history_direct(session_id))
+        && has_only_first_prompt(&crate::sessions::load_session_history_direct(session_id))
 }
 
 pub(crate) fn has_only_first_prompt(history: &[crate::app::ChatMessage]) -> bool {
@@ -375,7 +375,7 @@ pub(crate) struct SetStatusRequest {
 
 /// The owner's persisted snooze deadline, in Unix milliseconds.
 pub(crate) fn snoozed_until(id: &str) -> Option<u64> {
-    let dir = crate::config::get_active_session_dir(id)?;
+    let dir = crate::sessions::get_active_session_dir(id)?;
     serde_json::from_slice::<Option<u64>>(&std::fs::read(dir.join("snooze.json")).ok()?)
         .ok()
         .flatten()
@@ -385,7 +385,7 @@ pub(crate) fn set_snoozed(id: &str, until: Option<u64>) -> Result<(), String> {
     if !rustcode_session::valid_session_id(id) {
         return Err("invalid session id".into());
     }
-    let dir = crate::config::get_active_session_dir(id)
+    let dir = crate::sessions::get_active_session_dir(id)
         .filter(|dir| dir.is_dir())
         .ok_or_else(|| "thread storage is unavailable".to_owned())?;
     crate::worktrees::write_atomic(
@@ -443,8 +443,8 @@ pub(crate) struct SetTitleRequest {
 
 /// Whether the user named the thread themselves, so an agent leaves it alone.
 pub(crate) fn user_titled(session_id: &str) -> bool {
-    crate::config::session_user_titled(session_id)
-        || crate::config::get_active_session_dir(session_id)
+    crate::sessions::session_user_titled(session_id)
+        || crate::sessions::get_active_session_dir(session_id)
             .is_some_and(|dir| dir.join("user-titled").exists())
 }
 
@@ -460,20 +460,20 @@ pub(crate) fn set_title(request: &SetTitleRequest) -> Result<Value, String> {
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
-        .take(crate::config::MAX_REQUESTED_TITLE_CHARS)
+        .take(crate::sessions::MAX_REQUESTED_TITLE_CHARS)
         .collect();
     if title.is_empty() {
         return Err("A title can't be empty.".into());
     }
     let id = request.session_id.as_str();
     if !request.user && user_titled(id) {
-        let current = crate::config::load_session_title(id).unwrap_or(title);
+        let current = crate::sessions::load_session_title(id).unwrap_or(title);
         return Ok(json!({ "title": current, "kept": true }));
     }
     if request.user {
-        crate::config::save_user_session_title(id, &title);
+        crate::sessions::save_user_session_title(id, &title);
     } else {
-        crate::config::save_session_title(id, &title);
+        crate::sessions::save_session_title(id, &title);
     }
     announce(
         id,
@@ -484,7 +484,7 @@ pub(crate) fn set_title(request: &SetTitleRequest) -> Result<Value, String> {
 
 /// Whether the thread is pinned.
 pub(crate) fn pinned(session_id: &str) -> bool {
-    crate::config::get_active_session_dir(session_id)
+    crate::sessions::get_active_session_dir(session_id)
         .is_some_and(|dir| dir.join(PIN_FILE).is_file())
 }
 
@@ -493,7 +493,7 @@ pub(crate) fn set_pinned(session_id: &str, pinned: bool) -> Result<(), String> {
     if !rustcode_session::valid_session_id(session_id) {
         return Err("invalid session id".to_owned());
     }
-    let dir = crate::config::get_active_session_dir(session_id)
+    let dir = crate::sessions::get_active_session_dir(session_id)
         .ok_or_else(|| "session storage is unavailable".to_owned())?;
     let path = dir.join(PIN_FILE);
     if pinned {
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn live_state_wins_over_the_stored_one() {
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         assert_eq!(current(&id), Status::Idle);
         set(&id, "review").unwrap();
         assert_eq!(current(&id), Status::Review);
@@ -615,7 +615,7 @@ mod tests {
 
     #[test]
     fn first_response_timeout_stops_working_and_can_be_retried() {
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         let first_turn = turn(&id);
         assert_eq!(snapshot(&id), (Status::Running, true));
         first_response_timed_out(&id);
@@ -630,7 +630,7 @@ mod tests {
 
     #[test]
     fn self_settle_survives_the_running_turn_and_pull_news() {
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         {
             let _turn = turn(&id);
             set(&id, "done").unwrap();
@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn a_pin_round_trips_with_the_thread() {
         use agent_client_protocol::JsonRpcMessage;
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         assert!(!pinned(&id));
         set_pinned(&id, true).unwrap();
         assert!(pinned(&id));
@@ -678,35 +678,35 @@ mod tests {
 
     #[test]
     fn the_cli_writer_stores_the_status_the_app_reads() {
-        let id = crate::config::create_detached_session();
-        let dir = crate::config::get_active_session_dir(&id).expect("session dir");
+        let id = crate::sessions::create_detached_session();
+        let dir = crate::sessions::get_active_session_dir(&id).expect("session dir");
         std::fs::write(
             dir.join("history.json"),
             r#"[{"role":"user","content":"hi"},{"role":"assistant","content":"ok"}]"#,
         )
         .expect("write transcript");
-        assert!(crate::config::session_ids().contains(&id));
+        assert!(crate::sessions::session_ids().contains(&id));
 
-        crate::config::set_session_status(&id, "done").expect("settle");
+        crate::sessions::set_session_status(&id, "done").expect("settle");
         assert_eq!(current(&id), Status::Done);
-        crate::config::set_session_status(&id, "review").expect("review");
+        crate::sessions::set_session_status(&id, "review").expect("review");
         assert_eq!(current(&id), Status::Review);
-        crate::config::set_session_status(&id, "idle").expect("unsettle");
+        crate::sessions::set_session_status(&id, "idle").expect("unsettle");
         assert_eq!(current(&id), Status::Idle);
 
         // The MCP spelling of settled is not what the store holds.
-        assert!(crate::config::set_session_status(&id, "settled").is_err());
+        assert!(crate::sessions::set_session_status(&id, "settled").is_err());
         // An id with no thread folder is refused instead of creating one.
         assert!(
-            crate::config::set_session_status("ffffffff-ffff-7fff-8fff-ffffffffffff", "done")
+            crate::sessions::set_session_status("ffffffff-ffff-7fff-8fff-ffffffffffff", "done")
                 .is_err()
         );
     }
 
     #[test]
     fn settling_a_thread_keeps_everything_it_recorded() {
-        let id = crate::config::create_detached_session();
-        let dir = crate::config::get_active_session_dir(&id).expect("session dir");
+        let id = crate::sessions::create_detached_session();
+        let dir = crate::sessions::get_active_session_dir(&id).expect("session dir");
         let files = [
             ("history.json", r#"[{"role":"user","content":"hi"}]"#),
             ("performance.json", r#"{"turns":[]}"#),
@@ -718,7 +718,7 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, body).unwrap();
         }
-        crate::config::set_session_status(&id, "done").expect("settle");
+        crate::sessions::set_session_status(&id, "done").expect("settle");
         assert_eq!(current(&id), Status::Done);
         for (name, body) in files {
             assert_eq!(
@@ -728,12 +728,12 @@ mod tests {
             );
         }
         // Settled is a status, not a removal: the thread is still listed.
-        assert!(crate::config::session_ids().contains(&id));
+        assert!(crate::sessions::session_ids().contains(&id));
     }
 
     #[test]
     fn snooze_round_trips_on_the_owner() {
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         assert_eq!(snoozed_until(&id), None);
         set_snoozed(&id, Some(123456)).unwrap();
         assert_eq!(snoozed_until(&id), Some(123456));
@@ -783,7 +783,7 @@ mod tests {
 
     #[test]
     fn a_link_event_marks_an_idle_thread_for_review_once() {
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         let event = crate::pull_watch::WatchEvent {
             kind: "checks_failed".into(),
             message: "Checks failed: test".into(),

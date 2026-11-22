@@ -605,7 +605,7 @@ mod tests {
             history.push(ChatMessage::new("user", format!("follow-up {turn}")));
         }
         history.push(ChatMessage::new("assistant", "last answer"));
-        let title = crate::config::session_title(&history);
+        let title = crate::sessions::session_title(&history);
         assert_eq!(title, "Fix the login redirect");
 
         force_compact(&reqwest::Client::new(), &url, "model", &mut history, None)
@@ -618,8 +618,8 @@ mod tests {
                 .any(|message| message.role == "user" && message.content.starts_with("Fix")),
             "the first prompt should have been summarized away"
         );
-        assert_eq!(crate::config::session_title(&history), title);
-        assert!(crate::config::session_has_content(&history));
+        assert_eq!(crate::sessions::session_title(&history), title);
+        assert!(crate::sessions::session_has_content(&history));
     }
 
     #[tokio::test]

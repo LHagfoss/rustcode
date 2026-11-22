@@ -1240,7 +1240,7 @@ mod tests {
     /// shown as the first.
     #[test]
     fn compaction_count_survives_a_reload() {
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         let mut state = crate::app::AppState::new();
         state.active_session_id = session_id.clone();
         for _ in 0..2 {

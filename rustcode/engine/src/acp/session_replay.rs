@@ -22,11 +22,11 @@ pub(crate) fn replay_session(session_id: &str) -> Result<Value, agent_client_pro
     if !super::valid_acp_session_id(session_id) {
         return Err(invalid("invalid session id".to_owned()));
     }
-    let workspace = crate::config::load_session_workspace(session_id).map(|w| w.cwd);
+    let workspace = crate::sessions::load_session_workspace(session_id).map(|w| w.cwd);
     // A thread that ran on an external harness replays its recorded
     // transcript, as `harnesses::load_session` does.
     if let Some(record) = crate::harness::store::load_for_restore(session_id).map_err(invalid)? {
-        let history = crate::config::load_session_history_direct(session_id);
+        let history = crate::sessions::load_session_history_direct(session_id);
         let cwd = workspace.unwrap_or_else(|| record.cwd.clone());
         let updates = crate::harness::transcript::replay(&history, Some(&cwd));
         return Ok(json!({
@@ -36,7 +36,7 @@ pub(crate) fn replay_session(session_id: &str) -> Result<Value, agent_client_pro
             "updates": updates,
         }));
     }
-    let (meta, history) = crate::config::load_session_by_id(session_id)
+    let (meta, history) = crate::sessions::load_session_by_id(session_id)
         .ok_or_else(|| invalid(format!("unknown session: {session_id}")))?;
     let updates = super::session_load::replay_history_updates(&history, workspace.as_deref());
     Ok(json!({

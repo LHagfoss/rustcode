@@ -272,10 +272,10 @@ pub(crate) fn search(
 
 /// The thread folders as the session store lists them, with their mtimes.
 fn listed_threads() -> Vec<(String, i64)> {
-    crate::config::list_sessions()
+    crate::sessions::list_sessions()
         .into_iter()
         .filter_map(|meta| {
-            let id = crate::config::session_id_from_path(&meta.path)?;
+            let id = crate::sessions::session_id_from_path(&meta.path)?;
             let mtime = std::fs::metadata(&meta.path)
                 .and_then(|metadata| metadata.modified())
                 .ok()
@@ -287,7 +287,7 @@ fn listed_threads() -> Vec<(String, i64)> {
 }
 
 fn read_thread(id: &str, mtime: i64) -> Option<ThreadRecord> {
-    let (meta, history) = crate::config::load_session_by_id(id)?;
+    let (meta, history) = crate::sessions::load_session_by_id(id)?;
     let messages = history
         .iter()
         .filter(|message| message.role == "user" || message.role == "assistant")

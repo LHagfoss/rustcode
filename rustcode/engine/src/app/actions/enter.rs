@@ -609,7 +609,7 @@ async fn handle_enter_inner(
                         goal_text
                     );
                     s.history.push(ChatMessage::new("user", goal_msg));
-                    crate::config::save_session_history(&s.active_session_id, &s.history);
+                    crate::sessions::save_session_history(&s.active_session_id, &s.history);
                     s.input_buffer.clear();
                     s.cursor_position = 0;
                     return true;
@@ -1102,11 +1102,11 @@ async fn handle_enter_inner(
                 // Flush the live transcript first so the archive holds every
                 // message shown on screen.
                 let session_id = s.active_session_id.clone();
-                crate::config::save_session_history(&session_id, &s.history);
+                crate::sessions::save_session_history(&session_id, &s.history);
                 let destination = tokens
                     .get(1)
                     .map(|path| crate::home::expand_home(path, crate::home::home_dir().as_deref()));
-                match crate::config::export_session(&session_id, destination.as_deref()) {
+                match crate::sessions::export_session(&session_id, destination.as_deref()) {
                     Ok(path) => {
                         s.set_transient_notice(format!("Exported thread to {}", path.display()))
                     }
@@ -1121,7 +1121,7 @@ async fn handle_enter_inner(
                     );
                 } else {
                     let new_title = tokens[1..].join(" ");
-                    crate::config::save_user_session_title(&s.active_session_id, &new_title);
+                    crate::sessions::save_user_session_title(&s.active_session_id, &new_title);
                     s.invalidate_session_title_cache();
                     s.set_transient_notice(format!("Thread title renamed to \"{}\"", new_title));
                 }
@@ -1384,7 +1384,7 @@ fn start_provider_auth(
                 if persist_profiles {
                     crate::config::save_entire_config(&state.config);
                     if selected_profile.is_some() {
-                        crate::config::record_session_settings_for_profile(
+                        crate::sessions::record_session_settings_for_profile(
                             &state.active_session_id,
                             &state.config,
                             state.config.default.big(),
@@ -1498,12 +1498,12 @@ fn stage_prompt_command(state: &mut AppState, input: &str, roots: &crate::prompt
 /// resuming reattaches to this worktree instead of creating another.
 fn activate_task_workspace(
     s: &mut AppState,
-    descriptor: &crate::config::WorkspaceDescriptor,
+    descriptor: &crate::sessions::WorkspaceDescriptor,
     action: &str,
 ) {
     s.workspace_root = Some(descriptor.workspace_path.clone());
     s.task_working_directory = Some(descriptor.workspace_path.clone());
-    let _ = crate::config::save_session_workspace(
+    let _ = crate::sessions::save_session_workspace(
         &s.active_session_id,
         &rustcode_session::SessionWorkspace {
             cwd: descriptor.workspace_path.clone(),
@@ -1527,7 +1527,7 @@ fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
         s.show_command_panel("Workspace", "Usage: /workspace create <base_sha> [branch] [name] | status | archive | cleanup confirm [delete-branch]");
         return;
     };
-    let Some(manager) = crate::config::workspace_manager() else {
+    let Some(manager) = crate::sessions::workspace_manager() else {
         s.history.push(ChatMessage::new(
             "system",
             "Workspace persistence is unavailable.",
@@ -1572,7 +1572,7 @@ fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
                 activate_task_workspace(s, &descriptor, "reused");
                 return;
             }
-            let mut request = crate::config::WorkspaceRequest::for_task(
+            let mut request = crate::sessions::WorkspaceRequest::for_task(
                 source,
                 name,
                 base_sha,
@@ -1674,9 +1674,10 @@ fn handle_workspace_cleanup(
             Ok(_) => {
                 s.workspace_root = None;
                 s.task_working_directory = None;
-                if let Some(previous) = crate::config::load_session_workspace(&s.active_session_id)
+                if let Some(previous) =
+                    crate::sessions::load_session_workspace(&s.active_session_id)
                 {
-                    let _ = crate::config::save_session_workspace(
+                    let _ = crate::sessions::save_session_workspace(
                         &s.active_session_id,
                         &rustcode_session::SessionWorkspace {
                             task_workspace_id: None,

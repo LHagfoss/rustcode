@@ -2460,7 +2460,7 @@ fn save_entire_config_for_workspace_result(
         save_config_to_result(&dir, &persisted)?;
     }
     if let Some(session_id) = persisted.last_active_session_id.as_deref() {
-        session::record_session_settings(session_id, &persisted);
+        crate::sessions::record_session_settings(session_id, &persisted);
     }
     Ok(())
 }
@@ -3041,20 +3041,6 @@ pub(crate) use mcp_servers::{
     add_mcp_server_in, remove_mcp_server_in, set_mcp_server_enabled_in, set_skill_enabled_in,
     workspace_mcp_servers_in,
 };
-
-mod session;
-mod session_export;
-mod session_open;
-pub use session::session_title;
-pub use session::*;
-pub use session_export::{downloads_dir, export_session};
-pub(crate) use session_open::session_open_elsewhere;
-pub use session_open::{
-    SessionHolder, hold_primary_session, hold_session_open, release_session_open, session_open_by,
-};
-
-#[cfg(test)]
-use session::{next_session_id_value, queue_history_write, write_history_file};
 
 #[cfg(test)]
 mod tests;

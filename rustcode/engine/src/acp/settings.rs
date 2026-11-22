@@ -317,7 +317,7 @@ pub(crate) fn value_for_project(key: &str, project: Option<&Path>) -> Option<Val
 /// One setting as a thread reads it, through its project (its repository's
 /// folder, as the session store records it).
 pub(crate) fn value_for_session(key: &str, session_id: &str) -> Option<Value> {
-    let project = crate::config::load_session_repo(session_id);
+    let project = crate::sessions::load_session_repo(session_id);
     value_for_project(key, project.as_deref())
 }
 

@@ -34,9 +34,11 @@ struct Metadata {
 }
 
 pub(super) fn root(session_id: &str) -> Result<PathBuf> {
-    Ok(crate::config::get_active_session_artifacts_dir(session_id)
-        .context("session storage is unavailable")?
-        .join("remote-images"))
+    Ok(
+        crate::sessions::get_active_session_artifacts_dir(session_id)
+            .context("session storage is unavailable")?
+            .join("remote-images"),
+    )
 }
 
 fn valid_id(id: &str) -> bool {

@@ -21,10 +21,10 @@ pub(super) fn parse_session_cursor(
 }
 
 pub(super) fn session_info(
-    meta: &crate::config::SessionMeta,
+    meta: &crate::sessions::SessionMeta,
     workspace: Option<rustcode_session::SessionWorkspace>,
 ) -> SessionInfo {
-    let session_id = crate::config::session_id_from_path(&meta.path).unwrap_or_default();
+    let session_id = crate::sessions::session_id_from_path(&meta.path).unwrap_or_default();
     let (cwd, workspace_unknown) =
         listed_folder(workspace_cwd(workspace), home_folder().as_deref());
     let mut info = SessionInfo::new(session_id.clone(), cwd).title(meta.title.clone());
@@ -34,7 +34,7 @@ pub(super) fn session_info(
         "workspaceUnknown".into(),
         serde_json::json!(workspace_unknown),
     );
-    let metadata = crate::config::load_session_metadata(&session_id);
+    let metadata = crate::sessions::load_session_metadata(&session_id);
     if let Some(created_at_ms) = metadata.as_ref().map(|metadata| metadata.created_at_ms)
         && let Some(timestamp) = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
             created_at_ms.min(i64::MAX as u64) as i64,
@@ -47,10 +47,10 @@ pub(super) fn session_info(
     }
     // The profile recorded for the chat, else the one its settings log last
     // saw: chats that never changed model only have the latter.
-    if let Some(model) = crate::config::load_session_model(&session_id)
+    if let Some(model) = crate::sessions::load_session_model(&session_id)
         .map(|model| model.profile)
         .or_else(|| {
-            crate::config::load_session_settings(&session_id)
+            crate::sessions::load_session_settings(&session_id)
                 .map(|settings| settings.active_profile)
                 .filter(|profile| !profile.is_empty())
         })
@@ -131,7 +131,7 @@ pub(super) fn session_info(
 /// When the chat last changed: its last message, else the history file's
 /// modification time for transcripts written without timestamps.
 pub(super) fn session_updated_at(
-    meta: &crate::config::SessionMeta,
+    meta: &crate::sessions::SessionMeta,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(&meta.when)
         .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
@@ -146,7 +146,7 @@ pub(super) fn session_updated_at(
 
 pub(super) fn session_file_is_contained(path: &std::path::Path) -> bool {
     crate::config::get_config_dir()
-        .is_some_and(|config| crate::config::session_file_in_store(&config, path))
+        .is_some_and(|config| crate::sessions::session_file_in_store(&config, path))
 }
 
 pub(super) fn acp_list_sessions(
@@ -177,17 +177,17 @@ pub(super) fn acp_list_sessions(
     // recorded workspace and sessions whose workspace has since been deleted
     // stay unlisted, as they were before.
     let scope = match &filter_cwd {
-        Some(filter) => crate::config::SessionScope::WorkspaceExact(filter.clone()),
-        None => crate::config::SessionScope::All,
+        Some(filter) => crate::sessions::SessionScope::WorkspaceExact(filter.clone()),
+        None => crate::sessions::SessionScope::All,
     };
     let (metas, next) =
-        crate::config::list_sessions_page(cursor, ACP_SESSION_PAGE_SIZE, &scope, |meta| {
+        crate::sessions::list_sessions_page(cursor, ACP_SESSION_PAGE_SIZE, &scope, |meta| {
             // Path containment and id shape are not workspace concerns, so they
             // stay a separate narrowing step on the store's own listing.
             if !session_file_is_contained(&meta.path) {
                 return false;
             }
-            let id = crate::config::session_id_from_path(&meta.path);
+            let id = crate::sessions::session_id_from_path(&meta.path);
             id.as_deref().is_some_and(valid_acp_session_id)
         })
         .map_err(|_| {
@@ -384,9 +384,9 @@ pub(crate) fn build_loaded_app_state(
     // Reattach the session's recorded task worktree so resume reuses its
     // writable roots and cwd instead of starting over in the source checkout
     // (#1496). A missing or foreign worktree falls back to `cwd`.
-    if let Some(workspace) = crate::config::load_session_workspace(session_id)
+    if let Some(workspace) = crate::sessions::load_session_workspace(session_id)
         && let Some(descriptor_id) = workspace.task_workspace_id
-        && let Some(manager) = crate::config::workspace_manager()
+        && let Some(manager) = crate::sessions::workspace_manager()
         && let Ok(descriptor) = manager.resume(&descriptor_id)
     {
         state.workspace_root = Some(descriptor.workspace_path.clone());
@@ -400,10 +400,10 @@ pub(crate) fn build_loaded_app_state(
 /// last-active session, as the TUI does when it is still empty, would hand two
 /// ACP sessions (or two processes) the same history file.
 pub(super) fn new_session_state(cwd: &std::path::Path) -> crate::app::AppState {
-    let session_id = crate::config::create_detached_session();
+    let session_id = crate::sessions::create_detached_session();
     let state = crate::app::AppState::new_with_workspace_session(cwd, Some(&session_id));
     if !session_id.is_empty() {
-        crate::config::record_session_settings(&session_id, &state.config);
+        crate::sessions::record_session_settings(&session_id, &state.config);
         state.record_session_model();
     }
     state
@@ -509,7 +509,7 @@ pub(super) async fn create_builtin_session(
     let mut state = new_session_state(&cwd);
     let session_id = state.active_session_id.clone();
     // The name the thread was made with, from the app that made it (issue 3524).
-    crate::config::save_requested_title(&session_id, request.meta.as_ref());
+    crate::sessions::save_requested_title(&session_id, request.meta.as_ref());
     // Who started this thread, from the `_meta.rustcode.parent` its
     // caller gave: kept in the thread's own metadata, not only in
     // the link book the app prunes (`thread_parent.rs`).
@@ -517,8 +517,8 @@ pub(super) async fn create_builtin_session(
         crate::thread_parent::record(&session_id, &parent, relationship);
     }
     // A scheduled job's run: its thread lives in the job's view, not the list.
-    if let Some(job) = crate::config::requested_scheduled_job(request.meta.as_ref()) {
-        crate::config::save_session_scheduled_job(&session_id, &job);
+    if let Some(job) = crate::sessions::requested_scheduled_job(request.meta.as_ref()) {
+        crate::sessions::save_session_scheduled_job(&session_id, &job);
     }
     let session_clients = peer.attach(&session_id);
     apply_client_info(&mut state, peer.info(), &session_clients);
@@ -535,7 +535,7 @@ pub(super) async fn create_builtin_session(
         &crate::harness::builtin_start(&crate::harness::requested(request.meta.as_ref())),
     );
     let config_options = build_session_config_options(&state);
-    let _ = crate::config::save_session_workspace(
+    let _ = crate::sessions::save_session_workspace(
         &session_id,
         &session_workspace(cwd.clone(), request.additional_directories.clone()),
     );
@@ -632,7 +632,7 @@ pub(super) async fn acp_load_session(
     // Where the session's log is before its transcript is read: whatever it
     // logs after this is not in the transcript.
     let base = server.clients.load_mark(&session_id);
-    let (meta, history) = crate::config::load_session_by_id(&session_id).ok_or_else(|| {
+    let (meta, history) = crate::sessions::load_session_by_id(&session_id).ok_or_else(|| {
         agent_client_protocol::Error::invalid_params()
             .data(format!("unknown or unresumable ACP session: {session_id}"))
     })?;
@@ -650,7 +650,7 @@ pub(super) async fn acp_load_session(
         return Err(agent_client_protocol::Error::invalid_params()
             .data("session history escaped the session store"));
     }
-    if let Some(workspace) = crate::config::load_session_workspace(&session_id)
+    if let Some(workspace) = crate::sessions::load_session_workspace(&session_id)
         && !opens_in(&workspace.cwd, &cwd)
     {
         return Err(agent_client_protocol::Error::invalid_params()
@@ -716,7 +716,7 @@ pub(super) async fn acp_load_session(
             Some(&cwd),
             loaded_compaction.as_ref(),
         );
-        let _ = crate::config::save_session_workspace(
+        let _ = crate::sessions::save_session_workspace(
             &session_id,
             &session_workspace(cwd, request.additional_directories.clone()),
         );
@@ -833,7 +833,7 @@ pub(super) async fn attach_open_builtin(
     };
     // A resumed client has these already: changes to them were updates.
     if !position.resumed {
-        let title = crate::config::session_meta_by_id(&session_id)
+        let title = crate::sessions::session_meta_by_id(&session_id)
             .map(|meta| meta.title)
             .filter(|title| !title.trim().is_empty())
             .map(|title| SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)));

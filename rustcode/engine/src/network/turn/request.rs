@@ -407,7 +407,7 @@ async fn checkpoint_native_stream_recovery(
         .push(ChatMessage::new("assistant", content).as_unexecuted_tool_call_checkpoint());
     s.history.push(ChatMessage::new("system", notice));
     let active_id = s.active_session_id.clone();
-    crate::config::save_session_history(&active_id, &s.history);
+    crate::sessions::save_session_history(&active_id, &s.history);
     s.current_token_usage = None;
     s.status = crate::app::AppStatus::Streaming;
     s.stream_tracker = Some(crate::app::StreamTracker::new());
@@ -429,7 +429,7 @@ async fn checkpoint_stream_recovery(
         .push(ChatMessage::new("assistant", content).as_unexecuted_tool_call_checkpoint());
     s.history.push(ChatMessage::new("system", notice));
     let active_id = s.active_session_id.clone();
-    crate::config::save_session_history(&active_id, &s.history);
+    crate::sessions::save_session_history(&active_id, &s.history);
     s.current_token_usage = None;
     s.status = crate::app::AppStatus::Streaming;
     s.stream_tracker = Some(crate::app::StreamTracker::new());
@@ -467,7 +467,7 @@ async fn checkpoint_text_stream_recovery(
     s.history.push(ChatMessage::new("assistant", content));
     s.history.push(ChatMessage::new("system", notice));
     let active_id = s.active_session_id.clone();
-    crate::config::save_session_history(&active_id, &s.history);
+    crate::sessions::save_session_history(&active_id, &s.history);
     s.current_token_usage = None;
     s.status = crate::app::AppStatus::Streaming;
     s.stream_tracker = Some(crate::app::StreamTracker::new());
@@ -506,8 +506,8 @@ pub(super) async fn collect_round(
             for message in messages {
                 s.history.push(message);
             }
-            crate::config::save_session_history(turn_session_id, &s.history);
-            crate::config::flush_history();
+            crate::sessions::save_session_history(turn_session_id, &s.history);
+            crate::sessions::flush_history();
             crate::app::subagent_persistence::save(&s);
         }
     }
@@ -890,7 +890,7 @@ pub(super) async fn collect_round(
                 let mut s = state.lock().await;
                 if s.active_session_id == request_session_id {
                     s.history.push(ChatMessage::new("system", notice));
-                    crate::config::save_session_history(&request_session_id, &s.history);
+                    crate::sessions::save_session_history(&request_session_id, &s.history);
                 }
                 ctx.response.final_content_persisted = true;
                 ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(

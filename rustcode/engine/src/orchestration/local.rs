@@ -210,7 +210,7 @@ fn thread_usage(session_id: &str, args: &Value) -> Value {
         };
         (asked, scope)
     } else {
-        let own = crate::config::session_meta_by_id(session_id)
+        let own = crate::sessions::session_meta_by_id(session_id)
             .map(|meta| project_of(session_id, &meta))
             .filter(|own| !own.is_empty());
         let refused = || {
@@ -317,7 +317,7 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
     if let Some(title) = new_title
         && !title_kept
     {
-        crate::config::save_session_title(session_id, title);
+        crate::sessions::save_session_title(session_id, title);
         crate::thread_status::announce(
             session_id,
             agent_client_protocol::schema::v1::SessionUpdate::SessionInfoUpdate(
@@ -343,8 +343,8 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
     {
         return error("failed", why);
     }
-    let title = crate::config::load_session_title(session_id)
-        .or_else(|| crate::config::session_meta_by_id(session_id).map(|meta| meta.title));
+    let title = crate::sessions::load_session_title(session_id)
+        .or_else(|| crate::sessions::session_meta_by_id(session_id).map(|meta| meta.title));
     let mut answer = json!({
         "session_id": session_id,
         "title": title,
@@ -479,14 +479,14 @@ pub(super) fn reach_refused() -> String {
 
 /// Whether `caller` may act on `target`: the same project, a thread it
 /// started, or the cross-project setting (the app's `checkManage`).
-pub(super) fn may_reach(caller: &str, target: &str, meta: &crate::config::SessionMeta) -> bool {
-    let caller_meta = crate::config::session_meta_by_id(caller);
+pub(super) fn may_reach(caller: &str, target: &str, meta: &crate::sessions::SessionMeta) -> bool {
+    let caller_meta = crate::sessions::session_meta_by_id(caller);
     caller_meta.as_ref().is_some_and(|caller_meta| {
         same_project(
             Some(&reach_of(caller, caller_meta)),
             &reach_of(target, meta),
         )
-    }) || crate::config::load_session_parent(target)
+    }) || crate::sessions::load_session_parent(target)
         .and_then(|parent| parent.id)
         .is_some_and(|parent| parent == caller)
         || read_across_projects()
@@ -524,11 +524,11 @@ fn list_sessions(session_id: &str, args: &Value) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    let caller = crate::config::session_meta_by_id(session_id);
+    let caller = crate::sessions::session_meta_by_id(session_id);
     let caller_reach = caller.as_ref().map(|meta| reach_of(session_id, meta));
     let mut rows: Vec<(String, Value)> = Vec::new();
-    for meta in crate::config::list_sessions() {
-        let Some(id) = crate::config::session_id_from_path(&meta.path) else {
+    for meta in crate::sessions::list_sessions() {
+        let Some(id) = crate::sessions::session_id_from_path(&meta.path) else {
             continue;
         };
         if id == session_id {
@@ -536,7 +536,7 @@ fn list_sessions(session_id: &str, args: &Value) -> Value {
         }
         if !all_projects {
             let reach = reach_of(&id, &meta);
-            let started_by_caller = crate::config::load_session_parent(&id)
+            let started_by_caller = crate::sessions::load_session_parent(&id)
                 .and_then(|parent| parent.id)
                 .is_some_and(|parent| parent == session_id);
             if !same_project(caller_reach.as_deref(), &reach) && !started_by_caller {
@@ -638,11 +638,11 @@ async fn search_sessions(session_id: &str, args: &Value) -> Value {
         .split_whitespace()
         .map(str::to_owned)
         .collect();
-    let caller = crate::config::session_meta_by_id(session_id);
+    let caller = crate::sessions::session_meta_by_id(session_id);
     let caller_reach = caller.as_ref().map(|meta| reach_of(session_id, meta));
     let mut rows: Vec<(String, Value)> = Vec::new();
-    for meta in crate::config::list_sessions() {
-        let Some(id) = crate::config::session_id_from_path(&meta.path) else {
+    for meta in crate::sessions::list_sessions() {
+        let Some(id) = crate::sessions::session_id_from_path(&meta.path) else {
             continue;
         };
         if id == session_id {
@@ -653,7 +653,7 @@ async fn search_sessions(session_id: &str, args: &Value) -> Value {
             continue;
         }
         if !all_projects {
-            let started_by_caller = crate::config::load_session_parent(&id)
+            let started_by_caller = crate::sessions::load_session_parent(&id)
                 .and_then(|parent| parent.id)
                 .is_some_and(|parent| parent == session_id);
             if !same_project(caller_reach.as_deref(), &reach_of(&id, &meta)) && !started_by_caller {
@@ -695,8 +695,8 @@ fn list_projects(args: &Value) -> Value {
         return remote;
     }
     let mut by_path: HashMap<String, (usize, bool, String)> = HashMap::new();
-    for meta in crate::config::list_sessions() {
-        let Some(id) = crate::config::session_id_from_path(&meta.path) else {
+    for meta in crate::sessions::list_sessions() {
+        let Some(id) = crate::sessions::session_id_from_path(&meta.path) else {
             continue;
         };
         let path = project_of(&id, &meta);
@@ -736,16 +736,16 @@ fn read_session(caller: &str, args: &Value) -> Value {
     if target == caller {
         return error("not_allowed", "a thread cannot read itself");
     }
-    let Some(meta) = crate::config::session_meta_by_id(target) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(target) else {
         return error("not_found", "no thread has that id; use list_sessions");
     };
-    let caller_meta = crate::config::session_meta_by_id(caller);
+    let caller_meta = crate::sessions::session_meta_by_id(caller);
     let reaches = caller_meta.as_ref().is_some_and(|caller_meta| {
         same_project(
             Some(&reach_of(caller, caller_meta)),
             &reach_of(target, &meta),
         )
-    }) || crate::config::load_session_parent(target)
+    }) || crate::sessions::load_session_parent(target)
         .and_then(|parent| parent.id)
         .is_some_and(|parent| parent == caller);
     if !reaches && !read_across_projects() {
@@ -764,7 +764,7 @@ fn read_session(caller: &str, args: &Value) -> Value {
     let title = meta.title.clone();
     let status = crate::thread_status::current(target).as_str().to_owned();
     let project = project_of(target, &meta);
-    let history = crate::config::load_session_file(&meta.path);
+    let history = crate::sessions::load_session_file(&meta.path);
     let last_turns = args
         .get("last_turns")
         .and_then(Value::as_u64)
@@ -1258,7 +1258,7 @@ async fn run_machine_command(caller: &str, cancel: &CancellationToken, args: &Va
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .or_else(|| {
-            crate::config::session_meta_by_id(caller)
+            crate::sessions::session_meta_by_id(caller)
                 .map(|meta| project_of(caller, &meta))
                 .filter(|path| !path.is_empty())
         });
@@ -1295,11 +1295,11 @@ fn list_worktrees(caller: &str, args: &Value) -> Value {
     if all_projects && !read_across_projects() {
         return error("not_allowed", reach_refused());
     }
-    let caller_meta = crate::config::session_meta_by_id(caller);
+    let caller_meta = crate::sessions::session_meta_by_id(caller);
     let caller_reach = caller_meta.as_ref().map(|meta| reach_of(caller, meta));
     let mut worktrees = Vec::new();
-    for meta in crate::config::list_sessions() {
-        let Some(id) = crate::config::session_id_from_path(&meta.path) else {
+    for meta in crate::sessions::list_sessions() {
+        let Some(id) = crate::sessions::session_id_from_path(&meta.path) else {
             continue;
         };
         let Some(worktree) = crate::worktrees::list_meta(&id) else {
@@ -1307,7 +1307,7 @@ fn list_worktrees(caller: &str, args: &Value) -> Value {
         };
         if !all_projects {
             let reach = reach_of(&id, &meta);
-            let started_by_caller = crate::config::load_session_parent(&id)
+            let started_by_caller = crate::sessions::load_session_parent(&id)
                 .and_then(|parent| parent.id)
                 .is_some_and(|parent| parent == caller);
             if !same_project(caller_reach.as_deref(), &reach) && !started_by_caller {
@@ -1343,7 +1343,7 @@ fn read_project(caller: &str, args: &Value) -> Value {
         .map(clean_path)
         .unwrap_or_default();
     if !read_across_projects() {
-        let own = crate::config::session_meta_by_id(caller).map(|meta| reach_of(caller, &meta));
+        let own = crate::sessions::session_meta_by_id(caller).map(|meta| reach_of(caller, &meta));
         if !same_project(own.as_deref(), &path) {
             return error("not_allowed", reach_refused());
         }
@@ -1364,7 +1364,7 @@ fn read_activity(caller: &str, args: &Value) -> Value {
         return remote;
     }
     let target = strip_own_host(args.get("session_id").and_then(Value::as_str).unwrap_or(""));
-    let Some(meta) = crate::config::session_meta_by_id(target) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(target) else {
         return error("not_found", "no thread has that id; use list_sessions");
     };
     if !may_reach(caller, target, &meta) {
@@ -1414,7 +1414,7 @@ fn thread_status(caller: &str, args: &Value) -> Value {
     if let Some(target) = asked {
         // The same reach a read needs: the caller's project, or a thread it
         // started, or the cross-project setting (the app's `checkManage`).
-        let Some(meta) = crate::config::session_meta_by_id(target) else {
+        let Some(meta) = crate::sessions::session_meta_by_id(target) else {
             return error("not_found", "no thread has that id; use list_sessions");
         };
         if !may_reach(caller, target, &meta) {
@@ -1448,7 +1448,7 @@ fn delegates(targets: &[String]) -> Value {
     let rows: Vec<Value> = targets
         .iter()
         .filter_map(|target| {
-            let meta = crate::config::session_meta_by_id(target)?;
+            let meta = crate::sessions::session_meta_by_id(target)?;
             let worktree = crate::worktrees::list_meta(target);
             let (status, working) = crate::thread_status::snapshot(target);
             let mut row = json!({
@@ -1652,8 +1652,8 @@ fn last_reply(session_id: &str) -> Option<String> {
 /// A thread's last assistant reply cut to [`MAX_ANSWER_BYTES`], and whether
 /// anything was cut.
 pub(super) fn last_reply_cut(session_id: &str) -> Option<(String, bool)> {
-    let meta = crate::config::session_meta_by_id(session_id)?;
-    let history = crate::config::load_session_file(&meta.path);
+    let meta = crate::sessions::session_meta_by_id(session_id)?;
+    let history = crate::sessions::load_session_file(&meta.path);
     let reply = history
         .iter()
         .rev()
@@ -1679,7 +1679,7 @@ fn link_book() -> Vec<Value> {
 }
 
 /// A thread's project: its worktree's repository, else its folder.
-pub(super) fn project_of(session_id: &str, meta: &crate::config::SessionMeta) -> String {
+pub(super) fn project_of(session_id: &str, meta: &crate::sessions::SessionMeta) -> String {
     let path = crate::worktrees::list_meta(session_id)
         .and_then(|worktree| {
             worktree
@@ -1698,11 +1698,11 @@ pub(super) fn project_of(session_id: &str, meta: &crate::config::SessionMeta) ->
 
 /// The reach of a thread's tools: its repository, where a worktree and its
 /// checkout meet, else its folder.
-pub(super) fn reach_of(session_id: &str, meta: &crate::config::SessionMeta) -> String {
+pub(super) fn reach_of(session_id: &str, meta: &crate::sessions::SessionMeta) -> String {
     crate::worktrees::of_session(session_id)
         .map(|worktree| clean_path(&worktree.repo.to_string_lossy()))
         .or_else(|| {
-            crate::config::load_session_metadata(session_id)
+            crate::sessions::load_session_metadata(session_id)
                 .and_then(|metadata| metadata.repo)
                 .map(|repo| clean_path(&repo.to_string_lossy()))
         })
@@ -1735,7 +1735,7 @@ pub(super) fn clean_path(path: &str) -> String {
 }
 
 /// A thread's last update as RFC 3339, from its transcript or its file.
-fn updated_at(meta: &crate::config::SessionMeta) -> Option<String> {
+fn updated_at(meta: &crate::sessions::SessionMeta) -> Option<String> {
     chrono::DateTime::parse_from_rfc3339(&meta.when)
         .ok()
         .map(|timestamp| timestamp.with_timezone(&chrono::Utc).to_rfc3339())
@@ -1876,8 +1876,8 @@ mod tests {
 
     /// A caller thread with Full access, so a read does not need the app's card.
     fn full_access_caller() -> String {
-        let caller = crate::config::create_detached_session();
-        crate::config::save_session_yolo(&caller, true);
+        let caller = crate::sessions::create_detached_session();
+        crate::sessions::save_session_yolo(&caller, true);
         caller
     }
 
@@ -2021,15 +2021,15 @@ mod tests {
         assert_eq!(answer["title"], "Local data tools", "{answer}");
         assert_eq!(answer["not_applied"], json!([]), "{answer}");
         assert_eq!(
-            crate::config::load_session_title(&caller).as_deref(),
+            crate::sessions::load_session_title(&caller).as_deref(),
             Some("Local data tools")
         );
-        crate::config::save_user_session_title(&caller, "Mine");
+        crate::sessions::save_user_session_title(&caller, "Mine");
         let answer = rename("Agent name").await;
         assert_eq!(answer["title"], "Mine", "{answer}");
         assert!(answer["title_kept"].is_string(), "{answer}");
         assert_eq!(
-            crate::config::load_session_title(&caller).as_deref(),
+            crate::sessions::load_session_title(&caller).as_deref(),
             Some("Mine")
         );
     }
@@ -2077,7 +2077,7 @@ mod tests {
         let mine = tempfile::tempdir().unwrap();
         let theirs = tempfile::tempdir().unwrap();
         let caller = super::super::local_threads::test_thread(mine.path());
-        crate::config::save_session_yolo(&caller, true);
+        crate::sessions::save_session_yolo(&caller, true);
         let elsewhere = tempfile::tempdir().unwrap();
         // A thread the caller started reaches across projects; a sibling in
         // the caller's own project does too.
@@ -2123,21 +2123,21 @@ mod tests {
         set_setting("read-across-projects", json!(true));
         for id in [&caller, &other, &child, &sibling] {
             let _ =
-                crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
+                crate::sessions::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
         }
     }
 
     #[tokio::test]
     async fn a_read_with_no_app_answers_from_the_store() {
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         assert!(!session_id.is_empty());
         let mut history = Vec::new();
         let mut request = ChatMessage::new("user", "find the failing test");
         request.timestamp = "2026-01-01T00:00:00Z".to_owned();
         history.push(request);
         history.push(ChatMessage::new("assistant", "The test is in `a.rs`."));
-        crate::config::save_session_history(&session_id, &history);
-        crate::config::flush_history();
+        crate::sessions::save_session_history(&session_id, &history);
+        crate::sessions::flush_history();
 
         let caller = full_access_caller();
         let listed = answer_json(
@@ -2175,17 +2175,17 @@ mod tests {
         )
         .await;
         assert_eq!(machines["current"], json!("local"));
-        let _ = crate::config::get_active_session_dir(&session_id)
+        let _ = crate::sessions::get_active_session_dir(&session_id)
             .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[tokio::test]
     async fn read_session_pages_on_a_character_boundary() {
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         let mut history = vec![ChatMessage::new("user", "å".repeat(READ_BYTES))];
         history.push(ChatMessage::new("assistant", "done"));
-        crate::config::save_session_history(&session_id, &history);
-        crate::config::flush_history();
+        crate::sessions::save_session_history(&session_id, &history);
+        crate::sessions::flush_history();
         let caller = full_access_caller();
         let first = answer_json(
             &caller,
@@ -2205,20 +2205,20 @@ mod tests {
         )
         .await;
         assert!(second["text"].is_string(), "{second}");
-        let _ = crate::config::get_active_session_dir(&session_id)
+        let _ = crate::sessions::get_active_session_dir(&session_id)
             .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[tokio::test]
     async fn a_closed_app_does_not_widen_cross_project_reads() {
         let caller = full_access_caller();
-        let target = crate::config::create_detached_session();
+        let target = crate::sessions::create_detached_session();
         let history = vec![
             ChatMessage::new("user", "the other project's work"),
             ChatMessage::new("assistant", "done"),
         ];
-        crate::config::save_session_history(&target, &history);
-        crate::config::flush_history();
+        crate::sessions::save_session_history(&target, &history);
+        crate::sessions::flush_history();
 
         // The app's setting is off: neither the whole-store list nor a
         // cross-project read may go through while the app is closed.
@@ -2244,7 +2244,7 @@ mod tests {
         // read card, so without the app the read waits for the app.
         set_setting("read-across-projects", json!(true));
         set_setting("default-permission-mode", json!("ask"));
-        crate::config::save_session_yolo(&caller, false);
+        crate::sessions::save_session_yolo(&caller, false);
         let read = answer_json(
             &caller,
             &CancellationToken::new(),
@@ -2254,29 +2254,29 @@ mod tests {
         .await;
         let message = read["error"]["message"].as_str().unwrap_or("");
         assert!(message.contains("RustCode app open"), "{read}");
-        let _ =
-            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
-        let _ =
-            crate::config::get_active_session_dir(&target).map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&caller)
+            .map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&target)
+            .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[tokio::test]
     async fn search_sessions_finds_a_title_and_follows_the_cross_project_setting() {
         let caller = full_access_caller();
-        let target = crate::config::create_detached_session();
+        let target = crate::sessions::create_detached_session();
         let word = format!(
             "zebrafinch{}",
             &target[..target.len().min(8)].replace('-', "")
         );
-        crate::config::save_session_title(&target, &format!("Fix {word} parsing"));
-        crate::config::save_session_history(
+        crate::sessions::save_session_title(&target, &format!("Fix {word} parsing"));
+        crate::sessions::save_session_history(
             &target,
             &vec![
                 ChatMessage::new("user", "start"),
                 ChatMessage::new("assistant", "done"),
             ],
         );
-        crate::config::flush_history();
+        crate::sessions::flush_history();
 
         set_setting("read-across-projects", json!(true));
         let found = answer_json(
@@ -2316,10 +2316,10 @@ mod tests {
         .await;
         assert_eq!(refused["error"]["code"], json!("not_allowed"), "{refused}");
         set_setting("read-across-projects", json!(true));
-        let _ =
-            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
-        let _ =
-            crate::config::get_active_session_dir(&target).map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&caller)
+            .map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&target)
+            .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[tokio::test]
@@ -2369,7 +2369,7 @@ mod tests {
     async fn run_machine_command_runs_at_full_access_and_refuses_at_ask_without_app() {
         let dir = tempfile::tempdir().unwrap();
         let caller = super::super::local_threads::test_thread(dir.path());
-        crate::config::save_session_yolo(&caller, true);
+        crate::sessions::save_session_yolo(&caller, true);
         let ran = answer_json(
             &caller,
             &CancellationToken::new(),
@@ -2390,7 +2390,7 @@ mod tests {
             "{ran}"
         );
 
-        crate::config::save_session_yolo(&caller, false);
+        crate::sessions::save_session_yolo(&caller, false);
         set_setting("default-permission-mode", json!("ask"));
         let refused = answer_json(
             &caller,
@@ -2400,8 +2400,8 @@ mod tests {
         )
         .await;
         assert_eq!(refused["error"]["code"], json!("unavailable"), "{refused}");
-        let _ =
-            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&caller)
+            .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[test]

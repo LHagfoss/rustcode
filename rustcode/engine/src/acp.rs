@@ -249,16 +249,16 @@ fn mark_acp_session(session_id: &str) {
     // Other processes, the remote gateway first, see the session as open in
     // the app for as long as it is loaded here.
     if let Some(config_dir) = crate::config::get_config_dir() {
-        crate::config::hold_session_open(
+        crate::sessions::hold_session_open(
             &config_dir,
             session_id,
-            crate::config::SessionHolder::App,
+            crate::sessions::SessionHolder::App,
         );
     }
 }
 
 fn unmark_acp_session(session_id: &str) {
-    crate::config::release_session_open(session_id, crate::config::SessionHolder::App);
+    crate::sessions::release_session_open(session_id, crate::sessions::SessionHolder::App);
     if let Some(sessions) = ACTIVE_ACP_SESSIONS.get() {
         sessions
             .lock()
@@ -343,7 +343,7 @@ impl SessionTaskSink {
                         Some(&call_id),
                         output.clone(),
                     ));
-                    crate::config::save_session_history(&event_session_id, &state.history);
+                    crate::sessions::save_session_history(&event_session_id, &state.history);
                 }
             }
             let update = SessionUpdate::ToolCallUpdate(
@@ -771,7 +771,7 @@ impl AcpServer {
     /// connected app list the new row at once, whichever client asked for
     /// `session/new` (docs/desktop.md › Several machines).
     fn announce_thread_created(&self, mut notification: ThreadCreatedNotification) {
-        if let Some(parent) = crate::config::load_session_parent(&notification.session_id) {
+        if let Some(parent) = crate::sessions::load_session_parent(&notification.session_id) {
             notification.meta = Some(serde_json::json!({"rustcode": {"parent": {
                 "sessionId": parent.id, "title": parent.title,
                 "relationship": parent.relationship.unwrap_or(rustcode_session::SessionRelationship::Delegate).as_str()
@@ -3445,7 +3445,7 @@ async fn dispatch_request(
                 .and_then(|rustcode| rustcode.get("access"))
                 .and_then(serde_json::Value::as_str)
             {
-                crate::config::save_session_access(&session_id, access);
+                crate::sessions::save_session_access(&session_id, access);
             }
             if let Some(external) = harnesses::get(&server.external, &session_id).await {
                 // The access level the client runs the thread at: a harness that
@@ -3464,12 +3464,12 @@ async fn dispatch_request(
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                if crate::config::load_session_title(&session_id).is_none()
+                if crate::sessions::load_session_title(&session_id).is_none()
                     && crate::app::actions::wants_generated_title(&prompt_text)
                 {
                     let history = [crate::app::ChatMessage::new("user", prompt_text.clone())];
-                    crate::config::save_session_title_if_absent(&session_id, &history[..]);
-                    let fallback = crate::config::session_title(&history);
+                    crate::sessions::save_session_title_if_absent(&session_id, &history[..]);
+                    let fallback = crate::sessions::session_title(&history);
                     let title_clients = server.clients.session(&session_id);
                     let update = SessionUpdate::SessionInfoUpdate(
                         agent_client_protocol::schema::v1::SessionInfoUpdate::new()
@@ -3478,7 +3478,7 @@ async fn dispatch_request(
                     let _ = prompt::send_updates(&title_clients, &session_id, vec![update]);
                     if crate::config::load_config().2.generate_session_titles
                         && crate::text_generation::configured_for(
-                            crate::config::load_session_repo(&session_id).as_deref(),
+                            crate::sessions::load_session_repo(&session_id).as_deref(),
                         )
                     {
                         let title_session = session_id.clone();
@@ -3490,7 +3490,7 @@ async fn dispatch_request(
                                     prompt: Some(title_prompt),
                                     path: None,
                                     files: vec![],
-                                    project: crate::config::load_session_repo(&title_session),
+                                    project: crate::sessions::load_session_repo(&title_session),
                                 },
                             )
                             .await

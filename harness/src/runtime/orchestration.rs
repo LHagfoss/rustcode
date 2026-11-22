@@ -150,7 +150,7 @@ impl AppRuntime {
                             .history
                             .push(rustcode::app::ChatMessage::new("system", notice));
                         let session_id = state.active_session_id.clone();
-                        rustcode::config::save_session_history(&session_id, &state.history);
+                        rustcode::sessions::save_session_history(&session_id, &state.history);
                         state.clear_active_turn_projection();
                         state.enter_idle();
                         state.request_redraw();
@@ -479,7 +479,7 @@ impl AppRuntime {
         if update_exit {
             exit_summary.print_handoff = false;
         }
-        rustcode::config::flush_history();
+        rustcode::sessions::flush_history();
         restore_terminal(&mut terminal_runtime, exit_summary.composer_y)?;
         discord_rpc.shutdown();
         Ok(exit_summary)

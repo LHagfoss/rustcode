@@ -207,7 +207,7 @@ impl Access {
 }
 
 /// The access a thread runs at, from the records the engine keeps: the access
-/// of its last prompt (`config::save_session_access`), else its own `/yolo`,
+/// of its last prompt (`sessions::save_session_access`), else its own `/yolo`,
 /// else Settings › General › Default access, which the app seeds into
 /// `settings.json`. A thread no client has prompted since the engine began
 /// keeping the access falls back to the last two, which is the gap
@@ -226,14 +226,14 @@ fn access_of(session_id: &str) -> Access {
     // What a client last ran the thread at: the app sends it with every
     // prompt and the engine keeps it, so a thread narrowed to Ask under a Full
     // default reads as Ask here too.
-    if let Some(saved) = crate::config::load_session_access(session_id) {
+    if let Some(saved) = crate::sessions::load_session_access(session_id) {
         return match saved.as_str() {
             "full" => Access::Full,
             "edits" => Access::Edits,
             _ => Access::Ask,
         };
     }
-    let full = crate::config::load_session_yolo(session_id)
+    let full = crate::sessions::load_session_yolo(session_id)
         .unwrap_or_else(|| crate::config::load_config().2.yolo);
     if full {
         return Access::Full;
@@ -283,7 +283,7 @@ fn chain_refusal(caller: &str) -> bool {
     let mut depth = 0;
     while depth < MAX_DEPTH {
         let Some(parent) =
-            crate::config::load_session_parent(&current).and_then(|parent| parent.id)
+            crate::sessions::load_session_parent(&current).and_then(|parent| parent.id)
         else {
             return false;
         };
@@ -301,7 +301,7 @@ fn chain_refusal(caller: &str) -> bool {
 fn loop_or_linked(
     caller: &str,
     target: &str,
-    target_meta: &crate::config::SessionMeta,
+    target_meta: &crate::sessions::SessionMeta,
 ) -> Option<Value> {
     let book = link_book();
     let links = book
@@ -321,7 +321,7 @@ fn loop_or_linked(
             .filter_map(|link| field(link, "orchestrator"))
             .collect();
         if let Some(parent) =
-            crate::config::load_session_parent(&current).and_then(|parent| parent.id)
+            crate::sessions::load_session_parent(&current).and_then(|parent| parent.id)
         {
             parents.push(parent);
         }
@@ -333,7 +333,7 @@ fn loop_or_linked(
         }
     }
     if above.iter().any(|ancestor| ancestor == target) {
-        let name = crate::config::load_session_title(target)
+        let name = crate::sessions::load_session_title(target)
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| target_meta.title.clone());
         return Some(not_allowed(format!(
@@ -595,12 +595,12 @@ async fn start_one(
     // An outside agent has no thread record: it starts standalone threads in a
     // project it names.
     let outside = super::outside::is_caller(caller);
-    let caller_meta = crate::config::session_meta_by_id(caller);
+    let caller_meta = crate::sessions::session_meta_by_id(caller);
     if caller_meta.is_none() && !(outside && ask.standalone) {
         return Err(failed("this thread's own record is missing"));
     }
     let caller_title = match caller_meta.as_ref() {
-        Some(meta) => crate::config::load_session_title(caller)
+        Some(meta) => crate::sessions::load_session_title(caller)
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| meta.title.clone()),
         None => super::outside::name_of_caller(caller).unwrap_or_default(),
@@ -821,7 +821,7 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
     if let Err(refusal) = delegation(caller, "message_session") {
         return refusal;
     }
-    let Some(meta) = crate::config::session_meta_by_id(target) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(target) else {
         return error("not_found", "no thread has that id; use list_sessions");
     };
     if !super::local::may_reach(caller, target, &meta) {
@@ -848,7 +848,7 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
     let caller_title = if super::outside::is_caller(caller) {
         super::outside::name_of_caller(caller).unwrap_or_default()
     } else {
-        crate::config::load_session_title(caller).unwrap_or_default()
+        crate::sessions::load_session_title(caller).unwrap_or_default()
     };
     let text = args.get("message").and_then(Value::as_str).unwrap_or("");
 
@@ -856,7 +856,7 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
     // two processes on one history fork it. One open in this engine is safe.
     if !crate::acp::is_acp_session(target)
         && let Some(config_dir) = crate::config::get_config_dir()
-        && crate::config::session_open_by(&config_dir, target).is_some()
+        && crate::sessions::session_open_by(&config_dir, target).is_some()
     {
         return unavailable(format!(
             "that thread is open in another RustCode process, and this engine will not open a second copy of it; open the RustCode app, or close it there, and retry. Nothing was sent."
@@ -930,7 +930,7 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
         .map(|record| record.harness)
         .unwrap_or_else(|| crate::harness::BUILTIN_ID.to_owned());
     let harness_name = crate::harness::display_name(&harness);
-    let title = crate::config::load_session_title(target).unwrap_or_default();
+    let title = crate::sessions::load_session_title(target).unwrap_or_default();
     let link = match record_link(
         caller,
         &caller_title,
@@ -972,12 +972,12 @@ pub(super) fn configured(target: &str) -> Value {
         .as_ref()
         .map(|record| record.harness.clone())
         .unwrap_or_else(|| crate::harness::BUILTIN_ID.to_owned());
-    let access = crate::config::load_session_access(target).unwrap_or_else(|| "ask".to_owned());
+    let access = crate::sessions::load_session_access(target).unwrap_or_else(|| "ask".to_owned());
     let mut answer = json!({ "session_id": target, "harness": harness, "access": access });
     let (model, effort) = match record.filter(|record| record.harness != crate::harness::BUILTIN_ID)
     {
         Some(record) => (record.model, record.effort),
-        None => crate::config::load_session_model(target)
+        None => crate::sessions::load_session_model(target)
             .map(|model| (Some(model.profile), model.reasoning_effort))
             .unwrap_or_default(),
     };
@@ -1018,7 +1018,7 @@ pub(crate) async fn configure(caller: &str, args: &Value) -> Value {
         .filter(|target| !target.is_empty())
         .unwrap_or(caller)
         .to_owned();
-    let Some(meta) = crate::config::session_meta_by_id(&target) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(&target) else {
         return error("not_found", "no thread has that id; use list_sessions");
     };
     if target != caller && !super::local::may_reach(caller, &target, &meta) {
@@ -1048,7 +1048,7 @@ pub async fn configure_from_shell(
     model: Option<&str>,
     effort: Option<&str>,
 ) -> Result<Value, String> {
-    let Some(meta) = crate::config::session_meta_by_id(session_id) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(session_id) else {
         return Err("no thread has that id; `rc threads list --all` lists them".to_owned());
     };
     let args = json!({ "model": model, "effort": effort });
@@ -1086,13 +1086,13 @@ fn refusal_text(refusal: &Value) -> String {
 async fn apply_config(
     engine: &Engine,
     target: &str,
-    meta: &crate::config::SessionMeta,
+    meta: &crate::sessions::SessionMeta,
     changes: &[(&'static str, String)],
 ) -> Value {
     // A thread open in another RustCode process must not be opened again here.
     if !crate::acp::is_acp_session(target)
         && let Some(config_dir) = crate::config::get_config_dir()
-        && crate::config::session_open_by(&config_dir, target).is_some()
+        && crate::sessions::session_open_by(&config_dir, target).is_some()
     {
         return unavailable(
             "that thread is open in another RustCode process, and this engine will not open a second copy of it; change it there, or close it there, and retry. Nothing was changed.",
@@ -1211,7 +1211,7 @@ fn deliver(engine: Engine, session_id: String, text: String, link: Option<String
 pub(super) async fn merge_notice(caller: &str, number: u64, result: Value) {
     // Keep the outcome even if the thread cannot be resumed (a removed
     // harness or an engine shutdown must not erase what GitHub reported).
-    let receipt = crate::config::get_active_session_dir(caller)
+    let receipt = crate::sessions::get_active_session_dir(caller)
         .map(|dir| dir.join(format!("merge-{number}.json")));
     if let Some(path) = &receipt
         && let Err(why) = crate::worktrees::write_atomic(path, result.to_string().as_bytes())
@@ -1232,7 +1232,7 @@ pub(super) async fn merge_notice(caller: &str, number: u64, result: Value) {
         let engine = Engine::open(access_of(caller))
             .await
             .map_err(|why| why.to_string())?;
-        let meta = crate::config::session_meta_by_id(caller).ok_or("thread no longer exists")?;
+        let meta = crate::sessions::session_meta_by_id(caller).ok_or("thread no longer exists")?;
         let cwd = meta
             .workspace_cwd
             .clone()
@@ -1629,7 +1629,7 @@ fn now() -> i64 {
 /// before, as the app checks it.
 fn project_for(
     caller: &str,
-    meta: Option<&crate::config::SessionMeta>,
+    meta: Option<&crate::sessions::SessionMeta>,
     asked: Option<&str>,
 ) -> Result<String, Value> {
     let Some(asked) = asked.map(str::trim).filter(|asked| !asked.is_empty()) else {
@@ -1646,8 +1646,8 @@ fn project_for(
     {
         return Ok(asked);
     }
-    let known = crate::config::list_sessions().iter().any(|row| {
-        let Some(id) = crate::config::session_id_from_path(&row.path) else {
+    let known = crate::sessions::list_sessions().iter().any(|row| {
+        let Some(id) = crate::sessions::session_id_from_path(&row.path) else {
             return false;
         };
         asked == project_of(&id, row) || asked == reach_of(&id, row)
@@ -1970,7 +1970,7 @@ async fn open_job_engine(access: Access, thread_id: Option<&str>) -> Result<(Eng
     if let (Some(thread_id), Some(config_dir)) = (thread_id, crate::config::get_config_dir()) {
         candidates.sort_by_cached_key(|info| {
             info.as_ref().is_none_or(|info| {
-                crate::config::session_open_elsewhere(&config_dir, thread_id, info.pid)
+                crate::sessions::session_open_elsewhere(&config_dir, thread_id, info.pid)
             })
         });
     }
@@ -2390,7 +2390,7 @@ async fn open_loop_thread(
         thread_id: Some(thread_id.to_owned()),
         error,
     };
-    let Some(meta) = crate::config::session_meta_by_id(thread_id) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(thread_id) else {
         return Err(failed(format!(
             "the Loop's thread {thread_id} no longer exists; edit the Loop to pick another"
         )));
@@ -2401,7 +2401,7 @@ async fn open_loop_thread(
         ));
     }
     if let Some(config_dir) = crate::config::get_config_dir()
-        && crate::config::session_open_elsewhere(&config_dir, thread_id, engine_pid)
+        && crate::sessions::session_open_elsewhere(&config_dir, thread_id, engine_pid)
     {
         return Err(LoopRunEnd::Skipped(
             "the Loop's thread is open in another RustCode process, so the run was skipped"
@@ -2715,7 +2715,7 @@ pub(crate) async fn interrupt(caller: &str, args: &Value) -> Value {
     if target == caller {
         return error("not_allowed", "a thread cannot stop itself");
     }
-    let Some(meta) = crate::config::session_meta_by_id(target) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(target) else {
         return error("not_found", "no thread has that id; use list_sessions");
     };
     if !super::local::may_reach(caller, target, &meta) {
@@ -2785,8 +2785,8 @@ fn title_from(text: &str, max: usize) -> String {
 /// `session_meta_by_id` finds (a bare detached session has no row yet).
 #[cfg(test)]
 pub(super) fn test_thread(dir: &std::path::Path) -> String {
-    let id = crate::config::create_detached_session();
-    let _ = crate::config::save_session_workspace(
+    let id = crate::sessions::create_detached_session();
+    let _ = crate::sessions::save_session_workspace(
         &id,
         &rustcode_session::SessionWorkspace {
             cwd: dir.to_path_buf(),
@@ -2794,14 +2794,14 @@ pub(super) fn test_thread(dir: &std::path::Path) -> String {
             task_workspace_id: None,
         },
     );
-    crate::config::save_session_history(
+    crate::sessions::save_session_history(
         &id,
         &vec![
             crate::app::ChatMessage::new("user", "a test thread"),
             crate::app::ChatMessage::new("assistant", "ok"),
         ],
     );
-    crate::config::flush_history();
+    crate::sessions::flush_history();
     id
 }
 
@@ -2820,10 +2820,10 @@ mod tests {
     }
 
     fn caller_with(access: Access) -> String {
-        let caller = crate::config::create_detached_session();
+        let caller = crate::sessions::create_detached_session();
         match access {
-            Access::Full => crate::config::save_session_yolo(&caller, true),
-            Access::Ask | Access::Edits => crate::config::save_session_yolo(&caller, false),
+            Access::Full => crate::sessions::save_session_yolo(&caller, true),
+            Access::Ask | Access::Edits => crate::sessions::save_session_yolo(&caller, false),
         }
         if access == Access::Edits {
             set_setting("default-permission-mode", json!("edits"));
@@ -2862,8 +2862,8 @@ mod tests {
             assert!(answer["session_id"].is_null(), "{tool}: {answer}");
             assert!(answer["link_id"].is_null(), "{tool}: {answer}");
         }
-        let _ =
-            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&caller)
+            .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[tokio::test]
@@ -2879,8 +2879,8 @@ mod tests {
         assert_eq!(answer["error"]["code"], json!("unavailable"), "{answer}");
         let message = answer["error"]["message"].as_str().unwrap_or("");
         assert!(message.contains("studio"), "{message}");
-        let _ =
-            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&caller)
+            .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[test]
@@ -3005,7 +3005,7 @@ mod tests {
         let mine = tempfile::tempdir().unwrap();
         let theirs = tempfile::tempdir().unwrap();
         let caller = test_thread(mine.path());
-        crate::config::save_session_yolo(&caller, true);
+        crate::sessions::save_session_yolo(&caller, true);
         let other = test_thread(theirs.path());
         set_setting("read-across-projects", json!(false));
         let before = link_book()["links"].as_array().map(Vec::len);
@@ -3032,7 +3032,7 @@ mod tests {
         set_setting("read-across-projects", json!(true));
         for id in [&caller, &other] {
             let _ =
-                crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
+                crate::sessions::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
         }
     }
 
@@ -3040,7 +3040,7 @@ mod tests {
     async fn a_start_in_a_folder_that_is_not_a_project_is_refused_before_anything_starts() {
         let dir = tempfile::tempdir().unwrap();
         let caller = test_thread(dir.path());
-        crate::config::save_session_yolo(&caller, true);
+        crate::sessions::save_session_yolo(&caller, true);
         let answer = start(
             &caller,
             &json!({"prompt": "go", "project": "/nowhere/at/all"}),
@@ -3050,18 +3050,18 @@ mod tests {
         .await;
         assert_eq!(answer["error"]["code"], json!("not_allowed"), "{answer}");
         assert!(answer["session_id"].is_null(), "{answer}");
-        let _ =
-            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&caller)
+            .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[tokio::test]
     async fn a_message_to_a_thread_that_runs_at_ask_is_refused_not_raised_to_full() {
         let mine = tempfile::tempdir().unwrap();
         let caller = test_thread(mine.path());
-        crate::config::save_session_yolo(&caller, true);
+        crate::sessions::save_session_yolo(&caller, true);
         let target = test_thread(mine.path());
         // The app's last prompt to the target said Ask, whatever the default is.
-        crate::config::save_session_access(&target, "ask");
+        crate::sessions::save_session_access(&target, "ask");
         assert_eq!(access_of(&target), Access::Ask);
         let before = link_book()["links"].as_array().map(Vec::len);
         let answer = message(&caller, &json!({"session_id": target, "message": "hi"})).await;
@@ -3076,7 +3076,7 @@ mod tests {
         assert_eq!(link_book()["links"].as_array().map(Vec::len), before);
         for id in [&caller, &target] {
             let _ =
-                crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
+                crate::sessions::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
         }
     }
 
@@ -3179,12 +3179,12 @@ mod tests {
 
     #[tokio::test]
     async fn access_is_read_from_what_the_engine_can_see() {
-        let caller = crate::config::create_detached_session();
-        crate::config::save_session_yolo(&caller, true);
+        let caller = crate::sessions::create_detached_session();
+        crate::sessions::save_session_yolo(&caller, true);
         assert_eq!(access_of(&caller), Access::Full);
         assert!(!read_needs_approval(&caller));
 
-        crate::config::save_session_yolo(&caller, false);
+        crate::sessions::save_session_yolo(&caller, false);
         set_setting("default-permission-mode", json!("edits"));
         assert_eq!(access_of(&caller), Access::Edits);
         assert!(!read_needs_approval(&caller));
@@ -3192,8 +3192,8 @@ mod tests {
         set_setting("default-permission-mode", json!("ask"));
         assert_eq!(access_of(&caller), Access::Ask);
         assert!(read_needs_approval(&caller));
-        let _ =
-            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
+        let _ = crate::sessions::get_active_session_dir(&caller)
+            .map(|dir| std::fs::remove_dir_all(dir));
     }
 
     #[test]
@@ -3267,7 +3267,7 @@ mod tests {
     fn forget(ids: &[&String]) {
         for id in ids {
             let _ =
-                crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
+                crate::sessions::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
         }
     }
 
@@ -3275,7 +3275,7 @@ mod tests {
     async fn a_thread_is_read_without_the_app_and_without_approval() {
         let project = tempfile::tempdir().unwrap();
         let caller = test_thread(project.path());
-        crate::config::save_session_yolo(&caller, false);
+        crate::sessions::save_session_yolo(&caller, false);
         let other = test_thread(project.path());
         for target in [&caller, &other] {
             let answer = super::super::local::answer_json(
@@ -3301,7 +3301,7 @@ mod tests {
     async fn changing_another_threads_model_needs_full_access() {
         let project = tempfile::tempdir().unwrap();
         let caller = test_thread(project.path());
-        crate::config::save_session_access(&caller, "ask");
+        crate::sessions::save_session_access(&caller, "ask");
         let other = test_thread(project.path());
         let answer = configure(&caller, &json!({ "session_id": other, "model": "m" })).await;
         let message = answer["error"]["message"].as_str().unwrap_or("");
@@ -3329,7 +3329,7 @@ mod tests {
     async fn a_builtin_thread_takes_a_setting_it_lists_and_refuses_one_it_does_not() {
         let project = tempfile::tempdir().unwrap();
         let target = test_thread(project.path());
-        let meta = crate::config::session_meta_by_id(&target).expect("the thread is saved");
+        let meta = crate::sessions::session_meta_by_id(&target).expect("the thread is saved");
         let engine = served_engine().await;
         let loaded = engine
             .request(
@@ -3452,7 +3452,7 @@ mod tests {
     async fn an_external_harness_thread_moves_to_another_model_and_effort() {
         let project = tempfile::tempdir().unwrap();
         let target = test_thread(project.path());
-        let meta = crate::config::session_meta_by_id(&target).expect("the thread is saved");
+        let meta = crate::sessions::session_meta_by_id(&target).expect("the thread is saved");
         let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
         let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
         external_harness(theirs, seen_tx);

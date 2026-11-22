@@ -294,7 +294,7 @@ pub struct AppState {
 
     pub show_history_picker: bool,
     pub history_picker_index: usize,
-    pub history_picker_sessions: Vec<crate::config::SessionMeta>,
+    pub history_picker_sessions: Vec<crate::sessions::SessionMeta>,
     pub history_picker_truncated: bool,
     pub pending_delete_session_idx: Option<usize>,
     pub show_subagent_picker: bool,
@@ -310,7 +310,7 @@ pub struct AppState {
     pub show_session_modal: bool,
     /// Monthly usage captured when the stats panel is opened, so rendering the
     /// panel does not reread the usage file on every frame.
-    pub stats_usage_history: std::collections::BTreeMap<String, crate::config::MonthlyUsage>,
+    pub stats_usage_history: std::collections::BTreeMap<String, crate::sessions::MonthlyUsage>,
     pub active_session_id: String,
     /// Whether the current logical turn may set the title of a new session.
     pub session_title_tool_available: bool,
@@ -703,7 +703,7 @@ impl AppState {
             timing.outcome = outcome;
             if outcome.is_some() {
                 timing.ended_at = Some(chrono::Utc::now().to_rfc3339());
-                crate::config::clear_segment_checkpoint(&self.active_session_id);
+                crate::sessions::clear_segment_checkpoint(&self.active_session_id);
             }
             self.active_turn_timing = Some(timing.clone());
             self.history.set_turn(Some(timing.clone()));
@@ -717,7 +717,7 @@ impl AppState {
             let id = turn.turn_id.clone();
             if turn.outcome.is_none() {
                 self.freeze_turn_timing(Some(outcome));
-                crate::config::save_session_history(&self.active_session_id, &self.history);
+                crate::sessions::save_session_history(&self.active_session_id, &self.history);
             }
             self.end_turn_identity(&id);
         }
@@ -739,7 +739,7 @@ impl AppState {
             });
         if let Some(turn) = suspended {
             self.history.update_turn(&turn);
-            crate::config::clear_segment_checkpoint(&self.active_session_id);
+            crate::sessions::clear_segment_checkpoint(&self.active_session_id);
         }
     }
 
@@ -1477,10 +1477,10 @@ impl AppState {
 
     /// Record the current YOLO setting with the active session.
     pub fn record_auto_confirm(&self) {
-        crate::config::save_session_yolo(&self.active_session_id, self.auto_confirm);
+        crate::sessions::save_session_yolo(&self.active_session_id, self.auto_confirm);
         // The access the orchestration tools read (`orchestration/local_threads.rs`)
         // follows the switch: YOLO is Full access, and off is the safe side of it.
-        crate::config::save_session_access(
+        crate::sessions::save_session_access(
             &self.active_session_id,
             if self.auto_confirm { "full" } else { "ask" },
         );
@@ -1490,14 +1490,14 @@ impl AppState {
     /// `yolo` config default when the session never set it.
     pub fn restore_auto_confirm(&mut self) {
         self.auto_confirm =
-            crate::config::load_session_yolo(&self.active_session_id).unwrap_or(self.config.yolo);
+            crate::sessions::load_session_yolo(&self.active_session_id).unwrap_or(self.config.yolo);
     }
 
     /// Remember the active model profile and its reasoning effort for this
     /// session, so reopening or resuming it does not fall back to defaults.
     pub fn record_session_model(&self) {
         if let Some(profile) = self.active_model_profile() {
-            crate::config::save_session_model(
+            crate::sessions::save_session_model(
                 &self.active_session_id,
                 rustcode_session::SessionModel {
                     profile: profile.name,
@@ -1582,7 +1582,7 @@ impl AppState {
             }),
         );
         let at_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
-        crate::config::save_session_compaction(
+        crate::sessions::save_session_compaction(
             &self.active_session_id,
             stats.to_session_record(at_ms),
         );
@@ -1596,7 +1596,7 @@ impl AppState {
     /// Start with the compaction stats recorded for the active session, so
     /// the count goes on from where it was.
     pub fn restore_session_compaction(&mut self) {
-        self.last_compaction = crate::config::load_session_compaction(&self.active_session_id)
+        self.last_compaction = crate::sessions::load_session_compaction(&self.active_session_id)
             .as_ref()
             .and_then(crate::app::CompactionStats::from_session_record);
         self.pending_compaction_card = None;
@@ -1608,7 +1608,7 @@ impl AppState {
     /// session. A session that never set them, or whose profile no longer
     /// exists, keeps the configured defaults.
     pub fn restore_session_model(&mut self) {
-        let Some(saved) = crate::config::load_session_model(&self.active_session_id) else {
+        let Some(saved) = crate::sessions::load_session_model(&self.active_session_id) else {
             return;
         };
         self.apply_session_model(&saved);
@@ -1719,9 +1719,9 @@ impl AppState {
         config.start_time = Some(std::time::SystemTime::now());
         let active_session_id = session
             .map(str::to_owned)
-            .unwrap_or_else(|| crate::config::start_session(&mut config));
+            .unwrap_or_else(|| crate::sessions::start_session(&mut config));
         if session.is_none() {
-            crate::config::record_session_settings(&active_session_id, &config);
+            crate::sessions::record_session_settings(&active_session_id, &config);
         }
         let agent_mode = config.agent_mode;
         let verbosity = config.verbosity.clone();
@@ -1956,7 +1956,7 @@ impl AppState {
     /// Open the read-only usage panel, snapshotting monthly usage so the panel
     /// does not reread the usage file on every frame while it stays open.
     pub fn open_stats_modal(&mut self) {
-        self.stats_usage_history = crate::config::get_usage_history();
+        self.stats_usage_history = crate::sessions::get_usage_history();
         self.show_stats_modal = true;
     }
 

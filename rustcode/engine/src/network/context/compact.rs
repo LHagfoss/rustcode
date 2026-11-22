@@ -810,7 +810,7 @@ async fn force_compact_internal(
     let archival_prefix = archival_source
         .get(..summarize_count)
         .ok_or_else(|| "archival history no longer matches compaction boundary".to_string())?;
-    let history_archive = crate::config::archive_history_prefix(archival_prefix)?;
+    let history_archive = crate::sessions::archive_history_prefix(archival_prefix)?;
     let mut evidence_memory =
         super::memory::StructuredSessionMemory::extract_from_history(archival_prefix);
     evidence_memory.attach_archive_to_unlinked_reads(&history_archive);

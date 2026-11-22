@@ -52,7 +52,7 @@ fn target_of(caller: &str, args: &Value) -> Result<String, Value> {
     if let Err(remote) = super::local::local_machine(args) {
         return Err(remote);
     }
-    let Some(meta) = crate::config::session_meta_by_id(target) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(target) else {
         return Err(error(
             "not_found",
             "no thread has that id; use list_sessions",
@@ -129,7 +129,7 @@ async fn create_loop(caller: &str, args: &Value) -> Value {
     };
     let thread_id = field("thread_id");
     if let Some(id) = thread_id.as_deref().filter(|_| machine.is_none()) {
-        let Some(meta) = crate::config::session_meta_by_id(id) else {
+        let Some(meta) = crate::sessions::session_meta_by_id(id) else {
             return error("not_found", "no local thread has that id");
         };
         if !may_reach(caller, id, &meta) {
@@ -212,7 +212,7 @@ async fn update_loop(caller: &str, args: &Value) -> Value {
     };
     let thread_id = field("thread_id");
     if let Some(tid) = thread_id.as_deref() {
-        let Some(meta) = crate::config::session_meta_by_id(tid) else {
+        let Some(meta) = crate::sessions::session_meta_by_id(tid) else {
             return error("not_found", "no local thread has that id");
         };
         if !may_reach(caller, tid, &meta) {
@@ -320,7 +320,7 @@ fn update_session(caller: &str, args: &Value) -> Value {
         if title.is_empty() {
             return error("invalid", "title must not be empty");
         }
-        crate::config::save_session_title(&target, title);
+        crate::sessions::save_session_title(&target, title);
     }
     if let Some(pinned) = args.get("pinned").and_then(Value::as_bool)
         && let Err(reason) = crate::thread_status::set_pinned(&target, pinned)
@@ -339,7 +339,7 @@ fn update_session(caller: &str, args: &Value) -> Value {
     }
     json!({
         "session_id": target,
-        "title": crate::config::load_session_title(&target).unwrap_or_default(),
+        "title": crate::sessions::load_session_title(&target).unwrap_or_default(),
         "pinned": crate::thread_status::pinned(&target),
         "status": status_word(&target),
     })

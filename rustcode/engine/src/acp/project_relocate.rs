@@ -65,7 +65,7 @@ fn rewrite_projects(record: &mut Value, old: &Path, new: &Path) -> bool {
 // created thread already has metadata/workspace before its first history write.
 fn record_ids() -> Result<Vec<String>, String> {
     let config = crate::config::get_config_dir().ok_or("thread storage unavailable")?;
-    let mut ids = crate::config::session_ids();
+    let mut ids = crate::sessions::session_ids();
     let mut pending = vec![(rustcode_session::threads_dir(&config), 0)];
     while let Some((dir, depth)) = pending.pop() {
         let entries = match std::fs::read_dir(&dir) {
@@ -152,7 +152,8 @@ pub(crate) fn relocate(
     let mut edits = Vec::new();
     let mut ids = Vec::new();
     for id in record_ids()? {
-        let dir = crate::config::get_active_session_dir(&id).ok_or("thread storage unavailable")?;
+        let dir =
+            crate::sessions::get_active_session_dir(&id).ok_or("thread storage unavailable")?;
         let mut affected = false;
         let mut unreadable = Vec::new();
         for name in ["workspace.json", "metadata.json", "harness.json"] {
@@ -297,19 +298,19 @@ mod tests {
         let new = dir.path().join("new");
         std::fs::create_dir(&old).unwrap();
         let old = rustcode_session::strip_verbatim(&std::fs::canonicalize(old).unwrap());
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         let workspace = rustcode_session::SessionWorkspace {
             cwd: old.clone(),
             additional_directories: vec![old.join("docs")],
             task_workspace_id: None,
         };
-        crate::config::save_session_workspace(&id, &workspace).unwrap();
-        crate::config::save_session_repo(&id, Some(&old));
+        crate::sessions::save_session_workspace(&id, &workspace).unwrap();
+        crate::sessions::save_session_repo(&id, Some(&old));
         let mut harness = crate::harness::store::HarnessRecord::new("codex", old.clone());
         harness.native_session_id = Some("native-kept".into());
         crate::harness::store::save(&id, &harness);
         assert!(record_ids().unwrap().contains(&id));
-        let history_path = crate::config::get_active_session_dir(&id)
+        let history_path = crate::sessions::get_active_session_dir(&id)
             .unwrap()
             .join("history.json");
         let history = serde_json::to_vec(&vec![crate::app::ChatMessage::new(
@@ -325,7 +326,10 @@ mod tests {
         assert!(relocate(request(), |thread| thread == id).is_err());
         assert!(old.exists());
         assert!(!new.exists());
-        assert_eq!(crate::config::load_session_workspace(&id).unwrap().cwd, old);
+        assert_eq!(
+            crate::sessions::load_session_workspace(&id).unwrap().cwd,
+            old
+        );
         let answer = relocate(request(), |_| false).unwrap();
         let new = rustcode_session::strip_verbatim(&std::fs::canonicalize(new).unwrap());
         assert!(
@@ -334,9 +338,9 @@ mod tests {
                 .unwrap()
                 .contains(&json!(id))
         );
-        let moved = crate::config::load_session_workspace(&id).unwrap();
+        let moved = crate::sessions::load_session_workspace(&id).unwrap();
         assert_eq!(moved.cwd, new);
-        assert_eq!(crate::config::load_session_repo(&id), Some(new.clone()));
+        assert_eq!(crate::sessions::load_session_repo(&id), Some(new.clone()));
         assert_eq!(moved.additional_directories, vec![new.join("docs")]);
         assert_eq!(std::fs::read(&history_path).unwrap(), history);
         let moved = crate::harness::store::load(&id).unwrap();

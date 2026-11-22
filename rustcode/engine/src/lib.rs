@@ -59,6 +59,7 @@ pub mod remote;
 pub mod serve;
 pub mod server;
 pub mod service;
+pub mod sessions;
 pub mod shell_env;
 pub mod skills;
 mod smart_ui;
@@ -180,7 +181,7 @@ pub(crate) fn flush_pending_background_outputs(state: &mut AppState) -> usize {
         ));
     }
     let session_id = state.active_session_id.clone();
-    crate::config::save_session_history(&session_id, &state.history);
+    crate::sessions::save_session_history(&session_id, &state.history);
     state.request_redraw();
     count
 }

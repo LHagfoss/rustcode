@@ -109,7 +109,7 @@ pub(crate) fn take_turn_context_for_prompt_with_limits(
         // Held-over tool calls belong to the previous task (#1590); the new
         // prompt's transcript never promised them.
         state.clear_deferred_tool_calls();
-        crate::config::clear_segment_checkpoint(&state.active_session_id);
+        crate::sessions::clear_segment_checkpoint(&state.active_session_id);
         TurnContext::new()
     };
     // The arguments and checkpoint fields are retained for compatibility with
@@ -138,7 +138,7 @@ pub(crate) fn save_turn_context_after_run(
         );
         // Persist the segment sidecar so a restart can resume the pending
         // continuation instead of losing the long task's budgets.
-        crate::config::save_segment_checkpoint(
+        crate::sessions::save_segment_checkpoint(
             &state.active_session_id,
             &context.segment_checkpoint(
                 &state.active_session_id,
@@ -151,7 +151,7 @@ pub(crate) fn save_turn_context_after_run(
         }
         state.background_turn_context = Some(Box::new(context));
     } else {
-        crate::config::clear_segment_checkpoint(&state.active_session_id);
+        crate::sessions::clear_segment_checkpoint(&state.active_session_id);
         state.background_turn_context = None;
         // The turn is over: anything the scheduler still held for it is
         // released rather than executed against the next task (#1590).

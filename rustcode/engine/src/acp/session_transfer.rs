@@ -19,8 +19,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::app::ChatMessage;
-use crate::config::MachineOrigin;
 use crate::harness::{self, store as harness_store};
+use crate::sessions::MachineOrigin;
 
 /// Raw bytes per export/import chunk (384 KiB raw -> 512 KiB base64, well below
 /// `remote_gateway::gateway::MAX_FRAME_BYTES` = 1 MiB).
@@ -294,13 +294,13 @@ pub(crate) async fn export_session(
     }
 
     // First chunk: flush pending writes and build a consistent snapshot.
-    crate::config::flush_history();
+    crate::sessions::flush_history();
     let live_external = super::harnesses::get(external, &session_id).await;
     let record = match &live_external {
         Some(session) => Some(session.record()),
         None => harness_store::load_for_restore(&session_id).map_err(invalid)?,
     };
-    let disk_session = crate::config::load_session_by_id(&session_id);
+    let disk_session = crate::sessions::load_session_by_id(&session_id);
     if record.is_none() && disk_session.is_none() {
         return Err(invalid(format!("unknown session: {session_id}")));
     }
@@ -308,16 +308,16 @@ pub(crate) async fn export_session(
         Some(session) => session.recorded_history(),
         None => match disk_session.as_ref() {
             Some((_, messages)) => messages.clone(),
-            None => crate::config::load_session_history_direct(&session_id),
+            None => crate::sessions::load_session_history_direct(&session_id),
         },
     };
-    let workspace = crate::config::load_session_workspace(&session_id);
+    let workspace = crate::sessions::load_session_workspace(&session_id);
     let cwd = workspace
         .as_ref()
         .map(|w| w.cwd.clone())
         .or_else(|| record.as_ref().map(|r| r.cwd.clone()));
-    let metadata = crate::config::load_session_metadata(&session_id);
-    let title = crate::config::load_session_title(&session_id)
+    let metadata = crate::sessions::load_session_metadata(&session_id);
+    let title = crate::sessions::load_session_title(&session_id)
         .or_else(|| record.as_ref().and_then(|r| r.title.clone()))
         .or_else(|| {
             disk_session
@@ -336,13 +336,13 @@ pub(crate) async fn export_session(
         session_id: session_id.clone(),
         source_machine_id: own_machine_id(),
         title,
-        user_titled: crate::config::session_user_titled(&session_id),
+        user_titled: crate::sessions::session_user_titled(&session_id),
         cwd,
         status: status_str,
         pinned: crate::thread_status::pinned(&session_id),
         snoozed_until: crate::thread_status::snoozed_until(&session_id),
         yolo: metadata.as_ref().and_then(|m| m.yolo),
-        access: crate::config::load_session_access(&session_id),
+        access: crate::sessions::load_session_access(&session_id),
         model: metadata.as_ref().and_then(|m| m.model.clone()),
         compaction: metadata.as_ref().and_then(|m| m.compaction.clone()),
         harness: record.map(|r| ExportedHarness {
@@ -354,7 +354,7 @@ pub(crate) async fn export_session(
             handoff_from: r.handoff_from,
         }),
         history,
-        origins: crate::config::load_session_machine_origins(&session_id),
+        origins: crate::sessions::load_session_machine_origins(&session_id),
     };
     let bytes = serde_json::to_vec(&bundle)
         .map_err(|error| invalid(format!("could not serialize thread: {error}")))?;
@@ -707,7 +707,7 @@ fn persist_imported_bundle(
                 .or_else(|| from_effort.clone())
                 .or_else(|| prior.as_ref().and_then(|o| o.effort.clone()));
             if let Some(profile) = builtin_model.clone() {
-                crate::config::save_session_model(
+                crate::sessions::save_session_model(
                     &session_id,
                     rustcode_session::SessionModel {
                         profile,
@@ -837,32 +837,32 @@ fn persist_imported_bundle(
     ));
 
     // Persist history, title, workspace, repo, metadata, status & origins durably.
-    crate::config::save_session_history(&session_id, &history);
-    crate::config::flush_history();
+    crate::sessions::save_session_history(&session_id, &history);
+    crate::sessions::flush_history();
     if let Some(title) = bundle.title.as_deref().filter(|t| !t.trim().is_empty()) {
         if bundle.user_titled {
-            crate::config::save_user_session_title(&session_id, title);
+            crate::sessions::save_user_session_title(&session_id, title);
         } else {
-            crate::config::save_session_title(&session_id, title);
+            crate::sessions::save_session_title(&session_id, title);
         }
     }
-    crate::config::save_session_workspace(
+    crate::sessions::save_session_workspace(
         &session_id,
         &super::session_workspace(cwd.clone(), vec![]),
     )
     .map_err(|error| invalid(format!("could not save thread workspace: {error}")))?;
     let repo = crate::worktrees::repo_of(&cwd);
-    crate::config::save_session_repo(&session_id, repo.as_deref());
+    crate::sessions::save_session_repo(&session_id, repo.as_deref());
     if let Some(yolo) = bundle.yolo {
-        crate::config::save_session_yolo(&session_id, yolo);
+        crate::sessions::save_session_yolo(&session_id, yolo);
     }
     if let Some(access) = bundle.access.as_deref() {
-        crate::config::save_session_access(&session_id, access);
+        crate::sessions::save_session_access(&session_id, access);
     }
     if let Some(compaction) = bundle.compaction {
-        crate::config::save_session_compaction(&session_id, compaction);
+        crate::sessions::save_session_compaction(&session_id, compaction);
     }
-    crate::config::save_session_machine_origins(&session_id, origins);
+    crate::sessions::save_session_machine_origins(&session_id, origins);
     crate::thread_status::restore_state(
         &session_id,
         bundle.status.as_deref(),
@@ -905,7 +905,7 @@ pub(crate) async fn remove_session(
     }
     super::close_builtin(server, &session_id).await;
     server.presence.session_closed(&session_id);
-    let removed = crate::config::delete_session_by_id(&session_id);
+    let removed = crate::sessions::delete_session_by_id(&session_id);
     server.announce_thread_deleted(super::ThreadDeletedNotification {
         session_id: session_id.clone(),
     });
@@ -934,15 +934,15 @@ mod tests {
     async fn round_trip_export_and_import_preserves_history_and_bounce_back_origin() {
         let dir_a = tempfile::tempdir().unwrap();
         let dir_b = tempfile::tempdir().unwrap();
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         let history = vec![
             ChatMessage::new("user", "Check the latency spikes"),
             ChatMessage::new("assistant", "Looking at the metrics now."),
         ];
-        crate::config::save_session_history(&session_id, &history);
-        crate::config::flush_history();
-        crate::config::save_user_session_title(&session_id, "Latency audit");
-        crate::config::save_session_workspace(
+        crate::sessions::save_session_history(&session_id, &history);
+        crate::sessions::flush_history();
+        crate::sessions::save_user_session_title(&session_id, "Latency audit");
+        crate::sessions::save_session_workspace(
             &session_id,
             &rustcode_session::SessionWorkspace {
                 cwd: dir_a.path().to_path_buf(),
@@ -1042,23 +1042,23 @@ mod tests {
             rustcode_session::strip_verbatim(&std::fs::canonicalize(dir_a.path()).unwrap())
         );
 
-        assert!(crate::config::delete_session_by_id(&session_id));
-        assert!(crate::config::load_session_by_id(&session_id).is_none());
+        assert!(crate::sessions::delete_session_by_id(&session_id));
+        assert!(crate::sessions::load_session_by_id(&session_id).is_none());
     }
 
     #[tokio::test]
     async fn multi_chunk_export_reassembles_identically() {
         let dir = tempfile::tempdir().unwrap();
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         // Exceeds CHUNK_BYTES (384 KiB) so export spans multiple chunks.
         let big = "a".repeat(CHUNK_BYTES + 40_000);
         let history = vec![
             ChatMessage::new("user", big.clone()),
             ChatMessage::new("assistant", "Got it."),
         ];
-        crate::config::save_session_history(&session_id, &history);
-        crate::config::flush_history();
-        crate::config::save_session_workspace(
+        crate::sessions::save_session_history(&session_id, &history);
+        crate::sessions::flush_history();
+        crate::sessions::save_session_workspace(
             &session_id,
             &rustcode_session::SessionWorkspace {
                 cwd: dir.path().to_path_buf(),
@@ -1098,6 +1098,6 @@ mod tests {
         assert!(chunks >= 2, "expected multiple chunks, got {chunks}");
         let bundle: SessionTransferBundle = serde_json::from_slice(&assembled).unwrap();
         assert_eq!(bundle.history[0].content, big);
-        assert!(crate::config::delete_session_by_id(&session_id));
+        assert!(crate::sessions::delete_session_by_id(&session_id));
     }
 }

@@ -23,10 +23,10 @@ pub(crate) fn move_session(
     cwd: std::path::PathBuf,
 ) -> Result<Value, agent_client_protocol::Error> {
     let invalid = |message: String| agent_client_protocol::Error::invalid_params().data(message);
-    if crate::config::load_session_by_id(session_id).is_none() {
+    if crate::sessions::load_session_by_id(session_id).is_none() {
         return Err(invalid(format!("unknown session: {session_id}")));
     }
-    let previous = crate::config::load_session_workspace(session_id);
+    let previous = crate::sessions::load_session_workspace(session_id);
     let workspace = rustcode_session::SessionWorkspace {
         cwd: cwd.clone(),
         additional_directories: previous
@@ -34,13 +34,13 @@ pub(crate) fn move_session(
             .unwrap_or_default(),
         task_workspace_id: None,
     };
-    crate::config::save_session_workspace(session_id, &workspace)
+    crate::sessions::save_session_workspace(session_id, &workspace)
         .map_err(|error| invalid(format!("could not record the new folder: {error}")))?;
     // The repository the chat belongs to follows its folder, recorded now so a
     // later listing never runs git for it (#3162). A folder outside a
     // repository forgets the old one rather than keeping a stale scope.
     let repo = crate::worktrees::repo_of(&cwd);
-    crate::config::save_session_repo(session_id, repo.as_deref());
+    crate::sessions::save_session_repo(session_id, repo.as_deref());
     // A thread on an external harness loads from its own record, which checks
     // the folder too: move it there as well, or the next `session/load` fails.
     // The harness's own session id stays; a harness that cannot resume it in
@@ -71,7 +71,7 @@ mod tests {
         rustcode_session::flush_history();
 
         move_session(&id, repo.clone()).unwrap();
-        assert_eq!(crate::config::load_session_repo(&id), Some(repo));
+        assert_eq!(crate::sessions::load_session_repo(&id), Some(repo));
     }
 
     #[test]
@@ -103,11 +103,11 @@ mod tests {
             json!({ "cwd": new.path() })
         );
 
-        let moved = crate::config::load_session_workspace("acp-move-a").unwrap();
+        let moved = crate::sessions::load_session_workspace("acp-move-a").unwrap();
         assert_eq!(moved.cwd, new.path());
         assert_eq!(moved.additional_directories, vec![extra]);
         assert_eq!(moved.task_workspace_id, None);
-        let other = crate::config::load_session_workspace("acp-move-b").unwrap();
+        let other = crate::sessions::load_session_workspace("acp-move-b").unwrap();
         assert_eq!(other.cwd, old.path());
         assert!(move_session("acp-move-missing", new.path().to_path_buf()).is_err());
     }

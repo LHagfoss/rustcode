@@ -707,12 +707,12 @@ fn persist_transcript(
     if !persist || history.is_empty() {
         return;
     }
-    crate::config::save_session_history(id, &history);
+    crate::sessions::save_session_history(id, &history);
     // Written now rather than queued, so `session/list` right after the
     // turn already shows it.
-    crate::config::flush_history();
-    crate::config::save_session_title_if_absent(id, &history);
-    if let Some(title) = crate::config::load_session_title(id) {
+    crate::sessions::flush_history();
+    crate::sessions::save_session_title_if_absent(id, &history);
+    if let Some(title) = crate::sessions::load_session_title(id) {
         let saved = {
             let mut record = record_lock
                 .lock()

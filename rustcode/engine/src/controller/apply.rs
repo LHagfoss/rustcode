@@ -194,19 +194,19 @@ pub async fn apply_background_task_event(
             output,
             notify_on_complete,
         ) {
-            crate::config::save_session_history(&session_id, &state.history);
+            crate::sessions::save_session_history(&session_id, &state.history);
             true
         } else {
             false
         }
     } else {
-        let mut history = crate::config::load_session_history_direct(&session_id);
+        let mut history = crate::sessions::load_session_history_direct(&session_id);
         history.push(crate::background_task_history_message(
             &task_id,
             call_id.as_deref(),
             output,
         ));
-        crate::config::save_session_history(&session_id, &history);
+        crate::sessions::save_session_history(&session_id, &history);
         false
     }
 }
@@ -486,7 +486,7 @@ pub async fn cancel_turn_for_turn(
         return false;
     }
     state.freeze_turn_timing(Some(crate::app::TurnOutcome::Cancelled));
-    crate::config::save_session_history(&state.active_session_id, &state.history);
+    crate::sessions::save_session_history(&state.active_session_id, &state.history);
     state.active_turn_id = None;
     cancel_token.cancel();
     true

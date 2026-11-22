@@ -413,27 +413,27 @@ pub(crate) async fn new_session(
         &harness::learned_for(&id).models.unwrap_or_default(),
     );
 
-    let session_id = crate::config::create_detached_session();
+    let session_id = crate::sessions::create_detached_session();
     if session_id.is_empty() {
         return Err(failure("session storage is unavailable".to_owned()));
     }
     // The name the thread was made with, from the app that made it (issue 3524).
-    crate::config::save_requested_title(&session_id, request.meta.as_ref());
+    crate::sessions::save_requested_title(&session_id, request.meta.as_ref());
     // The thread that started this one, kept in its metadata so a pruned link
     // cannot turn it into a top-level thread (`thread_parent.rs`).
     if let Some((parent, relationship)) = crate::thread_parent::requested(request.meta.as_ref()) {
         crate::thread_parent::record(&session_id, &parent, relationship);
     }
     // A scheduled job's run: its thread lives in the job's view, not the list.
-    if let Some(job) = crate::config::requested_scheduled_job(request.meta.as_ref()) {
-        crate::config::save_session_scheduled_job(&session_id, &job);
+    if let Some(job) = crate::sessions::requested_scheduled_job(request.meta.as_ref()) {
+        crate::sessions::save_session_scheduled_job(&session_id, &job);
     }
     let mut record = store::HarnessRecord::new(&resolved.id, cwd.clone());
     record.account = account.as_ref().map(|account| account.id.clone());
     record.model = model;
     record.effort = effort;
     store::save(&session_id, &record);
-    let _ = crate::config::save_session_workspace(
+    let _ = crate::sessions::save_session_workspace(
         &session_id,
         &super::session_workspace(cwd, request.additional_directories.clone()),
     );
@@ -572,7 +572,7 @@ pub(crate) async fn load_session(
     // Validate before replay: a failed read must not create an empty writable
     // thread whose next prompt overwrites the transcript.
     let _ = handoff_history(&session_id)?;
-    let history = crate::config::load_session_history_direct(&session_id);
+    let history = crate::sessions::load_session_history_direct(&session_id);
     let title = record.title.clone();
     let info = peer.info();
     let usage = record
@@ -751,10 +751,10 @@ fn switch_origin(
 fn handoff_history(
     session_id: &str,
 ) -> Result<Vec<crate::app::ChatMessage>, agent_client_protocol::Error> {
-    crate::config::flush_history();
-    let directory = crate::config::get_active_session_dir(session_id)
+    crate::sessions::flush_history();
+    let directory = crate::sessions::get_active_session_dir(session_id)
         .ok_or_else(|| failure("session storage is unavailable".into()))?;
-    let path = crate::config::session_meta_by_id(session_id)
+    let path = crate::sessions::session_meta_by_id(session_id)
         .map(|meta| meta.path)
         .unwrap_or_else(|| directory.join("history.json"));
     match std::fs::read(path) {
@@ -987,14 +987,14 @@ mod tests {
 
     #[test]
     fn handoff_preserves_an_interrupted_transcript_and_refuses_corruption() {
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         let history = vec![crate::app::ChatMessage::new("user", "Still working")];
-        crate::config::save_session_history(&id, &history);
-        crate::config::flush_history();
+        crate::sessions::save_session_history(&id, &history);
+        crate::sessions::flush_history();
         let loaded = handoff_history(&id).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].content, "Still working");
-        let path = crate::config::get_active_session_dir(&id)
+        let path = crate::sessions::get_active_session_dir(&id)
             .unwrap()
             .join("history.json");
         std::fs::write(&path, "broken json").unwrap();
@@ -1055,7 +1055,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_thread_with_a_removed_account_can_switch() {
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         let mut record = store::HarnessRecord::new("claude-code", std::env::temp_dir());
         record.account = Some("gone".into());
         store::save(&session_id, &record);

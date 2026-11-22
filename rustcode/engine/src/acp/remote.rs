@@ -718,7 +718,7 @@ impl RemoteManager {
         Some(RemoteSessionInfo {
             session_id: session_id.to_owned(),
             registration_epoch: epoch,
-            title: crate::config::load_session_title(session_id).unwrap_or_default(),
+            title: crate::sessions::load_session_title(session_id).unwrap_or_default(),
             workspace: Some(session.cwd.display().to_string()),
             model,
             harness: Some(crate::harness::BUILTIN_ID.to_owned()),
@@ -960,7 +960,7 @@ impl RemoteManager {
             .title
             .clone()
             .filter(|title| !title.trim().is_empty())
-            .or_else(|| crate::config::load_session_title(&session_id))
+            .or_else(|| crate::sessions::load_session_title(&session_id))
             .unwrap_or_default();
         // What the device shows as the thread's model: the harness's own id
         // for the model, absent when the record has none (a thread that has

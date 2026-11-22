@@ -89,7 +89,7 @@ pub(super) async fn answer(
         .get("session_id")
         .and_then(Value::as_str)
         .unwrap_or(caller);
-    let Some(meta) = crate::config::session_meta_by_id(target) else {
+    let Some(meta) = crate::sessions::session_meta_by_id(target) else {
         return error("not_found", "no thread has that id");
     };
     if !super::local::may_reach(caller, target, &meta) {

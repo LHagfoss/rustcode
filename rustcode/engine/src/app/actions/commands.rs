@@ -359,7 +359,7 @@ async fn summarize_session_inner(
             s.history.push(msg);
         }
         s.finish_summary();
-        crate::config::save_session_history(&captured_session_id, &s.history);
+        crate::sessions::save_session_history(&captured_session_id, &s.history);
         s.request_redraw();
         return;
     }
@@ -460,7 +460,7 @@ async fn summarize_session_inner(
         }
     }
     s.finish_summary();
-    crate::config::save_session_history(&captured_session_id, &s.history);
+    crate::sessions::save_session_history(&captured_session_id, &s.history);
     s.request_redraw();
 }
 
@@ -708,21 +708,21 @@ pub fn trigger_sync(state: &Arc<Mutex<AppState>>, subcommand: Option<String>, ar
 
         let result =
             tokio::task::spawn_blocking(move || match subcommand.as_deref() {
-                Some("pull") => crate::config::sync_config_pull()
+                Some("pull") => crate::sessions::sync_config_pull()
                     .map(|_| "Config pull complete! 📥".to_string()),
-                Some("push") => crate::config::sync_config_push()
+                Some("push") => crate::sessions::sync_config_push()
                     .map(|_| "Config push complete! 💾".to_string()),
                 Some("init") => {
                     if let Some(url) = arg {
-                        crate::config::init_sync_repo(&url)
+                        crate::sessions::init_sync_repo(&url)
                             .map(|_| "Sync repository initialized! 🚀".to_string())
                     } else {
                         Err("Usage: /sync init <remote-git-url>".to_string())
                     }
                 }
                 _ => {
-                    crate::config::sync_config_pull()?;
-                    crate::config::sync_config_push()?;
+                    crate::sessions::sync_config_pull()?;
+                    crate::sessions::sync_config_push()?;
                     Ok("Config sync complete! 🚀".to_string())
                 }
             })
@@ -1028,7 +1028,7 @@ pub(crate) async fn compact_history(
             }
             // Compaction can fold the first prompt into a summary; name the
             // session after it first so its title does not move.
-            crate::config::save_session_title_if_absent(&live_session_id, &original_history);
+            crate::sessions::save_session_title_if_absent(&live_session_id, &original_history);
             s.record_compaction(
                 crate::app::CompactionTrigger::Manual,
                 if summarized {

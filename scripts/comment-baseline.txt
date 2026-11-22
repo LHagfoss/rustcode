@@ -775,9 +775,6 @@
 2 rustcode/engine/src/computer_use.rs
 73 rustcode/engine/src/config.rs
 4 rustcode/engine/src/config/mcp_servers.rs
-18 rustcode/engine/src/config/session.rs
-3 rustcode/engine/src/config/session_export.rs
-14 rustcode/engine/src/config/session_open.rs
 30 rustcode/engine/src/config/tests.rs
 3 rustcode/engine/src/connections.rs
 6 rustcode/engine/src/context.rs
@@ -978,6 +975,9 @@
 75 rustcode/engine/src/service/server_service.rs
 5 rustcode/engine/src/service/systemd.rs
 5 rustcode/engine/src/service/windows_task.rs
+3 rustcode/engine/src/sessions/export.rs
+14 rustcode/engine/src/sessions/open.rs
+18 rustcode/engine/src/sessions/store.rs
 58 rustcode/engine/src/shell_env.rs
 85 rustcode/engine/src/skills.rs
 15 rustcode/engine/src/smart_ui.rs
