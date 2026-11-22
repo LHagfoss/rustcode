@@ -24,6 +24,7 @@ import {
   clearFinished,
   connect,
   markUnread,
+  onSessionActivity,
   resetForTests,
   runPrompt,
   selectThread,
@@ -127,6 +128,28 @@ describe("requested compaction", () => {
     expect(thread.items.filter((item) => item.kind === "user" && item.continued)).toHaveLength(1);
     expect(
       thread.items.some((item) => item.kind === "notice" && item.text.startsWith("Context compacted")),
+    ).toBe(true);
+    await cancel(id);
+  });
+  test("runs and continues when a turn the engine woke ends", async () => {
+    const id = await openClaudeThread(10);
+    onSessionActivity({ sessionId: id, state: "running" });
+    expect(isRunning(useApp.getState().threads[id])).toBe(true);
+    expect(requestCompaction(id, true)).toBe(true);
+    await settle(40);
+    expect(compactPrompt(id)).toBe(false);
+
+    onSessionActivity({ sessionId: id, state: "idle" });
+    await until(
+      () =>
+        useApp.getState().threads[id]?.items.some((item) => item.kind === "user" && item.continued) ?? false,
+    );
+    expect(
+      useApp
+        .getState()
+        .threads[id]!.items.some(
+          (item) => item.kind === "notice" && item.text.startsWith("Context compacted"),
+        ),
     ).toBe(true);
     await cancel(id);
   });

@@ -210,7 +210,13 @@ import {
   windowTitle,
 } from "./announceThreads";
 import { automaticCompactionText, DEFAULT_AUTO_COMPACT, parseAutoCompactSettings } from "./autoCompact";
-import { forgetAutoCompact, noteCompactionCard, noteTyping, scheduleAutoCompact } from "./autoCompactRun";
+import {
+  forgetAutoCompact,
+  noteCompactionCard,
+  noteTyping,
+  runRequestedCompaction,
+  scheduleAutoCompact,
+} from "./autoCompactRun";
 import { createBatcher, frameQueue } from "./batch";
 import { parseHarnessCommands, rememberCommands, serializeHarnessCommands } from "./commands";
 import { type ComposeExtras, emptyExtras, hasExtras } from "./compose";
@@ -1102,6 +1108,9 @@ export function onSessionActivity(params: unknown) {
   // The turn a thread woke itself for ended: the one finish worth announcing, when nothing it
   // started is still going (a turn that ended on "waiting on the tests" said nothing).
   if (wokenEnd) announceFinished(id);
+  // A compaction the woken turn asked for (`compact_thread`) waits for it to end, as one asked for
+  // in a prompted turn does; parked again on background commands, it waits for the next wake.
+  if (wokenEnd && state === "idle") void runRequestedCompaction(id).catch(() => undefined);
   if (state !== "running") scheduleAutoCompact(id);
 }
 
