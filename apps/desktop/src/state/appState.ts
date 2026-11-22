@@ -321,6 +321,8 @@ export interface AppState {
   reduceTransparency: boolean;
   /** How much of the sidebar and the glass shows through, in percent (Settings › Appearance). */
   transparency: number;
+  /** How strongly the glass blurs what is behind it, in pixels (Settings › Appearance). */
+  glassBlur: number;
   /** How wide the chat lane grows, transcript and composer alike (Settings › Chat). */
   chatWidth: ChatWidth;
   /** A turn shows its tool calls (Settings › Chat); off, only its "Worked for" line and the reply. */
@@ -485,6 +487,7 @@ export const STORAGE = {
   animateStreaming: "rustcode.animateStreaming",
   reduceTransparency: "rustcode.reduceTransparency",
   transparency: "rustcode.transparency",
+  glassBlur: "rustcode.glassBlur",
   chatWidth: "rustcode.chatWidth",
   showToolCalls: "rustcode.showToolCalls",
   headerButtons: "rustcode.headerButtons",
@@ -530,6 +533,7 @@ export const SETTINGS_DEFAULTS = {
   animateStreaming: true,
   reduceTransparency: false,
   transparency: 28,
+  glassBlur: 9,
   chatWidth: CHAT_WIDTH_DEFAULT,
   showToolCalls: true,
   headerButtons: DEFAULT_HEADER_BUTTONS,
@@ -567,9 +571,14 @@ function storedNumber(key: string, fallback: number, min: number, max: number): 
   return Math.min(max, Math.max(min, n));
 }
 
-/** Settings › Appearance › Transparency, kept to the slider's 0..60. */
+/** Settings › Appearance › Transparency, kept to the slider's 0..100. */
 export function storedTransparency(): number {
-  return storedNumber(STORAGE.transparency, SETTINGS_DEFAULTS.transparency, 0, 60);
+  return storedNumber(STORAGE.transparency, SETTINGS_DEFAULTS.transparency, 0, 100);
+}
+
+/** Settings › Appearance › Blur, kept to the slider's 0..40 pixels. */
+export function storedGlassBlur(): number {
+  return storedNumber(STORAGE.glassBlur, SETTINGS_DEFAULTS.glassBlur, 0, 40);
 }
 
 /** A thread's own delegate limit, kept to 2..32. */

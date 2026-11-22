@@ -90,11 +90,46 @@ export function installReduceTransparency() {
 
 /** Settings › Appearance › Transparency, in percent: how much of the sidebar and the glass shows. */
 export const TRANSPARENCY_MIN = 0;
-export const TRANSPARENCY_MAX = 60;
+export const TRANSPARENCY_MAX = 100;
 
 /** Sets `--rc-transparency` on <html> (index.css), kept to the slider's range. */
 export function paintTransparency(percent: number) {
   if (typeof document === "undefined") return;
   const value = Math.min(TRANSPARENCY_MAX, Math.max(TRANSPARENCY_MIN, Math.round(percent)));
   document.documentElement.style.setProperty("--rc-transparency", `${value}%`);
+}
+
+/** Settings › Appearance › Blur, in pixels: how strongly the glass blurs what is behind it. */
+export const BLUR_MIN = 0;
+export const BLUR_MAX = 40;
+
+/** Every surface that takes `glass-filter` (index.css), and the header's frosted strip. */
+const GLASS_SURFACES =
+  ".rc-glass, .rc-glass-faint, .rc-glass-overlay, .rc-composer, .rc-composer-card, .rc-toast, " +
+  ".rc-composer-footer, .rc-scrim, .rc-lightbox-scrim, .elevated, .glass-filter";
+
+/** The rule that overrides index.css's 9px with the chosen blur. */
+export function blurRule(px: number): string {
+  const value = Math.min(BLUR_MAX, Math.max(BLUR_MIN, Math.round(px)));
+  const filter = `saturate(1.15) blur(${value}px)`;
+  // A literal, not a custom property: WebKit's prefixed `backdrop-filter` ignores `var()` (see
+  // `glass-filter` in index.css). The `:not` keeps the solid fallbacks winning where they apply.
+  const root = ':root:not(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])';
+  return (
+    `${root} :is(${GLASS_SURFACES}), ${root} .rc-header-glass::before ` +
+    `{ backdrop-filter: ${filter}; -webkit-backdrop-filter: ${filter}; }`
+  );
+}
+
+/** Writes the glass blur into a style element of its own, after the app's stylesheet. */
+export function paintBlur(px: number) {
+  if (typeof document === "undefined") return;
+  let style = document.getElementById("rc-glass-blur");
+  if (!style) {
+    style = document.createElement("style");
+    style.id = "rc-glass-blur";
+  }
+  // Re-appended each time so it stays last in <head>, after any stylesheet loaded since.
+  document.head.appendChild(style);
+  style.textContent = blurRule(px);
 }

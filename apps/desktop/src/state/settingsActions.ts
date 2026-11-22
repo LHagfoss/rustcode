@@ -166,6 +166,11 @@ export function setTransparency(percent: number) {
   store(STORAGE.transparency, String(percent));
 }
 
+export function setGlassBlur(px: number) {
+  set({ glassBlur: px });
+  store(STORAGE.glassBlur, String(px));
+}
+
 export function setChatWidth(width: ChatWidth) {
   set({ chatWidth: width });
   store(STORAGE.chatWidth, width);

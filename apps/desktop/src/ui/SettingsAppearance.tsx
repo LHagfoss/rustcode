@@ -4,7 +4,7 @@ import { dirname } from "../lib/paths";
 import { appPlatform, paintsBlur } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
-import { TRANSPARENCY_MAX, TRANSPARENCY_MIN } from "../lib/transparency";
+import { BLUR_MAX, BLUR_MIN, TRANSPARENCY_MAX, TRANSPARENCY_MIN } from "../lib/transparency";
 import { getZoom, stepZoom, subscribeZoom, ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, zoomLabel } from "../lib/zoom";
 import {
   createTheme,
@@ -12,6 +12,7 @@ import {
   setActiveTheme,
   setAnimateStreaming,
   setFont,
+  setGlassBlur,
   setReduceTransparency,
   setTextSize,
   setTheme,
@@ -184,6 +185,7 @@ export function AppearancePage() {
   const animateStreaming = useApp((s) => s.animateStreaming);
   const reduceTransparency = useApp((s) => s.reduceTransparency);
   const transparency = useApp((s) => s.transparency);
+  const glassBlur = useApp((s) => s.glassBlur);
   const active = useApp((s) => s.themeActive);
   const snapshot = useApp((s) => s.themes);
   const supported = useApp((s) => s.features.themes);
@@ -289,6 +291,28 @@ export function AppearancePage() {
               step={2}
               unit="%"
               onChange={setTransparency}
+            />
+          </Row>
+        )}
+        {paintsBlur() && (
+          <Row
+            title="Blur"
+            reset={
+              glassBlur !== SETTINGS_DEFAULTS.glassBlur
+                ? () => setGlassBlur(SETTINGS_DEFAULTS.glassBlur)
+                : undefined
+            }
+            subtitle="How strongly the composer and menus blur what is behind them."
+            hint={reduceTransparency ? "Reduce transparency is on, so nothing is blurred." : undefined}
+          >
+            <Slider
+              label="Blur"
+              value={glassBlur}
+              min={BLUR_MIN}
+              max={BLUR_MAX}
+              step={1}
+              unit="px"
+              onChange={setGlassBlur}
             />
           </Row>
         )}
