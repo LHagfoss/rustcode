@@ -2358,7 +2358,6 @@ mod tests {
         assert_eq!(tools[0]["name"], "start_thread");
         assert!(tools[0]["inputSchema"]["properties"].is_object());
         assert!(tools.len() <= SEARCH_RESULTS);
-        // A direct tool is already listed, so a search never repeats it.
         let answer = search_tools(super::super::VERSION, deferred(), "update_thread");
         if answer.success {
             assert!(!answer.content.contains("\"name\":\"update_thread\""));
