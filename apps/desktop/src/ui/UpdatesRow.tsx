@@ -1,7 +1,3 @@
-// A run of short automatic turns, folded (state/updateRuns.ts): one divider in
-// the notice rows' own grammar, `4 earlier updates · #21, #17 ›`, that opens
-// to show the turns it stands for.
-
 import { memo } from "react";
 import { type UpdateRun, updateRunLabel } from "../state/updateRuns";
 import { ChevronRight, Layers } from "./icons";

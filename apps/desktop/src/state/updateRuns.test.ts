@@ -31,7 +31,6 @@ const end = (id: string, elapsedMs = 2_000): TranscriptItem => ({
   outcome: "completed",
 });
 
-/** A quiet turn woken by pull request `n`'s news. */
 const news = (n: number, elapsedMs?: number) => [pull(`p${n}`, n), reply(`r${n}`), end(`e${n}`, elapsedMs)];
 
 const rowsOf = (items: TranscriptItem[], open: ReadonlySet<string> = new Set()) =>
@@ -74,7 +73,6 @@ describe("runs of short automatic turns", () => {
   test("a long or busy turn breaks the run: its report keeps its place", () => {
     const long = [...news(1), ...news(2, UPDATE_MAX_MS), ...news(3), ...news(4)];
     expect(keys(rowsOf(long)).some((k) => k.startsWith("[updates"))).toBe(false);
-    // A message the user typed is never folded away.
     const typed = [...news(1), user("u"), reply("ru"), end("eu"), ...news(2), ...news(3)];
     expect(keys(rowsOf(typed)).some((k) => k.startsWith("[updates"))).toBe(false);
   });

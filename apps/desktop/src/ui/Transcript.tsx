@@ -134,7 +134,6 @@ export type Row = {
   childKeys?: boolean;
   fold?: TurnFold;
   group?: ToolGroup;
-  /** A run of short automatic turns, folded (state/updateRuns.ts). */
   updates?: UpdateRun;
   inFold?: string;
   /** An approval the thread is waiting on, shown at the call it is about. */

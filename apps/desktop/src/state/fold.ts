@@ -190,13 +190,10 @@ export function foldTurns(
   return rows;
 }
 
-/** A turn that only replied, faster than this, draws no `Worked for …` over its answer. */
 export const QUICK_REPLY_MS = 5_000;
 
-/** Harness plumbing that loads other tools' schemas: it does nothing the reader asked about. */
 const PLUMBING = new Set(["ToolSearch"]);
 
-/** A finished call that is only the harness's plumbing, which the transcript leaves out. */
 export function isPlumbing(item: TranscriptItem): boolean {
   return item.kind === "tool" && item.status === "completed" && PLUMBING.has(item.title.trim());
 }
@@ -230,8 +227,7 @@ function pushTurn(
   const end = items.slice(from, to).find((x) => x.kind === "turnEnd");
   if (!work.length) {
     // A turn that only replied still says how long it took, over its answer: a divider with
-    // nothing to open (`steps: 0`). A reply of a few seconds says nothing a reader wants timed (a
-    // woken turn noting a merge), so it goes without one.
+    // nothing to open (`steps: 0`).
     const timed =
       end?.kind === "turnEnd" && end.elapsedMs !== undefined && end.elapsedMs >= QUICK_REPLY_MS
         ? end
