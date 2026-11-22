@@ -576,19 +576,18 @@ export function Switch({
   disabled?: boolean;
 }) {
   const [pressed, setPressed] = useState(false);
-  // The knob's offset while it is dragged (0 off, SWITCH_TRAVEL on); null when it rests.
-  const [drag, setDrag] = useState<number | null>(null);
+  const [dragOffset, setDragOffset] = useState<number | null>(null);
   const gesture = useRef<{ x: number; moved: boolean } | null>(null);
   const end = (commit: boolean, x?: number) => {
     const g = gesture.current;
     gesture.current = null;
     setPressed(false);
-    setDrag(null);
+    setDragOffset(null);
     if (!commit || !g) return;
     const next = g.moved && x !== undefined ? knobAt(x, g.x, checked) > SWITCH_TRAVEL / 2 : !checked;
     if (next !== checked) onChange(next);
   };
-  const offset = drag ?? (checked ? SWITCH_TRAVEL : 0);
+  const offset = dragOffset ?? (checked ? SWITCH_TRAVEL : 0);
   return (
     <button
       type="button"
@@ -596,7 +595,6 @@ export function Switch({
       aria-checked={checked}
       aria-label={label}
       disabled={disabled}
-      // A pointer toggles on release (below); a click with no pointer behind it is the keyboard's.
       onClick={(e) => {
         if (e.detail === 0) onChange(!checked);
       }}
@@ -611,23 +609,23 @@ export function Switch({
         if (!g) return;
         if (!g.moved && Math.abs(e.clientX - g.x) < 3) return;
         g.moved = true;
-        setDrag(knobAt(e.clientX, g.x, checked));
+        setDragOffset(knobAt(e.clientX, g.x, checked));
       }}
       onPointerUp={(e) => end(true, e.clientX)}
       onPointerCancel={() => end(false)}
       onLostPointerCapture={() => gesture.current && end(false)}
       className={cx(
         "relative inline-flex h-5 w-11 shrink-0 touch-none items-center rounded-full transition-[background-color] duration-200 ease-snappy disabled:opacity-40",
-        (drag === null ? checked : drag > SWITCH_TRAVEL / 2) ? "bg-accent" : "bg-fill-strong",
+        (dragOffset === null ? checked : dragOffset > SWITCH_TRAVEL / 2) ? "bg-accent" : "bg-fill-strong",
       )}
     >
       <span
         className={cx(
           "absolute top-0.5 left-0.5 h-4 rounded-full bg-knob shadow-knob ease-snappy",
-          // Pressed, the knob grows 4px toward the free side; its offset gives back what the growth
-          // takes as it travels, so the stretched knob stays inside the track all the way across.
           pressed ? "w-7" : "w-6",
-          drag === null ? "transition-[transform,width] duration-200" : "transition-[width] duration-150",
+          dragOffset === null
+            ? "transition-[transform,width] duration-200"
+            : "transition-[width] duration-150",
         )}
         style={{ transform: `translateX(${pressed ? offset - (4 * offset) / SWITCH_TRAVEL : offset}px)` }}
       />
@@ -646,6 +644,8 @@ function knobAt(x: number, start: number, checked: boolean): number {
  * `fill` is for a track that spans its card, where the segments share the width equally.
  * `tabs` makes it a tab strip for the views of a panel: tab roles, panel-sized labels, and a quiet
  * thumb on the soft fill instead of the white knob, so a secondary surface does not outshine the chat.
+ * On a track (not a tab strip) a press swells the thumb, which follows the pointer across the
+ * segments and picks the one it is over on release; a click from the keyboard picks at once.
  */
 export function Segments<T extends string>({
   value,
@@ -675,8 +675,6 @@ export function Segments<T extends string>({
   const group = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
   const intent = useIntentRest((next: T) => onIntent?.(next));
-  // A press on the track (not a tab strip): the thumb swells while held and follows the pointer
-  // across the segments; the release picks the one it is over. `shown` is that segment mid-gesture.
   const [held, setHeld] = useState<T | null>(null);
   const pressing = useRef(false);
   const shown = held ?? value;
@@ -760,8 +758,6 @@ export function Segments<T extends string>({
             ? { role: "tab", "aria-selected": o.value === value, "aria-controls": tabs.controls }
             : { role: "radio", "aria-checked": o.value === value })}
           disabled={o.disabled}
-          // On the track a pointer picks on release (above); a click with no pointer behind it is
-          // the keyboard's. A tab strip picks on click.
           onClick={(e) => {
             if (tabs || e.detail === 0) onChange(o.value);
           }}

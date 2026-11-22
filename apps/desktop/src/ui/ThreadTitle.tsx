@@ -1,7 +1,3 @@
-// The chat header's thread title: the last crumb after the project. It opens the thread's menu
-// (the sidebar row's own, ui/SidebarThreadRow.tsx), with a chevron that shows on hover, and its
-// Rename edits the title in place.
-
 import { DropdownMenu } from "radix-ui";
 import { useState } from "react";
 import { useApp } from "../state/store";
@@ -11,6 +7,11 @@ import { ChevronDown } from "./icons";
 import { MenuContent } from "./primitives";
 import { ThreadMenuItems } from "./SidebarThreadRow";
 
+/**
+ * The chat header's thread title, the last crumb after the project. It opens the thread's menu
+ * (the sidebar row's own, ui/SidebarThreadRow.tsx) with a chevron that shows on hover, and its
+ * Rename edits the title in place, once the menu has closed and given focus back.
+ */
 export function ThreadTitle({ thread, title }: { thread?: ThreadState; title: string }) {
   const session = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id) : undefined));
   const [renaming, setRenaming] = useState(false);
@@ -18,7 +19,6 @@ export function ThreadTitle({ thread, title }: { thread?: ThreadState; title: st
   if (!session) return <h1 className="min-w-0 truncate font-medium text-body text-fg">{title}</h1>;
   const startRename = () => {
     setDraft(session.title ?? title);
-    // After the menu closes and gives focus back.
     setTimeout(() => setRenaming(true), 0);
   };
   const commit = () => {

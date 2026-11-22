@@ -154,10 +154,10 @@ function PlanHeaderButton({ thread }: { thread?: ThreadState }) {
   return thread ? <PlanButton thread={thread} /> : null;
 }
 
-// The side panel's toggle: it opens the panel on this thread's last tab (Details, Changes, Pull
-// requests) and closes whichever is showing. A quiet button that names that tab, so the header says
-// where it goes. It carries `data-panel-toggle`: a panel that closes with nothing else focused hands
-// the keyboard back to it (ui/RightPanel.tsx).
+/**
+ * The side panel's toggle names the tab it opens (this thread's last: Details, Changes, Pull
+ * requests). Its `data-panel-toggle` takes the keyboard back when a panel closes (ui/RightPanel.tsx).
+ */
 const PANEL_LABELS: Record<PanelKind, string> = {
   details: "Details",
   changes: "Changes",
