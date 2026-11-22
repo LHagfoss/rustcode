@@ -111,7 +111,9 @@ all percentages are widths as written); a table sorts past eight rows. In text,
 `` `code` `` and `**bold**` work and HTML is kept as written. Anything else,
 and everything in a `<script>` or `<style>`, passes through, so a view mixes
 shorthand and HTML freely and a view without `::` lines is untouched. An
-unknown name (`:: chart`) stays text.
+unknown name (`:: chart`) stays text. Shorthand blocks written outside a fence
+still draw: right after a view (only blank lines between) they join it, otherwise
+they are a view of their own.
 
 The same reconnect view is 1,700 characters in kit HTML and 1,089 in shorthand
 (36% fewer; `MOCK_RECONNECT_HTML` and `MOCK_RECONNECT_SHORTHAND` in

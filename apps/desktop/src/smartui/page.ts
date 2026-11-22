@@ -233,6 +233,13 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-flat > .rc-stat { padding: 0; background: transparent; border-radius: 0; gap: 2px; }
 .rc-flat .rc-stat-value { font-size: 28px; line-height: 1.15; letter-spacing: -0.02em; }
 .rc-stat-value { font-size: var(--rc-text-size-value); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.rc-stats > :not(.rc-stat, title, style, script) { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 12px 14px;
+  background: var(--rc-surface); border-radius: var(--rc-radius); }
+.rc-flat > :not(.rc-stat, title, style, script) { padding: 0; background: transparent; border-radius: 0; }
+.rc-stats > :not(.rc-stat) > :first-child:not(.rc-label, .rc-stat-label) { font-size: var(--rc-text-size-value); line-height: 1.25;
+  font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.rc-flat > :not(.rc-stat) > :first-child:not(.rc-label, .rc-stat-label) { font-size: 28px; line-height: 1.15; letter-spacing: -0.02em; }
+.rc-stats > :not(.rc-stat) > :is(.rc-label, .rc-stat-label) { order: -1; }
 .rc-stat-note { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
 
 .rc-badge { display: inline-block; padding: 0 7px; font-size: var(--rc-text-size-xs); line-height: 18px; font-weight: 500; white-space: nowrap;
