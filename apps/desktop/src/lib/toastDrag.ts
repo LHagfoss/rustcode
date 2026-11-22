@@ -1,10 +1,8 @@
-// What a drag on a toast does, as pure arithmetic and one DOM guard
-// (ui/Toaster.tsx): the card slides one way only, right toward the window's
-// edge. Any other way it rubber-bands at a sixth and snaps back. It dismisses
-// past 48px, or on a quick flick right. A press that barely moves is a click,
-// which dismisses too. A drag never selects text anywhere: the guard below
-// turns selection off on the document and blocks `selectstart` until it is
-// released, and every way a drag ends releases it.
+// Pure drag math and one DOM guard (ui/Toaster.tsx): the card slides right
+// only and rubber-bands any other way; past 48px or a quick flick right it
+// dismisses, and a barely-moving press is a click. A drag never selects text:
+// the guard turns selection off and blocks `selectstart` until released, and
+// every way a drag ends releases it.
 
 /** How far a drag must travel to dismiss the toast. */
 export const TOAST_DISMISS_PX = 48;
