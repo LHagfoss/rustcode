@@ -109,7 +109,7 @@ export function NewThreadBanner({
     return () => clearTimeout(t);
   }, [image, columns, rows, dark, style, name]);
 
-  // macOS blurs live; Windows and Linux paint no blur (docs/design.md › Platforms), so there the
+  // macOS blurs live; Windows and Linux paint no decorative blur (docs/design.md › Platforms), so there the
   // blur is baked into the picture once by the worker instead, and nothing blurs on screen.
   const blurred = paintsBlur();
   const haze = style === "haze";

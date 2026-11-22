@@ -504,8 +504,9 @@ which reads that attribute. To look at Windows in the mock, open it at
 `/?platform=windows` (`bun run mock-window open "/?platform=windows"`), so the
 first render is already that platform.
 
-Blur is macOS's alone. Windows and Linux paint no blur at all, in the page or
-behind the window, decorative ones included. The chat background's Blur setting is not
+The in-app glass is the same on every platform: Windows (WebView2) blurs it
+like macOS, and Linux does wherever WebKitGTK composites, turning it solid
+elsewhere. The window material and the decorative blurs are macOS's alone. The chat background's Blur setting is not
 painted there either: the effects worker bakes it into the picture once
 (`boxBlur` in `lib/bannerEffects.ts`).
 
@@ -514,18 +515,20 @@ painted there either: the effects worker bakes it into the picture once
 | Sans (`--font-sans`, `--font-rounded`) | Inter by default; System: SF Pro / SF Pro Rounded | Inter by default; System: Segoe UI Variable Text, Segoe UI | Inter by default; System: Inter, Cantarell, Ubuntu, Noto Sans |
 | Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
 | Font smoothing | `antialiased` | system (ClearType) | system |
-| Glass | the recipe above | none: solid `surface-2` | none: solid `surface-2` |
+| Glass | the recipe above | the recipe above | the recipe above; solid `surface-2` without compositing |
 | Window material | `sidebar` vibrancy, through the sidebar's tint | none (opaque window) | none |
 | Word reveal | fade + 4px blur | fade only | fade only |
 | Popovers, toasts, What's New open | scale + fade | scale + fade | slide/fade, no scale |
 
-- Windows and Linux take the solid fallback for every frosted surface: the
-  same tokens and `backdrop-filter: none` that Reduce transparency sets, under
-  the same selector, so one platform attribute decides it for the CSS. Glass
-  and popovers are opaque `surface-2`, the composer and the sidebar `sidebar`,
-  the header and the scrims `bg`. The streaming reveal drops its 4px blur, and
+- Windows and Linux keep the frosted surfaces. On Linux, WebKitGTK paints a
+  `backdrop-filter` only with accelerated compositing, which the environment
+  can take away; the shell's `webview_blur` says so and `lib/transparency.ts`
+  then turns on `reduce-transparency`: glass and popovers opaque `surface-2`,
+  the composer and the sidebar `sidebar`, the header and the scrims `bg`. The
+  release CSS must keep the unprefixed `backdrop-filter` for WebView2 (see
+  `glass-filter` in `index.css`). The streaming reveal drops its 4px blur, and
   the new thread's banner turns its own blur and its glow off
-  (`ui/NewThreadBanner.tsx`), so nothing decorative blurs either.
+  (`ui/NewThreadBanner.tsx`): the decorative blurs stay macOS's.
 - Windows' window is opaque (`"transparent": false` in
   `tauri.windows.conf.json`): it has no material. The shell used to apply Mica
   when it built the window, and the page showed it through the sidebar alone;

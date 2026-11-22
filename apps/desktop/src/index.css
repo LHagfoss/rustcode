@@ -1471,8 +1471,9 @@
  * `reduce-transparency` class (lib/transparency.ts): on for Settings ›
  * Appearance › Reduce transparency, the system's request (macOS reads it
  * through the shell), and a web view with no `backdrop-filter` at all, where
- * translucency without the blur leaves text over text. Windows and Linux take
- * the same solid tokens always: they paint no blur (Platforms, below).
+ * translucency without the blur leaves text over text. Windows and Linux keep
+ * the glass too: WebView2 is Chromium, and on Linux the class is on wherever
+ * WebKitGTK does not composite (`webview_blur`), so it blurs or goes solid.
  */
 @media (prefers-reduced-transparency: reduce) {
   :root {
@@ -1516,7 +1517,7 @@
     backdrop-filter: none;
   }
 }
-:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) {
+:root.reduce-transparency {
   --rc-sidebar-bg: var(--rc-sidebar);
   --rc-glass-bg: var(--rc-surface-2);
   --rc-glass-bg-strong: var(--rc-surface-2);
@@ -1527,14 +1528,13 @@
   --rc-composer-bg-focus: var(--rc-composer-hue);
   --rc-composer-bg-over: var(--rc-composer-hue);
 }
-:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) .rc-composer:focus-within,
-:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
-  .rc-composer-card:focus-within {
+:root.reduce-transparency .rc-composer:focus-within,
+:root.reduce-transparency .rc-composer-card:focus-within {
   background: var(--rc-composer-bg-focus);
 }
 /* No filter behind an opaque fill (see the query above): the surfaces keep their solid tokens and
    drop the layer the blur would cost. */
-:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
+:root.reduce-transparency
   :is(
     .rc-glass,
     .rc-glass-faint,
@@ -1548,13 +1548,12 @@
     .elevated,
     .glass-filter
   ),
-:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) .rc-header-glass::before {
+:root.reduce-transparency .rc-header-glass::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]),
-:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
-  .rc-header-glass.rc-frost::before {
+:root.reduce-transparency,
+:root.reduce-transparency .rc-header-glass.rc-frost::before {
   --rc-glass-pane: var(--rc-bg);
 }
 
@@ -1576,9 +1575,10 @@
 /*
  * Platforms (docs/design.md › Platforms): `data-platform` on <html> (lib/platform.ts) fits the
  * macOS design to the other web views. Nothing here applies to `mac` or to a page without the
- * attribute, so the macOS look is the rules above alone. Glass is macOS alone: Windows (WebView2)
- * and Linux (WebKitGTK) paint no blur at all, in-app or behind the window, and take the solid
- * tokens and the missing filter above (see the shared selector with `reduce-transparency`).
+ * attribute, so the macOS look is the rules above alone. The in-app glass is the same on every
+ * platform (Linux turns it solid where its web view does not composite, through
+ * `reduce-transparency`); the window material behind the sidebar and the decorative blurs (the
+ * reveal, the banner) are macOS's alone.
  *
  * Type: each OS's own UI face, since SF Pro is not there to find and the macOS names in the stack
  * fall through to whatever the font config aliases them to. There is no rounded face elsewhere, so
@@ -1611,7 +1611,7 @@
     transform: translateY(10px);
   }
 }
-/* Windows and Linux paint no blur, decorative ones included: the reveal fades without its 4px. */
+/* The decorative blurs are macOS's alone: on Windows and Linux the reveal fades without its 4px. */
 :root:is([data-platform="windows"], [data-platform="linux"]) .rc-reveal {
   animation-name: rc-fade;
   animation-duration: 180ms;
