@@ -106,13 +106,13 @@ the accent marks state (on, selected, linked), it does not shout.
 |---|---|---|---|
 | xs | 6 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
 | sm | 8 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
-| md | 10 | `rounded-md` | Icon buttons, list rows, inputs |
-| lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, pictures in replies |
+| md | 10 | `rounded-md` | Icon buttons, fields, list rows, inputs |
+| lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows, menu items, pictures in replies |
 | xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels, tooltips and hover cards |
 | 2xl | 20 | `rounded-2xl` | The settings panel, toasts |
 | composer | 20 | `--rc-composer-radius` | The composer's box: one floating card a step rounder than menus and popovers, so its corners read soft over the text sliding under it |
 | 3xl | 26 | `rounded-3xl` | The largest floating surface (nothing uses it yet) |
-| full | — | `rounded-full` | Switches, avatars, dots, trackbars and labelled buttons |
+| full | — | `rounded-full` | Labelled buttons (`Pill`), selects, segmented controls, status chips, toolbar clusters, switches, avatars, dots, trackbars |
 
 In the chat a component names its **role** instead of a step; each role is
 one of the steps above, so a theme's radius still scales it:
@@ -188,6 +188,23 @@ Every knob is 24 px, except a switch's: a 24×16 px pill inset 2 px inside a
 knob and the track's fill answer a toggle over 200 ms. The button's own box is
 the track's 20 px, so a switch in a Settings row does not make the row taller
 than its neighbours.
+
+A segmented track is inset 3 px around its pill (`Segments`; `Choice` is its
+24 px size), so the pill reads as sitting inside the track rather than filling
+it.
+
+Knobs answer the press, not just the release:
+
+- Held, a knob swells: a switch's grows to 28 px toward the side it would move
+  to (staying inside the track), a segmented pill scales to 104%, a slider's
+  thumb to 115%, each over 200 ms `--ease-snappy`.
+- A switch and a segmented track can be dragged as well as pressed. A
+  segmented pill follows the pointer to the segment under it and picks it on
+  release. A switch's knob follows the pointer and lands on the side it is
+  let go nearer; a press without a drag toggles. A cancelled gesture changes
+  nothing.
+- The keyboard still picks with a click (Space, Enter), so a pointer
+  gesture commits once, on release, and never twice.
 
 ## Focus
 
@@ -457,7 +474,7 @@ that change use `tabular`.
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
   rows there when the thread opened, or remounted by the virtualizer, do not.
   A status dot that appears pops in (`rc-dot-in`); a segmented control's
-  selection slides (`transform`) to the new segment. A count that changes rolls
+  selection slides (`translate`) to the new segment. A count that changes rolls
   its digits vertically in 220ms `--ease-snappy` (`ui/RollingNumber.tsx`),
   keeping each column's place from the right, so 9 → 10 rolls the units and
   grows a tens.
@@ -638,11 +655,17 @@ content never shifts when a classic scrollbar appears.
 
 ## Component recipes
 
-Shape rule: **labelled buttons are pills** (`rounded-full` with
-horizontal padding, never a circle): the composer's footer buttons, chips,
-segmented items, header actions, Settings' "New…" and "Edit config".
-Circles only for icon-only round buttons (send, stop, close in a panel
-header, toolbar clusters). Icon buttons in dense rows are `rounded-md`.
+Shape rule: **what you press or pick is a pill, what holds content is a
+rounded rectangle.** Pills (`rounded-full`): labelled buttons (`Pill`, never a
+circle), segmented controls and their items, status chips, toolbar clusters,
+switches, selects, the composer's footer chips, and the chat header's machine
+pill and side-panel toggle (a quiet pill that names the tab it opens, the
+panel icon after the name). A labelled button with an icon always has a fill;
+`quiet` (no fill at rest) is for text-only actions. Settings' `Action` is
+`Pill`, so every labelled button in the app shares one shape.
+Rounded rectangles from the scale: text fields (`rounded-lg`), icon
+buttons (`rounded-md`, `rounded-sm` in dense rows), cards, rows, menus and
+panels. Circles only for icon-only round buttons (send, stop).
 Buttons inside a callout's actions are `rounded-md`, one step below its `rounded-lg`, and centred on its message.
 Rows are `rounded-md` (sidebar thread rows `rounded-xl` in the default comfortable
 layout, `rounded-lg` in the opt-in compact one), menu items and cards `rounded-lg`,

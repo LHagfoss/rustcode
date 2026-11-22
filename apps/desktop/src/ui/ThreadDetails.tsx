@@ -1,10 +1,11 @@
-// The side panel's Details tab, in titled sections: where the thread runs, its branch and
-// uncommitted changes, lineage, a few plain stats (agent, messages, tool calls, cost, age) and
-// context usage.
+// The side panel's Details tab, Multica-style: foldable sections of label and value rows. The
+// thread's properties (status, agent, model, account, machine, project, branch), its uncommitted
+// changes, lineage, activity (messages, tool calls, tokens, cost, age) and context usage.
 // Changes and Pull requests are the panel's other tabs (ui/RightPanel.tsx).
 
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { modelName } from "../acp/types";
+import { modelName, projectName } from "../acp/types";
+import { STATUS_LABEL } from "../acp/v2";
 import { type GitChanges, gitChangeSummary, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { contextPercent } from "../state/details";
@@ -13,8 +14,10 @@ import { showPanel, useApp, worktreeOf } from "../state/store";
 import { formatTokens, isRunning, type TranscriptItem } from "../state/thread";
 import { relativeAge } from "../state/threadFormat";
 import { splitThreadKey } from "../state/threadKeys";
+import { statusOf } from "../state/threadStatus";
 import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
-import { ChevronRight, FileDiff, FolderOpen, GitBranch, Laptop } from "./icons";
+import { HarnessIcon } from "./HarnessIcon";
+import { ChevronDown, ChevronRight, FileDiff, GitBranch, Laptop } from "./icons";
 import {
   FOLDED_EVENT,
   isFolded as isFoldedOf,
@@ -23,8 +26,10 @@ import {
   toggleFolded,
   writeFolded,
 } from "./overview";
+import { ProjectMark } from "./ProjectMark";
 import { cx, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
+import { StatusIcon } from "./Status";
 
 /**
  * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
@@ -74,6 +79,7 @@ export function ThreadDetails() {
   const harnessName = useApp((s) =>
     harnessId ? (s.harnesses?.harnesses.find((h) => h.id === harnessId)?.name ?? harnessId) : undefined,
   );
+  const status = useApp((s) => (s.selectedId ? statusOf(s, s.selectedId) : "idle"));
   const items = thread?.items;
   const counts = useMemo(() => threadCounts(items ?? []), [items]);
   const changes = useChanges(host ? undefined : thread?.cwd, isRunning(thread));
@@ -127,77 +133,109 @@ export function ThreadDetails() {
   const added = changes?.files.reduce((sum, f) => sum + f.added, 0) ?? 0;
   const removed = changes?.files.reduce((sum, f) => sum + f.removed, 0) ?? 0;
 
-  const row = "flex min-h-8 w-full items-center gap-2 rounded-lg px-3 text-left font-medium text-callout";
-  const action = `${row} hover:bg-fill-subtle`;
+  const project = projectName(worktree?.repo || thread.cwd);
+  const machineLabel =
+    machine ?? (host ? "Paired computer" : appPlatform() === "mac" ? "This Mac" : "This computer");
   const icon = "shrink-0 text-fg-muted";
+  const activity = stats.filter(([label]) => label !== "Agent" && label !== "Account");
 
-  // Titled sections, each a few 32px rows, a hairline between them: the layout T3 Code's thread
-  // details card uses, holding this panel's own facts.
+  // Multica-style sections: a title you can fold, then label and value rows, the label in a fixed
+  // column and the value beside it with its icon, so the eye runs down one edge.
   return (
-    <div className="min-h-0 overflow-y-auto pb-2">
-      <Section title="Workspace" first>
-        <div className={row}>
-          <Laptop size={16} className={icon} />
-          <span className="min-w-0 truncate">
-            {machine ?? (host ? "Paired computer" : appPlatform() === "mac" ? "This Mac" : "This computer")}
-          </span>
-        </div>
-        {!host && (
-          <button type="button" className={action} onClick={() => openPath(thread.cwd)}>
-            <FolderOpen size={16} className={icon} />
-            <span className="flex-1">Open in {fileManagerName(appPlatform())}</span>
-            <ChevronRight size={12} className="text-fg-faint" />
-          </button>
+    <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+      <Section id="properties" title="Properties" folded={isFolded("properties")} onToggle={toggle}>
+        <Property label="Status">
+          <StatusIcon status={status} size={13} />
+          <span className="truncate">{STATUS_LABEL[status]}</span>
+        </Property>
+        {harnessId && (
+          <Property label="Agent">
+            <HarnessIcon id={harnessId} size={14} />
+            <span className="truncate">{harnessName}</span>
+          </Property>
+        )}
+        {model && (
+          <Property label="Model">
+            <span className="truncate">{model}</span>
+          </Property>
+        )}
+        {account && (
+          <Property label="Account">
+            <span className="truncate">{account}</span>
+          </Property>
+        )}
+        <Property label="Machine">
+          <Laptop size={14} className={icon} />
+          <span className="truncate">{machineLabel}</span>
+        </Property>
+        <Property
+          label="Project"
+          onClick={host ? undefined : () => openPath(thread.cwd)}
+          tip={host ? undefined : `Open in ${fileManagerName(appPlatform())}`}
+        >
+          <ProjectMark name={project} />
+          <span className="truncate">{project}</span>
+        </Property>
+        {branch && (
+          <Property label="Branch" tip={branch}>
+            <GitBranch size={14} className={icon} />
+            <span className="truncate font-mono text-caption">{branch}</span>
+          </Property>
         )}
       </Section>
-      {branch && (
-        <Section title="Version control">
-          <Tooltip label={branch}>
-            <div className={row}>
-              <GitBranch size={16} className={icon} />
-              <span className="min-w-0 truncate rounded-md bg-fill-subtle px-2 py-0.5 font-mono text-caption">
-                {branch}
-              </span>
-            </div>
-          </Tooltip>
-          {changes && (
-            <button type="button" className={action} onClick={() => showPanel("changes")}>
-              <FileDiff size={16} className={icon} />
-              <span className="flex-1">
-                {fileCount
-                  ? `${fileCount} changed file${fileCount === 1 ? "" : "s"}`
-                  : "No uncommitted changes"}
-              </span>
-              {fileCount > 0 && <DiffCount added={added} removed={removed} />}
-              <ChevronRight size={12} className="text-fg-faint" />
-            </button>
-          )}
+      {changes && (
+        <Section
+          id="changes"
+          title="Changes"
+          folded={isFolded("changes")}
+          onToggle={toggle}
+          action={
+            <Tooltip label="Open Changes">
+              <button
+                type="button"
+                aria-label="Open Changes"
+                onClick={() => showPanel("changes")}
+                className="flex size-6 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </Tooltip>
+          }
+        >
+          <button
+            type="button"
+            onClick={() => showPanel("changes")}
+            className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-callout hover:bg-fill-subtle"
+          >
+            <FileDiff size={14} className={icon} />
+            <span className="flex-1 truncate">
+              {fileCount
+                ? `${fileCount} changed file${fileCount === 1 ? "" : "s"}`
+                : "No uncommitted changes"}
+            </span>
+            {fileCount > 0 && <DiffCount added={added} removed={removed} />}
+          </button>
         </Section>
       )}
       {delegates > 0 && (
-        <Section title="Lineage">
-          <div className="px-2">
-            <DelegatePreview
-              threadId={id}
-              expanded={!isFolded("delegates")}
-              onToggle={() => toggle("delegates")}
-            />
-          </div>
+        <Section id="delegates" title="Lineage" folded={false} onToggle={toggle}>
+          <DelegatePreview
+            threadId={id}
+            expanded={!isFolded("delegates")}
+            onToggle={() => toggle("delegates")}
+          />
         </Section>
       )}
-      <Section title="Thread">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 px-3 font-medium text-callout">
-          {stats.map(([label, value]) => (
-            <div key={label} className="contents">
-              <dt className="flex min-h-8 items-center text-fg-muted">{label}</dt>
-              <dd className="flex min-h-8 min-w-0 items-center justify-end truncate tabular">{value}</dd>
-            </div>
-          ))}
-        </dl>
+      <Section id="activity" title="Activity" folded={isFolded("activity")} onToggle={toggle}>
+        {activity.map(([label, value]) => (
+          <Property key={label} label={label}>
+            <span className="truncate tabular">{value}</span>
+          </Property>
+        ))}
       </Section>
       {usage && used !== undefined && (
-        <Section title="Context window">
-          <div className="flex min-h-8 items-center gap-2 px-3 font-medium text-callout">
+        <Section id="context" title="Context window" folded={isFolded("context")} onToggle={toggle}>
+          <div className="flex min-h-8 items-center gap-3 px-2 text-callout">
             <div
               role="meter"
               aria-label="Context used"
@@ -218,12 +256,70 @@ export function ThreadDetails() {
   );
 }
 
-/** One titled group of rows; every one after the first starts on a hairline. */
-function Section({ title, first, children }: { title: string; first?: boolean; children: ReactNode }) {
-  return (
-    <section className={cx("px-2 pt-1.5 pb-1", !first && "rule-t [--rc-rule-inset:1rem] mt-1.5")}>
-      <h3 className="flex min-h-8 items-center px-3 font-medium text-caption text-fg-muted">{title}</h3>
+/** A label in the fixed left column and its value beside it; a value that acts gets a hover fill. */
+function Property({
+  label,
+  children,
+  onClick,
+  tip,
+}: {
+  label: string;
+  children: ReactNode;
+  onClick?: () => void;
+  tip?: string;
+}) {
+  const value =
+    "flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-callout text-fg";
+  const body = onClick ? (
+    <button type="button" onClick={onClick} className={cx(value, "hover:bg-fill-subtle")}>
       {children}
+    </button>
+  ) : (
+    <div className={value}>{children}</div>
+  );
+  return (
+    <div className="flex items-center gap-1">
+      <span className="w-24 shrink-0 px-2 text-callout text-fg-muted">{label}</span>
+      {tip ? <Tooltip label={tip}>{body}</Tooltip> : body}
+    </div>
+  );
+}
+
+/** A titled group that folds away from its title; the fold is the reader's habit, kept for every thread. */
+function Section({
+  id,
+  title,
+  folded,
+  onToggle,
+  action,
+  children,
+}: {
+  id: SectionId;
+  title: string;
+  folded: boolean;
+  onToggle: (id: SectionId) => void;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="px-2 pt-2">
+      <div className="flex min-h-8 items-center gap-1 pr-1">
+        <button
+          type="button"
+          aria-expanded={!folded}
+          onClick={() => onToggle(id)}
+          className="flex min-h-7 items-center gap-1 rounded-md px-2 font-medium text-callout text-fg hover:bg-fill-subtle"
+        >
+          {title}
+          <ChevronDown
+            size={12}
+            className={cx("text-fg-muted transition-transform", folded && "-rotate-90")}
+          />
+        </button>
+        <span className="flex-1" />
+        {action}
+      </div>
+      {!folded && <div className="pb-1">{children}</div>}
     </section>
   );
 }

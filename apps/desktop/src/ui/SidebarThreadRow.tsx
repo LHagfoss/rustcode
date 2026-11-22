@@ -132,7 +132,7 @@ import { ThreadQuickActions } from "./ThreadQuickActions";
 // One thread row of the sidebar (ThreadRow, PendingRow), its state label and its
 // context menu (ThreadMenuItems), split out of Sidebar.tsx, which lays the rows out.
 
-function ThreadMenuItems({
+export function ThreadMenuItems({
   session,
   Menu,
   Item,

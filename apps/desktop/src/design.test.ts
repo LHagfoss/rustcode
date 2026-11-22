@@ -43,6 +43,7 @@ const SHAPED = /(?<![\w-])rounded-(?:md|lg|full)(?![\w-])/;
  */
 const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/AttentionCards.tsx", "send([o])", "the answers are choice rows"],
+  ["ui/ChatView.tsx", "data-panel-toggle", "the side panel's toggle: its fill marks the panel open"],
   ["ui/Board.tsx", "Unsettle", "a 24px icon button"],
   ["ui/ChatView.tsx", "px-2 font-medium", "the plan pill is a popover trigger"],
   ["ui/ComposerFooter.tsx", "aria-pressed={wt.on}", "a worktree toggle; its fill is its state"],
@@ -69,11 +70,6 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
     "a glyph in the machine icon picker; its fill marks the one chosen",
   ],
   ["ui/ShortcutSettings.tsx", "recording ?", "the keycap button; its fill marks recording"],
-  [
-    "ui/settingsKit.tsx",
-    "enabled:hover:bg-fill enabled:active:bg-fill-strong",
-    "a settings row's Action: one control shape in a card",
-  ],
   ["ui/Settings.tsx", "aria-current={s.id === section", "a settings section row"],
 ];
 

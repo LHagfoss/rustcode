@@ -21,6 +21,9 @@ export const OVERVIEW_SECTIONS = [
   "deliverables",
   "log",
   "details",
+  "changes",
+  "activity",
+  "context",
 ] as const;
 export type OverviewSection = (typeof OVERVIEW_SECTIONS)[number];
 

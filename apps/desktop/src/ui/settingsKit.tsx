@@ -3,16 +3,16 @@
 // controls a row holds, and engine data loaded once the engine is ready.
 //
 // A page is a column of sections. A section is its name in `fg`, then one
-// card: `rounded-xl` on a step of the page's own fill (`bg-surface`), its rows
+// card: `rounded-xl` on a step of the page's own fill (`bg-surface`) with a hairline edge, its rows
 // divided by a hairline. A row is a title, a description, an optional
 // status line and a control at the right; its own container query stacks the
 // control under the text when the window is narrow, whatever the nav takes. A
 // row whose value differs from its default shows a reset button before the
 // control, on hover or keyboard focus.
 //
-// The controls are one shape — 32px high, `rounded-lg`, a step of their own
+// The controls are one height — 28px, a step of their own
 // over the card — so a row of buttons, selects and choices reads as one
-// family, not as pills.
+// family: fields and selects are rounded rectangles, buttons and choices pills.
 //
 // Groups and rows carry `data-setting` with their title, so the panel's search
 // can scroll to the row it found (Settings.tsx) and light it once.
@@ -30,7 +30,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -49,7 +48,7 @@ import {
 } from "../state/pageCache";
 import { connectionFor, request, useApp } from "../state/store";
 import { Check, ChevronDown, Info, RotateCcw } from "./icons";
-import { cx, menuItem, rowInset, Skeleton, Switch, Tooltip } from "./primitives";
+import { cx, menuItem, Pill, rowInset, Segments, Skeleton, Switch, Tooltip } from "./primitives";
 
 /**
  * A section's name, above its card: `text-title3` in `fg`, at the card's own inset. `minor` is a
@@ -161,7 +160,7 @@ export function Group({
         <fieldset
           disabled={disabled}
           className={cx(
-            "rule-rows m-0 min-w-0 overflow-hidden rounded-xl border-0 bg-surface p-0",
+            "rule-rows m-0 min-w-0 overflow-hidden rounded-xl border border-border bg-surface p-0",
             disabled && "opacity-60",
           )}
         >
@@ -371,17 +370,13 @@ export const fieldClass =
   "h-7 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
 
 /**
- * A labelled action in a row: the quiet default (a translucent fill over the
- * card), `prominent` for the one primary action, `danger` for a destructive
- * one, `quiet` for one that rests without a fill (a section header's "Add").
+ * A labelled action in a row: the app's one labelled button (`Pill`), so Settings and the rest of
+ * the app share its shape and fills. Secondary by default, `prominent` for the one primary action,
+ * `danger` for a destructive one, `quiet` only for a text-only action that rests without a fill
+ * (an action with an icon keeps its fill, so it reads as a button).
  */
 export function Action({
-  prominent,
-  danger,
-  quiet,
   size = "md",
-  className,
-  children,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   prominent?: boolean;
@@ -389,26 +384,7 @@ export function Action({
   quiet?: boolean;
   size?: "sm" | "md";
 }) {
-  return (
-    <button
-      type="button"
-      className={cx(
-        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium whitespace-nowrap text-callout disabled:opacity-40",
-        size === "sm" ? "h-6 px-2" : "h-7 px-3",
-        prominent
-          ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
-          : danger
-            ? "bg-danger/12 text-danger enabled:hover:bg-danger/18"
-            : quiet
-              ? "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg"
-              : "bg-fill-subtle text-fg enabled:hover:bg-fill enabled:active:bg-fill-strong",
-        className,
-      )}
-      {...rest}
-    >
-      {children}
-    </button>
-  );
+  return <Pill size={size} {...rest} />;
 }
 
 /** A menu's options arrive as `{ value, label }`; `""` is a real choice here. */
@@ -488,67 +464,16 @@ export function Select({
 }
 
 /**
- * Two to four exclusive choices: a track one step over the card and the picked
- * segment on a step of its own, sliding there rather than jumping.
+ * Two to four exclusive choices: the segmented control (primitives.tsx › Segments) at a row's
+ * height, the picked segment's pill sliding there rather than jumping.
  */
-export function Choice<T extends string>({
-  value,
-  options,
-  onChange,
-  label,
-}: {
+export function Choice<T extends string>(props: {
   value: T;
   options: { value: T; label: string; disabled?: boolean }[];
   onChange: (value: T) => void;
   label: string;
 }) {
-  const group = useRef<HTMLDivElement>(null);
-  const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures when the choice or labels change
-  useLayoutEffect(() => {
-    const el = group.current?.querySelector<HTMLElement>('[aria-checked="true"]');
-    setThumb(el ? { left: el.offsetLeft, width: el.offsetWidth } : null);
-  }, [value, options.map((o) => o.label).join()]);
-  // The pick's label sits on the white pill, so it takes the pill's dark fg. Before the first
-  // measure the button draws the pill itself; a measured pill with no width (a track measured while
-  // hidden) draws none, so its label keeps the track's own fg instead of dark on dark.
-  const selected = thumb
-    ? thumb.width > 0
-      ? "text-knob-fg"
-      : "text-fg"
-    : "bg-knob text-knob-fg shadow-knob";
-  return (
-    <div
-      ref={group}
-      role="radiogroup"
-      aria-label={label}
-      className="relative inline-flex w-fit shrink-0 rounded-full bg-fill p-0.5"
-    >
-      {thumb && (
-        <span
-          aria-hidden
-          className="absolute top-0 left-0 h-6 rounded-full bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
-          style={{ transform: `translate(${thumb.left}px, 2px)`, width: thumb.width }}
-        />
-      )}
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={o.value === value}
-          disabled={o.disabled}
-          onClick={() => onChange(o.value)}
-          className={cx(
-            "relative h-6 rounded-full px-2 font-medium text-caption whitespace-nowrap disabled:opacity-40",
-            o.value === value ? selected : "text-fg-muted hover:text-fg",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <Segments size="md" {...props} />;
 }
 
 /** A row's state at a glance: a short tinted chip (signed in, signed out, active). */
@@ -765,7 +690,7 @@ export function Loading({ error, onRetry }: { error: string | null; onRetry?: ()
     // Where the page's list will be: a group card of rows, title and subtitle each.
     <section className="mb-6" role="status" aria-label="Loading">
       <Skeleton className="mx-3 mb-3 h-3 w-24 sm:mx-4" />
-      <div className="rule-rows overflow-hidden rounded-xl bg-surface">
+      <div className="rule-rows overflow-hidden rounded-xl border border-border bg-surface">
         {[46, 62, 38, 54].map((w, i) => (
           <div key={i} className="flex min-h-12 items-center gap-4 px-4 py-3">
             <div className="flex flex-1 flex-col gap-1.5">

@@ -461,7 +461,7 @@
 21 apps/desktop/src/ui/ChangesPanel.tsx
 5 apps/desktop/src/ui/ChatBackgroundGroup.tsx
 5 apps/desktop/src/ui/ChatLight.tsx
-114 apps/desktop/src/ui/ChatView.tsx
+111 apps/desktop/src/ui/ChatView.tsx
 14 apps/desktop/src/ui/CommandPalette.tsx
 5 apps/desktop/src/ui/Compare.tsx
 222 apps/desktop/src/ui/Composer.tsx
@@ -614,7 +614,7 @@
 9 apps/desktop/src/ui/replyActions.ts
 5 apps/desktop/src/ui/settingsIndex.test.ts
 26 apps/desktop/src/ui/settingsIndex.ts
-35 apps/desktop/src/ui/settingsKit.tsx
+32 apps/desktop/src/ui/settingsKit.tsx
 21 apps/desktop/src/ui/sidebarDrag.tsx
 1 apps/desktop/src/ui/syncRows.test.ts
 4 apps/desktop/src/ui/syncRows.ts

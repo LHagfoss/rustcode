@@ -436,8 +436,8 @@ export function RightPanel() {
         }}
         className={cx(
           CARD_SURFACE,
-          // As tall as what it shows, up to the room the row gives it.
-          "self-start",
+          // The full height of the row, below the header: a floating sidebar, not a card that ends with its content.
+          "self-stretch",
           // Above the header's glass (`z-10`): the header spans the whole view and fades 24px past
           // its foot, which would otherwise wash over the card's top 12px. The card starts below
           // the header's band, so nothing of it covers the header's own controls.
