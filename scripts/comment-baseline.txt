@@ -557,7 +557,7 @@
 9 apps/desktop/src/ui/ScopedHarnesses.tsx
 6 apps/desktop/src/ui/SendLaterDialog.tsx
 5 apps/desktop/src/ui/ServerProblems.tsx
-31 apps/desktop/src/ui/Settings.tsx
+30 apps/desktop/src/ui/Settings.tsx
 12 apps/desktop/src/ui/SettingsAbout.tsx
 7 apps/desktop/src/ui/SettingsAppearance.tsx
 6 apps/desktop/src/ui/SettingsOrchestration.tsx

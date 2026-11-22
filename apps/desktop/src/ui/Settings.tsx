@@ -88,6 +88,7 @@ import {
   TerminalSquare,
   X,
 } from "./icons";
+import { ViewHeader } from "./MainHeader";
 import { RestartToApply } from "./RestartToApply";
 import { AboutPage, AdvancedPage, STATUS_READ_MS } from "./SettingsAbout";
 import { AppearancePage } from "./SettingsAppearance";
@@ -107,7 +108,7 @@ const OutsideAgentsPage = lazy(() =>
 );
 const PermissionsPage = lazy(() => import("./PermissionsPage").then((m) => ({ default: m.PermissionsPage })));
 
-import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
+import { cx, Kbd, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
 import { SchemeWarning } from "./SchemeWarning";
 import { ScopedHarnessList } from "./ScopedHarnesses";
@@ -873,17 +874,14 @@ function ConnectionsPage() {
 // ---------------------------------------------------------------- the panel
 
 /**
- * Settings as a floating panel over the app (docs/design.md › Settings): a
- * nav column with the search field at its top, then one page beside it under
- * the panel's own header (breadcrumb, "Restore defaults", close). The app
- * stays mounted and inert behind a scrim; a press on the scrim, Esc or ⌘, puts
- * you back where you were.
+ * Settings in the app's own frame (docs/design.md › Settings): the sidebar keeps
+ * its title row (the gear there closes Settings) and swaps its thread list for
+ * this section list, and the main column swaps its view for the page. The
+ * thread list and the view stay mounted underneath, hidden and inert, so Esc,
+ * ⌘, or the gear put you back exactly where you were.
  */
-export function Settings() {
+export function SettingsNav() {
   const section = useApp((s) => s.settings) ?? "general";
-  const machine = useApp((s) => s.settingsMachine);
-  const current = PAGES.find((s) => s.id === section) ?? PAGES[0]!;
-  const label = section === "machines" && machine ? "Machine settings" : current.label;
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const field = useRef<HTMLInputElement>(null);
@@ -898,19 +896,13 @@ export function Settings() {
   useEffect(() => {
     if (query.trim()) virtualResults.scrollToIndex(active, { align: "auto" });
   }, [active, query, virtualResults]);
-  // The row to land on, set when a result is picked (here or in ⌘K) and cleared once it is lit.
-  const landing = useApp((s) => s.settingsLanding);
-  // A dot on each page that needs attention: the gear's dot says something does, the nav says
-  // where. The server's warnings are read once when Settings opens, if no page has read them.
+  // A dot on each page that needs attention: the gear's dot says something does, the nav says where.
   const attention = useSettingsAttention();
+  // The list takes focus when Settings opens: keys then land in Settings, never on the
+  // thread they replaced. Not its first control, so no stray ring in the search field.
+  const nav = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (useMachines.getState().server === null) void refreshServerService();
-  }, []);
-  // The panel takes focus when it opens: keys then land inside it, never on the
-  // shell it covers. Not its first control, so no stray ring in the search field.
-  const panel = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    panel.current?.focus({ preventScroll: true });
+    nav.current?.focus({ preventScroll: true });
   }, []);
 
   const clear = () => {
@@ -923,6 +915,170 @@ export function Settings() {
     clear();
     field.current?.blur();
   };
+
+  // "/" puts the cursor in the search field, unless a field already has it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      e.preventDefault();
+      field.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ↑↓ move through the results, ⏎ picks one. The first Esc clears the search and
+  // stops there; with nothing left to clear it closes Settings instead.
+  const onFieldKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!results.length) return;
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActive((i) => (i + step + results.length) % results.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const entry = results[active];
+      if (entry) pick(entry);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (query) clear();
+      else openSettings(null);
+    }
+  };
+
+  return (
+    <nav
+      ref={nav}
+      tabIndex={-1}
+      aria-label="Settings sections"
+      data-focus-area="sections"
+      className="flex h-full min-h-0 flex-col gap-3 px-3 pb-3 outline-none"
+    >
+      <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
+        <Search size={16} className="shrink-0 text-fg-faint" />
+        <input
+          ref={field}
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setActive(0);
+          }}
+          onKeyDown={onFieldKey}
+          placeholder="Search settings"
+          aria-label="Search settings"
+          {...noTextHelpers}
+          className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
+        />
+        {query ? (
+          <button
+            type="button"
+            aria-label="Clear search"
+            onClick={() => {
+              clear();
+              field.current?.focus();
+            }}
+            className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
+          >
+            <X size={12} strokeWidth={2.5} />
+          </button>
+        ) : (
+          <Kbd>/</Kbd>
+        )}
+      </div>
+      <div ref={resultsScroll} className="scroll-stable flex min-h-0 flex-1 flex-col gap-4 pb-1">
+        {query.trim() ? (
+          results.length ? (
+            <div
+              role="listbox"
+              aria-label="Settings results"
+              className="relative shrink-0"
+              style={{ height: virtualResults.getTotalSize() }}
+            >
+              {virtualResults.getVirtualItems().map((item) => {
+                const i = item.index;
+                const r = results[i]!;
+                return (
+                  <button
+                    key={`${r.section}:${r.title}`}
+                    style={{
+                      position: "absolute",
+                      top: item.start,
+                      height: item.size,
+                      width: "100%",
+                    }}
+                    aria-posinset={i + 1}
+                    aria-setsize={results.length}
+                    type="button"
+                    role="option"
+                    aria-selected={i === active}
+                    onMouseMove={() => setActive(i)}
+                    onClick={() => pick(r)}
+                    className={cx(
+                      "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
+                      i === active ? "bg-fill" : "hover:bg-fill",
+                    )}
+                  >
+                    <span className="w-full truncate font-medium text-body">{r.title}</span>
+                    <span className="text-caption text-fg-faint">{pageLabel(r.section)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="px-2 py-1.5 text-caption text-fg-muted">Nothing matches “{query.trim()}”.</p>
+          )
+        ) : (
+          NAV.map((group) => (
+            <div key={group.heading ?? group.pages[0]?.id} className="flex flex-col gap-1">
+              {group.heading && (
+                <div className="px-2 pb-0.5 font-medium text-callout text-fg-muted">{group.heading}</div>
+              )}
+              {group.pages.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-current={s.id === section ? "page" : undefined}
+                  aria-description={attention[s.id]}
+                  onClick={() => openSettings(s.id)}
+                  className={cx(
+                    "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
+                    s.id === section ? "bg-fill text-fg" : "text-fg-muted hover:bg-fill hover:text-fg",
+                  )}
+                >
+                  <s.icon size={16} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                  {attention[s.id] && (
+                    <span
+                      data-testid={`settings-attention-${s.id}`}
+                      title={attention[s.id]}
+                      className="size-1.5 shrink-0 rounded-full bg-warning"
+                    />
+                  )}
+                </button>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+    </nav>
+  );
+}
+
+/** The open Settings page, in the main column in place of the view. */
+export function SettingsPage() {
+  const section = useApp((s) => s.settings) ?? "general";
+  const machine = useApp((s) => s.settingsMachine);
+  const current = PAGES.find((s) => s.id === section) ?? PAGES[0]!;
+  const label = section === "machines" && machine ? "Machine settings" : current.label;
+  // The row to land on, set when a result is picked (in the nav or in ⌘K) and cleared once it is lit.
+  const landing = useApp((s) => s.settingsLanding);
+  // The server's warnings are read once when Settings opens, if no page has read them.
+  useEffect(() => {
+    if (useMachines.getState().server === null) void refreshServerService();
+  }, []);
 
   // The picked row lands: scroll to it once the page is on screen, then light it
   // for a moment. The class comes off in a timer of its own, so the effect can
@@ -947,263 +1103,74 @@ export function Settings() {
     };
   }, [landing, section]);
 
-  // "/" puts the cursor in the search field, unless a field already has it.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      e.preventDefault();
-      field.current?.focus();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // ↑↓ move through the results, ⏎ picks one. The first Esc clears the search and
-  // stops there; with nothing left to clear it closes the panel instead.
-  const onFieldKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      if (!results.length) return;
-      const step = e.key === "ArrowDown" ? 1 : -1;
-      setActive((i) => (i + step + results.length) % results.length);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      const entry = results[active];
-      if (entry) pick(entry);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      if (query) clear();
-      else openSettings(null);
-    }
-  };
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Settings"
-      data-tab-free
-      data-focus-scope
-      className="fixed inset-0 z-30"
-    >
-      {/* The app behind, dimmed; a press on it (not on the panel) closes Settings. */}
-      <div aria-hidden className="absolute inset-0 bg-bg/60" />
-      <div
-        className="absolute inset-0 flex items-center justify-center p-1 sm:p-6 lg:p-10"
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) openSettings(null);
-        }}
-      >
-        <div
-          ref={panel}
-          tabIndex={-1}
-          className="relative flex size-full max-h-[60rem] max-w-[80rem] overflow-hidden rounded-2xl bg-bg shadow-2 outline-none"
-        >
-          <RowResets>
-            <nav
-              aria-label="Settings sections"
-              data-focus-area="sections"
-              className="flex w-60 shrink-0 flex-col gap-3 bg-sidebar px-2 py-3"
-            >
-              <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
-                <Search size={16} className="shrink-0 text-fg-faint" />
-                <input
-                  ref={field}
-                  value={query}
-                  onChange={(e) => {
-                    setQuery(e.target.value);
-                    setActive(0);
-                  }}
-                  onKeyDown={onFieldKey}
-                  placeholder="Search settings"
-                  aria-label="Search settings"
-                  {...noTextHelpers}
-                  className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
-                />
-                {query ? (
-                  <button
-                    type="button"
-                    aria-label="Clear search"
-                    onClick={() => {
-                      clear();
-                      field.current?.focus();
-                    }}
-                    className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
-                  >
-                    <X size={12} strokeWidth={2.5} />
-                  </button>
-                ) : (
-                  <Kbd>/</Kbd>
-                )}
-              </div>
-              <div ref={resultsScroll} className="scroll-stable flex min-h-0 flex-1 flex-col gap-4 pb-1">
-                {query.trim() ? (
-                  results.length ? (
-                    <div
-                      role="listbox"
-                      aria-label="Settings results"
-                      className="relative shrink-0"
-                      style={{ height: virtualResults.getTotalSize() }}
-                    >
-                      {virtualResults.getVirtualItems().map((item) => {
-                        const i = item.index;
-                        const r = results[i]!;
-                        return (
-                          <button
-                            key={`${r.section}:${r.title}`}
-                            style={{
-                              position: "absolute",
-                              top: item.start,
-                              height: item.size,
-                              width: "100%",
-                            }}
-                            aria-posinset={i + 1}
-                            aria-setsize={results.length}
-                            type="button"
-                            role="option"
-                            aria-selected={i === active}
-                            onMouseMove={() => setActive(i)}
-                            onClick={() => pick(r)}
-                            className={cx(
-                              "flex flex-col items-start rounded-md px-2 py-1.5 text-left",
-                              i === active ? "bg-fill" : "hover:bg-fill",
-                            )}
-                          >
-                            <span className="w-full truncate font-medium text-body">{r.title}</span>
-                            <span className="text-caption text-fg-faint">{pageLabel(r.section)}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="px-2 py-1.5 text-caption text-fg-muted">
-                      Nothing matches “{query.trim()}”.
-                    </p>
-                  )
-                ) : (
-                  NAV.map((group) => (
-                    <div key={group.heading ?? group.pages[0]?.id} className="flex flex-col gap-1">
-                      {group.heading && (
-                        <div className="px-2 pb-0.5 font-medium text-callout text-fg-muted">
-                          {group.heading}
-                        </div>
-                      )}
-                      {group.pages.map((s) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          aria-current={s.id === section ? "page" : undefined}
-                          aria-description={attention[s.id]}
-                          onClick={() => openSettings(s.id)}
-                          className={cx(
-                            "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
-                            s.id === section
-                              ? "bg-fill text-fg"
-                              : "text-fg-muted hover:bg-fill hover:text-fg",
-                          )}
-                        >
-                          <s.icon size={16} className="shrink-0" />
-                          <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                          {attention[s.id] && (
-                            <span
-                              data-testid={`settings-attention-${s.id}`}
-                              title={attention[s.id]}
-                              className="size-1.5 shrink-0 rounded-full bg-warning"
-                            />
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  ))
-                )}
-              </div>
-            </nav>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <PanelHeader label={label} />
-              <main aria-label={label} data-focus-area="section" className="scroll-stable min-h-0 flex-1">
-                <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
-                  <Suspense fallback={<Loading error={null} />}>
-                    {section === "general" && <GeneralPage />}
-                    {section === "chat" && <ChatPage />}
-                    {section === "permissions" && <PermissionsPage />}
-                    {section === "agents" && <AgentsPage />}
-                    {section === "orchestration" && <OrchestrationPage />}
-                    {section === "voice" && <VoicePage />}
-                    {section === "connections" && <ConnectionsPage />}
-                    {section === "capabilities" && <CapabilitiesPage />}
-                    {section === "remote" && <RemoteAccessPage />}
-                    {section === "outside" && <OutsideAgentsPage />}
-                    {section === "machines" &&
-                      (machine ? <MachineSettingsPage id={machine} /> : <MachinesPage />)}
-                    {section === "appearance" && <AppearancePage />}
-                    {section === "keyboard" && <ShortcutsPage />}
-                    {section === "usage" && <UsagePage />}
-                    {section === "statistics" && <StatisticsPage />}
-                    {section === "advanced" && <AdvancedPage />}
-                    {section === "diagnostics" && <DiagnosticsPage />}
-                    {section === "about" && <AboutPage />}
-                  </Suspense>
-                </div>
-              </main>
-            </div>
-          </RowResets>
-        </div>
-      </div>
-    </div>
+    <section aria-label="Settings" data-tab-free className="flex min-w-0 flex-1 flex-col bg-bg">
+      <RowResets>
+        <PanelHeader label={label} />
+        <main aria-label={label} data-focus-area="section" className="scroll-stable min-h-0 flex-1">
+          <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
+            <Suspense fallback={<Loading error={null} />}>
+              {section === "general" && <GeneralPage />}
+              {section === "chat" && <ChatPage />}
+              {section === "permissions" && <PermissionsPage />}
+              {section === "agents" && <AgentsPage />}
+              {section === "orchestration" && <OrchestrationPage />}
+              {section === "voice" && <VoicePage />}
+              {section === "connections" && <ConnectionsPage />}
+              {section === "capabilities" && <CapabilitiesPage />}
+              {section === "remote" && <RemoteAccessPage />}
+              {section === "outside" && <OutsideAgentsPage />}
+              {section === "machines" && (machine ? <MachineSettingsPage id={machine} /> : <MachinesPage />)}
+              {section === "appearance" && <AppearancePage />}
+              {section === "keyboard" && <ShortcutsPage />}
+              {section === "usage" && <UsagePage />}
+              {section === "statistics" && <StatisticsPage />}
+              {section === "advanced" && <AdvancedPage />}
+              {section === "diagnostics" && <DiagnosticsPage />}
+              {section === "about" && <AboutPage />}
+            </Suspense>
+          </div>
+        </main>
+      </RowResets>
+    </section>
   );
 }
 
 /**
- * The panel's own header: where you are, then the page's whole-page action and
- * the close button. "Restore defaults" only shows while a row on this page can
- * go back to its default, and puts back everything that changed at once
- * (settingsKit.tsx › RowResets).
+ * The page's header, the main column's own title row: where you are, then the
+ * save status and "Restore defaults", which only shows while a row on this page
+ * can go back to its default and puts back everything that changed at once
+ * (settingsKit.tsx › RowResets). The sidebar's gear closes Settings.
  */
 function PanelHeader({ label }: { label: string }) {
   const save = useSettingsSave();
   const resets = useRowResets();
   return (
-    <header className="rule-b flex h-12 shrink-0 items-center gap-3 ps-4 pe-2">
-      <nav aria-label="Settings breadcrumb" className="min-w-0">
-        <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-body">
-          <li className="shrink-0 font-medium text-fg-muted">Settings</li>
-          <li aria-hidden className="shrink-0 text-fg-faint">
-            /
-          </li>
-          <li aria-current="page" className="min-w-0 truncate font-medium text-fg">
-            {label}
-          </li>
-        </ol>
-      </nav>
-      <div className="ms-auto flex shrink-0 items-center gap-1">
-        <span role="status" className="text-caption text-fg-muted">
-          {save.pending
-            ? "Saving…"
-            : save.error
-              ? `Could not save: ${save.error}`
-              : save.saved
-                ? "Saved"
-                : ""}
-        </span>
-        {resets.count > 0 && (
-          <Action
-            quiet
-            onClick={() => {
-              resets.restore();
-            }}
-          >
-            <RotateCcw size={13} />
-            Restore defaults
-          </Action>
-        )}
-        <ChromeButton label="Close settings" tooltip="Close (Esc)" onClick={() => openSettings(null)}>
-          <X size={16} />
-        </ChromeButton>
-      </div>
-    </header>
+    <ViewHeader
+      title={
+        <nav aria-label="Settings breadcrumb" className="min-w-0">
+          <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 font-medium text-body">
+            <li className="shrink-0 text-fg-muted">Settings</li>
+            <li aria-hidden className="shrink-0 text-fg-faint">
+              /
+            </li>
+            <li aria-current="page" className="min-w-0 truncate text-fg">
+              {label}
+            </li>
+          </ol>
+        </nav>
+      }
+    >
+      <span role="status" className="text-caption text-fg-muted">
+        {save.pending ? "Saving…" : save.error ? `Could not save: ${save.error}` : save.saved ? "Saved" : ""}
+      </span>
+      {resets.count > 0 && (
+        <Action quiet onClick={() => resets.restore()}>
+          <RotateCcw size={13} />
+          Restore defaults
+        </Action>
+      )}
+    </ViewHeader>
   );
 }
 
