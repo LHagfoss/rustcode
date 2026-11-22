@@ -127,7 +127,7 @@ export function ThreadDetails() {
   const added = changes?.files.reduce((sum, f) => sum + f.added, 0) ?? 0;
   const removed = changes?.files.reduce((sum, f) => sum + f.removed, 0) ?? 0;
 
-  const row = "flex min-h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout";
+  const row = "flex min-h-8 w-full items-center gap-2 rounded-lg px-3 text-left font-medium text-callout";
   const action = `${row} hover:bg-fill-subtle`;
   const icon = "shrink-0 text-fg-muted";
 
@@ -186,25 +186,25 @@ export function ThreadDetails() {
         </Section>
       )}
       <Section title="Thread">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-2 py-1 text-callout">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 px-3 font-medium text-callout">
           {stats.map(([label, value]) => (
             <div key={label} className="contents">
-              <dt className="text-fg-muted">{label}</dt>
-              <dd className="min-w-0 truncate text-right tabular">{value}</dd>
+              <dt className="flex min-h-8 items-center text-fg-muted">{label}</dt>
+              <dd className="flex min-h-8 min-w-0 items-center justify-end truncate tabular">{value}</dd>
             </div>
           ))}
         </dl>
       </Section>
       {usage && used !== undefined && (
         <Section title="Context window">
-          <div className="flex min-h-8 items-center gap-2 px-2 text-callout">
+          <div className="flex min-h-8 items-center gap-2 px-3 font-medium text-callout">
             <div
               role="meter"
               aria-label="Context used"
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={used}
-              className="h-1 flex-1 overflow-hidden rounded-full bg-fill"
+              className="h-1.5 flex-1 overflow-hidden rounded-full bg-fill"
             >
               <div className="h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
             </div>
@@ -221,8 +221,8 @@ export function ThreadDetails() {
 /** One titled group of rows; every one after the first starts on a hairline. */
 function Section({ title, first, children }: { title: string; first?: boolean; children: ReactNode }) {
   return (
-    <section className={cx("px-2 pt-2", !first && "rule-t [--rc-rule-inset:1rem] mt-2")}>
-      <h3 className="px-2 pb-1 font-medium text-caption text-fg-faint">{title}</h3>
+    <section className={cx("px-2 pt-1.5 pb-1", !first && "rule-t [--rc-rule-inset:1rem] mt-1.5")}>
+      <h3 className="flex min-h-8 items-center px-3 font-medium text-caption text-fg-muted">{title}</h3>
       {children}
     </section>
   );
