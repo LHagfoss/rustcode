@@ -1,4 +1,3 @@
-
 import type { TurnFold } from "./fold";
 import type { TranscriptItem } from "./thread";
 
