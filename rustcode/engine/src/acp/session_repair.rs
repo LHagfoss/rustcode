@@ -79,8 +79,8 @@ mod tests {
         store.save_session_history(
             id,
             &vec![
-                crate::app::ChatMessage::new("user", "Fix me"),
-                crate::app::ChatMessage::new("assistant", "Fixed"),
+                rustcode_core::ChatMessage::new("user", "Fix me"),
+                rustcode_core::ChatMessage::new("assistant", "Fixed"),
             ],
         );
         rustcode_session::flush_history();

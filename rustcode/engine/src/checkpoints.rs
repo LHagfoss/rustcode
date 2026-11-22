@@ -313,7 +313,7 @@ pub(crate) async fn before_turn(
 
 /// How many user messages of `history` a replay shows: the index the next
 /// prompt's message gets, which `_rustcode/rewind` takes.
-pub(crate) fn next_user_index(history: &[crate::app::ChatMessage]) -> usize {
+pub(crate) fn next_user_index(history: &[rustcode_core::ChatMessage]) -> usize {
     history
         .iter()
         .filter(|message| message.role == "user" && !message.content.is_empty())

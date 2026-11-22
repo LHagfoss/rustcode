@@ -160,8 +160,8 @@
 9 apps/desktop/src/lib/themes.ts
 4 apps/desktop/src/lib/title.test.ts
 1 apps/desktop/src/lib/title.ts
-5 apps/desktop/src/lib/toastDrag.test.ts
-6 apps/desktop/src/lib/toastDrag.ts
+2 apps/desktop/src/lib/toastDrag.test.ts
+5 apps/desktop/src/lib/toastDrag.ts
 5 apps/desktop/src/lib/toolBody.ts
 4 apps/desktop/src/lib/toolOutput.test.ts
 10 apps/desktop/src/lib/toolOutput.ts
@@ -705,6 +705,7 @@
 12 rustcode/core/rustcode-tools/src/lib.rs
 141 rustcode/engine/src/acp.rs
 5 rustcode/engine/src/acp/agents.rs
+8 rustcode/engine/src/acp/builtin_open.rs
 38 rustcode/engine/src/acp/clients.rs
 11 rustcode/engine/src/acp/commands.rs
 7 rustcode/engine/src/acp/config.rs
@@ -730,7 +731,7 @@
 1 rustcode/engine/src/acp/rewind.rs
 3 rustcode/engine/src/acp/scheduled.rs
 1 rustcode/engine/src/acp/session.rs
-70 rustcode/engine/src/acp/session_load.rs
+62 rustcode/engine/src/acp/session_load.rs
 7 rustcode/engine/src/acp/session_move.rs
 2 rustcode/engine/src/acp/session_repair.rs
 2 rustcode/engine/src/acp/session_replay.rs
@@ -791,7 +792,7 @@
 21 rustcode/engine/src/controller/tests.rs
 12 rustcode/engine/src/controller/worker.rs
 7 rustcode/engine/src/daemon/action_tests.rs
-24 rustcode/engine/src/daemon/executor.rs
+22 rustcode/engine/src/daemon/executor.rs
 1 rustcode/engine/src/daemon/hub_run.rs
 12 rustcode/engine/src/daemon/lifecycle.rs
 1 rustcode/engine/src/daemon/mod.rs

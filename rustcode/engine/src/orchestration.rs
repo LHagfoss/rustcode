@@ -20,7 +20,8 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::preview::PreviewClient;
-use crate::tools::{ToolErrorKind, ToolExecutionOutput};
+use rustcode_core::ToolErrorKind;
+use rustcode_tools::ToolExecutionOutput;
 
 pub mod ask_user;
 pub mod local;
@@ -2346,23 +2347,23 @@ mod tests {
         // activity read, v7 the queue control, v8 that native subagents go
         // through RustCode's tools, v9 a delegate's pull request.
 
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V11);
+        let tokens = rustcode_core::tokens::estimate_tokens(PROMPT_HINT_V11);
         println!(
             "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v9 {tokens} tokens",
-            crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
-            crate::network::compaction::estimate_tokens(PROMPT_HINT_V4),
-            crate::network::compaction::estimate_tokens(PROMPT_HINT_V5),
-            crate::network::compaction::estimate_tokens(PROMPT_HINT_V6)
+            rustcode_core::tokens::estimate_tokens(PROMPT_HINT_V3),
+            rustcode_core::tokens::estimate_tokens(PROMPT_HINT_V4),
+            rustcode_core::tokens::estimate_tokens(PROMPT_HINT_V5),
+            rustcode_core::tokens::estimate_tokens(PROMPT_HINT_V6)
         );
         // v9 adds the three delegate pull-request tools, all named with their use,
         // and how an orchestrator keeps its own context small: those few lines
         // save far more than they cost on each request.
         assert!(tokens < 1000, "{tokens}");
         // v12 is the v11 hint plus the machine sentences, still bounded.
-        let v12 = crate::network::compaction::estimate_tokens(PROMPT_HINT_V12);
+        let v12 = rustcode_core::tokens::estimate_tokens(PROMPT_HINT_V12);
         assert!(v12 < 1150, "{v12}");
         // v13 adds the worktree pair, and the seconds each call saves.
-        let v13 = crate::network::compaction::estimate_tokens(PROMPT_HINT_V13);
+        let v13 = rustcode_core::tokens::estimate_tokens(PROMPT_HINT_V13);
         assert!(v13 < 1200, "{v13}");
     }
 
@@ -3417,7 +3418,7 @@ mod tests {
 
     #[test]
     fn the_version_two_hint_stays_short() {
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V2);
+        let tokens = rustcode_core::tokens::estimate_tokens(PROMPT_HINT_V2);
         assert!(tokens < 115, "{tokens}");
         for name in tool_names(2) {
             assert!(PROMPT_HINT_V2.contains(name), "{name}");

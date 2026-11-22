@@ -30,7 +30,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-use crate::tools::{ToolErrorKind, ToolExecutionOutput};
+use rustcode_core::ToolErrorKind;
+use rustcode_tools::ToolExecutionOutput;
 
 pub const PREVIEW_TOOL_NAME: &str = "localhost_preview";
 /// The `clientCapabilities._meta.rustcode.preview` version this engine

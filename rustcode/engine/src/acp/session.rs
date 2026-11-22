@@ -172,8 +172,7 @@ impl Drop for SessionTurnGuard {
 }
 
 pub(crate) struct AcpSession {
-    pub(crate) state: Arc<Mutex<crate::app::AppState>>,
-    /// The agent that runs the thread's prompts, over the same state.
+    /// The agent that runs the thread's prompts.
     pub(crate) agent: Arc<dyn super::builtin::BuiltinAgent>,
     pub(crate) cwd: PathBuf,
     pub(crate) turns: Arc<SessionTurnState>,

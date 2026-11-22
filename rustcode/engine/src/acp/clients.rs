@@ -49,7 +49,7 @@ pub(crate) struct ClientInfo {
     /// The `rustcode-viz` level it renders (`_meta.rustcode.visualizations`).
     pub(crate) visualization_level: u8,
     /// `_meta.rustcode.smartUi` (#2484).
-    pub(crate) smart_ui: crate::app::SmartUi,
+    pub(crate) smart_ui: rustcode_core::SmartUi,
     /// `_meta.rustcode.preview` (#2138): its sessions get `localhost_preview`.
     pub(crate) preview: bool,
     /// It answers desktop control.

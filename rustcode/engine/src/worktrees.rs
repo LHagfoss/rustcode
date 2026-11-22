@@ -3283,8 +3283,8 @@ pub(crate) mod tests {
         store.save_session_history(
             id,
             &vec![
-                crate::app::ChatMessage::new("user", "Run in a worktree"),
-                crate::app::ChatMessage::new("assistant", "Done"),
+                rustcode_core::ChatMessage::new("user", "Run in a worktree"),
+                rustcode_core::ChatMessage::new("assistant", "Done"),
             ],
         );
         rustcode_session::flush_history();

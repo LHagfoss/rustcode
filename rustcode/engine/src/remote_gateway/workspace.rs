@@ -2348,8 +2348,8 @@ mod tests {
             .map(|(title, workspace)| {
                 let id = rustcode_session::next_session_id();
                 let history = vec![
-                    crate::app::ChatMessage::new("user", *title),
-                    crate::app::ChatMessage::new("assistant", "answer"),
+                    rustcode_core::ChatMessage::new("user", *title),
+                    rustcode_core::ChatMessage::new("assistant", "answer"),
                 ];
                 store.save_session_history(&id, &history);
                 store.save_session_title(&id, title);

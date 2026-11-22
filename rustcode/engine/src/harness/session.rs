@@ -1054,7 +1054,7 @@ impl ExternalSession {
         id: String,
         harness: ResolvedHarness,
         record: HarnessRecord,
-        history: Vec<crate::app::ChatMessage>,
+        history: Vec<rustcode_core::ChatMessage>,
         sink: Arc<dyn ClientSink>,
         persist: bool,
     ) -> Arc<Self> {
@@ -1356,7 +1356,7 @@ impl ExternalSession {
 
     /// The transcript recorded so far. A share of this thread starts its
     /// mirror from it, so nothing recorded before the share is missing.
-    pub(crate) fn recorded_history(&self) -> Vec<crate::app::ChatMessage> {
+    pub(crate) fn recorded_history(&self) -> Vec<rustcode_core::ChatMessage> {
         self.transcript
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -1366,7 +1366,7 @@ impl ExternalSession {
 
     /// The transcript recorded so far (tests).
     #[cfg(test)]
-    pub(crate) fn history(&self) -> Vec<crate::app::ChatMessage> {
+    pub(crate) fn history(&self) -> Vec<rustcode_core::ChatMessage> {
         self.transcript
             .lock()
             .unwrap_or_else(|error| error.into_inner())

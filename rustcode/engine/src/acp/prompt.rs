@@ -396,6 +396,70 @@ impl super::builtin::BuiltinAgent for StateAgent {
         })
     }
 
+    fn share<'a>(
+        &'a self,
+        session_id: &'a str,
+        registration: crate::remote::SessionRegistration,
+    ) -> super::builtin::AgentFuture<
+        'a,
+        Option<(
+            Box<dyn super::builtin::BuiltinPublisher>,
+            crate::remote::owner::OwnerMessage,
+        )>,
+    > {
+        Box::pin(super::share::share(&self.state, session_id, registration))
+    }
+
+    fn remote_mutation<'a>(
+        &'a self,
+        cancel_token: &'a mut tokio_util::sync::CancellationToken,
+        registration: &'a crate::remote::SessionRegistration,
+        request: &'a crate::remote::RemoteRequest,
+    ) -> super::builtin::AgentFuture<
+        'a,
+        Result<crate::remote::SessionMutation, crate::remote::RemoteError>,
+    > {
+        Box::pin(super::share::mutate(
+            &self.state,
+            cancel_token,
+            registration,
+            request,
+        ))
+    }
+
+    fn remote_read<'a>(
+        &'a self,
+        registration: &'a crate::remote::SessionRegistration,
+        request: &'a crate::remote::RemoteRequest,
+    ) -> super::builtin::AgentFuture<
+        'a,
+        Result<crate::remote::RemoteResult, crate::remote::RemoteError>,
+    > {
+        Box::pin(super::share::read(&self.state, registration, request))
+    }
+
+    fn remote_changes_workspace<'a>(
+        &'a self,
+        registration: &'a crate::remote::SessionRegistration,
+        request: &'a crate::remote::RemoteRequest,
+    ) -> super::builtin::AgentFuture<'a, Result<std::path::PathBuf, crate::remote::RemoteError>>
+    {
+        Box::pin(super::share::changes_workspace(
+            &self.state,
+            registration,
+            request,
+        ))
+    }
+
+    fn selected_model(&self) -> Option<String> {
+        super::share::selected_model(&self.state)
+    }
+
+    #[cfg(test)]
+    fn test_state(&self) -> Arc<Mutex<crate::app::AppState>> {
+        Arc::clone(&self.state)
+    }
+
     fn last_active(&self) -> Option<String> {
         self.state.try_lock().ok().and_then(|state| {
             state
