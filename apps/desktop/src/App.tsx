@@ -13,7 +13,11 @@ import {
 import { rememberFocus } from "./lib/focusAreas";
 import { matchWindowTheme } from "./lib/material";
 import { applyTheme, resolveTheme } from "./lib/themes";
-import { paintTransparency, setUserReduceTransparency } from "./lib/transparency";
+import {
+  paintBlurAfterAppStylesheet,
+  paintTransparency,
+  setUserReduceTransparency,
+} from "./lib/transparency";
 import { restoreZoom } from "./lib/zoom";
 import { startDeepLinks } from "./state/deepLinks";
 import { sessionsListed } from "./state/engine";
@@ -72,6 +76,7 @@ function useTheme() {
       document.documentElement.dataset.chatWidth = s.chatWidth;
       setUserReduceTransparency(s.reduceTransparency);
       paintTransparency(s.transparency);
+      paintBlurAfterAppStylesheet(s.glassBlur);
     };
     paint();
     media.addEventListener("change", paint);
@@ -84,6 +89,7 @@ function useTheme() {
         s.textSize !== prev.textSize ||
         s.reduceTransparency !== prev.reduceTransparency ||
         s.transparency !== prev.transparency ||
+        s.glassBlur !== prev.glassBlur ||
         s.chatWidth !== prev.chatWidth
       )
         paint();

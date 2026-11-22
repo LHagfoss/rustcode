@@ -90,11 +90,40 @@ export function installReduceTransparency() {
 
 /** Settings › Appearance › Transparency, in percent: how much of the sidebar and the glass shows. */
 export const TRANSPARENCY_MIN = 0;
-export const TRANSPARENCY_MAX = 60;
+export const TRANSPARENCY_MAX = 100;
 
 /** Sets `--rc-transparency` on <html> (index.css), kept to the slider's range. */
 export function paintTransparency(percent: number) {
   if (typeof document === "undefined") return;
   const value = Math.min(TRANSPARENCY_MAX, Math.max(TRANSPARENCY_MIN, Math.round(percent)));
   document.documentElement.style.setProperty("--rc-transparency", `${value}%`);
+}
+
+export const BLUR_MIN = 0;
+export const BLUR_MAX = 40;
+
+const GLASS_SURFACES =
+  ".rc-glass, .rc-glass-faint, .rc-glass-overlay, .rc-composer, .rc-composer-card, .rc-toast, " +
+  ".rc-composer-footer, .rc-scrim, .rc-lightbox-scrim, .elevated, .glass-filter";
+
+export function blurRule(px: number): string {
+  const value = Math.min(BLUR_MAX, Math.max(BLUR_MIN, Math.round(px)));
+  const literalFilterForWebKit = `saturate(1.15) blur(${value}px)`;
+  const rootUnlessSolid =
+    ':root:not(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])';
+  return (
+    `${rootUnlessSolid} :is(${GLASS_SURFACES}), ${rootUnlessSolid} .rc-header-glass::before ` +
+    `{ backdrop-filter: ${literalFilterForWebKit}; -webkit-backdrop-filter: ${literalFilterForWebKit}; }`
+  );
+}
+
+export function paintBlurAfterAppStylesheet(px: number) {
+  if (typeof document === "undefined") return;
+  let style = document.getElementById("rc-glass-blur");
+  if (!style) {
+    style = document.createElement("style");
+    style.id = "rc-glass-blur";
+  }
+  document.head.appendChild(style);
+  style.textContent = blurRule(px);
 }

@@ -11,6 +11,7 @@ import { quietNativeChrome } from "./lib/quietNative";
 import { applyCachedTheme } from "./lib/themes";
 import {
   installReduceTransparency,
+  paintBlurAfterAppStylesheet,
   paintTransparency,
   setSystemReduceTransparency,
   setUserReduceTransparency,
@@ -32,6 +33,7 @@ applyCachedTheme();
 installReduceTransparency();
 setUserReduceTransparency(store.useApp.getState().reduceTransparency);
 paintTransparency(store.useApp.getState().transparency);
+paintBlurAfterAppStylesheet(store.useApp.getState().glassBlur);
 
 // The window's material shows through the sidebar where there is one (macOS; lib/material.ts).
 applyMaterial(platform);
