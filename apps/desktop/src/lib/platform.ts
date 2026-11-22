@@ -48,7 +48,7 @@ export function applyPlatform(): Platform {
   return platform;
 }
 
-/** Whether the platform paints blur at all: Windows and Linux are solid, decorative blur included. */
+/** Whether the platform paints the decorative blurs (the banner's) and the window material: macOS alone. The in-app glass is everywhere (lib/transparency.ts). */
 export function paintsBlur(platform: Platform = appPlatform()): boolean {
   return platform === "mac";
 }

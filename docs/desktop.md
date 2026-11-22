@@ -1089,8 +1089,8 @@ composer's keys stay outside the table.
   through its tint; Settings › Appearance › Transparency sets how much, for
   the sidebar and the glass together. What floats (the
   composer, popovers, menus, tooltips, dialogs, toasts, the lightbox)
-  shares one glass, `--rc-glass-bg` + the shared `glass-filter` on macOS; Windows and Linux paint
-  no blur at all and keep every surface solid (design.md › Platforms). Reduce transparency
+  shares one glass, `--rc-glass-bg` + the shared `glass-filter`, on every platform (Linux goes
+  solid where WebKitGTK does not composite; design.md › Platforms). Reduce transparency
   (Settings › Appearance, the media query, or the system setting read by the shell's
   `reduce_transparency`) makes the glass solid too. Hover is
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard

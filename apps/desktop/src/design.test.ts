@@ -300,15 +300,12 @@ describe("design system", () => {
       expect(start).toBeGreaterThanOrEqual(0);
       return start < 0 ? "" : css.slice(start, css.indexOf("}", start));
     };
-    const reduced = block(
-      css.indexOf(':root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) {'),
-    );
+    const reduced = block(css.indexOf(":root.reduce-transparency {"));
     expect(reduced).toContain("--rc-scrim-bg: var(--rc-bg);");
     expect(reduced).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
     // The solid fallback takes the shared filter away with the translucency: a blur behind an
     // opaque fill is a compositing layer for nothing. The media query covers the first frame,
-    // before lib/transparency.ts has run; the shared rule after it covers the class and the two
-    // platforms that paint no blur at all.
+    // before lib/transparency.ts has run; the shared rule after it covers the class.
     const media = [...css.matchAll(/:root\s+:is\([^)]*\)[^{]*\{([^}]*)\}/g)];
     expect(media).toHaveLength(1);
     for (const rule of media) expect(rule[1]).toContain("backdrop-filter: none;");
@@ -401,10 +398,12 @@ describe("design system", () => {
     }
   });
 
-  test("Windows and Linux paint no blur, and only macOS has a window material", () => {
+  test("Windows and Linux keep the glass, and only macOS has a window material", () => {
     const css = readFileSync(join(SRC, "index.css"), "utf8");
-    // Windows and Linux take the same solid fallback as Reduce transparency, on every frame.
-    const solid = ':root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])';
+    // The solid fallback is Reduce transparency's alone: Windows (WebView2) blurs like macOS, and
+    // Linux turns it on through the class where WebKitGTK does not composite (lib/transparency.ts).
+    const solid = ":root.reduce-transparency";
+    expect(css).not.toMatch(/\[data-platform="(windows|linux)"\][^{]*\{[^}]*backdrop-filter: none/);
     const block = (selector: string) => {
       const start = css.indexOf(selector);
       expect(start).toBeGreaterThanOrEqual(0);
@@ -443,7 +442,7 @@ describe("design system", () => {
     ])
       expect(fallback, surface).toContain(surface);
     expect(css).toContain(`${solid} .rc-header-glass::before {`);
-    // The decorative blurs go too: the streaming reveal, and the banner's own (ui/NewThreadBanner.tsx).
+    // The decorative blurs stay macOS's: the streaming reveal, and the banner's own (ui/NewThreadBanner.tsx).
     expect(block(':root:is([data-platform="windows"], [data-platform="linux"]) .rc-reveal')).toContain(
       "animation-name: rc-fade;",
     );
