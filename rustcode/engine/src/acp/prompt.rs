@@ -328,6 +328,70 @@ impl super::builtin::BuiltinAgent for StateAgent {
     ) -> super::builtin::AgentFuture<'a, Vec<String>> {
         Box::pin(async move { super::steer::end(&mut *self.state.lock().await, session_id) })
     }
+
+    fn steer<'a>(
+        &'a self,
+        text: &'a str,
+        origin: Option<serde_json::Value>,
+    ) -> super::builtin::AgentFuture<'a, serde_json::Value> {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            let answer = super::steer::accept(&mut state, text);
+            if answer.get("accepted").and_then(serde_json::Value::as_bool) == Some(true) {
+                if let Some(steer) = state.pending_steers.last_mut() {
+                    steer.origin = origin;
+                }
+            }
+            answer
+        })
+    }
+
+    fn rewind<'a>(
+        &'a self,
+        user_index: usize,
+        text: &'a str,
+        first_only: bool,
+    ) -> super::builtin::AgentFuture<'a, Result<serde_json::Value, agent_client_protocol::Error>>
+    {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            if first_only && !crate::thread_status::has_only_first_prompt(&state.history) {
+                return Err(agent_client_protocol::Error::invalid_params()
+                    .data("the first message is no longer the entire transcript"));
+            }
+            super::rewind::rewind(&mut state, user_index, text)
+        })
+    }
+
+    fn set_config<'a>(
+        &'a self,
+        config_id: &'a agent_client_protocol::schema::v1::SessionConfigId,
+        value: &'a agent_client_protocol::schema::v1::SessionConfigOptionValue,
+    ) -> super::builtin::AgentFuture<
+        'a,
+        Result<
+            Vec<agent_client_protocol::schema::v1::SessionConfigOption>,
+            agent_client_protocol::Error,
+        >,
+    > {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            let options = super::config::handle_set_config_option(&mut state, config_id, value)?;
+            if matches!(config_id.0.as_ref(), "model" | "effort") {
+                let settings = crate::remote::projection::project_settings(&state);
+                crate::harness::remember_later(
+                    crate::harness::BUILTIN_ID.to_owned(),
+                    Some(settings.selected_model).filter(|model| !model.is_empty()),
+                    Some(settings.reasoning_effort),
+                );
+            }
+            Ok(options)
+        })
+    }
+
+    fn usage_limits(&self) -> super::builtin::AgentFuture<'_, serde_json::Value> {
+        Box::pin(super::usage::limits(&self.state))
+    }
 }
 
 /// Sends a report's answer and ends its prompt.

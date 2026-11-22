@@ -677,6 +677,15 @@ impl AcpServer {
             .is_some_and(|session| !session.is_closed())
     }
 
+    /// An open built-in thread's agent.
+    async fn builtin_agent(&self, session_id: &str) -> Option<Arc<dyn builtin::BuiltinAgent>> {
+        self.sessions
+            .lock()
+            .await
+            .get(session_id)
+            .map(|session| Arc::clone(&session.agent))
+    }
+
     /// An open session's state and working directory.
     async fn session_handle(
         &self,
@@ -1378,20 +1387,12 @@ async fn dispatch_request(
             let server = server.clone();
             let request: rewind::RewindRequest = parse_params(params)?;
 
-            let Some((state, _)) = server.session_handle(&request.session_id).await else {
+            let Some(agent) = server.builtin_agent(&request.session_id).await else {
                 return responder.respond_with_error(unknown_session(&request.session_id));
             };
-            let answer = {
-                let mut state = state.lock().await;
-                if request.first_only
-                    && !crate::thread_status::has_only_first_prompt(&state.history)
-                {
-                    Err(agent_client_protocol::Error::invalid_params()
-                        .data("the first message is no longer the entire transcript"))
-                } else {
-                    rewind::rewind(&mut state, request.user_index, &request.text)
-                }
-            };
+            let answer = agent
+                .rewind(request.user_index, &request.text, request.first_only)
+                .await;
             match answer {
                 Ok(answer) => {
                     // No update says the chat was cut: nobody
@@ -1514,7 +1515,7 @@ async fn dispatch_request(
             let server = server.clone();
             let request: usage::UsageLimitsRequest = parse_params(params)?;
 
-            let Some((state, _)) = server.session_handle(&request.session_id).await else {
+            let Some(agent) = server.builtin_agent(&request.session_id).await else {
                 // A thread on another harness has no engine session: its plan is that
                 // harness's own (the Codex CLI's windows for Codex).
                 let Some(harness) = usage::external_harness(&request.session_id) else {
@@ -1533,7 +1534,7 @@ async fn dispatch_request(
                 });
             };
             connection.spawn(async move {
-                responder.respond(usage::limits(&state).await)?;
+                responder.respond(agent.usage_limits().await)?;
                 Ok(())
             })
         }
@@ -2161,17 +2162,8 @@ async fn dispatch_request(
                     Ok(())
                 });
             }
-            let state = server
-                .sessions
-                .lock()
-                .await
-                .get(&request.session_id)
-                .map(|session| Arc::clone(&session.state));
-            let Some(state) = state else {
-                return responder.respond_with_error(
-                    agent_client_protocol::Error::invalid_params()
-                        .data(format!("unknown ACP session: {}", request.session_id)),
-                );
+            let Some(agent) = server.builtin_agent(&request.session_id).await else {
+                return responder.respond_with_error(unknown_session(&request.session_id));
             };
             // The built-in harness reads a steer as text; one with images waits for the next turn.
             let images = request.prompt.iter().flatten().any(|block| {
@@ -2183,20 +2175,14 @@ async fn dispatch_request(
             if images {
                 return responder.respond(serde_json::json!({ "accepted": false }));
             }
-            let mut state = state.lock().await;
-            let answer = steer::accept(&mut state, &request.text);
-            if answer.get("accepted").and_then(serde_json::Value::as_bool) == Some(true) {
-                if let Some(steer) = state.pending_steers.last_mut() {
-                    steer.origin = request
-                        .meta
-                        .as_ref()
-                        .and_then(|v| v.get("rustcode"))
-                        .and_then(|v| v.get("origin"))
-                        .cloned()
-                        .filter(|v| crate::message_origin::from_meta(v).is_some());
-                }
-            }
-            responder.respond(answer)
+            let origin = request
+                .meta
+                .as_ref()
+                .and_then(|v| v.get("rustcode"))
+                .and_then(|v| v.get("origin"))
+                .cloned()
+                .filter(|v| crate::message_origin::from_meta(v).is_some());
+            responder.respond(agent.steer(&request.text, origin).await)
         }
         // Remote access starts a gateway, waits for a pairing answer and runs
         // launchctl: keep the dispatch loop free while each does.
@@ -3362,28 +3348,10 @@ async fn dispatch_request(
                     Ok(())
                 });
             }
-            let state = server
-                .sessions
-                .lock()
-                .await
-                .get(&session_id)
-                .map(|session| Arc::clone(&session.state));
-            let Some(state) = state else {
-                return Err(agent_client_protocol::Error::invalid_params()
-                    .data(format!("unknown ACP session: {session_id}")));
+            let Some(agent) = server.builtin_agent(&session_id).await else {
+                return Err(unknown_session(&session_id));
             };
-
-            let mut state = state.lock().await;
-            let config_options =
-                handle_set_config_option(&mut state, &request.config_id, &request.value)?;
-            if matches!(request.config_id.0.as_ref(), "model" | "effort") {
-                let settings = crate::remote::projection::project_settings(&state);
-                crate::harness::remember_later(
-                    crate::harness::BUILTIN_ID.to_owned(),
-                    Some(settings.selected_model).filter(|model| !model.is_empty()),
-                    Some(settings.reasoning_effort),
-                );
-            }
+            let config_options = agent.set_config(&request.config_id, &request.value).await?;
             respond_typed(
                 responder,
                 SetSessionConfigOptionResponse::new(config_options),
