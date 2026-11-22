@@ -45,11 +45,9 @@ import {
   update,
 } from "./mockSeeds";
 import {
-  MOCK_CATALOG,
+  catalogReply,
   MOCK_CHARTS,
-  MOCK_CHARTS_SHORTHAND,
   MOCK_DASH,
-  MOCK_DASH_SHORTHAND,
   MOCK_HEADINGS,
   MOCK_KIT,
   MOCK_PROPOSAL,
@@ -66,11 +64,8 @@ import { mockAntigravityPlan, mockSharedPlans, mockUsage } from "./mockUsage";
 import type { HarnessSnapshot } from "./types";
 
 export {
-  MOCK_CATALOG,
   MOCK_CHARTS,
-  MOCK_CHARTS_SHORTHAND,
   MOCK_DASH,
-  MOCK_DASH_SHORTHAND,
   MOCK_HEADINGS,
   MOCK_KIT,
   MOCK_PROPOSAL,
@@ -3239,44 +3234,40 @@ export class MockEngine {
           ],
         });
       }
-      const reply = /\bcatalog dashboard\b/i.test(prompt)
-        ? MOCK_DASH_SHORTHAND
-        : /\bcatalog trend\b/i.test(prompt)
-          ? MOCK_CHARTS_SHORTHAND
-          : /\bcatalog\b/i.test(prompt)
-            ? MOCK_CATALOG
-            : /\bshorthand\b/i.test(prompt)
-              ? MOCK_RECONNECT_SHORTHAND
-              : /\breconnect\b/i.test(prompt)
-                ? MOCK_RECONNECT_HTML
-                : /\breview\b/i.test(prompt)
-                  ? MOCK_REVIEW
-                  : /\bheadings?\b/i.test(prompt)
-                    ? MOCK_HEADINGS
-                    : /\bdashboard\b/i.test(prompt)
-                      ? MOCK_DASH
-                      : /\bkit\b/i.test(prompt)
-                        ? MOCK_KIT
-                        : /\bproposal\b/i.test(prompt)
-                          ? MOCK_PROPOSAL
-                          : /\b(hover|trend|graph)\b/i.test(prompt)
-                            ? MOCK_CHARTS
-                            : /\btable\b/i.test(prompt)
-                              ? MOCK_TABLE
-                              : /\bview\b/i.test(prompt)
-                                ? MOCK_VIEW
-                                : /\bcharts?\b/i.test(prompt)
-                                  ? MOCK_VIZ
-                                  : [
-                                      "Done. ",
-                                      "I updated the greeting in `src/app.ts` ",
-                                      "and the tests pass.\n\n",
-                                      "```ts\n",
-                                      'const greeting = "hello, world";\n',
-                                      "export default greeting;\n",
-                                      "```\n\n",
-                                      "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-                                    ];
+      const reply =
+        catalogReply(prompt) ??
+        (/\bshorthand\b/i.test(prompt)
+          ? MOCK_RECONNECT_SHORTHAND
+          : /\breconnect\b/i.test(prompt)
+            ? MOCK_RECONNECT_HTML
+            : /\breview\b/i.test(prompt)
+              ? MOCK_REVIEW
+              : /\bheadings?\b/i.test(prompt)
+                ? MOCK_HEADINGS
+                : /\bdashboard\b/i.test(prompt)
+                  ? MOCK_DASH
+                  : /\bkit\b/i.test(prompt)
+                    ? MOCK_KIT
+                    : /\bproposal\b/i.test(prompt)
+                      ? MOCK_PROPOSAL
+                      : /\b(hover|trend|graph)\b/i.test(prompt)
+                        ? MOCK_CHARTS
+                        : /\btable\b/i.test(prompt)
+                          ? MOCK_TABLE
+                          : /\bview\b/i.test(prompt)
+                            ? MOCK_VIEW
+                            : /\bcharts?\b/i.test(prompt)
+                              ? MOCK_VIZ
+                              : [
+                                  "Done. ",
+                                  "I updated the greeting in `src/app.ts` ",
+                                  "and the tests pass.\n\n",
+                                  "```ts\n",
+                                  'const greeting = "hello, world";\n',
+                                  "export default greeting;\n",
+                                  "```\n\n",
+                                  "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+                                ]);
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();

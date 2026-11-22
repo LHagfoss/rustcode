@@ -178,7 +178,7 @@ describe("smart ui", () => {
 
   test("shorthand with no fence is a view; unknown names stay text", () => {
     expect(splitReply("Intro\n:: stats\n- 3 | Runs").map((p) => p.kind)).toEqual(["markdown", "ui"]);
-    expect(splitReply(":: chart x\n- a").map((p) => p.kind)).toEqual(["markdown"]);
+    expect(splitReply(":: gauge x\n- a").map((p) => p.kind)).toEqual(["markdown"]);
     expect(splitReply(":: stats\n- 3 | Runs", false)).toEqual([
       { kind: "ui", source: ":: stats\n- 3 | Runs", complete: false, index: 0 },
     ]);

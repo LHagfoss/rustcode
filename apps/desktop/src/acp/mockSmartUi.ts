@@ -448,3 +448,13 @@ export const MOCK_CATALOG = [
   "- check page | Page on-call if p95 rises\n",
   "```\n",
 ];
+
+/** The catalog replies by prompt: "catalog dashboard", "catalog trend", or any other "catalog". */
+export const catalogReply = (prompt: string): string[] | undefined =>
+  /\bcatalog dashboard\b/i.test(prompt)
+    ? MOCK_DASH_SHORTHAND
+    : /\bcatalog trend\b/i.test(prompt)
+      ? MOCK_CHARTS_SHORTHAND
+      : /\bcatalog\b/i.test(prompt)
+        ? MOCK_CATALOG
+        : undefined;
