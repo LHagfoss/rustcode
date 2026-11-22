@@ -1,3 +1,19 @@
+## [v1.48.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.48.0) - 2026-11-22
+
+### Features
+- The project picker spaces its rows like the machine picker. (#4195)
+- Machines settings: tidier map, Hide for machines known through another, clearer hub explanation. (#4196)
+- Opened sections in the chat ("Worked for", tool groups, tool calls, thoughts) keep their header pinned while you scroll through them. (#4198)
+- Screenshots in replies fill the reply's width with rounded corners, and agents show a screenshot when asked to see something. (#4197)
+- Smart UI views now draw shorthand blocks written after the view's fence, and stats written without the kit's classes stack value and label properly. (#4194)
+- Threads running on another computer can now be renamed, by their agent and from the sidebar. (#4199)
+- Settings › Usage merges the same Antigravity install across machines and no longer swaps live numbers for a paired machine's older ones. (#4200)
+- Codex, OpenCode, Gemini, Pi and other non-Claude harnesses send about 6,500 fewer tokens per request: RustCode's thread tools are found on demand instead of being listed up front. (#4202)
+- The composer is a shade lighter, so it stands out from the chat behind it. (#4205)
+- A machine reached through your own `ssh -L` now switches to an SSH tunnel RustCode manages the first time that tunnel dies after a sleep, so it reconnects within seconds after later wakes. (#4204)
+- Smart UI gets a component catalog: agents build views from blocks such as charts, progress, key-value rows, timelines, comparisons, heatmaps, tabs and forms, so views look consistent and arrive faster. (#4203)
+- Toasts show Undo and Open as a tinted button with an icon, stack without the text behind showing through, and no longer draw a timer line. (#4201)
+- Appearance: Transparency now goes up to 100%, and a new Blur slider sets how strongly the glass blurs. (#4206)
 ## [v1.47.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.47.0) - 2026-11-22
 
 ### Features
