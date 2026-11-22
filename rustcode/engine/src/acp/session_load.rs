@@ -570,7 +570,6 @@ pub(super) async fn create_builtin_session(
         session_id.clone(),
         AcpSession {
             agent,
-            state: Arc::clone(&state),
             cwd,
             turns: Arc::new(SessionTurnState::new()),
             task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
@@ -705,7 +704,6 @@ pub(super) async fn acp_load_session(
             session_id.clone(),
             AcpSession {
                 agent,
-                state,
                 cwd: cwd.clone(),
                 turns: Arc::new(SessionTurnState::new()),
                 task_events: Arc::new(std::sync::Mutex::new(task_receiver)),

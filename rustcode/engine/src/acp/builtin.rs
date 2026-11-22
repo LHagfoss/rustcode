@@ -150,6 +150,53 @@ pub(crate) trait BuiltinAgent: Send + Sync {
     /// Whether a queued prompt waits and no turn is running.
     fn has_queued_work(&self) -> AgentFuture<'_, bool>;
 
+    /// Start sharing `session_id` with the remote gateway under
+    /// `registration`: the publisher and the message that opens the link.
+    /// `None` when the thread no longer shows that session.
+    fn share<'a>(
+        &'a self,
+        session_id: &'a str,
+        registration: crate::remote::SessionRegistration,
+    ) -> AgentFuture<
+        'a,
+        Option<(
+            Box<dyn BuiltinPublisher>,
+            crate::remote::owner::OwnerMessage,
+        )>,
+    >;
+
+    /// Apply a device's mutation (prompt, cancel, answer, settings) to the
+    /// shared thread.
+    fn remote_mutation<'a>(
+        &'a self,
+        cancel_token: &'a mut tokio_util::sync::CancellationToken,
+        registration: &'a crate::remote::SessionRegistration,
+        request: &'a crate::remote::RemoteRequest,
+    ) -> AgentFuture<'a, Result<crate::remote::SessionMutation, crate::remote::RemoteError>>;
+
+    /// Answer a device's read of the shared thread.
+    fn remote_read<'a>(
+        &'a self,
+        registration: &'a crate::remote::SessionRegistration,
+        request: &'a crate::remote::RemoteRequest,
+    ) -> AgentFuture<'a, Result<crate::remote::RemoteResult, crate::remote::RemoteError>>;
+
+    /// The workspace a device's `get_changes` reads, checked like any read.
+    fn remote_changes_workspace<'a>(
+        &'a self,
+        registration: &'a crate::remote::SessionRegistration,
+        request: &'a crate::remote::RemoteRequest,
+    ) -> AgentFuture<'a, Result<PathBuf, crate::remote::RemoteError>>;
+
+    /// The thread's model, read without waiting: `None` while a turn holds
+    /// the thread.
+    fn selected_model(&self) -> Option<String>;
+
+    /// The thread's state, for the agent tests that still live in the
+    /// engine until the agent gets its own crate.
+    #[cfg(test)]
+    fn test_state(&self) -> Arc<tokio::sync::Mutex<crate::app::AppState>>;
+
     /// The thread's transcript.
     fn history(&self) -> AgentFuture<'_, rustcode_core::History>;
 
@@ -163,4 +210,30 @@ pub(crate) struct AttachSnapshot {
     pub(crate) compaction: Option<crate::app::CompactionStats>,
     pub(crate) config_options: Vec<SessionConfigOption>,
     pub(crate) usage: agent_client_protocol::schema::v1::SessionUpdate,
+}
+
+/// Publishes a shared built-in thread to the remote gateway.
+pub(crate) trait BuiltinPublisher: Send {
+    /// Note an agent event the thread has applied.
+    fn observe(&mut self, event: &crate::controller::AgentUiEvent);
+
+    /// Send a full snapshot on the next publish.
+    fn request_snapshot(&mut self);
+
+    /// Drop events until the next resync snapshot: the link fell behind.
+    fn mark_lagging(&mut self);
+
+    /// Sequence of the last event published.
+    fn sequence(&self) -> u64;
+
+    /// What changed since the last publish. `None` when the thread no longer
+    /// shows the shared session.
+    fn publish(&mut self, room_for_resync: bool) -> AgentFuture<'_, Option<Published>>;
+}
+
+/// One publish pass of a shared built-in thread.
+pub(crate) struct Published {
+    pub(crate) messages: Vec<crate::remote::owner::OwnerMessage>,
+    /// A prompt is queued and no turn runs, so the turn loop should start.
+    pub(crate) queued_while_idle: bool,
 }

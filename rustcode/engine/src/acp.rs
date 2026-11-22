@@ -36,6 +36,7 @@ mod session_repair;
 mod session_replay;
 mod session_transfer;
 pub(crate) mod settings;
+mod share;
 pub(crate) mod steer;
 mod stop;
 mod streaming;
