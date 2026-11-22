@@ -441,22 +441,20 @@ describe("mergeUsagePlans", () => {
         { label: "Weekly", usedPercent: 40, minutes: 10_080, resetsAt: RESET_WK },
       ],
     });
-    // The VPS answers from its own cache: the window before this one, already reset.
-    const stale = plan({
+    const alreadyReset = plan({
       windows: [
         { label: "5-hour", usedPercent: 61, minutes: 300, resetsAt: NOW - 3_600_000 },
         { label: "Weekly", usedPercent: 27, minutes: 10_080, resetsAt: RESET_WK },
       ],
     });
-    // Same window, older read: less used.
-    const behind = plan({
+    const lessUsedSameWindow = plan({
       windows: [
         { label: "5-hour", usedPercent: 80, minutes: 300, resetsAt: RESET_5H },
         { label: "Weekly", usedPercent: 38, minutes: 10_080, resetsAt: RESET_WK },
       ],
     });
 
-    for (const remote of [stale, behind]) {
+    for (const remote of [alreadyReset, lessUsedSameWindow]) {
       const merged = mergeUsagePlans(
         [
           { host: "", machine: "This computer", plans: [local], readAt: NOW - 120_000 },
