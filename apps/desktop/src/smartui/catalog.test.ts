@@ -163,6 +163,16 @@ describe("shorthand catalog", () => {
     expect(out).toContain('min="0" max="100" value="40" data-rc-out><output class="rc-num">40</output>');
     expect(out).toContain('type="text" name="q" placeholder="name"');
     expect(out).toContain("<button data-primary>Apply</button></div></form>");
+    expect(out).toContain('<div class="rc-choice">');
+  });
+
+  test("a choice with long options is a list and keeps commas inside parentheses", () => {
+    const out = expandShorthand(
+      ":: form Go | Start\n- choice who | Who | *delegate waves (faster, more usage), only this thread (the default)",
+    );
+    expect(out).toContain('<div class="rc-choice rc-choice-list">');
+    expect(out).toContain('value="delegate waves (faster, more usage)" checked>');
+    expect(out).toContain('value="only this thread (the default)">');
   });
 
   test("details fold a list or a paragraph", () => {

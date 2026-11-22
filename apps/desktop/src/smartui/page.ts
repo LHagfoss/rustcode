@@ -474,26 +474,47 @@ pre.rc-term { white-space: pre-wrap; }
 .rc-legend > li > span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin: 0 7px 0 0; border-radius: 50%;
   background: var(--rc-tint); }
 .rc-legend > li > b { font-weight: 500; font-variant-numeric: tabular-nums; }
-.rc-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 16px; align-items: start; }
-.rc-form > .rc-row { grid-column: 1 / -1; }
-.rc-field { display: grid; gap: 4px; min-width: 0; }
-.rc-field > span:first-child { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
+.rc-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px 20px; align-items: start; }
+.rc-form > .rc-row { grid-column: 1 / -1; padding-top: 2px; }
+.rc-field { display: grid; gap: 6px; min-width: 0; }
+.rc-field > span:first-child { font-size: var(--rc-text-size-xs); font-weight: 500; line-height: 1.45; color: var(--rc-muted); }
 .rc-field > :is(input:not([type=checkbox], [type=radio]), select) { width: 100%; min-width: 0; }
-.rc-field.rc-check { display: flex; align-items: center; gap: 8px; min-height: 28px; cursor: pointer; }
-.rc-field.rc-check > input { flex: none; margin: 0; }
-.rc-field.rc-check > span { font-size: var(--rc-text-size); color: var(--rc-text); }
+.rc-field.rc-check { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.rc-form > .rc-check + .rc-check { margin-top: -6px; }
+.rc-field.rc-check > span { font-size: var(--rc-text-size); line-height: 1.45; color: var(--rc-text); }
+.rc-check > input, .rc-choice-list input { appearance: none; flex: none; display: grid; place-content: center; width: 16px; height: 16px;
+  margin: 2px 0 0; padding: 0; border: 1.5px solid color-mix(in srgb, var(--rc-text) 35%, transparent); background: transparent; }
+.rc-check > input { border-radius: 4px; }
+.rc-check > input::after { content: ""; width: 4px; height: 8px; margin-top: -2px; border: solid var(--rc-accent-text);
+  border-width: 0 2px 2px 0; transform: rotate(45deg) scale(0); transition: transform 90ms ease-out; }
+.rc-check > input:checked { background: var(--rc-accent); border-color: var(--rc-accent); }
+.rc-check > input:checked::after { transform: rotate(45deg) scale(1); }
+.rc-check:hover > input:not(:checked), .rc-choice-list label:hover input:not(:checked) { border-color: color-mix(in srgb, var(--rc-text) 60%, transparent); }
 .rc-range { display: flex; align-items: center; gap: 8px; }
 .rc-range > input { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; }
 .rc-range > output { min-width: 3ch; text-align: right; font-size: var(--rc-text-size-sm); }
 .rc-choice { display: inline-flex; flex-wrap: wrap; width: fit-content; max-width: 100%; gap: 2px; padding: 2px;
   background: var(--rc-surface); border-radius: var(--rc-radius-sm); }
 .rc-choice > label { position: relative; cursor: pointer; }
-.rc-choice input { position: absolute; opacity: 0; pointer-events: none; }
-.rc-choice span { display: block; padding: 1px 10px; font-size: var(--rc-text-size-sm); line-height: 20px; color: var(--rc-muted);
-  border-radius: var(--rc-radius-xs); }
-.rc-choice label:hover span { color: var(--rc-text); }
-.rc-choice input:checked + span { color: var(--rc-text); background: var(--rc-bg); }
+.rc-choice:not(.rc-choice-list) input { position: absolute; opacity: 0; pointer-events: none; }
+.rc-choice:not(.rc-choice-list) span { display: block; padding: 2px 12px; font-size: var(--rc-text-size-sm); line-height: 22px; color: var(--rc-muted);
+  white-space: nowrap; border-radius: var(--rc-radius-xs); transition: background-color 90ms ease-out, color 90ms ease-out; }
+.rc-choice:not(.rc-choice-list) label:hover span { color: var(--rc-text); }
+.rc-choice:not(.rc-choice-list) input:checked + span { color: var(--rc-text); background: var(--rc-bg);
+  box-shadow: 0 1px 2px color-mix(in srgb, black 25%, transparent); }
 :root[data-keyboard-nav] .rc-choice input:focus-visible + span { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); }
+.rc-choice-list { display: grid; width: 100%; gap: 0; padding: 3px; }
+.rc-choice-list > label { display: flex; align-items: flex-start; gap: 10px; padding: 6px 9px; border-radius: var(--rc-radius-xs); }
+.rc-choice-list > label:hover { background: color-mix(in srgb, var(--rc-text) 5%, transparent); }
+.rc-choice-list > label:has(input:checked) { background: color-mix(in srgb, var(--rc-text) 8%, transparent); }
+.rc-choice-list input { border-radius: 50%; }
+.rc-choice-list input::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--rc-accent-text);
+  transform: scale(0); transition: transform 90ms ease-out; }
+.rc-choice-list input:checked { background: var(--rc-accent); border-color: var(--rc-accent); }
+.rc-choice-list input:checked::after { transform: scale(1); }
+.rc-choice-list span { font-size: var(--rc-text-size-sm); line-height: 20px; color: var(--rc-muted); }
+.rc-choice-list input:checked + span { color: var(--rc-text); }
+:root[data-keyboard-nav] .rc-choice-list input:focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
 pre[data-lang] { position: relative; }
 pre[data-lang]::before { content: attr(data-lang); position: absolute; top: 6px; right: 10px; font: var(--rc-text-size-xs)/1 var(--rc-font);
   color: var(--rc-faint); }

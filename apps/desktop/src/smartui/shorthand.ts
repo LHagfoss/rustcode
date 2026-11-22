@@ -611,6 +611,18 @@ function details(block: Block): string {
   return `<details class="rc-details"><summary><span>${inline(summary || "Details")}</span>${asideHtml}</summary>${text}${items}</details>`;
 }
 
+/** Option separators: `|`, or a comma outside parentheses and brackets, so `waves (faster, more usage)` stays one option. */
+function splitOptions(extra: string): string {
+  let depth = 0;
+  let out = "";
+  for (const char of extra) {
+    if (char === "(" || char === "[") depth++;
+    else if ((char === ")" || char === "]") && depth > 0) depth--;
+    out += char === "," && depth === 0 ? "|" : char;
+  }
+  return out;
+}
+
 const FIELD_KINDS = new Set(["text", "number", "date", "select", "choice", "check", "range"]);
 let fieldIds = 0;
 
@@ -623,7 +635,7 @@ function field(item: string): string {
   const label = inline(labelCell || name);
   const attrName = escapeAttr(name);
   const id = `rc-f${++fieldIds}`;
-  const options = cells(extra.replace(/,/g, "|")).filter(Boolean);
+  const options = cells(splitOptions(extra)).filter(Boolean);
   const chosen = (option: string) => /^\*/.test(option);
   const bare = (option: string) => option.replace(/^\*/, "").trim();
   const preset = options.findIndex(chosen);
@@ -645,7 +657,11 @@ function field(item: string): string {
             `<label><input type="radio" name="${attrName}" value="${escapeAttr(bare(option))}"${i === Math.max(0, preset) ? " checked" : ""}><span>${escapeHtml(bare(option))}</span></label>`,
         )
         .join("");
-      return `<div class="rc-field" role="radiogroup" aria-label="${escapeAttr(plain(labelCell || name))}"><span>${label}</span><div class="rc-choice">${opts}</div></div>`;
+      const words = options.map((option) => plain(bare(option)).length);
+      const fitsOnOneSegmentedRow =
+        options.length <= 4 && Math.max(0, ...words) <= 16 && words.reduce((a, b) => a + b, 0) <= 40;
+      const variant = fitsOnOneSegmentedRow ? "rc-choice" : "rc-choice rc-choice-list";
+      return `<div class="rc-field" role="radiogroup" aria-label="${escapeAttr(plain(labelCell || name))}"><span>${label}</span><div class="${variant}">${opts}</div></div>`;
     }
     case "check":
       return `<label class="rc-field rc-check"><input type="checkbox" name="${attrName}"${/^(on|yes|true|checked)$/i.test(extra.trim()) ? " checked" : ""}><span>${label}</span></label>`;

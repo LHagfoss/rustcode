@@ -449,12 +449,29 @@ export const MOCK_CATALOG = [
   "```\n",
 ];
 
-/** The catalog replies by prompt: "catalog dashboard", "catalog trend", or any other "catalog". */
+/** A question form with long options, as an agent asks before a large batch. */
+export const MOCK_FORM = [
+  "Before I change code for a batch this size, I need these answers.\n\n",
+  "```rustcode-ui v1\n",
+  ":: form Go with these answers | Start\n",
+  "- choice merge | After CI is green | merge each PR myself, *open PRs and you merge, merge and cut a beta after each step\n",
+  "- choice who | Who does the work | *delegate waves (faster, more usage), only this thread (AGENTS.md default)\n",
+  "- choice agent | Built-in agent (2 of 3,600 turns) | *move to its own crate, delete it\n",
+  "- choice phone | Phone on ACP | *in scope, I have rustcode-mobile checked out, skip for now\n",
+  "- select region | Region | Europe, *North America, Asia Pacific\n",
+  "- check branches | Delete merged remote branches (~990) and the 4 stale worktrees\n",
+  "- check slots | Delete build slots under ~/.config/rustcode/build (74 GB)\n",
+  "```\n",
+];
+
+/** The catalog replies by prompt: "catalog dashboard", "catalog trend", "catalog form", or any other "catalog". */
 export const catalogReply = (prompt: string): string[] | undefined =>
   /\bcatalog dashboard\b/i.test(prompt)
     ? MOCK_DASH_SHORTHAND
-    : /\bcatalog trend\b/i.test(prompt)
-      ? MOCK_CHARTS_SHORTHAND
-      : /\bcatalog\b/i.test(prompt)
-        ? MOCK_CATALOG
-        : undefined;
+    : /\bcatalog form\b/i.test(prompt)
+      ? MOCK_FORM
+      : /\bcatalog trend\b/i.test(prompt)
+        ? MOCK_CHARTS_SHORTHAND
+        : /\bcatalog\b/i.test(prompt)
+          ? MOCK_CATALOG
+          : undefined;
