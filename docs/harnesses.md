@@ -139,11 +139,11 @@ latter, and groups those apart. Detection is cached for a minute; `set` and
 | id | kind | command | version from | auth from |
 | --- | --- | --- | --- | --- |
 | `codex` | `codex` | `codex app-server` | `codex --version` | `codex login status` |
-| `claude-code` | `acp` | `npx -y @agentclientprotocol/claude-agent-acp` | `claude --version` | `claude auth status --json` |
+| `claude-code` | `acp` | `npx --prefer-offline -y @agentclientprotocol/claude-agent-acp@0.109.1` | `claude --version` | `claude auth status --json` |
 | `gemini` | `acp` | `gemini --experimental-acp` | `gemini --version` | `unknown` |
 | `opencode` | `acp` | `opencode acp` | `opencode --version` | `unknown` |
 | `cursor` | `acp` | `agent acp` | `agent --version` | `unknown` |
-| `pi` | `acp` | `npx -y pi-acp` (pi's RPC mode adapted to ACP) | `pi --version` | `unknown` |
+| `pi` | `acp` | `npx --prefer-offline -y pi-acp@0.0.35` (pi's RPC mode adapted to ACP) | `pi --version` | `unknown` |
 | `perch` | `acp` | `perch acp` | `perch status` | `perch status` (`Not signed in.` is signed out) |
 | `antigravity` | `acp` | `agy acp` | `agy --version` | `unknown` |
 

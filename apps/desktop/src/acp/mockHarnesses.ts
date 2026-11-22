@@ -192,7 +192,7 @@ export function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         builtin: false,
         known: true,
         enabled: false,
-        command: ["npx", "-y", "pi-acp"],
+        command: ["npx", "--prefer-offline", "-y", "pi-acp@0.0.35"],
         installed: false,
         auth: "unknown",
         login_command: ["pi"],
