@@ -1,7 +1,7 @@
 use super::memory::compact_with_structured_memory;
 use super::prune::{DEFAULT_PRUNE_TOKEN_THRESHOLD, KEEP_RECENT_TURNS, prune_floor};
-use super::tokens::estimate_message_tokens;
 use crate::app::{ChatMessage, CompactionBoundary, CompactionEntry, TokenUsage};
+use rustcode_core::tokens::estimate_message_tokens;
 use std::future::Future;
 use std::time::Duration;
 

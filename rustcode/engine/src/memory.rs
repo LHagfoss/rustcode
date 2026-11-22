@@ -67,7 +67,7 @@ pub fn scope_root(task: Option<PathBuf>, workspace: Option<PathBuf>) -> Option<P
 pub(crate) fn tool_scope_root() -> Option<PathBuf> {
     scope_root(
         crate::tools::active_task_working_directory(),
-        crate::tools::active_workspace_root(),
+        rustcode_tools::active_workspace_root(),
     )
 }
 

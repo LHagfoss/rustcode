@@ -13,6 +13,7 @@ pub mod input;
 pub mod mcp_app;
 pub mod paste;
 pub mod status;
+pub mod tokens;
 pub mod update;
 
 fn current_timestamp() -> String {

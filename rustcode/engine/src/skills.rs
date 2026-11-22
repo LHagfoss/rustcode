@@ -155,7 +155,7 @@ fn current_root_inputs() -> SkillRootInputs {
     SkillRootInputs {
         // Prefer the explicit workspace the tool call is running against; fall
         // back to the process CWD when no session has established one.
-        workspace: crate::tools::active_workspace_root().or_else(|| std::env::current_dir().ok()),
+        workspace: rustcode_tools::active_workspace_root().or_else(|| std::env::current_dir().ok()),
         config_dir,
         home: crate::home::home_dir(),
         extra_dirs,
@@ -822,7 +822,9 @@ pub fn relevant_skills_hint(
 /// Return the names successfully loaded after the latest explicit user prompt.
 /// Keeping this boundary local avoids suppressing routing for a new request
 /// merely because an earlier request used the same skill.
-pub(crate) fn loaded_skills_since_latest_user(history: &[crate::app::ChatMessage]) -> Vec<String> {
+pub(crate) fn loaded_skills_since_latest_user(
+    history: &[rustcode_core::ChatMessage],
+) -> Vec<String> {
     let Some(latest_user) = history.iter().rposition(|message| message.role == "user") else {
         return Vec::new();
     };
@@ -833,7 +835,7 @@ pub(crate) fn loaded_skills_since_latest_user(history: &[crate::app::ChatMessage
 /// in the active or the previous user turn. Those two turns are always sent,
 /// even when request scoping drops older tool results, and compaction removes
 /// a load from history altogether, so an older load is not counted (#1970).
-pub(crate) fn loaded_skills_in_context(history: &[crate::app::ChatMessage]) -> Vec<String> {
+pub(crate) fn loaded_skills_in_context(history: &[rustcode_core::ChatMessage]) -> Vec<String> {
     let mut users = history
         .iter()
         .enumerate()
@@ -846,7 +848,7 @@ pub(crate) fn loaded_skills_in_context(history: &[crate::app::ChatMessage]) -> V
     loaded_skills_in(&history[start + 1..])
 }
 
-fn loaded_skills_in(messages: &[crate::app::ChatMessage]) -> Vec<String> {
+fn loaded_skills_in(messages: &[rustcode_core::ChatMessage]) -> Vec<String> {
     messages
         .iter()
         .filter_map(|message| {
@@ -1147,7 +1149,7 @@ mod tests {
             .unwrap();
         assert_eq!(themes.path, builtin_skill_path("rustcode-themes"));
         let content = builtin_skill_content("rustcode-themes").unwrap();
-        let tokens = crate::network::compaction::estimate_tokens(&content);
+        let tokens = rustcode_core::tokens::estimate_tokens(&content);
         assert!(tokens < 950, "the rustcode-themes skill is {tokens} tokens");
         // Every desktop token and CLI command is named.
         for (token, _) in crate::themes::TOKENS {
@@ -1167,7 +1169,7 @@ mod tests {
             .unwrap();
         assert_eq!(create.path, builtin_skill_path("create-skill"));
         let content = builtin_skill_content("create-skill").unwrap();
-        let tokens = crate::network::compaction::estimate_tokens(&content);
+        let tokens = rustcode_core::tokens::estimate_tokens(&content);
         assert!(tokens < 800, "the create-skill skill is {tokens} tokens");
         for name in [
             "~/.config/rustcode/skills",
@@ -1192,7 +1194,7 @@ mod tests {
         let content = builtin_skill_content("smart-ui").unwrap();
         assert!(content.contains("```rustcode-ui v1"));
         assert!(content.len() < MAX_SKILL_CONTENT_BYTES);
-        let tokens = crate::network::compaction::estimate_tokens(&content);
+        let tokens = rustcode_core::tokens::estimate_tokens(&content);
         // 2,188 tokens: the theme section (every variable, and no colour or
         // font of one's own), the one-rhythm rule, `data-size`, and one
         // canonical example per intent cost about 640 over the 1,552 it was
@@ -2053,11 +2055,11 @@ mod tests {
     #[test]
     fn successful_load_only_suppresses_the_current_user_turn() {
         let loaded = |name: &str| {
-            crate::app::ChatMessage::new(
+            rustcode_core::ChatMessage::new(
                 "tool",
                 format!("use_skill: <skill_content name=\"{name}\">\ninstructions"),
             )
-            .with_tool_result(crate::app::ToolResultRecord {
+            .with_tool_result(rustcode_core::ToolResultRecord {
                 workspace_generation: None,
                 workspace_epoch: None,
                 evidence_hash: None,
@@ -2067,9 +2069,9 @@ mod tests {
             })
         };
         let history = vec![
-            crate::app::ChatMessage::new("user", "old request"),
+            rustcode_core::ChatMessage::new("user", "old request"),
             loaded("solidtime"),
-            crate::app::ChatMessage::new("user", "new request: use solidtime"),
+            rustcode_core::ChatMessage::new("user", "new request: use solidtime"),
         ];
         let skills = [test_metadata("solidtime", "Solidtime workflow")];
 
@@ -2083,26 +2085,26 @@ mod tests {
     #[test]
     fn a_load_from_the_previous_turn_is_still_in_context() {
         let loaded = |name: &str| {
-            crate::app::ChatMessage::new(
+            rustcode_core::ChatMessage::new(
                 "tool",
                 format!("use_skill: <skill_content name=\"{name}\">\ninstructions"),
             )
-            .with_tool_result(crate::app::ToolResultRecord {
+            .with_tool_result(rustcode_core::ToolResultRecord {
                 tool_name: "use_skill".to_string(),
                 success: true,
                 ..Default::default()
             })
         };
         let mut history = vec![
-            crate::app::ChatMessage::new("user", "log my hours"),
+            rustcode_core::ChatMessage::new("user", "log my hours"),
             loaded("worklog"),
-            crate::app::ChatMessage::new("user", "now check the active timer"),
+            rustcode_core::ChatMessage::new("user", "now check the active timer"),
         ];
         assert_eq!(loaded_skills_in_context(&history), vec!["worklog"]);
 
         // Two user turns later the old tool result may be dropped from the
         // request, so the skill must be loaded in full again.
-        history.push(crate::app::ChatMessage::new("user", "and the clients"));
+        history.push(rustcode_core::ChatMessage::new("user", "and the clients"));
         assert!(loaded_skills_in_context(&history).is_empty());
         assert!(loaded_skills_in_context(&[]).is_empty());
     }
@@ -2110,9 +2112,9 @@ mod tests {
     #[test]
     fn failed_load_does_not_suppress_routing_hint() {
         let history = vec![
-            crate::app::ChatMessage::new("user", "use solidtime"),
-            crate::app::ChatMessage::new("tool", "use_skill: Skill not found").with_tool_result(
-                crate::app::ToolResultRecord {
+            rustcode_core::ChatMessage::new("user", "use solidtime"),
+            rustcode_core::ChatMessage::new("tool", "use_skill: Skill not found").with_tool_result(
+                rustcode_core::ToolResultRecord {
                     workspace_generation: None,
                     workspace_epoch: None,
                     evidence_hash: None,

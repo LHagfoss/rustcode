@@ -1,4 +1,4 @@
-use crate::app::ChatMessage;
+use crate::ChatMessage;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
@@ -10,7 +10,7 @@ static BPE: OnceLock<CoreBPE> = OnceLock::new();
 /// Two halves are retained (see [`TokenMemo`]), so the real ceiling is twice
 /// this. Sized to comfortably hold a long session's history so a compaction
 /// pass never evicts an entry it is about to look up again.
-pub(super) const TOKEN_MEMO_CAPACITY: usize = 4096;
+pub(crate) const TOKEN_MEMO_CAPACITY: usize = 4096;
 
 /// Bounded memo mapping message content to its BPE token count.
 ///
@@ -26,16 +26,16 @@ pub(super) const TOKEN_MEMO_CAPACITY: usize = 4096;
 /// while genuinely dead entries fall out after two of them. That keeps the
 /// memory bounded without the bookkeeping of a true LRU.
 #[derive(Default)]
-pub(super) struct TokenMemo {
-    pub(super) live: HashMap<(usize, u64), usize>,
-    pub(super) prev: HashMap<(usize, u64), usize>,
+pub(crate) struct TokenMemo {
+    pub(crate) live: HashMap<(usize, u64), usize>,
+    pub(crate) prev: HashMap<(usize, u64), usize>,
 }
 
-pub(super) static TOKEN_MEMO: OnceLock<Mutex<TokenMemo>> = OnceLock::new();
+pub(crate) static TOKEN_MEMO: OnceLock<Mutex<TokenMemo>> = OnceLock::new();
 
 /// Key on (byte length, hash) so a 64-bit hash collision between two strings of
 /// different lengths cannot hand back the wrong count.
-pub(super) fn memo_key(text: &str) -> (usize, u64) {
+pub(crate) fn memo_key(text: &str) -> (usize, u64) {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     (text.len(), hasher.finish())
@@ -116,4 +116,35 @@ pub fn estimate_message_tokens(message: &ChatMessage) -> usize {
     estimate_tokens(&message.content)
         .saturating_add(tool_calls)
         .saturating_add(tool_call_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Filling the memo past its capacity must not grow it without bound, and
+    /// must not corrupt the counts that survive.
+    #[test]
+    fn memo_stays_bounded_and_correct_under_churn() {
+        let bpe = cl100k_base().unwrap();
+        let hot = "the hot message that keeps being counted every pass";
+        let hot_expected = bpe.encode_ordinary(hot).len();
+
+        for i in 0..(TOKEN_MEMO_CAPACITY * 2 + 100) {
+            estimate_tokens(&format!("unique filler message number {i}"));
+            if i % 64 == 0 {
+                assert_eq!(estimate_tokens(hot), hot_expected);
+            }
+        }
+
+        let memo = TOKEN_MEMO
+            .get()
+            .expect("memo initialized by the calls above");
+        let guard = memo.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(guard.live.len() <= TOKEN_MEMO_CAPACITY);
+        assert!(guard.prev.len() <= TOKEN_MEMO_CAPACITY);
+        drop(guard);
+
+        assert_eq!(estimate_tokens(hot), hot_expected);
+    }
 }
