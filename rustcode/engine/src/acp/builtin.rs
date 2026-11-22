@@ -5,7 +5,9 @@
 //! the agent's state. The agent implements it in `acp/prompt.rs` for now; once
 //! its files move to their own crate, the binary registers it at startup.
 
-use agent_client_protocol::schema::v1::StopReason;
+use agent_client_protocol::schema::v1::{
+    SessionConfigId, SessionConfigOption, SessionConfigOptionValue, StopReason,
+};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::path::PathBuf;
@@ -66,4 +68,34 @@ pub(crate) trait BuiltinAgent: Send + Sync {
     /// End the thread's turn for steering: the steers it did not read, which
     /// go back to the client to send next.
     fn end_steers<'a>(&'a self, session_id: &'a str) -> AgentFuture<'a, Vec<String>>;
+
+    /// Offer a steer to the running turn. The answer says whether the turn
+    /// took it (`{"accepted": bool}`); `origin` is the device that sent it.
+    fn steer<'a>(
+        &'a self,
+        text: &'a str,
+        origin: Option<serde_json::Value>,
+    ) -> AgentFuture<'a, serde_json::Value>;
+
+    /// Cut the conversation back to before user message `user_index`, whose
+    /// text must be `text`. `first_only` refuses unless that message is still
+    /// the whole transcript.
+    fn rewind<'a>(
+        &'a self,
+        user_index: usize,
+        text: &'a str,
+        first_only: bool,
+    ) -> AgentFuture<'a, Result<serde_json::Value, agent_client_protocol::Error>>;
+
+    /// Set one of the thread's config options (model, effort, mode, ...) and
+    /// return them all. A model or effort becomes the built-in harness's
+    /// choice for the next new thread.
+    fn set_config<'a>(
+        &'a self,
+        config_id: &'a SessionConfigId,
+        value: &'a SessionConfigOptionValue,
+    ) -> AgentFuture<'a, Result<Vec<SessionConfigOption>, agent_client_protocol::Error>>;
+
+    /// The thread's plan usage limits, for the usage meter.
+    fn usage_limits(&self) -> AgentFuture<'_, serde_json::Value>;
 }
