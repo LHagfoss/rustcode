@@ -568,6 +568,7 @@ pub(super) async fn create_builtin_session(
     server.sessions.lock().await.insert(
         session_id.clone(),
         AcpSession {
+            agent: super::prompt::builtin_agent(Arc::clone(&state)),
             state: Arc::clone(&state),
             cwd,
             turns: Arc::new(SessionTurnState::new()),
@@ -701,6 +702,7 @@ pub(super) async fn acp_load_session(
         sessions.insert(
             session_id.clone(),
             AcpSession {
+                agent: super::prompt::builtin_agent(Arc::clone(&state)),
                 state,
                 cwd: cwd.clone(),
                 turns: Arc::new(SessionTurnState::new()),

@@ -266,6 +266,70 @@ pub(crate) async fn report_updates(
     ]
 }
 
+/// The built-in agent behind [`super::builtin::BuiltinAgent`]: one thread's
+/// `AppState`.
+pub(crate) struct StateAgent {
+    state: Arc<Mutex<crate::app::AppState>>,
+}
+
+/// The built-in agent for a thread that runs on `state`.
+pub(crate) fn builtin_agent(
+    state: Arc<Mutex<crate::app::AppState>>,
+) -> Arc<dyn super::builtin::BuiltinAgent> {
+    Arc::new(StateAgent { state })
+}
+
+impl super::builtin::BuiltinAgent for StateAgent {
+    fn image_support_error(&self) -> super::builtin::AgentFuture<'_, Option<String>> {
+        Box::pin(async move {
+            self.state
+                .lock()
+                .await
+                .image_support_error()
+                .map(str::to_string)
+        })
+    }
+
+    fn report<'a>(
+        &'a self,
+        session_id: &'a str,
+        text: &'a str,
+        clients: &'a SessionClients,
+    ) -> super::builtin::AgentFuture<'a, super::builtin::TurnResult> {
+        Box::pin(run_report(&self.state, session_id, text, clients))
+    }
+
+    fn prompt(
+        &self,
+        turn: super::builtin::BuiltinTurn,
+    ) -> super::builtin::AgentFuture<'static, super::builtin::TurnResult> {
+        Box::pin(run_prompt(
+            Arc::clone(&self.state),
+            turn.cwd,
+            turn.scheduled,
+            turn.session_id,
+            turn.task_events,
+            turn.known_task_ids,
+            turn.terminal_backlog,
+            turn.terminal_overflow,
+            turn.text,
+            turn.origin,
+            turn.clients,
+            turn.client,
+            turn.auto_approve,
+            turn.remote,
+            turn.turns,
+        ))
+    }
+
+    fn end_steers<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> super::builtin::AgentFuture<'a, Vec<String>> {
+        Box::pin(async move { super::steer::end(&mut *self.state.lock().await, session_id) })
+    }
+}
+
 /// Sends a report's answer and ends its prompt.
 pub(crate) async fn run_report(
     state: &Mutex<crate::app::AppState>,

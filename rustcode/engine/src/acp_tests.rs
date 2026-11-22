@@ -211,6 +211,7 @@ fn loading_an_already_active_session_is_rejected() {
     sessions.insert(
         "active-session".into(),
         AcpSession {
+            agent: prompt::builtin_agent(Arc::clone(&state)),
             state,
             cwd: PathBuf::from("/tmp"),
             turns: Arc::new(SessionTurnState::new()),
@@ -254,6 +255,7 @@ async fn unregistering_failed_session_load_removes_registry_and_task_route() {
     server.sessions.lock().await.insert(
         session_id.into(),
         AcpSession {
+            agent: prompt::builtin_agent(Arc::clone(&state)),
             state,
             cwd: PathBuf::from("/tmp"),
             turns: Arc::new(SessionTurnState::new()),
