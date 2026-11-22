@@ -93,6 +93,10 @@ failure. Fix from the CI log and push again.
   -D warnings` in `apps/desktop/src-tauri` (its own Cargo workspace; CI runs
   its tests). This is the product: the RustCode orchestrator app. Start from
   `docs/desktop.md` › "Status and roadmap" and follow `docs/design.md`.
+- Size caps: a Rust file may not pass 2,000 lines (`scripts/check-rust-size.py`,
+  run in CI's lint job) nor a TypeScript one 1,500 (`apps/desktop/src/fileSize.test.ts`).
+  Files already past it are listed with a cap that may only come down: put new
+  code in a module of its own, and lower the cap when a split lands.
 - A UI-only change needs no cargo run, and a Rust-only one no
   `bun run check`, unless the change crosses the ACP boundary between them.
 
