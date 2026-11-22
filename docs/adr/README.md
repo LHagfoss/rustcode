@@ -16,3 +16,4 @@ changes, update the record in the same pull request.
 | [0004](0004-cli-hub-and-server-restart.md) | The hub link and `rc server restart` |
 | [0005](0005-cli-threads-and-usage.md) | `rc threads` status rules and `rc usage` totals |
 | [0006](0006-cli-test-isolation.md) | CLI integration tests never touch the developer's setup |
+| [0007](0007-desktop-pinned-section-headers.md) | Opened chat sections pin their header by script, not CSS `sticky` |

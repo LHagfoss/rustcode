@@ -1041,7 +1041,6 @@ export function Transcript({
     topInset,
     toggleFold,
     pinned,
-    size,
   });
 
   const railCurrent = showLatest ? Math.min(readTurn, turns.length - 1) : turns.length - 1;

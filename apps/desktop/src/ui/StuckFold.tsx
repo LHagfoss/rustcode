@@ -1,13 +1,6 @@
-// An opened row's header stays under the glass header while what it opened is in view, so it can
-// be closed from anywhere in it. Two kinds:
-// - A turn's `Worked for …` fold and a run of tool calls open into rows of their own. The rows are
-//   virtual (each its own box), so CSS `sticky` has no shared parent to stick in: a copy of each
-//   header floats over the scroller, stacked (a group's under its turn's).
-// - A tool call or a thought opens inside its own row: its header (`.rc-sticky-head`) is moved down
-//   that row to just below the floating copies, and marked `data-stuck` while it is pinned so it
-//   lifts off what scrolls under it.
 import type { Virtualizer } from "@tanstack/react-virtual";
 import { type RefObject, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { observeSize } from "../lib/resize";
 import { cx } from "./primitives";
 import { ToolGroupRow, TurnFoldRow } from "./Rows";
 import type { Row } from "./Transcript";
@@ -24,7 +17,6 @@ export function useStuckFold({
   topInset,
   toggleFold,
   pinned,
-  size,
 }: {
   rows: Row[];
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -33,9 +25,7 @@ export function useStuckFold({
   topInset: number;
   toggleFold: (key: string) => void;
   pinned: RefObject<boolean>;
-  size: { width: number; height: number };
 }) {
-  // Each opened fold with steps and each opened group, with the last row it opened.
   const ranges = useMemo(() => {
     const out: { index: number; last: number }[] = [];
     for (let i = 0; i < rows.length; i++) {
@@ -48,7 +38,6 @@ export function useStuckFold({
     return out;
   }, [rows]);
   const boxes = useRef<(HTMLDivElement | null)[]>([]);
-  // The offset each in-row header was moved by, so its own place can be read back from where it is.
   const moved = useRef(new Map<HTMLElement, number>());
   const [stack, setStack] = useState<Stack>(EMPTY);
 
@@ -64,16 +53,13 @@ export function useStuckFold({
       if (!header) continue;
       const line = top + offset;
       const height = boxes.current[items.length]?.offsetHeight || 32;
-      // Pinned once the header itself reaches the line (its row's foot less the bar's height).
       if (header.end - height > line) break;
       const end = starts[last]?.end;
       if (end === undefined || end <= line) continue;
-      // Pushed up by the row after what it opened as that leaves, as a sticky header would be.
       const shift = Math.min(0, end - line - height);
       items.push({ index, top: offset + shift });
       offset += Math.max(0, height + shift);
     }
-    // The lane's own box, so the copies line up with the rows whatever the scroller pads.
     const lane = innerRef.current?.getBoundingClientRect();
     const box = el.parentElement?.getBoundingClientRect();
     const next: Stack = items.length
@@ -86,10 +72,6 @@ export function useStuckFold({
       : EMPTY;
     setStack((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
 
-    // In-row headers ride down their own row to the line, and stop at its foot. CSS `sticky` would
-    // do this, but the rows sit under one translated box (Transcript) and Chromium places a sticky
-    // box from its untranslated layout, so it pinned at the wrong place.
-    // 8px down: the 4px between bars, and the 4px its bar reaches above it.
     const line = el.getBoundingClientRect().top + topInset + offset + 8;
     const heads = new Set(el.querySelectorAll<HTMLElement>(".rc-sticky-head"));
     for (const head of moved.current.keys()) {
@@ -110,9 +92,15 @@ export function useStuckFold({
     }
   }, [ranges, topInset, virtualizer, scrollRef, innerRef]);
 
-  const total = virtualizer.getTotalSize();
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a resize or a row opened or closed moves the rows under the view top
-  useLayoutEffect(updateStuck, [updateStuck, size.width, size.height, total]);
+  useLayoutEffect(() => {
+    updateStuck();
+    const watched = [scrollRef.current, innerRef.current].flatMap((el) =>
+      el ? [observeSize(el, updateStuck)] : [],
+    );
+    return () => {
+      for (const stop of watched) stop();
+    };
+  }, [updateStuck, scrollRef, innerRef]);
 
   const close = useCallback(
     (index: number) => {
@@ -124,8 +112,6 @@ export function useStuckFold({
       const above = stack.items.findIndex((s) => s.index === index);
       const over = above > 0 ? stack.items[above]!.top : 0;
       toggleFold(key);
-      // Closing from the copy brings the real header back where the copy was, rather than leaving
-      // the view somewhere in the rows below.
       if (el && start !== undefined) {
         pinned.current = false;
         requestAnimationFrame(() => {
