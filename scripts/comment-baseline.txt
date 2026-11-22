@@ -704,6 +704,7 @@
 12 rustcode/core/rustcode-tools/src/lib.rs
 141 rustcode/engine/src/acp.rs
 5 rustcode/engine/src/acp/agents.rs
+8 rustcode/engine/src/acp/builtin_open.rs
 38 rustcode/engine/src/acp/clients.rs
 11 rustcode/engine/src/acp/commands.rs
 7 rustcode/engine/src/acp/config.rs
@@ -729,7 +730,7 @@
 1 rustcode/engine/src/acp/rewind.rs
 3 rustcode/engine/src/acp/scheduled.rs
 1 rustcode/engine/src/acp/session.rs
-70 rustcode/engine/src/acp/session_load.rs
+62 rustcode/engine/src/acp/session_load.rs
 7 rustcode/engine/src/acp/session_move.rs
 2 rustcode/engine/src/acp/session_repair.rs
 2 rustcode/engine/src/acp/session_replay.rs
