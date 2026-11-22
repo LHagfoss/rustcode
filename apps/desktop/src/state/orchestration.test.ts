@@ -20,7 +20,6 @@ import {
   capped,
   checkManage,
   checkMessage,
-  checkQueryData,
   checkStart,
   contextNote,
   cutForAll,
@@ -57,7 +56,6 @@ import {
   listSessions,
   MACHINE_LOST_TURN,
   MAX_ACTIVITY_ITEMS,
-  MAX_DATA_ROWS,
   MAX_DEPTH,
   MAX_MESSAGE_BYTES,
   markDelivered,
@@ -85,7 +83,6 @@ import {
   supersededLinks,
   unheard,
   updateLink,
-  usageScope,
   WAKE_ANSWER_CHARS,
   WAKE_COALESCE_MS,
   type Wake,
@@ -849,35 +846,6 @@ describe("v2 shapes", () => {
 });
 
 describe("the data store", () => {
-  test("parses thread_usage and query_data, and refuses bad arguments", () => {
-    expect(parseCall({ tool: "thread_usage", args: {} })).toEqual({
-      tool: "thread_usage",
-      since: undefined,
-      groupBy: "harness",
-      project: undefined,
-    });
-    expect(parseCall({ tool: "thread_usage", args: { since: "2026-11", group_by: "day" } })).toMatchObject({
-      since: "2026-11",
-      groupBy: "day",
-    });
-    expect(isFailure(parseCall({ tool: "thread_usage", args: { since: "last week" } }))).toBe(true);
-    expect(isFailure(parseCall({ tool: "thread_usage", args: { group_by: "tool" } }))).toBe(true);
-    const query = parseCall({ tool: "query_data", args: { sql: " SELECT 1 " } });
-    expect(query).toEqual({ tool: "query_data", sql: "SELECT 1", limit: MAX_DATA_ROWS });
-    expect(parseCall({ tool: "query_data", args: { sql: "SELECT 1", limit: 5 } })).toEqual({
-      tool: "query_data",
-      sql: "SELECT 1",
-      limit: 5,
-    });
-    // A limit is clamped, never refused: the answer is bounded either way.
-    expect(parseCall({ tool: "query_data", args: { sql: "SELECT 1", limit: 1e9 } })).toEqual({
-      tool: "query_data",
-      sql: "SELECT 1",
-      limit: MAX_DATA_ROWS,
-    });
-    expect(isFailure(parseCall({ tool: "query_data", args: { sql: "  " } }))).toBe(true);
-  });
-
   test("parses read_activity and clamps its page", () => {
     expect(parseCall({ tool: "read_activity", args: { session_id: "b", order: "newest" } })).toMatchObject({
       order: "newest",
@@ -969,25 +937,6 @@ describe("the data store", () => {
     const a = thread("a");
     expect(checkMessage(a, undefined, emptyBook(), true)?.code).toBe("not_found");
     expect(checkMessage(a, a, emptyBook(), true)?.code).toBe("not_allowed");
-  });
-
-  test("usage is scoped to the caller's project while reading across projects is off", () => {
-    const a = thread("a");
-    expect(usageScope(a, true)).toEqual({ scope: "every project" });
-    expect(usageScope(a, true, "/other")).toEqual({ project: "/other", scope: "this project" });
-    expect(usageScope(a, false)).toEqual({ project: "/repo", scope: "this project" });
-    // Asking for its own project by name is fine; another one is refused.
-    expect(usageScope(a, false, "/repo")).toEqual({ project: "/repo", scope: "this project" });
-    const refused = usageScope(a, false, "/other");
-    expect(isFailure(refused) && refused.code).toBe("not_allowed");
-    expect(isFailure(refused) ? refused.message : "").toContain("Settings › Orchestration");
-  });
-
-  test("SQL needs the setting: it cannot be scoped to one project", () => {
-    expect(checkQueryData(true)).toBeNull();
-    const refused = checkQueryData(false);
-    expect(refused?.code).toBe("not_allowed");
-    expect(refused?.message).toContain("Let agents read threads in other projects");
   });
 });
 

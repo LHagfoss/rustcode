@@ -150,8 +150,6 @@ export type Call =
     }
   | { tool: "list_projects"; machine?: string }
   | { tool: "list_pull_requests"; state: PullStateChoice; machine?: string }
-  | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
-  | { tool: "query_data"; sql: string; limit: number }
   | {
       tool: "read_activity";
       target: string;
@@ -246,11 +244,6 @@ export const MAX_ORGANIZED_THREADS = 50;
 /** What `list_pull_requests` may ask for. */
 export type PullStateChoice = "open" | "closed" | "merged" | "all";
 const PULL_STATES: readonly string[] = ["open", "closed", "merged", "all"];
-/** How `thread_usage` groups its rows. */
-export type UsageGroup = "harness" | "model" | "day" | "project" | "thread";
-const USAGE_GROUPS: readonly string[] = ["harness", "model", "day", "project", "thread"];
-/** Rows `query_data` may bring back in one answer. */
-export const MAX_DATA_ROWS = 1000;
 /** Items `read_activity` returns by default, and at most. */
 export const DEFAULT_ACTIVITY_ITEMS = 50;
 export const MAX_ACTIVITY_ITEMS = 200;
@@ -480,28 +473,6 @@ export function parseCall(params: JsonObject): Call | Failure {
         unread,
         archived,
       };
-    }
-    case "thread_usage": {
-      const since = s(args.since)?.trim() || undefined;
-      if (since && !/^\d{4}-\d{2}(-\d{2})?$/.test(since)) {
-        return failure("invalid", "since must be YYYY-MM-DD or YYYY-MM");
-      }
-      const group = s(args.group_by) ?? "harness";
-      if (!USAGE_GROUPS.includes(group)) {
-        return failure("invalid", `group_by must be one of ${USAGE_GROUPS.join(", ")}`);
-      }
-      return {
-        tool: "thread_usage",
-        since,
-        groupBy: group as UsageGroup,
-        project: s(args.project)?.trim() || undefined,
-      };
-    }
-    case "query_data": {
-      const sql = (s(args.sql) ?? "").trim();
-      if (!sql) return failure("invalid", "sql is required");
-      const asked = typeof args.limit === "number" ? Math.floor(args.limit) : MAX_DATA_ROWS;
-      return { tool: "query_data", sql, limit: Math.min(Math.max(asked, 1), MAX_DATA_ROWS) };
     }
     case "compact_session": {
       const target = sessionReference(args.session_id)?.trim();

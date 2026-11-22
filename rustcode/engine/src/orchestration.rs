@@ -111,6 +111,16 @@ pub const V3_TOOL_NAMES: [&str; 10] = [
 ];
 /// Added by version 4: the data store — tokens and reported cost, and SQL.
 pub const V4_TOOL_NAMES: [&str; 2] = [THREAD_USAGE, QUERY_DATA];
+/// The tools the engine answers itself even while an app hosts the others:
+/// reads of this machine's data store, which the app could only pass through.
+pub const ENGINE_TOOL_NAMES: [&str; 2] = [THREAD_USAGE, QUERY_DATA];
+
+/// Whether the engine answers `name` itself, whoever hosts the thread's other
+/// orchestration calls.
+pub fn engine_answers(name: &str) -> bool {
+    ENGINE_TOOL_NAMES.contains(&name)
+}
+
 /// Added by version 6: one thread's recorded activity, paged.
 pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 /// Added by version 7: the messages this thread queued on another one.
@@ -1671,7 +1681,7 @@ pub async fn execute(
     // No client hosts the tools: the engine answers what it can itself and
     // names the app for the rest (#3422), instead of saying the tool does not
     // exist.
-    let output = if client.is_none() && local {
+    let output = if (client.is_some() && engine_answers(name)) || (client.is_none() && local) {
         local::answer(&session_id, cancel, name, args).await
     } else {
         execute_versioned(client, version, cancel, name, args).await
@@ -2243,7 +2253,7 @@ mod tests {
             assert!(PROMPT_HINT_V12.contains(name), "{name} in the v12 hint");
         }
         for name in [THREAD_USAGE, QUERY_DATA] {
-            assert!(is_tool(name) && is_v4_tool(name));
+            assert!(is_tool(name) && is_v4_tool(name) && engine_answers(name));
             assert!(PROMPT_HINT_V4.contains(name), "{name}");
             assert!(!PROMPT_HINT_V3.contains(name), "{name} is v4 only");
         }

@@ -87,7 +87,6 @@ import {
   askingIds,
   capped,
   checkMessage,
-  checkQueryData,
   contextNote,
   type DelegateLimits,
   emptyBook,
@@ -122,7 +121,6 @@ import {
   type RuleThread,
   shownState,
   updateLink,
-  usageScope,
   type Wake,
   type WakeContext,
   type WakeReport,
@@ -1014,33 +1012,6 @@ async function perform(
       return mergeWhenGreen(caller, call);
     case "cleanup_worktree":
       return cleanupWorktree(caller, call);
-    case "thread_usage": {
-      const scope = usageScope(caller, acrossProjects(), call.project);
-      if (isFailure(scope)) return failureJson(scope);
-      try {
-        const answer = await request<JsonObject>(
-          Method.dataUsage,
-          {
-            ...(call.since ? { since: call.since } : {}),
-            groupBy: call.groupBy,
-            ...(scope.project ? { project: scope.project } : {}),
-          },
-          20_000,
-        );
-        return { ...answer, scope: scope.scope };
-      } catch (error) {
-        return failureJson(failure("failed", `the data store did not answer: ${errorText(error)}`));
-      }
-    }
-    case "query_data": {
-      const refused = checkQueryData(acrossProjects());
-      if (refused) return failureJson(refused);
-      try {
-        return await request<JsonObject>(Method.dataQuery, { sql: call.sql, limit: call.limit }, 20_000);
-      } catch (error) {
-        return failureJson(failure("failed", `the data store did not answer: ${errorText(error)}`));
-      }
-    }
     case "read_activity": {
       // A read of the store, like thread_usage: the project rule applies (any
       // project while the setting allows it), and no approval is asked. The
