@@ -113,7 +113,10 @@ therefore runs with (`harness/build_env.rs`):
   `~/.config/rustcode/build/<repo-name>/slot-N`, so two builds never wait on the
   same build-directory lock. A delegate that has to wait prints `cargo: waiting
   for a build slot …` every 30 s, so the wait is output, not silence. A slot
-  whose build died is taken over. Windows has no wrapper: it gets the shared
+  whose build died is taken over. Cargo never prunes a target directory, so a
+  slot past `RUSTCODE_BUILD_SLOT_MAX_GB` (default 40, `0` turns the cap off)
+  is deleted before its next build, checked at most once an hour; the build
+  then starts cold. Windows has no wrapper: it gets the shared
   directory and the priority only.
 
 Threads that are not a worktree of a Rust project, and the built-in harness,

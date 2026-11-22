@@ -105,6 +105,25 @@ if [ -z "$CARGO_TARGET_DIR" ] || [ "$CARGO_TARGET_DIR" = "$RUSTCODE_BUILD_ROOT/s
   CARGO_TARGET_DIR="$RUSTCODE_BUILD_ROOT/slot-$got"
   export CARGO_TARGET_DIR
 fi
+# Cargo never prunes a target directory: every profile, feature set and stale
+# dependency version stays, and one slot reached 69 GB. While holding the slot
+# (so no build is using it), start it over once it passes the cap, checking at
+# most once an hour because `du` over a full target takes seconds.
+cap_gb=${RUSTCODE_BUILD_SLOT_MAX_GB:-40}
+case "$CARGO_TARGET_DIR" in
+  "$RUSTCODE_BUILD_ROOT"/slot-*)
+    stamp="$locks/slot-$got.sized"
+    if [ "$cap_gb" -gt 0 ] && [ -d "$CARGO_TARGET_DIR" ] &&
+      { [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +60 2>/dev/null)" ]; }; then
+      touch "$stamp"
+      kb=$(du -sk "$CARGO_TARGET_DIR" 2>/dev/null | cut -f1)
+      if [ -n "$kb" ] && [ "$kb" -gt $((cap_gb * 1048576)) ]; then
+        echo "cargo: build slot $got holds $((kb / 1048576)) GB, over the ${cap_gb} GB cap; starting it over" >&2
+        rm -rf "$CARGO_TARGET_DIR"
+      fi
+    fi
+    ;;
+esac
 RUSTCODE_BUILD_SLOT_HELD=$got
 export RUSTCODE_BUILD_SLOT_HELD
 PATH=$clean
