@@ -1094,11 +1094,13 @@
  * unprefixed property is behind a flag, so a filter read from a token left WebKitGTK, Linux's web
  * view, with translucent glass and nothing blurred behind it (#3328). Both properties are written:
  * the prefixed one is the one WebKit paints with, and the unprefixed one is what Chromium and
- * WebView2 read. Every surface that blurs takes this with `@apply glass-filter`.
+ * Firefox read. The prefixed one comes first: Lightning CSS (Tailwind's production pass) keeps
+ * only the later of the pair when the prefixed one follows, and the web build then had no blur
+ * outside WebKit. Every surface that blurs takes this with `@apply glass-filter`.
  */
 @utility glass-filter {
-  backdrop-filter: saturate(1.15) blur(9px);
   -webkit-backdrop-filter: saturate(1.15) blur(9px);
+  backdrop-filter: saturate(1.15) blur(9px);
 }
 
 .rc-glass {
@@ -1510,8 +1512,8 @@
       .glass-filter
     ),
   :root .rc-header-glass::before {
-    backdrop-filter: none;
     -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
 :root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) {
@@ -1547,8 +1549,8 @@
     .glass-filter
   ),
 :root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) .rc-header-glass::before {
-  backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 :root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]),
 :root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
