@@ -44,7 +44,7 @@ fn mcp() -> JobAction {
     }
 }
 
-fn recorded_settings() -> crate::config::SessionSettingsSnapshot {
+fn recorded_settings() -> crate::sessions::SessionSettingsSnapshot {
     let mut config = crate::config::AppConfig::default();
     config.models = vec![crate::config::ModelProfile {
         name: "recorded".into(),
@@ -58,7 +58,7 @@ fn recorded_settings() -> crate::config::SessionSettingsSnapshot {
     config.mcp_servers.clear();
     config.agent_mode = crate::config::AgentMode::Plan;
     config.max_total_tool_rounds = 7;
-    crate::config::SessionSettingsSnapshot {
+    crate::sessions::SessionSettingsSnapshot {
         captured_at_ms: 1,
         active_profile: "recorded".into(),
         config: serde_json::to_value(config).unwrap(),

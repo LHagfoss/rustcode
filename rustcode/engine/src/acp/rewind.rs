@@ -51,7 +51,7 @@ pub(crate) fn rewind(
     state.history = history.into();
     // A parked turn belonged to the history that is gone.
     state.background_turn_context = None;
-    crate::config::save_session_history(&state.active_session_id, &state.history);
+    crate::sessions::save_session_history(&state.active_session_id, &state.history);
     Ok(json!({ "removed": removed }))
 }
 

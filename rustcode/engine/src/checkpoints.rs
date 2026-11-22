@@ -648,7 +648,7 @@ pub(crate) fn thread_cwd(session_id: &str) -> Option<PathBuf> {
     if !rustcode_session::valid_session_id(session_id) {
         return None;
     }
-    crate::config::load_session_workspace(session_id)
+    crate::sessions::load_session_workspace(session_id)
         .map(|workspace| workspace.cwd)
         .or_else(|| crate::harness::store::load(session_id).map(|record| record.cwd))
 }

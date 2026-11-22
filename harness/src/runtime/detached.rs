@@ -123,8 +123,8 @@ impl AppRuntime {
         };
         runtime.current_cancel_token.cancel();
         let state = runtime.app_state.lock().await;
-        rustcode::config::save_session_history(&state.active_session_id, &state.history);
-        rustcode::config::flush_history();
+        rustcode::sessions::save_session_history(&state.active_session_id, &state.history);
+        rustcode::sessions::flush_history();
         match failure {
             Some(failure) => {
                 eprintln!("{failure}; exiting");

@@ -1,10 +1,12 @@
-use super::*;
+use super::{SessionHolder, hold_primary_session, hold_session_open};
 use crate::app::ChatMessage;
+use crate::config::*;
 use rustcode_session::SessionStore;
 pub use rustcode_session::{
     HistorySnapshot, MachineOrigin, SessionMeta, SessionMigrationReport, SessionScope,
     SessionSearchHit, SessionWorkspace, WorkspaceDescriptor, WorkspaceManager, WorkspaceRequest,
 };
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::HashMap;
 use std::fs;
@@ -116,7 +118,7 @@ fn ensure_session_dir(session_id: &str) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-pub(super) fn next_session_id_value(now: u64, previous: u64) -> u64 {
+pub(crate) fn next_session_id_value(now: u64, previous: u64) -> u64 {
     rustcode_session::next_session_id_value(now, previous)
 }
 
@@ -125,7 +127,7 @@ fn next_session_id() -> String {
 }
 
 #[cfg(test)]
-pub(super) fn queue_history_write(
+pub(crate) fn queue_history_write(
     path: PathBuf,
     history: &[ChatMessage],
     revision: Option<u64>,
@@ -133,7 +135,7 @@ pub(super) fn queue_history_write(
     rustcode_session::queue_history_write(path, history, revision)
 }
 
-pub(super) fn write_history_file(path: &Path, history: &[ChatMessage]) {
+pub(crate) fn write_history_file(path: &Path, history: &[ChatMessage]) {
     rustcode_session::write_history_file(path, history)
 }
 

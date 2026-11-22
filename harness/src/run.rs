@@ -313,7 +313,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if cli_args.acp || acp_subcommand {
         rustcode::shell_env::hydrate_all_missing();
         rustcode::acp::run_acp(cli_args.yolo).await?;
-        rustcode::config::flush_history();
+        rustcode::sessions::flush_history();
         return Ok(());
     }
 
@@ -339,7 +339,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             rustcode::raw_cli::run_raw_cli(&prompt, model_override.as_deref(), cli_args.yolo)
                 .await?;
         }
-        rustcode::config::flush_history();
+        rustcode::sessions::flush_history();
         return Ok(());
     }
 
@@ -433,8 +433,8 @@ fn resume_latest_unscoped(
     rustcode::app::session_controller::SessionTransition,
     rustcode::app::session_controller::SessionError,
 > {
-    if !rustcode::config::session_has_content(&state.history)
-        && let Some(live) = rustcode::config::live_session_meta()
+    if !rustcode::sessions::session_has_content(&state.history)
+        && let Some(live) = rustcode::sessions::live_session_meta()
     {
         if rustcode::app::actions::load_session_into(state, &live) {
             return Ok(
@@ -444,8 +444,8 @@ fn resume_latest_unscoped(
             );
         }
     }
-    let meta = rustcode::config::latest_resumable_session_meta_in_scope(
-        &rustcode::config::SessionScope::All,
+    let meta = rustcode::sessions::latest_resumable_session_meta_in_scope(
+        &rustcode::sessions::SessionScope::All,
     )
     .ok_or(rustcode::app::session_controller::SessionError::NoSessionToResume)?;
     let session_id =
@@ -465,7 +465,7 @@ async fn run_interactive(
     cli_args: crate::cli::Cli,
     model_override: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    rustcode::config::archive_live_history();
+    rustcode::sessions::archive_live_history();
 
     let mut app_state_struct = AppState::new();
     // The TUI draws `rustcode-viz` blocks natively, so its prompt carries the

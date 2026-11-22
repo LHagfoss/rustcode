@@ -61,7 +61,7 @@ impl SessionTitleTracker {
             _ => false,
         };
         check
-            .then(|| crate::config::load_session_title(session_id))
+            .then(|| crate::sessions::load_session_title(session_id))
             .flatten()
             .and_then(|title| self.observe_title(Some(title)))
     }
@@ -96,7 +96,7 @@ fn record_prompt(state: &mut crate::app::AppState, session_id: &str, text: &str)
     state
         .history
         .push(crate::app::ChatMessage::new("user", text.to_owned()));
-    crate::config::save_session_title_if_absent(session_id, &state.history);
+    crate::sessions::save_session_title_if_absent(session_id, &state.history);
 }
 
 impl BackgroundTurnTasks {
@@ -319,7 +319,7 @@ pub(crate) async fn run_prompt(
     // fallback: concurrent turns of other sessions overwrite it.
     let result = crate::logger::scope_session(session_id.clone(), async {
         crate::tools::set_active_session_id(Some(session_id.clone()));
-        crate::config::set_active_session_id(&session_id);
+        crate::sessions::set_active_session_id(&session_id);
         let (workspace_root, sandbox_mode) = {
             let mut state = state.lock().await;
             state.auto_confirm = auto_approve;
@@ -477,8 +477,8 @@ pub(crate) async fn run_prompt(
         let (is_first_prompt, first_response) = {
             let mut state = state.lock().await;
             let first_response = state.history.is_empty();
-            let is_first = !crate::config::session_has_content(&state.history)
-                && crate::config::load_session_title(&session_id).is_none()
+            let is_first = !crate::sessions::session_has_content(&state.history)
+                && crate::sessions::load_session_title(&session_id).is_none()
                 && crate::app::actions::wants_generated_title(&text);
             state.session_title_tool_available = is_first && state.config.generate_session_titles;
             record_prompt(&mut state, &session_id, &text);
@@ -486,7 +486,7 @@ pub(crate) async fn run_prompt(
                 message.origin = origin.clone();
             }
             if first_response {
-                crate::config::save_session_history(&session_id, &state.history);
+                crate::sessions::save_session_history(&session_id, &state.history);
             }
             (is_first, first_response)
         };
@@ -690,7 +690,7 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
     let state = Arc::clone(&wakeup.state);
     crate::logger::scope_session(session_id.clone(), async {
         crate::tools::set_active_session_id(Some(session_id.clone()));
-        crate::config::set_active_session_id(&session_id);
+        crate::sessions::set_active_session_id(&session_id);
         crate::tools::set_active_workspace_context(
             state.lock().await.workspace_root.clone(),
             Some(wakeup.cwd.clone()),
@@ -886,7 +886,8 @@ where
     let deadline = tokio::time::sleep(crate::thread_status::FIRST_RESPONSE_TIMEOUT);
     tokio::pin!(deadline);
     let mut timed_out = false;
-    let mut title_tracker = SessionTitleTracker::new(crate::config::load_session_title(session_id));
+    let mut title_tracker =
+        SessionTitleTracker::new(crate::sessions::load_session_title(session_id));
     let asked = super::questions::AskedQuestions::default();
     let context = loop {
         tokio::select! {
@@ -960,7 +961,7 @@ where
             send_updates(clients, session_id, vec![update])?;
         }
     }
-    if let Some(title) = crate::config::load_session_title(session_id)
+    if let Some(title) = crate::sessions::load_session_title(session_id)
         && let Some(update) = title_tracker.observe_title(Some(title))
     {
         send_updates(clients, session_id, vec![update])?;
@@ -1067,14 +1068,14 @@ mod tests {
         let mut state = crate::app::AppState::new();
         super::record_prompt(&mut state, &session_id, "Fix the login redirect");
         assert_eq!(
-            crate::config::load_session_title(&session_id).as_deref(),
+            crate::sessions::load_session_title(&session_id).as_deref(),
             Some("Fix the login redirect")
         );
 
-        crate::config::save_session_title(&session_id, "Named by hand");
+        crate::sessions::save_session_title(&session_id, "Named by hand");
         super::record_prompt(&mut state, &session_id, "a later prompt");
         assert_eq!(
-            crate::config::load_session_title(&session_id).as_deref(),
+            crate::sessions::load_session_title(&session_id).as_deref(),
             Some("Named by hand")
         );
     }

@@ -37,7 +37,7 @@ pub use publisher::SessionPublisher;
 /// lock. A record whose parent ID was never recovered has nothing to name, so
 /// the session reads as top-level.
 pub fn session_parent(session_id: &str) -> Option<RemoteThreadParent> {
-    let parent = crate::config::load_session_parent(session_id)?;
+    let parent = crate::sessions::load_session_parent(session_id)?;
     let relationship = parent.relationship();
     Some(RemoteThreadParent {
         session_id: parent.id?,

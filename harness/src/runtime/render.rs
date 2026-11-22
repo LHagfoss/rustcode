@@ -28,7 +28,7 @@ pub(super) async fn session_title_for_render(
         return (session_id, title);
     }
 
-    let title = rustcode::config::load_session_title(&session_id);
+    let title = rustcode::sessions::load_session_title(&session_id);
     let mut guard = state.lock().await;
     if guard.install_session_title_cache(&session_id, generation, title.clone()) {
         return (session_id, title);
@@ -139,7 +139,7 @@ pub(super) async fn render_frame(
             .history
             .iter()
             .find(|m| m.role == "user" && !m.content.starts_with('/'))
-            .map(|_| rustcode::config::session_title(&guard.history));
+            .map(|_| rustcode::sessions::session_title(&guard.history));
         let snapshot = render_snapshot(&rustcode::controller::render_state(&guard));
         discord_rpc.set_enabled(guard.config.discord_rpc_enabled);
         let activity =

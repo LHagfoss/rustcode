@@ -117,7 +117,7 @@ async fn controller_worker(
                     );
                     continue;
                 };
-                let Some(meta) = crate::config::session_meta_by_id(&session_id) else {
+                let Some(meta) = crate::sessions::session_meta_by_id(&session_id) else {
                     send_error(
                         &updates,
                         generation,
@@ -125,7 +125,7 @@ async fn controller_worker(
                     );
                     continue;
                 };
-                if crate::config::load_session_file(&meta.path).is_empty() {
+                if crate::sessions::load_session_file(&meta.path).is_empty() {
                     send_error(
                         &updates,
                         generation,
@@ -152,10 +152,10 @@ async fn controller_worker(
                     );
                     continue;
                 }
-                let restored = crate::config::load_session_model(&session_id)
+                let restored = crate::sessions::load_session_model(&session_id)
                     .is_some_and(|saved| state.apply_session_model(&saved));
                 if !restored
-                    && let Some(profile_name) = crate::config::load_session_settings(&session_id)
+                    && let Some(profile_name) = crate::sessions::load_session_settings(&session_id)
                         .map(|settings| settings.active_profile)
                 {
                     restore_session_profile(&mut state, &profile_name);
@@ -353,7 +353,7 @@ async fn controller_worker(
                     state.api_base_url = api_base_url;
                     state.config.use_profile_for_session(profile_name.clone());
                     state.record_session_model();
-                    crate::config::record_session_settings_for_profile(
+                    crate::sessions::record_session_settings_for_profile(
                         &state.active_session_id,
                         &state.config,
                         &profile_name,
@@ -369,12 +369,12 @@ async fn controller_worker(
                     // The active transcript is added to this snapshot even
                     // before its queued history write has reached disk. Make
                     // it resumable before advertising it as a saved session.
-                    if crate::config::session_has_content(&state.history) {
-                        crate::config::save_session_history(
+                    if crate::sessions::session_has_content(&state.history) {
+                        crate::sessions::save_session_history(
                             &state.active_session_id,
                             &state.history,
                         );
-                        crate::config::flush_history();
+                        crate::sessions::flush_history();
                     }
                     // Same store listing the TUI picker uses; the desktop shell
                     // is the documented exception that renders the result per
@@ -386,7 +386,7 @@ async fn controller_worker(
                         .into_iter()
                         .map(|session| SessionChoice::from_meta(&session))
                         .collect();
-                    if crate::config::session_has_content(&state.history) {
+                    if crate::sessions::session_has_content(&state.history) {
                         snapshot
                             .sessions
                             .retain(|choice| choice.id != state.active_session_id);
@@ -394,8 +394,8 @@ async fn controller_worker(
                             0,
                             SessionChoice {
                                 id: state.active_session_id.clone(),
-                                title: crate::config::load_session_title(&state.active_session_id)
-                                    .unwrap_or_else(|| crate::config::session_title(&state.history)),
+                                title: crate::sessions::load_session_title(&state.active_session_id)
+                                    .unwrap_or_else(|| crate::sessions::session_title(&state.history)),
                                 when: state
                                     .history
                                     .last()
@@ -695,7 +695,7 @@ async fn run_native_slash(
                 state.model_name = model_name;
                 state.api_base_url = api_base_url;
                 state.config.use_profile_for_session(profile_name.clone());
-                crate::config::record_session_settings_for_profile(
+                crate::sessions::record_session_settings_for_profile(
                     &state.active_session_id,
                     &state.config,
                     &profile_name,
@@ -716,7 +716,7 @@ async fn run_native_slash(
         }
         NativeSlashCommand::ChangeTitle(Some(title)) => {
             let mut state = session.state.lock().await;
-            crate::config::save_session_title(&state.active_session_id, &title);
+            crate::sessions::save_session_title(&state.active_session_id, &title);
             state.invalidate_session_title_cache();
             state.history_picker_sessions = crate::app::actions::build_session_list(&state);
             state.set_notice(format!("Chat renamed to '{title}'."));
@@ -753,7 +753,7 @@ pub(crate) fn apply_provider_auth_result(
                     let profile_name = profile.name.clone();
                     state.model_name = profile.model.clone();
                     state.api_base_url = profile.url.clone();
-                    crate::config::record_session_settings_for_profile(
+                    crate::sessions::record_session_settings_for_profile(
                         &state.active_session_id,
                         &state.config,
                         &profile_name,
@@ -951,8 +951,8 @@ async fn retire_session(
         session.cancel_token.cancel();
     }
     let state = session.state.lock().await;
-    crate::config::save_session_history(&state.active_session_id, &state.history);
-    crate::config::flush_history();
+    crate::sessions::save_session_history(&state.active_session_id, &state.history);
+    crate::sessions::flush_history();
 }
 
 async fn poll_background_events(
@@ -1072,9 +1072,9 @@ async fn start_pending_turn(
 fn persist_session_workspace(session_id: &str, workspace: &std::path::Path) {
     // Preserve an already-recorded task worktree: this record refreshes the
     // cwd, it must not erase the session's isolated task workspace (#1496).
-    let task_workspace_id = crate::config::load_session_workspace(session_id)
+    let task_workspace_id = crate::sessions::load_session_workspace(session_id)
         .and_then(|previous| previous.task_workspace_id);
-    let _ = crate::config::save_session_workspace(
+    let _ = crate::sessions::save_session_workspace(
         session_id,
         &rustcode_session::SessionWorkspace {
             cwd: workspace.to_path_buf(),

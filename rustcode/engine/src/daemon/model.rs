@@ -59,7 +59,7 @@ pub enum JobAction {
         model_profile: Option<String>,
         session_id: Option<String>,
         #[serde(default)]
-        settings: Option<crate::config::SessionSettingsSnapshot>,
+        settings: Option<crate::sessions::SessionSettingsSnapshot>,
     },
     ShellCommand {
         command: String,

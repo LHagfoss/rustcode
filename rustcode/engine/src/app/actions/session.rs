@@ -302,8 +302,8 @@ pub fn toggle_auto_confirm(s: &mut AppState) {
 
 pub fn start_new_session(s: &mut AppState) {
     s.finish_pending_turn_timing(crate::app::TurnOutcome::Cancelled);
-    if crate::config::session_has_content(&s.history) {
-        crate::config::save_session_history(&s.active_session_id, &s.history);
+    if crate::sessions::session_has_content(&s.history) {
+        crate::sessions::save_session_history(&s.active_session_id, &s.history);
     }
     reset_active_session_state(s);
     s.tip_index = crate::app::random_tip_index();
@@ -311,9 +311,9 @@ pub fn start_new_session(s: &mut AppState) {
     s.history.clear();
 
     // Switch to a new active session ID
-    s.active_session_id = crate::config::create_new_session(&mut s.config);
-    crate::config::set_active_session_id(&s.active_session_id);
-    crate::config::save_session_history(&s.active_session_id, &s.history);
+    s.active_session_id = crate::sessions::create_new_session(&mut s.config);
+    crate::sessions::set_active_session_id(&s.active_session_id);
+    crate::sessions::save_session_history(&s.active_session_id, &s.history);
     // The new chat keeps this frontend's YOLO setting; record it so the
     // session starts the same way when another owner picks it up.
     s.record_auto_confirm();
@@ -495,7 +495,9 @@ pub fn parse_token_count(input: &str) -> Option<u32> {
 /// Defaults to current-workspace only (parent/child match); legacy sessions
 /// with no workspace recorded are included and should be labeled
 /// "no workspace recorded". Explicit `--resume <id>` bypasses this filter.
-pub fn build_session_list_with_truncation(s: &AppState) -> (Vec<crate::config::SessionMeta>, bool) {
+pub fn build_session_list_with_truncation(
+    s: &AppState,
+) -> (Vec<crate::sessions::SessionMeta>, bool) {
     build_session_list_scoped_with_truncation(s, false)
 }
 
@@ -511,12 +513,12 @@ pub fn build_session_list_with_truncation(s: &AppState) -> (Vec<crate::config::S
 pub fn build_session_list_scoped_with_truncation(
     s: &AppState,
     show_all: bool,
-) -> (Vec<crate::config::SessionMeta>, bool) {
+) -> (Vec<crate::sessions::SessionMeta>, bool) {
     const MAX_SESSIONS: usize = 50;
     let scope = session_list_scope(show_all);
-    let (mut list, mut truncated) = crate::config::list_sessions_in_scope(MAX_SESSIONS, &scope);
-    if !crate::config::session_has_content(&s.history)
-        && let Some(live) = crate::config::live_session_meta()
+    let (mut list, mut truncated) = crate::sessions::list_sessions_in_scope(MAX_SESSIONS, &scope);
+    if !crate::sessions::session_has_content(&s.history)
+        && let Some(live) = crate::sessions::live_session_meta()
         && !list.iter().any(|m| m.path == live.path)
     {
         list.insert(0, live);
@@ -530,14 +532,14 @@ pub fn build_session_list_scoped_with_truncation(
 
 /// The scope the session picker lists under. An undeterminable working
 /// directory falls back to `All` rather than hiding every session.
-pub fn session_list_scope(show_all: bool) -> crate::config::SessionScope {
+pub fn session_list_scope(show_all: bool) -> crate::sessions::SessionScope {
     if show_all {
-        return crate::config::SessionScope::All;
+        return crate::sessions::SessionScope::All;
     }
-    crate::config::SessionScope::for_current_dir()
+    crate::sessions::SessionScope::for_current_dir()
 }
 
-pub fn build_session_list(s: &AppState) -> Vec<crate::config::SessionMeta> {
+pub fn build_session_list(s: &AppState) -> Vec<crate::sessions::SessionMeta> {
     let (list, _) = build_session_list_with_truncation(s);
     list
 }
@@ -551,14 +553,14 @@ pub fn is_session_list_truncated(total_sessions: usize) -> bool {
 /// isolated task worktree when it can be reattached (#1496), otherwise the
 /// recorded cwd when it still exists. Missing records keep the current
 /// directory. Reports whether the working directory changed.
-pub fn adopt_session_workspace(s: &mut AppState, meta: &crate::config::SessionMeta) -> bool {
-    let session_id = crate::config::session_id_from_path(&meta.path).unwrap_or_default();
+pub fn adopt_session_workspace(s: &mut AppState, meta: &crate::sessions::SessionMeta) -> bool {
+    let session_id = crate::sessions::session_id_from_path(&meta.path).unwrap_or_default();
     // Read the whole record rather than rebuilding one from the meta's embedded
     // cwd: the record is the only place `task_workspace_id` lives, and a resume
     // already opens the whole transcript, so one small extra read here costs
     // nothing and keeps the isolated-worktree reattach above working (#1533).
     let workspace = (!session_id.is_empty())
-        .then(|| crate::config::load_session_workspace(&session_id))
+        .then(|| crate::sessions::load_session_workspace(&session_id))
         .flatten();
     let Some(workspace) = workspace else {
         return false;
@@ -566,7 +568,7 @@ pub fn adopt_session_workspace(s: &mut AppState, meta: &crate::config::SessionMe
     // Reattach an isolated task worktree first so resume reuses its
     // writable roots instead of starting over in the source checkout.
     if let Some(descriptor_id) = workspace.task_workspace_id.as_deref()
-        && let Some(manager) = crate::config::workspace_manager()
+        && let Some(manager) = crate::sessions::workspace_manager()
         && let Ok(descriptor) = manager.resume(descriptor_id)
     {
         s.workspace_root = Some(descriptor.workspace_path.clone());
@@ -608,7 +610,7 @@ pub fn adopt_detached_session(s: &mut AppState, session_id: &str) -> String {
         return "That thread is already open here.".to_owned();
     }
     let Some(meta) = build_session_list(s).into_iter().find(|meta| {
-        crate::config::session_id_from_path(&meta.path).as_deref() == Some(session_id)
+        crate::sessions::session_id_from_path(&meta.path).as_deref() == Some(session_id)
     }) else {
         return format!("No saved thread '{session_id}' found.");
     };
@@ -698,8 +700,8 @@ fn owner_pid_is_rustcode(pid: u32) -> bool {
         .is_some_and(|name| name == own.file_name().unwrap_or_default())
 }
 
-pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) -> bool {
-    let mut loaded = crate::config::load_session_file(&meta.path);
+pub fn load_session_into(s: &mut AppState, meta: &crate::sessions::SessionMeta) -> bool {
+    let mut loaded = crate::sessions::load_session_file(&meta.path);
     if loaded.is_empty() {
         s.history.push(ChatMessage::new(
             "system",
@@ -718,25 +720,25 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     // Finalize against the outgoing session before replacing its ID/history.
     s.finish_pending_turn_timing(crate::app::TurnOutcome::Cancelled);
     if finalizing_current
-        && crate::config::session_id_from_path(&meta.path).as_deref()
+        && crate::sessions::session_id_from_path(&meta.path).as_deref()
             == Some(s.active_session_id.as_str())
     {
         loaded = s.history.as_slice().to_vec();
         loaded.retain(|m| !(m.role == "system" && m.content.starts_with("Resumed session ")));
     }
     // Save current active session history if it has content
-    if crate::config::session_has_content(&s.history) {
-        crate::config::save_session_history(&s.active_session_id, &s.history);
+    if crate::sessions::session_has_content(&s.history) {
+        crate::sessions::save_session_history(&s.active_session_id, &s.history);
     }
 
     // Extract session ID from the loaded path
-    if let Some(session_id_str) = crate::config::session_id_from_path(&meta.path) {
+    if let Some(session_id_str) = crate::sessions::session_id_from_path(&meta.path) {
         // Flush the outgoing session's queued history before retargeting.
-        crate::config::flush_history();
+        crate::sessions::flush_history();
         s.active_session_id = session_id_str;
         s.config.last_active_session_id = Some(s.active_session_id.clone());
         crate::config::save_entire_config(&s.config);
-        crate::config::set_active_session_id(&s.active_session_id);
+        crate::sessions::set_active_session_id(&s.active_session_id);
     }
 
     s.history.replace(loaded);
@@ -750,7 +752,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     // still exists; otherwise the current directory is kept.
     let workspace_switched = adopt_session_workspace(s, meta);
     restore_segment_checkpoint(s);
-    s.image_analysis_cache = crate::config::load_session_image_cache(&s.active_session_id);
+    s.image_analysis_cache = crate::sessions::load_session_image_cache(&s.active_session_id);
     s.history_display_start = 0;
     if workspace_switched && let Some(cwd) = s.task_working_directory.as_deref() {
         s.history.push(ChatMessage::new(
@@ -758,7 +760,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
             format!("Switched to the thread's workspace {}", cwd.display()),
         ));
     }
-    crate::config::save_session_history(&s.active_session_id, &s.history);
+    crate::sessions::save_session_history(&s.active_session_id, &s.history);
     s.set_transient_notice(format!("Resumed thread \"{}\"", meta.title));
     true
 }
@@ -767,7 +769,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
 /// context remains idle until the user explicitly continues it.
 /// Stale or foreign checkpoints are ignored.
 pub(crate) fn restore_segment_checkpoint(s: &mut AppState) {
-    let Some(checkpoint) = crate::config::load_segment_checkpoint(&s.active_session_id) else {
+    let Some(checkpoint) = crate::sessions::load_segment_checkpoint(&s.active_session_id) else {
         return;
     };
     if !checkpoint.continuation_pending && !checkpoint.background_pending {
@@ -947,7 +949,7 @@ mod workspace_tests {
     fn stored_meta(
         session_id: &str,
         workspace: Option<&std::path::Path>,
-    ) -> crate::config::SessionMeta {
+    ) -> crate::sessions::SessionMeta {
         let store = rustcode_session::SessionStore::new(
             crate::config::get_config_dir().expect("config dir"),
         );
@@ -961,7 +963,7 @@ mod workspace_tests {
         store
             .save_session_workspace(
                 session_id,
-                &crate::config::SessionWorkspace {
+                &crate::sessions::SessionWorkspace {
                     cwd: workspace
                         .map(std::path::Path::to_path_buf)
                         .unwrap_or_default(),

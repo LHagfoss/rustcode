@@ -27,7 +27,7 @@ pub(super) fn as_error_message(message: &str) -> String {
 /// preview instead of handing the model base64 (#2564).
 fn mcp_result_content(value: &Value) -> String {
     let artifacts = super::get_active_session_id()
-        .and_then(|session| crate::config::get_active_session_artifacts_dir(&session));
+        .and_then(|session| crate::sessions::get_active_session_artifacts_dir(&session));
     mcp_result_content_in(value, artifacts.as_deref())
 }
 

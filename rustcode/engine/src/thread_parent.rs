@@ -64,10 +64,10 @@ pub(crate) fn record(child: &str, parent: &str, relationship: SessionRelationshi
     }
     let parent = rustcode_session::SessionParent {
         id: Some(parent.to_owned()),
-        title: crate::config::load_session_title(parent).filter(|title| !title.is_empty()),
+        title: crate::sessions::load_session_title(parent).filter(|title| !title.is_empty()),
         relationship: Some(relationship),
     };
-    crate::config::save_session_parent(child, &parent);
+    crate::sessions::save_session_parent(child, &parent);
 }
 
 /// The first user message of `history`, with a delivered task's heading
@@ -128,7 +128,7 @@ pub(crate) fn backfill() -> Report {
         .and_then(|book| book.get("book")?.get("links")?.as_array().cloned())
         .unwrap_or_default();
     let mut report = Report::default();
-    for path in crate::config::session_history_paths() {
+    for path in crate::sessions::session_history_paths() {
         report.threads += 1;
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
@@ -141,10 +141,10 @@ pub(crate) fn backfill() -> Report {
         {
             continue;
         }
-        let Some(id) = crate::config::session_id_from_path(&path) else {
+        let Some(id) = crate::sessions::session_id_from_path(&path) else {
             continue;
         };
-        if crate::config::load_session_parent(&id).is_some() {
+        if crate::sessions::load_session_parent(&id).is_some() {
             continue;
         }
         let Ok(history) = serde_json::from_slice::<Vec<ChatMessage>>(&bytes) else {
@@ -164,7 +164,7 @@ pub(crate) fn backfill() -> Report {
             title: parent_title.or_else(|| Some(title.to_owned())),
             relationship: Some(SessionRelationship::Delegate),
         };
-        crate::config::save_session_parent(&id, &parent);
+        crate::sessions::save_session_parent(&id, &parent);
         report.delegated += 1;
     }
     report
@@ -246,11 +246,11 @@ mod tests {
 
     #[test]
     fn a_recorded_relationship_survives_in_the_thread_metadata() {
-        let parent = crate::config::create_detached_session();
-        let child = crate::config::create_detached_session();
-        crate::config::save_session_title(&parent, "Update the sidebar");
+        let parent = crate::sessions::create_detached_session();
+        let child = crate::sessions::create_detached_session();
+        crate::sessions::save_session_title(&parent, "Update the sidebar");
         record(&child, &parent, SessionRelationship::SideChat);
-        let saved = crate::config::load_session_parent(&child).expect("recorded parent");
+        let saved = crate::sessions::load_session_parent(&child).expect("recorded parent");
         assert_eq!(saved.id.as_deref(), Some(parent.as_str()));
         assert_eq!(saved.title.as_deref(), Some("Update the sidebar"));
         assert_eq!(saved.relationship, Some(SessionRelationship::SideChat));
@@ -298,9 +298,9 @@ mod tests {
 
     #[test]
     fn the_pass_records_a_parent_once() {
-        let child = crate::config::create_detached_session();
+        let child = crate::sessions::create_detached_session();
         assert!(!child.is_empty());
-        let dir = crate::config::get_active_session_dir(&child).expect("session dir");
+        let dir = crate::sessions::get_active_session_dir(&child).expect("session dir");
         let history = vec![
             ChatMessage::new(
                 "user",
@@ -313,21 +313,21 @@ mod tests {
             serde_json::to_string(&history).unwrap(),
         )
         .unwrap();
-        crate::config::save_session_title(&child, "Research: the sidebar");
+        crate::sessions::save_session_title(&child, "Research: the sidebar");
 
-        assert_eq!(crate::config::load_session_parent(&child), None);
+        assert_eq!(crate::sessions::load_session_parent(&child), None);
         let first = backfill();
         assert!(first.threads >= 1);
         assert!(first.delegated >= 1);
-        let parent = crate::config::load_session_parent(&child).expect("recorded parent");
+        let parent = crate::sessions::load_session_parent(&child).expect("recorded parent");
         // No link in this test's store: the heading is all there is.
         assert_eq!(parent.id, None);
         assert_eq!(parent.title.as_deref(), Some("Update the sidebar"));
         assert_eq!(parent.relationship, Some(SessionRelationship::Delegate));
 
         // The next pass leaves it alone.
-        let before = crate::config::load_session_parent(&child);
+        let before = crate::sessions::load_session_parent(&child);
         backfill();
-        assert_eq!(crate::config::load_session_parent(&child), before);
+        assert_eq!(crate::sessions::load_session_parent(&child), before);
     }
 }

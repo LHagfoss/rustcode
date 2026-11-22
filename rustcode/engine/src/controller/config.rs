@@ -14,9 +14,9 @@
 use std::path::PathBuf;
 
 pub use crate::config::{
-    AgentMode, ApiProtocol, AppConfig, ModelProfile, MonthlyUsage, SandboxMode, SessionMeta,
-    ToolProtocol,
+    AgentMode, ApiProtocol, AppConfig, ModelProfile, SandboxMode, ToolProtocol,
 };
+pub use crate::sessions::{MonthlyUsage, SessionMeta};
 
 /// The effective shell permissions for a mode, as shown in the status line,
 /// the welcome banner, and `/status`. Frontends render this string; they must

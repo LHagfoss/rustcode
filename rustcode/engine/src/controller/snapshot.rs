@@ -104,8 +104,8 @@ pub struct SessionChoice {
 }
 
 impl SessionChoice {
-    pub(crate) fn from_meta(session: &crate::config::SessionMeta) -> Self {
-        let id = crate::config::session_id_from_path(&session.path).unwrap_or_default();
+    pub(crate) fn from_meta(session: &crate::sessions::SessionMeta) -> Self {
+        let id = crate::sessions::session_id_from_path(&session.path).unwrap_or_default();
         // The store embeds the recorded cwd in every `SessionMeta` it builds, so
         // projecting a picker row costs no store read at all (#1533). `None` is
         // a legacy session with no workspace recorded, not a missing read.
@@ -518,14 +518,14 @@ impl ControllerSnapshot {
             .iter()
             .map(SessionChoice::from_meta)
             .collect::<Vec<_>>();
-        if crate::config::session_has_content(&state.history) {
+        if crate::sessions::session_has_content(&state.history) {
             sessions.retain(|choice| choice.id != state.active_session_id);
             sessions.insert(
                 0,
                 SessionChoice {
                     id: state.active_session_id.clone(),
-                    title: crate::config::load_session_title(&state.active_session_id)
-                        .unwrap_or_else(|| crate::config::session_title(&state.history)),
+                    title: crate::sessions::load_session_title(&state.active_session_id)
+                        .unwrap_or_else(|| crate::sessions::session_title(&state.history)),
                     when: state
                         .history
                         .last()

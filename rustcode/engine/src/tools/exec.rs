@@ -780,7 +780,7 @@ fn run_command_output_unguarded(
     let resolved_cwd = match cwd {
         Some("sandbox") | Some("./sandbox") => {
             if let Some(session_id) = get_active_session_id() {
-                crate::config::get_active_session_sandbox_dir(&session_id)
+                crate::sessions::get_active_session_sandbox_dir(&session_id)
             } else {
                 None
             }
@@ -870,7 +870,7 @@ fn run_command_output_unguarded(
         command_str.to_owned()
     };
     let session_scratch = get_active_session_id()
-        .and_then(|session_id| crate::config::get_active_session_sandbox_dir(&session_id));
+        .and_then(|session_id| crate::sessions::get_active_session_sandbox_dir(&session_id));
     // The file tools' `sandbox/` is the session scratch directory; name it
     // for the shell too, so a command can reach what those tools wrote. It
     // goes right after PATH so an explicit `env` entry still wins.
@@ -1595,7 +1595,7 @@ fn task_output_log_path(
     session_id: &str,
     task_id: &str,
 ) -> Result<Option<std::path::PathBuf>, String> {
-    let Some(session_dir) = crate::config::get_active_session_dir(session_id) else {
+    let Some(session_dir) = crate::sessions::get_active_session_dir(session_id) else {
         return Ok(None);
     };
     let directory = session_dir.join("task-logs");

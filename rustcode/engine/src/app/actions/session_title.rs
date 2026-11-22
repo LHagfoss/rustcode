@@ -87,11 +87,11 @@ pub(crate) fn normalize_generated_title(raw: &str) -> Option<String> {
 /// `expected`, the fallback saved from its first prompt. A title the user
 /// renamed it to, or the model set with `set_session_title`, is kept.
 pub(crate) fn apply_generated_title(session_id: &str, expected: Option<&str>, title: &str) -> bool {
-    let current = crate::config::load_session_title(session_id);
+    let current = crate::sessions::load_session_title(session_id);
     if current.as_deref() != expected || current.as_deref() == Some(title) {
         return false;
     }
-    crate::config::save_session_title(session_id, title);
+    crate::sessions::save_session_title(session_id, title);
     true
 }
 
@@ -108,12 +108,12 @@ pub(crate) async fn generate_session_title(
     if session_id.is_empty() || !wants_generated_title(prompt) {
         return None;
     }
-    let project = crate::config::load_session_repo(session_id);
+    let project = crate::sessions::load_session_repo(session_id);
     if crate::text_generation::configured_for(project.as_deref()) {
         if !state.lock().await.config.generate_session_titles {
             return None;
         }
-        let expected = crate::config::load_session_title(session_id);
+        let expected = crate::sessions::load_session_title(session_id);
         let answer = crate::text_generation::generate(crate::text_generation::GenerateRequest {
             kind: "thread_title".into(),
             prompt: Some(prompt.into()),
@@ -150,7 +150,7 @@ pub(crate) async fn generate_session_title(
         (Arc::new(Mutex::new(temporary)), request_id)
     };
     // The fallback saved as the prompt was recorded; only it may be replaced.
-    let expected = crate::config::load_session_title(session_id);
+    let expected = crate::sessions::load_session_title(session_id);
     let (url, model) = {
         let temp = temporary.lock().await;
         (temp.api_base_url.clone(), temp.model_name.clone())
@@ -278,15 +278,15 @@ mod tests {
     #[test]
     fn a_generated_title_replaces_only_the_fallback() {
         let session = &test_session("fallback");
-        crate::config::save_session_title(session, "please look at the failing upload test and…");
-        let fallback = crate::config::load_session_title(session);
+        crate::sessions::save_session_title(session, "please look at the failing upload test and…");
+        let fallback = crate::sessions::load_session_title(session);
         assert!(apply_generated_title(
             session,
             fallback.as_deref(),
             "Fix failing upload test"
         ));
         assert_eq!(
-            crate::config::load_session_title(session).as_deref(),
+            crate::sessions::load_session_title(session).as_deref(),
             Some("Fix failing upload test")
         );
     }
@@ -294,18 +294,18 @@ mod tests {
     #[test]
     fn a_late_title_never_overwrites_a_rename() {
         let session = &test_session("rename");
-        crate::config::save_session_title(session, "first line of the prompt");
-        let fallback = crate::config::load_session_title(session);
+        crate::sessions::save_session_title(session, "first line of the prompt");
+        let fallback = crate::sessions::load_session_title(session);
         // The user renames the chat, or the model calls `set_session_title`,
         // while the request is out.
-        crate::config::save_session_title(session, "My upload fix");
+        crate::sessions::save_session_title(session, "My upload fix");
         assert!(!apply_generated_title(
             session,
             fallback.as_deref(),
             "Fix failing upload test"
         ));
         assert_eq!(
-            crate::config::load_session_title(session).as_deref(),
+            crate::sessions::load_session_title(session).as_deref(),
             Some("My upload fix")
         );
     }
@@ -313,9 +313,9 @@ mod tests {
     #[test]
     fn a_title_is_kept_per_session_after_a_switch() {
         let (session, other) = (&test_session("switch"), &test_session("other"));
-        crate::config::save_session_title(session, "first line of the prompt");
-        crate::config::save_session_title(other, "Another chat");
-        let fallback = crate::config::load_session_title(session);
+        crate::sessions::save_session_title(session, "first line of the prompt");
+        crate::sessions::save_session_title(other, "Another chat");
+        let fallback = crate::sessions::load_session_title(session);
         // The user switched to another chat before the title came back: it
         // still lands on the session it was asked for, and only there.
         assert!(apply_generated_title(
@@ -324,7 +324,7 @@ mod tests {
             "Fix failing upload test"
         ));
         assert_eq!(
-            crate::config::load_session_title(other).as_deref(),
+            crate::sessions::load_session_title(other).as_deref(),
             Some("Another chat")
         );
     }

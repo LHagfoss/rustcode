@@ -296,7 +296,7 @@ pub fn project_session_info(state: &AppState, context: &ProjectionContext) -> Re
                 .iter()
                 .any(|message| message.role == "user" && !message.content.starts_with('/'))
             {
-                crate::config::session_title(&state.history)
+                crate::sessions::session_title(&state.history)
             } else {
                 String::new()
             }

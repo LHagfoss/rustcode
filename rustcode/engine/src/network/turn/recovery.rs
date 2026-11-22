@@ -179,7 +179,7 @@ async fn handle_output_limit_stop(
             }),
         );
         ctx.lifecycle.stop_reason = Some(reason);
-        crate::config::save_session_history(&s.active_session_id, &s.history);
+        crate::sessions::save_session_history(&s.active_session_id, &s.history);
         s.clear_current_response();
         return ResponseRecoveryOutcome::Stop;
     }
@@ -206,7 +206,7 @@ async fn handle_output_limit_stop(
         }),
     );
     push_or_replace_recovery_notice(s.history.as_mut_vec(), prompt.to_owned());
-    crate::config::save_session_history(&s.active_session_id, &s.history);
+    crate::sessions::save_session_history(&s.active_session_id, &s.history);
     s.clear_current_response();
     s.status = AppStatus::Streaming;
     s.stream_tracker = Some(StreamTracker::new());
@@ -625,7 +625,7 @@ pub(super) async fn handle_response_recovery(
             ctx.response.final_content_persisted = true;
             ctx.lifecycle.task_completed = true;
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
-            crate::config::save_session_history(&s.active_session_id, &s.history);
+            crate::sessions::save_session_history(&s.active_session_id, &s.history);
             s.clear_current_response();
             drop(s);
             ctx.lifecycle.turn_machine.abandon_tool_phase();
@@ -686,7 +686,7 @@ pub(super) async fn handle_response_recovery(
                     s.history.as_mut_vec(),
                     recovery_prompt.to_string(),
                 );
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
@@ -736,7 +736,7 @@ pub(super) async fn handle_response_recovery(
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 ctx.response.final_content_persisted = true;
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 drop(s);
                 ctx.lifecycle.turn_machine.abandon_tool_phase();

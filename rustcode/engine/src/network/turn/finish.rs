@@ -299,11 +299,11 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
         });
     let active_id = s.active_session_id.clone();
     let persistence_started = std::time::Instant::now();
-    crate::config::save_session_history(&active_id, &s.history);
+    crate::sessions::save_session_history(&active_id, &s.history);
     ctx.performance.persistence_enqueue_us += crate::benchmark::elapsed_us(persistence_started);
     ctx.performance.wall_us = crate::benchmark::elapsed_us(ctx.lifecycle.turn_started_at);
     s.last_turn_performance = Some(ctx.performance.clone());
-    if let Some(dir) = crate::config::get_active_session_dir(&active_id) {
+    if let Some(dir) = crate::sessions::get_active_session_dir(&active_id) {
         if let Ok(bytes) = serde_json::to_vec_pretty(&ctx.performance) {
             let path = dir.join("performance.json");
             let saved = (|| -> std::io::Result<()> {
@@ -319,7 +319,7 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
         }
     }
 
-    crate::config::flush_history_async();
+    crate::sessions::flush_history_async();
     crate::logger::operational_event(
         "turn.performance",
         serde_json::json!({"session_id": active_id, "performance": ctx.performance}),
@@ -329,7 +329,7 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
     s.enter_idle();
     s.request_redraw();
     if let Some(u) = &turn_usage {
-        crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
+        crate::sessions::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
     }
     // The turn, its tokens and its tool calls, as metadata only, for the local
     // data store (`docs/data-store.md`). A failure there is logged and cannot
@@ -708,7 +708,7 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
                     "system",
                     format!("[⚠ Build could not be verified — {errors}]"),
                 ));
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 drop(s);
             } else {
                 ctx.recovery.finish_gate_retries += 1;
@@ -734,7 +734,7 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
                                  Compiler errors:\n{errors}]"
                             ),
                         ));
-                crate::config::save_session_history(&s.active_session_id, &s.history);
+                crate::sessions::save_session_history(&s.active_session_id, &s.history);
                 s.clear_current_response();
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
@@ -775,7 +775,7 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
             msg.thought_time_ms = thought_time_ms;
             msg.thought_tokens = thought_tokens;
             s.history.push(msg);
-            crate::config::save_session_history(&s.active_session_id, &s.history);
+            crate::sessions::save_session_history(&s.active_session_id, &s.history);
             ctx.response.final_content_persisted = true;
         }
         ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
@@ -797,7 +797,7 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
             msg.thought_time_ms = thought_time_ms;
             msg.thought_tokens = thought_tokens;
             s.history.push(msg);
-            crate::config::save_session_history(&s.active_session_id, &s.history);
+            crate::sessions::save_session_history(&s.active_session_id, &s.history);
             ctx.response.final_content_persisted = true;
         }
         ctx.lifecycle.task_completed = true;
@@ -830,7 +830,7 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
             msg.thought_time_ms = thought_time_ms;
             msg.thought_tokens = thought_tokens;
             s.history.push(msg);
-            crate::config::save_session_history(&s.active_session_id, &s.history);
+            crate::sessions::save_session_history(&s.active_session_id, &s.history);
             ctx.response.final_content_persisted = true;
         }
         ctx.response.final_content = summary;
@@ -845,7 +845,7 @@ pub(super) async fn handle_plain_response_finish_for_session<P: policy::TurnPoli
         msg.thought_time_ms = thought_time_ms;
         msg.thought_tokens = thought_tokens;
         s.history.push(msg);
-        crate::config::save_session_history(&s.active_session_id, &s.history);
+        crate::sessions::save_session_history(&s.active_session_id, &s.history);
         ctx.response.final_content_persisted = true;
         ctx.lifecycle.task_completed = true;
         ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);

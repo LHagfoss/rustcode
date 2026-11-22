@@ -1092,7 +1092,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(false) => {
                     rustcode::shell_env::hydrate_all_missing();
                     rustcode::acp::run_acp(cli_args.yolo).await?;
-                    rustcode::config::flush_history();
+                    rustcode::sessions::flush_history();
                     return Ok(());
                 }
                 Err(error) => {
@@ -1153,7 +1153,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 run_session_export(id.as_deref(), out.as_deref());
             }
             Some(crate::cli::SessionCommands::Migrate { dry_run }) => {
-                let Some(report) = rustcode::config::migrate_legacy_sessions(*dry_run) else {
+                let Some(report) = rustcode::sessions::migrate_legacy_sessions(*dry_run) else {
                     eprintln!("Thread migration failed: configuration directory is unavailable.");
                     std::process::exit(1);
                 };
@@ -1209,7 +1209,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 run_sessions_search(query, *all || cli_args.all, *limit, *json);
             }
             Some(crate::cli::SessionCommands::Path { id }) => {
-                match rustcode::config::get_active_session_dir(id) {
+                match rustcode::sessions::get_active_session_dir(id) {
                     Some(dir) if dir.is_dir() => println!("{}", dir.display()),
                     Some(_) => {
                         eprintln!("No saved thread with id `{id}`.");
@@ -1373,7 +1373,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
                 );
-                if let Err(e) = rustcode::config::sync_config_pull() {
+                if let Err(e) = rustcode::sessions::sync_config_pull() {
                     eprintln!("Sync pull failed: {e}");
                     std::process::exit(1);
                 }
@@ -1381,14 +1381,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             crate::cli::SyncAction::Push => {
                 println!("💾 [sync] Staging and pushing config, skills, and themes...");
-                if let Err(e) = rustcode::config::sync_config_push() {
+                if let Err(e) = rustcode::sessions::sync_config_push() {
                     eprintln!("Sync push failed: {e}");
                     std::process::exit(1);
                 }
                 println!("✅ [sync] Config sync complete!");
             }
             crate::cli::SyncAction::Init(remote_url) => {
-                if let Err(e) = rustcode::config::init_sync_repo(&remote_url) {
+                if let Err(e) = rustcode::sessions::init_sync_repo(&remote_url) {
                     eprintln!("Error initializing sync repo: {e}");
                     std::process::exit(1);
                 }
@@ -1400,12 +1400,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "📥 [sync] Pulling latest config, skills, and themes from remote origin..."
                 );
-                if let Err(e) = rustcode::config::sync_config_pull() {
+                if let Err(e) = rustcode::sessions::sync_config_pull() {
                     eprintln!("Sync failed during pull: {e}");
                     std::process::exit(1);
                 }
                 println!("💾 [sync] Staging and pushing config, skills, and themes...");
-                if let Err(e) = rustcode::config::sync_config_push() {
+                if let Err(e) = rustcode::sessions::sync_config_push() {
                     eprintln!("Sync failed during push: {e}");
                     std::process::exit(1);
                 }
@@ -1462,7 +1462,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         rustcode::shell_env::hydrate_all_missing();
         match rustcode::server::run(cli_args.yolo, *service).await? {
-            rustcode::server::RunOutcome::Stopped => rustcode::config::flush_history(),
+            rustcode::server::RunOutcome::Stopped => rustcode::sessions::flush_history(),
             rustcode::server::RunOutcome::AlreadyRunning(Some(info)) => println!(
                 "A RustCode server is already running for this user: pid {}, version {}, at {}.",
                 info.pid, info.version, info.endpoint
@@ -1478,7 +1478,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if cli_args.acp || acp_subcommand {
         rustcode::shell_env::hydrate_all_missing();
         rustcode::acp::run_acp(cli_args.yolo).await?;
-        rustcode::config::flush_history();
+        rustcode::sessions::flush_history();
         return Ok(());
     }
 
@@ -1516,11 +1516,11 @@ fn run_session_export(id: Option<&str>, out: Option<&std::path::Path>) {
     let id = match id {
         Some(id) => id.to_owned(),
         None => {
-            let scope = rustcode::config::SessionScope::for_current_dir();
-            let (sessions, _) = rustcode::config::list_sessions_in_scope(1, &scope);
+            let scope = rustcode::sessions::SessionScope::for_current_dir();
+            let (sessions, _) = rustcode::sessions::list_sessions_in_scope(1, &scope);
             match sessions
                 .first()
-                .and_then(|meta| rustcode::config::session_id_from_path(&meta.path))
+                .and_then(|meta| rustcode::sessions::session_id_from_path(&meta.path))
             {
                 Some(id) => id,
                 None => {
@@ -1530,7 +1530,7 @@ fn run_session_export(id: Option<&str>, out: Option<&std::path::Path>) {
             }
         }
     };
-    match rustcode::config::export_session(&id, out) {
+    match rustcode::sessions::export_session(&id, out) {
         Ok(path) => println!("{}", path.display()),
         Err(error) => {
             eprintln!("{error}");
@@ -1574,7 +1574,7 @@ impl ThreadStatusChange {
 /// terminal picker read the same `status.json`. One line per thread, an
 /// unknown or ambiguous id on stderr, and a non-zero exit if any failed.
 fn run_sessions_set_status(ids: &[String], change: ThreadStatusChange) {
-    let saved = rustcode::config::session_ids();
+    let saved = rustcode::sessions::session_ids();
     let mut failed = false;
     for raw in ids {
         let id = match resolve_thread_id(raw, &saved) {
@@ -1586,18 +1586,18 @@ fn run_sessions_set_status(ids: &[String], change: ThreadStatusChange) {
             }
         };
         if matches!(change, ThreadStatusChange::Unsettle)
-            && rustcode::config::session_status(&id) == "review"
+            && rustcode::sessions::session_status(&id) == "review"
         {
             println!("kept {id} review");
             continue;
         }
-        if let Err(error) = rustcode::config::set_session_status(&id, change.status()) {
+        if let Err(error) = rustcode::sessions::set_session_status(&id, change.status()) {
             eprintln!("Could not mark `{raw}` {}: {error}", change.word());
             failed = true;
             continue;
         }
         let title =
-            rustcode::config::load_session_title(&id).unwrap_or_else(|| "(untitled)".to_owned());
+            rustcode::sessions::load_session_title(&id).unwrap_or_else(|| "(untitled)".to_owned());
         println!("{} {id} {title}", change.word());
     }
     if failed {
@@ -1614,7 +1614,7 @@ pub(crate) fn resolve_thread_id(raw: &str, saved: &[String]) -> Result<String, S
     if let Some(id) = saved.iter().find(|id| id.as_str() == wanted) {
         return Ok(id.clone());
     }
-    if rustcode::config::get_active_session_dir(wanted).is_some_and(|dir| dir.is_dir()) {
+    if rustcode::sessions::get_active_session_dir(wanted).is_some_and(|dir| dir.is_dir()) {
         return Ok(wanted.to_owned());
     }
     let matches: Vec<&String> = saved.iter().filter(|id| id.starts_with(wanted)).collect();
@@ -1645,17 +1645,17 @@ pub(crate) fn resolve_thread_id(raw: &str, saved: &[String]) -> Result<String, S
 fn run_sessions_list(show_all: bool) {
     const LIMIT: usize = 50;
     let scope = if show_all {
-        rustcode::config::SessionScope::All
+        rustcode::sessions::SessionScope::All
     } else {
-        rustcode::config::SessionScope::for_current_dir()
+        rustcode::sessions::SessionScope::for_current_dir()
     };
-    let (sessions, truncated) = rustcode::config::list_sessions_in_scope(LIMIT, &scope);
+    let (sessions, truncated) = rustcode::sessions::list_sessions_in_scope(LIMIT, &scope);
     if sessions.is_empty() {
         println!("No saved threads found.");
         return;
     }
     for meta in &sessions {
-        let id = rustcode::config::session_id_from_path(&meta.path).unwrap_or_default();
+        let id = rustcode::sessions::session_id_from_path(&meta.path).unwrap_or_default();
         let workspace = meta
             .workspace_cwd
             .as_deref()
@@ -1682,11 +1682,11 @@ fn run_sessions_list(show_all: bool) {
 /// first. `--json` prints an array the desktop app reads.
 fn run_sessions_search(query: &str, show_all: bool, limit: usize, json: bool) {
     let scope = if show_all {
-        rustcode::config::SessionScope::All
+        rustcode::sessions::SessionScope::All
     } else {
-        rustcode::config::SessionScope::for_current_dir()
+        rustcode::sessions::SessionScope::for_current_dir()
     };
-    let hits = rustcode::config::search_sessions(query, limit, &scope);
+    let hits = rustcode::sessions::search_sessions(query, limit, &scope);
     if json {
         let rows: Vec<serde_json::Value> = hits
             .iter()

@@ -108,7 +108,7 @@ pub(super) fn zoom(args: &Value) -> Result<String, String> {
     let root = crate::config::get_config_dir().ok_or("configuration directory unavailable")?;
     // Compaction snapshots are queued before dispatch. Drain those writes so
     // the tool sees the current boundary, including on the first round after it.
-    crate::config::flush_history();
+    crate::sessions::flush_history();
     zoom_in_session(&root, &session, args)
 }
 

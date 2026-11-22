@@ -544,7 +544,7 @@ fn new_sessions_never_reuse_the_shared_last_active_session() {
     let cwd = tempfile::tempdir().unwrap();
     // The TUI reuses an empty last-active session; another process may own it.
     let (_, _, mut config) = crate::config::load_config();
-    let shared = crate::config::create_new_session(&mut config);
+    let shared = crate::sessions::create_new_session(&mut config);
 
     let first = new_session_state(cwd.path());
     let second = new_session_state(cwd.path());
@@ -566,14 +566,14 @@ async fn a_loaded_session_persists_only_to_its_own_history() {
     let cwd = tempfile::tempdir().unwrap();
     // session/new, then session/load of an older session, as the macOS app does.
     let created = new_session_state(cwd.path()).active_session_id;
-    crate::config::set_active_session_id(&created);
+    crate::sessions::set_active_session_id(&created);
     let loaded = rustcode_session::next_session_id();
     let earlier = vec![
         crate::app::ChatMessage::new("user", "check my daily dev feed"),
         crate::app::ChatMessage::new("assistant", "Here is your feed."),
     ];
     store.save_session_history(&loaded, &earlier);
-    crate::config::flush_history();
+    crate::sessions::flush_history();
 
     let mut state = build_loaded_app_state(&loaded, cwd.path(), earlier);
     state.history.push(crate::app::ChatMessage::new(
@@ -589,7 +589,7 @@ async fn a_loaded_session_persists_only_to_its_own_history() {
     )
     .await
     .expect("request preparation");
-    crate::config::flush_history();
+    crate::sessions::flush_history();
 
     let loaded_history = store.load_session_file(
         &store
@@ -632,7 +632,7 @@ fn acp_cwd_must_be_an_absolute_existing_directory() {
 
 #[test]
 fn session_info_uses_standard_title_and_marks_legacy_workspace_unknown() {
-    let meta = crate::config::SessionMeta {
+    let meta = crate::sessions::SessionMeta {
         path: PathBuf::from("/tmp/sessions/session-123/history.json"),
         title: "Inspect project".into(),
         when: "2026-09-24T00:00:00Z".into(),
@@ -654,7 +654,7 @@ fn session_info_dates_a_chat_by_its_last_message_not_its_file() {
     let path = directory.path().join("history.json");
     // Written now, as opening a chat rewrites its history.
     std::fs::write(&path, "[]").unwrap();
-    let meta = crate::config::SessionMeta {
+    let meta = crate::sessions::SessionMeta {
         path,
         title: "Old chat".into(),
         when: "2026-09-24T10:33:25.122403+02:00".into(),
@@ -666,7 +666,7 @@ fn session_info_dates_a_chat_by_its_last_message_not_its_file() {
         Some("2026-09-24T08:33:25.122403+00:00")
     );
 
-    let untimed = crate::config::SessionMeta {
+    let untimed = crate::sessions::SessionMeta {
         when: String::new(),
         ..meta
     };
@@ -675,9 +675,9 @@ fn session_info_dates_a_chat_by_its_last_message_not_its_file() {
 
 #[test]
 fn session_info_carries_the_parent_recorded_in_the_thread() {
-    let id = crate::config::create_detached_session();
-    let directory = crate::config::get_active_session_dir(&id).expect("session dir");
-    crate::config::save_session_parent(
+    let id = crate::sessions::create_detached_session();
+    let directory = crate::sessions::get_active_session_dir(&id).expect("session dir");
+    crate::sessions::save_session_parent(
         &id,
         &rustcode_session::SessionParent {
             id: Some("parent-session".into()),
@@ -685,7 +685,7 @@ fn session_info_carries_the_parent_recorded_in_the_thread() {
             relationship: Some(rustcode_session::SessionRelationship::Fork),
         },
     );
-    let meta = crate::config::SessionMeta {
+    let meta = crate::sessions::SessionMeta {
         path: directory.join("history.json"),
         title: "Research: the sidebar".into(),
         when: "2026-09-24T00:00:00Z".into(),
@@ -705,14 +705,14 @@ fn session_info_carries_the_parent_recorded_in_the_thread() {
 
 #[test]
 fn session_info_lists_a_recorded_repository_without_asking_git() {
-    let id = crate::config::create_detached_session();
-    let directory = crate::config::get_active_session_dir(&id).expect("session dir");
+    let id = crate::sessions::create_detached_session();
+    let directory = crate::sessions::get_active_session_dir(&id).expect("session dir");
     let repo = PathBuf::from("/Users/me/code/rustcode");
-    crate::config::save_session_repo(&id, Some(&repo));
+    crate::sessions::save_session_repo(&id, Some(&repo));
     // A folder that is not a git repository: only the record can name one,
     // and listing reads the record instead of running git (#3162).
     let cwd = tempfile::tempdir().unwrap();
-    let meta = crate::config::SessionMeta {
+    let meta = crate::sessions::SessionMeta {
         path: directory.join("history.json"),
         title: "Worktree thread".into(),
         when: "2026-09-24T00:00:00Z".into(),
@@ -733,10 +733,10 @@ fn session_info_lists_a_recorded_repository_without_asking_git() {
 fn session_info_does_not_publish_a_repository_for_a_thread_with_no_workspace() {
     // A legacy thread inherits the engine's cwd; publishing that folder's
     // repository would give it another project's scope (#3162).
-    let id = crate::config::create_detached_session();
-    let directory = crate::config::get_active_session_dir(&id).expect("session dir");
-    crate::config::save_session_repo(&id, Some(std::path::Path::new("/Users/me/code/rustcode")));
-    let meta = crate::config::SessionMeta {
+    let id = crate::sessions::create_detached_session();
+    let directory = crate::sessions::get_active_session_dir(&id).expect("session dir");
+    crate::sessions::save_session_repo(&id, Some(std::path::Path::new("/Users/me/code/rustcode")));
+    let meta = crate::sessions::SessionMeta {
         path: directory.join("history.json"),
         title: "Legacy thread".into(),
         when: "2026-09-24T00:00:00Z".into(),
@@ -755,9 +755,9 @@ fn session_info_does_not_publish_a_repository_for_a_thread_with_no_workspace() {
 /// (#3425): a listing falls back to the home folder instead.
 #[test]
 fn a_thread_with_no_workspace_lists_the_home_folder_not_the_engine_folder() {
-    let id = crate::config::create_detached_session();
-    let directory = crate::config::get_active_session_dir(&id).expect("session dir");
-    let meta = crate::config::SessionMeta {
+    let id = crate::sessions::create_detached_session();
+    let directory = crate::sessions::get_active_session_dir(&id).expect("session dir");
+    let meta = crate::sessions::SessionMeta {
         path: directory.join("history.json"),
         title: "Legacy thread".into(),
         when: "2026-09-24T00:00:00Z".into(),
@@ -3631,8 +3631,8 @@ async fn closed_load_with_a_second_client() {
     let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
     // A thread on disk that is not open in this engine.
     let session_id = on_the_connection_thread(|| {
-        let session_id = crate::config::create_detached_session();
-        crate::config::save_session_history(
+        let session_id = crate::sessions::create_detached_session();
+        crate::sessions::save_session_history(
             &session_id,
             &[
                 crate::app::ChatMessage::new("user", "an earlier question"),
@@ -3641,7 +3641,7 @@ async fn closed_load_with_a_second_client() {
         );
         // The history is written in the background.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while crate::config::load_session_by_id(&session_id).is_none() {
+        while crate::sessions::load_session_by_id(&session_id).is_none() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "the history is never written"
@@ -3758,12 +3758,12 @@ fn restart_restores_external_harness_account_native_session_and_parent() {
         let id = on_the_connection_thread({
             let cwd_path = cwd_path.clone();
             move || {
-                let id = crate::config::create_detached_session();
+                let id = crate::sessions::create_detached_session();
                 let mut record = crate::harness::store::HarnessRecord::new("claude-code", cwd_path);
                 record.account = Some("personal-1".into());
                 record.native_session_id = Some("saved-native-session".into());
                 crate::harness::store::save(&id, &record);
-                crate::config::save_session_parent(
+                crate::sessions::save_session_parent(
                     &id,
                     &rustcode_session::SessionParent {
                         id: Some("parent-thread".into()),
@@ -3785,14 +3785,17 @@ fn restart_restores_external_harness_account_native_session_and_parent() {
         );
         let inspected = id.clone();
         on_the_connection_thread(move || {
-            let parent = crate::config::load_session_parent(&inspected).unwrap();
+            let parent = crate::sessions::load_session_parent(&inspected).unwrap();
             assert_eq!(parent.id.as_deref(), Some("parent-thread"));
             assert_eq!(
                 parent.relationship,
                 Some(rustcode_session::SessionRelationship::Delegate)
             );
             session_repair::repair_session(&inspected).unwrap();
-            assert_eq!(crate::config::load_session_parent(&inspected), Some(parent));
+            assert_eq!(
+                crate::sessions::load_session_parent(&inspected),
+                Some(parent)
+            );
         });
         client.leave().await;
         server.shutdown().await;
@@ -3811,7 +3814,7 @@ async fn closed_external_load_with_a_second_client() {
     let session_id = on_the_connection_thread({
         let cwd_path = cwd_path.clone();
         move || {
-            let session_id = crate::config::create_detached_session();
+            let session_id = crate::sessions::create_detached_session();
             let mut record = crate::harness::store::HarnessRecord::new("claude-code", cwd_path);
             record.title = Some("Stored title".to_owned());
             crate::harness::store::save(&session_id, &record);

@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::ChatMessage;
+use crate::sessions::*;
 
 #[test]
 fn sandbox_modes_round_trip_and_default_to_trusted() {

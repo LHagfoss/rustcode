@@ -2061,7 +2061,7 @@ pub(crate) fn requested(meta: Option<&serde_json::Map<String, Value>>) -> Option
 
 /// Record that `session_id` runs in `worktree`, on both sides.
 pub(crate) fn attach(session_id: &str, worktree: &Worktree) {
-    if let Some(dir) = crate::config::get_active_session_dir(session_id)
+    if let Some(dir) = crate::sessions::get_active_session_dir(session_id)
         && let Ok(text) = serde_json::to_string_pretty(worktree)
     {
         let _ = std::fs::create_dir_all(&dir);
@@ -2069,7 +2069,7 @@ pub(crate) fn attach(session_id: &str, worktree: &Worktree) {
     }
     // The worktree knows its repository without asking git, so record it on
     // the thread now: `session/list` reads it later (#3162).
-    crate::config::save_session_repo(session_id, Some(&worktree.repo));
+    crate::sessions::save_session_repo(session_id, Some(&worktree.repo));
     let mut record = load_record(&worktree.path).unwrap_or_else(|| Record {
         worktree: worktree.clone(),
         session_ids: Vec::new(),
@@ -2093,7 +2093,7 @@ fn move_threads_to_repo(session_ids: &[String], repo: &Path) {
 /// Forget the worktree `session_id` ran in: its folder is gone, or the thread
 /// moved to the repository it came from.
 pub(crate) fn detach(session_id: &str) {
-    if let Some(dir) = crate::config::get_active_session_dir(session_id) {
+    if let Some(dir) = crate::sessions::get_active_session_dir(session_id) {
         let _ = std::fs::remove_file(dir.join(THREAD_FILE));
     }
 }
@@ -2109,7 +2109,7 @@ pub(crate) fn recover_missing_worktree(session_id: &str, cwd: &Path) -> Option<s
         return None;
     }
     let canonical = rustcode_session::canonicalize_best_effort;
-    let recorded = crate::config::load_session_workspace(session_id)?;
+    let recorded = crate::sessions::load_session_workspace(session_id)?;
     // A refreshed thread list may already offer the repository. Recover only
     // the exact removed workspace, and accept only it or its recorded repo.
     if canonical(&recorded.cwd) != canonical(&worktree.path)
@@ -2129,7 +2129,7 @@ pub(crate) fn of_session(session_id: &str) -> Option<Worktree> {
     if !rustcode_session::valid_session_id(session_id) {
         return None;
     }
-    let dir = crate::config::get_active_session_dir(session_id)?;
+    let dir = crate::sessions::get_active_session_dir(session_id)?;
     let text = std::fs::read_to_string(dir.join(THREAD_FILE)).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -2165,15 +2165,15 @@ pub(crate) fn recorded_repo(
 /// is missing: at creation, or the first load of a thread older than this
 /// record. `session/list` never calls this.
 pub(crate) fn session_repo(session_id: &str) -> Option<PathBuf> {
-    if let Some(repo) = crate::config::load_session_repo(session_id) {
+    if let Some(repo) = crate::sessions::load_session_repo(session_id) {
         return Some(repo);
     }
     if let Some(worktree) = of_session(session_id) {
-        crate::config::save_session_repo(session_id, Some(&worktree.repo));
+        crate::sessions::save_session_repo(session_id, Some(&worktree.repo));
         return Some(worktree.repo);
     }
     let repo = repo_of(&crate::checkpoints::thread_cwd(session_id)?)?;
-    crate::config::save_session_repo(session_id, Some(&repo));
+    crate::sessions::save_session_repo(session_id, Some(&repo));
     Some(repo)
 }
 
@@ -2990,9 +2990,9 @@ pub(crate) mod tests {
     #[test]
     fn a_new_thread_records_its_repository_so_listing_needs_no_git() {
         let (_dir, repo) = repo();
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         assert!(!id.is_empty(), "a test config dir holds sessions");
-        crate::config::save_session_workspace(
+        crate::sessions::save_session_workspace(
             &id,
             &rustcode_session::SessionWorkspace {
                 cwd: repo.clone(),
@@ -3004,14 +3004,14 @@ pub(crate) mod tests {
             agent_client_protocol::schema::v1::NewSessionResponse::new(id.clone()),
             None,
         );
-        assert_eq!(crate::config::load_session_repo(&id), Some(repo.clone()));
+        assert_eq!(crate::sessions::load_session_repo(&id), Some(repo.clone()));
         let meta = answer.meta.expect("thread meta");
         assert_eq!(meta["rustcode"]["repo"], json!(repo));
         // The record answers on its own, when the repository is gone and git
         // has nothing left to ask.
         std::fs::remove_dir_all(&repo).unwrap();
         assert_eq!(
-            recorded_repo(&id, crate::config::load_session_metadata(&id).as_ref()),
+            recorded_repo(&id, crate::sessions::load_session_metadata(&id).as_ref()),
             Some(repo)
         );
     }
@@ -3025,10 +3025,10 @@ pub(crate) mod tests {
             ..Default::default()
         })
         .unwrap();
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         assert!(!id.is_empty(), "a test config dir holds sessions");
         attach(&id, &worktree);
-        assert_eq!(crate::config::load_session_repo(&id), Some(repo));
+        assert_eq!(crate::sessions::load_session_repo(&id), Some(repo));
     }
 
     #[test]
@@ -3299,9 +3299,9 @@ pub(crate) mod tests {
             ..Default::default()
         })
         .unwrap();
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         seed_thread(&session_id);
-        crate::config::save_session_workspace(
+        crate::sessions::save_session_workspace(
             &session_id,
             &rustcode_session::SessionWorkspace {
                 cwd: worktree.path.clone(),
@@ -3315,10 +3315,10 @@ pub(crate) mod tests {
         assert_eq!(remove(&worktree.path, false).unwrap()["removed"], true);
 
         // The thread moved to the repository and no longer names the worktree.
-        let moved = crate::config::load_session_workspace(&session_id).unwrap();
+        let moved = crate::sessions::load_session_workspace(&session_id).unwrap();
         assert_eq!(moved.cwd, repo);
         assert_eq!(of_session(&session_id), None);
-        let dir = crate::config::get_active_session_dir(&session_id).unwrap();
+        let dir = crate::sessions::get_active_session_dir(&session_id).unwrap();
         assert!(!dir.join(THREAD_FILE).exists());
     }
 
@@ -3331,9 +3331,9 @@ pub(crate) mod tests {
             ..Default::default()
         })
         .unwrap();
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         seed_thread(&session_id);
-        crate::config::save_session_workspace(
+        crate::sessions::save_session_workspace(
             &session_id,
             &rustcode_session::SessionWorkspace {
                 cwd: worktree.path.clone(),
@@ -3354,7 +3354,7 @@ pub(crate) mod tests {
             Some(repo.clone())
         );
         assert_eq!(
-            crate::config::load_session_workspace(&session_id)
+            crate::sessions::load_session_workspace(&session_id)
                 .unwrap()
                 .cwd,
             repo
@@ -3376,8 +3376,8 @@ pub(crate) mod tests {
         let worktree = worktree.unwrap();
         assert_eq!(request.cwd, worktree.path);
         assert_eq!(worktree.branch, "fix/flaky-test");
-        let session_id = crate::config::create_detached_session();
-        let _ = crate::config::save_session_workspace(
+        let session_id = crate::sessions::create_detached_session();
+        let _ = crate::sessions::save_session_workspace(
             &session_id,
             &rustcode_session::SessionWorkspace {
                 cwd: worktree.path.clone(),
@@ -3414,9 +3414,9 @@ pub(crate) mod tests {
 
     /// A seeded thread that runs in `cwd`, as one started there is.
     fn thread_in(cwd: &Path) -> String {
-        let session_id = crate::config::create_detached_session();
+        let session_id = crate::sessions::create_detached_session();
         seed_thread(&session_id);
-        crate::config::save_session_workspace(
+        crate::sessions::save_session_workspace(
             &session_id,
             &rustcode_session::SessionWorkspace {
                 cwd: cwd.to_path_buf(),
@@ -3450,7 +3450,7 @@ pub(crate) mod tests {
         // The thread opens in the checkout, on the branch it handed over, and
         // the checkout really has the work.
         assert_eq!(
-            crate::config::load_session_workspace(&session_id)
+            crate::sessions::load_session_workspace(&session_id)
                 .unwrap()
                 .cwd,
             repo
@@ -3590,7 +3590,7 @@ pub(crate) mod tests {
         assert_eq!(answer["branch"], json!("feat/login-form"));
         let worktree = of_session(&session_id).expect("the thread runs in a worktree");
         assert_eq!(
-            crate::config::load_session_workspace(&session_id)
+            crate::sessions::load_session_workspace(&session_id)
                 .unwrap()
                 .cwd,
             worktree.path

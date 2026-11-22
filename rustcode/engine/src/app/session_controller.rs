@@ -80,19 +80,19 @@ impl SessionController {
         action: SessionAction,
     ) -> Result<SessionTransition, SessionError> {
         let (source_session_id, source_history) = match action {
-            SessionAction::Latest if crate::config::session_has_content(&state.history) => {
+            SessionAction::Latest if crate::sessions::session_has_content(&state.history) => {
                 (state.active_session_id.clone(), state.history.to_vec())
             }
             SessionAction::Latest => {
                 let meta = self.resolve_meta(state, SessionAction::Latest)?;
                 let source_id = session_id_from_meta(&meta)
                     .ok_or_else(|| SessionError::SessionNotFound(meta.title.clone()))?;
-                (source_id, crate::config::load_session_file(&meta.path))
+                (source_id, crate::sessions::load_session_file(&meta.path))
             }
             SessionAction::Id(id) => {
                 validate_session_id(&id)?;
                 let meta = self.resolve_meta(state, SessionAction::Id(id.clone()))?;
-                (id, crate::config::load_session_file(&meta.path))
+                (id, crate::sessions::load_session_file(&meta.path))
             }
         };
         if source_history.is_empty() {
@@ -107,9 +107,9 @@ impl SessionController {
         state.current_token_usage = None;
         state.response_time = None;
         state.last_turn_performance = None;
-        state.image_analysis_cache = crate::config::load_session_image_cache(&new_session_id);
+        state.image_analysis_cache = crate::sessions::load_session_image_cache(&new_session_id);
         state.session_title_cache = None;
-        crate::config::save_session_history(&new_session_id, &state.history);
+        crate::sessions::save_session_history(&new_session_id, &state.history);
         state.set_transient_notice(format!("Forked session from \"{source_session_id}\""));
 
         Ok(SessionTransition::Forked {
@@ -132,11 +132,11 @@ impl SessionController {
     }
 
     pub fn archive(&self, state: &mut AppState) -> Result<SessionTransition, SessionError> {
-        if !crate::config::session_has_content(&state.history) {
+        if !crate::sessions::session_has_content(&state.history) {
             return Err(SessionError::EmptySession);
         }
-        crate::config::save_session_history(&state.active_session_id, &state.history);
-        crate::config::flush_history();
+        crate::sessions::save_session_history(&state.active_session_id, &state.history);
+        crate::sessions::flush_history();
         Ok(SessionTransition::Archived {
             session_id: state.active_session_id.clone(),
         })
@@ -155,7 +155,7 @@ impl SessionController {
             }
         };
         validate_session_id(&session_id)?;
-        let directory = crate::config::get_active_session_dir(&session_id)
+        let directory = crate::sessions::get_active_session_dir(&session_id)
             .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
         let history_path = directory.join("history.json");
         if !directory.exists() {
@@ -163,7 +163,7 @@ impl SessionController {
         }
 
         if history_path.exists() {
-            crate::config::delete_session_file(&history_path);
+            crate::sessions::delete_session_file(&history_path);
         } else {
             let _ = std::fs::remove_dir_all(&directory);
         }
@@ -178,11 +178,11 @@ impl SessionController {
         &self,
         state: &AppState,
         action: SessionAction,
-    ) -> Result<crate::config::SessionMeta, SessionError> {
+    ) -> Result<crate::sessions::SessionMeta, SessionError> {
         match action {
             SessionAction::Latest => {
-                if !crate::config::session_has_content(&state.history)
-                    && let Some(live) = crate::config::live_session_meta()
+                if !crate::sessions::session_has_content(&state.history)
+                    && let Some(live) = crate::sessions::live_session_meta()
                 {
                     Ok(live)
                 } else {
@@ -190,22 +190,22 @@ impl SessionController {
                     // (parent/child match, legacy included) under the store's
                     // shared scope rule. Explicit `SessionAction::Id` bypasses
                     // scoping entirely.
-                    crate::config::latest_resumable_session_meta_in_scope(
-                        &crate::config::SessionScope::for_current_dir(),
+                    crate::sessions::latest_resumable_session_meta_in_scope(
+                        &crate::sessions::SessionScope::for_current_dir(),
                     )
                     .ok_or(SessionError::NoSessionToResume)
                 }
             }
             SessionAction::Id(id) => {
                 validate_session_id(&id)?;
-                crate::config::session_meta_by_id(&id).ok_or(SessionError::SessionNotFound(id))
+                crate::sessions::session_meta_by_id(&id).ok_or(SessionError::SessionNotFound(id))
             }
         }
     }
 }
 
-pub fn session_id_from_meta(meta: &crate::config::SessionMeta) -> Option<String> {
-    crate::config::session_id_from_path(&meta.path)
+pub fn session_id_from_meta(meta: &crate::sessions::SessionMeta) -> Option<String> {
+    crate::sessions::session_id_from_path(&meta.path)
 }
 
 fn validate_session_id(id: &str) -> Result<(), SessionError> {
@@ -437,10 +437,10 @@ mod tests {
         state
             .history
             .push(ChatMessage::new("assistant", "working on it"));
-        crate::config::save_session_history(&saved_id, &state.history);
+        crate::sessions::save_session_history(&saved_id, &state.history);
         let checkpoint = crate::network::TurnContext::with_budgets(40, 200)
             .segment_checkpoint(&saved_id, true, false);
-        crate::config::save_segment_checkpoint(&saved_id, &checkpoint);
+        crate::sessions::save_segment_checkpoint(&saved_id, &checkpoint);
 
         SessionController::default()
             .start_fresh(&mut state)
@@ -452,7 +452,7 @@ mod tests {
 
         assert!(state.background_turn_context.is_some());
         assert!(state.pending_queue.is_empty());
-        crate::config::clear_segment_checkpoint(&saved_id);
+        crate::sessions::clear_segment_checkpoint(&saved_id);
     }
 
     #[test]
@@ -463,10 +463,10 @@ mod tests {
         state
             .history
             .push(ChatMessage::new("assistant", "working on it"));
-        crate::config::save_session_history(&saved_id, &state.history);
+        crate::sessions::save_session_history(&saved_id, &state.history);
         let checkpoint = crate::network::TurnContext::with_budgets(40, 200)
             .segment_checkpoint(&saved_id, true, false);
-        crate::config::save_segment_checkpoint(&saved_id, &checkpoint);
+        crate::sessions::save_segment_checkpoint(&saved_id, &checkpoint);
 
         SessionController::default()
             .start_fresh(&mut state)
@@ -482,7 +482,7 @@ mod tests {
             state.pending_queue,
             vec!["__task_wakeup__:productive_segment".to_string()]
         );
-        crate::config::clear_segment_checkpoint(&saved_id);
+        crate::sessions::clear_segment_checkpoint(&saved_id);
     }
 
     #[test]
@@ -493,8 +493,8 @@ mod tests {
         state
             .history
             .push(ChatMessage::new("assistant", "answer A"));
-        crate::config::save_session_history(&session_a, &state.history);
-        crate::config::flush_history();
+        crate::sessions::save_session_history(&session_a, &state.history);
+        crate::sessions::flush_history();
 
         SessionController::default()
             .start_fresh(&mut state)
@@ -504,8 +504,8 @@ mod tests {
         state
             .history
             .push(ChatMessage::new("assistant", "answer B"));
-        crate::config::save_session_history(&session_b, &state.history);
-        crate::config::flush_history();
+        crate::sessions::save_session_history(&session_b, &state.history);
+        crate::sessions::flush_history();
 
         SessionController::default()
             .resume(&mut state, SessionAction::Id(session_a.clone()))
@@ -537,7 +537,7 @@ mod tests {
         state
             .history
             .push(ChatMessage::new("user", "session to delete"));
-        crate::config::save_session_history(&previous_session_id, &state.history);
+        crate::sessions::save_session_history(&previous_session_id, &state.history);
         add_pending_steer(&mut state);
 
         SessionController::default()

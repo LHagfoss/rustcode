@@ -205,7 +205,7 @@ pub(super) async fn forward_from_thread(
 ) -> Option<Value> {
     let (machine, strip_session_host) = named_machine(args)?;
     let arguments = prepare_forwarded_args(args, strip_session_host)?;
-    let who = crate::config::load_session_title(session_id)
+    let who = crate::sessions::load_session_title(session_id)
         .filter(|title| !title.trim().is_empty())
         .map(|title| format!("thread “{title}”"))
         .unwrap_or_else(|| format!("thread {session_id}"));

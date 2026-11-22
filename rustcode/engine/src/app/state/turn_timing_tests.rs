@@ -152,7 +152,7 @@ fn resuming_the_current_session_preserves_its_newly_finalized_timing() {
         .history
         .push(ChatMessage::new("user", "unfinished stored prompt"));
     std::fs::write(&path, serde_json::to_vec(state.history.as_slice()).unwrap()).unwrap();
-    let meta = crate::config::SessionMeta {
+    let meta = crate::sessions::SessionMeta {
         path,
         title: "current".to_owned(),
         when: String::new(),
@@ -187,7 +187,7 @@ async fn esc_and_new_session_finalize_suspended_turns_before_discarding_them() {
         if new_session {
             let outgoing = state.active_session_id.clone();
             crate::app::start_new_session(&mut state);
-            crate::config::flush_history();
+            crate::sessions::flush_history();
             let store =
                 rustcode_session::SessionStore::new(crate::config::get_config_dir().unwrap());
             history = store.load_session_history_direct(&outgoing);
@@ -225,8 +225,8 @@ async fn cancelled_suspended_checkpoint_cannot_resume_after_history_reload() {
     let mut context = crate::network::TurnContext::new();
     context.lifecycle.turn_timing = state.freeze_turn_timing(None);
     let checkpoint = context.segment_checkpoint(&state.active_session_id, true, false);
-    crate::config::save_segment_checkpoint(&state.active_session_id, &checkpoint);
-    assert!(crate::config::load_segment_checkpoint(&state.active_session_id).is_some());
+    crate::sessions::save_segment_checkpoint(&state.active_session_id, &checkpoint);
+    assert!(crate::sessions::load_segment_checkpoint(&state.active_session_id).is_some());
     state.background_turn_context = Some(Box::new(context));
     state.enter_idle();
     state.end_turn_identity(&id);
@@ -234,8 +234,8 @@ async fn cancelled_suspended_checkpoint_cannot_resume_after_history_reload() {
     crate::app::stop_turn_keeping_draft(&shared, &mut tokio_util::sync::CancellationToken::new())
         .await;
     let mut state = Arc::try_unwrap(shared).ok().unwrap().into_inner();
-    crate::config::flush_history();
-    assert!(crate::config::load_segment_checkpoint(&state.active_session_id).is_none());
+    crate::sessions::flush_history();
+    assert!(crate::sessions::load_segment_checkpoint(&state.active_session_id).is_none());
     let store = rustcode_session::SessionStore::new(crate::config::get_config_dir().unwrap());
     let meta = store.session_meta_by_id(&state.active_session_id).unwrap();
     assert!(crate::app::load_session_into(&mut state, &meta));

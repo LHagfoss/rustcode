@@ -1398,7 +1398,7 @@ fn with_checkout_diff(turn: &TurnRow) -> TurnRow {
     let cwd = crate::harness::store::load(&turn.thread_id)
         .map(|record| record.cwd)
         .or_else(|| {
-            crate::config::load_session_workspace(&turn.thread_id).map(|workspace| workspace.cwd)
+            crate::sessions::load_session_workspace(&turn.thread_id).map(|workspace| workspace.cwd)
         });
     if let Some((files, added, removed)) = cwd.as_deref().and_then(checkout_diff) {
         turn.diff_files = Some(files);
@@ -1533,15 +1533,15 @@ fn mcp_server_of(tool_name: &str) -> Option<&str> {
 fn live_thread(turn: &TurnRow) -> ThreadRow {
     let id = turn.thread_id.as_str();
     let record = crate::harness::store::load(id);
-    let dir = crate::config::get_active_session_dir(id);
+    let dir = crate::sessions::get_active_session_dir(id);
     let cwd = record
         .as_ref()
         .map(|record| record.cwd.display().to_string())
         .or_else(|| {
-            crate::config::load_session_workspace(id)
+            crate::sessions::load_session_workspace(id)
                 .map(|workspace| workspace.cwd.display().to_string())
         });
-    let metadata = crate::config::load_session_metadata(id);
+    let metadata = crate::sessions::load_session_metadata(id);
     let created_at = record
         .as_ref()
         .map(|record| record.created_at.clone())
@@ -1561,7 +1561,7 @@ fn live_thread(turn: &TurnRow) -> ThreadRow {
         title: record
             .as_ref()
             .and_then(|record| record.title.clone())
-            .or_else(|| crate::config::load_session_title(id)),
+            .or_else(|| crate::sessions::load_session_title(id)),
         project: project_of(dir.as_deref(), cwd.as_deref()),
         cwd,
         harness: turn.harness.clone(),

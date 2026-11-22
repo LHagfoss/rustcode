@@ -561,8 +561,8 @@ async fn cancelled_native_batch_closes_calls_before_steers_and_persists_them() {
         "cancelled results are counted separately, never judged for progress"
     );
 
-    crate::config::flush_history();
-    let persisted = crate::config::load_session_history_direct(&session_id);
+    crate::sessions::flush_history();
+    let persisted = crate::sessions::load_session_history_direct(&session_id);
     let persisted_result_ids = persisted
         .iter()
         .filter(|message| message.tool_result.is_some())

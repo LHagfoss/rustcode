@@ -298,7 +298,7 @@ pub(crate) fn set_settings(
     state.config.use_profile_for_session(model.to_owned());
     state.request_redraw();
     state.record_session_model();
-    crate::config::record_session_settings_for_profile(
+    crate::sessions::record_session_settings_for_profile(
         &state.active_session_id,
         &state.config,
         model,
@@ -729,7 +729,7 @@ pub(crate) fn execute_command(
                     "Usage: /title <title> (one line, up to 512 bytes)",
                 ));
             }
-            crate::config::save_user_session_title(&state.active_session_id, arguments);
+            crate::sessions::save_user_session_title(&state.active_session_id, arguments);
             state.invalidate_session_title_cache();
             state.request_redraw();
             ("Session title", format!("Renamed to {arguments}"))
@@ -977,7 +977,7 @@ fn workspace_report(state: &AppState) -> String {
     let Some(path) = state.workspace_root.as_deref() else {
         return root;
     };
-    let Some(manager) = crate::config::workspace_manager() else {
+    let Some(manager) = crate::sessions::workspace_manager() else {
         return root;
     };
     match manager.handoff_for_workspace_path(path) {

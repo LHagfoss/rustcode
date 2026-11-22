@@ -1188,8 +1188,8 @@ pub(crate) fn current_tool_context() -> rustcode_tools::ToolContext {
     let (sandbox_dir, artifacts_dir) = get_active_session_id()
         .map(|session_id| {
             (
-                crate::config::get_active_session_sandbox_dir(&session_id),
-                crate::config::get_active_session_artifacts_dir(&session_id),
+                crate::sessions::get_active_session_sandbox_dir(&session_id),
+                crate::sessions::get_active_session_artifacts_dir(&session_id),
             )
         })
         .unwrap_or((None, None));

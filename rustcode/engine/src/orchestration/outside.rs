@@ -843,8 +843,8 @@ impl Runner for EngineRunner {
         Box::pin(async move {
             let mut seen = std::collections::HashSet::new();
             let mut projects: Vec<String> = Vec::new();
-            for meta in crate::config::list_sessions() {
-                let Some(id) = crate::config::session_id_from_path(&meta.path) else {
+            for meta in crate::sessions::list_sessions() {
+                let Some(id) = crate::sessions::session_id_from_path(&meta.path) else {
                     continue;
                 };
                 let project = super::local::project_of(&id, &meta);

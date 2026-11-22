@@ -1504,7 +1504,7 @@ fn set_session_title(args: &Value) -> Result<String, String> {
     }
     let session_id = super::get_active_session_id()
         .ok_or("active session is unavailable for setting a title")?;
-    crate::config::save_session_title(&session_id, title);
+    crate::sessions::save_session_title(&session_id, title);
     Ok("Session title saved.".to_string())
 }
 

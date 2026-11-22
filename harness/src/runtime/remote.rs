@@ -763,10 +763,10 @@ impl RemoteBridge {
 /// one derived from the first prompt, else its id. Reads one small file at
 /// most; listing the session store here parsed every recent transcript.
 fn standby_title(state: &AppState) -> String {
-    rustcode::config::load_session_title(&state.active_session_id)
+    rustcode::sessions::load_session_title(&state.active_session_id)
         .or_else(|| {
-            rustcode::config::session_has_content(&state.history)
-                .then(|| rustcode::config::session_title(&state.history))
+            rustcode::sessions::session_has_content(&state.history)
+                .then(|| rustcode::sessions::session_title(&state.history))
         })
         .filter(|title| !title.trim().is_empty())
         .unwrap_or_else(|| state.active_session_id.clone())
@@ -2439,7 +2439,7 @@ mod standby_title_tests {
         state.history.push(ChatMessage::new("assistant", "On it."));
         assert_eq!(
             standby_title(&state),
-            rustcode::config::session_title(&state.history)
+            rustcode::sessions::session_title(&state.history)
         );
     }
 }

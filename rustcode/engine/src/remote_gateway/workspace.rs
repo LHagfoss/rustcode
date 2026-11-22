@@ -70,8 +70,8 @@ pub(crate) fn owner_alive(owners: &Path, session_id: &str) -> bool {
 
 /// What the device is told when another live process has a saved session
 /// open: where it is open, and how to continue on the device.
-fn open_elsewhere_message(holder: Option<crate::config::SessionHolder>) -> &'static str {
-    use crate::config::SessionHolder;
+fn open_elsewhere_message(holder: Option<crate::sessions::SessionHolder>) -> &'static str {
+    use crate::sessions::SessionHolder;
     match holder {
         Some(SessionHolder::App) => {
             "This chat is open in the RustCode app on the Mac. Turn on Remote access for it there to continue on this device."
@@ -86,8 +86,8 @@ fn open_elsewhere_message(holder: Option<crate::config::SessionHolder>) -> &'sta
 }
 
 /// How the saved-session list names what has a session open.
-fn saved_session_holder(holder: crate::config::SessionHolder) -> SavedSessionHolder {
-    use crate::config::SessionHolder;
+fn saved_session_holder(holder: crate::sessions::SessionHolder) -> SavedSessionHolder {
+    use crate::sessions::SessionHolder;
     match holder {
         SessionHolder::App => SavedSessionHolder::App,
         SessionHolder::Terminal => SavedSessionHolder::Terminal,
@@ -405,7 +405,7 @@ fn pin_thread(session_id: &str, pinned: bool) -> Result<RemoteResult, String> {
 }
 
 fn settle_thread(session_id: &str, settled: bool) -> Result<RemoteResult, String> {
-    crate::config::set_session_status(session_id, if settled { "done" } else { "idle" })?;
+    crate::sessions::set_session_status(session_id, if settled { "done" } else { "idle" })?;
     Ok(RemoteResult::ThreadSettled {
         session_id: session_id.to_owned(),
         settled,
@@ -517,7 +517,7 @@ fn list_saved_sessions(
                     return false;
                 };
                 if !rustcode_session::valid_session_id(&id)
-                    || !crate::config::session_file_in_store(config, &meta.path)
+                    || !crate::sessions::session_file_in_store(config, &meta.path)
                 {
                     return false;
                 }
@@ -553,7 +553,7 @@ fn list_saved_sessions(
             });
         let state = state_of(&session_id);
         let open_in = (state == SavedSessionState::Open)
-            .then(|| crate::config::session_open_by(config, &session_id))
+            .then(|| crate::sessions::session_open_by(config, &session_id))
             .flatten()
             .flatten()
             .map(saved_session_holder);
@@ -615,7 +615,7 @@ fn saved_session_directory(config: &Path, session_id: &str) -> Result<PathBuf> {
         )
     };
     let meta = store.session_meta_by_id(session_id).ok_or_else(not_found)?;
-    if !crate::config::session_file_in_store(config, &meta.path) {
+    if !crate::sessions::session_file_in_store(config, &meta.path) {
         return Err(not_found());
     }
     let cwd = store
@@ -837,7 +837,7 @@ impl WorkspaceRouter {
                     "a session owner already holds this session without sharing it; check `rc remote status`",
                 ));
             }
-            if let Some(holder) = crate::config::session_open_by(config, session_id) {
+            if let Some(holder) = crate::sessions::session_open_by(config, session_id) {
                 return Err(refused(
                     RemoteErrorCode::OpenElsewhere,
                     open_elsewhere_message(holder),
@@ -1181,7 +1181,8 @@ impl FrameRouter for WorkspaceRouter {
                                     SavedSessionState::Shared
                                 } else if hub.is_announced(session_id)
                                     || owner_alive(&owners, session_id)
-                                    || crate::config::session_open_by(&config, session_id).is_some()
+                                    || crate::sessions::session_open_by(&config, session_id)
+                                        .is_some()
                                 {
                                     SavedSessionState::Open
                                 } else {
@@ -1608,7 +1609,7 @@ mod tests {
 
     #[test]
     fn pin_and_settle_use_the_engine_thread_paths() {
-        let id = crate::config::create_detached_session();
+        let id = crate::sessions::create_detached_session();
         assert!(matches!(
             pin_thread(&id, true).unwrap(),
             RemoteResult::ThreadPinned { pinned: true, .. }
@@ -2645,7 +2646,7 @@ mod tests {
         let saved = list_saved_sessions(
             config.path(),
             |id| {
-                if crate::config::session_open_by(config.path(), id).is_some() {
+                if crate::sessions::session_open_by(config.path(), id).is_some() {
                     SavedSessionState::Open
                 } else {
                     SavedSessionState::Saved
@@ -2682,7 +2683,7 @@ mod tests {
         drop(open_in(config.path(), &ids[0], "app"));
         // A concurrent fork may retain the lock until it execs.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while crate::config::session_open_by(config.path(), &ids[0]).is_some() {
+        while crate::sessions::session_open_by(config.path(), &ids[0]).is_some() {
             assert!(std::time::Instant::now() < deadline, "lock stayed held");
             tokio::task::yield_now().await;
         }
@@ -2812,8 +2813,11 @@ pub fn owner_state(
     // The gateway checked before it started this process; a terminal or the
     // app may have opened the session since. Two processes running one
     // session both write its history, so this one steps back.
-    if !crate::config::hold_session_open(config, session_id, crate::config::SessionHolder::Remote)
-        && let Some(holder) = crate::config::session_open_by(config, session_id)
+    if !crate::sessions::hold_session_open(
+        config,
+        session_id,
+        crate::sessions::SessionHolder::Remote,
+    ) && let Some(holder) = crate::sessions::session_open_by(config, session_id)
     {
         anyhow::bail!("{}", open_elsewhere_message(holder));
     }
@@ -2821,7 +2825,7 @@ pub fn owner_state(
     // A saved session resumed from a device runs in its recorded workspace:
     // keep what was recorded with it (extra directories, its task worktree)
     // and load it the way ACP and the terminal resume a session.
-    let recorded = crate::config::load_session_workspace(session_id).filter(|recorded| {
+    let recorded = crate::sessions::load_session_workspace(session_id).filter(|recorded| {
         rustcode_session::canonicalize_best_effort(&recorded.cwd)
             == rustcode_session::canonicalize_best_effort(&workspace)
     });
@@ -2829,14 +2833,14 @@ pub fn owner_state(
     // one took it (the app shows it anyway): never overwrite what such a
     // process saves with this owner's older copy.
     rustcode_session::SessionStore::new(config).guard_session_history(session_id);
-    let history = crate::config::load_session_history_direct(session_id);
+    let history = crate::sessions::load_session_history_direct(session_id);
     let mut state = crate::acp::build_loaded_app_state(session_id, &workspace, history);
     // A detached owner has no `--yolo` flag: start as the session last was,
     // or as the user's `yolo` default for a session that never set it.
     state.restore_auto_confirm();
-    crate::config::set_active_session_id(session_id);
-    crate::config::record_session_settings(session_id, &state.config);
-    let _ = crate::config::save_session_workspace(
+    crate::sessions::set_active_session_id(session_id);
+    crate::sessions::record_session_settings(session_id, &state.config);
+    let _ = crate::sessions::save_session_workspace(
         session_id,
         &recorded.unwrap_or(rustcode_session::SessionWorkspace {
             cwd: workspace,
