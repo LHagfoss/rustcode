@@ -486,6 +486,7 @@ async fn attach_orchestrator(
     // A harness without its own question tool also gets `ask_user_question`,
     // asked through this thread's permission channel (#3393).
     let ask_user = harness::needs_question_tool(&session.harness);
+    let defer_tools = !harness::defers_mcp_tools(&session.harness);
     // No app hosts the tools: this engine answers the reads itself and names
     // the app for the calls that need it (#3422). An app that turned them off
     // still turns them off, so nothing is attached then; an app connected to
@@ -500,7 +501,7 @@ async fn attach_orchestrator(
             smart_ui,
         )
         .await;
-        return set_launch(session, launch, ask_user).await;
+        return set_launch(session, launch, ask_user, defer_tools).await;
     }
     if orchestration < 2 {
         return false;
@@ -510,21 +511,23 @@ async fn attach_orchestrator(
     };
     let launch =
         crate::orchestration::hub::launch_for(&session.id, client, orchestration, smart_ui).await;
-    set_launch(session, launch, ask_user).await
+    set_launch(session, launch, ask_user, defer_tools).await
 }
 
 /// Start the thread's orchestration server with `launch`, offering
-/// `ask_user_question` when `ask_user`. Whether there is a server.
+/// `ask_user_question` when `ask_user` and deferring its tools when
+/// `defer_tools`. Whether there is a server.
 async fn set_launch(
     session: &ExternalSession,
     launch: Option<crate::orchestration::hub::Launch>,
     ask_user: bool,
+    defer_tools: bool,
 ) -> bool {
     let channel = launch.is_some()
         && crate::orchestration::hub::set_questions(&session.id, session.question_asker()).await;
     crate::orchestration::hub::set_secret_workspace(&session.id, session.cwd.clone()).await;
     let ask_user = ask_user && channel;
-    let launch = launch.map(|launch| launch.with_ask_user(ask_user));
+    let launch = launch.map(|launch| launch.with_ask_user(ask_user).with_defer_tools(defer_tools));
     let attached = launch.is_some();
     session.set_orchestrator(launch);
     attached

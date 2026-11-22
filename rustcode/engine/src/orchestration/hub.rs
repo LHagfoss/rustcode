@@ -72,6 +72,9 @@ pub struct Launch {
     /// The harness has no question tool of its own, so the server also
     /// offers `ask_user_question` (#3393).
     pub ask_user: bool,
+    /// The harness lists every MCP schema with each request, so the server
+    /// lists a few tools plus `tool_search` and `call_tool` for the rest.
+    pub defer_tools: bool,
     /// The orchestration version the client advertises: which tools it can answer.
     pub version: u8,
 }
@@ -86,6 +89,9 @@ pub const SMART_UI_ENV: &str = "RUSTCODE_SMART_UI";
 /// Set to `1` for a harness with no question tool of its own: the server then
 /// also lists `ask_user_question` (`ask_user::TOOL_NAME`, #3393).
 pub const ASK_USER_ENV: &str = "RUSTCODE_ASK_USER";
+
+/// Set to `1` when the server should defer its tools ([`Launch::defer_tools`]).
+pub const DEFER_TOOLS_ENV: &str = "RUSTCODE_DEFER_TOOLS";
 
 /// The orchestration version the thread's client advertises. The server lists
 /// that version's tools and instructions, so a client never sees a tool it
@@ -194,6 +200,7 @@ impl Launch {
             token: token.to_owned(),
             smart_ui: false,
             ask_user: false,
+            defer_tools: false,
             version: super::VERSION,
         }
     }
@@ -207,6 +214,13 @@ impl Launch {
     /// Also offer `ask_user_question`, for a harness without a question tool.
     pub fn with_ask_user(mut self, on: bool) -> Self {
         self.ask_user = on;
+        self
+    }
+
+    /// List a few tools and find the rest through `tool_search`, for a
+    /// harness that does not defer MCP tools itself.
+    pub fn with_defer_tools(mut self, on: bool) -> Self {
+        self.defer_tools = on;
         self
     }
 
@@ -227,6 +241,9 @@ impl Launch {
         }
         if self.ask_user {
             env.push((ASK_USER_ENV, "1".to_owned()));
+        }
+        if self.defer_tools {
+            env.push((DEFER_TOOLS_ENV, "1".to_owned()));
         }
         env
     }

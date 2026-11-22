@@ -337,6 +337,7 @@ pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(
         .map_or(super::VERSION, |version| version.min(super::VERSION));
     let smart_ui = std::env::var(super::hub::SMART_UI_ENV).is_ok_and(|on| on == "1");
     let ask_user = std::env::var(super::hub::ASK_USER_ENV).is_ok_and(|on| on == "1");
+    let deferred = std::env::var(super::hub::DEFER_TOOLS_ENV).is_ok_and(|on| on == "1");
     serve_every(
         tokio::io::stdin(),
         tokio::io::stdout(),
@@ -351,6 +352,7 @@ pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(
             smart_ui,
             ask_user,
             core_only: !super::lists_all_tools(),
+            deferred,
         },
         PROGRESS_INTERVAL,
     )
@@ -367,6 +369,9 @@ struct Offered {
     /// Leave `EXTRA_TOOL_NAMES` out of the list: the user has not asked for
     /// every tool (`orchestration-all-tools`).
     core_only: bool,
+    /// List [`DIRECT_TOOLS`], `tool_search` and `call_tool` alone: the
+    /// harness sends every listed schema with each request (`hub::Launch::defer_tools`).
+    deferred: bool,
 }
 
 /// Run `rc mcp-connect` on stdin/stdout: the orchestration tools for an
@@ -424,6 +429,7 @@ where
             smart_ui,
             ask_user: false,
             core_only: false,
+            deferred: false,
         },
         PROGRESS_INTERVAL,
     )
@@ -652,12 +658,36 @@ async fn call(
     version: u8,
     offered: Offered,
 ) -> CallAnswer {
-    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    let mut name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let mut args = params
         .get("arguments")
         .cloned()
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
+    if offered.deferred && !identity.outside {
+        if name == TOOL_SEARCH {
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("");
+            return search_tools(version, offered, query);
+        }
+        if name == CALL_TOOL {
+            let Some(inner) = args.get("name").and_then(Value::as_str) else {
+                return CallAnswer::failure(format!(
+                    "error: {CALL_TOOL} needs `name`, a tool `{TOOL_SEARCH}` found."
+                ));
+            };
+            if inner == CALL_TOOL || inner == TOOL_SEARCH {
+                return CallAnswer::failure(format!(
+                    "error: call `{inner}` directly, not through {CALL_TOOL}."
+                ));
+            }
+            name = params["arguments"]["name"].as_str().unwrap_or_default();
+            args = args
+                .get("arguments")
+                .cloned()
+                .filter(Value::is_object)
+                .unwrap_or_else(|| json!({}));
+        }
+    }
     let names = match mcp_names::call_args(name, &mut args) {
         Ok(names) => names,
         Err(answer) => return answer,
@@ -1090,6 +1120,14 @@ fn all_tools(version: u8, offered: Offered) -> Vec<Value> {
         })
         .map(mcp_names::public_entry)
         .collect();
+    if offered.deferred {
+        listed.retain(|entry| {
+            entry["name"]
+                .as_str()
+                .is_some_and(|name| DIRECT_TOOLS.contains(&name))
+        });
+        listed.extend([tool_search_entry(), call_tool_entry()]);
+    }
     listed.extend(crate::computer_use::tools(
         &crate::computer_use::Settings::load(),
     ));
@@ -1101,11 +1139,143 @@ const EXTRA_VERSION: u8 = 2;
 
 /// The `instructions` a thread's harness is given.
 fn instructions(version: u8, offered: Offered) -> String {
-    let text = mcp_names::public_text(super::mcp_instructions(version));
+    let mut text = mcp_names::public_text(super::mcp_instructions(version));
+    if offered.deferred {
+        text.push_str("\n\n");
+        text.push_str(DEFERRED_TOOLS_NOTE);
+    }
     if offered.core_only && version >= EXTRA_VERSION {
-        format!("{text}\n\n{}", super::CORE_TOOLS_NOTE)
-    } else {
-        text
+        text.push_str("\n\n");
+        text.push_str(super::CORE_TOOLS_NOTE);
+    }
+    text
+}
+
+/// The tool that finds the ones a deferred list leaves out.
+const TOOL_SEARCH: &str = "tool_search";
+/// The tool that runs one `tool_search` found, for a harness that only calls
+/// the tools it was listed at the start.
+const CALL_TOOL: &str = "call_tool";
+
+/// What a deferred list keeps, by public name: the tools a thread calls
+/// without being asked (its title, credentials, Smart UI, questions) and the
+/// reads that answer most questions about threads. Every other schema costs
+/// each request of a harness that does not defer them, about 7,000 tokens for
+/// the whole list, so it is found with `tool_search` when needed.
+const DIRECT_TOOLS: &[&str] = &[
+    "list_threads",
+    "read_thread",
+    "thread_status",
+    "update_thread",
+    super::secret::TOOL_NAME,
+    crate::smart_ui::CHECK_TOOL_NAME,
+    super::ask_user::TOOL_NAME,
+];
+
+/// What the instructions add when the list is deferred.
+const DEFERRED_TOOLS_NOTE: &str = "Only a few RustCode tools are listed. Every tool named above is available: find it with `tool_search` (by name or purpose: delegate, wait, merge, settings, jobs, usage, data, worktrees, machines), then run it with `call_tool`.";
+
+/// The most tools one search returns.
+const SEARCH_RESULTS: usize = 5;
+
+fn tool_search_entry() -> Value {
+    json!({
+        "name": TOOL_SEARCH,
+        "title": "Find RustCode tools",
+        "description": "Find RustCode tools that are not listed, by name or purpose (`start_thread`, \"merge pull request\", \"settings\"). Returns each match's name, description and input schema; run one with `call_tool`.",
+        "inputSchema": {
+            "type": "object",
+            "properties": { "query": { "type": "string", "description": "Tool names or words about the task." } },
+            "required": ["query"],
+            "additionalProperties": false
+        },
+        "annotations": Effect::Reads.annotations(),
+    })
+}
+
+fn call_tool_entry() -> Value {
+    json!({
+        "name": CALL_TOOL,
+        "title": "Run a RustCode tool",
+        "description": "Run a RustCode tool `tool_search` found, with arguments that match its input schema. It asks for approval and changes what that tool does.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "The tool's name, as `tool_search` returned it." },
+                "arguments": { "type": "object", "description": "The tool's arguments." }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+        },
+        "annotations": Effect::Removes.annotations(),
+    })
+}
+
+/// [`TOOL_SEARCH`]'s answer: the best matches for `query` among the tools a
+/// list without deferral would hold, whole, so `call_tool` can be called next.
+fn search_tools(version: u8, offered: Offered, query: &str) -> CallAnswer {
+    let every = all_tools(
+        version,
+        Offered {
+            deferred: false,
+            ..offered
+        },
+    );
+    let terms: Vec<String> = query
+        .to_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .filter(|term| term.len() > 1)
+        .map(str::to_owned)
+        .collect();
+    let score = |entry: &Value| {
+        let name = entry["name"].as_str().unwrap_or("").to_lowercase();
+        let description = entry["description"].as_str().unwrap_or("").to_lowercase();
+        terms
+            .iter()
+            .map(|term| {
+                if *term == name {
+                    100
+                } else if name.contains(term.as_str()) {
+                    5
+                } else if description.contains(term.as_str()) {
+                    1
+                } else {
+                    0
+                }
+            })
+            .sum::<u32>()
+    };
+    let mut found: Vec<(u32, Value)> = every
+        .into_iter()
+        .filter(|entry| {
+            entry["name"]
+                .as_str()
+                .is_some_and(|name| !DIRECT_TOOLS.contains(&name))
+        })
+        .map(|entry| (score(&entry), entry))
+        .filter(|(score, _)| *score > 0)
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    let tools: Vec<Value> = found
+        .into_iter()
+        .take(SEARCH_RESULTS)
+        .map(|(_, entry)| {
+            json!({
+                "name": entry["name"],
+                "description": entry["description"],
+                "inputSchema": entry["inputSchema"],
+            })
+        })
+        .collect();
+    if tools.is_empty() {
+        return CallAnswer::failure(format!(
+            "No RustCode tool matches \"{query}\". Search with other words or a tool name."
+        ));
+    }
+    CallAnswer {
+        success: true,
+        content: json!({ "tools": tools, "next": format!("Run one with {CALL_TOOL} {{\"name\", \"arguments\"}}.") })
+            .to_string(),
     }
 }
 
@@ -1177,6 +1347,7 @@ mod tests {
             smart_ui,
             ask_user: false,
             core_only: false,
+            deferred: false,
         };
         exchange_offered(identity, socket, messages, orchestration, offered).await
     }
@@ -1284,6 +1455,7 @@ mod tests {
             smart_ui: false,
             ask_user: true,
             core_only: false,
+            deferred: false,
         };
         let answers = exchange_offered(
             identity.clone(),
@@ -2123,6 +2295,114 @@ mod tests {
             "the core list is {} of {} bytes",
             bytes(&core),
             bytes(&all)
+        );
+    }
+
+    fn deferred() -> Offered {
+        Offered {
+            core_only: true,
+            deferred: true,
+            ..Offered::default()
+        }
+    }
+
+    #[test]
+    fn a_deferred_list_holds_the_direct_tools_and_the_two_that_reach_the_rest() {
+        let names = |tools: &[Value]| -> Vec<String> {
+            tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                .collect()
+        };
+        let short = all_tools(super::super::VERSION, deferred());
+        let full = all_tools(
+            super::super::VERSION,
+            Offered {
+                deferred: false,
+                ..deferred()
+            },
+        );
+        let listed = names(&short);
+        assert!(listed.contains(&TOOL_SEARCH.to_owned()), "{listed:?}");
+        assert!(listed.contains(&CALL_TOOL.to_owned()), "{listed:?}");
+        assert!(listed.contains(&"update_thread".to_owned()), "{listed:?}");
+        assert!(!listed.contains(&"start_thread".to_owned()), "{listed:?}");
+        for tool in &short {
+            assert!(tool["title"].is_string(), "{tool}");
+            assert!(tool["annotations"].is_object(), "{tool}");
+        }
+        let bytes = |tools: &[Value]| serde_json::to_vec(tools).unwrap().len();
+        assert!(
+            bytes(&short) * 4 <= bytes(&full),
+            "the deferred list is {} of {} bytes",
+            bytes(&short),
+            bytes(&full)
+        );
+        assert!(instructions(super::super::VERSION, deferred()).contains(DEFERRED_TOOLS_NOTE));
+        assert!(
+            !instructions(
+                super::super::VERSION,
+                Offered {
+                    deferred: false,
+                    ..deferred()
+                }
+            )
+            .contains(TOOL_SEARCH)
+        );
+    }
+
+    #[test]
+    fn tool_search_returns_whole_schemas_of_the_best_matches() {
+        let answer = search_tools(super::super::VERSION, deferred(), "start_thread");
+        assert!(answer.success, "{}", answer.content);
+        let found: Value = serde_json::from_str(&answer.content).unwrap();
+        let tools = found["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["name"], "start_thread");
+        assert!(tools[0]["inputSchema"]["properties"].is_object());
+        assert!(tools.len() <= SEARCH_RESULTS);
+        let answer = search_tools(super::super::VERSION, deferred(), "update_thread");
+        if answer.success {
+            assert!(!answer.content.contains("\"name\":\"update_thread\""));
+        }
+        assert!(!search_tools(super::super::VERSION, deferred(), "zzqx").success);
+    }
+
+    #[tokio::test]
+    async fn call_tool_runs_the_tool_it_names() {
+        let (_dir, hub) = hub().await;
+        let token = hub.register("thread-1", Arc::new(EchoApp), super::super::VERSION);
+        let answers = exchange_offered(
+            Identity {
+                session_id: "thread-1".into(),
+                token,
+                outside: false,
+            },
+            hub.path().to_owned(),
+            &[
+                json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": CALL_TOOL, "arguments": {"name": "start_thread", "arguments": {"prompt": "fix the login"}}}}),
+                json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                       "params": {"name": CALL_TOOL, "arguments": {"name": CALL_TOOL}}}),
+                json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                       "params": {"name": TOOL_SEARCH, "arguments": {"query": "merge"}}}),
+            ],
+            super::super::VERSION,
+            deferred(),
+        )
+        .await;
+        let called = &answers[0]["result"];
+        assert_eq!(called["isError"], false, "{called}");
+        let echoed: Value =
+            serde_json::from_str(called["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(echoed["asked"]["tool"], json!(super::super::START_SESSION));
+        assert_eq!(echoed["asked"]["args"], json!({"prompt": "fix the login"}));
+        assert_eq!(answers[1]["result"]["isError"], true);
+        assert_eq!(answers[2]["result"]["isError"], false, "{}", answers[2]);
+        assert!(
+            answers[2]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("merge_when_green")
         );
     }
 
