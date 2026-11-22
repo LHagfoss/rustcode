@@ -37,9 +37,9 @@ import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
 import { useLoopBadges } from "./ui/LoopBadge";
 import { OutsideApprovals } from "./ui/OutsideApprovals";
-import { Pill } from "./ui/primitives";
+import { cx, Pill } from "./ui/primitives";
 // Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
-import { Settings } from "./ui/Settings";
+import { SettingsPage } from "./ui/Settings";
 import { Sidebar } from "./ui/Sidebar";
 import { Toaster } from "./ui/Toaster";
 import { WhatsNewDialog } from "./ui/Updates";
@@ -247,10 +247,11 @@ export function App() {
     // what Radix's Tooltip and HoverCard require, and nothing here waits on it.
     <Tooltip.Provider>
       {/*
-        One shell, never unmounted. Settings floats over it (docs/design.md ›
-        Settings): the shell stays mounted and laid out underneath, inert, so
-        closing Settings shows the thread exactly where it was (scroll, drafts,
-        open rows) in one frame.
+        One shell, never unmounted. Settings opens inside it (docs/design.md ›
+        Settings): its sections replace the sidebar's list and its page the
+        view, which both stay mounted and laid out underneath, hidden and inert,
+        so closing Settings shows the thread exactly where it was (scroll,
+        drafts, open rows) in one frame.
       */}
       <div className="relative h-full w-full overflow-hidden">
         {/*
@@ -260,7 +261,7 @@ export function App() {
           native title bar draw themselves.
         */}
         <WindowControls className="absolute top-0 right-0 z-40" />
-        <div className="flex h-full w-full overflow-hidden bg-sidebar-glass" inert={settings}>
+        <div className="flex h-full w-full overflow-hidden bg-sidebar-glass">
           <Sidebar />
           <div className="relative flex min-w-0 flex-1 bg-bg">
             {/*
@@ -268,7 +269,7 @@ export function App() {
               the chat view's own row (ui/ChatView.tsx), so it is never drawn over
               the board, the review or the compare view.
             */}
-            <div className="flex min-w-0 flex-1 flex-col">
+            <div className={cx("flex min-w-0 flex-1 flex-col", settings && "invisible")} inert={settings}>
               {view.kind === "chat" ? (
                 <ChatView />
               ) : view.kind === "inbox" ? (
@@ -282,9 +283,13 @@ export function App() {
                 </Suspense>
               )}
             </div>
+            {settings && (
+              <div className="absolute inset-0 flex">
+                <SettingsPage />
+              </div>
+            )}
           </div>
         </div>
-        {settings && <Settings />}
       </div>
       <CommandPalette />
       <Suspense fallback={null}>{onboarding && <Onboarding onClose={() => setOnboarding(false)} />}</Suspense>

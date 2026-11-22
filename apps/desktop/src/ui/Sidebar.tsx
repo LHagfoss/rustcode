@@ -114,6 +114,7 @@ import { SettingsButton } from "./MainHeader";
 import { HiddenDot, ProjectHeader } from "./ProjectHeader";
 import { Cluster, ClusterButton, cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
+import { SettingsNav } from "./Settings";
 import { PendingRow, ROW_HEIGHT, ThreadRow } from "./SidebarThreadRow";
 import { SidebarToolbar, ThreadSectionLabel } from "./SidebarToolbar";
 import { useThreadDrag } from "./sidebarDrag";
@@ -342,6 +343,7 @@ export function Sidebar() {
   // Paired computers' threads are rows of the one list, each tagged with where it runs.
   const machines = useMachines((s) => s.machines);
   const pending = useApp((s) => s.pendingSetup);
+  const settingsOpen = useApp((s) => s.settings !== null);
   const backgroundSetups = useApp((s) => s.backgroundSetups);
   const pendingById = useMemo(
     () => ({ ...backgroundSetups, ...(pending ? { [pending.id]: pending } : {}) }),
@@ -1291,159 +1293,174 @@ export function Sidebar() {
             <SettingsButton />
           </TitlebarControls>
         </TitlebarRow>
-        <NeedsYouRow threadIds={new Set(filtered.map((s) => s.id))} />
-        {toolbarOn && <SidebarToolbar />}
-        <nav
-          ref={list}
-          data-focus-default
-          // One tab stop for the whole list (the row the keyboard is on), ↑ ↓ through its rows,
-          // ⏎ to open and Esc to let the selection go.
-          onKeyDown={onListKey}
-          onFocus={onListFocus}
-          onClickCapture={onListClick}
-          // A press on a row is a drag if the pointer moves (ui/sidebarDrag.tsx), and a click if not.
-          onPointerDown={(e) => {
-            drag.start(e);
-            projectDrag.start(e);
-          }}
-          aria-label="Thread list"
-          className="relative min-h-0 flex-1 overflow-y-auto px-3 pb-2"
-          style={{ maskImage: fade, WebkitMaskImage: fade }}
-        >
-          {listing && <ThreadRowsSkeleton />}
-          <div className="flex min-h-full flex-col">
-            {sections.map((section) => {
-              const open = isOpen(section.id);
-              const shelf = isShelf(section.id, layoutMode);
-              return (
-                <Fragment key={section.id}>
-                  {/* The shelves sit at the foot, under one hairline, apart from Pinned and Threads. */}
-                  {section.id === firstShelf && (
-                    <div aria-hidden className="mt-2 min-h-2 flex-1 border-border border-b" />
-                  )}
-                  <section
-                    className={cx("mt-2 first:mt-0", section.id === firstShelf && "mt-0")}
-                    aria-label={section.label}
-                    data-shelf={shelf ? section.id : undefined}
-                  >
-                    {/* Shelves fold. The Threads label also holds the list controls. */}
-                    {shelf ? (
-                      <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
-                    ) : (
-                      labelled(section.id) && (
-                        <ThreadSectionLabel
-                          label={section.label}
-                          threads={section.id === "threads"}
-                          filtering={onlyProject && !!projectCwd}
-                        />
-                      )
-                    )}
-                    {section.id === "threads" && !listing && !filtered.length && (
-                      <div className="px-2 py-3 text-callout text-fg-muted">
-                        {onlyProject ? "No threads in this project yet." : "No threads yet."}
-                      </div>
-                    )}
-                    <Fold open={open}>
-                      {section.projects
-                        ? section.projects.map((p) => {
-                            const projectOpen = isOpen(`project:${p.key}`);
-                            const onNew = p.project ? () => startNewThread(p.project) : undefined;
-                            return (
-                              <div key={p.key} data-project-id={p.key} className="relative mb-1">
-                                <ProjectHeader
-                                  label={p.label}
-                                  count={p.items.length}
-                                  hidden={
-                                    p.items.some((x) => flags.includes(`${x.id}:n`))
-                                      ? "needs"
-                                      : p.items.some((x) => flags.includes(`${x.id}:w`))
-                                        ? "working"
-                                        : p.items.some((x) => !!finished[x.id])
-                                          ? "finished"
-                                          : undefined
-                                  }
-                                  open={projectOpen}
-                                  onToggle={() => toggle(`project:${p.key}`)}
-                                  onNew={onNew}
-                                />
-                                {/* Only delegates are indented; project threads keep the full row width. */}
-                                <Fold open={projectOpen}>
-                                  <div className={cx(!compact && "pt-0.5")}>{rows(p.items)}</div>
-                                </Fold>
-                              </div>
-                            );
-                          })
-                        : rows(
-                            section.id === "settled" ? section.items.slice(0, settledLimit) : section.items,
-                          )}
-                      {section.id === "settled" && section.items.length > settledLimit && (
-                        <button
-                          type="button"
-                          onClick={() => setSettledShown((n) => n + 25)}
-                          className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
-                        >
-                          <ChevronDown size={14} className="shrink-0" />
-                          Show {Math.min(25, section.items.length - settledShown)} more
-                        </button>
-                      )}
-                    </Fold>
-                  </section>
-                </Fragment>
-              );
-            })}
-          </div>
-        </nav>
-        {pickedSessions.length > 1 && (
-          <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
-            <span
-              className="min-w-0 flex-1 truncate px-1 font-medium text-caption text-fg-muted tabular"
-              aria-live="polite"
-            >
-              {pickedSessions.length} selected
-            </span>
-            <Pill
-              size="sm"
-              quiet
-              onClick={() => {
-                setPinned(
-                  pickedSessions.map((s) => s.id),
-                  !allPickedPinned,
-                );
-                clearSelection();
+        {/* Settings swaps the list (kept mounted, hidden) for its sections under the same title row. */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            className={cx("flex min-h-0 flex-1 flex-col", settingsOpen && "invisible")}
+            inert={settingsOpen}
+          >
+            <NeedsYouRow threadIds={new Set(filtered.map((s) => s.id))} />
+            {toolbarOn && <SidebarToolbar />}
+            <nav
+              ref={list}
+              data-focus-default
+              // One tab stop for the whole list (the row the keyboard is on), ↑ ↓ through its rows,
+              // ⏎ to open and Esc to let the selection go.
+              onKeyDown={onListKey}
+              onFocus={onListFocus}
+              onClickCapture={onListClick}
+              // A press on a row is a drag if the pointer moves (ui/sidebarDrag.tsx), and a click if not.
+              onPointerDown={(e) => {
+                drag.start(e);
+                projectDrag.start(e);
               }}
+              aria-label="Thread list"
+              className="relative min-h-0 flex-1 overflow-y-auto px-3 pb-2"
+              style={{ maskImage: fade, WebkitMaskImage: fade }}
             >
-              {allPickedPinned ? "Unpin" : "Pin"}
-            </Pill>
-            {!allPickedSettled && (
-              <Pill
-                size="sm"
-                quiet
-                onClick={() => {
-                  settleThreads(pickedSessions.map((s) => s.id));
-                  clearSelection();
-                }}
-              >
-                Settle
-              </Pill>
+              {listing && <ThreadRowsSkeleton />}
+              <div className="flex min-h-full flex-col">
+                {sections.map((section) => {
+                  const open = isOpen(section.id);
+                  const shelf = isShelf(section.id, layoutMode);
+                  return (
+                    <Fragment key={section.id}>
+                      {/* The shelves sit at the foot, under one hairline, apart from Pinned and Threads. */}
+                      {section.id === firstShelf && (
+                        <div aria-hidden className="mt-2 min-h-2 flex-1 border-border border-b" />
+                      )}
+                      <section
+                        className={cx("mt-2 first:mt-0", section.id === firstShelf && "mt-0")}
+                        aria-label={section.label}
+                        data-shelf={shelf ? section.id : undefined}
+                      >
+                        {/* Shelves fold. The Threads label also holds the list controls. */}
+                        {shelf ? (
+                          <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
+                        ) : (
+                          labelled(section.id) && (
+                            <ThreadSectionLabel
+                              label={section.label}
+                              threads={section.id === "threads"}
+                              filtering={onlyProject && !!projectCwd}
+                            />
+                          )
+                        )}
+                        {section.id === "threads" && !listing && !filtered.length && (
+                          <div className="px-2 py-3 text-callout text-fg-muted">
+                            {onlyProject ? "No threads in this project yet." : "No threads yet."}
+                          </div>
+                        )}
+                        <Fold open={open}>
+                          {section.projects
+                            ? section.projects.map((p) => {
+                                const projectOpen = isOpen(`project:${p.key}`);
+                                const onNew = p.project ? () => startNewThread(p.project) : undefined;
+                                return (
+                                  <div key={p.key} data-project-id={p.key} className="relative mb-1">
+                                    <ProjectHeader
+                                      label={p.label}
+                                      count={p.items.length}
+                                      hidden={
+                                        p.items.some((x) => flags.includes(`${x.id}:n`))
+                                          ? "needs"
+                                          : p.items.some((x) => flags.includes(`${x.id}:w`))
+                                            ? "working"
+                                            : p.items.some((x) => !!finished[x.id])
+                                              ? "finished"
+                                              : undefined
+                                      }
+                                      open={projectOpen}
+                                      onToggle={() => toggle(`project:${p.key}`)}
+                                      onNew={onNew}
+                                    />
+                                    {/* Only delegates are indented; project threads keep the full row width. */}
+                                    <Fold open={projectOpen}>
+                                      <div className={cx(!compact && "pt-0.5")}>{rows(p.items)}</div>
+                                    </Fold>
+                                  </div>
+                                );
+                              })
+                            : rows(
+                                section.id === "settled"
+                                  ? section.items.slice(0, settledLimit)
+                                  : section.items,
+                              )}
+                          {section.id === "settled" && section.items.length > settledLimit && (
+                            <button
+                              type="button"
+                              onClick={() => setSettledShown((n) => n + 25)}
+                              className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                            >
+                              <ChevronDown size={14} className="shrink-0" />
+                              Show {Math.min(25, section.items.length - settledShown)} more
+                            </button>
+                          )}
+                        </Fold>
+                      </section>
+                    </Fragment>
+                  );
+                })}
+              </div>
+            </nav>
+            {pickedSessions.length > 1 && (
+              <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
+                <span
+                  className="min-w-0 flex-1 truncate px-1 font-medium text-caption text-fg-muted tabular"
+                  aria-live="polite"
+                >
+                  {pickedSessions.length} selected
+                </span>
+                <Pill
+                  size="sm"
+                  quiet
+                  onClick={() => {
+                    setPinned(
+                      pickedSessions.map((s) => s.id),
+                      !allPickedPinned,
+                    );
+                    clearSelection();
+                  }}
+                >
+                  {allPickedPinned ? "Unpin" : "Pin"}
+                </Pill>
+                {!allPickedSettled && (
+                  <Pill
+                    size="sm"
+                    quiet
+                    onClick={() => {
+                      settleThreads(pickedSessions.map((s) => s.id));
+                      clearSelection();
+                    }}
+                  >
+                    Settle
+                  </Pill>
+                )}
+                {pickedSettled && (
+                  <Pill
+                    size="sm"
+                    quiet
+                    onClick={() => {
+                      unsettleThreads(pickedSessions.map((s) => s.id));
+                      clearSelection();
+                    }}
+                  >
+                    Unsettle
+                  </Pill>
+                )}
+                <Pill size="sm" quiet onClick={clearSelection}>
+                  Clear
+                </Pill>
+              </div>
             )}
-            {pickedSettled && (
-              <Pill
-                size="sm"
-                quiet
-                onClick={() => {
-                  unsettleThreads(pickedSessions.map((s) => s.id));
-                  clearSelection();
-                }}
-              >
-                Unsettle
-              </Pill>
-            )}
-            <Pill size="sm" quiet onClick={clearSelection}>
-              Clear
-            </Pill>
+            <UpdateRow />
           </div>
-        )}
-        <UpdateRow />
+          {settingsOpen && (
+            <div className="absolute inset-0">
+              <SettingsNav />
+            </div>
+          )}
+        </div>
       </div>
       <CustomSnooze />
       {!hidden && (
