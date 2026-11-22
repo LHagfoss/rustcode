@@ -261,9 +261,6 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
         height={picture?.height || undefined}
         onError={() => setState({ error: "Could not display this picture." })}
         draggable={false}
-        // The width cap follows the height cap through the picture's own ratio, so the box is the
-        // picture: `object-contain` letterboxed a wide one inside a full-width box, which drew the
-        // rounded corners on the empty bars and left the picture square and narrower than the reply.
         style={pictureFit(picture)}
         className="h-auto max-w-full rounded-xl"
       />
