@@ -537,7 +537,7 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
   const headings = thoughtHeadings(item.text);
   return (
     <div className="text-callout">
-      <div className="flex max-w-full items-center gap-1">
+      <div className={cx("flex max-w-full items-center gap-1", open && "rc-sticky-head")}>
         <button
           type="button"
           aria-expanded={open}
@@ -831,7 +831,7 @@ export const ToolRow = memo(function ToolRow({
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
   return (
     <div>
-      <div className="group flex items-center gap-0.5">
+      <div className={cx("group flex items-center gap-0.5", open && "rc-sticky-head")}>
         <button
           type="button"
           aria-expanded={open}

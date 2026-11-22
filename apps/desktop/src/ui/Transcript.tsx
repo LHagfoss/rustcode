@@ -99,6 +99,7 @@ import {
   WorkingRow,
 } from "./Rows";
 import { turnFooterHidden } from "./replyActions";
+import { useStuckFold } from "./StuckFold";
 import { plainPreview, type RailNode, TimelineRail, type Turn, turnTitle } from "./TimelineRail";
 import { TurnChanges } from "./TurnChanges";
 import { TurnTrace } from "./TurnTrace";
@@ -1020,6 +1021,7 @@ export function Transcript({
     }
     setReadTurn(at);
     setLastOnScreen(onScreen);
+    updateStuck();
   };
 
   const jumpToTurn = useCallback(
@@ -1030,6 +1032,16 @@ export function Transcript({
     },
     [virtualizer],
   );
+
+  const { updateStuck, stuckHeader } = useStuckFold({
+    rows,
+    scrollRef,
+    innerRef,
+    virtualizer,
+    topInset,
+    toggleFold,
+    pinned,
+  });
 
   const railCurrent = showLatest ? Math.min(readTurn, turns.length - 1) : turns.length - 1;
 
@@ -1411,6 +1423,7 @@ export function Transcript({
           />
         ) : null}
       </div>
+      {stuckHeader}
       <TimelineRail
         turns={turns}
         current={railCurrent}
