@@ -674,14 +674,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Toast:** `.rc-toast rounded-2xl` (strong glass and a slight shadow), 380px wide, `py-1.5 pl-3 pr-1.5 text-callout`: an icon
   (info `text-fg-muted`, success `text-success`, error `text-danger`, a
   spinner while it has progress), the text in `text-fg` (up to 3 lines), at
-  most one action as a secondary pill (`h-6 bg-fill`), and a close button.
+  most one action as accent text (`h-6 px-2 font-medium text-accent`, a
+  `bg-accent/10` hover) kept tight beside a quiet close button.
   Progress is a 2px accent bar along its foot. `Toaster` shows at most three
   (`state/toasts.ts` enforces the queue), newest on top: at rest only the
-  front card is fully shown, the others peeking 6px above it, and hovering or
+  front card is fully shown, the others taking its height with their text
+  hidden and peeking 6px above it, and hovering or
   focusing the stack fans them out 8px apart, upward. In the window's
-  bottom-right corner, 16px in, away from the transcript being read. An
-  auto-dismissing card drains a 1px accent hairline along its foot, which
-  stops with its clock; a card replaced in place from spinner to check settles
+  bottom-right corner, 16px in, away from the transcript being read. No timer
+  line: a card's clock is not drawn. A card replaced in place from spinner to check settles
   onto the check. The same message again refreshes its card and
   restarts its time instead of stacking; past three, the oldest is dropped.
   Info and success leave after 2.5s, errors after 5s. The pointer or focus on

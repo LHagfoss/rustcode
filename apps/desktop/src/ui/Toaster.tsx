@@ -1,6 +1,8 @@
 // Up to three toasts, newest in front (state/toasts.ts keeps the queue), frosted
 // like the composer, in the window's bottom-right corner, away from the
-// transcript being read. Info and success leave after 2.5 s, errors after 5 s.
+// transcript being read. At rest the cards behind the front one take its
+// height and hide their text, so only their edges peek above it. Info and
+// success leave after 2.5 s, errors after 5 s.
 // The pointer or focus on the stack, a drag, or the window in the background
 // stops the clock. A click anywhere on the card, ×, Escape, or a drag past 48px
 // sideways or 24px down dismisses; a drag never selects text anywhere.
@@ -17,16 +19,16 @@ import {
   TOAST_DRAG_MS,
 } from "../lib/toastDrag";
 import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
-import { nextExpiry, toastTtl } from "../state/toasts";
+import { nextExpiry } from "../state/toasts";
 import { CircleAlert, CircleCheck, Info, X } from "./icons";
-import { cx, Pill, Spinner } from "./primitives";
+import { cx, Spinner } from "./primitives";
 
 /** How far the cards behind the front one peek over its top edge, and how much smaller each is. */
 const TOAST_PEEK = 6;
 const TOAST_SHRINK = 0.04;
-/** The 8px between fanned-out cards. */
 /** The stack's distance from the window's bottom and right edges. */
 const TOAST_INSET = 16;
+/** The 8px between fanned-out cards. */
 const TOAST_GAP = 8;
 /** A quiet settle on the check after a spinner finishes. */
 const TOAST_SETTLE_MS = 320;
@@ -50,11 +52,12 @@ interface DragSession {
 
 function ToastCard({
   toast,
-  paused,
+  compactHeight,
   onDrag,
 }: {
   toast: Toast;
-  paused: boolean;
+  /** A card behind the front one at rest: drawn at the front card's height with its text hidden. */
+  compactHeight?: number;
   onDrag: (dragging: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -167,6 +170,7 @@ function ToastCard({
     const timer = setTimeout(() => setSettled(false), TOAST_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [spinning, toast.tone]);
+  const compact = compactHeight !== undefined;
   return (
     <div
       ref={ref}
@@ -177,62 +181,66 @@ function ToastCard({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
       onLostPointerCapture={onLostPointerCapture}
+      style={compact ? { height: compactHeight } : undefined}
       className={cx(
-        "rc-toast pointer-events-auto relative flex w-[380px] max-w-[calc(100vw-32px)] cursor-pointer touch-none items-start gap-2 overflow-hidden rounded-xl py-1.5 pr-1.5 pl-3 text-callout select-none active:cursor-grabbing",
+        "rc-toast pointer-events-auto relative w-[380px] max-w-[calc(100vw-32px)] cursor-pointer touch-none overflow-hidden rounded-xl text-callout select-none active:cursor-grabbing",
         toast.leaving ? (flung ? "" : "rc-toast-out") : "rc-toast-in",
       )}
     >
-      <span className="flex h-6 shrink-0 items-center">
-        {spinning ? (
-          <Spinner size={13} />
-        ) : (
-          <Icon
-            size={14}
-            className={cx(
-              settled && "rc-dot-in",
-              error ? "text-danger" : toast.tone === "success" ? "text-success" : "text-fg-muted",
-            )}
-          />
+      <div
+        data-toast-body
+        aria-hidden={compact || undefined}
+        className={cx(
+          "flex items-start gap-2 py-1.5 pr-1.5 pl-3 transition-opacity duration-150 ease-out",
+          compact && "opacity-0",
         )}
-      </span>
-      <p className="line-clamp-3 min-w-0 flex-1 py-1 text-fg">{toast.text}</p>
-      {toast.action && (
-        <Pill
-          size="sm"
-          onClick={() => {
-            toast.action?.run();
-            dismissToast(toast.id);
-          }}
-        >
-          {toast.action.label}
-        </Pill>
-      )}
-      <button
-        type="button"
-        aria-label="Dismiss"
-        onClick={() => dismissToast(toast.id)}
-        className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
       >
-        <X size={12} />
-      </button>
-      {toast.persist && toast.progress !== undefined ? (
+        <span className="flex h-6 shrink-0 items-center">
+          {spinning ? (
+            <Spinner size={13} />
+          ) : (
+            <Icon
+              size={14}
+              className={cx(
+                settled && "rc-dot-in",
+                error ? "text-danger" : toast.tone === "success" ? "text-success" : "text-fg-muted",
+              )}
+            />
+          )}
+        </span>
+        <p className="line-clamp-3 min-w-0 flex-1 py-1 text-fg">{toast.text}</p>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {toast.action && (
+            // The one thing to do about the message, in the accent as text: it reads as the
+            // card's action without outweighing the message the way a filled pill did.
+            <button
+              type="button"
+              tabIndex={compact ? -1 : undefined}
+              onClick={() => {
+                toast.action?.run();
+                dismissToast(toast.id);
+              }}
+              className="flex h-6 items-center rounded-full px-2 font-medium whitespace-nowrap text-accent hover:bg-accent/10 active:bg-accent/15"
+            >
+              {toast.action.label}
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="Dismiss"
+            tabIndex={compact ? -1 : undefined}
+            onClick={() => dismissToast(toast.id)}
+            className="flex size-6 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      </div>
+      {toast.persist && toast.progress !== undefined && (
         <span className="absolute inset-x-0 bottom-0 h-0.5 bg-fill" aria-hidden>
           <span
             className="block h-full bg-accent transition-[width] duration-300 ease-snappy"
             style={{ width: `${Math.round(Math.min(1, Math.max(0, toast.progress)) * 100)}%` }}
-          />
-        </span>
-      ) : toast.persist ? null : (
-        // An auto-dismissing card drains a 1px accent hairline along its foot; it stops with
-        // the clock while the stack is held by the pointer, focus or a drag.
-        <span className="absolute inset-x-0 bottom-0 h-px overflow-hidden" aria-hidden>
-          <span
-            key={toast.at}
-            className="rc-toast-timer block h-full bg-accent"
-            style={{
-              animationDuration: `${toastTtl(toast.tone)}ms`,
-              animationPlayState: paused ? "paused" : "running",
-            }}
           />
         </span>
       )}
@@ -354,7 +362,11 @@ export function Toaster() {
                 : `translateY(${-index * TOAST_PEEK}px) scale(${Math.max(0.9, 1 - index * TOAST_SHRINK)})`,
             }}
           >
-            <ToastCard toast={toast} paused={paused} onDrag={setDragging} />
+            <ToastCard
+              toast={toast}
+              compactHeight={!expanded && index > 0 ? heights[toasts[0]?.id ?? ""] : undefined}
+              onDrag={setDragging}
+            />
           </ToastSlot>
         ))}
       </div>
@@ -380,9 +392,12 @@ function ToastSlot({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const report = () => onHeight(id, el.offsetHeight);
+    // The card's body keeps its natural height while a compact card is clamped to the front
+    // one's, so the fanned-out offsets are known before the stack opens.
+    const body = el.querySelector<HTMLElement>("[data-toast-body]") ?? el;
+    const report = () => onHeight(id, body.offsetHeight);
     report();
-    return observeSize(el, report);
+    return observeSize(body, report);
   }, [id, onHeight]);
   return (
     <div ref={ref} className={cx("rc-toast-slot", className)} style={style}>

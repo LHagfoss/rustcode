@@ -1398,21 +1398,6 @@
   transform-origin: bottom center;
   transition: transform 220ms var(--ease-snappy);
 }
-/* An auto-dismissing card's clock, along its foot: a 1px accent hairline that drains. */
-@keyframes rc-toast-timer {
-  from {
-    transform: scaleX(1);
-  }
-  to {
-    transform: scaleX(0);
-  }
-}
-.rc-toast-timer {
-  animation-name: rc-toast-timer;
-  animation-timing-function: linear;
-  animation-fill-mode: forwards;
-  transform-origin: left center;
-}
 
 /*
  * Skeletons: a quiet block where content will appear, swept by a soft
