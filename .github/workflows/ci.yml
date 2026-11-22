@@ -258,6 +258,11 @@ jobs:
                   python3 scripts/check-comments.py --self-test
                   python3 scripts/check-comments.py
 
+            - name: Check no Rust file grows past its size cap
+              # scripts/check-rust-size.py: no new file past 2,000 lines, and
+              # the files already past it may only shrink.
+              run: python3 scripts/check-rust-size.py
+
             - name: Install Rust toolchain
               if: env.AFFECTED_PACKAGES != ''
               uses: dtolnay/rust-toolchain@stable
