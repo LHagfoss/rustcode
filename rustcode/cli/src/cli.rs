@@ -662,7 +662,12 @@ pub enum ServerCommands {
     },
     /// Relay ACP on stdin and stdout to the server, starting it in the
     /// background if it is not running
-    Connect,
+    Connect {
+        /// Run a standalone engine instead when the server is another
+        /// version or cannot be reached (the desktop app's engine)
+        #[arg(long, hide = true)]
+        or_standalone: bool,
+    },
     /// Run the server in the background from login: a LaunchAgent on macOS,
     /// a systemd user unit on Linux, a logon task on Windows
     Install {
@@ -2147,7 +2152,18 @@ mod tests {
             server(&["run", "--service"]),
             ServerCommands::Run { service: true }
         ));
-        assert!(matches!(server(&["connect"]), ServerCommands::Connect));
+        assert!(matches!(
+            server(&["connect"]),
+            ServerCommands::Connect {
+                or_standalone: false
+            }
+        ));
+        assert!(matches!(
+            server(&["connect", "--or-standalone"]),
+            ServerCommands::Connect {
+                or_standalone: true
+            }
+        ));
         assert!(matches!(
             server(&["install"]),
             ServerCommands::Install {

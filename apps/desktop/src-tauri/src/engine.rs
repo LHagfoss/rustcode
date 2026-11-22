@@ -1,6 +1,9 @@
-//! The engine sidecar: runs `rustcode --acp`, relays its newline-delimited
-//! JSON-RPC to the webview over a Tauri Channel, and restarts it with backoff
-//! when it exits. The webview only ever sees what the engine prints; nothing
+//! The engine sidecar: runs `rc server connect --or-standalone`, relays its
+//! newline-delimited JSON-RPC to the webview over a Tauri Channel, and
+//! restarts it with backoff when it exits. That process relays to the user's
+//! RustCode server, starting it if none runs, so threads outlive the app; it
+//! runs a standalone engine instead when the server is another version
+//! (`docs/server.md` › The app's engine). The webview only ever sees what the engine prints; nothing
 //! here reads or forwards credentials. Users know this process as the
 //! "RustCode server" (docs/terminology.md), so the text they read says server.
 //!
@@ -214,6 +217,10 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// The engine's arguments: the shared server when it is this build, else a
+/// standalone engine (`rustcode::server::attach`).
+const ENGINE_ARGS: [&str; 3] = ["server", "connect", "--or-standalone"];
+
 /// Events kept for a webview that has not attached yet.
 const EARLY_MAX: usize = 200;
 
@@ -425,7 +432,7 @@ impl Engine {
         // Recorded before the spawn, so a binary that will not start is still named.
         self.run.lock().unwrap().path = Some(path.clone());
         let mut child = crate::process::command(path)
-            .arg("--acp")
+            .args(ENGINE_ARGS)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -444,7 +451,11 @@ impl Engine {
         }
         *self.child.lock().unwrap() = Some(child);
         self.emit(EngineEvent::Log {
-            line: format!("desktop: started {} --acp (pid {pid})", path.display()),
+            line: format!(
+                "desktop: started {} {} (pid {pid})",
+                path.display(),
+                ENGINE_ARGS.join(" ")
+            ),
         });
         self.emit(EngineEvent::Open {
             engine: path.display().to_string(),

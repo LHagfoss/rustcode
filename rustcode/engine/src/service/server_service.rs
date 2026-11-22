@@ -1068,6 +1068,14 @@ pub async fn restart() -> Result<Option<LiveStatus>> {
     Ok(wait_for_server(before.as_ref().map(|live| live.pid)).await)
 }
 
+/// Stop the server process `pid` and wait (up to 15 s) until it no longer
+/// answers: the app replaces an idle server of another version this way.
+pub async fn stop_server(pid: u32) -> Result<()> {
+    terminate(pid)?;
+    wait_until_gone(pid).await;
+    Ok(())
+}
+
 async fn wait_until_gone(pid: u32) {
     for _ in 0..150 {
         if live_status().await.is_none_or(|live| live.pid != pid) {
