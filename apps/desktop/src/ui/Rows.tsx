@@ -1314,10 +1314,9 @@ export function TurnEndRow({
   threadId?: string;
   latest?: boolean;
 }) {
-  // One row for the turn: its outcome and time, copy and fork, then the changes chip. It is the
-  // turn's only action row: the reply above it draws none, and a turn still running has no footer
-  // yet. The newest answer keeps its actions in view; an older turn's fade in under the pointer or
-  // focus, in room the row always keeps, so nothing in the transcript moves when they do.
+  // The turn's only action row: outcome and time, copy and fork, then the changes chip. The newest
+  // answer keeps its actions in view; an older turn's fade in under the pointer or focus, in room
+  // the row always keeps (docs/design.md › Type).
   const row = turnActions({ text: reply, at: item.at, threadId });
   const sideChat = useApp(
     (s) => s.sessions.find((session) => session.id === threadId)?.parent?.relationship === "side_chat",

@@ -42,8 +42,8 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (item.kind === "status") return 34 + item.rows.length * 44;
   // Thoughts start collapsed; the virtualizer measures the row when expanded.
   if (item.kind === "thought") return 17;
-  // A sent bubble: its pictures and files above it, 12px of padding each way, its text, and the
-  // 22px line under it that holds the time (shown on hover, laid out always). A long one folds at
+  // A sent bubble: its pictures and files above it, 8px of padding each way, its text, and the
+  // 24px line under it that holds the time (shown on hover, laid out always). A long one folds at
   // `COLLAPSED_MESSAGE_HEIGHT` and keeps its "Show full message" pill, so its estimate never
   // reserves a screenful the row will not use.
   if (item.kind === "user") {
@@ -97,9 +97,6 @@ export function rowGap(rows: readonly Row[], index: number): number {
   if (flowRow(rows[index]) && (flowRow(rows[index - 1]) || rows[index - 1]?.fold)) return FLOW_GAP;
   if (rows[index - 1]?.fold) return FOLD_GAP;
   if (item?.kind === "turnEnd" && prev?.kind === "assistant") return FOOTER_GAP;
-  // A divider is the turn's own first line, and a sent bubble already ends on the 24px line its
-  // time and actions keep (`META_LINE`): the row under either takes the narrow gap, or the air
-  // between a message and its turn came to 52px where every other turn break is 28.
   if ((prev?.kind === "notice" && prev.tone === "info") || prev?.kind === "user") return ITEM_GAP;
   return item?.kind === "user" ? TURN_GAP : ITEM_GAP;
 }
