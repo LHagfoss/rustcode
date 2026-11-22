@@ -300,7 +300,11 @@ impl Engine {
             return;
         }
         if self.supervising.swap(true, Ordering::SeqCst) {
-            // Already running: hand the new page a clean engine.
+            // Already running: hand the new page a clean engine (a reload: the web process may have died).
+            crate::update_log::record_webview(
+                "webview.reloaded",
+                "the page loaded again; the engine restarts for it",
+            );
             self.restart();
             return;
         }
