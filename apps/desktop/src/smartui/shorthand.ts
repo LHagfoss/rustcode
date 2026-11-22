@@ -657,12 +657,10 @@ function field(item: string): string {
             `<label><input type="radio" name="${attrName}" value="${escapeAttr(bare(option))}"${i === Math.max(0, preset) ? " checked" : ""}><span>${escapeHtml(bare(option))}</span></label>`,
         )
         .join("");
-      // A few short options read as a segmented control; longer ones as a list of radio rows,
-      // since a segmented control that wraps loses its shape.
       const words = options.map((option) => plain(bare(option)).length);
-      const segmented =
+      const fitsOnOneSegmentedRow =
         options.length <= 4 && Math.max(0, ...words) <= 16 && words.reduce((a, b) => a + b, 0) <= 40;
-      const variant = segmented ? "rc-choice" : "rc-choice rc-choice-list";
+      const variant = fitsOnOneSegmentedRow ? "rc-choice" : "rc-choice rc-choice-list";
       return `<div class="rc-field" role="radiogroup" aria-label="${escapeAttr(plain(labelCell || name))}"><span>${label}</span><div class="${variant}">${opts}</div></div>`;
     }
     case "check":
