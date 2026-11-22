@@ -4,19 +4,19 @@
 // height and hide their text, so only their edges peek above it. Info and
 // success leave after 2.5 s, errors after 5 s.
 // The pointer or focus on the stack, a drag, or the window in the background
-// stops the clock. A click anywhere on the card, ×, Escape, or a drag past 48px
-// sideways or 24px down dismisses; a drag never selects text anywhere.
+// stops the clock. A click anywhere on the card, ×, Escape, or a drag right past
+// 48px (or a quick flick right) dismisses; a drag never selects text anywhere.
 
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { observeSize } from "../lib/resize";
 import {
-  dragExit,
   dragOpacity,
   dragState,
   holdSelection,
   isClick,
   startsDrag,
   TOAST_DRAG_MS,
+  TOAST_EXIT,
 } from "../lib/toastDrag";
 import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
 import { nextExpiry } from "../state/toasts";
@@ -54,6 +54,8 @@ interface DragSession {
   pointerId: number;
   x: number;
   y: number;
+  /** When the press began, for a flick. */
+  at: number;
   dx: number;
   dy: number;
   /** Puts the document back; safe to call twice. */
@@ -89,9 +91,8 @@ function ToastCard({
         el.releasePointerCapture(session.pointerId);
       }
       if (flyOut && session && el) {
-        const { dx, direction } = dragState(session.dx, session.dy);
         el.style.transition = `transform ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms ease-out`;
-        el.style.transform = dragExit(direction ?? "down", dx);
+        el.style.transform = TOAST_EXIT;
         el.style.opacity = "0";
         setFlung(true);
         dismissToast(toast.id);
@@ -126,6 +127,7 @@ function ToastCard({
       pointerId: e.pointerId,
       x: e.clientX,
       y: e.clientY,
+      at: e.timeStamp,
       dx: 0,
       dy: 0,
       release: holdSelection(document),
@@ -157,7 +159,7 @@ function ToastCard({
       dismissToast(toast.id);
       return;
     }
-    end(dragState(session.dx, session.dy).dismiss);
+    end(dragState(session.dx, session.dy, e.timeStamp - session.at).dismiss);
   };
 
   const onPointerCancel = () => end(false);

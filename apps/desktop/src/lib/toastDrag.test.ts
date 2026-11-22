@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  dragExit,
   dragOpacity,
   dragState,
   holdSelection,
@@ -8,45 +7,36 @@ import {
   type SelectionDoc,
   startsDrag,
   TOAST_DISMISS_PX,
+  TOAST_FLICK_PX,
 } from "./toastDrag";
 
 describe("toast drag", () => {
-  test("a small move is a snap back, not a dismissal", () => {
+  test("only a drag right past 48px dismisses", () => {
     expect(dragState(TOAST_DISMISS_PX, 0).dismiss).toBe(false);
-    expect(dragState(-TOAST_DISMISS_PX, 0).dismiss).toBe(false);
-    expect(dragState(0, TOAST_DISMISS_PX / 2 - 1).dismiss).toBe(false);
-  });
-
-  test("past 48px sideways or 24px down it dismisses, the way it is going", () => {
     expect(dragState(TOAST_DISMISS_PX + 1, 0).dismiss).toBe(true);
-    expect(dragState(TOAST_DISMISS_PX + 1, 0).direction).toBe("right");
-    expect(dragState(-TOAST_DISMISS_PX - 1, 0).direction).toBe("left");
-    expect(dragState(0, TOAST_DISMISS_PX / 2).direction).toBe("down");
-    // Down wins when the drag is more vertical than sideways.
-    expect(dragState(10, 40).direction).toBe("down");
-    expect(dragState(60, 20).direction).toBe("right");
-    // Upward never dismisses: it resists.
+    expect(dragState(-200, 0).dismiss).toBe(false);
+    expect(dragState(0, 200).dismiss).toBe(false);
     expect(dragState(0, -200).dismiss).toBe(false);
   });
 
-  test("sideways follows fully, upward resists at a sixth", () => {
+  test("a quick flick right dismisses short of 48px, a slow or tiny one does not", () => {
+    expect(dragState(30, 0, 40).dismiss).toBe(true);
+    expect(dragState(30, 0, 400).dismiss).toBe(false);
+    expect(dragState(TOAST_FLICK_PX - 1, 0, 5).dismiss).toBe(false);
+    expect(dragState(-30, 0, 40).dismiss).toBe(false);
+  });
+
+  test("right follows fully, every other way resists at a sixth", () => {
     expect(dragState(40, 0)).toMatchObject({ dx: 40, dy: 0, away: 40 });
+    expect(dragState(-60, 0)).toMatchObject({ dx: -10, away: 0 });
+    expect(dragState(0, 60).dy).toBe(10);
     expect(dragState(0, -60).dy).toBe(-10);
-    expect(dragState(0, 60).dy).toBe(60);
-    // An upward drag resists, so it never travels far enough to fade.
-    expect(dragState(0, -60).away).toBe(0);
   });
 
   test("the card fades as it travels but never below a fifth", () => {
     expect(dragOpacity(0)).toBe(1);
     expect(dragOpacity(100)).toBe(0.5);
     expect(dragOpacity(1000)).toBe(0.2);
-  });
-
-  test("a dismissed card flies off the way it was dragged", () => {
-    expect(dragExit("left", -60)).toBe("translateX(-120%)");
-    expect(dragExit("right", 60)).toBe("translateX(120%)");
-    expect(dragExit("down", 4)).toBe("translateY(140%)");
   });
 
   test("a press that barely moves is a click", () => {

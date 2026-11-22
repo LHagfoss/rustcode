@@ -450,8 +450,8 @@ that change use `tabular`.
   `transform`, `opacity` and those two; never `filter` or `box-shadow` on
   something that moves every frame.
 - Toasts rise in with `rc-toast-in` (220ms, from 10px below) and drop away
-  in 140ms `ease-in`; a drag follows the pointer and snaps back or flies off
-  in 160ms, and a card shown meanwhile takes the top of the stack. At rest only
+  in 140ms `ease-in`; a drag slides it right only (other ways rubber-band at
+  a sixth) and it snaps back or flies off the right edge in 160ms, and a card shown meanwhile takes the top of the stack. At rest only
   the front card is in flow, the ones behind peeking 6px above it; hovering or
   focusing the stack fans them out 8px apart (`transform` only).
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
@@ -721,9 +721,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   Info and success leave after 2.5s, errors after 5s. The pointer or focus on
   the stack, a drag, and a window in the background stop every clock, which
   resumes with what was left. A click anywhere on the card, ×, Escape (after a
-  draft or an open overlay has taken it), or a drag past 48px sideways or 24px
-  down dismisses; a drag follows the
-  pointer and snaps back in 160ms, and never selects text. Use a
+  draft or an open overlay has taken it), or a drag right past 48px or a quick
+  flick right dismisses; the card slides right only, rubber-bands any other
+  way, snaps back in 160ms, and never selects text. Use a
   toast for what is not tied to a message (copied, engine events, errors of an
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
