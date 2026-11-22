@@ -8,13 +8,13 @@ frontend carries only its own rendering and input code.
 
 | Frontend | Location | How it links core |
 | --- | --- | --- |
-| Terminal UI | `rustcode/tui` (`rustcode-tui`, owns the `rustcode` binary) | `rustcode = { path = "../.." }` |
-| Desktop (Tauri, React) | `apps/desktop` | spawns `rustcode --acp` (ACP over stdio) |
+| Terminal UI | `harness/` (`rustcode-harness`, owns the `rustcode` binary) | `rustcode = { path = ".." }` |
+| Desktop (Tauri, React) | `apps/desktop` | spawns `rc --acp` (ACP over stdio) |
 | ACP | in-tree (`engine/src/acp.rs`, driven by the CLI) | same crate |
-| Daemon / headless | in-tree (`engine/src/daemon.rs`, CLI flags) | same crate |
+| Daemon / headless | in-tree (`engine/src/daemon/`, `rc daemon`) | same crate |
 | Mobile | remote only — see `docs/mobile.md` | JSON protocol, never links Rust |
 
-The experimental `rustcode serve` command is the TCP transport for remote
+The experimental `rc serve` command is the TCP transport for remote
 frontends. It drives `rustcode::controller` and is documented in
 [`mobile.md`](mobile.md).
 
@@ -24,7 +24,7 @@ frontends. It drives `rustcode::controller` and is documented in
 for controlling and observing a session: `InteractiveController`,
 `ControllerHandle`, `ControllerEvent` / `ControllerUpdate`,
 `ControllerSnapshot`, `Command`. Frontends that link the crate drive this. The
-desktop apps instead run `rustcode --acp`, whose surface is wider (see
+desktop apps instead run `rc --acp`, whose surface is wider (see
 [`acp.md`](acp.md) and [`desktop.md`](desktop.md)).
 
 The terminal UI lives in its own crate and follows the same seam
@@ -36,7 +36,7 @@ snapshot bridge it used to read. Anything that needed an `AppState` method —
 whether the turn is interruptible, whether an overlay owns the screen, the
 active model profile / context window / tool protocol, the unexpired transient
 notice — is resolved into the view by the engine, so a frontend never
-re-derives engine policy. The TUI's event loop (`rustcode/tui/src/runtime`) is
+re-derives engine policy. The TUI's event loop (`harness/src/runtime`) is
 out of scope by design: it moves with the frontend and drives turns directly.
 The update prompt renders a binary-local `env!("CARGO_PKG_VERSION")` helper
 plus the shared `rustcode_core::update` leaf, and render tests spawn
@@ -52,7 +52,7 @@ extending the view over reaching past `controller`.
 ## Rules
 
 - Nothing under `rustcode/core/` or `rustcode/engine/` may reference `ratatui` or `crossterm`; the terminal
-  stack lives only in `rustcode/tui`.
+  stack lives only in `harness/`.
 - Dependency direction is strictly frontend → core. `rustcode` must never
   depend on a frontend crate, not even optionally: Cargo rejects the cycle
   (`error: cyclic package dependency`) regardless of feature flags.
@@ -64,7 +64,7 @@ extending the view over reaching past `controller`.
 
 The terminal UI stays inline by default. Set `fullscreen = true` in the
 configuration file or pass `--fullscreen` to opt in. The startup capability
-check is passive (`rustcode/tui/src/terminal_probe.rs`): it reads terminal
+check is passive (`harness/src/terminal_probe.rs`): it reads terminal
 attributes and environment variables without sending queries or reading stdin,
 so it cannot delay the UI or consume a user's first keypress. Cursor-report,
 color, and keyboard support are estimates until a later phase negotiates those
@@ -93,7 +93,7 @@ Follow-up interaction issues #1492 (drag keeps highlight, explicit copy),
 #1495 (truthful Preparing/queued/running tool status) are all closed; their
 behavior is covered by TUI render/interaction tests. Palette contrast and
 reduced-motion remain covered by the render goldens
-(`rustcode/tui/src/ui/fixtures/render_snapshot_*.txt`) and the
+(`harness/src/ui/fixtures/render_snapshot_*.txt`) and the
 reduced-motion activity-label tests. Headless/serve behavior is unchanged.
 
 Fullscreen releases the alternate screen on normal exit, panic, Ctrl-Z
@@ -135,7 +135,7 @@ Complete, code-verified:
   #1495 (#1499) are closed by merged PRs, each with focused tests.
 - Large paste behavior is implemented end to end:
   `Composer::handle_paste` collapses payloads of 300 characters or more into a
-  `<!--PASTE:…-->` marker (`rustcode/tui/src/runtime/composer.rs:145`), the
+  `<!--PASTE:…-->` marker (`harness/src/runtime/composer.rs:27`), the
   composer renders it collapsed, and the provider boundary expands it
   (`rustcode/engine/src/network/payload.rs:96`).
 - Palette contrast and reduced motion stay covered by the render goldens and
@@ -161,6 +161,6 @@ Descoped:
 
 - Flipping fullscreen on by default. The epic asked for that to be revisited
   only after the rest is stable, so fullscreen stays opt-in — `--fullscreen` or
-  `fullscreen = true` (`rustcode/tui/src/run.rs:591`), guarded by
-  `fullscreen_is_opt_in` (`rustcode/tui/src/cli.rs:451`). Revisit it as its own
+  `fullscreen = true` (`harness/src/run.rs:479`), guarded by
+  `fullscreen_is_opt_in` (`harness/src/cli.rs:272`). Revisit it as its own
   change backed by a lab pass, never inside an unrelated bug fix.
