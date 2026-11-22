@@ -1159,8 +1159,9 @@ export function Transcript({
     <div className="relative min-h-0 flex-1">
       {find && (
         <div
-          style={{ top: topInset + 8 }}
-          className="elevated absolute right-7 z-20 flex h-[32px] items-center gap-1 rounded-full pr-1 pl-3 rc-in"
+          // Clear of the right panel's card, which floats over this column (`--rc-panel-room`).
+          style={{ top: topInset + 8, right: "calc(1.75rem + var(--rc-panel-room, 0px))" }}
+          className="elevated absolute z-20 flex h-[32px] items-center gap-1 rounded-full pr-1 pl-3 rc-in"
         >
           <Search size={12} className="text-fg-muted" />
           <input
