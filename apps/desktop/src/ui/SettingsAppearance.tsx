@@ -301,7 +301,7 @@ export function AppearancePage() {
         action={
           <div className="flex items-center gap-1">
             {hasShell() && (
-              <Action quiet size="sm" onClick={() => revealPath(userDir)}>
+              <Action size="sm" onClick={() => revealPath(userDir)}>
                 <FolderOpen size={12} /> Open themes folder
               </Action>
             )}

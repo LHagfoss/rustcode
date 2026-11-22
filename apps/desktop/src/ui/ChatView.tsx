@@ -179,12 +179,12 @@ function DetailsHeaderButton() {
         data-panel-toggle
         onClick={toggleRightPanel}
         className={cx(
-          "inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
+          "inline-flex h-7 items-center gap-1.5 rounded-full pr-2 pl-3 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
           panel && "bg-fill text-fg",
         )}
       >
-        <PanelRight size={16} />
         {label}
+        <PanelRight size={16} />
       </button>
     </Tooltip>
   );

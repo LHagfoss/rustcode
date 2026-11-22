@@ -503,7 +503,7 @@ export function Select({
       <RadixSelect.Trigger
         aria-label={label}
         className={cx(
-          "inline-flex max-w-[260px] min-w-0 items-center gap-1.5 rounded-md bg-fill font-medium text-callout text-fg outline-none enabled:hover:bg-fill-strong disabled:opacity-40 data-[state=open]:bg-fill-strong",
+          "inline-flex max-w-[260px] min-w-0 items-center gap-1.5 rounded-full bg-fill font-medium text-callout text-fg outline-none enabled:hover:bg-fill-strong disabled:opacity-40 data-[state=open]:bg-fill-strong",
           size === "sm" ? "h-6 pr-2 pl-2" : "h-[26px] pr-2 pl-3",
           className,
         )}
@@ -651,7 +651,7 @@ export function Segments<T extends string>({
           aria-hidden
           className={cx(
             "absolute top-0 left-0 transition-[transform,width] duration-200 ease-snappy",
-            tabs ? "h-7 rounded-md bg-fill" : "h-5 rounded-full bg-knob shadow-knob",
+            tabs ? "h-7 rounded-lg bg-fill" : "h-5 rounded-full bg-knob shadow-knob",
           )}
           style={{ transform: `translate(${thumb.left}px, ${tabs ? 0 : 2}px)`, width: thumb.width }}
         />
@@ -672,7 +672,7 @@ export function Segments<T extends string>({
           onBlur={intent.cancel}
           className={cx(
             "relative whitespace-nowrap font-medium disabled:opacity-40",
-            tabs ? "h-7 rounded-md px-3 text-callout" : "h-5 rounded-full px-2 text-caption",
+            tabs ? "h-7 rounded-lg px-3 text-callout" : "h-5 rounded-full px-2 text-caption",
             fill && "min-w-0 flex-1",
             o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}

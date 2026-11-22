@@ -260,16 +260,16 @@
   --rc-shadow-soft: color-mix(in srgb, var(--rc-shadow-color) 50%, transparent);
   --rc-shadow-1: 0 1px 1px var(--rc-shadow-soft), 0 0 0 1px var(--rc-separator);
   --rc-shadow-2: 0 2px 8px var(--rc-shadow-soft), 0 0 0 1px var(--rc-separator);
-  --rc-radius-xs: 5px;
-  --rc-radius-sm: 7px;
-  --rc-radius-md: 9px;
-  --rc-radius-lg: 11px;
-  --rc-radius-xl: 14px;
-  --rc-radius-2xl: 18px;
-  --rc-radius-3xl: 22px;
-  /* The composer's box and tray take a corner of their own, rounder than the scale: it is the one
-     surface the chat floats in, and the soft corner reads as one floating card over the transcript. */
-  --rc-composer-radius: 26px;
+  --rc-radius-xs: 6px;
+  --rc-radius-sm: 8px;
+  --rc-radius-md: 10px;
+  --rc-radius-lg: 12px;
+  --rc-radius-xl: 16px;
+  --rc-radius-2xl: 20px;
+  --rc-radius-3xl: 26px;
+  /* The composer's box and tray take a step of their own: it is the one surface the chat floats
+     in, and the rounder corner reads as one floating card over the transcript. */
+  --rc-composer-radius: var(--rc-radius-3xl);
 }
 
 /*
@@ -304,7 +304,6 @@
   --rc-radius-xl: 8px;
   --rc-radius-2xl: 10px;
   --rc-radius-3xl: 12px;
-  --rc-composer-radius: 12px;
 }
 
 :root[data-radius="round"] {
@@ -315,7 +314,6 @@
   --rc-radius-xl: 20px;
   --rc-radius-2xl: 26px;
   --rc-radius-3xl: 32px;
-  --rc-composer-radius: 32px;
 }
 
 @layer base {

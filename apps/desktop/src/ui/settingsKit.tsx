@@ -49,7 +49,7 @@ import {
 } from "../state/pageCache";
 import { connectionFor, request, useApp } from "../state/store";
 import { Check, ChevronDown, Info, RotateCcw } from "./icons";
-import { cx, menuItem, rowInset, Skeleton, Switch, Tooltip } from "./primitives";
+import { cx, menuItem, Pill, rowInset, Skeleton, Switch, Tooltip } from "./primitives";
 
 /**
  * A section's name, above its card: `text-title3` in `fg`, at the card's own inset. `minor` is a
@@ -361,27 +361,23 @@ export function Row({
 // ---------------------------------------------------------------- controls
 
 /**
- * The field shape a row's control takes: 28px high, `rounded-md` and a step of
+ * The field shape a row's control takes: 28px high, `rounded-lg` and a step of
  * its own over the card, so it reads as a control and not as a block.
  */
 /** A switch setting's value as a row reads it. */
 export const boolLabel = (value: Json | undefined) => (value ? "On" : "Off");
 
 export const fieldClass =
-  "h-7 rounded-md bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
+  "h-7 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
 
 /**
- * A labelled action in a row: the quiet default (a translucent fill over the
- * card), `prominent` for the one primary action, `danger` for a destructive
- * one, `quiet` for one that rests without a fill (a section header's "Add").
+ * A labelled action in a row: the app's one labelled button (`Pill`), so Settings and the rest of
+ * the app share its shape and fills. Secondary by default, `prominent` for the one primary action,
+ * `danger` for a destructive one, `quiet` only for a text-only action that rests without a fill
+ * (an action with an icon keeps its fill, so it reads as a button).
  */
 export function Action({
-  prominent,
-  danger,
-  quiet,
   size = "md",
-  className,
-  children,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   prominent?: boolean;
@@ -389,26 +385,7 @@ export function Action({
   quiet?: boolean;
   size?: "sm" | "md";
 }) {
-  return (
-    <button
-      type="button"
-      className={cx(
-        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium whitespace-nowrap text-callout disabled:opacity-40",
-        size === "sm" ? "h-6 px-2" : "h-7 px-3",
-        prominent
-          ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
-          : danger
-            ? "bg-danger/12 text-danger enabled:hover:bg-danger/18"
-            : quiet
-              ? "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg"
-              : "bg-fill-subtle text-fg enabled:hover:bg-fill enabled:active:bg-fill-strong",
-        className,
-      )}
-      {...rest}
-    >
-      {children}
-    </button>
-  );
+  return <Pill size={size} {...rest} />;
 }
 
 /** A menu's options arrive as `{ value, label }`; `""` is a real choice here. */
@@ -464,7 +441,7 @@ export function Select({
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          className="elevated rounded-xl z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
+          className="elevated rounded-2xl z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
         >
           <RadixSelect.Viewport>
             {options.map((o) => (

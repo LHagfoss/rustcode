@@ -1168,7 +1168,7 @@ function PanelHeader({ label }: { label: string }) {
         {save.pending ? "Saving…" : save.error ? `Could not save: ${save.error}` : save.saved ? "Saved" : ""}
       </span>
       {resets.count > 0 && (
-        <Action quiet onClick={() => resets.restore()}>
+        <Action size="sm" onClick={() => resets.restore()}>
           <RotateCcw size={13} />
           Restore defaults
         </Action>
