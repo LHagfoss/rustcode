@@ -424,6 +424,64 @@ pub(crate) struct SnoozeRequest {
     pub until: Option<u64>,
 }
 
+/// `_rustcode/session/title`: name a thread from the app on another computer,
+/// which cannot write this machine's thread folder (`thread_rename` is its own
+/// shell's). Without it a thread running here could never name itself.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/session/title", response = serde_json::Value)]
+pub(crate) struct SetTitleRequest {
+    #[serde(alias = "sessionId")]
+    pub session_id: String,
+    pub title: String,
+    /// A name the user typed: it replaces any title and is recorded as theirs.
+    /// Otherwise a title the user chose stays (issue 3599).
+    #[serde(default)]
+    pub user: bool,
+}
+
+/// Whether the user named the thread themselves, so an agent leaves it alone.
+pub(crate) fn user_titled(session_id: &str) -> bool {
+    crate::config::session_user_titled(session_id)
+        || crate::config::get_active_session_dir(session_id)
+            .is_some_and(|dir| dir.join("user-titled").exists())
+}
+
+/// Apply `_rustcode/session/title`: the title the thread has now, and whether
+/// the user's own name was kept.
+pub(crate) fn set_title(request: &SetTitleRequest) -> Result<Value, String> {
+    if !rustcode_session::valid_session_id(&request.session_id) {
+        return Err("invalid session id".into());
+    }
+    let title: String = request
+        .title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(crate::config::MAX_REQUESTED_TITLE_CHARS)
+        .collect();
+    if title.is_empty() {
+        return Err("A title can't be empty.".into());
+    }
+    let id = request.session_id.as_str();
+    if !request.user && user_titled(id) {
+        let current = crate::config::load_session_title(id).unwrap_or(title);
+        return Ok(json!({ "title": current, "kept": true }));
+    }
+    if request.user {
+        crate::config::save_user_session_title(id, &title);
+    } else {
+        crate::config::save_session_title(id, &title);
+    }
+    announce(
+        id,
+        SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title.clone())),
+    );
+    Ok(json!({ "title": title, "kept": false }))
+}
+
 /// Whether the thread is pinned.
 pub(crate) fn pinned(session_id: &str) -> bool {
     crate::config::get_active_session_dir(session_id)

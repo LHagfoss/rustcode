@@ -3,7 +3,7 @@
 // (docs/visualizations.md). Only an info string of exactly `rustcode-ui v1`
 // runs; any other fence stays Markdown.
 
-import { expandShorthand } from "./shorthand";
+import { expandShorthand, isDirective } from "./shorthand";
 
 export const MAX_SOURCE_BYTES = 64 * 1024;
 export const MAX_ELEMENTS = 5000;
@@ -16,7 +16,7 @@ export type Segment =
   | { kind: "viz"; source: string; complete: boolean; index: number };
 
 /** Split a reply at its `rustcode-ui v1` and `rustcode-viz` fences. */
-export function splitReply(text: string): Segment[] {
+export function splitReply(text: string, done = true): Segment[] {
   const lines = text.split("\n");
   const out: Segment[] = [];
   let markdown: string[] = [];
@@ -27,7 +27,22 @@ export function splitReply(text: string): Segment[] {
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const open = /^ {0,3}(`{3,}|~{3,})\s*(.*?)\s*$/.exec(line);
+    const open = FENCE_OPEN.exec(line);
+    if (!open && isDirective(line)) {
+      const end = shorthandEnd(lines, i);
+      const body = lines.slice(i, end).join("\n");
+      const complete = done || end < lines.length;
+      const last = out[out.length - 1];
+      if (!markdown.join("").trim() && last?.kind === "ui" && last.complete) {
+        markdown = [];
+        out[out.length - 1] = { ...last, source: `${last.source}\n\n${body}`, complete };
+      } else {
+        flush();
+        out.push({ kind: "ui", source: body, complete, index: block++ });
+      }
+      i = end - 1;
+      continue;
+    }
     if (!open) {
       markdown.push(line);
       continue;
@@ -57,6 +72,24 @@ export function splitReply(text: string): Segment[] {
   }
   flush();
   return out;
+}
+
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})\s*(.*?)\s*$/;
+
+function shorthandEnd(lines: string[], start: number): number {
+  let i = start + 1;
+  while (i < lines.length) {
+    if (FENCE_OPEN.test(lines[i]!)) return i;
+    if (lines[i]!.trim()) {
+      i++;
+      continue;
+    }
+    let next = i;
+    while (next < lines.length && !lines[next]!.trim()) next++;
+    if (next >= lines.length || !isDirective(lines[next]!)) return i;
+    i = next;
+  }
+  return i;
 }
 
 /** Elements that never hold content, so they never need closing. */

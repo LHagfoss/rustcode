@@ -365,9 +365,7 @@ fn update_own_session(session_id: &str, args: &Value) -> Value {
 /// Whether the user named the thread themselves: the engine's record of a
 /// `/change_title`, or the marker the app leaves beside it on a rename.
 fn user_titled(session_id: &str) -> bool {
-    crate::config::session_user_titled(session_id)
-        || crate::config::get_active_session_dir(session_id)
-            .is_some_and(|dir| dir.join("user-titled").exists())
+    crate::thread_status::user_titled(session_id)
 }
 
 /// The refusal for a call that sets only what needs the app, naming it.

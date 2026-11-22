@@ -2765,6 +2765,16 @@ async fn dispatch_request(
                 ),
             }
         }
+        "_rustcode/session/title" => {
+            let request: crate::thread_status::SetTitleRequest = parse_params(params)?;
+
+            match crate::thread_status::set_title(&request) {
+                Ok(answer) => responder.respond(answer),
+                Err(message) => responder.respond_with_error(
+                    agent_client_protocol::Error::invalid_params().data(message),
+                ),
+            }
+        }
         "_rustcode/session/status" => {
             let request: crate::thread_status::SetStatusRequest = parse_params(params)?;
 
@@ -3999,6 +4009,7 @@ mod dispatch_table_tests {
         );
         assert!(<crate::thread_status::SnoozeRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/session/snooze"), "method mismatch for crate::thread_status::SnoozeRequest");
         assert!(<crate::thread_status::SetStatusRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/session/status"), "method mismatch for crate::thread_status::SetStatusRequest");
+        assert!(<crate::thread_status::SetTitleRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/session/title"), "method mismatch for crate::thread_status::SetTitleRequest");
         assert!(<crate::thread_index::SearchRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/threads/search"), "method mismatch for crate::thread_index::SearchRequest");
         assert!(<crate::checkpoints::ListRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/checkpoints/list"), "method mismatch for crate::checkpoints::ListRequest");
         assert!(<crate::checkpoints::DiffRequest as agent_client_protocol::JsonRpcMessage>::matches_method("_rustcode/checkpoints/diff"), "method mismatch for crate::checkpoints::DiffRequest");

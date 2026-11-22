@@ -121,6 +121,7 @@ mod tests {
             token: "secret".into(),
             smart_ui: false,
             ask_user: true,
+            defer_tools: false,
             version: crate::orchestration::VERSION,
         };
         let env = environment(&launch, dir.path());

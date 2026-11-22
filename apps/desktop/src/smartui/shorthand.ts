@@ -83,6 +83,7 @@ export const BLOCKS = new Set([
   "sources",
 ]);
 const DIRECTIVE = /^\s*::\s*([a-z]+)\b\s*(.*)$/;
+export const isDirective = (line: string) => BLOCKS.has(DIRECTIVE.exec(line)?.[1] ?? "");
 const ITEM = /^\s*[-*]\s+(.*)$/;
 const TINT_SUFFIX = /\s*\{(ok|warn|bad|info)\}\s*$/;
 const TINT_PREFIX = /^\s*\{(ok|warn|bad|info)\}(?:\s+|$)/;

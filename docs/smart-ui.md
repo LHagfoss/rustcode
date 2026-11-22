@@ -115,7 +115,9 @@ all percentages are widths as written); a table sorts past eight rows. In text,
 `` `code` `` and `**bold**` work and HTML is kept as written. Anything else,
 and everything in a `<script>` or `<style>`, passes through, so a view mixes
 shorthand and HTML freely and a view without `::` lines is untouched. An
-unknown name (`:: gauge`) stays text, and `smart_ui_check` names it.
+unknown name (`:: gauge`) stays text, and `smart_ui_check` names it. Shorthand
+blocks written outside a fence still draw: right after a view (only blank lines
+between) they join it, otherwise they are a view of their own.
 
 The catalog (`BLOCKS` in `shorthand.ts`; `CATALOG` in
 `rustcode/engine/src/smart_ui.rs` must list the same names):

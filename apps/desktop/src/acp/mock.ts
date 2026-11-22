@@ -2148,6 +2148,14 @@ export class MockEngine {
         this.removedWorktrees.add(path);
         return { removed: true };
       }
+      case "_rustcode/session/title": {
+        const title = str(params.title)?.trim();
+        if (!title) throw Object.assign(new Error("A title can't be empty."), { code: -32602 });
+        const thread = this.thread(params.session_id);
+        if (params.user !== true && this.userTitled.has(thread.id))
+          return { title: thread.title ?? title, kept: true };
+        return { title: this.renameThread(thread.id, title, params.user === true), kept: false };
+      }
       case "_rustcode/session/status": {
         const status = str(params.status);
         if (!status || !["review", "done", "idle"].includes(status)) {

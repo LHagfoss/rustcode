@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import type { Json } from "../acp/jsonrpc";
 import {
   displayTool,
   failureReason,
   humanizeTool,
+  keptTitle,
   orchestrationTool,
   sessionIdOf,
   splitToolName,
+  unwrapCallTool,
   unwrapToolError,
   usefulSummary,
 } from "./toolNames";
@@ -168,5 +171,37 @@ describe("why a call failed (issue 3711)", () => {
     expect(failureReason(empty)).toBe("The tool gave no reason");
     expect(failureReason(empty)).not.toContain("tool_use_error");
     expect(failureReason(undefined)).toBe("");
+  });
+});
+
+describe("unwrapCallTool", () => {
+  const call = (title: string, input: Json) => unwrapCallTool({ title, input });
+
+  test("a deferred call reads as the tool it ran", () => {
+    expect(
+      call("mcp__rustcode__call_tool", { name: "start_thread", arguments: { prompt: "fix the login" } }),
+    ).toEqual({ title: "mcp__rustcode__start_thread", input: { prompt: "fix the login" } });
+    expect(call("rustcode.call_tool", { name: "list_jobs" })).toEqual({
+      title: "mcp__rustcode__list_jobs",
+      input: {},
+    });
+    expect(
+      orchestrationTool(call("mcp__rustcode__call_tool", { name: "wait_thread", arguments: {} }).title),
+    ).toBe("wait_session");
+  });
+
+  test("another server's call_tool and an input it does not recognise stay as they came", () => {
+    const other = { title: "mcp__mail__call_tool", input: { name: "send" } };
+    expect(unwrapCallTool(other)).toBe(other);
+    const odd = { title: "mcp__rustcode__call_tool", input: { name: "x", extra: 1 } };
+    expect(unwrapCallTool(odd)).toBe(odd);
+  });
+
+  test("a later update without input keeps the unwrapped title", () => {
+    expect(keptTitle("mcp__rustcode__call_tool", undefined, "mcp__rustcode__start_thread")).toBe(
+      "mcp__rustcode__start_thread",
+    );
+    expect(keptTitle(undefined, undefined, "Bash")).toBe("Bash");
+    expect(keptTitle("Read", undefined, "Bash")).toBe("Read");
   });
 });

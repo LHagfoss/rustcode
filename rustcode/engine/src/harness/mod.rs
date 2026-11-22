@@ -785,6 +785,14 @@ pub(crate) fn needs_question_tool(harness: &ResolvedHarness) -> bool {
     }
 }
 
+/// Whether the harness keeps MCP tool schemas out of its prompt until the
+/// model searches for them (Claude Code's ToolSearch). Every other harness
+/// sends each listed schema with every request, so RustCode's server defers
+/// its own tools for it (`orchestration/mcp_server.rs` › `DIRECT_TOOLS`).
+pub(crate) fn defers_mcp_tools(harness: &ResolvedHarness) -> bool {
+    harness.known.is_some_and(|known| known.id == "claude-code")
+}
+
 /// `session_meta` of a built-in thread.
 pub(crate) fn builtin_session_meta() -> serde_json::Map<String, Value> {
     session_meta(&builtin_resolved(), true)

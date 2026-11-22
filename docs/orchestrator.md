@@ -167,6 +167,12 @@ under the same authorization as other desktop thread operations. An offline
 owner, or an older gateway that rejects the method, leaves the thread visible
 and reports an error.
 
+`_rustcode/session/title` takes `{ "session_id", "title", "user": <bool> }` and
+returns `{ "title", "kept" }`: how the app names a thread that runs on another
+machine, whose thread folder only that machine's engine writes. `user` is a
+name the user typed, recorded as theirs; without it a name the user chose stays
+and `kept` is true. The owner broadcasts the new title in `session_info_update`.
+
 `_rustcode/session/snooze` takes `{ "session_id", "until": <Unix milliseconds or null> }`
 and returns `{}`. The owner stores the deadline in `snooze.json`, includes it as
 `_meta.rustcode.snoozedUntil` in session lists, and broadcasts it in
@@ -1812,6 +1818,19 @@ tools (`read_project`, `create_project`, `clone_project`, `update_project`,
 server's instructions tell the agent so. A left-out tool that is called anyway
 is answered as before. The built-in harness and `rc mcp-connect` are not
 affected: they pick their tools another way.
+
+On top of that, a harness other than Claude Code (which keeps MCP schemas out
+of its prompt until ToolSearch loads them) gets a deferred list
+(`RUSTCODE_DEFER_TOOLS=1`, from `harness::defers_mcp_tools`): only
+`list_threads`, `read_thread`, `thread_status`, `update_thread`,
+`request_secret`, `smart_ui_check` and `ask_user_question`, plus
+`tool_search` and `call_tool`. `tool_search` returns the whole entries of up to
+five matching tools, and `call_tool {name, arguments}` runs one through the
+usual call path, so a harness that never refreshes its tool list can still
+reach every tool. The list drops from about 32 KB to about 6 KB, roughly 6,500
+tokens off each request. The desktop shows a `call_tool` row as the tool it ran
+(`toolNames.ts` › `unwrapCallTool`), so nesting, waits and labels work as for
+a direct call.
 
 Capability flag `orchestration` (see below): in the `session/new` /
 `session/load` answer, `true` only when the server was injected. Not on

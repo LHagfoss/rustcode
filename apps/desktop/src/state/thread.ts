@@ -17,7 +17,7 @@ import type { McpApp } from "../lib/mcpApp";
 import type { ComposeExtras, SentAttachment } from "./compose";
 import { activeStep, advancePlanClocks, type PlanClocks, type SteerNote } from "./steer";
 import { subagentOf, type ToolItem } from "./threadFormat";
-import { orchestrationTool } from "./toolNames";
+import { keptTitle, orchestrationTool, unwrapCallTool } from "./toolNames";
 import { type ChildActivity, isQuiet, isRunning, type ThreadTurn, type TurnKind } from "./turn";
 
 // What the transcript says, read off its items (state/threadFormat.ts).
@@ -698,7 +698,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       // An approval can arrive before the call it is about: its clock starts here.
       const approval = state.permissions.find((p) => p.toolCallId === update.id && !p.question);
       const waits: ToolWait[] | undefined = approval ? [{ from: approval.at ?? now }] : undefined;
-      const tool: TranscriptItem = {
+      const tool: ToolItem = unwrapCallTool<ToolItem>({
         kind: "tool",
         id: update.id,
         title: update.title,
@@ -717,12 +717,14 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         startedAt: now,
         endedAt: update.status === "completed" || update.status === "failed" ? now : undefined,
         waits,
-      };
+      });
       if (existing !== undefined && items[existing]?.kind === "tool") {
         const before = items[existing] as Extract<TranscriptItem, { kind: "tool" }>;
         const merged = {
           ...before,
           ...tool,
+          title: keptTitle(tool.title, update.input, before.title),
+          input: tool.input ?? before.input,
           toolName: tool.toolName ?? before.toolName,
           exitCode: tool.exitCode ?? before.exitCode,
           fullOutput: tool.fullOutput ?? before.fullOutput,
@@ -749,11 +751,11 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         (update.outputDelta !== undefined ? (item.output ?? "") + update.outputDelta : item.output);
       const background = backgroundOf(item, update, output, isRunning(state));
       const ended = !background && (update.status === "completed" || update.status === "failed");
-      next[index] = {
+      next[index] = unwrapCallTool({
         ...item,
         parent: item.parent ?? update.parent,
         endedAt: item.endedAt ?? (ended ? now : undefined),
-        title: update.title ?? item.title,
+        title: keptTitle(update.title, update.input, item.title),
         toolKind: update.toolKind ?? item.toolKind,
         input: update.input ?? item.input,
         status: background
@@ -768,7 +770,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         exitCode: update.exitCode ?? item.exitCode,
         fullOutput: update.fullOutput ?? item.fullOutput,
         denial: update.denial ?? item.denial,
-      };
+      });
       return { ...state, items: next };
     }
     case "plan": {
