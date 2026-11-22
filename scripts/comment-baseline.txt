@@ -381,7 +381,7 @@
 7 apps/desktop/src/state/schedule.test.ts
 8 apps/desktop/src/state/schedule.ts
 12 apps/desktop/src/state/scheduledSends.ts
-41 apps/desktop/src/state/sendActions.ts
+40 apps/desktop/src/state/sendActions.ts
 3 apps/desktop/src/state/settingsActions.ts
 10 apps/desktop/src/state/settingsAttention.ts
 2 apps/desktop/src/state/settingsFollow.test.ts

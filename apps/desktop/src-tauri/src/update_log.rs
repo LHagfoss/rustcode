@@ -14,11 +14,22 @@ const MAX_LINES: usize = 400;
 /// Appends `event detail` with a UTC time. `event` is a dotted name such as
 /// `update.failed`; `detail` is one line (newlines are flattened).
 pub fn record(event: &str, detail: &str) {
+    record_in("updates.log", event, detail);
+}
+
+/// Appends to `connections.log`, the same way: each paired machine's
+/// connects and drops with the route and the reason, which otherwise only
+/// the machine's row shows until the next attempt replaces it.
+pub fn record_connection(event: &str, detail: &str) {
+    record_in("connections.log", event, detail);
+}
+
+fn record_in(file: &str, event: &str, detail: &str) {
     let Some(dir) = crate::diagnostics::config_dir() else {
         return;
     };
     let _ = append(
-        &dir.join("updates.log"),
+        &dir.join(file),
         &line(chrono::Utc::now().to_rfc3339(), event, detail),
     );
 }

@@ -95,6 +95,7 @@ export type QueueReason =
   | "attachments"
   | "awaiting"
   | "refused"
+  | "offline"
   | "harness";
 
 export type SendDecision =
@@ -111,6 +112,7 @@ export const QUEUE_REASON: Record<QueueReason, string> = {
   attachments: "This harness takes text mid-turn only: the pictures go with the next turn",
   awaiting: "The turn is waiting on you: this goes with the next one",
   refused: "The turn can't take it now: it goes with the next one",
+  offline: "The machine is reconnecting: this goes with the next turn",
   harness: "This harness can't take a message mid-turn: it waits for the next one",
 };
 
