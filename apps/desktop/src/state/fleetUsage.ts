@@ -15,6 +15,7 @@ import {
   type UsagePlan,
   type UsageReport,
   type UsageRow,
+  type UsageWindow,
 } from "../acp/rustcode";
 import { usageRows } from "./logins";
 import { addTotals, emptyTotals, totalsOf } from "./statistics";
@@ -152,41 +153,54 @@ const norm = (value: string | null | undefined): string => (value ?? "").trim().
 const hasWindows = (plan: UsagePlan): boolean => plan.status === "ok" && plan.windows.length > 0;
 
 /**
+ * The window of `windows` that is `window` on another machine: the same label,
+ * else (labels absent or renamed) the same length. A plan with several windows
+ * of one length (Antigravity's quota groups, each weekly) pairs them by label
+ * only, never one group's weekly window with another's.
+ */
+function counterpart(
+  window: UsageWindow & { label: string },
+  windows: readonly (UsageWindow & { label: string })[],
+) {
+  const byLabel = windows.find((candidate) => candidate.label === window.label);
+  if (byLabel || window.minutes === undefined) return byLabel;
+  const sameLength = windows.filter((candidate) => candidate.minutes === window.minutes);
+  return sameLength.length === 1 ? sameLength[0] : undefined;
+}
+
+/**
  * Compares active (`usedPercent > 0`) shared windows' `resetsAt` timestamps.
- * Idle 0%-used windows can roll forward with poll time, so only active windows
+ * Idle 0%-used windows can roll forward with poll time, and a window whose
+ * reset has passed is one machine's older read, so only active, current windows
  * establish or refute identity.
  */
-function compareActiveResets(a: UsagePlan, b: UsagePlan): "match" | "conflict" | "none" {
+function compareActiveResets(a: UsagePlan, b: UsagePlan, now: number): "match" | "conflict" | "none" {
   if (!hasWindows(a) || !hasWindows(b)) return "none";
   let matched = 0;
   for (const wa of a.windows) {
-    if (wa.resetsAt === undefined || wa.usedPercent <= 0) continue;
-    const wb = b.windows.find(
-      (candidate) =>
-        candidate.resetsAt !== undefined &&
-        candidate.usedPercent > 0 &&
-        (candidate.label === wa.label || (wa.minutes !== undefined && candidate.minutes === wa.minutes)),
-    );
-    if (!wb || wb.resetsAt === undefined) continue;
+    if (wa.resetsAt === undefined || wa.usedPercent <= 0 || wa.resetsAt < now - RESET_TOLERANCE_MS) continue;
+    const wb = counterpart(wa, b.windows);
+    if (!wb || wb.resetsAt === undefined || wb.usedPercent <= 0 || wb.resetsAt < now - RESET_TOLERANCE_MS)
+      continue;
     if (Math.abs(wa.resetsAt - wb.resetsAt) > RESET_TOLERANCE_MS) return "conflict";
     matched += 1;
   }
   return matched > 0 ? "match" : "none";
 }
 
-function plansContradict(a: UsagePlan, b: UsagePlan): boolean {
+function plansContradict(a: UsagePlan, b: UsagePlan, now: number): boolean {
   if (a.fingerprint && b.fingerprint && a.fingerprint !== b.fingerprint) return true;
   if (hasWindows(a) && hasWindows(b)) {
     if (a.plan && b.plan && norm(a.plan) !== norm(b.plan)) return true;
-    if (compareActiveResets(a, b) === "conflict") return true;
+    if (compareActiveResets(a, b, now) === "conflict") return true;
   }
   return false;
 }
 
-function sameWindowSignature(a: UsagePlan, b: UsagePlan): boolean {
+function sameWindowSignature(a: UsagePlan, b: UsagePlan, now: number): boolean {
   if (!hasWindows(a) || !hasWindows(b)) return false;
   if (a.plan && b.plan && norm(a.plan) !== norm(b.plan)) return false;
-  return compareActiveResets(a, b) === "match";
+  return compareActiveResets(a, b, now) === "match";
 }
 
 function sameAccountLabel(a: UsagePlan, b: UsagePlan): boolean {
@@ -208,12 +222,50 @@ function maxUsedPercent(plan: UsagePlan): number {
   return plan.windows.reduce((max, w) => Math.max(max, w.usedPercent), -1);
 }
 
+/** An active window whose reset has passed: numbers from before it rolled over. */
+function outlived(plan: UsagePlan, now: number): boolean {
+  return plan.windows.some(
+    (w) => w.usedPercent > 0 && w.resetsAt !== undefined && w.resetsAt < now - RESET_TOLERANCE_MS,
+  );
+}
+
+/**
+ * Which of two readings of one subscription the windows themselves say is
+ * newer (> 0 for `a`): a later reset of an active window is a later window,
+ * and within one window usage only grows. When this computer last received an
+ * answer says nothing about when the machine read it: a paired machine answers
+ * from its own cache, so a fresh answer can carry old numbers.
+ */
+function windowProgress(a: UsagePlan, b: UsagePlan, now: number): number {
+  const aOld = outlived(a, now);
+  const bOld = outlived(b, now);
+  if (aOld !== bOld) return aOld ? -1 : 1;
+  let votes = 0;
+  for (const wa of a.windows) {
+    const wb = counterpart(wa, b.windows);
+    if (!wb) continue;
+    const bothActive = wa.usedPercent > 0 && wb.usedPercent > 0;
+    if (bothActive && wa.resetsAt !== undefined && wb.resetsAt !== undefined) {
+      const resetDiff = wa.resetsAt - wb.resetsAt;
+      if (Math.abs(resetDiff) > RESET_TOLERANCE_MS) {
+        votes += Math.sign(resetDiff);
+        continue;
+      }
+    }
+    const usedDiff = wa.usedPercent - wb.usedPercent;
+    if (Math.abs(usedDiff) > 0.01) votes += Math.sign(usedDiff);
+  }
+  return votes;
+}
+
 /** Returns > 0 when `a` is a better reading to display than `b`. */
-function compareReadings(a: Candidate, b: Candidate): number {
+function compareReadings(a: Candidate, b: Candidate, now: number): number {
   const rankDiff = planRank(a.plan) - planRank(b.plan);
   if (rankDiff !== 0) return rankDiff;
   const rank = planRank(a.plan);
   if (rank === 4) {
+    const progress = windowProgress(a.plan, b.plan, now);
+    if (progress !== 0) return progress;
     if (a.readAt !== undefined && b.readAt !== undefined) {
       const ageDiff = a.readAt - b.readAt;
       if (Math.abs(ageDiff) > FRESHNESS_TIE_MS) return ageDiff;
@@ -238,7 +290,7 @@ function compareReadings(a: Candidate, b: Candidate): number {
  * quotas; picks the healthiest, freshest reading and keeps every contributing
  * machine in `sources`.
  */
-export function mergeUsagePlans(hosts: readonly HostPlans[]): MergedUsagePlan[] {
+export function mergeUsagePlans(hosts: readonly HostPlans[], now = Date.now()): MergedUsagePlan[] {
   interface Cluster {
     harness: string;
     hosts: Set<string>;
@@ -258,7 +310,7 @@ export function mergeUsagePlans(hosts: readonly HostPlans[]): MergedUsagePlan[] 
         readAt: hostEntry.readAt,
       };
       const eligible = clusters.filter((c) => c.harness === harness && !c.hosts.has(hostEntry.host));
-      const noConflict = (c: Cluster) => !c.members.some((m) => plansContradict(m.plan, plan));
+      const noConflict = (c: Cluster) => !c.members.some((m) => plansContradict(m.plan, plan, now));
 
       // Tier 1: exact hashed account fingerprint.
       let target = plan.fingerprint
@@ -267,7 +319,7 @@ export function mergeUsagePlans(hosts: readonly HostPlans[]): MergedUsagePlan[] 
       // Tier 2: live window reset signature (same tier + matching active resetsAt).
       if (!target) {
         target = eligible.find(
-          (c) => noConflict(c) && c.members.some((m) => sameWindowSignature(m.plan, plan)),
+          (c) => noConflict(c) && c.members.some((m) => sameWindowSignature(m.plan, plan, now)),
         );
       }
       // Tier 3: same named account or sole default login (when live readings don't conflict).
@@ -296,7 +348,7 @@ export function mergeUsagePlans(hosts: readonly HostPlans[]): MergedUsagePlan[] 
     let winner = cluster.members[0]!;
     for (let i = 1; i < cluster.members.length; i += 1) {
       const next = cluster.members[i]!;
-      if (compareReadings(next, winner) > 0) winner = next;
+      if (compareReadings(next, winner, now) > 0) winner = next;
     }
     // Preserve a user-chosen account name (e.g. "Paral 2") if the winning copy came
     // from a machine where that same subscription is the unnamed default login.
