@@ -45,6 +45,7 @@ import { formatClock, isRunning, type ThreadState } from "../state/thread";
 import { retryStalledFirstMessage, retryThread } from "../state/threadActions";
 import { splitThreadKey } from "../state/threadKeys";
 import { failureHarness, turnErrorAdvice } from "../state/turnError";
+import type { PanelKind } from "../state/viewActions";
 import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
@@ -71,23 +72,14 @@ import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidg
 import { boundTips } from "./newThreadTips";
 import { ProjectMark } from "./ProjectMark";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
-import {
-  Callout,
-  ClusterButton,
-  cx,
-  Kbd,
-  Pill,
-  Skeleton,
-  Spinner,
-  surfaceCollisionPadding,
-  Tooltip,
-} from "./primitives";
+import { Callout, cx, Kbd, Pill, Skeleton, Spinner, surfaceCollisionPadding, Tooltip } from "./primitives";
 import { RemoteThreadIndicator } from "./RemoteAccessPage";
 import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
 import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
 import { useThreadStatus } from "./Status";
+import { ThreadTitle } from "./ThreadTitle";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
 import { WhileAwayCard } from "./WhileAway";
 
@@ -163,21 +155,38 @@ function PlanHeaderButton({ thread }: { thread?: ThreadState }) {
 }
 
 // The side panel's toggle: it opens the panel on this thread's last tab (Details, Changes, Pull
-// requests) and closes whichever is showing. It carries `data-panel-toggle`: a panel that closes
-// with nothing else focused hands the keyboard back to it (ui/RightPanel.tsx).
+// requests) and closes whichever is showing. A quiet button that names that tab, so the header says
+// where it goes. It carries `data-panel-toggle`: a panel that closes with nothing else focused hands
+// the keyboard back to it (ui/RightPanel.tsx).
+const PANEL_LABELS: Record<PanelKind, string> = {
+  details: "Details",
+  changes: "Changes",
+  pulls: "Pull requests",
+  peek: "Thread",
+};
+
 function DetailsHeaderButton() {
-  const on = useApp((s) => !!s.panel);
+  const panel = useApp((s) => s.panel);
+  const remembered = useApp((s) => (s.selectedId ? s.panelByThread[s.selectedId] : undefined));
   const key = useShortcutHint("toggle-panel");
+  const label = PANEL_LABELS[panel ?? remembered ?? "details"];
   return (
-    <ClusterButton
-      label="Side panel"
-      tooltip={on ? `Close side panel (${key})` : `Side panel (${key})`}
-      data-panel-toggle
-      on={on}
-      onClick={toggleRightPanel}
-    >
-      <PanelRight size={16} />
-    </ClusterButton>
+    <Tooltip label={panel ? `Close side panel (${key})` : `Side panel (${key})`} side="bottom">
+      <button
+        type="button"
+        aria-label="Side panel"
+        aria-pressed={!!panel}
+        data-panel-toggle
+        onClick={toggleRightPanel}
+        className={cx(
+          "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
+          panel && "bg-fill text-fg",
+        )}
+      >
+        <PanelRight size={16} />
+        {label}
+      </button>
+    </Tooltip>
   );
 }
 
@@ -256,7 +265,7 @@ function Header({
               /
             </span>
           )}
-          <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
+          <ThreadTitle thread={pending ? undefined : thread} title={title} />
           {thread && machine && (
             <MachineSelector
               thread={thread}

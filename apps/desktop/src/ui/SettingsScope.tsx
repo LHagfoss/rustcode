@@ -61,7 +61,7 @@ export function SettingsScopeBar({ machineOnly = false }: { machineOnly?: boolea
     ...(machineOnly ? [] : [{ value: ALL, label: "All machines" }]),
   ];
   return (
-    <div className="mb-6 flex flex-col gap-2 rounded-xl bg-surface px-4 py-3">
+    <div className="mb-6 flex flex-col gap-2 rounded-xl border border-border bg-surface px-4 py-3">
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 font-medium text-body text-fg">
@@ -134,7 +134,7 @@ export function MixedChip({ breakdown }: { breakdown: ScopeBreakdownEntry[] }) {
         </span>
       }
     >
-      <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-warning/12 px-2 font-medium text-caption text-warning">
+      <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm bg-warning/12 px-2 font-medium text-caption text-warning">
         <Layers size={12} />
         Mixed
       </span>
@@ -163,7 +163,7 @@ export function SourceChip({ project }: { project: ProjectRowState }) {
         }
       >
         <span
-          className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-caption ${
+          className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-sm px-2 font-medium text-caption ${
             project.source === "project" ? "bg-accent/12 text-accent" : "bg-fill-subtle text-fg-muted"
           }`}
         >

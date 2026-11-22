@@ -3,14 +3,14 @@
 // controls a row holds, and engine data loaded once the engine is ready.
 //
 // A page is a column of sections. A section is its name in `fg`, then one
-// card: `rounded-xl` on a step of the page's own fill (`bg-surface`), its rows
+// card: `rounded-xl` on a step of the page's own fill (`bg-surface`) with a hairline edge, its rows
 // divided by a hairline. A row is a title, a description, an optional
 // status line and a control at the right; its own container query stacks the
 // control under the text when the window is narrow, whatever the nav takes. A
 // row whose value differs from its default shows a reset button before the
 // control, on hover or keyboard focus.
 //
-// The controls are one shape — 32px high, `rounded-lg`, a step of their own
+// The controls are one shape — 28px high, `rounded-md`, a step of their own
 // over the card — so a row of buttons, selects and choices reads as one
 // family, not as pills.
 //
@@ -161,7 +161,7 @@ export function Group({
         <fieldset
           disabled={disabled}
           className={cx(
-            "rule-rows m-0 min-w-0 overflow-hidden rounded-xl border-0 bg-surface p-0",
+            "rule-rows m-0 min-w-0 overflow-hidden rounded-xl border border-border bg-surface p-0",
             disabled && "opacity-60",
           )}
         >
@@ -361,14 +361,14 @@ export function Row({
 // ---------------------------------------------------------------- controls
 
 /**
- * The field shape a row's control takes: 28px high, `rounded-lg` and a step of
+ * The field shape a row's control takes: 28px high, `rounded-md` and a step of
  * its own over the card, so it reads as a control and not as a block.
  */
 /** A switch setting's value as a row reads it. */
 export const boolLabel = (value: Json | undefined) => (value ? "On" : "Off");
 
 export const fieldClass =
-  "h-7 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
+  "h-7 rounded-md bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
 
 /**
  * A labelled action in a row: the quiet default (a translucent fill over the
@@ -393,7 +393,7 @@ export function Action({
     <button
       type="button"
       className={cx(
-        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium whitespace-nowrap text-callout disabled:opacity-40",
+        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap text-callout disabled:opacity-40",
         size === "sm" ? "h-6 px-2" : "h-7 px-3",
         prominent
           ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
@@ -464,7 +464,7 @@ export function Select({
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          className="elevated rounded-2xl z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
+          className="elevated rounded-xl z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
         >
           <RadixSelect.Viewport>
             {options.map((o) => (
@@ -522,12 +522,12 @@ export function Choice<T extends string>({
       ref={group}
       role="radiogroup"
       aria-label={label}
-      className="relative inline-flex w-fit shrink-0 rounded-full bg-fill p-0.5"
+      className="relative inline-flex w-fit shrink-0 rounded-md bg-fill p-0.5"
     >
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-0 left-0 h-6 rounded-full bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
+          className="absolute top-0 left-0 h-6 rounded-sm bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
           style={{ transform: `translate(${thumb.left}px, 2px)`, width: thumb.width }}
         />
       )}
@@ -540,7 +540,7 @@ export function Choice<T extends string>({
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cx(
-            "relative h-6 rounded-full px-2 font-medium text-caption whitespace-nowrap disabled:opacity-40",
+            "relative h-6 rounded-sm px-2 font-medium text-caption whitespace-nowrap disabled:opacity-40",
             o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}
         >
@@ -565,7 +565,7 @@ export function Chip({
     <span
       title={title}
       className={cx(
-        "inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-caption",
+        "inline-flex h-5 shrink-0 items-center gap-1 rounded-sm px-2 font-medium text-caption",
         tone === "ok"
           ? "bg-success/12 text-success"
           : tone === "warn"
@@ -765,7 +765,7 @@ export function Loading({ error, onRetry }: { error: string | null; onRetry?: ()
     // Where the page's list will be: a group card of rows, title and subtitle each.
     <section className="mb-6" role="status" aria-label="Loading">
       <Skeleton className="mx-3 mb-3 h-3 w-24 sm:mx-4" />
-      <div className="rule-rows overflow-hidden rounded-xl bg-surface">
+      <div className="rule-rows overflow-hidden rounded-xl border border-border bg-surface">
         {[46, 62, 38, 54].map((w, i) => (
           <div key={i} className="flex min-h-12 items-center gap-4 px-4 py-3">
             <div className="flex flex-1 flex-col gap-1.5">
