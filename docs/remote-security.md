@@ -158,7 +158,7 @@ Where this shows:
   encrypted)`), `—` for a machine that is not connected. `--json` carries
   `network` with `path`, `provider`, `encrypted` and `label` (null when the
   machine is not connected). The route is mapped onto the gateway's
-  `ConnectionRoute` in `rustcode/tui/src/machines.rs`, so the label and the
+  `ConnectionRoute` in `rustcode/cli/src/machines.rs`, so the label and the
   rule come from `address.rs`.
 - Route change: when this computer reconnects to a machine over another kind
   of network than before (a tunnel at the office, the LAN at home), the app

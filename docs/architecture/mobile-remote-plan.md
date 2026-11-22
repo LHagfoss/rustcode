@@ -39,10 +39,10 @@ All paths below are relative to the repository root.
 | `rustcode/engine/src/controller/snapshot.rs` | Reuse transcript, pending prompt and approval projections. `ControllerSnapshot::from_state` is crate-private; expose a narrow controller projection for the TUI bridge. `sessions` is a history-picker projection, not a live remote registry. |
 | `rustcode/engine/src/controller/events.rs` | Reuse typed turn updates. Controller generation is not a per-event sequence. Add remote ordering independently. Audit missing subagent detail before promising a full remote view. |
 | `rustcode/engine/src/controller/worker.rs` | Existing queue/steer, cancel and exact approval batch validation establish behavior. Extract shared operations as needed rather than spawning another worker for the TUI session. Question answers currently carry no question identity. |
-| `rustcode/tui/src/runtime/mod.rs` | `AppRuntime` owns `Arc<Mutex<AppState>>`, channels and the current cancellation token. Add a bounded remote command receiver and bridge lifecycle here. |
-| `rustcode/tui/src/runtime/orchestration.rs` | The TUI loop consumes agent events and task events. Publish remote projections after authoritative state application, independent of drawing or focus. |
-| `rustcode/tui/src/runtime/input.rs` | Composer submission invokes `handle_enter_with_ui_events`; approval/question events use shared controller helpers. Remote input needs an explicit operation that preserves the terminal draft. |
-| `rustcode/tui/src/runtime/events.rs` | `AppEvent::SubmitPrompt` must not be assumed to submit a turn: the test handler only edits the composer. Add a distinct validated remote command path. |
+| `harness/src/runtime/mod.rs` | `AppRuntime` owns `Arc<Mutex<AppState>>`, channels and the current cancellation token. Add a bounded remote command receiver and bridge lifecycle here. |
+| `harness/src/runtime/orchestration.rs` | The TUI loop consumes agent events and task events. Publish remote projections after authoritative state application, independent of drawing or focus. |
+| `harness/src/runtime/input.rs` | Composer submission invokes `handle_enter_with_ui_events`; approval/question events use shared controller helpers. Remote input needs an explicit operation that preserves the terminal draft. |
+| `harness/src/runtime/events.rs` | `AppEvent::SubmitPrompt` must not be assumed to submit a turn: the test handler only edits the composer. Add a distinct validated remote command path. |
 | `rustcode/engine/src/daemon/lifecycle.rs` | Reuse the design of single-instance locking, private registration and process birth identity. Keep remote service registration separate from scheduled jobs. |
 | `docs/mobile.md` | Describes the current raw-TCP MVP and its 1 MiB full-snapshot limit. Link this proposal without implying WebSocket or app support is already shipped. |
 
