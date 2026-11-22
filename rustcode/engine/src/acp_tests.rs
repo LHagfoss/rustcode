@@ -211,8 +211,7 @@ fn loading_an_already_active_session_is_rejected() {
     sessions.insert(
         "active-session".into(),
         AcpSession {
-            agent: prompt::builtin_agent(Arc::clone(&state)),
-            state,
+            agent: prompt::builtin_agent(state),
             cwd: PathBuf::from("/tmp"),
             turns: Arc::new(SessionTurnState::new()),
             task_events: Arc::new(std::sync::Mutex::new(receiver)),
@@ -255,8 +254,7 @@ async fn unregistering_failed_session_load_removes_registry_and_task_route() {
     server.sessions.lock().await.insert(
         session_id.into(),
         AcpSession {
-            agent: prompt::builtin_agent(Arc::clone(&state)),
-            state,
+            agent: prompt::builtin_agent(state),
             cwd: PathBuf::from("/tmp"),
             turns: Arc::new(SessionTurnState::new()),
             task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
@@ -2325,8 +2323,8 @@ async fn two_connections() {
         let (a_state, b_state) = {
             let sessions = server.sessions.lock().await;
             (
-                Arc::clone(&sessions[&a_session].state),
-                Arc::clone(&sessions[&b_session].state),
+                sessions[&a_session].agent.test_state(),
+                sessions[&b_session].agent.test_state(),
             )
         };
         let a_preview = {
@@ -2532,7 +2530,7 @@ fn serve_on_thread(
 /// Point a session at `endpoint`, with an earlier exchange in its history.
 async fn use_provider(server: &AcpServer, session_id: &str, endpoint: &str) {
     use crate::config::{ApiProtocol, ModelProfile};
-    let state = Arc::clone(&server.sessions.lock().await[session_id].state);
+    let state = server.sessions.lock().await[session_id].agent.test_state();
     let mut state = state.lock().await;
     state.api_base_url = endpoint.to_owned();
     state.model_name = "held-test".to_owned();
@@ -2806,7 +2804,7 @@ async fn turn_outlives_client() {
     })
     .await;
     let answer = {
-        let state = Arc::clone(&server.sessions.lock().await[&session_id].state);
+        let state = server.sessions.lock().await[&session_id].agent.test_state();
         let state = state.lock().await;
         state.history.last().map(|message| message.content.clone())
     };

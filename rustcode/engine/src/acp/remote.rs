@@ -22,7 +22,6 @@ use tokio::sync::Mutex;
 
 use super::AcpSession;
 use super::session::{KnownTaskIds, SessionTurnState};
-use crate::app::AppState;
 use crate::controller::AgentUiEvent;
 use crate::harness::session::PermissionFuture;
 use crate::harness::session::{ClientSink, ExternalSession};
@@ -43,8 +42,8 @@ use crate::remote::owner::{
 };
 use crate::remote::{
     OwnerFollowUp, ProjectionLimits, PromptDisposition, ReceiptState, RemoteErrorCode,
-    RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, RemoteSnapshot, SessionPublisher,
-    SessionRegistration, apply_session_mutation, read_session,
+    RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, RemoteSnapshot,
+    SessionRegistration,
 };
 use crate::remote_gateway::address::ConnectionPath;
 use crate::remote_gateway::control::{
@@ -136,7 +135,6 @@ pub(crate) struct RemoteRevokeRequest {
 /// `/remote` starts and stays valid while the share exists.
 pub(crate) struct RemoteSession {
     pub session_id: String,
-    pub state: Arc<Mutex<AppState>>,
     pub agent: Arc<dyn super::builtin::BuiltinAgent>,
     pub cwd: PathBuf,
     pub turns: Arc<SessionTurnState>,
@@ -167,7 +165,6 @@ impl RemoteSession {
     ) -> Arc<Self> {
         Arc::new(Self {
             session_id,
-            state: Arc::clone(&session.state),
             agent: Arc::clone(&session.agent),
             cwd: session.cwd.clone(),
             turns: Arc::clone(&session.turns),
@@ -363,7 +360,7 @@ struct ShareState {
 /// from its state; a thread on an external harness publishes a snapshot
 /// whenever its mirror changed.
 enum Publisher {
-    Acp(SessionPublisher),
+    Acp(Box<dyn super::builtin::BuiltinPublisher>),
     Harness {
         sequence: u64,
         /// Asked for by the gateway, or owed after a lagging link.
@@ -393,17 +390,13 @@ impl Publisher {
         }
     }
 
-    fn owns(&self, state: &AppState) -> bool {
+    async fn publish(&mut self, room_for_resync: bool) -> Option<super::builtin::Published> {
         match self {
-            Publisher::Acp(publisher) => publisher.owns(state),
-            Publisher::Harness { .. } => true,
-        }
-    }
-
-    fn publish(&mut self, state: &AppState, room_for_resync: bool) -> Vec<OwnerMessage> {
-        match self {
-            Publisher::Acp(publisher) => publisher.publish(state, room_for_resync),
-            Publisher::Harness { .. } => Vec::new(),
+            Publisher::Acp(publisher) => publisher.publish(room_for_resync).await,
+            Publisher::Harness { .. } => Some(super::builtin::Published {
+                messages: Vec::new(),
+                queued_while_idle: false,
+            }),
         }
     }
 
@@ -694,12 +687,7 @@ impl RemoteManager {
             );
         }
         let session = share.acp()?;
-        let model = session
-            .state
-            .try_lock()
-            .ok()
-            .map(|state| crate::remote::projection::project_settings(&state).selected_model)
-            .unwrap_or_default();
+        let model = session.agent.selected_model().unwrap_or_default();
         Some(RemoteSessionInfo {
             session_id: session_id.to_owned(),
             registration_epoch: epoch,
@@ -866,16 +854,16 @@ impl RemoteManager {
 
         let (events, receiver) = mpsc::unbounded_channel();
         let share_state = {
-            let state = session.state.lock().await;
-            if state.active_session_id != session.session_id {
+            let Some((publisher, register)) = session
+                .agent
+                .share(&session.session_id, registration.clone())
+                .await
+            else {
                 return Err(StartError::Refused(
                     "the ACP session is no longer active".to_owned(),
                 ));
-            }
-            let (publisher, register) =
-                SessionPublisher::register(&state, registration.clone(), state.has_active_turn());
+            };
             let publisher = Publisher::Acp(publisher);
-            drop(state);
             if let Err(error) = link.outbound.try_send(register) {
                 return Err(StartError::Link(format!(
                     "could not register the remote session: {error}"
@@ -1819,13 +1807,10 @@ impl Share {
                             .active_token()
                             .unwrap_or_else(CancellationToken::new);
                         if request.operation.is_mutation() {
-                            match apply_session_mutation(
-                                &session.state,
-                                &mut cancel_token,
-                                &self.registration,
-                                &request,
-                            )
-                            .await
+                            match session
+                                .agent
+                                .remote_mutation(&mut cancel_token, &self.registration, &request)
+                                .await
                             {
                                 Ok(mutation) => {
                                     let follow_up = mutation.follow_up;
@@ -1850,13 +1835,10 @@ impl Share {
                         ) {
                             // Git may take a moment: read it off the owner's
                             // loop, with no lock held.
-                            let app = session.state.lock().await;
-                            let workspace = crate::remote::ops::changes_workspace(
-                                &app,
-                                &self.registration,
-                                &request,
-                            );
-                            drop(app);
+                            let workspace = session
+                                .agent
+                                .remote_changes_workspace(&self.registration, &request)
+                                .await;
                             match workspace {
                                 Ok(root) => {
                                     tokio::spawn(async move {
@@ -1874,14 +1856,10 @@ impl Share {
                                 Err(error) => reply.send(RemoteResponse::error(request_id, error)),
                             }
                         } else {
-                            let app = session.state.lock().await;
-                            let result = read_session(
-                                &app,
-                                &self.registration,
-                                &request,
-                                &ProjectionLimits::default(),
-                            );
-                            drop(app);
+                            let result = session
+                                .agent
+                                .remote_read(&self.registration, &request)
+                                .await;
                             match result {
                                 Ok(result) => reply.send(RemoteResponse::new(request_id, result)),
                                 Err(error) => reply.send(RemoteResponse::error(request_id, error)),
@@ -1900,12 +1878,11 @@ impl Share {
                 }
             }
 
-            let app = session.state.lock().await;
-            if !state.publisher.owns(&app) {
-                return false;
-            }
             let room_for_resync = state.link.outbound.capacity() > 1;
-            let mut messages = state.publisher.publish(&app, room_for_resync);
+            let Some(published) = state.publisher.publish(room_for_resync).await else {
+                return false;
+            };
+            let mut messages = published.messages;
             if manager.can_host_threads() {
                 for message in &mut messages {
                     if let OwnerMessage::Snapshot { snapshot, .. } = message {
@@ -1913,10 +1890,7 @@ impl Share {
                     }
                 }
             }
-            start_runner |= !session.runner.load(Ordering::Acquire)
-                && !app.has_active_turn()
-                && !app.pending_queue.is_empty();
-            drop(app);
+            start_runner |= !session.runner.load(Ordering::Acquire) && published.queued_while_idle;
 
             for message in messages {
                 match state.link.outbound.try_send(message) {

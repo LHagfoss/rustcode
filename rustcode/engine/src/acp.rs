@@ -1,6 +1,7 @@
 mod agents;
 mod attachments;
 pub(crate) mod builtin;
+mod builtin_open;
 mod capabilities;
 pub(crate) mod clients;
 mod commands;
@@ -36,6 +37,7 @@ mod session_repair;
 mod session_replay;
 mod session_transfer;
 pub(crate) mod settings;
+mod share;
 pub(crate) mod steer;
 mod stop;
 mod streaming;
@@ -43,6 +45,7 @@ mod telemetry;
 mod themes;
 pub(crate) mod usage;
 mod workflows;
+pub(crate) use builtin_open::*;
 pub(crate) use session_load::*;
 mod extensions;
 pub(crate) use extensions::*;
@@ -472,27 +475,6 @@ async fn close_builtin(server: &AcpServer, session_id: &str) -> Option<std::path
     crate::tools::stop_background_tasks(session_id);
     crate::orchestration::secret::forget_thread_env(session_id);
     cwd
-}
-
-/// A built-in `session/new` honours `_meta.rustcode.model` and `effort` the
-/// same way external harnesses do (docs/harnesses.md). Model first, since
-/// the effort choices depend on it; an unknown value is ignored and the
-/// session keeps its default.
-fn apply_requested_model_and_effort(
-    state: &mut crate::app::AppState,
-    asked: &crate::harness::HarnessRequest,
-) {
-    for (id, value) in [("model", &asked.model), ("effort", &asked.effort)] {
-        if let Some(value) = value {
-            let _ = handle_set_config_option(
-                state,
-                &agent_client_protocol::schema::v1::SessionConfigId::new(id),
-                &agent_client_protocol::schema::v1::SessionConfigOptionValue::value_id(
-                    value.clone(),
-                ),
-            );
-        }
-    }
 }
 
 fn unknown_session(session_id: &str) -> agent_client_protocol::Error {

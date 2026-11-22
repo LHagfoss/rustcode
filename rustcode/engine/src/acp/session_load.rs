@@ -371,44 +371,6 @@ pub(super) fn replay_history_updates_with_compaction(
     updates
 }
 
-pub(crate) fn build_loaded_app_state(
-    session_id: &str,
-    cwd: &std::path::Path,
-    history: Vec<crate::app::ChatMessage>,
-) -> crate::app::AppState {
-    let mut state = crate::app::AppState::new_with_workspace_session(cwd, Some(session_id));
-    state.restore_session_model();
-    state.restore_session_compaction();
-    state.task_working_directory = Some(cwd.to_path_buf());
-    state.workspace_root = Some(cwd.to_path_buf());
-    // Reattach the session's recorded task worktree so resume reuses its
-    // writable roots and cwd instead of starting over in the source checkout
-    // (#1496). A missing or foreign worktree falls back to `cwd`.
-    if let Some(workspace) = crate::sessions::load_session_workspace(session_id)
-        && let Some(descriptor_id) = workspace.task_workspace_id
-        && let Some(manager) = crate::sessions::workspace_manager()
-        && let Ok(descriptor) = manager.resume(&descriptor_id)
-    {
-        state.workspace_root = Some(descriptor.workspace_path.clone());
-        state.task_working_directory = Some(descriptor.workspace_path.clone());
-    }
-    state.history.replace(history);
-    state
-}
-
-/// State for `session/new`. The id is always fresh: reusing the shared
-/// last-active session, as the TUI does when it is still empty, would hand two
-/// ACP sessions (or two processes) the same history file.
-pub(super) fn new_session_state(cwd: &std::path::Path) -> crate::app::AppState {
-    let session_id = crate::sessions::create_detached_session();
-    let state = crate::app::AppState::new_with_workspace_session(cwd, Some(&session_id));
-    if !session_id.is_empty() {
-        crate::sessions::record_session_settings(&session_id, &state.config);
-        state.record_session_model();
-    }
-    state
-}
-
 pub(super) fn canonical_acp_cwd(
     cwd: &std::path::Path,
     operation: &str,
@@ -466,36 +428,6 @@ pub(super) fn session_workspace(
     }
 }
 
-/// Give a session the client half of what its client advertised: how replies
-/// are drawn, and the preview, desktop, orchestration and Smart UI requests.
-/// Read once, from the client that created or loaded it, so its prompt never
-/// changes mid-session; each request goes to whichever client has the
-/// session then.
-pub(super) fn apply_client_info(
-    state: &mut crate::app::AppState,
-    info: clients::ClientInfo,
-    clients: &clients::SessionClients,
-) {
-    let secret_clients = clients.clone();
-    state.secret_asker = Some(std::sync::Arc::new(move |request| {
-        let clients = secret_clients.clone();
-        Box::pin(async move { clients.request(None, request).await.ok() })
-    }));
-    state.visualization_level = info.visualization_level;
-    state.smart_ui = info.smart_ui;
-    state.preview_client = preview::preview_client_for(info.preview, clients);
-    state.desktop_client = preview::desktop_client_for(info.desktop, clients);
-    (state.orchestration_client, state.orchestration_version) =
-        preview::orchestration_for(info.orchestration, clients);
-    // No app hosting the tools: this engine serves the reads and names the app
-    // for the rest (#3422). An app that turned them off keeps them off.
-    state.local_orchestration = info.engine_hosts_orchestration(clients);
-    state.smart_ui_client = preview::smart_ui_client_for(
-        info.smart_ui == crate::app::SmartUi::On && info.smart_ui_preview,
-        clients,
-    );
-}
-
 /// The session `session/new` creates on the built-in harness: the engine's own
 /// chat state, its task route and the client it publishes to. Also what a
 /// thread a paired device asked for starts as (`super::hosted`), which is why
@@ -506,8 +438,17 @@ pub(super) async fn create_builtin_session(
     request: NewSessionRequest,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
     let cwd = session_new_cwd(&request.cwd)?;
-    let mut state = new_session_state(&cwd);
-    let session_id = state.active_session_id.clone();
+    // What the request asked for, else the built-in harness's
+    // remembered choice (docs/harnesses.md).
+    let start = crate::harness::builtin_start(&crate::harness::requested(request.meta.as_ref()));
+    let OpenedThread {
+        session_id,
+        agent,
+        clients: session_clients,
+        snapshot,
+    } = create_thread(&cwd, &start, peer.info(), |session_id| {
+        peer.attach(session_id)
+    });
     // The name the thread was made with, from the app that made it (issue 3524).
     crate::sessions::save_requested_title(&session_id, request.meta.as_ref());
     // Who started this thread, from the `_meta.rustcode.parent` its
@@ -520,21 +461,6 @@ pub(super) async fn create_builtin_session(
     if let Some(job) = crate::sessions::requested_scheduled_job(request.meta.as_ref()) {
         crate::sessions::save_session_scheduled_job(&session_id, &job);
     }
-    let session_clients = peer.attach(&session_id);
-    apply_client_info(&mut state, peer.info(), &session_clients);
-    state.raw_cli_mode = false;
-    state.task_working_directory = Some(cwd.clone());
-    // ACP's requested cwd is both the task's initial location
-    // and its hard filesystem boundary, independent of the
-    // directory from which RustCode itself was launched.
-    state.workspace_root = Some(cwd.clone());
-    // What the request asked for, else the built-in harness's
-    // remembered choice (docs/harnesses.md).
-    apply_requested_model_and_effort(
-        &mut state,
-        &crate::harness::builtin_start(&crate::harness::requested(request.meta.as_ref())),
-    );
-    let config_options = build_session_config_options(&state);
     let _ = crate::sessions::save_session_workspace(
         &session_id,
         &session_workspace(cwd.clone(), request.additional_directories.clone()),
@@ -543,8 +469,6 @@ pub(super) async fn create_builtin_session(
     let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
     let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
     let terminal_overflow = Arc::new(AtomicBool::new(false));
-    let state = Arc::new(Mutex::new(state));
-    let agent = super::prompt::builtin_agent(Arc::clone(&state));
     let task_sink = Arc::new(SessionTaskSink {
         agent: Arc::clone(&agent),
         clients: session_clients,
@@ -570,7 +494,6 @@ pub(super) async fn create_builtin_session(
         session_id.clone(),
         AcpSession {
             agent,
-            state: Arc::clone(&state),
             cwd,
             turns: Arc::new(SessionTurnState::new()),
             task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
@@ -582,18 +505,14 @@ pub(super) async fn create_builtin_session(
     // Commands, then the session's opening usage, so the client
     // shows its context meter from the start rather than only
     // after the first turn ends (#2414 follow-up).
-    let opening_usage = {
-        let state = state.lock().await;
-        usage::usage_update(&state)
-    };
-    for update in [commands::available_commands_update(), opening_usage] {
+    for update in [commands::available_commands_update(), snapshot.usage] {
         if let Err(error) = peer.send_snapshot(&session_id, update) {
             unregister_acp_session(server, &session_id).await;
             return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
         }
     }
     Ok(NewSessionResponse::new(session_id)
-        .config_options(config_options)
+        .config_options(snapshot.config_options)
         .meta(crate::harness::builtin_session_meta()))
 }
 
@@ -665,17 +584,21 @@ pub(super) async fn acp_load_session(
                 agent_client_protocol::Error::invalid_params().data("session is already active")
             );
         }
-        let mut state = build_loaded_app_state(&session_id, &cwd, history.clone());
         // Not attached yet: the replay below attaches the loading client in
         // the same step that queues the transcript to it, so no live update
         // can land between its chunks.
-        let session_clients = peer.clients().session(&session_id);
-        apply_client_info(&mut state, peer.info(), &session_clients);
-        let config_options = build_session_config_options(&state);
-        let loaded_usage = usage::usage_update(&state);
-        let loaded_compaction = state.last_compaction.clone();
-        let state = Arc::new(Mutex::new(state));
-        let agent = super::prompt::builtin_agent(Arc::clone(&state));
+        let OpenedThread {
+            agent,
+            clients: session_clients,
+            snapshot: loaded,
+            ..
+        } = load_thread(
+            &session_id,
+            &cwd,
+            history.clone(),
+            peer.info(),
+            peer.clients().session(&session_id),
+        );
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
         let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
         let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
@@ -705,7 +628,6 @@ pub(super) async fn acp_load_session(
             session_id.clone(),
             AcpSession {
                 agent,
-                state,
                 cwd: cwd.clone(),
                 turns: Arc::new(SessionTurnState::new()),
                 task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
@@ -718,7 +640,7 @@ pub(super) async fn acp_load_session(
         let replay = replay_history_updates_with_compaction(
             &history,
             Some(&cwd),
-            loaded_compaction.as_ref(),
+            loaded.compaction.as_ref(),
         );
         let _ = crate::sessions::save_session_workspace(
             &session_id,
@@ -734,7 +656,7 @@ pub(super) async fn acp_load_session(
             ));
         }
         snapshot.push(commands::available_commands_update());
-        snapshot.push(loaded_usage);
+        snapshot.push(loaded.usage);
         load_pause::here(&session_id).await;
         // Queued and attached under one lock (see `Peer::attach_closed`):
         // the transcript, then what the session logged since `base`.
@@ -752,7 +674,7 @@ pub(super) async fn acp_load_session(
         }
         return Ok(peer.position(&session_id, reset).finish(
             LoadSessionResponse::new()
-                .config_options(config_options)
+                .config_options(loaded.config_options)
                 .meta(crate::harness::builtin_session_meta()),
         ));
     }
