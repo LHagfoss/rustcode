@@ -2315,8 +2315,6 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
     // values, `:: actions` and the one-short-line rule for cards add about
     // 150, and trimming the kit list paid most of it back so the whole
     // text stays under 4 KB: views came out as walls of card text. 2,500.
-    // The catalog (charts, hero, progress, tabs, forms and the rest as `::`
-    // blocks) replaced the kit's class list, so it is 2,194 now.
     assert!(
         SMART_UI_HARNESS_HINT.len() < 2_500,
         "{}",

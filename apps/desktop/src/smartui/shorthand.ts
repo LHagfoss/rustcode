@@ -1,52 +1,8 @@
-// Smart UI shorthand (docs/smart-ui.md › Shorthand): a line that starts with `::` opens a kit
-// block the app writes itself, so an agent spends a few tokens per row instead of the
-// kit's full markup, and every view of one kind comes out alike. It is the view's
-// component catalog: the agent names a block and gives its data, and the app owns the
-// markup, the style and the behaviour (the idea A2UI calls a locked catalog). The `- `
-// lines under it are the block's items; a blank line, the next `::` line or a line that
-// starts with `<` ends it. Everything else in a block is HTML and passes through
-// unchanged, as does a `<script>` or `<style>` body.
-//
-// Text and layout
-//   :: title Reconnect timing            <title>, the view's label
-//   :: head Title | caption              .rc-head: a title and a muted caption at the right
-//   :: h Why it takes a minute           h3
-//   :: p                                 a paragraph; the lines below are its text
-//   :: callout info                      .rc-callout tinted ok|warn|bad|info; the lines below are its text
-//   :: divider                           hr
-//   :: tab Name … :: end                 .rc-tabs: consecutive tabs form one set, `:: end` closes it
-//   :: details Summary                   a fold; its `- ` items are a list, its lines a paragraph
-// Numbers and charts
-//   :: hero Label                        .rc-hero; `- value | delta | sentence`
-//   :: stats                             .rc-stats; `- value | label | note | 1,4,2,8` (a sparkline)
-//   :: bars Why it takes a minute        .rc-bars; `- label | value | shown | tip`
-//   :: progress                          progress bars; `- label | 72% | note` (or `3/5`)
-//   :: chart line|area|bar|stacked|hbar|donut|pie Title | size=lg | line=150 normal | band=75-270 | end
-//                                        Chart.js from a table: `x | series…` heading, then rows
-//   :: heatmap                           a table whose numbers shade their cells
-// Rows and status
-//   :: table                             table.rc-table; `a | b` rows, the first is the heading
-//   :: compare                           a table whose yes / no / partial cells are marks
-//   :: list                              .rc-list; `- Title | detail | value`
-//   :: kv                                key and value rows; `- Key | value`
-//   :: cards                             .rc-grid of .rc-card; `- Title | body | badge`
-//   :: steps                             .rc-steps; `- [x] done`, `[>]` active, `[!]` failed, `[ ]` to do
-//   :: timeline                          `- 10:02 | event | detail`, the dot in the item's tint
-//   :: findings                          .rc-findings; `- high | where | finding | note` (`{ok}`: fixed)
-//   :: files                             .rc-file rows; `- path | +12 -3 | note`
-//   :: tags                              a row of badges; `- label {tint}`
-//   :: term                              .rc-term; its lines as written, `{tint}` per line
-//   :: code                              a code block; its lines as written
-// Actions
-//   :: actions                           a row of .rc-chip follow-ups; `- Label | message`
-//   :: form Message | Button             a form that sends Message and its fields;
-//                                        `- text|number|date|select|choice|check|range name | Label | extra`
-//   :: sources                           folded sources; `- Title | url`
-//
-// A title after a block's name (`:: bars Why …`) draws an h3 over it. An item may end with
-// `{ok}`, `{warn}`, `{bad}` or `{info}` to tint it; on a titled item the tint may also end its
-// title cell (`Fast path {ok} | …`), where agents put it as often as at the end. In text, `code` and **bold** work and
-// any HTML is kept; cells split at `|` outside backticks.
+// Smart UI shorthand, the view's component catalog (docs/smart-ui.md › Shorthand: the
+// component catalog, which lists every block): a line that starts with `::` opens a kit
+// block the app writes itself, and the `- ` lines under it are its items. A blank line,
+// the next `::` line or a line that starts with `<` ends it. Everything else is HTML
+// and passes through unchanged, as does a `<script>` or `<style>` body.
 
 const TINTS = new Set(["ok", "warn", "bad", "info"]);
 /** Every block the shorthand knows, the catalog `smart_ui_check` and the skill name. */
@@ -441,7 +397,6 @@ function chart(block: Block): string {
   const title = CHART_TYPES.has(word) ? titleWords.join(" ") : first;
   const options = chartOptions(optionParts);
   const table = rows(block);
-  // A heading row names the series; a first row whose values are numbers is data already.
   const headed = table.length > 1 && !(table[0] ?? []).slice(1).every((cell) => measure(cell) !== null);
   const header = headed
     ? (table[0] ?? [])
@@ -494,7 +449,6 @@ function chart(block: Block): string {
     total = `<div class="rc-donut-total"><b>${Math.round(sum * 100) / 100}</b><span>${escapeHtml(unit)}</span></div>`;
   }
   const box = `<div class="rc-chart${radial ? " rc-chart-radial" : ""}"${size ? ` data-size="${size}"` : ""}>${canvas}${total}</div>`;
-  // A donut's slices are named beside it, with their values, since a canvas legend is not text.
   const legend = radial
     ? `<ul class="rc-legend">${labels
         .map(
@@ -513,7 +467,6 @@ function heatmap(block: Block): string {
   const values = data
     .flatMap((row) => row.slice(1).map((cell) => measure(cell)))
     .filter((v): v is number => v !== null);
-  // Shades run from the smallest value to the largest, so close numbers still read apart.
   const min = Math.min(...values);
   const max = Math.max(...values);
   const th = header.map((cell, i) => `<th${i ? ' class="rc-num"' : ""}>${inline(cell)}</th>`).join("");
@@ -802,7 +755,6 @@ export function expandShorthand(source: string): string {
   const out: string[] = [];
   let block: Block | null = null;
   let raw: string | null = null;
-  // An open set of tabs: its names so far, and the slot its tab list fills once they are all known.
   let tabs: TabSet | null = null;
   let tabSets = 0;
   const closeTabs = () => {

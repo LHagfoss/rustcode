@@ -149,7 +149,6 @@ describe("shorthand catalog", () => {
         "<p>After</p>",
       ].join("\n"),
     );
-    // A set still streaming is closed with the tabs it has so far.
     expect(expandShorthand(":: tab One\n:: p First")).toContain('data-rc-tab="t1-0">One</button></div>');
   });
 

@@ -1252,8 +1252,6 @@ export const usesChart = (source: string) => {
  */
 export const previewable = (source: string) => {
   CHART_TAG.lastIndex = 0;
-  // A `:: chart` is one block among others and holds its own size, so the rest of the view
-  // streams in around a quiet box where it will draw; a hand-written chart script waits.
   return !CHART_TAG.test(source);
 };
 
