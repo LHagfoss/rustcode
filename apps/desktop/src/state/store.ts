@@ -60,6 +60,7 @@ export {
   editMessage,
   forgetSidebarOrder,
   pruneSidebarOrder,
+  renameRemoteThread,
   renameThread,
   restoreInbox,
   retryMessage,

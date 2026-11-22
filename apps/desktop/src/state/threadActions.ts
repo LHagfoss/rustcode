@@ -357,6 +357,46 @@ export function setArchived(id: string, on: boolean) {
 }
 
 /**
+ * Renames a thread on another computer: its name lives in that machine's thread folder, so its
+ * engine writes it (`_rustcode/session/title`). `kept` is a name the user chose there, which an
+ * agent's rename leaves alone. Null when the rename failed; the toast says why.
+ */
+export async function renameRemoteThread(
+  id: string,
+  title: string,
+  options: { user?: boolean } = {},
+): Promise<{ title: string; kept: boolean } | null> {
+  const conn = connectionForThread(id);
+  if (!conn) {
+    toast("Could not rename the thread: That computer is not connected.", "error");
+    return null;
+  }
+  try {
+    const answer = obj(
+      await conn.request(
+        V2Method.sessionTitle,
+        { session_id: splitThreadKey(id).id, title, user: !!options.user },
+        10_000,
+      ),
+    );
+    const saved = str(answer?.title) ?? title;
+    const kept = answer?.kept === true;
+    if (!kept) {
+      set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: saved } : x)) }));
+      updateThread(id, (t) => ({ ...t, title: saved }));
+    }
+    return { title: saved, kept };
+  } catch (error) {
+    const reason =
+      error instanceof RpcError && error.isMethodNotFound
+        ? "update RustCode on that computer to rename its threads from here."
+        : errorText(error);
+    toast(`Could not rename the thread: ${reason}`, "error");
+    return null;
+  }
+}
+
+/**
  * Renames a thread. `user` is a name the user typed: the thread records that they chose it, and an
  * agent naming its own thread with `update_session` leaves it alone (issue 3599).
  */
@@ -365,12 +405,7 @@ export async function renameThread(
   title: string,
   options: { user?: boolean } = {},
 ): Promise<boolean> {
-  // A thread's name lives on the computer that owns it, and renaming one is that computer's
-  // folder (`thread_rename` is this shell's): another machine's thread is not renamed from here.
-  if (threadIsRemote(id)) {
-    toast("A thread on another computer is renamed on that computer.", "info");
-    return false;
-  }
+  if (threadIsRemote(id)) return (await renameRemoteThread(id, title, options)) !== null;
   try {
     const saved = await shellCall<string>("thread_rename", { id, title, user: !!options.user });
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: saved } : x)) }));

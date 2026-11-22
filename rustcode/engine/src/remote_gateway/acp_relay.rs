@@ -125,6 +125,7 @@ const EXACT_METHODS: &[&str] = &[
     "initialize",
     "_rustcode/session/status",
     "_rustcode/session/snooze",
+    "_rustcode/session/title",
     "_rustcode/session/repair",
     // The transcript a load would replay, read without opening the thread:
     // what keeps a complete copy of this machine's threads on the other.
@@ -487,6 +488,7 @@ mod tests {
                 "initialize",
                 "_rustcode/session/status",
                 "_rustcode/session/snooze",
+                "_rustcode/session/title",
                 "_rustcode/session/repair",
                 "_rustcode/session/replay",
                 "_rustcode/session/stop",
@@ -534,6 +536,7 @@ mod tests {
             "initialize",
             "_rustcode/session/status",
             "_rustcode/session/snooze",
+            "_rustcode/session/title",
             "_rustcode/session/repair",
             "_rustcode/session/replay",
             "_rustcode/session/stop",
