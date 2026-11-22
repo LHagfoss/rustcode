@@ -792,7 +792,7 @@
 21 rustcode/engine/src/controller/tests.rs
 12 rustcode/engine/src/controller/worker.rs
 7 rustcode/engine/src/daemon/action_tests.rs
-24 rustcode/engine/src/daemon/executor.rs
+22 rustcode/engine/src/daemon/executor.rs
 1 rustcode/engine/src/daemon/hub_run.rs
 12 rustcode/engine/src/daemon/lifecycle.rs
 1 rustcode/engine/src/daemon/mod.rs
