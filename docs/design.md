@@ -203,7 +203,7 @@ Knobs answer the press, not just the release:
   release. A switch's knob follows the pointer and lands on the side it is
   let go nearer; a press without a drag toggles. A cancelled gesture changes
   nothing.
-- The keyboard still picks with a click (Space, Enter, arrows), so a pointer
+- The keyboard still picks with a click (Space, Enter), so a pointer
   gesture commits once, on release, and never twice.
 
 ## Focus
