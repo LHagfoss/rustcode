@@ -522,6 +522,21 @@ fills in the same saved machines.
 | `rc machines remove <name-or-id>` | Forget a machine and delete its token. It still lists this computer until it is revoked there. |
 | `rc machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
 
+The desktop app writes every connect and drop of a paired machine to
+`connections.log` in its config folder (next to `updates.log`), one line each:
+`machine.connected <name> via <route kind> <address>`, and
+`machine.disconnected <name> after <n> s (<cause>): <reason>` with the reason
+the row showed, such as *the machine did not answer a ping within 10 s*. The
+newest 400 lines are kept. Read it when a machine dropped and the row has
+moved on.
+
+A steer sent to a thread on another machine shows in the transcript at once as
+*Steering…*. When the turn takes it, the label turns to *Steered*. When the
+machine cannot be reached (no connection, or the request fails or times out
+after 10 s), the row goes away and the message waits in the queue with *The
+machine is reconnecting: this goes with the next turn*. A steer the turn
+refuses waits there too.
+
 An address is `host`, `host:port`, `[v6]:port` or `ws://host:port`; the port
 defaults to `17879`. `wss://host` is the machine's public address, a tunnel
 to its engine's HTTP listener ([The public address](remote-security.md#the-public-address)):

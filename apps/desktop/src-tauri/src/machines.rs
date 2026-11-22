@@ -737,6 +737,15 @@ async fn supervise(
                     (cause, answered, message)
                 }
             };
+        crate::update_log::record_connection(
+            "machine.disconnected",
+            &format!(
+                "{} after {} s ({}): {reason}",
+                machine.name,
+                started.elapsed().as_secs(),
+                cause.as_str()
+            ),
+        );
         // A connection that worked for a while deserves a fresh schedule.
         if started.elapsed() >= STABLE_AFTER {
             attempt = 0;
@@ -1030,6 +1039,15 @@ async fn relay_once(
         Err(error) => return End::Failed(error, Some(route)),
     };
     set_connected(machines, id, &route);
+    crate::update_log::record_connection(
+        "machine.connected",
+        &format!(
+            "{} via {} {}",
+            machine.name,
+            route.kind.as_str(),
+            route.address
+        ),
+    );
     set_hint(machines, id, hint);
     // A LAN win stops the race before the overlay attempts start. Ask about
     // them in the background, so the row can say why the overlay is not used

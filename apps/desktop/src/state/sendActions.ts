@@ -52,6 +52,7 @@ import {
   setExtras,
   setSwitcher,
   startNewThread,
+  threadOffline,
   toast,
   updateThread,
   useApp,
@@ -59,6 +60,7 @@ import {
 } from "./store";
 import {
   appendSteer,
+  confirmSteer,
   departQueued,
   dropDeparted,
   isRunning,
@@ -66,6 +68,7 @@ import {
   messagesAfter,
   type QueuedPrompt,
   type ThreadState,
+  withdrawSteer,
 } from "./thread";
 import { askConfirm, cancelEdit, renameThread, rewindTo } from "./threadActions";
 import { LOCAL_HOST, splitThreadKey } from "./threadKeys";
@@ -419,10 +422,12 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
   // writing in the thread, so the thread comes back here (`submit` does the same).
   wakeOnWrite(id);
   const verdict = sendDecisionFor(thread, extras);
-  if (verdict.action === "steer" && (await steer(id, text, extras))) return true;
   if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
-  // A steer the engine refused (the turn ended or began waiting on the user meanwhile) waits too.
-  return queueMessage(id, text, extras, verdict.action === "queue" ? verdict.reason : "refused");
+  if (verdict.action === "queue") return queueMessage(id, text, extras, verdict.reason);
+  const outcome = await steerInto(id, text, extras);
+  if (outcome === "steered") return true;
+  // A steer the engine refused or could not reach waits for the next turn, and says which.
+  return queueMessage(id, text, extras, outcome === "unreachable" ? "offline" : "refused");
 }
 
 /** A message that does not steer waits for the next turn, saying why it waits. */
@@ -520,7 +525,25 @@ export async function steer(
   sender?: string,
   link?: string,
 ): Promise<boolean> {
+  return (await steerInto(id, text, extras, sender, link)) === "steered";
+}
+
+/**
+ * What became of a steer: the turn took it, refused it, or the thread's machine could not be
+ * reached (not connected, or the line dropped or went quiet while the steer was on its way).
+ */
+type SteerOutcome = "steered" | "refused" | "unreachable";
+
+async function steerInto(
+  id: string,
+  text: string,
+  extras?: ComposeExtras,
+  sender?: string,
+  link?: string,
+): Promise<SteerOutcome> {
   const thread = get().threads[id];
+  const conn = connectionForThread(id);
+  if (!conn || threadOffline(id)) return "unreachable";
   // What the turn reads: the typed text with its command, links and long pastes in place.
   const full = composedText(text, extras ?? emptyExtras);
   const conditions = {
@@ -536,9 +559,10 @@ export async function steer(
           advertised: advertisedCommands(get(), id),
         })
       : undefined;
+  const rowId = localId("user");
+  updateThread(id, (t) => appendSteer(t, full, Date.now(), extras && sentAttachments(extras), rowId, true));
+  let outcome: SteerOutcome;
   try {
-    const conn = connectionForThread(id);
-    if (!conn) return false;
     const sessionId = splitThreadKey(id).id;
     const result = (await conn.request(
       Method.steer,
@@ -567,13 +591,12 @@ export async function steer(
       },
       10_000,
     )) as JsonObject | null;
-    if (result?.accepted !== true) return false;
-    updateThread(id, (t) => appendSteer(t, full, Date.now(), extras && sentAttachments(extras)));
-    // The steered row in the transcript says it was read after the current step.
-    return true;
+    outcome = result?.accepted === true ? "steered" : "refused";
   } catch {
-    return false;
+    outcome = "unreachable";
   }
+  updateThread(id, (t) => (outcome === "steered" ? confirmSteer(t, rowId) : withdrawSteer(t, rowId)));
+  return outcome;
 }
 
 /**

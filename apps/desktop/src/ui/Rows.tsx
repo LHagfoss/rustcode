@@ -379,7 +379,11 @@ export const UserRow = memo(function UserRow({
             </>
           )}
         </div>
-        {item.steered && <span className="rc-keep truncate text-accent">Steered</span>}
+        {item.steered && (
+          <span className={cx("rc-keep truncate", !item.steering && "text-accent")}>
+            {item.steering ? "Steering…" : "Steered"}
+          </span>
+        )}
         {item.fromView && <span className="rc-keep truncate text-accent">From view</span>}
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
           <span className={cx("truncate tabular", newDay && "rc-keep")}>

@@ -12,6 +12,7 @@ import {
   beginQuietTurn,
   beginTurn,
   checkCommands,
+  confirmSteer,
   departQueued,
   diffCounts,
   diffLines,
@@ -52,6 +53,7 @@ import {
   wakeTurn,
   withChildActivity,
   withContinueMark,
+  withdrawSteer,
   withWakeMark,
   workingLabel,
 } from "./thread";
@@ -278,6 +280,19 @@ describe("thread reducer", () => {
     expect(s.steers).toHaveLength(1);
     s = requeueSteers(s, ["also this"]);
     expect(s.steers).toEqual([]);
+  });
+
+  test("a steer on its way shows at once, and is confirmed or withdrawn by the answer", () => {
+    let s = beginTurn(emptyThread("s", "/p"), "go", 0);
+    s = appendSteer(s, "take it", 1000, undefined, "user-a", true);
+    s = appendSteer(s, "lost on the way", 1100, undefined, "user-b", true);
+    const row = (id: string) => s.items.find((i) => i.id === id);
+    expect(row("user-a")).toMatchObject({ kind: "user", steered: true, steering: true });
+    s = confirmSteer(s, "user-a");
+    expect(row("user-a")).toMatchObject({ steered: true, steering: undefined });
+    s = withdrawSteer(s, "user-b");
+    expect(row("user-b")).toBeUndefined();
+    expect(s.steers.map((n) => n.id)).toEqual(["user-a"]);
   });
 
   test("a queued row a steer took leaves after its glide, and not before", () => {

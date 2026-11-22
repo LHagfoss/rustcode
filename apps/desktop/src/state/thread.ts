@@ -41,6 +41,8 @@ export type TranscriptItem =
       text: string;
       at?: number;
       steered?: boolean;
+      /** A steer on its way to the turn: drawn at once, gone again if the turn does not take it. */
+      steering?: boolean;
       attachments?: SentAttachment[];
       /** Sent by a Smart UI view's button (`rustcode.send`). */
       fromView?: boolean;
@@ -1159,8 +1161,9 @@ export function appendSteer(
   text: string,
   now = Date.now(),
   attachments?: SentAttachment[],
+  id = localId("user"),
+  steering = false,
 ): ThreadState {
-  const id = localId("user");
   return {
     ...state,
     items: [
@@ -1171,10 +1174,30 @@ export function appendSteer(
         text,
         at: now,
         steered: true,
+        steering: steering || undefined,
         attachments: attachments?.length ? attachments : undefined,
       },
     ],
     steers: [...state.steers, { id, text, at: now, step: activeStep(state.plan) }],
+  };
+}
+
+/** The turn took the steer `id`: its row stops saying it is on its way. */
+export function confirmSteer(state: ThreadState, id: string): ThreadState {
+  return {
+    ...state,
+    items: state.items.map((item) =>
+      item.kind === "user" && item.id === id && item.steering ? { ...item, steering: undefined } : item,
+    ),
+  };
+}
+
+/** The turn did not take the steer `id`: its row and its note go, and the message waits instead. */
+export function withdrawSteer(state: ThreadState, id: string): ThreadState {
+  return {
+    ...state,
+    items: state.items.filter((item) => item.id !== id),
+    steers: state.steers.filter((note) => note.id !== id),
   };
 }
 
