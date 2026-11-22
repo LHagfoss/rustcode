@@ -247,11 +247,10 @@ export function App() {
     // what Radix's Tooltip and HoverCard require, and nothing here waits on it.
     <Tooltip.Provider>
       {/*
-        One shell, never unmounted. Settings opens inside it (docs/design.md ›
-        Settings): its sections replace the sidebar's list and its page the
-        view, which both stay mounted and laid out underneath, hidden and inert,
-        so closing Settings shows the thread exactly where it was (scroll,
-        drafts, open rows) in one frame.
+        One shell, never unmounted. Settings swaps the sidebar's list and the view,
+        which stay mounted underneath, hidden and inert (docs/design.md › Settings),
+        so closing it shows the thread exactly where it was (scroll, drafts, open
+        rows) in one frame.
       */}
       <div className="relative h-full w-full overflow-hidden">
         {/*

@@ -1293,7 +1293,6 @@ export function Sidebar() {
             <SettingsButton />
           </TitlebarControls>
         </TitlebarRow>
-        {/* Settings swaps the list (kept mounted, hidden) for its sections under the same title row. */}
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             className={cx("flex min-h-0 flex-1 flex-col", settingsOpen && "invisible")}
