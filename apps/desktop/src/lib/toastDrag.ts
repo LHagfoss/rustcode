@@ -1,44 +1,43 @@
 // What a drag on a toast does, as pure arithmetic and one DOM guard
-// (ui/Toaster.tsx): the card follows sideways fully and upward at a sixth,
-// drops away downward, and dismisses past 48px sideways or 24px down. A press
-// that barely moves is a click, which dismisses too. A drag never selects text
-// anywhere: the guard below turns selection off on the document and blocks
-// `selectstart` until it is released, and every way a drag ends releases it.
+// (ui/Toaster.tsx): the card slides one way only, right toward the window's
+// edge. Any other way it rubber-bands at a sixth and snaps back. It dismisses
+// past 48px, or on a quick flick right. A press that barely moves is a click,
+// which dismisses too. A drag never selects text anywhere: the guard below
+// turns selection off on the document and blocks `selectstart` until it is
+// released, and every way a drag ends releases it.
 
 /** How far a drag must travel to dismiss the toast. */
 export const TOAST_DISMISS_PX = 48;
-/** Upward drags resist: the stack sits in the window's bottom corner and leaves downward. */
-const UP_RESIST = 6;
+/** A flick faster than this, in px/ms over the whole drag, dismisses short of 48px. */
+export const TOAST_FLICK_SPEED = 0.5;
+/** ...but only once it has gone this far, so a fast twitch is not a dismissal. */
+export const TOAST_FLICK_PX = 12;
+/** Every way but right resists. */
+const RESIST = 6;
 /** Less travel than this, end to end, is a click on the card rather than a drag. */
 export const TOAST_CLICK_PX = 4;
 export const TOAST_DRAG_MS = 160;
 
-export type SwipeDirection = "left" | "right" | "down";
-
 export interface DragState {
-  /** Sideways movement, unmodified. */
+  /** Sideways offset: full to the right, resisted to the left. */
   dx: number;
-  /** Vertical movement: full downward, resisted upward. */
+  /** Vertical offset, resisted both ways. */
   dy: number;
-  /** How far it has travelled from its place, for the fade. */
+  /** How far it has travelled toward the edge, for the fade. */
   away: number;
   dismiss: boolean;
-  /** Which way it leaves when dismissed; null while it snaps back. */
-  direction: SwipeDirection | null;
 }
 
-export function dragState(dx: number, dy: number): DragState {
-  const followY = dy > 0 ? dy : dy / UP_RESIST;
-  const away = Math.max(Math.abs(dx), followY);
-  const dismiss = Math.abs(dx) > TOAST_DISMISS_PX || dy >= TOAST_DISMISS_PX / 2;
-  const direction: SwipeDirection | null = !dismiss
-    ? null
-    : Math.abs(dx) > dy
-      ? dx < 0
-        ? "left"
-        : "right"
-      : "down";
-  return { dx, dy: followY, away, dismiss, direction };
+/** `ms` is how long the drag has lasted, for a flick; omit it while the pointer moves. */
+export function dragState(dx: number, dy: number, ms = Number.POSITIVE_INFINITY): DragState {
+  const followX = dx > 0 ? dx : dx / RESIST;
+  const flick = dx >= TOAST_FLICK_PX && dx / Math.max(ms, 1) > TOAST_FLICK_SPEED;
+  return {
+    dx: followX,
+    dy: dy / RESIST,
+    away: Math.max(0, dx),
+    dismiss: dx > TOAST_DISMISS_PX || flick,
+  };
 }
 
 /** Opacity while dragging: it fades as it travels, never below 0.2. */
@@ -46,11 +45,8 @@ export function dragOpacity(away: number): number {
   return Math.max(0.2, 1 - away / 200);
 }
 
-/** Where a dismissed card flies to. */
-export function dragExit(direction: SwipeDirection, dx: number): string {
-  if (direction === "down") return "translateY(140%)";
-  return `translateX(${Math.sign(dx) * 120}%)`;
-}
+/** Where a dismissed card flies to: off the window's right edge. */
+export const TOAST_EXIT = "translateX(120%)";
 
 /** A press and release this close together is a click on the card: it dismisses. */
 export function isClick(dx: number, dy: number): boolean {
