@@ -69,13 +69,7 @@ function lines(text: string, perLine: number): number {
   return Math.max(1, Math.ceil(text.length / perLine));
 }
 
-/**
- * The transcript's vertical rhythm, tight then airy: 4px between the steps of the work (tool
- * rows, thoughts, a group of calls), 8px under an opened `Worked for …`, 12px between the other
- * items of a turn (narration, the answer), 16px from the answer to its footer and 28px between
- * turns, which is where a message starts and a footer ends. A row draws no air of its own, so
- * these decide every gap in the lane and nothing reserves room for a hover.
- */
+/** The transcript's vertical rhythm (docs/design.md › Type). */
 const FLOW_GAP = 4;
 const FOLD_GAP = 8;
 const ITEM_GAP = 12;
@@ -100,8 +94,6 @@ export function rowGap(rows: readonly Row[], index: number): number {
   if (index <= 0) return 0;
   const item = rows[index]?.item;
   const prev = rows[index - 1]?.item;
-  // Steps of the work sit tight under each other and under the `Worked for …` that opened them;
-  // the answer and the footer under it get air of their own.
   if (flowRow(rows[index]) && (flowRow(rows[index - 1]) || rows[index - 1]?.fold)) return FLOW_GAP;
   if (rows[index - 1]?.fold) return FOLD_GAP;
   if (item?.kind === "turnEnd" && prev?.kind === "assistant") return FOOTER_GAP;

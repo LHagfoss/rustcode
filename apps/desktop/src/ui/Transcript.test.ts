@@ -29,7 +29,6 @@ describe("the air above a transcript row", () => {
     expect(rowGap(rows, 0)).toBe(0);
     // A sent bubble ends on its own 24px time line, so the turn under it takes the narrow gap.
     expect(rowGap(rows, 1)).toBe(12);
-    // Steps of the work are 4px apart.
     expect(rowGap(rows, 2)).toBe(4);
     // The message that starts the next turn takes the wide gap again.
     expect(rowGap(rows, 3)).toBe(28);

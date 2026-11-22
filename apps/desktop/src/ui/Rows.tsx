@@ -292,7 +292,6 @@ export const UserRow = memo(function UserRow({
         className={cx(
           // A card a step off the pane, not a fill that moves with the text colour. Messages sent
           // one after another soften the corners they share, so they read as one run.
-          // R20 with a 16px side inset, on the reply's own 24px line (docs/design.md › Chat).
           "relative max-w-full selectable rounded-bubble bg-message px-4 py-2 leading-chat",
           // A message after this one continues the run: the bottom-right corner joins it.
           after && "rounded-br-md",
@@ -890,8 +889,6 @@ export const ToolRow = memo(function ToolRow({
           )}
           <DiffCount {...counts} />
           {exitCode !== undefined && exitCode !== 0 && (
-            // The command ran and said no: a neutral capsule with a red dot and the code, which
-            // never truncates (the title gives way). Red text is for a call that could not run.
             <span className="flex h-[18px] shrink-0 items-center gap-1 rounded-full bg-fill px-1.5 font-mono text-caption text-fg-muted tabular">
               <span aria-hidden className="size-1.5 rounded-full bg-danger" />
               <span className="sr-only">Exit code </span>
@@ -1316,7 +1313,6 @@ export function TurnEndRow({
   trace?: ReactNode;
   /** The thread, so the footer's fork can copy its conversation. */
   threadId?: string;
-  /** The newest turn, ending in its reply: its actions stay in view. */
   latest?: boolean;
 }) {
   // One row for the turn: its outcome and time, copy and fork, then the changes chip. It is the
