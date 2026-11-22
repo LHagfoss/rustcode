@@ -139,6 +139,38 @@ export function orchestrationTool(name: string): string | undefined {
   return (ORCHESTRATION_TOOLS as readonly string[]).includes(internal) ? internal : undefined;
 }
 
+/**
+ * A harness that lists every MCP schema with each request gets RustCode's
+ * tools deferred: it runs most of them through `call_tool`, naming the tool and
+ * its arguments. The call reads as that tool everywhere (its row, nesting,
+ * waits), so it is unwrapped where the transcript keeps it. Anything else, and
+ * a `call_tool` of another server, comes back as it was.
+ */
+export function isCallTool(title: string): boolean {
+  const { server, tool } = splitToolName(title);
+  return tool === "call_tool" && (!server || server === "rustcode");
+}
+
+/** The title an update leaves a row with: a repeated `call_tool` title without its input keeps the unwrapped one. */
+export function keptTitle(next: string | undefined, nextInput: Json | undefined, before: string): string {
+  if (next === undefined) return before;
+  return nextInput === undefined && isCallTool(next) && !isCallTool(before) ? before : next;
+}
+
+export function unwrapCallTool<T extends { title: string; input?: Json }>(item: T): T {
+  if (!isCallTool(item.title)) return item;
+  const args = objectOf(item.input);
+  const inner = args.name;
+  if (typeof inner !== "string" || !IDENT.test(inner)) return item;
+  const rest = Object.keys(args).filter((key) => key !== "name" && key !== "arguments");
+  if (rest.length) return item;
+  const input =
+    args.arguments && typeof args.arguments === "object" && !Array.isArray(args.arguments)
+      ? args.arguments
+      : {};
+  return { ...item, title: `mcp__rustcode__${inner}`, input };
+}
+
 /** `start_session` reads `Start session`: underscores become spaces, the first letter goes up. */
 export const humanizeTool = (tool: string) =>
   tool
