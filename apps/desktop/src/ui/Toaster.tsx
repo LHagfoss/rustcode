@@ -31,7 +31,7 @@ import {
   Undo2,
   X,
 } from "./icons";
-import { cx, Spinner, Tooltip } from "./primitives";
+import { cx, Spinner } from "./primitives";
 
 /** How far the cards behind the front one peek over its top edge, and how much smaller each is. */
 const TOAST_PEEK = 6;
@@ -201,11 +201,11 @@ function ToastCard({
         data-toast-body
         aria-hidden={compact || undefined}
         className={cx(
-          "flex min-h-[60px] items-stretch gap-2 py-1.5 pr-1.5 pl-3 transition-opacity duration-150 ease-out",
+          "flex items-start gap-2 py-1.5 pr-1.5 pl-3 transition-opacity duration-150 ease-out",
           compact && "opacity-0",
         )}
       >
-        <div className="flex min-w-0 flex-1 items-start gap-2 self-center">
+        <div className="flex min-w-0 flex-1 items-start gap-2">
           <span className="flex h-6 shrink-0 items-center">
             {spinning ? (
               <Spinner size={13} />
@@ -221,19 +221,17 @@ function ToastCard({
           </span>
           <p className="line-clamp-3 min-w-0 flex-1 py-1 text-fg">{toast.text}</p>
         </div>
-        <div className="flex shrink-0 flex-col items-center justify-between">
-          <Tooltip label="Dismiss" side="left">
-            <button
-              type="button"
-              aria-label="Dismiss"
-              tabIndex={compact ? -1 : undefined}
-              onClick={() => dismissToast(toast.id)}
-              className="flex size-6 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
-            >
-              <X size={12} />
-            </button>
-          </Tooltip>
+        <div className="flex shrink-0 items-center gap-1">
           {toast.action && <ToastActionButton toast={toast} compact={compact} />}
+          <button
+            type="button"
+            aria-label="Dismiss"
+            tabIndex={compact ? -1 : undefined}
+            onClick={() => dismissToast(toast.id)}
+            className="flex size-6 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
+          >
+            <X size={12} />
+          </button>
         </div>
       </div>
       {toast.persist && toast.progress !== undefined && (
@@ -260,34 +258,19 @@ function ToastActionButton({ toast, compact }: { toast: Toast; compact: boolean 
   const action = toast.action;
   if (!action) return null;
   const ActionIcon = ACTION_ICONS[action.label];
-  const run = () => {
-    action.run();
-    dismissToast(toast.id);
-  };
-  if (!ActionIcon) {
-    return (
-      <button
-        type="button"
-        tabIndex={compact ? -1 : undefined}
-        onClick={run}
-        className="flex h-6 items-center rounded-full px-2 font-medium whitespace-nowrap text-accent hover:bg-accent/10 active:bg-accent/15"
-      >
-        {action.label}
-      </button>
-    );
-  }
   return (
-    <Tooltip label={action.label} side="left">
-      <button
-        type="button"
-        aria-label={action.label}
-        tabIndex={compact ? -1 : undefined}
-        onClick={run}
-        className="flex size-6 items-center justify-center rounded-full text-accent hover:bg-accent/10 active:bg-accent/15"
-      >
-        <ActionIcon size={14} />
-      </button>
-    </Tooltip>
+    <button
+      type="button"
+      tabIndex={compact ? -1 : undefined}
+      onClick={() => {
+        action.run();
+        dismissToast(toast.id);
+      }}
+      className="flex h-6 items-center gap-1 rounded-full bg-accent/12 pr-3 pl-2 font-medium whitespace-nowrap text-accent hover:bg-accent/18 active:bg-accent/24"
+    >
+      {ActionIcon && <ActionIcon size={13} />}
+      {action.label}
+    </button>
   );
 }
 
