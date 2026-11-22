@@ -675,41 +675,6 @@ export function checkMessage(
   return null;
 }
 
-/**
- * The project `thread_usage` reads: the one asked for, the caller's while
- * "Let agents read threads in other projects" is off, or none (every project)
- * while it is on. A failure when the setting is off and another project was
- * asked for by name — better than quietly answering about a different scope.
- */
-export function usageScope(
-  caller: RuleThread,
-  acrossProjects: boolean,
-  asked?: string,
-): { project?: string; scope: "this project" | "every project" } | Failure {
-  if (acrossProjects) return asked ? { project: asked, scope: "this project" } : { scope: "every project" };
-  const own = projectOf(caller);
-  if (asked && !sameProject(asked, own)) {
-    return failure(
-      "not_allowed",
-      "reading usage across projects is off; turn on “Let agents read threads in other projects” in Settings › Orchestration",
-    );
-  }
-  return { project: own, scope: "this project" };
-}
-
-/**
- * Whether `query_data` may run at all. SQL over the store cannot be narrowed to
- * one project safely (a join, a subquery, a view), so it needs the setting.
- */
-export function checkQueryData(acrossProjects: boolean): Failure | null {
-  return acrossProjects
-    ? null
-    : failure(
-        "not_allowed",
-        "SQL reads every project, so it needs “Let agents read threads in other projects” in Settings › Orchestration",
-      );
-}
-
 /** Whether `caller` may start `count` threads, before the user is asked. */
 export function checkStart(
   caller: RuleThread,
@@ -1421,7 +1386,6 @@ export {
   type HandoffTarget,
   type HarnessChoice,
   MAX_ACTIVITY_ITEMS,
-  MAX_DATA_ROWS,
   MAX_DELEGATES,
   MAX_LAST_TURNS,
   MAX_MERGE_MS,
@@ -1440,5 +1404,4 @@ export {
   type QueueAction,
   type SessionStatusChoice,
   type TaskSchedule,
-  type UsageGroup,
 } from "./orchestrationCalls";

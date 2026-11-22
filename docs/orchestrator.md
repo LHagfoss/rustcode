@@ -1131,12 +1131,13 @@ an old app keeps exactly the v3 set (and the v3 prompt hint).
 | `thread_usage` | `{ since?, group_by?, project? }` — `harness` (default), `model`, `day`, `project`, `thread`; `since` is `YYYY-MM-DD` or `YYYY-MM` | `{ group_by, since, project, scope, rows, totals, truncated, note }`: tokens and the USD a harness reported, per group, with `turns_without_tokens` so a silent harness is visible | None |
 | `query_data` | `{ sql, limit? }`, one read-only statement, at most 1000 rows | `{ columns, rows, truncated }` | None |
 
-The app answers them (`state/host.ts`): it passes the caller's project while
-**Let agents read threads in other projects** is off — `thread_usage` then
-reports `scope: "this project"` — and refuses `query_data`, which cannot be
-scoped to a project safely, with a `not_allowed` that names the setting. It
-asks the engine `_rustcode/data/usage` / `_rustcode/data/query`
-(`engine/src/acp/data.rs`), which only ever reads: the one-time backfill runs
+The engine answers them itself, with or without an app attached
+(`orchestration::engine_answers`, `orchestration/local.rs`): it passes the
+caller's project while **Let agents read threads in other projects** is off —
+`thread_usage` then reports `scope: "this project"` — and refuses `query_data`,
+which cannot be scoped to a project safely, with a `not_allowed` that names the
+setting. It reads through the same `_rustcode/data/usage` / `_rustcode/data/query` readers
+(`engine/src/acp/data.rs`), which only ever read: the one-time backfill runs
 on first use, and `query` keeps the read-only connection, the single-statement
 rule, no `ATTACH` and the two-second stop.
 

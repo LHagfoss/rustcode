@@ -318,7 +318,7 @@
 16 apps/desktop/src/state/mirrorBackfill.ts
 7 apps/desktop/src/state/notify.test.ts
 17 apps/desktop/src/state/notify.ts
-193 apps/desktop/src/state/orchestration.test.ts
+191 apps/desktop/src/state/orchestration.test.ts
 37 apps/desktop/src/state/orchestration.ts
 11 apps/desktop/src/state/orchestrationCalls.ts
 26 apps/desktop/src/state/orchestrationWake.ts
@@ -898,7 +898,6 @@
 22 rustcode/engine/src/network/verification.rs
 139 rustcode/engine/src/orchestration.rs
 2 rustcode/engine/src/orchestration/ask_user.rs
-18 rustcode/engine/src/orchestration/tool_socket.rs
 33 rustcode/engine/src/orchestration/local.rs
 2 rustcode/engine/src/orchestration/local_merge.rs
 81 rustcode/engine/src/orchestration/local_threads.rs
@@ -913,6 +912,7 @@
 3 rustcode/engine/src/orchestration/outside_signin.rs
 7 rustcode/engine/src/orchestration/outside_web.rs
 9 rustcode/engine/src/orchestration/secret.rs
+18 rustcode/engine/src/orchestration/tool_socket.rs
 2 rustcode/engine/src/platform.rs
 7 rustcode/engine/src/preview.rs
 7 rustcode/engine/src/provider_auth/antigravity_usage.rs
@@ -948,8 +948,6 @@
 93 rustcode/engine/src/remote_gateway/gateway/tests.rs
 20 rustcode/engine/src/remote_gateway/handshake.rs
 43 rustcode/engine/src/remote_gateway/host.rs
-35 rustcode/engine/src/remote_gateway/session_registry.rs
-67 rustcode/engine/src/remote_gateway/session_registry/tests.rs
 12 rustcode/engine/src/remote_gateway/hub_link.rs
 19 rustcode/engine/src/remote_gateway/lifecycle.rs
 5 rustcode/engine/src/remote_gateway/local_socket.rs
@@ -960,6 +958,8 @@
 23 rustcode/engine/src/remote_gateway/pairing.rs
 1 rustcode/engine/src/remote_gateway/qr.rs
 20 rustcode/engine/src/remote_gateway/service.rs
+35 rustcode/engine/src/remote_gateway/session_registry.rs
+67 rustcode/engine/src/remote_gateway/session_registry/tests.rs
 31 rustcode/engine/src/remote_gateway/transport.rs
 2 rustcode/engine/src/remote_gateway/wire_names.rs
 77 rustcode/engine/src/remote_gateway/workspace.rs

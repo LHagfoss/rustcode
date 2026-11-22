@@ -540,6 +540,9 @@ impl Hub {
             };
         }
         let output = match client {
+            Some(_) if super::engine_answers(&request.tool) => {
+                super::local::answer(&request.session_id, cancel, &request.tool, args).await
+            }
             Some(client) => {
                 super::execute_versioned(Some(client), version, cancel, &request.tool, args).await
             }
