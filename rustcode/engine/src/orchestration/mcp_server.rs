@@ -1347,6 +1347,7 @@ mod tests {
             smart_ui,
             ask_user: false,
             core_only: false,
+            deferred: false,
         };
         exchange_offered(identity, socket, messages, orchestration, offered).await
     }
@@ -1454,6 +1455,7 @@ mod tests {
             smart_ui: false,
             ask_user: true,
             core_only: false,
+            deferred: false,
         };
         let answers = exchange_offered(
             identity.clone(),
