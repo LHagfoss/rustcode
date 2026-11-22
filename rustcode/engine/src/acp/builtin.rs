@@ -98,4 +98,30 @@ pub(crate) trait BuiltinAgent: Send + Sync {
 
     /// The thread's plan usage limits, for the usage meter.
     fn usage_limits(&self) -> AgentFuture<'_, serde_json::Value>;
+
+    /// Answer `_rustcode/agents`: the thread's subagents and their history.
+    fn agents<'a>(
+        &'a self,
+        cwd: &'a std::path::Path,
+        client: &'a reqwest::Client,
+        action: super::agents::AgentsAction,
+    ) -> AgentFuture<'a, Result<serde_json::Value, agent_client_protocol::Error>>;
+
+    /// Answer `_rustcode/mcp/app`: an MCP app's call to its server, which may
+    /// wait for the user's approval. `builtin` is false when the thread runs
+    /// on an external harness that keeps its own MCP servers.
+    fn mcp_app(
+        &self,
+        request: super::mcp_app::McpAppRequest,
+        builtin: bool,
+        clients: SessionClients,
+        auto_approve: bool,
+    ) -> AgentFuture<'static, Result<serde_json::Value, agent_client_protocol::Error>>;
+
+    /// Replace the timed command approvals the thread's copy of the user
+    /// config holds, after one was revoked.
+    fn set_timed_command_approvals(
+        &self,
+        approvals: Vec<crate::config::TimedCommandApproval>,
+    ) -> AgentFuture<'_, ()>;
 }
