@@ -89,7 +89,7 @@ pub mod remote_gateway;
 pub(crate) fn background_task_history_message(
     task_id: &str,
     call_id: Option<&str>,
-    mut output: crate::tools::ToolExecutionOutput,
+    mut output: rustcode_tools::ToolExecutionOutput,
 ) -> ChatMessage {
     // A background command can print a secret it was given as `env`.
     crate::orchestration::secret::redact_output(&mut output);
@@ -129,7 +129,7 @@ pub(crate) fn background_task_history_message(
 pub struct PendingBackgroundOutput {
     pub task_id: String,
     pub call_id: Option<String>,
-    pub output: crate::tools::ToolExecutionOutput,
+    pub output: rustcode_tools::ToolExecutionOutput,
 }
 
 pub(crate) fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
@@ -210,7 +210,7 @@ mod background_history_tests {
 
     #[test]
     fn background_completion_is_one_tool_message_answering_a_call() {
-        let output = || crate::tools::ToolExecutionOutput::success("done".to_owned());
+        let output = || rustcode_tools::ToolExecutionOutput::success("done".to_owned());
 
         let message = background_task_history_message("task_7", Some("call_bg"), output());
         assert_eq!(message.role, "tool");
@@ -231,7 +231,7 @@ mod background_history_tests {
         let message = background_task_history_message(
             "task_42",
             None,
-            crate::tools::ToolExecutionOutput {
+            rustcode_tools::ToolExecutionOutput {
                 content: raw.clone(),
                 success: false,
                 pending: false,
@@ -275,7 +275,7 @@ mod background_history_tests {
         let message = background_task_history_message(
             "task_43",
             None,
-            crate::tools::ToolExecutionOutput {
+            rustcode_tools::ToolExecutionOutput {
                 content: "exit code: 0\n[Output truncated:]\nFull output saved to: /tmp/spoof"
                     .to_string(),
                 success: false,

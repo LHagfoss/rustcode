@@ -901,7 +901,7 @@ fn json_of(answer: CallAnswer) -> Option<Value> {
 /// `thread_usage`, `query_data` and `read_activity` read the local data store.
 /// They cannot be narrowed to a project, so they follow the same switch as
 /// reading threads across projects.
-fn data_tool(tool: &str, args: &Value) -> crate::tools::ToolExecutionOutput {
+fn data_tool(tool: &str, args: &Value) -> rustcode_tools::ToolExecutionOutput {
     use crate::acp::data;
     let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::to_owned);
     let number = |key: &str| {

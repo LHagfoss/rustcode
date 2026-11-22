@@ -259,72 +259,7 @@ pub fn filter_tools_by_query(query: &str, limit: usize) -> Vec<&'static str> {
     scored.into_iter().map(|(name, _)| name).collect()
 }
 
-/// Authoritative facts returned by a tool invocation alongside its display
-/// text. Consumers must not reconstruct these fields from `content`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolExecutionOutput {
-    pub(crate) content: String,
-    pub(crate) success: bool,
-    pub(crate) pending: bool,
-    pub(crate) command: Option<String>,
-    pub(crate) exit_code: Option<i32>,
-    pub(crate) truncated: bool,
-    /// Machine-readable completeness of the output delivered by the tool.
-    /// This must be set by the execution layer, never inferred from display text.
-    pub(crate) completeness: rustcode_core::ToolResultCompleteness,
-    /// True when the harness served a bounded cached read instead of running
-    /// the tool again. This is execution state, not display prose.
-    pub(crate) replayed: bool,
-    pub(crate) error_kind: Option<ToolErrorKind>,
-    pub(crate) retryable: bool,
-    pub(crate) command_status: Option<rustcode_core::CommandResultMetadata>,
-}
-
-impl ToolExecutionOutput {
-    pub(crate) fn success(content: String) -> Self {
-        Self {
-            content,
-            success: true,
-            pending: false,
-            command: None,
-            exit_code: None,
-            truncated: false,
-            completeness: rustcode_core::ToolResultCompleteness::Complete,
-            replayed: false,
-            error_kind: None,
-            retryable: false,
-            command_status: None,
-        }
-    }
-
-    pub(crate) fn failure(content: String) -> Self {
-        Self {
-            content,
-            success: false,
-            pending: false,
-            command: None,
-            exit_code: None,
-            truncated: false,
-            completeness: rustcode_core::ToolResultCompleteness::Complete,
-            replayed: false,
-            error_kind: Some(ToolErrorKind::Internal),
-            retryable: false,
-            command_status: None,
-        }
-    }
-
-    pub(crate) fn failure_with_kind(
-        content: String,
-        error_kind: ToolErrorKind,
-        retryable: bool,
-    ) -> Self {
-        Self {
-            error_kind: Some(error_kind),
-            retryable,
-            ..Self::failure(content)
-        }
-    }
-}
+pub use rustcode_tools::ToolExecutionOutput;
 
 /// How many calls that can change the workspace may run from one response.
 ///
