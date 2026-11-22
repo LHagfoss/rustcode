@@ -20,8 +20,19 @@ rc daemon stop
 `daemon run` is the foreground worker used by `daemon start`. It owns the
 event-driven scheduler and executes due jobs. The socket and registration are
 private to the current user. On Windows the worker detaches from the calling
-console, so closing the terminal leaves scheduled jobs running. Starting at
-login still requires configuring a service or startup task.
+console, so closing the terminal leaves scheduled jobs running.
+
+### In the server
+
+The RustCode server runs the scheduler too, in its own process
+(`daemon/host.rs`), so with the server installed (`rc server install`) jobs
+run from login with no terminal or app open. The daemon's owner lock keeps
+one scheduler per config directory:
+
+- A scheduler already running (`rc daemon start`) is left alone. The server
+  looks again every minute and takes over once that one is gone.
+- `rc daemon stop` stops the server's scheduler until the server restarts.
+- Why the server could not run it goes to `rc server logs`, once per reason.
 
 ## Create a morning Teams job
 

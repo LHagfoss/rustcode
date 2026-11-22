@@ -142,6 +142,7 @@ async fn serve_until_stopped(
     // remote gateway and starts it again when it stops. The app adopts a
     // gateway started here instead of binding a second one.
     crate::remote_gateway::host::spawn();
+    crate::daemon::host::spawn();
     // A server a service manager runs also keeps itself up to date, so a
     // machine nobody sits at does not stay on the version it was installed
     // with (docs/server.md). A server an app or a terminal started is theirs.
