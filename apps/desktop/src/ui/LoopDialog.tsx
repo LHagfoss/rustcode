@@ -43,7 +43,6 @@ import { Callout, cx, inputClass, noTextHelpers, Pill, Segments, Select, Switch 
 
 const EFFORTS = ["low", "medium", "high"];
 
-/** The schedule choices; Daily and Weekly are both a days-of-the-week form, all seven or chosen ones. */
 type RepeatChoice = Exclude<Repeat, "days"> | "daily" | "weekly";
 
 const REPEATS: { value: RepeatChoice; label: string }[] = [
@@ -719,8 +718,6 @@ export function LoopDialog({
                           {zone}
                         </div>
                       )}
-                      {/* The controls already say an hourly, daily or monthly schedule; the words
-                          translate a cron, a one-time date or no schedule at all, and any problem. */}
                       {(cronError || form.repeat === "cron" || once || manual) && (
                         <p
                           aria-live="polite"

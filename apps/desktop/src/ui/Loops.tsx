@@ -93,7 +93,6 @@ const OUTCOME_TEXT: Record<"ok" | "bad" | "muted", string> = {
 };
 
 function runDotTint(run: LoopRun | undefined): string {
-  // Never run: a hollow ring, apart from a run that found nothing to report.
   if (!run) return "border border-fg-faint";
   if (run.state === "running" || run.state === "claimed") return "bg-accent";
   if (run.state === "failed" || run.state === "ambiguous") return "bg-danger";
@@ -175,10 +174,8 @@ function nextRunLine(next: number, now: number): string {
 
 const HISTORY_DOTS = 5;
 
-/** The last few runs as dots, oldest first, so a job that keeps failing shows it while collapsed. */
 function RunHistory({ runs }: { runs: readonly LoopRun[] }) {
   const recent = runs.slice(0, HISTORY_DOTS).reverse();
-  // A fixed-width slot, newest dot at its right, so the status text lines up across rows.
   const slot = "flex w-[38px] shrink-0 items-center justify-end gap-0.5";
   if (recent.length < 2) {
     return (
@@ -437,7 +434,6 @@ function JobRow({
               <SquareStop size={14} />
             </IconAction>
           ) : (
-            // A paused job resumes from the menu; its Run now keeps the slot so the columns line up.
             <IconAction
               label="Run now"
               disabled={loop.paused}
@@ -853,7 +849,6 @@ export function Loops() {
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 pt-2 pb-8">
           {data?.daemonRunning && loops.length > 0 && (
-            // In the list's column, not the window's corners, so the controls sit over what they change.
             <div className="flex items-center justify-between gap-2 pb-1">
               <Segments
                 label="Show"
@@ -909,7 +904,6 @@ export function Loops() {
               (group) =>
                 group.loops.length > 0 && (
                   <section key={group.title} aria-label={group.title} className="flex flex-col gap-2 pb-3">
-                    {/* One group needs no heading; the second one says which is which. */}
                     {upcoming.length > 0 && inactive.length > 0 && (
                       <h2 className="px-1 font-medium text-caption text-fg-muted">{group.title}</h2>
                     )}
