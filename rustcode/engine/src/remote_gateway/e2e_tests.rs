@@ -559,7 +559,7 @@ async fn gateway_resumes_the_current_snapshot_and_exposes_machine_readable_histo
         .lock()
         .await
         .history
-        .push(crate::app::ChatMessage::new("user", "Fresh timestamp"));
+        .push(rustcode_core::ChatMessage::new("user", "Fresh timestamp"));
     let history = phone
         .request(
             Some(&terminal.registration),
@@ -1140,7 +1140,7 @@ async fn large_output_stays_within_frame_limits_and_rebuilds_completely() {
     {
         let mut state = terminal.state.lock().await;
         for index in 0..400 {
-            state.history.push(crate::app::ChatMessage::new(
+            state.history.push(rustcode_core::ChatMessage::new(
                 if index % 2 == 0 { "user" } else { "assistant" },
                 format!("message {index}: {}", "lorem ipsum ".repeat(500)),
             ));

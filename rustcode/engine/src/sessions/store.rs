@@ -1,6 +1,6 @@
 use super::{SessionHolder, hold_primary_session, hold_session_open};
-use crate::app::ChatMessage;
 use crate::config::*;
+use rustcode_core::ChatMessage;
 use rustcode_session::SessionStore;
 pub use rustcode_session::{
     HistorySnapshot, MachineOrigin, SessionMeta, SessionMigrationReport, SessionScope,

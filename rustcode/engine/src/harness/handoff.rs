@@ -5,8 +5,8 @@
 //! is a `handoff` message in the thread's history, so a reload shows it too,
 //! and nothing replays it to a model.
 
-use crate::app::ChatMessage;
 use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
+use rustcode_core::ChatMessage;
 use serde_json::{Value, json};
 
 /// The history role of a switch.

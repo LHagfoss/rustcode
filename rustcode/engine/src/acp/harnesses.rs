@@ -750,7 +750,7 @@ fn switch_origin(
 /// Refuse a damaged file before changing the harness record or closing a thread.
 fn handoff_history(
     session_id: &str,
-) -> Result<Vec<crate::app::ChatMessage>, agent_client_protocol::Error> {
+) -> Result<Vec<rustcode_core::ChatMessage>, agent_client_protocol::Error> {
     crate::sessions::flush_history();
     let directory = crate::sessions::get_active_session_dir(session_id)
         .ok_or_else(|| failure("session storage is unavailable".into()))?;
@@ -988,7 +988,7 @@ mod tests {
     #[test]
     fn handoff_preserves_an_interrupted_transcript_and_refuses_corruption() {
         let id = crate::sessions::create_detached_session();
-        let history = vec![crate::app::ChatMessage::new("user", "Still working")];
+        let history = vec![rustcode_core::ChatMessage::new("user", "Still working")];
         crate::sessions::save_session_history(&id, &history);
         crate::sessions::flush_history();
         let loaded = handoff_history(&id).unwrap();
@@ -1038,8 +1038,8 @@ mod tests {
 
         // The history the load replays, with no harness started.
         let history = vec![
-            crate::app::ChatMessage::new("user", "hello"),
-            crate::app::ChatMessage::new("assistant", "hi"),
+            rustcode_core::ChatMessage::new("user", "hello"),
+            rustcode_core::ChatMessage::new("assistant", "hi"),
         ];
         let updates = harness::transcript::replay(&history, None);
         assert!(updates.len() >= 2, "the recorded conversation replays");

@@ -671,7 +671,7 @@ async fn the_workspaces_mcp_servers_are_thread_config() {
         StartOptions {
             client_display: crate::harness::ClientDisplay {
                 visualization_level: 2,
-                smart_ui: crate::app::SmartUi::On,
+                smart_ui: rustcode_core::SmartUi::On,
             },
             mcp: vec![
                 crate::config::McpServerConfig {
@@ -734,7 +734,7 @@ async fn the_workspaces_mcp_servers_are_thread_config() {
     );
     assert!(
         instructions.ends_with(&crate::tools::schema::harness_output_style(
-            crate::app::SmartUi::On
+            rustcode_core::SmartUi::On
         ))
     );
 }
@@ -752,7 +752,7 @@ async fn the_threads_skills_note_rides_in_the_developer_instructions() {
             skills_note: Some(note.to_owned()),
             client_display: crate::harness::ClientDisplay {
                 visualization_level: 1,
-                smart_ui: crate::app::SmartUi::Off,
+                smart_ui: rustcode_core::SmartUi::Off,
             },
             ..StartOptions::default()
         },
@@ -767,7 +767,7 @@ async fn the_threads_skills_note_rides_in_the_developer_instructions() {
     assert!(instructions.contains(note), "{instructions}");
     assert!(
         instructions.ends_with(&crate::tools::schema::harness_output_style(
-            crate::app::SmartUi::Off
+            rustcode_core::SmartUi::Off
         )),
         "the note comes before the reply style"
     );

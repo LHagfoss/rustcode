@@ -17,7 +17,7 @@
 use rustcode_session::SessionRelationship;
 use serde_json::Value;
 
-use crate::app::ChatMessage;
+use rustcode_core::ChatMessage;
 // The heading every agent-delivered task starts with, and the title in it.
 use crate::message_origin::{AGENT_HEADING as HEADING, delivered_title};
 

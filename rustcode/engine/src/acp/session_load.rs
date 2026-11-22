@@ -213,7 +213,7 @@ pub(super) fn acp_list_sessions(
 }
 
 pub(crate) fn replay_history_updates(
-    history: &[crate::app::ChatMessage],
+    history: &[rustcode_core::ChatMessage],
     cwd: Option<&std::path::Path>,
 ) -> Vec<SessionUpdate> {
     replay_history_updates_with_compaction(history, cwd, None)
@@ -223,7 +223,7 @@ pub(crate) fn replay_history_updates(
 /// left its summary. `compaction` is the session's recorded last
 /// compaction; it describes the latest summary only.
 pub(super) fn replay_history_updates_with_compaction(
-    history: &[crate::app::ChatMessage],
+    history: &[rustcode_core::ChatMessage],
     cwd: Option<&std::path::Path>,
     compaction: Option<&crate::app::CompactionStats>,
 ) -> Vec<SessionUpdate> {
@@ -797,7 +797,7 @@ pub(crate) async fn attach_with_replay<F>(
     session_id: &str,
     resume: Option<u64>,
     history: impl Fn() -> F,
-    replay: impl Fn(&[crate::app::ChatMessage]) -> Vec<SessionUpdate>,
+    replay: impl Fn(&[rustcode_core::ChatMessage]) -> Vec<SessionUpdate>,
 ) -> Result<cursor::Position, agent_client_protocol::Error>
 where
     F: std::future::Future<Output = rustcode_core::History>,

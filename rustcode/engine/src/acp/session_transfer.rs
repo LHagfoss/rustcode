@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::app::ChatMessage;
 use crate::harness::{self, store as harness_store};
 use crate::sessions::MachineOrigin;
+use rustcode_core::ChatMessage;
 
 /// Raw bytes per export/import chunk (384 KiB raw -> 512 KiB base64, well below
 /// `remote_gateway::gateway::MAX_FRAME_BYTES` = 1 MiB).

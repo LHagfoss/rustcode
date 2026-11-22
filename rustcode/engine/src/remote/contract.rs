@@ -1928,10 +1928,11 @@ mod tests {
     fn the_golden_origins_are_what_the_host_derives_from_the_text() {
         let messages = golden_messages();
         for message in &messages {
-            let derived = super::super::projection::project_origin(&crate::app::ChatMessage::new(
-                message.role.clone(),
-                message.content.text.clone(),
-            ));
+            let derived =
+                super::super::projection::project_origin(&rustcode_core::ChatMessage::new(
+                    message.role.clone(),
+                    message.content.text.clone(),
+                ));
             assert_eq!(message.origin, derived, "{}", message.message_id);
         }
         let kinds = messages

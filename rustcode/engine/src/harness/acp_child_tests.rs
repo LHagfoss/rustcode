@@ -1321,7 +1321,7 @@ async fn the_threads_skills_note_rides_in_the_client_system_prompt() {
             skills_note: Some(note.to_owned()),
             client_display: crate::harness::ClientDisplay {
                 visualization_level: 2,
-                smart_ui: crate::app::SmartUi::On,
+                smart_ui: rustcode_core::SmartUi::On,
             },
             ..StartOptions::default()
         },
@@ -1338,7 +1338,7 @@ async fn the_threads_skills_note_rides_in_the_client_system_prompt() {
     assert!(prompt.contains(note), "{prompt}");
     assert!(
         prompt.ends_with(&crate::tools::schema::harness_output_style(
-            crate::app::SmartUi::On
+            rustcode_core::SmartUi::On
         )),
         "the note comes before the reply style"
     );

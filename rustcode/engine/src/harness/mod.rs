@@ -42,7 +42,7 @@ pub(crate) const BUILTIN_ID: &str = "rustcode";
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ClientDisplay {
     pub(crate) visualization_level: u8,
-    pub(crate) smart_ui: crate::app::SmartUi,
+    pub(crate) smart_ui: rustcode_core::SmartUi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

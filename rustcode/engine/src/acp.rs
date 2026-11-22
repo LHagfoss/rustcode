@@ -118,7 +118,7 @@ const SMART_UI_CAPABILITY_VERSION: u64 = 1;
 
 fn client_smart_ui(
     capabilities: &agent_client_protocol::schema::v1::ClientCapabilities,
-) -> crate::app::SmartUi {
+) -> rustcode_core::SmartUi {
     let version = capabilities
         .meta
         .as_ref()
@@ -126,9 +126,9 @@ fn client_smart_ui(
         .and_then(|rustcode| rustcode.get("smartUi"))
         .and_then(serde_json::Value::as_u64);
     match version {
-        Some(version) if version >= SMART_UI_CAPABILITY_VERSION => crate::app::SmartUi::On,
-        Some(0) => crate::app::SmartUi::Off,
-        _ => crate::app::SmartUi::Unsupported,
+        Some(version) if version >= SMART_UI_CAPABILITY_VERSION => rustcode_core::SmartUi::On,
+        Some(0) => rustcode_core::SmartUi::Off,
+        _ => rustcode_core::SmartUi::Unsupported,
     }
 }
 
@@ -3397,7 +3397,7 @@ async fn dispatch_request(
                 if crate::sessions::load_session_title(&session_id).is_none()
                     && crate::app::actions::wants_generated_title(&prompt_text)
                 {
-                    let history = [crate::app::ChatMessage::new("user", prompt_text.clone())];
+                    let history = [rustcode_core::ChatMessage::new("user", prompt_text.clone())];
                     crate::sessions::save_session_title_if_absent(&session_id, &history[..]);
                     let fallback = crate::sessions::session_title(&history);
                     let title_clients = server.clients.session(&session_id);

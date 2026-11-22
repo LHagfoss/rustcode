@@ -204,7 +204,7 @@ fn unanswered_first_prompt(session_id: &str) -> bool {
         && has_only_first_prompt(&crate::sessions::load_session_history_direct(session_id))
 }
 
-pub(crate) fn has_only_first_prompt(history: &[crate::app::ChatMessage]) -> bool {
+pub(crate) fn has_only_first_prompt(history: &[rustcode_core::ChatMessage]) -> bool {
     matches!(history, [message] if message.role == "user" && !message.content.trim().is_empty())
 }
 

@@ -1,5 +1,5 @@
 //! Request-only evidence lifecycle. Stored transcripts remain immutable.
-use crate::app::ChatMessage;
+use rustcode_core::ChatMessage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceClass {

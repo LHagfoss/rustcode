@@ -313,7 +313,7 @@ mod tests {
         let history_path = crate::sessions::get_active_session_dir(&id)
             .unwrap()
             .join("history.json");
-        let history = serde_json::to_vec(&vec![crate::app::ChatMessage::new(
+        let history = serde_json::to_vec(&vec![rustcode_core::ChatMessage::new(
             "user",
             "Keep this history",
         )])

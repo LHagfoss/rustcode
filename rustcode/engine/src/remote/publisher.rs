@@ -709,9 +709,9 @@ mod tests {
     #[test]
     fn terminal_timing_is_retained_for_live_events_late_attach_and_history() {
         for outcome in [
-            crate::app::TurnOutcome::Completed,
-            crate::app::TurnOutcome::Cancelled,
-            crate::app::TurnOutcome::Failed,
+            rustcode_core::TurnOutcome::Completed,
+            rustcode_core::TurnOutcome::Cancelled,
+            rustcode_core::TurnOutcome::Failed,
         ] {
             let mut state = shared_state();
             let (mut publisher, _) = register(&state);
@@ -727,7 +727,7 @@ mod tests {
             let timing = state.freeze_turn_timing(Some(outcome)).unwrap();
             state.enter_idle();
             state.end_turn_identity(&id);
-            let event = if outcome == crate::app::TurnOutcome::Cancelled {
+            let event = if outcome == rustcode_core::TurnOutcome::Cancelled {
                 AgentUiEvent::Cancelled {
                     completed_tool_ids: Vec::new(),
                     timing: Some(timing.clone()),
@@ -735,7 +735,7 @@ mod tests {
             } else {
                 AgentUiEvent::TurnFinished {
                     content: String::new(),
-                    completed: outcome == crate::app::TurnOutcome::Completed,
+                    completed: outcome == rustcode_core::TurnOutcome::Completed,
                     timing: Some(timing.clone()),
                 }
             };
@@ -803,7 +803,7 @@ mod tests {
             };
             assert!(texts(&publisher.publish(&state, true)).is_empty());
             let timing = state
-                .freeze_turn_timing(Some(crate::app::TurnOutcome::Completed))
+                .freeze_turn_timing(Some(rustcode_core::TurnOutcome::Completed))
                 .unwrap();
             state.enter_idle();
             state.end_turn_identity(&id);
@@ -1096,7 +1096,7 @@ mod tests {
         let mut state = shared_state();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "do it"));
+            .push(rustcode_core::ChatMessage::new("user", "do it"));
         let (mut publisher, _) = register(&state);
         let turn_id = start_turn(&mut state, &mut publisher);
         state.append_current_response("hello from provider");
@@ -1105,12 +1105,12 @@ mod tests {
         // The turn ends while a device is attached: the engine writes the
         // answer to history, which changes the transcript, and empties the
         // live buffer, all before the turn's end event is observed.
-        state.history.push(crate::app::ChatMessage::new(
+        state.history.push(rustcode_core::ChatMessage::new(
             "assistant",
             "hello from provider",
         ));
         let timing = state
-            .freeze_turn_timing(Some(crate::app::TurnOutcome::Completed))
+            .freeze_turn_timing(Some(rustcode_core::TurnOutcome::Completed))
             .expect("the turn's timing");
         state.clear_current_response();
         state.enter_idle();
@@ -1168,7 +1168,7 @@ mod tests {
         let mut state = shared_state();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "do it"));
+            .push(rustcode_core::ChatMessage::new("user", "do it"));
         state.current_turn_started_at = Some(std::time::Instant::now());
         let (mut publisher, _) = register(&state);
         let turn_id = start_turn(&mut state, &mut publisher);
@@ -1177,7 +1177,7 @@ mod tests {
         // Between tool rounds the engine writes the tool-call segment to
         // history and empties the live buffer, so a snapshot here carries
         // that segment only in its transcript.
-        state.history.push(crate::app::ChatMessage::new(
+        state.history.push(rustcode_core::ChatMessage::new(
             "assistant",
             "checking the logs",
         ));
@@ -1203,9 +1203,9 @@ mod tests {
         // first place it is published, and it arrives in full.
         state
             .history
-            .push(crate::app::ChatMessage::new("assistant", "the answer"));
+            .push(rustcode_core::ChatMessage::new("assistant", "the answer"));
         let timing = state
-            .freeze_turn_timing(Some(crate::app::TurnOutcome::Completed))
+            .freeze_turn_timing(Some(rustcode_core::TurnOutcome::Completed))
             .expect("the turn's timing");
         state.enter_idle();
         state.end_turn_identity(&turn_id);
@@ -1231,7 +1231,7 @@ mod tests {
         let mut state = shared_state();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "do it"));
+            .push(rustcode_core::ChatMessage::new("user", "do it"));
         state.current_turn_started_at = Some(std::time::Instant::now());
         let (mut publisher, _) = register(&state);
         let turn_id = start_turn(&mut state, &mut publisher);
@@ -1242,9 +1242,9 @@ mod tests {
         let answer = format!("{}{}", "cut ".repeat(1200), "the end");
         state
             .history
-            .push(crate::app::ChatMessage::new("assistant", answer.clone()));
+            .push(rustcode_core::ChatMessage::new("assistant", answer.clone()));
         let timing = state
-            .freeze_turn_timing(Some(crate::app::TurnOutcome::Completed))
+            .freeze_turn_timing(Some(rustcode_core::TurnOutcome::Completed))
             .expect("the turn's timing");
         state.enter_idle();
         let sent = publisher.publish(&state, true);

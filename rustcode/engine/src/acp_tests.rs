@@ -149,7 +149,7 @@ fn visualization_support_comes_only_from_the_client_capability() {
 
 #[test]
 fn smart_ui_comes_only_from_the_client_capability() {
-    use crate::app::SmartUi;
+    use rustcode_core::SmartUi;
     let parse = |value: serde_json::Value| {
         client_smart_ui(
             &serde_json::from_value::<agent_client_protocol::schema::v1::ClientCapabilities>(value)
@@ -278,8 +278,8 @@ fn session_list_filters_and_paginates_with_standard_titles() {
     let store = rustcode_session::SessionStore::new(config_dir);
     let cwd = tempfile::tempdir().unwrap();
     let history = vec![
-        crate::app::ChatMessage::new("user", "Listable session title"),
-        crate::app::ChatMessage::new("assistant", "answer"),
+        rustcode_core::ChatMessage::new("user", "Listable session title"),
+        rustcode_core::ChatMessage::new("assistant", "answer"),
     ];
     for index in 0..51 {
         let id = format!("acp-list-{index:03}");
@@ -332,8 +332,8 @@ fn session_list_skips_legacy_ids_that_cannot_be_loaded_or_used_as_cursors() {
     let config_dir = crate::config::get_config_dir().unwrap();
     let store = rustcode_session::SessionStore::new(config_dir);
     let history = vec![
-        crate::app::ChatMessage::new("user", "legacy pagination prompt"),
-        crate::app::ChatMessage::new("assistant", "answer"),
+        rustcode_core::ChatMessage::new("user", "legacy pagination prompt"),
+        rustcode_core::ChatMessage::new("assistant", "answer"),
     ];
     let mut ids = Vec::new();
     for index in 0..49 {
@@ -393,13 +393,13 @@ fn session_workspace_preserves_client_additional_directories() {
 
 #[test]
 fn loaded_session_history_replays_user_assistant_and_tool_events_in_order() {
-    let mut assistant = crate::app::ChatMessage::new("assistant", "Checking the file.");
+    let mut assistant = rustcode_core::ChatMessage::new("assistant", "Checking the file.");
     assistant.tool_calls.push(crate::app::ToolCallRef {
         id: "call-1".into(),
         name: "read_file".into(),
         arguments: r#"{"path":"src/main.rs"}"#.into(),
     });
-    let mut result = crate::app::ChatMessage::new("tool", "file contents");
+    let mut result = rustcode_core::ChatMessage::new("tool", "file contents");
     result.tool_call_id = Some("call-1".into());
     result.tool_result = Some(crate::app::ToolResultRecord {
         workspace_generation: None,
@@ -411,10 +411,10 @@ fn loaded_session_history_replays_user_assistant_and_tool_events_in_order() {
     });
     let updates = replay_history_updates(
         &[
-            crate::app::ChatMessage::new("user", "inspect the file"),
+            rustcode_core::ChatMessage::new("user", "inspect the file"),
             assistant,
             result,
-            crate::app::ChatMessage::new("assistant", "It defines main."),
+            rustcode_core::ChatMessage::new("assistant", "It defines main."),
         ],
         None,
     );
@@ -467,7 +467,7 @@ fn edit_tool_updates_carry_diff_content_live_and_on_replay() {
     assert_eq!(content[0]["newText"], "new\n");
 
     let mut result =
-        crate::app::ChatMessage::new("tool", format!("replace_file_content: {receipt}"));
+        rustcode_core::ChatMessage::new("tool", format!("replace_file_content: {receipt}"));
     result.tool_call_id = Some("call-edit".into());
     result.tool_result = Some(crate::app::ToolResultRecord {
         tool_name: "replace_file_content".into(),
@@ -522,8 +522,8 @@ fn replayed_background_completion_updates_its_card_without_prose() {
 fn loaded_session_state_keeps_transcript_and_uses_its_own_identity() {
     let cwd = tempfile::tempdir().unwrap();
     let history = vec![
-        crate::app::ChatMessage::new("user", "earlier task"),
-        crate::app::ChatMessage::new("assistant", "earlier answer"),
+        rustcode_core::ChatMessage::new("user", "earlier task"),
+        rustcode_core::ChatMessage::new("assistant", "earlier answer"),
     ];
     let state = build_loaded_app_state("session-loaded", cwd.path(), history.clone());
     assert_eq!(state.active_session_id, "session-loaded");
@@ -569,14 +569,14 @@ async fn a_loaded_session_persists_only_to_its_own_history() {
     crate::sessions::set_active_session_id(&created);
     let loaded = rustcode_session::next_session_id();
     let earlier = vec![
-        crate::app::ChatMessage::new("user", "check my daily dev feed"),
-        crate::app::ChatMessage::new("assistant", "Here is your feed."),
+        rustcode_core::ChatMessage::new("user", "check my daily dev feed"),
+        rustcode_core::ChatMessage::new("assistant", "Here is your feed."),
     ];
     store.save_session_history(&loaded, &earlier);
     crate::sessions::flush_history();
 
     let mut state = build_loaded_app_state(&loaded, cwd.path(), earlier);
-    state.history.push(crate::app::ChatMessage::new(
+    state.history.push(rustcode_core::ChatMessage::new(
         "user",
         "follow-up in the loaded session",
     ));
@@ -1468,11 +1468,12 @@ fn replayed_system_cancel_marker_is_a_timed_empty_reply() {
         started_at: Some("2026-10-30T12:42:27Z".into()),
         ended_at: Some("2026-10-30T12:42:37Z".into()),
         elapsed_work_ms: Some(9_770),
-        outcome: Some(crate::app::TurnOutcome::Cancelled),
+        outcome: Some(rustcode_core::TurnOutcome::Cancelled),
     };
-    let mut note = crate::app::ChatMessage::new("system", "Request cancelled by user");
+    let mut note = rustcode_core::ChatMessage::new("system", "Request cancelled by user");
     note.turn = Some(turn.clone());
-    let mut marker = crate::app::ChatMessage::new("system", "[harness: turn stopped — cancelled]");
+    let mut marker =
+        rustcode_core::ChatMessage::new("system", "[harness: turn stopped — cancelled]");
     marker.turn = Some(turn);
     let updates = replay_history_updates(&[note, marker], None);
     let [SessionUpdate::AgentMessageChunk(chunk)] = updates.as_slice() else {
@@ -1488,16 +1489,16 @@ fn replayed_system_cancel_marker_is_a_timed_empty_reply() {
 #[test]
 fn replayed_stop_marker_is_a_timed_empty_reply_or_its_notice() {
     let mut cancelled =
-        crate::app::ChatMessage::new("assistant", "[harness: turn stopped — cancelled]");
+        rustcode_core::ChatMessage::new("assistant", "[harness: turn stopped — cancelled]");
     cancelled.turn = Some(crate::app::TurnTiming {
         turn_id: "t1".into(),
         started_at: Some("2026-10-30T13:42:27Z".into()),
         ended_at: Some("2026-10-30T13:42:37Z".into()),
         elapsed_work_ms: Some(9_700),
-        outcome: Some(crate::app::TurnOutcome::Cancelled),
+        outcome: Some(rustcode_core::TurnOutcome::Cancelled),
     });
     let stopped =
-        crate::app::ChatMessage::new("assistant", "[harness: turn stopped — loop_escalation]");
+        rustcode_core::ChatMessage::new("assistant", "[harness: turn stopped — loop_escalation]");
     let updates = replay_history_updates(&[cancelled, stopped], None);
     let texts: Vec<(String, Option<String>)> = updates
         .iter()
@@ -1532,11 +1533,11 @@ fn replayed_reply_carries_its_finished_turn_timing() {
         started_at: Some("2026-10-22T20:58:02+00:00".into()),
         ended_at: Some("2026-10-22T20:59:52+00:00".into()),
         elapsed_work_ms: Some(109_582),
-        outcome: Some(crate::app::TurnOutcome::Completed),
+        outcome: Some(rustcode_core::TurnOutcome::Completed),
     };
-    let mut reply = crate::app::ChatMessage::new("assistant", "<think>Hm.</think>Done.");
+    let mut reply = rustcode_core::ChatMessage::new("assistant", "<think>Hm.</think>Done.");
     reply.turn = Some(turn.clone());
-    let mut open = crate::app::ChatMessage::new("assistant", "Still going.");
+    let mut open = rustcode_core::ChatMessage::new("assistant", "Still going.");
     open.timestamp = String::new();
     open.turn = Some(crate::app::TurnTiming {
         ended_at: None,
@@ -1570,9 +1571,9 @@ fn replayed_reply_carries_its_finished_turn_timing() {
 // #2461, #2463: replayed messages say when they were sent and written.
 #[test]
 fn replayed_messages_carry_their_time() {
-    let mut question = crate::app::ChatMessage::new("user", "Why?");
+    let mut question = rustcode_core::ChatMessage::new("user", "Why?");
     question.timestamp = "2026-10-27T09:16:01.473007+01:00".into();
-    let mut answer = crate::app::ChatMessage::new("assistant", "<think>Hm.</think>Because.");
+    let mut answer = rustcode_core::ChatMessage::new("assistant", "<think>Hm.</think>Because.");
     answer.timestamp = "2026-10-27T09:16:16.043688+01:00".into();
 
     let updates = replay_history_updates(&[question, answer], None);
@@ -1602,17 +1603,17 @@ fn replayed_messages_carry_their_time() {
 // a tool's result in the user role says nothing.
 #[test]
 fn replayed_user_messages_carry_their_origin() {
-    let mut task = crate::app::ChatMessage::new(
+    let mut task = rustcode_core::ChatMessage::new(
         "user",
         "From thread “Ship the tree” (agent):\n\nReview the rules.",
     );
     task.timestamp = "2026-11-11T09:16:01+01:00".into();
-    let wake = crate::app::ChatMessage::new(
+    let wake = rustcode_core::ChatMessage::new(
         "user",
         "Delegate finished: Review the rows\n\nFinished:\n\n- link_id parent-1/2 · done · “Review the rows” · session child-7\n  answer: Done.\n\n<!-- rustcode:wake -->",
     );
-    let typed = crate::app::ChatMessage::new("user", "thanks");
-    let result = crate::app::ChatMessage::new("user", "<tool_result>ok</tool_result>");
+    let typed = rustcode_core::ChatMessage::new("user", "thanks");
+    let result = rustcode_core::ChatMessage::new("user", "<tool_result>ok</tool_result>");
 
     let updates = replay_history_updates(&[task, wake, typed, result], None);
 
@@ -1657,14 +1658,14 @@ fn replayed_user_messages_carry_their_origin() {
 // label and duration it had live, not as `<think>` inside message text.
 #[test]
 fn replayed_reasoning_is_sent_as_labelled_thoughts() {
-    let mut summarized = crate::app::ChatMessage::new(
+    let mut summarized = rustcode_core::ChatMessage::new(
         "assistant",
         "<think>\n**Inspecting site**\n</think>\n\nDone.",
     );
     summarized.reasoning_summary = true;
     summarized.thought_time_ms = Some(4000);
     let mut reasoned =
-        crate::app::ChatMessage::new("assistant", "<think>Let me check.</think>Fine.");
+        rustcode_core::ChatMessage::new("assistant", "<think>Let me check.</think>Fine.");
     reasoned.thought_time_ms = Some(0);
 
     let updates = replay_history_updates(&[summarized, reasoned], None);
@@ -1703,7 +1704,7 @@ fn replay_shows_the_compaction_card_where_the_summary_is() {
         &[],
         "/tmp/archive.jsonl",
     );
-    let notice = crate::app::ChatMessage::new(
+    let notice = rustcode_core::ChatMessage::new(
         "system",
         "🧹 History compacted: reduced context from 161495 to 4200 tokens.",
     );
@@ -1717,7 +1718,7 @@ fn replay_shows_the_compaction_card_where_the_summary_is() {
     );
     let history = [
         summary,
-        crate::app::ChatMessage::new("user", "next"),
+        rustcode_core::ChatMessage::new("user", "next"),
         notice,
     ];
 
@@ -2331,7 +2332,7 @@ async fn two_connections() {
             let state = a_state.lock().await;
             assert_eq!(state.orchestration_version, 3);
             assert_eq!(state.visualization_level, 2);
-            assert_eq!(state.smart_ui, crate::app::SmartUi::On);
+            assert_eq!(state.smart_ui, rustcode_core::SmartUi::On);
             assert!(state.orchestration_client.is_some());
             assert!(!state.local_orchestration);
             state
@@ -2343,7 +2344,7 @@ async fn two_connections() {
             let state = b_state.lock().await;
             assert_eq!(state.orchestration_version, 0);
             assert_eq!(state.visualization_level, 0);
-            assert_eq!(state.smart_ui, crate::app::SmartUi::Unsupported);
+            assert_eq!(state.smart_ui, rustcode_core::SmartUi::Unsupported);
             assert!(state.orchestration_client.is_none());
             // No app has this session, so the engine serves its reads
             // itself (#3422), even though the other client is an app.
@@ -2543,10 +2544,11 @@ async fn use_provider(server: &AcpServer, session_id: &str, endpoint: &str) {
         ..ModelProfile::default()
     }];
     state.record_function_calling_support(endpoint, false);
-    state
-        .history
-        .push(crate::app::ChatMessage::new("user", "an earlier question"));
-    state.history.push(crate::app::ChatMessage::new(
+    state.history.push(rustcode_core::ChatMessage::new(
+        "user",
+        "an earlier question",
+    ));
+    state.history.push(rustcode_core::ChatMessage::new(
         "assistant",
         "an earlier answer",
     ));
@@ -3635,8 +3637,8 @@ async fn closed_load_with_a_second_client() {
         crate::sessions::save_session_history(
             &session_id,
             &[
-                crate::app::ChatMessage::new("user", "an earlier question"),
-                crate::app::ChatMessage::new("assistant", "an earlier answer"),
+                rustcode_core::ChatMessage::new("user", "an earlier question"),
+                rustcode_core::ChatMessage::new("assistant", "an earlier answer"),
             ][..],
         );
         // The history is written in the background.
