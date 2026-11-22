@@ -652,9 +652,7 @@ async fn supervise(
     // away ([`stalled_forward`]). It stays on the row while the next attempt
     // runs, so it does not flicker away every few seconds.
     let mut stalled: Option<Stalled> = None;
-    // Whether the forwarded port was already handed to an SSH route of
-    // RustCode's own without the button ([`take_over_forward`]).
-    let mut tried_take_over = false;
+    let mut took_over_forward_once = false;
     loop {
         set_state(
             &machines,
@@ -698,16 +696,10 @@ async fn supervise(
                     } else {
                         None
                     };
-                    // The `ssh -L` behind the port was found: switch to an
-                    // SSH route of RustCode's own, which opens a fresh
-                    // `ssh -W` per connection and so comes back by itself
-                    // after the next wake, instead of asking the user to
-                    // press "Let RustCode manage this tunnel". Tried once per
-                    // supervisor; when the host does not answer, the row
-                    // keeps its advice and button.
                     if let Some(found) = stalled.as_ref().filter(|stalled| stalled.offer) {
-                        if let (Some(owner), false) = (found.owner.clone(), tried_take_over) {
-                            tried_take_over = true;
+                        if let (Some(owner), false) = (found.owner.clone(), took_over_forward_once)
+                        {
+                            took_over_forward_once = true;
                             let route = Route::ssh(owner);
                             match take_over_forward(&config_dir, &id, &found.address, route).await {
                                 Ok(()) => {
@@ -2136,9 +2128,6 @@ pub async fn machines_forward_take_over(
     machines.list()
 }
 
-/// Test the SSH `route` and, once it answers, save it and turn off the
-/// forwarded port at `address`. Nothing is saved when the test fails; the
-/// error says why.
 async fn take_over_forward(
     config_dir: &Path,
     id: &str,
