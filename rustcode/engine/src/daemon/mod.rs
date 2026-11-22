@@ -2,6 +2,7 @@ pub mod client;
 pub(crate) mod command;
 pub use command::{CommandError, create_job, format_response};
 pub mod executor;
+pub(crate) mod host;
 pub(crate) mod hub_run;
 pub mod lifecycle;
 pub mod model;
