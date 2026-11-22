@@ -360,7 +360,7 @@ pub struct ModelProfile {
     /// Reference to a credential stored in the operating system credential store.
     /// The secret itself is never serialized with the profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<crate::provider_auth::CredentialRef>,
+    pub credential: Option<CredentialRef>,
     /// Send the resolved API key as an `X-Api-Key` header in addition to
     /// `Authorization: Bearer`. Defaults to off: OpenAI-compatible gateways
     /// (e.g. Splash/MLX) reject requests carrying both headers even when the
@@ -859,23 +859,21 @@ impl ModelProfile {
     }
 
     /// Where the wire cap of a request comes from, for the stop notice.
-    pub fn output_cap_source(
-        &self,
-        sent: Option<u32>,
-    ) -> crate::network::lifecycle::OutputCapSource {
+    pub fn output_cap_source(&self, sent: Option<u32>) -> rustcode_lifecycle::OutputCapSource {
         if sent.is_none() {
-            crate::network::lifecycle::OutputCapSource::Provider
+            rustcode_lifecycle::OutputCapSource::Provider
         } else if self.max_output_tokens.is_some() || self.max_tokens.is_some() {
-            crate::network::lifecycle::OutputCapSource::Configured
+            rustcode_lifecycle::OutputCapSource::Configured
         } else {
-            crate::network::lifecycle::OutputCapSource::Default
+            rustcode_lifecycle::OutputCapSource::Default
         }
     }
 
     fn default_context_window(&self) -> u32 {
-        let chatgpt = self.credential.as_ref().is_some_and(|credential| {
-            credential.method == crate::provider_auth::AuthMethod::ChatGpt
-        });
+        let chatgpt = self
+            .credential
+            .as_ref()
+            .is_some_and(|credential| credential.method == AuthMethod::ChatGpt);
         if chatgpt {
             CHATGPT_DEFAULT_CONTEXT_WINDOW
         } else {
@@ -1568,7 +1566,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub agent_mode: AgentMode,
     #[serde(default)]
-    pub verbosity: crate::app::state::Verbosity,
+    pub verbosity: rustcode_core::Verbosity,
     /// Opt-in: log the full outbound chat-completion payload (entire message
     /// array, tool schemas) on every request round instead of a metadata-only
     /// summary. Off by default — the full payload is what blows debug.log up
@@ -1720,13 +1718,13 @@ pub struct ProviderDefinition {
     #[serde(default)]
     pub api_key_env: Option<String>,
     #[serde(default = "default_provider_auth_methods")]
-    pub auth_methods: Vec<crate::provider_auth::AuthMethod>,
+    pub auth_methods: Vec<AuthMethod>,
     #[serde(default)]
     pub base_url: Option<String>,
 }
 
-fn default_provider_auth_methods() -> Vec<crate::provider_auth::AuthMethod> {
-    vec![crate::provider_auth::AuthMethod::ApiKey]
+fn default_provider_auth_methods() -> Vec<AuthMethod> {
+    vec![AuthMethod::ApiKey]
 }
 
 fn default_provider_definitions() -> Vec<ProviderDefinition> {
@@ -1735,31 +1733,28 @@ fn default_provider_definitions() -> Vec<ProviderDefinition> {
             id: "openai".to_string(),
             display_name: "OpenAI".to_string(),
             api_key_env: Some("OPENAI_API_KEY".to_string()),
-            auth_methods: vec![
-                crate::provider_auth::AuthMethod::ApiKey,
-                crate::provider_auth::AuthMethod::ChatGpt,
-            ],
+            auth_methods: vec![AuthMethod::ApiKey, AuthMethod::ChatGpt],
             base_url: Some("https://api.openai.com/v1".to_string()),
         },
         ProviderDefinition {
             id: "github-copilot".into(),
             display_name: "GitHub Copilot".into(),
             api_key_env: None,
-            auth_methods: vec![crate::provider_auth::AuthMethod::GitHubCopilot],
+            auth_methods: vec![AuthMethod::GitHubCopilot],
             base_url: Some("https://api.githubcopilot.com".into()),
         },
         ProviderDefinition {
             id: "anthropic".into(),
             display_name: "Anthropic".into(),
             api_key_env: Some("ANTHROPIC_API_KEY".into()),
-            auth_methods: vec![crate::provider_auth::AuthMethod::ApiKey],
+            auth_methods: vec![AuthMethod::ApiKey],
             base_url: Some("https://api.anthropic.com/v1".into()),
         },
         ProviderDefinition {
             id: "generic".to_string(),
             display_name: "Generic OpenAI-compatible provider".to_string(),
             api_key_env: None,
-            auth_methods: vec![crate::provider_auth::AuthMethod::ApiKey],
+            auth_methods: vec![AuthMethod::ApiKey],
             base_url: None,
         },
     ]
@@ -1808,7 +1803,7 @@ struct RuntimeConfig {
     #[serde(default)]
     agent_mode: AgentMode,
     #[serde(default)]
-    verbosity: crate::app::state::Verbosity,
+    verbosity: rustcode_core::Verbosity,
     #[serde(default = "default_false")]
     debug_verbose_network_logging: bool,
     #[serde(default = "default_false")]
@@ -1896,7 +1891,7 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_mode: Option<AgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    verbosity: Option<crate::app::state::Verbosity>,
+    verbosity: Option<rustcode_core::Verbosity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     debug_verbose_network_logging: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2072,7 +2067,7 @@ impl Default for AppConfig {
             yolo: false,
             legacy_laya: None,
             agent_mode: AgentMode::default(),
-            verbosity: crate::app::state::Verbosity::default(),
+            verbosity: rustcode_core::Verbosity::default(),
             debug_verbose_network_logging: false,
             capture_provider_payloads: false,
             capture_harness_rpc_payloads: false,
@@ -2836,10 +2831,7 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // project model profiles selectable, but never let the checkout create or
     // redirect a binding to a machine's credential-store entry.
     file.providers = None;
-    let user_credentials: std::collections::HashMap<
-        String,
-        Option<crate::provider_auth::CredentialRef>,
-    > = config
+    let user_credentials: std::collections::HashMap<String, Option<CredentialRef>> = config
         .models
         .iter()
         .map(|model| (model.name.clone(), model.credential.clone()))
@@ -3031,6 +3023,9 @@ fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
     }
     result
 }
+
+mod credentials;
+pub use credentials::{AuthMethod, CredentialRef};
 
 mod mcp_servers;
 pub use mcp_servers::{

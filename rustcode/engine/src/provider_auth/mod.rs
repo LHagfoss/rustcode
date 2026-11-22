@@ -13,43 +13,14 @@ mod store;
 use crate::config::{ApiProtocol, AppConfig, ModelProfile, ProviderDefinition};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::sync::Arc;
 
+pub use crate::config::{AuthMethod, CredentialRef};
 pub(crate) use rate_limits::rate_limit_header_pairs;
 pub use rate_limits::{ProviderRateLimits, RateLimitWindow};
 pub use store::{
     CredentialStore, NativeCredentialStore, credential_prompts_allowed, disable_credential_prompts,
 };
-
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthMethod {
-    ApiKey,
-    ChatGpt,
-    #[serde(rename = "github_copilot")]
-    GitHubCopilot,
-    /// Legacy config compatibility only. Credential resolution rejects this
-    /// method; Claude Code CLI subscription access is no longer supported.
-    ClaudeCli,
-}
-
-impl AuthMethod {
-    pub fn is_chatgpt(self) -> bool {
-        matches!(self, Self::ChatGpt)
-    }
-}
-
-impl fmt::Debug for AuthMethod {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::ApiKey => "ApiKey",
-            Self::ChatGpt => "ChatGpt",
-            Self::GitHubCopilot => "GitHubCopilot",
-            Self::ClaudeCli => "ClaudeCli",
-        })
-    }
-}
 
 /// How a sign-in reaches a browser. `/login <provider> --browser` and
 /// `--headless` choose; with neither the session decides.
@@ -102,37 +73,6 @@ fn session_has_no_browser(is_set: impl Fn(&str) -> bool) -> bool {
     is_set("SSH_CONNECTION")
         || is_set("SSH_TTY")
         || (cfg!(target_os = "linux") && !is_set("DISPLAY") && !is_set("WAYLAND_DISPLAY"))
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CredentialRef {
-    pub provider: String,
-    pub account: String,
-    pub method: AuthMethod,
-}
-
-impl CredentialRef {
-    pub fn is_chatgpt(&self) -> bool {
-        self.method.is_chatgpt()
-    }
-
-    pub fn is_copilot(&self) -> bool {
-        self.provider == "github-copilot" && self.method == AuthMethod::GitHubCopilot
-    }
-
-    fn is_claude_cli(&self) -> bool {
-        self.provider == "claude" && self.method == AuthMethod::ClaudeCli
-    }
-}
-
-impl fmt::Debug for CredentialRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CredentialRef")
-            .field("provider", &self.provider)
-            .field("account", &"[redacted]")
-            .field("method", &self.method)
-            .finish()
-    }
 }
 
 #[derive(Debug, Clone)]
