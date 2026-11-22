@@ -1,5 +1,6 @@
-// One resizable card with a tab per view: Details (the default), Changes, Pull
-// requests and the beside thread. Every tab and every thread share one width,
+// One resizable card: Details (the home, everything on one card) and the full
+// views it opens, Changes, Pull requests and the beside thread, each with a way
+// back. Every tab and every thread share one width,
 // so switching tabs or threads never moves the card's edge or the chat beside
 // it. Every view draws on one surface, the chat's own dark ground with a
 // hairline edge, as tall as its content but never shorter than it is wide
@@ -31,8 +32,9 @@ import { observeSize } from "../lib/resize";
 import { readStorage, writeStorage } from "../lib/storage";
 import { type AppState, setPanel, showPanel, useApp } from "../state/store";
 import { PANEL_SHEET_AT } from "../state/viewActions";
+import { ChevronLeft } from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
-import { cx, Segments } from "./primitives";
+import { cx, Tooltip } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
@@ -146,8 +148,6 @@ function headerToggle(): HTMLElement | null {
 
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
-  const pullsOn = useApp((s) => !!s.agent?.pullRequests);
-  const peekOn = useApp((s) => !!s.peekId);
   // A side chat opened beside this thread gives its tab that name.
   const peekIsSideChat = useApp((s) => {
     const parent = s.sessions.find((x) => x.id === s.peekId)?.parent;
@@ -324,37 +324,34 @@ export function RightPanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, sheet]);
 
-  const tabs: { value: Kind; label: string }[] = [
-    { value: "details", label: "Details" },
-    { value: "changes", label: "Changes" },
-    ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
-    ...(peekOn ? [{ value: "peek" as const, label: peekIsSideChat ? "Side chat" : "Thread" }] : []),
-  ];
+  // Details is the panel's home and carries no header: everything is on its one card. The full
+  // views it opens (the diff, the pull list, a thread beside this one) get a way back to it.
+  const titles: Record<Kind, string> = {
+    details: "Details",
+    changes: "Changes",
+    pulls: "Pull requests",
+    peek: peekIsSideChat ? "Side chat" : "Thread",
+  };
+  const home = kind === "details";
 
   const contents = kind && (
     <>
-      <div data-tauri-drag-region className="flex h-12 shrink-0 items-center gap-2 px-3">
-        {/* The views keep their labels and scroll sideways when the card is narrow. The header's
-            toggle and Escape close the panel, so the card carries no close button of its own. */}
-        <div className="flex min-w-0 items-center overflow-x-auto">
-          <div className="flex shrink-0 items-center">
-            {tabs.length > 1 ? (
-              // Soft pills, as T3 Code's panel tabs: the pick sits on a quiet fill, never the white
-              // knob, so the panel stays secondary to the chat beside it.
-              <Segments
-                label="Panel"
-                value={kind}
-                options={tabs}
-                onChange={showPanel}
-                tabs={{ controls: PANE_ID }}
-              />
-            ) : (
-              <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
-            )}
-          </div>
+      {!home && (
+        <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-1 px-2">
+          <Tooltip label="Back to details">
+            <button
+              type="button"
+              aria-label="Back to details"
+              onClick={() => showPanel("details")}
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+            >
+              <ChevronLeft size={16} />
+            </button>
+          </Tooltip>
+          <span className="truncate font-semibold text-body">{titles[kind]}</span>
+          <span className="flex-1" data-tauri-drag-region />
         </div>
-        <span className="flex-1" data-tauri-drag-region />
-      </div>
+      )}
       <Suspense fallback={<div className="flex-1" />}>
         {kind === "details" && <ThreadDetails />}
         {kind === "changes" && <ChangesPanel />}
@@ -436,8 +433,9 @@ export function RightPanel() {
         }}
         className={cx(
           CARD_SURFACE,
-          // The full height of the row, below the header: a floating sidebar, not a card that ends with its content.
-          "self-stretch",
+          // Details is one card as tall as what it holds; the full views (the diff, the pull list, a
+          // thread) take the row's whole height below the header, a floating sidebar.
+          home ? "self-start" : "self-stretch",
           // Above the header's glass (`z-10`): the header spans the whole view and fades 24px past
           // its foot, which would otherwise wash over the card's top 12px. The card starts below
           // the header's band, so nothing of it covers the header's own controls.
@@ -454,7 +452,9 @@ export function RightPanel() {
           maxHeight: `calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px)`,
           // Never shorter than it is wide, so the card stays about square whatever the tab shows;
           // the window's own height still wins.
-          minHeight: `min(var(--rc-panel-width), calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px))`,
+          minHeight: home
+            ? undefined
+            : `min(var(--rc-panel-width), calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px))`,
         }}
       >
         {contents}

@@ -58,7 +58,7 @@ function StateMark({ pull }: { pull: PullRequest }) {
 }
 
 /** A pull's own line: its title, then what it is by number, size or age, and its state on the right. */
-function PullRow({ pull, onOpen }: { pull: PullRequest; onOpen: () => void }) {
+export function PullRow({ pull, onOpen }: { pull: PullRequest; onOpen: () => void }) {
   const pill = pullPill(pull);
   const sized = pull.additions + pull.deletions > 0;
   return (
