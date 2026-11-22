@@ -2918,7 +2918,7 @@ pub(crate) fn append_visualization_hint(
 /// Guidance for `rustcode-ui v1` blocks (#2484), sent only to frontends that
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
-This app runs small views in replies: a ```rustcode-ui v1 fence built from its `::` component catalog that reads like chat. \
+This app runs small views in replies: a ```rustcode-ui v1 fence of `::` catalog blocks. \
 Answer visually, asked or not: data, numbers, results, status, comparisons, plans or 4+ items go in a view (chart, bars, stats, table), never a Markdown table. \
 Only short explanations, one fact, code and diffs stay Markdown. Be brief: one line with the finding before the view, nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown. \
 First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
