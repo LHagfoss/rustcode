@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::hub::CallAnswer;
+use super::tool_socket::CallAnswer;
 
 const TOOLS: &[(&str, &str)] = &[
     (super::LIST_SESSIONS, "list_threads"),

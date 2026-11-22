@@ -1,7 +1,7 @@
 //! Opt-in browser tools carried by the existing authenticated RustCode MCP hub.
 use crate::orchestration::{
     ask_user::Asker,
-    hub::{CallAnswer, CallRequest},
+    tool_socket::{CallAnswer, CallRequest},
 };
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,

@@ -438,10 +438,12 @@ fn mcp_servers(options: &StartOptions, http: bool) -> Value {
     let mut servers: Vec<Value> = options
         .orchestrator
         .iter()
-        .map(crate::orchestration::hub::Launch::acp_server)
+        .map(crate::orchestration::tool_socket::Launch::acp_server)
         .collect();
     for server in &options.mcp {
-        if options.orchestrator.is_some() && server.name == crate::orchestration::hub::SERVER_NAME {
+        if options.orchestrator.is_some()
+            && server.name == crate::orchestration::tool_socket::SERVER_NAME
+        {
             crate::dbg_log!(
                 "harness MCP: '{}' is the orchestrator's name; skipped",
                 server.name

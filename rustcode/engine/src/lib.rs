@@ -36,7 +36,6 @@ pub mod network;
 mod notifications;
 mod orchestration;
 pub mod permission_places;
-pub use orchestration::hub::ORCHESTRATOR_TOKEN_ENV;
 pub use orchestration::mcp_server::run as run_mcp_orchestrator;
 pub use orchestration::mcp_server::run_outside as run_mcp_connect;
 pub use orchestration::outside::TOKEN_ENV as MCP_CONNECT_TOKEN_ENV;
@@ -48,6 +47,7 @@ pub use orchestration::outside_hub::answer_for_hub as answer_hub_call;
 /// The machine owner's passkeys for the public sign-in page (#3954).
 pub use orchestration::outside_passkey as owner_passkeys;
 pub use orchestration::outside_web as owner_web_sessions;
+pub use orchestration::tool_socket::ORCHESTRATOR_TOKEN_ENV;
 mod platform;
 pub mod preview;
 pub mod prompt_commands;

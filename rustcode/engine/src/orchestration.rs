@@ -23,7 +23,6 @@ use crate::preview::PreviewClient;
 use crate::tools::{ToolErrorKind, ToolExecutionOutput};
 
 pub mod ask_user;
-pub mod hub;
 pub mod local;
 mod local_merge;
 pub(crate) mod local_threads;
@@ -38,6 +37,7 @@ pub mod outside_signin;
 pub mod outside_web;
 pub mod presets;
 pub mod secret;
+pub mod tool_socket;
 
 pub const METHOD: &str = "_rustcode/orchestration";
 /// Told to the client when a call was dropped before its answer arrived: the
@@ -2460,7 +2460,7 @@ mod tests {
         // still inside the external harness's MCP timeout.
         let deadline = timeout(MERGE_WHEN_GREEN, &json!({"session_id": "d1"}));
         assert!(deadline >= Duration::from_millis(MAX_MERGE_WAIT_MS) + Duration::from_secs(170));
-        assert!(deadline < Duration::from_secs(hub::TOOL_TIMEOUT_SECS));
+        assert!(deadline < Duration::from_secs(tool_socket::TOOL_TIMEOUT_SECS));
         // A longer ask is cut to the cap.
         assert_eq!(
             timeout(

@@ -2,7 +2,7 @@
 //!
 //! The gateway foundation understands only handshake frames. Once a device is
 //! authenticated, each text frame it sends is handed, unparsed, to a
-//! [`FrameRouter`]. [`super::hub::SessionHub`] is the router of a real
+//! [`FrameRouter`]. [`super::session_registry::SessionHub`] is the router of a real
 //! gateway; [`NoSessionsRouter`] is a stub that answers every frame with a
 //! typed `not_implemented` error.
 

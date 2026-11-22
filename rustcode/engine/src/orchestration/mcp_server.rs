@@ -2,7 +2,7 @@
 //! `RUSTCODE_ORCHESTRATOR_TOKEN`):
 //! a stdio MCP server that offers an external harness the orchestration
 //! tools (`docs/orchestrator.md`). It holds no state of its own: every
-//! `tools/call` goes to the parent engine's [`super::hub`], which checks the
+//! `tools/call` goes to the parent engine's [`super::tool_socket`], which checks the
 //! session and token and forwards it to the client like a built-in call.
 
 use std::collections::HashMap;
@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
-use super::hub::{CallAnswer, CallRequest};
 use super::mcp_names;
+use super::tool_socket::{CallAnswer, CallRequest};
 
 /// The MCP revisions this server speaks; it answers with the client's when
 /// it is one of these.
@@ -49,7 +49,7 @@ impl Forward for SocketForward {
         Box::pin(async move {
             #[cfg(unix)]
             {
-                super::hub::call(&self.socket, &request).await
+                super::tool_socket::call(&self.socket, &request).await
             }
             #[cfg(not(unix))]
             {
@@ -82,10 +82,10 @@ impl Forward for PublishedForward {
         Box::pin(async move {
             #[cfg(unix)]
             {
-                let Some(socket) = super::hub::published_socket() else {
+                let Some(socket) = super::tool_socket::published_socket() else {
                     return CallAnswer::failure(format!("error: {NOT_RUNNING}. Nothing was sent."));
                 };
-                match super::hub::try_call(&socket, &request).await {
+                match super::tool_socket::try_call(&socket, &request).await {
                     Ok(answer) => answer,
                     Err(_) => {
                         CallAnswer::failure(format!("error: {NOT_RUNNING}. Nothing was sent."))
@@ -329,15 +329,15 @@ fn listing(name: &str) -> Option<(&'static str, Effect)> {
 
 /// Run on stdin/stdout until the harness closes stdin.
 pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(), String> {
-    // Set by the engine from the thread's client (`hub::Launch`): the tools it
+    // Set by the engine from the thread's client (`tool_socket::Launch`): the tools it
     // can answer, and whether its Smart UI blocks run.
-    let orchestration = std::env::var(super::hub::ORCHESTRATION_VERSION_ENV)
+    let orchestration = std::env::var(super::tool_socket::ORCHESTRATION_VERSION_ENV)
         .ok()
         .and_then(|value| value.parse::<u8>().ok())
         .map_or(super::VERSION, |version| version.min(super::VERSION));
-    let smart_ui = std::env::var(super::hub::SMART_UI_ENV).is_ok_and(|on| on == "1");
-    let ask_user = std::env::var(super::hub::ASK_USER_ENV).is_ok_and(|on| on == "1");
-    let deferred = std::env::var(super::hub::DEFER_TOOLS_ENV).is_ok_and(|on| on == "1");
+    let smart_ui = std::env::var(super::tool_socket::SMART_UI_ENV).is_ok_and(|on| on == "1");
+    let ask_user = std::env::var(super::tool_socket::ASK_USER_ENV).is_ok_and(|on| on == "1");
+    let deferred = std::env::var(super::tool_socket::DEFER_TOOLS_ENV).is_ok_and(|on| on == "1");
     serve_every(
         tokio::io::stdin(),
         tokio::io::stdout(),
@@ -370,7 +370,7 @@ struct Offered {
     /// every tool (`orchestration-all-tools`).
     core_only: bool,
     /// List [`DIRECT_TOOLS`], `tool_search` and `call_tool` alone: the
-    /// harness sends every listed schema with each request (`hub::Launch::defer_tools`).
+    /// harness sends every listed schema with each request (`tool_socket::Launch::defer_tools`).
     deferred: bool,
 }
 
@@ -387,7 +387,7 @@ pub async fn run_outside(token: String) -> Result<(), String> {
     }
     // Checked once here so an app started without RustCode says so at once;
     // every call after that finds the engine running at the time.
-    if super::hub::published_socket().is_none() {
+    if super::tool_socket::published_socket().is_none() {
         return Err(NOT_RUNNING.to_owned());
     }
     serve(
@@ -1299,7 +1299,7 @@ fn response_content(tool: &str, answer: &CallAnswer) -> Value {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::super::hub::Hub;
+    use super::super::tool_socket::Hub;
     use super::*;
     use crate::preview::{PreviewClient, PreviewFuture};
     use tokio::io::AsyncBufReadExt;

@@ -169,8 +169,8 @@ mod tests {
     use super::*;
     use rustcode::remote_gateway::address::plan_listen;
     use rustcode::remote_gateway::gateway::{Gateway, GatewayConfig, Limits};
-    use rustcode::remote_gateway::hub::{HubLimits, SessionHub};
     use rustcode::remote_gateway::hub_link::{HubCallAnswer, HubMember, Scope};
+    use rustcode::remote_gateway::session_registry::{HubLimits, SessionHub};
     use rustcode_client::machine::machine_from_pairing;
     use rustcode_client::{Machine, Route};
     use serde_json::json;

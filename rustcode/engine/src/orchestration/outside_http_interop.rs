@@ -1,6 +1,6 @@
 //! Wire-level tests: explicit temporary settings avoid process-global config/env races.
 use super::*;
-use crate::orchestration::hub::CallAnswer;
+use crate::orchestration::tool_socket::CallAnswer;
 
 struct FakeRunner;
 impl outside::Runner for FakeRunner {

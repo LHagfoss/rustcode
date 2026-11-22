@@ -21,9 +21,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::address::plan_listen;
 use super::gateway::{Gateway, GatewayConfig, Limits};
-use super::hub::{HubLimits, SessionHub};
 use super::lifecycle::RemoteLifecycle;
 use super::owner_client::{ClientTiming, GatewayConnector};
+use super::session_registry::{HubLimits, SessionHub};
 use crate::app::{AppState, AppStatus, PendingQuestion};
 use crate::controller::AgentUiEvent;
 use crate::remote::owner::{

@@ -1,7 +1,7 @@
 //! Private user replies bypass the harness transcript and orchestration audit.
 use super::{
     ask_user::Asker,
-    hub::{CallAnswer, CallRequest},
+    tool_socket::{CallAnswer, CallRequest},
 };
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,

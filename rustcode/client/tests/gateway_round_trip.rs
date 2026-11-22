@@ -15,8 +15,8 @@ use std::time::Duration;
 use rustcode::remote_gateway::address::plan_listen;
 use rustcode::remote_gateway::control::RefusalReason;
 use rustcode::remote_gateway::gateway::{Gateway, GatewayConfig, Limits};
-use rustcode::remote_gateway::hub::{HubLimits, SessionHub};
 use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
+use rustcode::remote_gateway::session_registry::{HubLimits, SessionHub};
 use rustcode_client::device_key::DeviceKey;
 use rustcode_client::machine::machine_from_pairing;
 use rustcode_client::{

@@ -26,9 +26,9 @@
 
 use super::gateway::MAX_FRAME_BYTES;
 use crate::daemon::private_files::{publish_private_json, read_private_json};
-use crate::orchestration::hub::CallAnswer;
 /// The outside-agent access levels, which a membership's ceiling uses.
 pub use crate::orchestration::outside::Scope;
+use crate::orchestration::tool_socket::CallAnswer;
 use chrono::{DateTime, Utc};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,7 @@
 //! Authenticated host-wide operations. Detached owners do not belong to a phone connection.
 use super::{
-    hub::SessionHub,
     router::{DeviceContext, FrameRouter, FrameSink},
+    session_registry::SessionHub,
 };
 use crate::daemon::private_files::{
     ensure_private_directory, is_lock_busy, lock_private_file, open_private_log,
@@ -1833,14 +1833,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         allow(config.path(), directory.path());
         let hub = SessionHub::start(Default::default());
-        let mut desktop = super::super::hub::tests::Owner::register_host(&hub, "desktop-thread", 7);
+        let mut desktop =
+            super::super::session_registry::tests::Owner::register_host(&hub, "desktop-thread", 7);
         // The program does not exist: a session owner would say so.
         let router = WorkspaceRouter::new(
             Arc::clone(&hub),
             config.path().to_path_buf(),
             Path::new("/never/launch").to_path_buf(),
         );
-        let mut phone = super::super::hub::tests::Device::connect(&hub, 1, "phone");
+        let mut phone = super::super::session_registry::tests::Device::connect(&hub, 1, "phone");
         let request = RemoteRequest {
             authenticated_device_id: None,
             protocol_version: REMOTE_PROTOCOL_VERSION,
@@ -1881,7 +1882,7 @@ mod tests {
             RemoteResponse::new(
                 "create-1",
                 RemoteResult::SessionCreated {
-                    session: super::super::hub::tests::info("desktop-new", 3),
+                    session: super::super::session_registry::tests::info("desktop-new", 3),
                 },
             )
             .with_receipt(ReceiptState::Applied),
@@ -1907,7 +1908,7 @@ mod tests {
             config.path().to_path_buf(),
             Path::new("/bin/sh").to_path_buf(),
         );
-        let mut phone = super::super::hub::tests::Device::connect(&hub, 1, "phone");
+        let mut phone = super::super::session_registry::tests::Device::connect(&hub, 1, "phone");
         let request = RemoteRequest {
             authenticated_device_id: None,
             protocol_version: REMOTE_PROTOCOL_VERSION,
@@ -2045,13 +2046,16 @@ mod tests {
     }
 
     /// What the owner socket does when the owner of `session_id` registers.
-    fn register(hub: &Arc<SessionHub>, session_id: &str) -> super::super::hub::OwnerRegistration {
+    fn register(
+        hub: &Arc<SessionHub>,
+        session_id: &str,
+    ) -> super::super::session_registry::OwnerRegistration {
         hub.register_owner(
             SessionRegistration {
                 session_id: session_id.to_owned(),
                 registration_epoch: 1,
             },
-            super::super::hub::tests::snapshot(session_id, 1, 0),
+            super::super::session_registry::tests::snapshot(session_id, 1, 0),
         )
         .unwrap()
     }

@@ -620,7 +620,7 @@ async fn a_dismissed_question_fails_the_user_input_request() {
 
 #[tokio::test]
 async fn the_orchestrator_is_added_to_the_codex_thread_config() {
-    let launch = crate::orchestration::hub::Launch::new(
+    let launch = crate::orchestration::tool_socket::Launch::new(
         "/opt/rustcode/bin/rustcode".into(),
         "thread-1",
         std::path::Path::new("/tmp/run/orchestrator-1.sock"),

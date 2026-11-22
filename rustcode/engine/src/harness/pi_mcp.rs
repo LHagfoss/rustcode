@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::orchestration::hub::{
+use crate::orchestration::tool_socket::{
     ASK_USER_ENV, Launch, ORCHESTRATION_VERSION_ENV, ORCHESTRATOR_TOKEN_ENV, SMART_UI_ENV,
 };
 

@@ -451,7 +451,7 @@ pub(crate) async fn new_session(
     session.set_client_display(info.display());
     let orchestrated = attach_orchestrator(&session, info, &clients).await;
     if let Err(message) = session.ensure_started().await {
-        crate::orchestration::hub::release(&session_id);
+        crate::orchestration::tool_socket::release(&session_id);
         peer.clients().forget_session(&session_id);
         crate::dbg_log!("harness {} failed to start: {message}", resolved.id);
         return Err(agent_client_protocol::Error::internal_error().data(message));
@@ -495,7 +495,7 @@ async fn attach_orchestrator(
         if !info.engine_hosts_orchestration(clients) {
             return false;
         }
-        let launch = crate::orchestration::hub::launch_local_for(
+        let launch = crate::orchestration::tool_socket::launch_local_for(
             &session.id,
             crate::orchestration::VERSION,
             smart_ui,
@@ -510,7 +510,8 @@ async fn attach_orchestrator(
         return false;
     };
     let launch =
-        crate::orchestration::hub::launch_for(&session.id, client, orchestration, smart_ui).await;
+        crate::orchestration::tool_socket::launch_for(&session.id, client, orchestration, smart_ui)
+            .await;
     set_launch(session, launch, ask_user, defer_tools).await
 }
 
@@ -519,13 +520,14 @@ async fn attach_orchestrator(
 /// `defer_tools`. Whether there is a server.
 async fn set_launch(
     session: &ExternalSession,
-    launch: Option<crate::orchestration::hub::Launch>,
+    launch: Option<crate::orchestration::tool_socket::Launch>,
     ask_user: bool,
     defer_tools: bool,
 ) -> bool {
     let channel = launch.is_some()
-        && crate::orchestration::hub::set_questions(&session.id, session.question_asker()).await;
-    crate::orchestration::hub::set_secret_workspace(&session.id, session.cwd.clone()).await;
+        && crate::orchestration::tool_socket::set_questions(&session.id, session.question_asker())
+            .await;
+    crate::orchestration::tool_socket::set_secret_workspace(&session.id, session.cwd.clone()).await;
     let ask_user = ask_user && channel;
     let launch = launch.map(|launch| launch.with_ask_user(ask_user).with_defer_tools(defer_tools));
     let attached = launch.is_some();
@@ -703,8 +705,12 @@ pub(crate) async fn attach_open(
         attach_orchestrator(session, info, &session_clients).await
     } else if info.orchestration >= 1 {
         if let Some(client) = super::preview::orchestration_client_for(true, &session_clients) {
-            let _ = crate::orchestration::hub::swap_client(&session_id, client, info.orchestration)
-                .await;
+            let _ = crate::orchestration::tool_socket::swap_client(
+                &session_id,
+                client,
+                info.orchestration,
+            )
+            .await;
         }
         true
     } else {
@@ -936,7 +942,7 @@ pub(crate) async fn close(
         )
         .await;
     session.close().await;
-    crate::orchestration::hub::release(session_id);
+    crate::orchestration::tool_socket::release(session_id);
     super::unmark_acp_session(session_id);
     true
 }
@@ -946,7 +952,7 @@ pub(crate) async fn close_all(sessions: &ExternalSessions) {
     let open = sessions.lock().await.drain().collect::<Vec<_>>();
     for (session_id, session) in open {
         session.kill_now();
-        crate::orchestration::hub::release(&session_id);
+        crate::orchestration::tool_socket::release(&session_id);
         super::unmark_acp_session(&session_id);
     }
     harness::process::kill_all();
