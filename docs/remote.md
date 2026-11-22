@@ -877,7 +877,10 @@ process, which ends with it, so no tunnel is left running.
   SSH route to that host and, once it answers, saves it and turns the
   forwarded port off (`machines_forward_take_over`). Each connection then opens
   its own `ssh -W`, so after a wake the next attempt starts a fresh tunnel.
-  Turning the forwarded port back on undoes it.
+  Turning the forwarded port back on undoes it. When the running `ssh -L`
+  was found, the app does this on its own the first time the tunnel is found
+  dead, without the button; the row keeps the advice and button only when that
+  SSH route does not answer.
 
 #### Mutual access
 

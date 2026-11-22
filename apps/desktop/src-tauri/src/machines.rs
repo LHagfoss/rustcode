@@ -652,6 +652,7 @@ async fn supervise(
     // away ([`stalled_forward`]). It stays on the row while the next attempt
     // runs, so it does not flicker away every few seconds.
     let mut stalled: Option<Stalled> = None;
+    let mut took_over_forward_once = false;
     loop {
         set_state(
             &machines,
@@ -695,6 +696,36 @@ async fn supervise(
                     } else {
                         None
                     };
+                    if let Some(found) = stalled.as_ref().filter(|stalled| stalled.offer) {
+                        if let (Some(owner), false) = (found.owner.clone(), took_over_forward_once)
+                        {
+                            took_over_forward_once = true;
+                            let route = Route::ssh(owner);
+                            match take_over_forward(&config_dir, &id, &found.address, route).await {
+                                Ok(()) => {
+                                    emit_log(
+                                        &channel,
+                                        format!(
+                                            "desktop: RustCode now manages the tunnel to {} \
+                                             instead of the forwarded port {}",
+                                            machine.name, found.address
+                                        ),
+                                    );
+                                    stalled = None;
+                                    set_stalled(&machines, &id, None);
+                                    attempt = 0;
+                                    continue;
+                                }
+                                Err(why) => emit_log(
+                                    &channel,
+                                    format!(
+                                        "desktop: could not take over the tunnel to {}: {why}",
+                                        machine.name
+                                    ),
+                                ),
+                            }
+                        }
+                    }
                     emit_log(
                         &channel,
                         format!(
@@ -2091,7 +2122,19 @@ pub async fn machines_forward_take_over(
 ) -> Result<Vec<MachineView>, String> {
     let route = ssh_route(ssh.trim(), ssh_port, identity, gateway_port)?;
     let config_dir = config_dir()?;
-    let connector = Machines::connector(&config_dir)?;
+    take_over_forward(&config_dir, &id, &address, route).await?;
+    set_stalled(machines.inner(), &id, None);
+    machines.retry(Some(&id));
+    machines.list()
+}
+
+async fn take_over_forward(
+    config_dir: &Path,
+    id: &str,
+    address: &str,
+    route: Route,
+) -> Result<(), String> {
+    let connector = Machines::connector(config_dir)?;
     let probe = connector.probe_route(&route).await;
     if probe.outcome != ProbeOutcome::Reachable {
         let why = probe
@@ -2103,12 +2146,12 @@ pub async fn machines_forward_take_over(
             route.address
         ));
     }
-    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    let mut registry = MachineRegistry::load(config_dir).map_err(chain)?;
     registry
-        .take_over_forward(&id, &address, route)
+        .take_over_forward(id, address, route)
         .map_err(chain)?;
     let machine = registry
-        .get(&id)
+        .get(id)
         .ok_or("That machine is no longer saved.")?
         .clone();
     let mut probes: Vec<RouteProbe> = machine
@@ -2118,10 +2161,8 @@ pub async fn machines_forward_take_over(
         .cloned()
         .collect();
     probes.push(probe);
-    registry.set_probes(&id, probes).map_err(chain)?;
-    set_stalled(machines.inner(), &id, None);
-    machines.retry(Some(&id));
-    machines.list()
+    registry.set_probes(id, probes).map_err(chain)?;
+    Ok(())
 }
 
 /// Remove one route of a saved machine. A route the machine reports comes
