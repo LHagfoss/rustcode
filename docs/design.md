@@ -104,33 +104,33 @@ the accent marks state (on, selected, linked), it does not shout.
 
 | Step | px | Tailwind | Used by |
 |---|---|---|---|
-| xs | 4 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
-| sm | 6 | `rounded-sm` | 22px icon buttons inside rows, status chips, segmented items, small inputs |
-| md | 8 | `rounded-md` | Labelled buttons (`Pill`), icon buttons, selects, segmented tracks, list rows, inputs |
-| lg | 10 | `rounded-lg` | Cards (tool output, error card), settings rows, menu items, toolbar clusters, pictures in replies |
-| xl | 12 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels, tooltips and hover cards |
-| 2xl | 16 | `rounded-2xl` | The settings panel, toasts |
-| 3xl | 20 | `rounded-3xl` | The largest floating surface |
+| xs | 5 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
+| sm | 7 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
+| md | 9 | `rounded-md` | Icon buttons, selects, fields, list rows, inputs |
+| lg | 11 | `rounded-lg` | Cards (tool output, error card), settings rows, menu items, pictures in replies |
+| xl | 14 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels, tooltips and hover cards |
+| 2xl | 18 | `rounded-2xl` | The settings panel, toasts |
+| 3xl | 22 | `rounded-3xl` | The largest floating surface |
 | composer | 26 | `--rc-composer-radius` | The composer's box: its own corner, rounder than the scale, so it reads as one soft floating card over the text sliding under it |
-| full | — | `rounded-full` | Switches, avatars, dots, trackbars, the composer's footer chips |
+| full | — | `rounded-full` | Labelled buttons (`Pill`), segmented controls, status chips, toolbar clusters, switches, avatars, dots, trackbars |
 
 In the chat a component names its **role** instead of a step; each role is
 one of the steps above, so a theme's radius still scales it:
 
 | Role | Step (default px) | Tailwind | Used by |
 |---|---|---|---|
-| inline | xs − 2 (2) | `rounded-inline` | Inline code and file references in a reply, keycaps |
-| chip | sm (6) | `rounded-chip` | Compact controls H20–28: footer actions, tool rows' hover fill, thread chips |
-| row | lg (10) | `rounded-row` | Standard controls H32–40 and single-line rows |
-| block | xl (12) | `rounded-block` | Code blocks, diffs, tool output bodies, tables, file and preview cards |
-| bubble | 2xl (16) | `rounded-bubble` | A sent message's bubble, independent cards |
-| panel | 3xl (20) | `rounded-panel` | Dialogs, panels |
+| inline | xs − 2 (3) | `rounded-inline` | Inline code and file references in a reply, keycaps |
+| chip | sm (7) | `rounded-chip` | Compact controls H20–28: footer actions, tool rows' hover fill, thread chips |
+| row | lg (11) | `rounded-row` | Standard controls H32–40 and single-line rows |
+| block | xl (14) | `rounded-block` | Code blocks, diffs, tool output bodies, tables, file and preview cards |
+| bubble | 2xl (18) | `rounded-bubble` | A sent message's bubble, independent cards |
+| panel | 3xl (22) | `rounded-panel` | Dialogs, panels |
 
 A nested inset takes the outer radius minus the inset, and a hover fill keeps
 its container's radius, so no crescent shows between them.
 
 A theme's `radius` (`sharp`, `default`, `round`) scales the steps
-(`default`: 4/6/8/10/12/16/20, `sharp`: 2/3/4/6/8/10/12, `round`:
+(`default`: 5/7/9/11/14/18/22, `sharp`: 2/3/4/6/8/10/12, `round`:
 8/10/12/16/20/26/32) and sets the composer's own corner (26, 12, 32); components only ever
 name a step. No arbitrary radii (`rounded-[14px]`), no `rounded-4xl`. A child
 inside a padded parent uses the step below the parent's.
@@ -639,14 +639,14 @@ content never shifts when a classic scrollbar appears.
 
 ## Component recipes
 
-Shape rule: **labelled buttons are rounded rectangles** (`Pill`, `rounded-md`
-with horizontal padding): header actions, Settings' "New…" and "Edit config",
-selects, and segmented tracks (`rounded-md`, their items and thumb
-`rounded-sm`, one step in). Capsules (`rounded-full`) stay for switches and
-the composer's footer chips; circles only for icon-only round buttons (send,
-stop). Icon buttons are `rounded-md`, `rounded-sm` in dense rows; toolbar
-clusters are a `rounded-lg` track of `rounded-md` buttons. The chat header's
-side-panel toggle is a quiet button that names the tab it opens ("Details").
+Shape rule: **what you press or pick is a pill, what holds content is a
+rounded rectangle.** Pills (`rounded-full`): labelled buttons (`Pill`, never a
+circle), segmented controls and their items, status chips, toolbar clusters,
+switches, the composer's footer chips, and the chat header's machine pill and
+side-panel toggle (a quiet pill that names the tab it opens, "Details").
+Rounded rectangles from the scale: selects and fields (`rounded-md`), icon
+buttons (`rounded-md`, `rounded-sm` in dense rows), cards, rows, menus and
+panels. Circles only for icon-only round buttons (send, stop).
 Buttons inside a callout's actions are `rounded-md`, one step below its `rounded-lg`, and centred on its message.
 Rows are `rounded-md` (sidebar thread rows `rounded-xl` in the default comfortable
 layout, `rounded-lg` in the opt-in compact one), menu items and cards `rounded-lg`,

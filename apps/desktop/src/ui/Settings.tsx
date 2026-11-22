@@ -692,7 +692,7 @@ function AgentsPage() {
                   aria-label="Check all harnesses"
                   onClick={() => void runAllHarnessChecks()}
                   disabled={checking}
-                  className="inline-flex size-6 items-center justify-center rounded-sm text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-60"
+                  className="inline-flex size-6 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-60"
                 >
                   {checking ? <Spinner size={12} /> : <RefreshCw size={13} />}
                 </button>

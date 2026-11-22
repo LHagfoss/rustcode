@@ -260,13 +260,13 @@
   --rc-shadow-soft: color-mix(in srgb, var(--rc-shadow-color) 50%, transparent);
   --rc-shadow-1: 0 1px 1px var(--rc-shadow-soft), 0 0 0 1px var(--rc-separator);
   --rc-shadow-2: 0 2px 8px var(--rc-shadow-soft), 0 0 0 1px var(--rc-separator);
-  --rc-radius-xs: 4px;
-  --rc-radius-sm: 6px;
-  --rc-radius-md: 8px;
-  --rc-radius-lg: 10px;
-  --rc-radius-xl: 12px;
-  --rc-radius-2xl: 16px;
-  --rc-radius-3xl: 20px;
+  --rc-radius-xs: 5px;
+  --rc-radius-sm: 7px;
+  --rc-radius-md: 9px;
+  --rc-radius-lg: 11px;
+  --rc-radius-xl: 14px;
+  --rc-radius-2xl: 18px;
+  --rc-radius-3xl: 22px;
   /* The composer's box and tray take a corner of their own, rounder than the scale: it is the one
      surface the chat floats in, and the soft corner reads as one floating card over the transcript. */
   --rc-composer-radius: 26px;

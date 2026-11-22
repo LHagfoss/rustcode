@@ -10,9 +10,9 @@
 // row whose value differs from its default shows a reset button before the
 // control, on hover or keyboard focus.
 //
-// The controls are one shape — 28px high, `rounded-md`, a step of their own
+// The controls are one height — 28px, a step of their own
 // over the card — so a row of buttons, selects and choices reads as one
-// family, not as pills.
+// family: fields and selects are rounded rectangles, buttons and choices pills.
 //
 // Groups and rows carry `data-setting` with their title, so the panel's search
 // can scroll to the row it found (Settings.tsx) and light it once.
@@ -393,7 +393,7 @@ export function Action({
     <button
       type="button"
       className={cx(
-        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap text-callout disabled:opacity-40",
+        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium whitespace-nowrap text-callout disabled:opacity-40",
         size === "sm" ? "h-6 px-2" : "h-7 px-3",
         prominent
           ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
@@ -522,12 +522,12 @@ export function Choice<T extends string>({
       ref={group}
       role="radiogroup"
       aria-label={label}
-      className="relative inline-flex w-fit shrink-0 rounded-md bg-fill p-0.5"
+      className="relative inline-flex w-fit shrink-0 rounded-full bg-fill p-0.5"
     >
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-0 left-0 h-6 rounded-sm bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
+          className="absolute top-0 left-0 h-6 rounded-full bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
           style={{ transform: `translate(${thumb.left}px, 2px)`, width: thumb.width }}
         />
       )}
@@ -540,7 +540,7 @@ export function Choice<T extends string>({
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cx(
-            "relative h-6 rounded-sm px-2 font-medium text-caption whitespace-nowrap disabled:opacity-40",
+            "relative h-6 rounded-full px-2 font-medium text-caption whitespace-nowrap disabled:opacity-40",
             o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}
         >
@@ -565,7 +565,7 @@ export function Chip({
     <span
       title={title}
       className={cx(
-        "inline-flex h-5 shrink-0 items-center gap-1 rounded-sm px-2 font-medium text-caption",
+        "inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-caption",
         tone === "ok"
           ? "bg-success/12 text-success"
           : tone === "warn"

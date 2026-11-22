@@ -179,7 +179,7 @@ function DetailsHeaderButton() {
         data-panel-toggle
         onClick={toggleRightPanel}
         className={cx(
-          "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
+          "inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
           panel && "bg-fill text-fg",
         )}
       >

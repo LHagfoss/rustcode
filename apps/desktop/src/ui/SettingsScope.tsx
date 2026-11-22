@@ -134,7 +134,7 @@ export function MixedChip({ breakdown }: { breakdown: ScopeBreakdownEntry[] }) {
         </span>
       }
     >
-      <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm bg-warning/12 px-2 font-medium text-caption text-warning">
+      <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-warning/12 px-2 font-medium text-caption text-warning">
         <Layers size={12} />
         Mixed
       </span>
@@ -163,7 +163,7 @@ export function SourceChip({ project }: { project: ProjectRowState }) {
         }
       >
         <span
-          className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-sm px-2 font-medium text-caption ${
+          className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-caption ${
             project.source === "project" ? "bg-accent/12 text-accent" : "bg-fill-subtle text-fg-muted"
           }`}
         >
