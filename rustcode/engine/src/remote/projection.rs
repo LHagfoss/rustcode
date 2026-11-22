@@ -518,7 +518,7 @@ fn project_messages(
 }
 
 /// Who sent `message`, for a user request; see [`crate::message_origin`].
-pub(super) fn project_origin(message: &crate::app::ChatMessage) -> Option<RemoteMessageOrigin> {
+pub(super) fn project_origin(message: &rustcode_core::ChatMessage) -> Option<RemoteMessageOrigin> {
     crate::message_origin::of_message(message).map(wire_origin)
 }
 
@@ -550,9 +550,9 @@ pub(super) fn project_turn_timing(turn: &crate::app::TurnTiming) -> RemoteTurnTi
         ended_at: turn.ended_at.clone(),
         elapsed_work_ms: turn.elapsed_work_ms,
         outcome: turn.outcome.map(|outcome| match outcome {
-            crate::app::TurnOutcome::Completed => RemoteTurnOutcome::Completed,
-            crate::app::TurnOutcome::Cancelled => RemoteTurnOutcome::Cancelled,
-            crate::app::TurnOutcome::Failed => RemoteTurnOutcome::Failed,
+            rustcode_core::TurnOutcome::Completed => RemoteTurnOutcome::Completed,
+            rustcode_core::TurnOutcome::Cancelled => RemoteTurnOutcome::Cancelled,
+            rustcode_core::TurnOutcome::Failed => RemoteTurnOutcome::Failed,
         }),
     }
 }
@@ -1069,7 +1069,7 @@ mod tests {
         assert!(project_session_info(&state, &context).title.is_empty());
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "fresh prompt"));
+            .push(rustcode_core::ChatMessage::new("user", "fresh prompt"));
         let page = project_history_page(&state, &ProjectionLimits::default(), None, 10).unwrap();
         assert!(
             chrono::DateTime::parse_from_rfc3339(page.messages[0].timestamp.as_deref().unwrap())

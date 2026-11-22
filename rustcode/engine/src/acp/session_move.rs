@@ -63,8 +63,8 @@ mod tests {
         let (_dir, repo) = crate::worktrees::tests::repo();
         let id = "acp-move-repo";
         let history = vec![
-            crate::app::ChatMessage::new("user", "Move me"),
-            crate::app::ChatMessage::new("assistant", "Moved"),
+            rustcode_core::ChatMessage::new("user", "Move me"),
+            rustcode_core::ChatMessage::new("assistant", "Moved"),
         ];
         store.ensure_session(id);
         store.save_session_history(id, &history);
@@ -80,8 +80,8 @@ mod tests {
         let (old, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let extra = std::path::PathBuf::from("/tmp/extra");
         let history = vec![
-            crate::app::ChatMessage::new("user", "Move me"),
-            crate::app::ChatMessage::new("assistant", "Moved"),
+            rustcode_core::ChatMessage::new("user", "Move me"),
+            rustcode_core::ChatMessage::new("assistant", "Moved"),
         ];
         for id in ["acp-move-a", "acp-move-b"] {
             store.save_session_history(id, &history);
@@ -120,8 +120,8 @@ mod tests {
         store.save_session_history(
             id,
             &vec![
-                crate::app::ChatMessage::new("user", "Move me"),
-                crate::app::ChatMessage::new("assistant", "Moved"),
+                rustcode_core::ChatMessage::new("user", "Move me"),
+                rustcode_core::ChatMessage::new("assistant", "Moved"),
             ],
         );
         rustcode_session::flush_history();

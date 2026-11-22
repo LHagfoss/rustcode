@@ -18,7 +18,7 @@
 
 use serde_json::{Value, json};
 
-use crate::app::ChatMessage;
+use rustcode_core::ChatMessage;
 
 /// The heading every agent-delivered message starts with (`delivered` in the app).
 pub(crate) const AGENT_HEADING: &str = "From thread “";

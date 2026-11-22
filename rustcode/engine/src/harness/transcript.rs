@@ -19,12 +19,12 @@
 //! `tool_output/` when it does not fit — so a replay or a post-mortem has the
 //! same evidence as a native turn. Images and other binary payloads stay out.
 
-use crate::app::ChatMessage;
 use agent_client_protocol::schema::v1::{
     ContentBlock, Meta, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate,
     TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, ToolKind,
 };
+use rustcode_core::ChatMessage;
 use rustcode_core::{ToolCallRef, ToolResultRecord};
 use serde_json::Value;
 use std::collections::HashMap;

@@ -28,8 +28,8 @@ use agent_client_protocol::schema::v1::{
 use serde_json::Value;
 use tokio::sync::oneshot;
 
-use crate::app::ChatMessage;
 use crate::controller::QuestionPrompt;
+use rustcode_core::ChatMessage;
 use rustcode_core::{ToolCallRef, ToolResultRecord};
 
 use super::ops::SessionRegistration;

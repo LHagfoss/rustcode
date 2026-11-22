@@ -971,3 +971,15 @@ mod tests {
         assert_eq!(ToolErrorKind::Deferred.as_str(), "Deferred");
     }
 }
+
+/// What the frontend can do with `rustcode-ui v1` blocks (#2484).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SmartUi {
+    /// The client never advertised Smart UI: say nothing about it.
+    #[default]
+    Unsupported,
+    /// The client can run blocks, but the user has the setting off.
+    Off,
+    /// The client runs blocks.
+    On,
+}

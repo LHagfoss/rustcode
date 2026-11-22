@@ -1253,7 +1253,7 @@ mod tests {
         let mut state = shared_state();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "x".repeat(800)));
+            .push(rustcode_core::ChatMessage::new("user", "x".repeat(800)));
         let report = output(execute_command(&mut state, "/context"));
         assert!(
             report.contains("| Category | Tokens | % of window |"),
@@ -1285,10 +1285,10 @@ mod tests {
         let mut state = shared_state();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "hi"));
+            .push(rustcode_core::ChatMessage::new("user", "hi"));
         state
             .history
-            .push(crate::app::ChatMessage::new("assistant", "hello"));
+            .push(rustcode_core::ChatMessage::new("assistant", "hello"));
         state.current_token_usage = Some(crate::app::TokenUsage {
             prompt_tokens: 12,
             completion_tokens: 3,
@@ -2170,7 +2170,7 @@ mod tests {
         let mut state = shared_state();
         state
             .history
-            .push(crate::app::ChatMessage::new("user", "hello"));
+            .push(rustcode_core::ChatMessage::new("user", "hello"));
         let limits = crate::remote::ProjectionLimits::default();
         let history = request(RemoteOperation::GetHistory {
             cursor: None,
