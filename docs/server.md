@@ -30,6 +30,26 @@ rc server connect   # ACP on stdin/stdout, relayed to the server
   gateway relays a paired desktop to the threads the app shows without a
   server behind it (`docs/remote.md` › Desktop ACP channel).
 
+## The app's engine
+
+The desktop app runs `rc server connect --or-standalone` (hidden flag), so it
+shares the server with every other client and a thread it started keeps
+running after the app closes. Before relaying, that process decides:
+
+| Running server | What the app gets |
+| --- | --- |
+| None | A server started from the app's `rc`, then relayed to |
+| Same version | Relayed to it |
+| Another version, no client, no running turn, not installed as a service | That server stopped, then one started from the app's `rc` |
+| Another version, in use or installed as a service | A standalone engine (`rc --acp`), as before |
+| Cannot be reached | A standalone engine |
+
+A debug build always runs standalone: it carries the release's version
+number but not its code. The choice and its reason are the first line the
+process writes to stderr (Settings › Diagnostics). An installed server
+updates itself (`### Staying up to date`), so a standalone engine after an
+app update lasts only until the service catches up.
+
 ## Where it lives
 
 The server's lock, description and socket are in `<config dir>/run/`

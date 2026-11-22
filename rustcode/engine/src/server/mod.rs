@@ -16,6 +16,7 @@
 //! (`engine_endpoint.rs`), so a paired device opens the threads the app shows
 //! without a server running behind it.
 
+pub(crate) mod attach;
 pub(crate) mod auto_update;
 pub(crate) mod engine_endpoint;
 pub(crate) mod listen;
@@ -23,6 +24,7 @@ mod lock;
 mod peer;
 pub(crate) mod supervise;
 
+pub use attach::connect_or_standalone;
 pub use lock::ServerInfo;
 
 use crate::acp::{AcpEngine, KillHarnesses};

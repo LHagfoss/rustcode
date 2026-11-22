@@ -1077,15 +1077,31 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(crate::cli::Commands::Server { command }) = cli_args.command.as_ref()
         && !matches!(command, crate::cli::ServerCommands::Run { .. })
-        && !matches!(command, crate::cli::ServerCommands::Connect)
+        && !matches!(command, crate::cli::ServerCommands::Connect { .. })
     {
         crate::server_command::run(command).await;
     }
     if let Some(crate::cli::Commands::Server {
-        command: crate::cli::ServerCommands::Connect,
+        command: crate::cli::ServerCommands::Connect { or_standalone },
     }) = cli_args.command.as_ref()
     {
-        let result = rustcode::server::connect(std::env::current_exe()?).await;
+        let program = std::env::current_exe()?;
+        if *or_standalone {
+            match rustcode::server::connect_or_standalone(&program).await {
+                Ok(true) => std::process::exit(0),
+                Ok(false) => {
+                    rustcode::shell_env::hydrate_all_missing();
+                    rustcode::acp::run_acp(cli_args.yolo).await?;
+                    rustcode::config::flush_history();
+                    return Ok(());
+                }
+                Err(error) => {
+                    eprintln!("rc server connect: {error:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        let result = rustcode::server::connect(program).await;
         let code = match result {
             Ok(()) => 0,
             Err(error) => {

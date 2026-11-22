@@ -42,7 +42,7 @@ async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
         ServerCommands::UpdateCli { json } => update_cli(*json).await,
         ServerCommands::Uninstall { yes } => uninstall(*yes).await,
         ServerCommands::Logs { follow, lines } => show_logs(*follow, *lines).await,
-        ServerCommands::Run { .. } | ServerCommands::Connect => {
+        ServerCommands::Run { .. } | ServerCommands::Connect { .. } => {
             unreachable!("run and connect are handled where the server starts")
         }
     }
