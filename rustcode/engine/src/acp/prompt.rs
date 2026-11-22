@@ -346,6 +346,35 @@ impl super::builtin::BuiltinAgent for StateAgent {
         })
     }
 
+    fn record_background_result<'a>(
+        &'a self,
+        session_id: &'a str,
+        task_id: &'a str,
+        call_id: &'a str,
+        output: crate::tools::ToolExecutionOutput,
+    ) -> super::builtin::AgentFuture<'a, ()> {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            state.history.push(crate::background_task_history_message(
+                task_id,
+                Some(call_id),
+                output,
+            ));
+            crate::sessions::save_session_history(session_id, &state.history);
+        })
+    }
+
+    fn last_active(&self) -> Option<String> {
+        self.state.try_lock().ok().and_then(|state| {
+            state
+                .history
+                .iter()
+                .rev()
+                .map(|message| message.timestamp.clone())
+                .find(|timestamp| !timestamp.is_empty())
+        })
+    }
+
     fn rewind<'a>(
         &'a self,
         user_index: usize,

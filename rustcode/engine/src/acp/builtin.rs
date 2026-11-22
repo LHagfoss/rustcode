@@ -77,6 +77,20 @@ pub(crate) trait BuiltinAgent: Send + Sync {
         origin: Option<serde_json::Value>,
     ) -> AgentFuture<'a, serde_json::Value>;
 
+    /// Record a background task's result in the transcript of `session_id`,
+    /// so the next request carries it.
+    fn record_background_result<'a>(
+        &'a self,
+        session_id: &'a str,
+        task_id: &'a str,
+        call_id: &'a str,
+        output: crate::tools::ToolExecutionOutput,
+    ) -> AgentFuture<'a, ()>;
+
+    /// When the thread last had a message, read without waiting: `None`
+    /// while a turn holds it or before its first message.
+    fn last_active(&self) -> Option<String>;
+
     /// Cut the conversation back to before user message `user_index`, whose
     /// text must be `text`. `first_only` refuses unless that message is still
     /// the whole transcript.

@@ -544,8 +544,9 @@ pub(super) async fn create_builtin_session(
     let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
     let terminal_overflow = Arc::new(AtomicBool::new(false));
     let state = Arc::new(Mutex::new(state));
+    let agent = super::prompt::builtin_agent(Arc::clone(&state));
     let task_sink = Arc::new(SessionTaskSink {
-        state: Arc::clone(&state),
+        agent: Arc::clone(&agent),
         clients: session_clients,
         runtime: tokio::runtime::Handle::current(),
         terminal_ledger: std::sync::Mutex::new(TerminalLedger::default()),
@@ -568,7 +569,7 @@ pub(super) async fn create_builtin_session(
     server.sessions.lock().await.insert(
         session_id.clone(),
         AcpSession {
-            agent: super::prompt::builtin_agent(Arc::clone(&state)),
+            agent,
             state: Arc::clone(&state),
             cwd,
             turns: Arc::new(SessionTurnState::new()),
@@ -674,12 +675,13 @@ pub(super) async fn acp_load_session(
         let loaded_usage = usage::usage_update(&state);
         let loaded_compaction = state.last_compaction.clone();
         let state = Arc::new(Mutex::new(state));
+        let agent = super::prompt::builtin_agent(Arc::clone(&state));
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
         let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
         let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
         let terminal_overflow = Arc::new(AtomicBool::new(false));
         let task_sink = Arc::new(SessionTaskSink {
-            state: Arc::clone(&state),
+            agent: Arc::clone(&agent),
             clients: session_clients,
             runtime: tokio::runtime::Handle::current(),
             terminal_ledger: std::sync::Mutex::new(TerminalLedger::default()),
@@ -702,7 +704,7 @@ pub(super) async fn acp_load_session(
         sessions.insert(
             session_id.clone(),
             AcpSession {
-                agent: super::prompt::builtin_agent(Arc::clone(&state)),
+                agent,
                 state,
                 cwd: cwd.clone(),
                 turns: Arc::new(SessionTurnState::new()),
