@@ -34,6 +34,22 @@ thread_local! {
     }) };
 }
 
+thread_local! {
+    static WORKSPACE_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// The workspace the current thread's tool call runs against, as the agent
+/// set it with [`set_workspace_root`]. Server code that resolves paths for a
+/// tool call (skills, memory) reads it here.
+pub fn active_workspace_root() -> Option<PathBuf> {
+    WORKSPACE_ROOT.with(|current| current.borrow().clone())
+}
+
+/// Set the workspace the current thread's tool calls run against.
+pub fn set_workspace_root(root: Option<PathBuf>) {
+    WORKSPACE_ROOT.with(|current| *current.borrow_mut() = root);
+}
+
 /// Run a legacy handler with an explicit context.
 pub fn with_context<T>(context: &ToolContext, f: impl FnOnce() -> T) -> T {
     ACTIVE_CONTEXT.with(|active| {
