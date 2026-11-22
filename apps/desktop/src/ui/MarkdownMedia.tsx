@@ -184,6 +184,14 @@ export function BlockedImage({ path, reason, remote }: { path: string; reason: s
   );
 }
 
+/** The tallest a picture in a reply draws: a 16:10 screenshot still fills a reply's width. */
+const PICTURE_MAX_HEIGHT = 480;
+
+function pictureFit(picture?: Picture): CSSProperties {
+  if (!picture?.width || !picture.height) return { maxHeight: PICTURE_MAX_HEIGHT };
+  return { maxWidth: `min(100%, ${(PICTURE_MAX_HEIGHT * picture.width) / picture.height}px)` };
+}
+
 export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const path = src ? picturePath(src) : null;
   const direct = src && !path && /^(https?:|data:image\/)/i.test(src) ? src : null;
@@ -253,7 +261,8 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
         height={picture?.height || undefined}
         onError={() => setState({ error: "Could not display this picture." })}
         draggable={false}
-        className="h-auto max-h-[360px] max-w-full rounded-xl object-contain"
+        style={pictureFit(picture)}
+        className="h-auto max-w-full rounded-xl"
       />
     </button>
   );
