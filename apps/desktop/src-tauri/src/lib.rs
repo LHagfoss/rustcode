@@ -23,6 +23,7 @@ mod update_log;
 mod updater;
 mod url_scheme;
 mod webview;
+mod webview_watch;
 
 use engine::{Engine, EngineEvent};
 use std::sync::Arc;
@@ -201,6 +202,8 @@ pub fn run() {
             }
             // The engine starts with the app, in parallel with the webview loading the UI.
             app.state::<EngineState>().prestart();
+            // The window's web process runs apart from the app: webview.log records its memory.
+            webview_watch::spawn(app.handle().clone());
             // An AppImage's bundled binary lives in a mount that goes away with the app, so the
             // copy a service runs is refreshed here; the copies outside the app catch up with the
             // engine this build ships, which is what makes an update reach them (#3487).

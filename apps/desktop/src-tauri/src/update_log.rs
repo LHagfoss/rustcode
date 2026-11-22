@@ -24,6 +24,12 @@ pub fn record_connection(event: &str, detail: &str) {
     record_in("connections.log", event, detail);
 }
 
+/// Appends to `webview.log`: the window's web process (pid, memory, CPU) and
+/// each time the page reloads or that process is replaced (src/webview_watch.rs).
+pub fn record_webview(event: &str, detail: &str) {
+    record_in("webview.log", event, detail);
+}
+
 fn record_in(file: &str, event: &str, detail: &str) {
     let Some(dir) = crate::diagnostics::config_dir() else {
         return;

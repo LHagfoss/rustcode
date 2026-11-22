@@ -300,7 +300,12 @@ impl Engine {
             return;
         }
         if self.supervising.swap(true, Ordering::SeqCst) {
-            // Already running: hand the new page a clean engine.
+            // Already running: hand the new page a clean engine. A reload the user did not ask for
+            // means the web process ended (killed, or out of memory), so it goes in webview.log.
+            crate::update_log::record_webview(
+                "webview.reloaded",
+                "the page loaded again; the engine restarts for it",
+            );
             self.restart();
             return;
         }
