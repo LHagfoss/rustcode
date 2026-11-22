@@ -807,12 +807,6 @@ export const ThreadRow = memo(function ThreadRow({
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
   const model = catalogModelTitle(session.model, harness);
   const startRename = () => {
-    // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
-    // says so instead of opening an editor whose save would only be refused (store.ts).
-    if (session.host) {
-      toast("A thread on another computer is renamed on that computer.", "info");
-      return;
-    }
     setTitle(session.title ?? "");
     // After the menu closes and gives focus back.
     setTimeout(() => setRenaming(true), 0);

@@ -1452,7 +1452,8 @@ fails too, the connection is closed with `internal`, which a client reports as
 Client requests and notifications are restricted to these exact methods:
 
 - `initialize`
-- `_rustcode/session/status`, `_rustcode/session/snooze`, `_rustcode/session/repair`
+- `_rustcode/session/status`, `_rustcode/session/snooze`, `_rustcode/session/title`,
+  `_rustcode/session/repair`
 - `_rustcode/session/replay`: a thread's transcript as `session/load` would
   replay it, without opening it (complete thread copies, `docs/data-store.md` ›
   Thread mirror)

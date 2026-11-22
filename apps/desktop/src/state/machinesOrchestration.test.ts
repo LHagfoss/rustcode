@@ -888,9 +888,18 @@ describe("the rest of the thread tools on another machine (orchestration 16)", (
     expect(asked).toMatchObject({ sessionId: "remote-1" });
   });
 
-  test("manage_queue and update_session reach a keyed thread; a rename stays with its machine", async () => {
-    withRemotes({});
+  test("manage_queue and update_session reach a keyed thread; its machine renames it", async () => {
+    const { sent } = withRemotes(
+      {},
+      { "_rustcode/session/title": (params) => ({ title: params.title, kept: false }) },
+    );
     withRemoteThread();
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        grants: { ...s.links.grants, [CALLER]: [...(s.links.grants[CALLER] ?? []), `organize:${REMOTE}`] },
+      },
+    }));
     const queue = await answerOrchestration({
       sessionId: CALLER,
       tool: "manage_queue",
@@ -903,8 +912,10 @@ describe("the rest of the thread tools on another machine (orchestration 16)", (
       tool: "update_session",
       args: { session_id: REMOTE, title: "New name" },
     });
-    expect(renamed.error).toMatchObject({ code: "not_allowed" });
-    expect(String((renamed.error as JsonObject).message)).toContain("renamed there");
+    expect(renamed.error).toBeUndefined();
+    expect(renamed).toMatchObject({ session_id: REMOTE, title: "New name" });
+    const asked = sent().find((frame) => frame.method === "_rustcode/session/title")?.params;
+    expect(asked).toMatchObject({ session_id: "remote-1", title: "New name", user: false });
     // Without a thread, a named machine has no "this thread" to change.
     const none = await answerOrchestration({
       sessionId: CALLER,

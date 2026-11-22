@@ -12,6 +12,7 @@ export const V2Method = {
   worktreeState: "_rustcode/worktrees/state",
   worktreeHandoff: "_rustcode/worktrees/handoff",
   sessionStatus: "_rustcode/session/status",
+  sessionTitle: "_rustcode/session/title",
   sessionPin: "_rustcode/session/pin",
   checkpointList: "_rustcode/checkpoints/list",
   checkpointDiff: "_rustcode/checkpoints/diff",

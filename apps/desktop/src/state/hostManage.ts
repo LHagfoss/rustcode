@@ -76,6 +76,7 @@ import {
   openThread,
   permissionModeOf,
   removeQueued,
+  renameRemoteThread,
   renameThread,
   runPrompt,
   sendDecisionFor,
@@ -218,15 +219,6 @@ export async function updateSession(
 ): Promise<JsonObject> {
   const target = manageTarget(caller, call.target, machine);
   if (isFailure(target)) return failureJson(target);
-  // A thread's name lives on the computer that owns it (`renameThread`).
-  if (call.title && isRemoteThread(target.id)) {
-    return failureJson(
-      failure(
-        "not_allowed",
-        `a thread on ${targetMachine(target.id) ?? "another computer"} is renamed there`,
-      ),
-    );
-  }
   if (target.id !== caller.id) {
     const changes = [
       call.title && `rename it to “${call.title}”`,
@@ -249,10 +241,18 @@ export async function updateSession(
   // another thread is the user's own approval above.
   // A title that answers the user's `/rename` replaces even a name they chose, and is theirs now.
   const asked = !!call.title && target.id === caller.id && takeAgentRename(target.id);
-  const titleStatus = call.title && target.id === caller.id && !asked ? await userTitled(target.id) : false;
-  const keepTitle = titleStatus !== false;
+  // A thread on another computer is named by its engine, which keeps a name the user chose there.
+  const remote = isRemoteThread(target.id);
+  const titleStatus =
+    call.title && target.id === caller.id && !asked && !remote ? await userTitled(target.id) : false;
+  let keepTitle = titleStatus !== false;
+  if (call.title && remote && call.title !== target.title) {
+    const renamed = await renameRemoteThread(target.id, call.title, { user: asked });
+    if (!renamed) return failureJson(failure("failed", "the thread could not be renamed"));
+    keepTitle = renamed.kept;
+  }
   const applied = await applyManagedChange(target, {
-    title: keepTitle ? undefined : call.title,
+    title: keepTitle || remote ? undefined : call.title,
     userTitle: asked,
     pinned: call.pinned,
     unread: call.unread,

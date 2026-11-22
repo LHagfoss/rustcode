@@ -167,6 +167,12 @@ under the same authorization as other desktop thread operations. An offline
 owner, or an older gateway that rejects the method, leaves the thread visible
 and reports an error.
 
+`_rustcode/session/title` takes `{ "session_id", "title", "user": <bool> }` and
+returns `{ "title", "kept" }`: how the app names a thread that runs on another
+machine, whose thread folder only that machine's engine writes. `user` is a
+name the user typed, recorded as theirs; without it a name the user chose stays
+and `kept` is true. The owner broadcasts the new title in `session_info_update`.
+
 `_rustcode/session/snooze` takes `{ "session_id", "until": <Unix milliseconds or null> }`
 and returns `{}`. The owner stores the deadline in `snooze.json`, includes it as
 `_meta.rustcode.snoozedUntil` in session lists, and broadcasts it in
