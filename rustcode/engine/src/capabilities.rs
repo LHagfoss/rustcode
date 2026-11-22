@@ -301,7 +301,7 @@ pub fn skill_markdown(name: &str, path: &Path) -> Result<String, String> {
 }
 
 fn mcp_workspace() -> std::path::PathBuf {
-    crate::tools::active_workspace_root()
+    rustcode_tools::active_workspace_root()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }

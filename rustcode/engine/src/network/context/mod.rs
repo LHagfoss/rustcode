@@ -2,7 +2,6 @@ mod budget;
 mod compact;
 mod memory;
 mod prune;
-mod tokens;
 
 #[cfg(test)]
 pub use budget::calculate_preflight_budget;
@@ -26,13 +25,13 @@ pub use memory::{
 pub(crate) use memory::{compact_context_block, compact_context_line};
 #[allow(unused_imports)]
 pub use prune::{DEFAULT_PRUNE_TOKEN_THRESHOLD, KEEP_RECENT_TURNS};
-pub use tokens::estimate_message_tokens;
-pub use tokens::{estimate_tokens, estimate_tool_schema_tokens};
+pub use rustcode_core::tokens::estimate_message_tokens;
+pub use rustcode_core::tokens::{estimate_tokens, estimate_tool_schema_tokens};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::{compact::*, prune::*, tokens::*};
+    use super::{compact::*, prune::*};
     use crate::app::ChatMessage;
     use tiktoken_rs::cl100k_base;
 
@@ -148,32 +147,6 @@ mod tests {
             bpe.encode_ordinary(rewritten).len()
         );
         assert_ne!(estimate_tokens(&original), estimate_tokens(rewritten));
-    }
-
-    /// Filling the memo past its capacity must not grow it without bound, and
-    /// must not corrupt the counts that survive.
-    #[test]
-    fn memo_stays_bounded_and_correct_under_churn() {
-        let bpe = cl100k_base().unwrap();
-        let hot = "the hot message that keeps being counted every pass";
-        let hot_expected = bpe.encode_ordinary(hot).len();
-
-        for i in 0..(TOKEN_MEMO_CAPACITY * 2 + 100) {
-            estimate_tokens(&format!("unique filler message number {i}"));
-            if i % 64 == 0 {
-                assert_eq!(estimate_tokens(hot), hot_expected);
-            }
-        }
-
-        let memo = TOKEN_MEMO
-            .get()
-            .expect("memo initialized by the calls above");
-        let guard = memo.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(guard.live.len() <= TOKEN_MEMO_CAPACITY);
-        assert!(guard.prev.len() <= TOKEN_MEMO_CAPACITY);
-        drop(guard);
-
-        assert_eq!(estimate_tokens(hot), hot_expected);
     }
 
     // Regression: session 1785593632937. A 6677-token read of src/main.rs was

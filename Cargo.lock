@@ -3740,6 +3740,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tiktoken-rs",
 ]
 
 [[package]]

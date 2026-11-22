@@ -686,6 +686,7 @@
 11 rustcode/core/rustcode-command/src/shell.rs
 4 rustcode/core/rustcode-core/src/activity.rs
 3 rustcode/core/rustcode-core/src/paste.rs
+4 rustcode/core/rustcode-core/src/tokens.rs
 2 rustcode/core/rustcode-core/src/update.rs
 5 rustcode/core/rustcode-lifecycle/src/lib.rs
 18 rustcode/core/rustcode-loop-detect/src/infrastructure.rs
@@ -855,7 +856,6 @@
 19 rustcode/engine/src/network/context/memory.rs
 20 rustcode/engine/src/network/context/mod.rs
 3 rustcode/engine/src/network/context/prune.rs
-4 rustcode/engine/src/network/context/tokens.rs
 7 rustcode/engine/src/network/context_tail.rs
 24 rustcode/engine/src/network/events.rs
 108 rustcode/engine/src/network/history.rs

@@ -1,9 +1,9 @@
 #[cfg(test)]
-use super::tokens::estimate_message_tokens;
-use super::tokens::{estimate_tokens, estimate_tool_schema_tokens};
-#[cfg(test)]
 use crate::app::ChatMessage;
 use crate::network::messages::estimate_msg_tokens;
+#[cfg(test)]
+use rustcode_core::tokens::estimate_message_tokens;
+use rustcode_core::tokens::{estimate_tokens, estimate_tool_schema_tokens};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PreflightBudget {
