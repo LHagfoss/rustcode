@@ -18,6 +18,7 @@ pub mod config;
 pub(crate) mod denial;
 pub(crate) mod detect;
 pub(crate) mod handoff;
+pub(crate) mod npx;
 pub(crate) mod pi_mcp;
 pub(crate) mod pressure;
 pub(crate) mod process;
