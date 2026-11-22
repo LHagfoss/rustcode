@@ -674,8 +674,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Toast:** `.rc-toast rounded-2xl` (strong glass and a slight shadow), 380px wide, `py-1.5 pl-3 pr-1.5 text-callout`: an icon
   (info `text-fg-muted`, success `text-success`, error `text-danger`, a
   spinner while it has progress), the text in `text-fg` (up to 3 lines), at
-  most one action as accent text (`h-6 px-2 font-medium text-accent`, a
-  `bg-accent/10` hover) kept tight beside a quiet close button.
+  most one action, and a close button. Every card is at least two lines tall
+  (60px) with the text centred; the right edge is a column of 24px icon
+  buttons, × at the top and the action's icon in the accent below it (Undo ↶,
+  Open ↗, Release page, Restart, Move…), each named by a tooltip on its left.
+  An action without an icon stays accent text.
   Progress is a 2px accent bar along its foot. `Toaster` shows at most three
   (`state/toasts.ts` enforces the queue), newest on top: at rest only the
   front card is fully shown, the others taking its height with their text
