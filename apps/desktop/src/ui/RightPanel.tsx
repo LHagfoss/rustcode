@@ -11,7 +11,7 @@
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
-// default), Escape inside the panel closes it, focus moves in when a shortcut
+// default), Escape inside the panel and the header's toggle close it (the card has no close button), focus moves in when a shortcut
 // opens it with nothing focused, and closing hands the focus back to the
 // header's toggle. The card is beside the composer rather than over it, so a
 // field being typed in always keeps the keyboard.
@@ -29,11 +29,10 @@ import {
 import { relationshipOf } from "../acp/types";
 import { observeSize } from "../lib/resize";
 import { readStorage, writeStorage } from "../lib/storage";
-import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
+import { type AppState, setPanel, showPanel, useApp } from "../state/store";
 import { PANEL_SHEET_AT } from "../state/viewActions";
-import { X } from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
-import { cx, Tooltip } from "./primitives";
+import { cx, Segments } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel").then((m) => ({ default: m.ChangesPanel })));
@@ -147,7 +146,6 @@ function headerToggle(): HTMLElement | null {
 
 export function RightPanel() {
   const panel = useApp((s) => s.panel);
-  const panelKey = useShortcutHint("toggle-panel");
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const peekOn = useApp((s) => !!s.peekId);
   // A side chat opened beside this thread gives its tab that name.
@@ -335,58 +333,27 @@ export function RightPanel() {
 
   const contents = kind && (
     <>
-      <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-2 px-2">
-        {/* The views keep their labels and scroll before the close button leaves the row. */}
+      <div data-tauri-drag-region className="flex h-12 shrink-0 items-center gap-2 px-3">
+        {/* The views keep their labels and scroll sideways when the card is narrow. The header's
+            toggle and Escape close the panel, so the card carries no close button of its own. */}
         <div className="flex min-w-0 items-center overflow-x-auto">
           <div className="flex shrink-0 items-center">
             {tabs.length > 1 ? (
-              // Quiet text tabs, not the white segmented pill: the panel is a secondary surface
-              // beside the chat and should not outshine it. The pick is the brighter label with a
-              // hairline under it.
-              <div role="tablist" aria-label="Panel" className="flex items-center gap-0.5">
-                {tabs.map((tab) => {
-                  const on = tab.value === kind;
-                  return (
-                    <button
-                      key={tab.value}
-                      type="button"
-                      role="tab"
-                      aria-selected={on}
-                      aria-controls={PANE_ID}
-                      onClick={() => showPanel(tab.value)}
-                      className={cx(
-                        "relative h-7 whitespace-nowrap rounded-md px-2 text-callout",
-                        on ? "text-fg" : "text-fg-faint hover:text-fg-muted",
-                      )}
-                    >
-                      {tab.label}
-                      <span
-                        aria-hidden
-                        className={cx(
-                          "absolute inset-x-2 bottom-0 h-px rounded-full",
-                          on ? "bg-fg-muted" : "bg-transparent",
-                        )}
-                      />
-                    </button>
-                  );
-                })}
-              </div>
+              // Soft pills, as T3 Code's panel tabs: the pick sits on a quiet fill, never the white
+              // knob, so the panel stays secondary to the chat beside it.
+              <Segments
+                label="Panel"
+                value={kind}
+                options={tabs}
+                onChange={showPanel}
+                tabs={{ controls: PANE_ID }}
+              />
             ) : (
               <span className="truncate px-1 font-semibold text-body">{tabs[0]?.label}</span>
             )}
           </div>
         </div>
         <span className="flex-1" data-tauri-drag-region />
-        <Tooltip label={`Close (${panelKey})`}>
-          <button
-            type="button"
-            aria-label="Close panel"
-            onClick={() => setPanel(null)}
-            className="flex size-7 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
-          >
-            <X size={14} />
-          </button>
-        </Tooltip>
       </div>
       <Suspense fallback={<div className="flex-1" />}>
         {kind === "details" && <ThreadDetails />}

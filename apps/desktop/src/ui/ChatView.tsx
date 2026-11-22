@@ -176,7 +176,7 @@ function DetailsHeaderButton() {
       on={on}
       onClick={toggleRightPanel}
     >
-      <PanelRight size={14} />
+      <PanelRight size={16} />
     </ClusterButton>
   );
 }

@@ -594,6 +594,8 @@ export function Switch({
  * Segmented control: a track with a sliding thumb. The track fits its segments (`w-fit`), so a flex
  * column that stretches its children never leaves the buttons at one end of a full-width track;
  * `fill` is for a track that spans its card, where the segments share the width equally.
+ * `tabs` makes it a tab strip for the views of a panel: tab roles, panel-sized labels, and a quiet
+ * thumb on the soft fill instead of the white knob, so a secondary surface does not outshine the chat.
  */
 export function Segments<T extends string>({
   value,
@@ -602,6 +604,7 @@ export function Segments<T extends string>({
   label,
   onIntent,
   fill,
+  tabs,
 }: {
   value: T;
   options: { value: T; label: string; disabled?: boolean }[];
@@ -611,6 +614,8 @@ export function Segments<T extends string>({
   onIntent?: (value: T) => void;
   /** Span the container, the segments sharing the width equally (a card's own toggle). */
   fill?: boolean;
+  /** A tab strip: the id of the panel the tabs control. */
+  tabs?: { controls: string };
 }) {
   // The selected segment's pill slides to the new one instead of jumping.
   const group = useRef<HTMLDivElement>(null);
@@ -618,37 +623,47 @@ export function Segments<T extends string>({
   const intent = useIntentRest((next: T) => onIntent?.(next));
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures when the choice or labels change
   useLayoutEffect(() => {
-    const el = group.current?.querySelector<HTMLElement>('[aria-checked="true"]');
+    const el = group.current?.querySelector<HTMLElement>("[data-on]");
     setThumb(el ? { left: el.offsetLeft, width: el.offsetWidth } : null);
   }, [value, options.map((o) => o.label).join()]);
   // The pick's label sits on the white pill, so it takes the pill's dark fg. Before the first
   // measure the button draws the pill itself; a measured pill with no width (a track measured while
   // hidden) draws none, so its label keeps the track's own fg instead of dark on dark.
-  const selected = thumb
-    ? thumb.width > 0
-      ? "text-knob-fg"
-      : "text-fg"
-    : "bg-knob text-knob-fg shadow-knob";
+  const selected = tabs
+    ? cx("text-fg", !thumb && "bg-fill")
+    : thumb
+      ? thumb.width > 0
+        ? "text-knob-fg"
+        : "text-fg"
+      : "bg-knob text-knob-fg shadow-knob";
   return (
     <div
       ref={group}
-      role="radiogroup"
-      aria-label={label}
-      className={cx("relative rounded-full bg-fill p-[2px]", fill ? "flex w-full" : "inline-flex w-fit")}
+      {...{ role: tabs ? "tablist" : "radiogroup", "aria-label": label }}
+      className={cx(
+        "relative",
+        tabs ? "gap-1" : "rounded-full bg-fill p-[2px]",
+        fill ? "flex w-full" : "inline-flex w-fit",
+      )}
     >
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-0 left-0 h-5 rounded-full bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
-          style={{ transform: `translate(${thumb.left}px, 2px)`, width: thumb.width }}
+          className={cx(
+            "absolute top-0 left-0 transition-[transform,width] duration-200 ease-snappy",
+            tabs ? "h-7 rounded-lg bg-fill" : "h-5 rounded-full bg-knob shadow-knob",
+          )}
+          style={{ transform: `translate(${thumb.left}px, ${tabs ? 0 : 2}px)`, width: thumb.width }}
         />
       )}
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
-          role="radio"
-          aria-checked={o.value === value}
+          data-on={o.value === value || undefined}
+          {...(tabs
+            ? { role: "tab", "aria-selected": o.value === value, "aria-controls": tabs.controls }
+            : { role: "radio", "aria-checked": o.value === value })}
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           onPointerEnter={() => intent.start(o.value)}
@@ -656,7 +671,8 @@ export function Segments<T extends string>({
           onFocus={() => intent.start(o.value)}
           onBlur={intent.cancel}
           className={cx(
-            "relative h-5 whitespace-nowrap rounded-full px-2 font-medium text-caption disabled:opacity-40",
+            "relative whitespace-nowrap font-medium disabled:opacity-40",
+            tabs ? "h-7 rounded-lg px-3 text-callout" : "h-5 rounded-full px-2 text-caption",
             fill && "min-w-0 flex-1",
             o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}
