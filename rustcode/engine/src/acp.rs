@@ -281,7 +281,7 @@ impl TerminalLedger {
 }
 
 struct SessionTaskSink {
-    state: Arc<Mutex<crate::app::AppState>>,
+    agent: Arc<dyn builtin::BuiltinAgent>,
     /// Where the session's updates go: the clients that have it.
     clients: clients::SessionClients,
     runtime: tokio::runtime::Handle,
@@ -315,7 +315,7 @@ impl SessionTaskSink {
             .call_id()
             .map(str::to_owned)
             .unwrap_or_else(|| task_id.clone());
-        let state = Arc::clone(&self.state);
+        let agent = Arc::clone(&self.agent);
         let clients = self.clients.clone();
         let terminal_backlog = Arc::clone(&self.terminal_backlog);
         let terminal_overflow = Arc::clone(&self.terminal_overflow);
@@ -329,13 +329,14 @@ impl SessionTaskSink {
                     // The record answers the card the client already shows.
                     // That call was answered when the task went to the
                     // background, so the provider request carries it as text.
-                    let mut state = state.lock().await;
-                    state.history.push(crate::background_task_history_message(
-                        &task_id,
-                        Some(&call_id),
-                        output.clone(),
-                    ));
-                    crate::sessions::save_session_history(&event_session_id, &state.history);
+                    agent
+                        .record_background_result(
+                            &event_session_id,
+                            &task_id,
+                            &call_id,
+                            output.clone(),
+                        )
+                        .await;
                 }
             }
             let update = SessionUpdate::ToolCallUpdate(
@@ -556,19 +557,7 @@ impl AcpServer {
                 // Read without waiting: a busy thread's clock is its last
                 // message, and a lock held elsewhere only costs it its place
                 // in the order.
-                let last_active = session
-                    .state
-                    .try_lock()
-                    .ok()
-                    .and_then(|state| {
-                        state
-                            .history
-                            .iter()
-                            .rev()
-                            .map(|message| message.timestamp.clone())
-                            .find(|timestamp| !timestamp.is_empty())
-                    })
-                    .unwrap_or_default();
+                let last_active = session.agent.last_active().unwrap_or_default();
                 candidates.push(Candidate {
                     last_active,
                     target: CandidateTarget::Builtin(remote::RemoteSession::from_acp(
