@@ -385,12 +385,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   {
     section: "appearance",
     title: "Transparency",
-    keywords: "opacity see through translucent glass sidebar window alpha",
-  },
-  {
-    section: "appearance",
-    title: "Blur",
-    keywords: "glass frosted backdrop blur radius pixels softness",
+    keywords: "opacity see through translucent sidebar window alpha",
   },
   {
     section: "appearance",
