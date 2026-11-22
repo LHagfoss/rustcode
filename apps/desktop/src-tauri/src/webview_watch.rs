@@ -17,6 +17,8 @@ const SUMMARY_EVERY: u32 = 60;
 const MEMORY_STEPS_MB: &[u64] = &[1024, 2048, 4096, 8192];
 /// CPU over a whole interval above this, in percent of one core, is "busy".
 const BUSY_PERCENT: f64 = 50.0;
+/// A busy stretch is recorded at its first minute, then this often (in minutes) while it lasts.
+const BUSY_REPEAT_MINUTES: u32 = 10;
 
 /// One reading of the web process.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,8 +74,7 @@ impl Watch {
                 let percent = cpu_percent(last.cpu_ns, now.cpu_ns, interval);
                 if percent >= BUSY_PERCENT {
                     self.busy_streak += 1;
-                    // The first busy minute, then every ten while it lasts.
-                    if self.busy_streak % 10 == 1 {
+                    if self.busy_streak % BUSY_REPEAT_MINUTES == 1 {
                         lines.push((
                             "webview.busy",
                             format!(
@@ -223,7 +224,8 @@ mod macos {
             .filter(|pid| *pid > 0)
     }
 
-    /// Memory and CPU time of `pid`, which belongs to the same user.
+    /// Memory and CPU time of `pid`, which belongs to the same user. CPU times come in Mach ticks
+    /// (nanoseconds on Intel, 125/3 ns on Apple silicon), converted with the timebase.
     pub fn sample(pid: i32) -> Option<Sample> {
         let mut info = RusageInfoV0::default();
         let mut timebase = Timebase::default();
@@ -235,7 +237,6 @@ mod macos {
             mach_timebase_info(&mut timebase);
         }
         let ticks = info.user_time.saturating_add(info.system_time) as u128;
-        // CPU times are in Mach ticks (nanoseconds on Intel, 125/3 ns on Apple silicon).
         let cpu_ns = if timebase.denom == 0 {
             ticks
         } else {
@@ -302,7 +303,6 @@ mod tests {
         watch.observe(at(10, 200, 0), INTERVAL);
         let mut busy = 0;
         for minute in 1..=12 {
-            // 45 s of CPU a minute: 75%.
             busy += events(&watch.observe(at(10, 200, minute * 45), INTERVAL))
                 .iter()
                 .filter(|e| **e == "webview.busy")
