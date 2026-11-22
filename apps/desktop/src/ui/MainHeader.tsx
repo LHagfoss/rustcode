@@ -14,12 +14,12 @@ import { useSettingsAttention } from "../state/settingsAttention";
 import {
   openSettings,
   type SettingsSection,
-  startNewThread,
+  setSwitcher,
   toggleSidebar,
   useApp,
   useShortcutHint,
 } from "../state/store";
-import { Settings as Gear, PanelLeft, SquarePen } from "./icons";
+import { Settings as Gear, PanelLeft, Search } from "./icons";
 import { Cluster, ClusterButton, cx } from "./primitives";
 import { TITLEBAR_HEIGHT, useLightsInset } from "./Titlebar";
 import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
@@ -57,11 +57,24 @@ export function SettingsButton() {
 /** The header's height: a view under it starts its content this far down. */
 export const HEADER_HEIGHT = TITLEBAR_HEIGHT;
 
+export function SidebarCluster() {
+  const toggleKey = useShortcutHint("toggle-sidebar");
+  return (
+    <Cluster>
+      <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
+        <PanelLeft size={14} />
+      </ClusterButton>
+      <ClusterButton label="Search threads" tooltip="Search threads (⌘K)" onClick={() => setSwitcher(true)}>
+        <Search size={14} />
+      </ClusterButton>
+      <SettingsButton />
+    </Cluster>
+  );
+}
+
 /** A header for views that replace the chat: clear of the traffic lights and the window's controls. */
 export function ViewHeader({ title, children }: { title: ReactNode; children?: ReactNode }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
-  const toggleKey = useShortcutHint("toggle-sidebar");
-  const newKey = useShortcutHint("new-thread");
   const lightsInset = useLightsInset();
   const controlsInset = windowControlsInset(appPlatform());
   const maximizes = appPlatform() === "windows";
@@ -76,21 +89,7 @@ export function ViewHeader({ title, children }: { title: ReactNode; children?: R
         ...(controlsInset ? { paddingRight: controlsInset } : null),
       }}
     >
-      {sidebarHidden && (
-        <Cluster>
-          <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
-            <PanelLeft size={14} />
-          </ClusterButton>
-          <SettingsButton />
-          <ClusterButton
-            label="New thread"
-            tooltip={`New thread (${newKey})`}
-            onClick={() => startNewThread()}
-          >
-            <SquarePen size={14} />
-          </ClusterButton>
-        </Cluster>
-      )}
+      {sidebarHidden && <SidebarCluster />}
       <h1 className="min-w-0 flex-1 truncate font-semibold text-body" data-tauri-drag-region>
         {title}
       </h1>
@@ -112,7 +111,6 @@ export function MainHeader({
   lights?: boolean;
 }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
-  const toggleKey = useShortcutHint("toggle-sidebar");
   const lightsInset = useLightsInset();
   const controlsInset = windowControlsInset(appPlatform());
   const underLights = lights || sidebarHidden;
@@ -135,14 +133,7 @@ export function MainHeader({
         ...(controlsInset ? { paddingRight: controlsInset } : null),
       }}
     >
-      {sidebarHidden && !lights && (
-        <Cluster>
-          <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
-            <PanelLeft size={14} />
-          </ClusterButton>
-          <SettingsButton />
-        </Cluster>
-      )}
+      {sidebarHidden && !lights && <SidebarCluster />}
       <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
         {title}
       </div>

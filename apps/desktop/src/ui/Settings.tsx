@@ -955,7 +955,7 @@ export function SettingsNav() {
       tabIndex={-1}
       aria-label="Settings sections"
       data-focus-area="sections"
-      className="flex h-full min-h-0 flex-col gap-3 px-3 pb-3 outline-none"
+      className="rc-in flex h-full min-h-0 flex-col gap-3 px-3 pb-3 outline-none"
     >
       <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
         <Search size={16} className="shrink-0 text-fg-faint" />
@@ -1108,7 +1108,10 @@ export function SettingsPage() {
       <RowResets>
         <PanelHeader label={label} />
         <main aria-label={label} data-focus-area="section" className="scroll-stable min-h-0 flex-1">
-          <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
+          <div
+            key={`${section}:${machine ?? ""}`}
+            className="rc-in @container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24"
+          >
             <Suspense fallback={<Loading error={null} />}>
               {section === "general" && <GeneralPage />}
               {section === "chat" && <ChatPage />}
