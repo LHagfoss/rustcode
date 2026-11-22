@@ -394,4 +394,77 @@ describe("mergeUsagePlans", () => {
     expect(grouped[0]!.plans.map((entry) => entry.plan.name)).toEqual(["Paral 2", "Work"]);
     expect(planProvenance(grouped[0]!.plans[1]!, NOW)?.label).toBe("Lagos VPS");
   });
+
+  test("merges Antigravity's quota groups by label, not one group's weekly window with another's", () => {
+    const groups = (): UsagePlan =>
+      plan({
+        id: "antigravity",
+        name: "Model quotas",
+        via: "Antigravity",
+        harness: "antigravity",
+        account: null,
+        plan: undefined,
+        windows: [
+          { label: "Gemini Models · Weekly", usedPercent: 67, minutes: 10_080, resetsAt: RESET_WK },
+          { label: "Gemini Models · 5-hour", usedPercent: 39, minutes: 300, resetsAt: RESET_5H },
+          {
+            label: "Claude and GPT models · Weekly",
+            usedPercent: 0,
+            minutes: 10_080,
+            resetsAt: RESET_WK + 1,
+          },
+          {
+            label: "Gemini 4 Argon · Weekly",
+            usedPercent: 100,
+            minutes: 10_080,
+            resetsAt: RESET_WK + 4 * 3_600_000,
+          },
+        ],
+      });
+
+    const merged = mergeUsagePlans(
+      [
+        { host: "", machine: "This computer", plans: [groups()], readAt: NOW },
+        { host: "vps", machine: "Lagos VPS", plans: [groups()], readAt: NOW },
+      ],
+      NOW,
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(planProvenance(merged[0]!, NOW)?.label).toBe("This computer · Lagos VPS");
+  });
+
+  test("draws the newer numbers, not the answer that arrived last", () => {
+    const local = plan({
+      windows: [
+        { label: "5-hour", usedPercent: 97, minutes: 300, resetsAt: RESET_5H },
+        { label: "Weekly", usedPercent: 40, minutes: 10_080, resetsAt: RESET_WK },
+      ],
+    });
+    const alreadyReset = plan({
+      windows: [
+        { label: "5-hour", usedPercent: 61, minutes: 300, resetsAt: NOW - 3_600_000 },
+        { label: "Weekly", usedPercent: 27, minutes: 10_080, resetsAt: RESET_WK },
+      ],
+    });
+    const lessUsedSameWindow = plan({
+      windows: [
+        { label: "5-hour", usedPercent: 80, minutes: 300, resetsAt: RESET_5H },
+        { label: "Weekly", usedPercent: 38, minutes: 10_080, resetsAt: RESET_WK },
+      ],
+    });
+
+    for (const remote of [alreadyReset, lessUsedSameWindow]) {
+      const merged = mergeUsagePlans(
+        [
+          { host: "", machine: "This computer", plans: [local], readAt: NOW - 120_000 },
+          { host: "vps", machine: "Lagos VPS", plans: [remote], readAt: NOW },
+        ],
+        NOW,
+      );
+      expect(merged).toHaveLength(1);
+      expect(merged[0]!.winnerHost).toBe("");
+      expect(merged[0]!.plan.windows[0]?.usedPercent).toBe(97);
+    }
+  });
 });
