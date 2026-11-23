@@ -76,6 +76,7 @@ export {
 import {
   clearSettledNotifications,
   clearStatusMark,
+  guardListedStatus,
   leaveSettledThreads,
   reconcileStatusMarks,
   sessionById,
@@ -1434,6 +1435,7 @@ export async function refreshSessions(options: { quiet?: boolean } = {}): Promis
     return;
   }
   try {
+    const guardStatus = guardListedStatus();
     const all: SessionSummary[] = [];
     let cursor: string | undefined;
     let capped = false;
@@ -1447,7 +1449,7 @@ export async function refreshSessions(options: { quiet?: boolean } = {}): Promis
     }
     // A thread trashed while this read was out is not news that it came back.
     for (let i = all.length - 1; i >= 0; i--) if (isTombstoned(all[i]?.id ?? "")) all.splice(i, 1);
-    // The engine's list is the newer truth about a status.
+    for (let i = 0; i < all.length; i++) all[i] = guardStatus(all[i]!);
     reconcileStatusMarks(all);
     for (const x of all)
       if (x.snoozedUntil !== undefined)

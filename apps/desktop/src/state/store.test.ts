@@ -3183,7 +3183,9 @@ describe("engine controller with the mock engine", () => {
     setPanel("changes");
     expect(useApp.getState().panel).toBe("changes");
 
-    await settleThread(a!.id);
+    const saving = settleThread(a!.id);
+    expect(useApp.getState().selectedId).toBeNull();
+    await saving;
     let s = useApp.getState();
     expect(s.selectedId).toBeNull();
     expect(s.panel).toBeNull();
@@ -3264,11 +3266,14 @@ describe("engine controller with the mock engine", () => {
     expect(statusOf(useApp.getState(), second!.id)).toBe("done");
     expect(useApp.getState().selectedId).toBe(first!.id);
 
+    const staleList = refreshSessions({ quiet: true });
     await selfSettle(first!.id);
+    await staleList;
     const state = useApp.getState();
     expect(state.selectedId).toBeNull();
     expect(state.panel).toBeNull();
     expect(state.projectCwd).toBe(first!.cwd);
+    expect(statusOf(state, first!.id)).toBe("done");
   });
 
   test("settling on the board stays on the board, and its Undo restores every status", async () => {
