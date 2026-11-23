@@ -12,8 +12,8 @@
     "build": "vite build",
     "build:hub": "VITE_TRANSPORT=hub vite build --outDir dist-hub",
     "typecheck": "tsc --noEmit -p .",
-    "lint": "biome check src scripts",
-    "format": "biome check --write src scripts",
+    "lint": "biome check src scripts e2e playwright.config.ts",
+    "format": "biome check --write src scripts e2e playwright.config.ts",
     "test": "bun test src",
     "tauri": "tauri",
     "bundle:engine": "bun scripts/bundle-engine.ts",
@@ -22,7 +22,8 @@
     "bundle:debug": "bun scripts/bundle-engine.ts && bun scripts/bundle-version.ts && bun scripts/app-icon.ts && tauri build --debug --config src-tauri/tauri.bundle.conf.json --config src-tauri/gen-version/tauri.conf.json --config src-tauri/gen-icon/tauri.conf.json",
     "check": "bun scripts/ensure-deps.ts && bun run typecheck && bun run lint && bun run test && bun run build",
     "perf": "bun scripts/perf.ts",
-    "perf:native": "bun scripts/perf-native.ts"
+    "perf:native": "bun scripts/perf-native.ts",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource-variable/inter": "5.2.8",
@@ -46,6 +47,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
+    "@playwright/test": "1.65.1",
     "@tailwindcss/vite": "4.3.5",
     "@tauri-apps/cli": "2.12.4",
     "@types/bun": "1.4.4",

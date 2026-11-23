@@ -2,3 +2,7 @@
 /src-tauri/binaries/
 # The release version, written by scripts/bundle-version.ts.
 /src-tauri/gen-version/
+# Playwright output from `bun run e2e`.
+/test-results/
+/playwright-report/
+/dist-e2e/

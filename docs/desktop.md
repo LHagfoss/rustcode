@@ -317,7 +317,10 @@ Chrome on the mock at native scale (`open --show` for a visible window) (`eval`,
 `drag`, `scroll`, `move`, `type`, `press`, `screenshot`, `close`), never a
 browser pane in the user's terminal; WebKit
 (the app) can differ from Chrome, so check alignment-sensitive changes in the
-app. Releases:
+app. End-to-end: `bun run e2e` in `apps/desktop` runs the Playwright flows in
+`e2e/` against a mock production build in the installed Chrome (`E2E_CHROME`
+names another binary); Desktop CI runs them in a job of their own. Add a flow
+for a user path a unit test cannot reach, not for each component. Releases:
 `scripts/release-notes.sh > notes.md`, edit, then
 `scripts/release.sh --version X --notes-file notes.md --yes`.
 
