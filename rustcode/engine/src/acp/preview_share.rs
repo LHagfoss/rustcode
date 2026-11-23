@@ -145,8 +145,6 @@ async fn run(
     cancel: CancellationToken,
     ready: tokio::sync::oneshot::Sender<Result<Value, String>>,
 ) -> Result<(), String> {
-    // An existing account tunnel can carry its own ingress rules. Give this
-    // process an isolated configuration so only the approved port is routed.
     let config = match tempfile::NamedTempFile::new().and_then(|mut file| {
         std::io::Write::write_all(&mut file, b"{}\n")?;
         Ok(file)

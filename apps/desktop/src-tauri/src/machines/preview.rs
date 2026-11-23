@@ -37,8 +37,6 @@ pub async fn machines_preview(
     let machine = Arc::new(machine);
     let session_id = Arc::new(session_id);
 
-    // Check the remote is reachable before returning a URL. Reuse the first
-    // connected channel for the first browser socket.
     let first = connector
         .connect_raced(&machine, &tokens)
         .await
