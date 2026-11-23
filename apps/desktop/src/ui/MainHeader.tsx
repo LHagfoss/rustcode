@@ -73,7 +73,7 @@ export function SidebarCluster() {
 }
 
 /** A header for views that replace the chat: clear of the traffic lights and the window's controls. */
-export function ViewHeader({ title, children }: { title: ReactNode; children?: ReactNode }) {
+export function ViewHeader({ title, children }: { title?: ReactNode; children?: ReactNode }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
   const lightsInset = useLightsInset();
   const controlsInset = windowControlsInset(appPlatform());
@@ -90,9 +90,13 @@ export function ViewHeader({ title, children }: { title: ReactNode; children?: R
       }}
     >
       {sidebarHidden && <SidebarCluster />}
-      <h1 className="min-w-0 flex-1 truncate font-semibold text-body" data-tauri-drag-region>
-        {title}
-      </h1>
+      {title == null ? (
+        <div className="flex-1 self-stretch" data-tauri-drag-region />
+      ) : (
+        <h1 className="min-w-0 flex-1 truncate font-semibold text-body" data-tauri-drag-region>
+          {title}
+        </h1>
+      )}
       {children}
     </header>
   );
