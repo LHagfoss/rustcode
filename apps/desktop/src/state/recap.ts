@@ -1,116 +1,125 @@
-// The while-you-were-away recap: what the threads did while the app was idle for
-// hours, in three groups — what needs you, what failed, and what finished — so a
-// return after lunch is one card rather than a hunt through the list. Pure, so the
-// card, its settings and its tests agree on when a recap is due and what it says.
+// The chat recap: when the user comes back to a chat they have not looked at for a
+// while (Settings › General, an hour by default), a card at the top of that chat
+// says what they asked last, where the reply left off and whether the thread is
+// still working, waits on them or failed. It is per chat, like Claude Code's
+// recap, and built from the transcript, so it costs no model turn. Pure, so the
+// card, its setting and its tests agree on when a recap is due and what it says.
 
-import type { SessionSummary } from "../acp/types";
-import type { InboxItem } from "./inbox";
+import type { TranscriptItem } from "./thread";
 
-/** The default idle time before a return earns a recap (Settings › Notifications). */
-export const RECAP_HOURS_DEFAULT = 4;
+/** The default time a chat goes unseen before a return earns a recap. */
+export const RECAP_MINUTES_DEFAULT = 60;
 
-/** The idle times the setting offers. */
-export const RECAP_HOUR_OPTIONS = [1, 4, 8, 24] as const;
+/** The times the setting offers, in minutes. */
+export const RECAP_MINUTE_OPTIONS = [15, 60, 240, 480] as const;
 
-const HOUR = 3_600_000;
+const MINUTE = 60_000;
 
-/** A stored recap threshold, kept to one of {@link RECAP_HOUR_OPTIONS}. */
-export function parseRecapHours(value: string | null): number {
+/** How many chats keep a last-seen time; the oldest go first. */
+export const SEEN_LIMIT = 300;
+
+/** A stored recap threshold, kept to one of {@link RECAP_MINUTE_OPTIONS}. */
+export function parseRecapMinutes(value: string | null): number {
   const n = value === null ? Number.NaN : Number.parseInt(value, 10);
-  return (RECAP_HOUR_OPTIONS as readonly number[]).includes(n) ? n : RECAP_HOURS_DEFAULT;
+  return (RECAP_MINUTE_OPTIONS as readonly number[]).includes(n) ? n : RECAP_MINUTES_DEFAULT;
+}
+
+/** The setting's label for a threshold: `15m`, `1h`, `4h`. */
+export function recapMinutesLabel(minutes: number): string {
+  return minutes < 60 ? `${minutes}m` : `${minutes / 60}h`;
 }
 
 /**
- * Whether the gap since the app was last used is long enough to have missed
- * something. A first run has no last time and never earns a recap.
+ * Whether the chat went unseen long enough to earn a recap. A chat never seen
+ * before has no last time and never earns one: there is nothing to come back to.
  */
-export function awayDue(lastActive: number | undefined, now: number, hours: number): boolean {
-  if (!lastActive) return false;
-  return now - lastActive >= hours * HOUR;
+export function recapDue(seenAt: number | undefined, now: number, minutes: number): boolean {
+  if (!seenAt) return false;
+  return now - seenAt >= minutes * MINUTE;
 }
 
-/** One thread in the failed or done group. */
-export interface RecapThread {
-  threadId: string;
-  title: string;
-  project: string;
-  at: number;
+/** The last-seen map with only its {@link SEEN_LIMIT} most recent chats. */
+export function pruneSeen(seen: Readonly<Record<string, number>>): Record<string, number> {
+  const entries = Object.entries(seen).filter(([, at]) => Number.isFinite(at) && at > 0);
+  if (entries.length <= SEEN_LIMIT) return Object.fromEntries(entries);
+  return Object.fromEntries(entries.sort((a, b) => b[1] - a[1]).slice(0, SEEN_LIMIT));
 }
 
-/** What the recap card says. */
-export interface Recap {
-  /** When the user left, for "while you were away". */
-  since: number;
-  /** What still needs you, newest first. */
-  needs: InboxItem[];
-  /** Turns that failed since then, newest first. */
-  failed: RecapThread[];
-  /** Threads that finished since then, newest first. */
-  done: RecapThread[];
+/** Where the chat stands. */
+export type RecapState = "running" | "needs" | "failed" | "done";
+
+/** What the card says. */
+export interface ChatRecap {
+  /** The user's last message, shortened. */
+  asked?: string;
+  /** The opening of the last reply to it, shortened. */
+  reply?: string;
+  state: RecapState;
 }
 
-/** What {@link recapOf} reads. */
-export interface RecapRead {
-  /** The inbox's current rows: what needs the user now. */
-  items: readonly InboxItem[];
-  /** Threads whose turn finished, with when (state/store.ts `finished`). */
-  finished: Readonly<Record<string, number>>;
-  /** The thread list, for titles and folders. */
-  sessions: readonly SessionSummary[];
-  /** Titles of loaded threads, which are fresher than the list's. */
-  threads: Readonly<Record<string, { title?: string }>>;
-  /** When the user left. */
-  since: number;
-  /** Threads asleep until a time: what they do is not in the card until their snooze ends. */
-  snoozed?: Readonly<Record<string, number>>;
+/** What {@link chatRecapOf} reads from a thread. */
+export interface ChatRecapRead {
+  items: readonly TranscriptItem[];
+  /** Requests waiting on the user. */
+  pending: number;
+  running: boolean;
 }
 
-function titleOf(read: RecapRead, id: string): string {
-  return read.threads[id]?.title ?? read.sessions.find((s) => s.id === id)?.title ?? "Untitled thread";
+/** Markdown and whitespace folded to one plain line. */
+export function plainLine(text: string): string {
+  return text
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+/gm, "")
+    .replace(/(\*\*|__|~~)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function projectOf(read: RecapRead, id: string): string {
-  const session = read.sessions.find((s) => s.id === id);
-  return session?.worktree?.repo ?? session?.cwd ?? "";
+/** A line cut to about `max` characters, at a sentence end or a word where it can. */
+export function shorten(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  const sentence = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "));
+  if (sentence >= max * 0.5) return head.slice(0, sentence + 1);
+  const word = head.lastIndexOf(" ");
+  return `${(word >= max * 0.5 ? head.slice(0, word) : head).replace(/[\s,;:.]+$/, "")}…`;
 }
 
-function sinceGroup(read: RecapRead, at: Readonly<Record<string, number>>, from: number): RecapThread[] {
-  const asleep = read.snoozed ?? {};
-  return Object.entries(at)
-    .filter(([threadId, when]) => when >= from && !(threadId in asleep))
-    .map(([threadId, when]) => ({
-      threadId,
-      title: titleOf(read, threadId),
-      project: projectOf(read, threadId),
-      at: when,
-    }))
-    .sort((a, b) => b.at - a.at);
+function typed(item: TranscriptItem): item is Extract<TranscriptItem, { kind: "user" }> {
+  return item.kind === "user" && !item.wake && !item.continued && !item.steering && item.text.trim() !== "";
 }
 
 /**
- * The card's three groups. "Needs you" is what waits right now (a request that
- * waited since before the break still needs you); failed and done are the events
- * since the user left, because those are what the away time produced.
+ * The card's content, or null for a chat with nothing to recap yet. The reply is
+ * the last one after the user's last message, so an older answer is never shown
+ * as the answer to a newer question.
  */
-export function recapOf(read: RecapRead): Recap {
+export function chatRecapOf(read: ChatRecapRead): ChatRecap | null {
+  const { items } = read;
+  let askedAt = -1;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (typed(items[i]!)) {
+      askedAt = i;
+      break;
+    }
+  }
+  let reply: string | undefined;
+  let failed = false;
+  for (let i = items.length - 1; i > askedAt && !reply; i--) {
+    const item = items[i]!;
+    if (item.kind === "assistant" && item.text.trim()) reply = plainLine(item.text);
+    else if (item.kind === "notice" && item.tone === "error") failed = true;
+  }
+  const askedItem = askedAt >= 0 ? items[askedAt] : undefined;
+  const asked = askedItem?.kind === "user" ? plainLine(askedItem.text) : undefined;
+  if (!asked && !reply) return null;
+  const state: RecapState =
+    read.pending > 0 ? "needs" : read.running ? "running" : failed ? "failed" : "done";
   return {
-    since: read.since,
-    // Still waiting, even when it waited before the break: it blocks the thread now.
-    needs: read.items.filter((item) => item.kind !== "failed"),
-    failed: read.items
-      .filter((item) => item.kind === "failed" && item.at >= read.since)
-      .map((item) => ({
-        threadId: item.threadId,
-        title: titleOf(read, item.threadId) || item.title,
-        project: item.project,
-        at: item.at,
-      }))
-      .sort((a, b) => b.at - a.at),
-    done: sinceGroup(read, read.finished, read.since),
+    asked: asked ? shorten(asked, 160) : undefined,
+    reply: reply ? shorten(reply, 240) : undefined,
+    state,
   };
-}
-
-/** Whether there is anything to recap. */
-export function recapEmpty(recap: Recap): boolean {
-  return !recap.needs.length && !recap.failed.length && !recap.done.length;
 }

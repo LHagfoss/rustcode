@@ -264,7 +264,7 @@ import { clearPageCache } from "./pageCache";
 import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
 import { projectKey } from "./projectBook";
 import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
-import { parseRecapHours } from "./recap";
+import { parseRecapMinutes } from "./recap";
 import { resetRemoteStatusReads } from "./remoteAccess";
 import { forgetRunDrift, reconcileRunState, resetRunStatePoll, startRunStatePoll } from "./runStatePoll";
 import { parseScheduleBook, SCHEDULED_KEY } from "./schedule";
@@ -480,10 +480,9 @@ export const useApp = create<AppState>((_set, _get, api) => ({
     STORAGE.notificationsBackgroundOnly,
     SETTINGS_DEFAULTS.notificationsBackgroundOnly,
   ),
-  recapWhileAway: storedFlag(STORAGE.recapWhileAway, SETTINGS_DEFAULTS.recapWhileAway),
-  recapHours: parseRecapHours(stored(STORAGE.recapHours)),
-  recapSince: null,
-  recapDismissed: false,
+  chatRecaps: storedFlag(STORAGE.chatRecaps, SETTINGS_DEFAULTS.chatRecaps),
+  recapMinutes: parseRecapMinutes(stored(STORAGE.recapMinutes)),
+  chatRecap: null,
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
   internetWaits: storedJson<Record<string, InternetWait>>(STORAGE.internetWaits, {}),

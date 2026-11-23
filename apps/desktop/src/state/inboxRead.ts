@@ -1,11 +1,10 @@
-// The hooks the app reads the inbox and the away recap with, kept out of the
-// pure modules so their derivation and tests stay free of React and the store.
-// Both read the store through compact signatures: the threads object changes on
+// The hook the app reads the inbox with, kept out of the
+// pure module so its derivation and tests stay free of React and the store.
+// It reads the store through compact signatures: the threads object changes on
 // every streamed chunk, and none of those chunks changes a row.
 
 import { useMemo } from "react";
 import { deriveInbox, type InboxItem } from "./inbox";
-import { type Recap, recapOf } from "./recap";
 import { useApp } from "./store";
 
 /** Titles and requests of every loaded thread: the one string the inbox changes with. */
@@ -48,21 +47,4 @@ export function useInboxItems(): InboxItem[] {
       }),
     [sessions, failed, links, archived, dismissed, snoozed, viewing, signature],
   );
-}
-
-/**
- * What happened while the user was away, or null when there is no recap to
- * show: none was started, or it was dismissed, or all three groups are empty.
- */
-export function useRecap(): Recap | null {
-  const items = useInboxItems();
-  const since = useApp((s) => s.recapSince);
-  const dismissed = useApp((s) => s.recapDismissed);
-  const finished = useApp((s) => s.finished);
-  const sessions = useApp((s) => s.sessions);
-  const snoozed = useApp((s) => s.snoozed);
-  return useMemo(() => {
-    if (since === null || dismissed) return null;
-    return recapOf({ items, finished, sessions, threads: {}, since, snoozed });
-  }, [items, since, dismissed, finished, sessions, snoozed]);
 }
