@@ -110,7 +110,7 @@ import {
   projectKeyOf,
 } from "./composerMentions";
 import { DictationButton, MicrophoneNotice, useDictation } from "./Dictation";
-import { draftMirror } from "./DraftMirror";
+import { draftMirror, listContinuation } from "./DraftMirror";
 import { overFolderDrop, overQuestionDrop } from "./folderDropTarget";
 import { IssueReportDialog } from "./IssueReportDialog";
 import { ArrowUp, Check, GitBranch, ListEnd, Pencil, Square } from "./icons";
@@ -449,7 +449,19 @@ export const Composer = memo(function Composer({
   const drawerRef = useRef<HTMLDivElement>(null);
   // Where the field is in what ↑/↓ walks (`sentMessages`), and the draft the walk started from.
   const history = useRef<{ draft: string; index: number } | null>(null);
-  const highlightedDraft = useMemo(() => draftMirror(draft, extras.mentions), [draft, extras.mentions]);
+  const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
+  const highlightedDraft = useMemo(
+    () =>
+      draftMirror(
+        draft,
+        extras.mentions,
+        selectionEnd === null ? undefined : { start: caret, end: Math.max(caret, selectionEnd) },
+      ),
+    [draft, extras.mentions, caret, selectionEnd],
+  );
+  useLayoutEffect(() => {
+    if (mirror.current && field.current) mirror.current.scrollTop = field.current.scrollTop;
+  });
   // Which edges of the scrolled field fade (lib/fade.ts); nothing to fade while the draft fits.
   const [fade, setFade] = useState<FieldFade>("none");
   // Carried by the field and the mirror alike: the mask (`.rc-field-fade`) takes its two depths.
@@ -940,6 +952,26 @@ export const Composer = memo(function Composer({
         return;
       }
     }
+    if (e.key === "Enter" && !primaryModifier(e) && !e.altKey && !offline) {
+      const continuation = listContinuation(el.value, el.selectionStart, el.selectionEnd);
+      if (continuation) {
+        e.preventDefault();
+        // A native editing command keeps the marker and newline together in the undo history.
+        const start = el.selectionStart;
+        el.setSelectionRange(continuation.start, start);
+        const edited = continuation.text
+          ? document.execCommand("insertText", false, continuation.text)
+          : document.execCommand("delete");
+        if (!edited) {
+          const next = continuation.start + continuation.text.length;
+          onChange(el.value.slice(0, continuation.start) + continuation.text + el.value.slice(start));
+          setCaret(next);
+          setSelectionEnd(next);
+          requestAnimationFrame(() => el.setSelectionRange(next, next));
+        }
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
       // A held Enter sends one message, not one a frame.
       if (e.repeat) return;
@@ -1255,10 +1287,17 @@ export const Composer = memo(function Composer({
                 onChange={(e) => {
                   history.current = null;
                   setCaret(e.target.selectionStart);
+                  setSelectionEnd(e.target.selectionEnd);
                   onChange(e.target.value);
                 }}
+                onFocus={(e) => {
+                  setCaret(e.currentTarget.selectionStart);
+                  setSelectionEnd(e.currentTarget.selectionEnd);
+                }}
+                onBlur={() => setSelectionEnd(null)}
                 onSelect={(e) => {
                   setCaret(e.currentTarget.selectionStart);
+                  setSelectionEnd(e.currentTarget.selectionEnd);
                   // A line wrapped or a ⇧⏎ pressed with the caret at the end: keep its line clear.
                   followCaret();
                 }}
