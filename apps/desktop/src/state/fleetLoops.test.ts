@@ -1,6 +1,3 @@
-// Fleet-wide jobs: choosing any machine in the paired network, resolving hub fallbacks, and
-// opening run threads on the machine that ran them.
-
 import { describe, expect, test } from "bun:test";
 import { RpcError } from "../acp/jsonrpc";
 import {

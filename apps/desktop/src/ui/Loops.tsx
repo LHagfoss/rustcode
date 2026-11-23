@@ -1,10 +1,7 @@
 // Jobs (issues 3892, 3937): prompts the scheduler daemon runs once, on a schedule, manually, or
 // from a webhook, each run in a fresh thread or one chosen thread (docs/daemon.md › Jobs). Reached
-// from the sidebar's Jobs row. Jobs live across the entire paired machine network: every connected
-// computer's scheduler is read and managed directly over ACP, and a hub's members remain reachable
-// too. Each job is a card with its agent, last result, schedule and next run; the card opens one
-// dialog that edits the job beside its runs. Jobs paused by failures lead. Review is a timeline by
-// day of failed runs and open threads, a repeated failure folded into one row.
+// from the sidebar's Jobs row. Each job is a card with its agent, last result, schedule and next
+// run; the card opens one dialog that edits the job beside its runs. Jobs paused by failures lead.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessSnapshot } from "../acp/types";
@@ -136,7 +133,6 @@ export function Loops() {
     return () => clearInterval(timer);
   }, [reload, hasRunning]);
 
-  // Load harnesses for connected hosts that have jobs so cards show real model/account names.
   useEffect(() => {
     for (const host of connectedHosts) {
       if (byHost?.[host]?.loops.length && !remoteHarnesses[host]) {
@@ -325,7 +321,6 @@ export function Loops() {
   const scopeOffline = Boolean(scopeMachine && scopeMachine.state !== "connected");
   const scopeState = effectiveScope === ALL_MACHINES ? undefined : byHost?.[effectiveScope];
 
-  // Connected machines in the active scope whose scheduler is stopped (excluding older unsupported hosts).
   const stoppedHosts = useMemo(() => {
     if (!byHost) return [];
     const list = effectiveScope === ALL_MACHINES ? Object.values(byHost) : scopeState ? [scopeState] : [];
