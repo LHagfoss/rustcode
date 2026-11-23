@@ -64,6 +64,7 @@ import {
   ranked,
   sidebarActions,
   threadHaystack,
+  titleMatches,
 } from "./paletteActions";
 import { searchGroups } from "./paletteSearch";
 import { cx, Kbd, noTextHelpers } from "./primitives";
@@ -387,8 +388,16 @@ export function CommandPalette() {
           open: s.id === selectedId,
         }),
       );
-    // With a query, threads lead; without one, the recent threads and then every action.
-    return q ? [...threads, ...actions.slice(0, 12), ...found] : [...threads, ...actions];
+    if (!q) return [...threads, ...actions];
+
+    // Direct destinations are useful immediately. Keep keyword-only matches below threads.
+    const destinations = [...actions.slice(0, 12), ...found];
+    const leads = (result: Result) =>
+      result.kind === "action" &&
+      !result.action.disabled &&
+      (result.action.group === undefined || result.action.group === "Settings") &&
+      titleMatches(result.action.label, q);
+    return [...destinations.filter(leads), ...threads, ...destinations.filter((result) => !leads(result))];
   }, [sessions, q, scope, projectCwd, selectedId, actionsOnly, open, contentHits, sort, liveThreads]);
 
   const choose = (i: number) => {
@@ -477,7 +486,7 @@ export function CommandPalette() {
                 {heading(i) && (
                   <div className="px-3 pt-2 pb-1 font-semibold text-caption text-fg-muted">{heading(i)}</div>
                 )}
-                {i === 0 && r.kind === "thread" && (
+                {r.kind === "thread" && results[i - 1]?.kind !== "thread" && (
                   <div className="px-3 pt-1 pb-1 font-semibold text-caption text-fg-muted">
                     {q || sort !== "recent" ? "Threads" : "Recent threads"}
                   </div>
