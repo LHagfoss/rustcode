@@ -11,7 +11,7 @@ const MAX_WAIT_AGENT_TIMEOUT_MS: u64 = 3_600_000;
 /// Shortest a `wait_agent` call waits. A child's turn takes model rounds, so a
 /// one-second wait only times out and spends a parent round per poll; a
 /// finished child or a message for the waiter still ends the wait early.
-const MIN_WAIT_AGENT_TIMEOUT_MS: u64 = 30_000;
+pub(super) const MIN_WAIT_AGENT_TIMEOUT_MS: u64 = 30_000;
 
 /// The targets of `wait_agent`: `ids`, or the single `id`.
 pub(super) fn agent_ids_arg(args: &serde_json::Value) -> Vec<u32> {
