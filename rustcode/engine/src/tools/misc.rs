@@ -397,7 +397,7 @@ pub const READ_SESSION: Tool = Tool {
 
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
-    description: "Start a delegate in its own worktree by default. Give the full task, repo rules, acceptance criteria and timeouts. Returns link_id for wait_session. Standalone creates a top-level thread and returns session_id instead. Explicit agent fields, including a named account, override the preset from list_harnesses. The user approves.",
+    description: "Start a thread. For a request to start a new thread or an agent in a new thread, set standalone to true when supported. This creates a top-level thread and returns session_id. Omit standalone only for explicit delegation. A delegate gets its own worktree by default and returns link_id for wait_session. Give the full task, repo rules, acceptance criteria and timeouts. Explicit agent fields, including a named account, override the preset from list_harnesses. The user approves.",
     arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -414,7 +414,7 @@ pub const START_SESSION: Tool = Tool {
                 "worktree": {"type": "boolean"},
                 "preset": {"type": "string"},
                 "access": {"type": "string", "enum": ["ask", "edits", "full"]},
-                "standalone": {"type": "boolean", "description": "The user's own top-level thread: nothing comes back"},
+                "standalone": {"type": "boolean", "description": "Set true for a new top-level thread. Set false or omit only for an explicitly requested delegate"},
                 "project": {"type": "string", "description": "absolute path of another project"},
                 "machine": {"type": "string"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key"}
