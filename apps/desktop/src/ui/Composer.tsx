@@ -956,7 +956,6 @@ export const Composer = memo(function Composer({
       const continuation = listContinuation(el.value, el.selectionStart, el.selectionEnd);
       if (continuation) {
         e.preventDefault();
-        // A native editing command keeps the marker and newline together in the undo history.
         const start = el.selectionStart;
         el.setSelectionRange(continuation.start, start);
         const edited = continuation.text

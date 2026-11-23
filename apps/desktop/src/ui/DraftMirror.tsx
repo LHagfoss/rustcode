@@ -35,7 +35,6 @@ function HeadingPreview({ source, label, level }: { source: string; label: strin
     const mirror = line?.closest(".rc-field-fade");
     if (!line || !title || !mirror) return;
     const measure = () => {
-      // Keep the textarea's line breaks and hit targets. A wrapped heading stays in source view.
       setFits(line.getClientRects().length === 1 && title.offsetWidth <= mirror.clientWidth);
     };
     measure();
