@@ -259,13 +259,9 @@ export async function updateSession(
   });
   if (applied.renameFailed) return failureJson(failure("failed", "the thread could not be renamed"));
   if (call.status) {
-    const onScreen = useApp.getState().selectedId;
-    const failed = await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
-    // Settling is what the user asked for ("settle this"), so the thread leaves the screen as their
-    // own settle does, unless they moved to another thread while the status was saved.
-    if (call.status === "settled" && !failed && useApp.getState().selectedId === onScreen) {
-      leaveSettledThreads([target.id]);
-    }
+    const saving = setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
+    if (call.status === "settled") leaveSettledThreads([target.id]);
+    await saving;
   }
   if (call.snoozedUntil !== undefined) await setSnoozed(target.id, call.snoozedUntil);
   const after = ruleThread(useApp.getState(), target.id);

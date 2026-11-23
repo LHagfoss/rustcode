@@ -1,3 +1,4 @@
+import { guardListedStatus } from "./threadStatus";
 // The other computers this app is paired with (Settings › Machines). One
 // saved machine is one entry, reached over an ordered list of routes; the
 // app's Rust shell runs a supervisor per machine and relays its ACP here, and
@@ -901,6 +902,7 @@ async function readThreads(id: string, connection: AcpConnection): Promise<void>
       // Only this connection is marked: an answer from one a reconnect replaced is dropped.
       links.step(id, { type: "initialized", connection });
     }
+    const guardStatus = guardListedStatus();
     const sessions: SessionSummary[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 10; page++) {
@@ -936,7 +938,7 @@ async function readThreads(id: string, connection: AcpConnection): Promise<void>
       // and its keep expires while the thread still runs.
       const cached = state.sessions[id] ?? [];
       const rows = [
-        ...sessions,
+        ...sessions.map((row) => guardStatus(row, threadKey(id, row.id))),
         ...kept.map((summary) => {
           const status = cached.find((row) => row.id === summary.id)?.status;
           return status ? { ...summary, status } : summary;

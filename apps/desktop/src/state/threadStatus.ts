@@ -74,6 +74,23 @@ export function statusOf(s: AppState, id: string): ThreadStatus {
   return mark ?? "idle";
 }
 
+const localStatusWrites = new Map<string, symbol>();
+
+/** Preserve a settle or reopen that raced a list request, including a write still being saved. */
+export function guardListedStatus() {
+  const before = get();
+  const pending = new Set([...localStatusWrites.keys(), ...remoteStatusPending.keys()]);
+  return (row: SessionSummary, id = row.id): SessionSummary => {
+    const state = get();
+    const current = state.statusMarks[id] ?? sessionById(state, id)?.status;
+    const previous = before.statusMarks[id] ?? sessionById(before, id)?.status;
+    const changed = previous !== current && (previous === "done" || current === "done");
+    if (changed || pending.has(id) || localStatusWrites.has(id) || remoteStatusPending.has(id))
+      return { ...row, status: current };
+    return row;
+  };
+}
+
 function saveMarks(marks: Record<string, ThreadStatus>) {
   set({ statusMarks: marks });
   store(STORAGE.statusMarks, JSON.stringify(marks));
@@ -230,6 +247,8 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
     // that cannot be reached is said, since the machine will not have it.
     else if (threadIsRemote(id)) errors.push(new Error("That computer is not connected."));
   }
+  const write = Symbol();
+  for (const group of groups.values()) for (const id of group) localStatusWrites.set(id, write);
   for (const [conn, group] of groups) {
     for (const id of group) {
       try {
@@ -237,6 +256,8 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
         // The engine keeps it now; the app's mark only covers the gap until the list says so.
       } catch (error) {
         if (!(error instanceof RpcError && error.isMethodNotFound)) errors.push(error);
+      } finally {
+        if (localStatusWrites.get(id) === write) localStatusWrites.delete(id);
       }
     }
   }
@@ -281,12 +302,10 @@ export async function settleThreads(ids: string[]): Promise<void> {
     toast("Already settled", "info");
     return;
   }
-  const optimistic = before.every((x) => threadIsRemote(x.id) && connectionForThread(x.id));
   const saving = setThreadsStatus(
     before.map((x) => x.id),
     "done",
   );
-  if (!optimistic && (await saving)) return;
   if (get().selectedId === state.selectedId) leaveSettledThreads(before.map((x) => x.id));
   const title =
     before.length === 1
@@ -310,7 +329,7 @@ export async function settleThreads(ids: string[]): Promise<void> {
       },
     },
   );
-  if (optimistic && (await saving)) dismissToast(toastId);
+  if (await saving) dismissToast(toastId);
 }
 
 /** Settles one thread, with the same Undo and the same rule about leaving the screen. */
