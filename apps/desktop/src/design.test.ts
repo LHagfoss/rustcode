@@ -444,9 +444,7 @@ describe("design system", () => {
     // Only the macOS window's vibrancy shows through, behind the sidebar alone, in its own
     // Transparency, and never under Reduce transparency (lib/material.ts sets the attribute).
     const material = ":root[data-material]:not(.reduce-transparency)";
-    expect(block(`${material} {`)).toContain(
-      "--rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) calc(100% - var(--rc-transparency)), transparent);",
-    );
+    expect(block(`${material} {`)).toContain("var(--rc-sidebar) calc(100% - 0.92 * var(--rc-transparency)),");
     expect(block(`${material} body {`)).toContain("background: transparent;");
     expect(css.match(/\[data-material\]/g)).toHaveLength(2);
     expect(css).toContain("--rc-glass-alpha: 72%;");
