@@ -445,6 +445,9 @@ const links = new LinkTable();
 
 /** Hear when a machine's connection opens or drops, so the store can route its threads there. */
 const linkListeners = new Set<(id: string, connection: AcpConnection | null) => void>();
+/** Hear when a machine connection completes its initial thread-list read. */
+const threadsReadyListeners = new Set<(id: string, connection: AcpConnection) => void>();
+const threadsReadConnections = new WeakSet<AcpConnection>();
 let started = false;
 /** Counts asks, so an answer that arrives after Cancel is ignored. */
 let asks = 0;
@@ -547,9 +550,17 @@ export async function refreshMachines(): Promise<void> {
     // an offline one keeps its rows (and a reconnect replaces them: `readThreads`).
     const state = useMachines.getState();
     const cached: Record<string, SessionSummary[]> = {};
+    const pendingConnect = (machine: Machine) => {
+      const link = links.get(machine.id);
+      return (
+        machine.state === "connecting" ||
+        machine.state === "connected" ||
+        (machine.state === "stopped" && (!link || link.phase === "opening"))
+      );
+    };
     for (const machine of machines) {
       if (state.sessions[machine.id]) continue;
-      if (machine.state === "connecting") {
+      if (pendingConnect(machine)) {
         holdCopy(machine.id);
         continue;
       }
@@ -567,7 +578,7 @@ export async function refreshMachines(): Promise<void> {
     // A machine that is away also draws what this computer's disk mirrored from it, past the 200
     // newest the web view keeps (`state/machineMirror.ts`).
     for (const machine of machines) {
-      if (machine.state !== "connected" && machine.state !== "connecting") void drawMirrored(machine.id);
+      if (machine.state !== "connected" && !pendingConnect(machine)) void drawMirrored(machine.id);
     }
     for (const machine of machines) void attach(machine);
     for (const [id, link] of links.entries()) {
@@ -584,6 +595,14 @@ export function setCopyGraceForTests(ms: number): void {
   copyGraceMs = ms;
 }
 const copyHolds = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearCopyHold(host: string): void {
+  const timer = copyHolds.get(host);
+  if (timer) {
+    clearTimeout(timer);
+    copyHolds.delete(host);
+  }
+}
 
 function holdCopy(host: string): void {
   if (copyHolds.has(host)) return;
@@ -803,6 +822,7 @@ export function resetMachinesForTests(): void {
   for (const timer of copyHolds.values()) clearTimeout(timer);
   copyHolds.clear();
   linkListeners.clear();
+  threadsReadyListeners.clear();
   started = false;
   useMachines.setState({
     ready: false,
@@ -891,6 +911,7 @@ async function readThreads(id: string, connection: AcpConnection): Promise<void>
       id: splitThreadKey(summary.id).id,
       host: undefined,
     }));
+    clearCopyHold(id);
     useMachines.setState((state) => {
       // The kept summary was stored with no status. The cache row has the one a status broadcast
       // wrote (a thread another client announced is running), so keep that, or the row reads idle
@@ -908,6 +929,10 @@ async function readThreads(id: string, connection: AcpConnection): Promise<void>
         sessions: { ...state.sessions, [id]: rows },
       };
     });
+    if (!threadsReadConnections.has(connection)) {
+      threadsReadConnections.add(connection);
+      for (const listener of threadsReadyListeners) listener(id, connection);
+    }
   } catch {
     // An older machine, or one whose ACP is not allowed yet: no count.
   }
@@ -942,6 +967,12 @@ export function machineLinks(): MachineLink[] {
 export function onMachineLinks(listener: (id: string, connection: AcpConnection | null) => void): () => void {
   linkListeners.add(listener);
   return () => linkListeners.delete(listener);
+}
+
+/** Hear once per machine connection after its initial `session/list` has populated `sessions`. */
+export function onMachineThreadsReady(listener: (id: string, connection: AcpConnection) => void): () => void {
+  threadsReadyListeners.add(listener);
+  return () => threadsReadyListeners.delete(listener);
 }
 
 function announce(id: string, connection: AcpConnection | null): void {

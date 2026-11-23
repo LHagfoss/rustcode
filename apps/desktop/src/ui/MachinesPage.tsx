@@ -162,14 +162,10 @@ export function MachinesPage() {
       {error && <p className="mb-6 text-callout text-warning">Could not read the machines: {error}</p>}
 
       <Group
-        title={
-          <span className="flex items-center gap-3">
-            Machines
-            <ViewSwitch view={view} onChange={chooseView} />
-          </span>
-        }
+        title="Machines"
         action={
           <span className="flex items-center gap-2">
+            <ViewSwitch view={view} onChange={chooseView} />
             {outdated.length > 1 && (
               <Action size="sm" onClick={() => updateMachines(outdated)}>
                 Update all ({outdated.length})

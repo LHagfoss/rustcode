@@ -213,7 +213,14 @@ export function RemoteAccessPage() {
           )}
         </Row>
         <Row
-          title="Gateway address"
+          title={
+            <>
+              Gateway address
+              <Chip tone={gateway?.connected ? "ok" : enabled ? "warn" : "idle"}>
+                {gateway?.connected ? "Connected" : enabled ? "Starting" : "Off"}
+              </Chip>
+            </>
+          }
           subtitle="What a phone on this network dials."
           hint={withCode("The terminal's `/remote status` shows the same address.")}
           status={
@@ -240,9 +247,6 @@ export function RemoteAccessPage() {
               Copy
             </Action>
           )}
-          <Chip tone={gateway?.connected ? "ok" : enabled ? "warn" : "idle"}>
-            {gateway?.connected ? "Connected" : enabled ? "Starting" : "Off"}
-          </Chip>
         </Row>
         <Row
           title="Pair a device"
@@ -310,7 +314,24 @@ export function RemoteAccessPage() {
           devices.map((device) => (
             <Row
               key={device.id}
-              title={device.name}
+              title={
+                <>
+                  {device.name}
+                  <Chip tone={device.connected ? "ok" : "idle"}>
+                    {device.connected ? "Connected" : "Paired"}
+                  </Chip>
+                  {device.connected &&
+                    distinctConnectionRoutes(device.routes).map((route) => (
+                      <Chip
+                        key={`${route.localAddress}-${route.path}`}
+                        tone={connectionRouteTone(route)}
+                        title={`${device.name} connects inbound to this computer at ${route.localAddress}`}
+                      >
+                        {connectionRouteLabel(route)}
+                      </Chip>
+                    ))}
+                </>
+              }
               subtitle={`${deviceLabel(device.kind, device.platform)} · ${lastSeenLabel(device, now)}`}
               hint={connectionDirection(
                 peerOutbound(device.hostId, machines),
@@ -318,17 +339,6 @@ export function RemoteAccessPage() {
                 device.name,
               )}
             >
-              {device.connected &&
-                distinctConnectionRoutes(device.routes).map((route) => (
-                  <Chip
-                    key={`${route.localAddress}-${route.path}`}
-                    tone={connectionRouteTone(route)}
-                    title={`${device.name} connects inbound to this computer at ${route.localAddress}`}
-                  >
-                    {connectionRouteLabel(route)}
-                  </Chip>
-                ))}
-              <Chip tone={device.connected ? "ok" : "idle"}>{device.connected ? "Connected" : "Paired"}</Chip>
               <RevokeDeviceAction device={device} />
             </Row>
           ))
@@ -348,11 +358,15 @@ export function RemoteAccessPage() {
           gateway.routes.map((route) => (
             <Row
               key={route.address}
-              title={routeLabel(route)}
+              title={
+                <>
+                  {routeLabel(route)}
+                  {route.address === gateway.advertisedAddress && <Chip tone="ok">Advertised</Chip>}
+                </>
+              }
               subtitle={routeHint(route)}
               status={<span className="font-mono">{route.address}</span>}
             >
-              {route.address === gateway.advertisedAddress && <Chip tone="ok">Advertised</Chip>}
               <Action
                 aria-label={`Copy the route ${route.address}`}
                 onClick={() => void copyText(route.address)}

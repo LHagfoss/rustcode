@@ -56,10 +56,10 @@ import {
 } from "../state/settingsScope";
 import { errorText, openSettings, toast, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
-import { Trash2 } from "./icons";
+import { ArrowLeft, Trash2 } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
-import { cx, noTextHelpers, Segments, Spinner, Switch, Tooltip } from "./primitives";
+import { ChromeButton, cx, noTextHelpers, Segments, Spinner, Switch } from "./primitives";
 import { Action, Chip, ErrorDetails, fieldClass, Group, Row, SectionTitle } from "./settingsKit";
 import { SYNC_COLUMNS, syncRows } from "./syncRows";
 
@@ -74,7 +74,10 @@ export function MachineSettingsPage({ id }: { id: string }) {
           title="That machine is no longer saved"
           subtitle="It was removed on this computer. Back to Machines lists the others."
         >
-          <Action onClick={() => openSettings("machines")}>Machines</Action>
+          <Action onClick={() => openSettings("machines")}>
+            <ArrowLeft size={13} />
+            Machines
+          </Action>
         </Row>
       </Group>
     );
@@ -84,8 +87,9 @@ export function MachineSettingsPage({ id }: { id: string }) {
 
 function BackToMachines() {
   return (
-    <div className="mb-3 flex items-center gap-2 px-4">
+    <div className="mb-3 flex items-center gap-2 px-1">
       <Action quiet size="sm" onClick={() => openSettings("machines")}>
+        <ArrowLeft size={13} />
         Machines
       </Action>
     </div>
@@ -163,7 +167,7 @@ function MachineSettings({ machine }: { machine: Machine }) {
               {machine.hint && <p className="m-0 pt-1 text-callout text-fg-muted">{machine.hint}</p>}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-2 pt-1">
             <MachineIdentityEditor
               label={`${name} on this computer`}
               reportedName={machine.name}
@@ -175,16 +179,15 @@ function MachineSettings({ machine }: { machine: Machine }) {
               }}
               onName={(next) => void setMachineDisplayName(machine, next)}
               onIcon={(icon, tint) => void setMachineIcon(machine, icon, tint)}
-              trigger={<Action size="sm">Edit identity</Action>}
+              trigger={<Action>Edit identity</Action>}
             />
             <Action
-              size="sm"
               disabled={machine.state === "connecting" || machine.state === "needsPairing"}
               onClick={() => reconnectMachine(machine)}
             >
               Reconnect
             </Action>
-            <Action size="sm" disabled={!online} onClick={() => void disconnectMachine(machine)}>
+            <Action danger disabled={!online} onClick={() => void disconnectMachine(machine)}>
               Disconnect
             </Action>
           </div>
@@ -240,25 +243,35 @@ function Access({ machine }: { machine: Machine }) {
       title={`Access · ${access.label}`}
       hint="The two directions are separate pairings. Ending one leaves the other as it is."
     >
-      <Row title="This computer reaches it" subtitle={access.outboundText}>
-        <Chip tone={access.outbound ? "ok" : "bad"}>{access.outbound ? "Allowed" : "Ended"}</Chip>
-      </Row>
       <Row
-        title="It reaches this computer"
+        title={
+          <>
+            This computer reaches it
+            <Chip tone={access.outbound ? "ok" : "bad"}>{access.outbound ? "Allowed" : "Ended"}</Chip>
+          </>
+        }
+        subtitle={access.outboundText}
+      />
+      <Row
+        title={
+          <>
+            It reaches this computer
+            <Chip tone={access.inbound ? "ok" : "idle"}>{access.inbound ? "Allowed" : "Not allowed"}</Chip>
+          </>
+        }
         subtitle={access.inboundText}
         status={
           back?.error && !access.inbound ? <span className="text-warning">{back.error}</span> : undefined
         }
       >
-        <Chip tone={access.inbound ? "ok" : "idle"}>{access.inbound ? "Allowed" : "Not allowed"}</Chip>
         {!access.inbound && (
-          <Action size="sm" disabled={!online || back?.busy} onClick={() => void allowMachineBack(machine)}>
+          <Action disabled={!online || back?.busy} onClick={() => void allowMachineBack(machine)}>
             {back?.busy ? <Spinner /> : null}
             {back?.busy ? "Allowing…" : "Allow"}
           </Action>
         )}
         {access.inbound && (
-          <Action size="sm" danger onClick={() => void revokeRemoteDevice(access.inbound!.id)}>
+          <Action danger onClick={() => void revokeRemoteDevice(access.inbound!.id)}>
             Revoke
           </Action>
         )}
@@ -281,12 +294,12 @@ function Routes({ machine }: { machine: Machine }) {
     <Group
       title="Routes"
       action={
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           <Action quiet size="sm" disabled={probing} onClick={() => void probeMachineRoutes(machine)}>
             {probing ? "Testing…" : "Test routes"}
           </Action>
           {!adding && (
-            <Action quiet size="sm" onClick={() => setAdding(true)}>
+            <Action size="sm" onClick={() => setAdding(true)}>
               Add route
             </Action>
           )}
@@ -301,10 +314,11 @@ function Routes({ machine }: { machine: Machine }) {
         <Row
           key={route.address}
           title={
-            <span className="flex items-center gap-2">
+            <span className="flex flex-wrap items-center gap-2">
               {routeLabel(route)}
               {inUse === route.address && <Chip tone="ok">In use</Chip>}
               {route.off && <Chip tone="idle">Off</Chip>}
+              <Chip tone={probeTone(route.probe)}>{probeLabel(route.probe)}</Chip>
             </span>
           }
           subtitle={
@@ -321,7 +335,6 @@ function Routes({ machine }: { machine: Machine }) {
               {route.probe && ` · tested ${lastSeen(route.probe.at)}`}
             </span>
           }
-          badge={<Chip tone={probeTone(route.probe)}>{probeLabel(route.probe)}</Chip>}
         >
           <Switch
             label={`Use ${routeLabel(route)} at ${route.address}`}
@@ -330,23 +343,18 @@ function Routes({ machine }: { machine: Machine }) {
             disabled={!route.off && on <= 1}
             onChange={(next) => void setMachineRouteOff(machine, route.address, !next)}
           />
-          <Tooltip
-            label={
+          <ChromeButton
+            label={`Remove ${route.address}`}
+            tooltip={
               route.manual
                 ? "Remove this route"
                 : "Remove this route. The machine reports it again on its next connection; turn it off to keep it unused."
             }
+            disabled={!route.off && on <= 1}
+            onClick={() => void removeMachineRoute(machine, route.address)}
           >
-            <Action
-              quiet
-              size="sm"
-              aria-label={`Remove ${route.address}`}
-              disabled={!route.off && on <= 1}
-              onClick={() => void removeMachineRoute(machine, route.address)}
-            >
-              <Trash2 size={12} />
-            </Action>
-          </Tooltip>
+            <Trash2 size={14} />
+          </ChromeButton>
         </Row>
       ))}
       {adding && <AddRoute machine={machine} onDone={() => setAdding(false)} />}

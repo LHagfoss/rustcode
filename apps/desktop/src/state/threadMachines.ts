@@ -137,6 +137,9 @@ export async function startMachineRouting(): Promise<void> {
     const machines = await import("./machines");
     machineReset = machines.resetMachinesForTests;
     machines.onMachineLinks((id, conn) => watchMachineConnection(id, conn));
+    machines.onMachineThreadsReady((id, conn) => {
+      void subscribePullWatches(conn, id).catch(() => {});
+    });
     const mirror = () => {
       const state = machines.useMachines.getState();
       const names = Object.fromEntries(
@@ -233,7 +236,6 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
     return;
   }
   machineConnections.set(id, next);
-  void subscribePullWatches(next, id).catch(() => {});
   void subscribeWorkflows(next).catch(() => {});
   machineOff.set(
     id,

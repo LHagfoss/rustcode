@@ -368,7 +368,7 @@ function PasskeyRows({ host, status }: { host: string; status: OutsideStatus }) 
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <input
-              className={fieldClass}
+              className={cx(fieldClass, "w-56")}
               value={name}
               placeholder="Name, such as My phone"
               aria-label="Passkey name"

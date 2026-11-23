@@ -438,7 +438,7 @@ function McpSection({
     <Group
       title={`MCP servers · ${connected} of ${data.mcpServers.length} connected`}
       action={
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           {data.configPath && hasShell() && (
             <Tooltip label={`Edit ${data.configPath}`}>
               <Action
@@ -827,7 +827,7 @@ function SkillsSection({
       <SectionTitle
         title={`Skills · ${on} of ${data.skills.length} on`}
         action={
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <Tooltip label="Start a thread that asks an agent to write the skill with you">
               <Action quiet size="sm" onClick={() => createSkillWithAgent(host)}>
                 Create with agent

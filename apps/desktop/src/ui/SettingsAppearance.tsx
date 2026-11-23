@@ -299,9 +299,9 @@ export function AppearancePage() {
       <Group
         title="Theme"
         action={
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             {hasShell() && (
-              <Action size="sm" onClick={() => revealPath(userDir)}>
+              <Action quiet size="sm" onClick={() => revealPath(userDir)}>
                 Open folder
               </Action>
             )}

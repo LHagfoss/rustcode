@@ -60,7 +60,7 @@ export function RevokeDeviceAction({ device }: { device: RemoteDevice }) {
       },
     });
   return (
-    <Action size="sm" disabled={busy} onClick={revoke} aria-label={`Revoke ${device.name}`}>
+    <Action danger disabled={busy} onClick={revoke} aria-label={`Revoke ${device.name}`}>
       {busy && <Spinner />}
       Revoke
     </Action>

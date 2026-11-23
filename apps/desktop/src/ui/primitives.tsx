@@ -183,7 +183,7 @@ export const Pill = forwardRef<
       type="button"
       className={cx(
         "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium text-callout whitespace-nowrap disabled:opacity-40",
-        size === "lg" ? "h-[30px] px-4" : size === "sm" ? "h-6 px-2" : "h-[26px] px-3",
+        size === "lg" ? "h-[30px] px-4" : size === "sm" ? "h-6 px-3" : "h-7 px-3",
         prominent
           ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
           : danger
@@ -219,7 +219,7 @@ export const menuInset = "p-2";
  */
 export const menuSurface = `elevated rounded-2xl z-50 max-h-[var(--radix-popper-available-height,80vh)] min-w-[200px] max-w-[calc(100vw-16px)] overflow-y-auto ${menuInset}`;
 export const menuItem =
-  "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-xl px-2 py-1 text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
+  "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
 export const menuItemDanger = "text-danger data-[highlighted]:bg-danger/12";
 export const menuSeparator = "mx-2 my-1 h-px shrink-0 bg-separator";
 export const menuLabel = "px-2 pt-1.5 pb-1 text-caption text-fg-faint";
@@ -268,7 +268,7 @@ export function MenuQuickActions({
             disabled={action.disabled}
             onSelect={action.onSelect}
             className={cx(
-              "flex aspect-square min-w-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl p-1 text-caption text-fg outline-none hover:bg-fill focus-visible:bg-fill active:bg-fill-strong data-[highlighted]:bg-fill data-[disabled]:cursor-default data-[disabled]:opacity-40 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-fill-subtle [&_svg]:size-4 [&_svg]:shrink-0",
+              "flex aspect-square min-w-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg p-1 text-caption text-fg outline-none hover:bg-fill focus-visible:bg-fill active:bg-fill-strong data-[highlighted]:bg-fill data-[disabled]:cursor-default data-[disabled]:opacity-40 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-fill-subtle [&_svg]:size-4 [&_svg]:shrink-0",
               action.checked ? "bg-fill-strong" : "bg-fill-subtle",
             )}
           >

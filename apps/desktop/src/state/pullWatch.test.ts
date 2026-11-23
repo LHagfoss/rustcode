@@ -194,3 +194,14 @@ test("late merge results and queued automatic turns cannot reopen a settled thre
   expect(isRunning(useApp.getState().threads[id])).toBe(false);
   conn.close("test finished");
 });
+
+test("remote PR watch waits for the machine's session list before waking an unlisted thread", async () => {
+  resetForTests();
+  const conn = new AcpConnection(() => {
+    throw new Error("unlisted remote thread must not be opened or claimed before sessions load");
+  });
+  watchMachineConnection("machine", conn);
+  await deliverPullWatch(conn, { watch }, "machine");
+  expect(useApp.getState().threads["machine/pr-thread"]).toBeUndefined();
+  conn.close("test finished");
+});
