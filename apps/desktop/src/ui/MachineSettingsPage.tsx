@@ -15,6 +15,7 @@ import { opError, opRunning, useOp } from "../lib/op";
 import { currentPlatform } from "../lib/platform";
 import { devicePlatform, deviceRoute, deviceStatus, machineAccess, versionLine } from "../state/deviceRows";
 import { accountState } from "../state/harness";
+import { allowMachineBack, useMachineAccess } from "../state/machineAccess";
 import { addMachineRoute, removeMachineRoute, setMachineRouteOff } from "../state/machineRoutes";
 import {
   defaultSelfName,
@@ -238,6 +239,8 @@ function MachineSettings({ machine }: { machine: Machine }) {
 function Access({ machine }: { machine: Machine }) {
   const devices = useApp((state) => state.remote?.devices);
   const access = machineAccess(machine, devices ?? []);
+  const back = useMachineAccess((state) => state.byMachine[machine.id]);
+  const online = machine.state === "connected";
   return (
     <Group
       title={`Access · ${access.label}`}
@@ -246,8 +249,20 @@ function Access({ machine }: { machine: Machine }) {
       <Row title="This computer reaches it" subtitle={access.outboundText}>
         <Chip tone={access.outbound ? "ok" : "bad"}>{access.outbound ? "Allowed" : "Ended"}</Chip>
       </Row>
-      <Row title="It reaches this computer" subtitle={access.inboundText}>
+      <Row
+        title="It reaches this computer"
+        subtitle={access.inboundText}
+        status={
+          back?.error && !access.inbound ? <span className="text-warning">{back.error}</span> : undefined
+        }
+      >
         <Chip tone={access.inbound ? "ok" : "idle"}>{access.inbound ? "Allowed" : "Not allowed"}</Chip>
+        {!access.inbound && (
+          <Action size="sm" disabled={!online || back?.busy} onClick={() => void allowMachineBack(machine)}>
+            {back?.busy ? <Spinner /> : null}
+            {back?.busy ? "Allowing…" : "Allow"}
+          </Action>
+        )}
         {access.inbound && (
           <Action size="sm" danger onClick={() => void revokeRemoteDevice(access.inbound!.id)}>
             Revoke

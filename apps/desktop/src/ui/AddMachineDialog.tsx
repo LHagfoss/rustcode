@@ -10,6 +10,7 @@
 
 import { Dialog } from "radix-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { setBothWays, useMachineAccess } from "../state/machineAccess";
 import {
   askMachine,
   type ConnectOffer,
@@ -133,6 +134,7 @@ export function AddMachineDialog({
                 {method === "code" && <CodePane />}
                 {method === "ssh" && <SshPane />}
                 {method === "address" && <AddressPane local={local} />}
+                {method !== "ssh" && <SharedAccessChoice />}
               </>
             )}
           </Dialog.Content>
@@ -140,6 +142,12 @@ export function AddMachineDialog({
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+/** Who reaches whom for a pairing by code or address; the SSH pane shows its own, by host name. */
+function SharedAccessChoice() {
+  const mutual = useMachineAccess((s) => s.bothWays);
+  return <AccessChoice mutual={mutual} host="the other computer" onChange={setBothWays} />;
 }
 
 /** The machine is saved: say so, and what it can do now. */
@@ -437,7 +445,7 @@ function SshPane() {
   const notice = useMachines((s) => s.ssh.data?.notice);
   const [target, setTarget] = useState("");
   const [allowInstall, setAllowInstall] = useState(true);
-  const [mutual, setMutual] = useState(false);
+  const mutual = useMachineAccess((s) => s.bothWays);
   const [via, setVia] = useState<SshVia>("auto");
   const running = useMachines((s) => s.ssh.status === "running");
   const connect = () => {
@@ -481,7 +489,7 @@ function SshPane() {
         </label>
       </Field>
       <ViaChoice via={via} disabled={running} host={sshHost(target)} onChange={setVia} />
-      <AccessChoice mutual={mutual} disabled={running} host={sshHost(target)} onChange={setMutual} />
+      <AccessChoice mutual={mutual} disabled={running} host={sshHost(target)} onChange={setBothWays} />
       {run && (
         <ProgressSteps steps={sshProgress(run.steps, running, mutual)} label="Connect over SSH progress" />
       )}
@@ -557,17 +565,17 @@ export function AccessChoice({
     <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0" disabled={disabled}>
       <legend className="p-0 pb-1 text-callout font-medium text-fg">Who can reach whom</legend>
       <label className="flex items-start gap-2 text-callout text-fg-muted">
-        <input type="radio" name="ssh-access" checked={!mutual} onChange={() => onChange(false)} />
+        <input type="radio" name="machine-access" checked={mutual} onChange={() => onChange(true)} />
         <span>
-          <b className="font-medium text-fg">One way:</b> this computer can see and run threads on {host}.{" "}
-          {host} cannot reach this computer.
+          <b className="font-medium text-fg">Both ways</b> (recommended): each computer can see and run
+          threads on the other. Either side can be turned off later in the machine's settings.
         </span>
       </label>
       <label className="flex items-start gap-2 text-callout text-fg-muted">
-        <input type="radio" name="ssh-access" checked={mutual} onChange={() => onChange(true)} />
+        <input type="radio" name="machine-access" checked={!mutual} onChange={() => onChange(false)} />
         <span>
-          <b className="font-medium text-fg">Both ways:</b> {host} can also see and run all threads on this
-          computer. Each side is revoked on its own, here under Machines and there under Remote access.
+          <b className="font-medium text-fg">One way:</b> this computer reaches {host}; {host} cannot reach
+          this computer.
         </span>
       </label>
     </fieldset>

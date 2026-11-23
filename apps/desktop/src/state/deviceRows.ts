@@ -227,6 +227,6 @@ export function machineAccess(
       : `This computer's pairing with ${name} ended, so it cannot reach it. Pair it again.`,
     inboundText: inbound
       ? `${name} can see and run all threads on this computer. Revoke it under Remote access › Paired devices.`
-      : `${name} cannot reach this computer. Connect over SSH with Both ways, or create a connect code on this computer and redeem it there.`,
+      : `${name} cannot reach this computer. Allow pairs it back over the connection this computer already has.`,
   };
 }

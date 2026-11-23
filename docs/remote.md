@@ -904,10 +904,18 @@ code can reach the computer that created it. Connect over SSH can grant the
 other direction as well, in the same step, so nobody repeats an opaque pairing
 by hand: Add machine › SSH › **Both ways**, or `--mutual`.
 
+In the desktop app *Both ways* is the default for every way in. After a pairing
+by connect code or by address, the app creates a code here and has the new
+machine redeem it over the connection it just made (`rc machines connect` run
+through `_rustcode/machine/exec`), so no SSH is needed
+(`apps/desktop/src/state/machineAccess.ts`). Machines › ‹machine› › Access
+has **Allow** for a machine that cannot reach this computer yet, which does the
+same.
+
 | Choice | This computer reaches `box` | `box` reaches this computer |
 | --- | --- | --- |
-| **One way** (default) | yes | no |
-| **Both ways** | yes | yes |
+| **Both ways** (default in the app) | yes | yes |
+| **One way** | yes | no |
 
 - **Consent.** Choosing *Both ways* here is this computer's consent: it creates
   a fresh connect code, which pairs `box` as a `desktop` device with ACP
@@ -1403,7 +1411,7 @@ rc machines hub join vps --access delegate
   and when it was last seen.
 - **In the app**, Settings › Machines › *Hub* does the same: a switch makes
   this computer the hub and lists its members (linked or offline, their
-  ceiling, calls waiting), and on a member *Join a hub* picks the paired hub,
+  ceiling, calls waiting), and on a member *Link to a hub* picks the paired hub,
   its access and whether to ask, with *Leave* to undo. The app runs these
   commands (`apps/desktop/src-tauri/src/hub.rs`).
 - `rc machines hub status` shows the role and, on the hub, each member

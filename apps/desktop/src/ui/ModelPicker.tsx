@@ -820,7 +820,7 @@ function ModelPanel({
                             field.current?.focus();
                           }}
                           className={cx(
-                            "flex size-5 shrink-0 items-center justify-center rounded text-fg-muted hover:text-fg focus-visible:opacity-100 group-hover/model:opacity-100 group-focus-within/model:opacity-100",
+                            "flex size-5 shrink-0 items-center justify-center rounded-inline text-fg-muted hover:text-fg focus-visible:opacity-100 group-hover/model:opacity-100 group-focus-within/model:opacity-100",
                             starred || i === active ? "opacity-100" : "opacity-0",
                           )}
                         >
