@@ -969,6 +969,3 @@ async fn interrupt_subagent_turn(
     );
     Ok(true)
 }
-
-/// Values of `spawn_agent`'s `model` that mean "the parent's model".
-const INHERIT_MODEL_ALIASES: &[&str] = &["inherit", "default", "parent", "same"];

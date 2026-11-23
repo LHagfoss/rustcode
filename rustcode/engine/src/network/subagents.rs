@@ -1097,6 +1097,9 @@ pub(crate) fn launch_subagent_turn(
     )
 }
 
+/// Values of `spawn_agent`'s `model` that mean "the parent's model".
+const INHERIT_MODEL_ALIASES: &[&str] = &["inherit", "default", "parent", "same"];
+
 /// How many profiles a spawn error suggests.
 const SUGGESTED_PROFILES: usize = 5;
 
