@@ -363,7 +363,6 @@
 8 apps/desktop/src/state/queuePreview.ts
 13 apps/desktop/src/state/queues.test.ts
 10 apps/desktop/src/state/queues.ts
-5 apps/desktop/src/state/recap.ts
 4 apps/desktop/src/state/recentFiles.ts
 6 apps/desktop/src/state/refusals.ts
 13 apps/desktop/src/state/remoteAccess.ts
@@ -590,7 +589,6 @@
 60 apps/desktop/src/ui/UsagePage.tsx
 5 apps/desktop/src/ui/Viz.tsx
 6 apps/desktop/src/ui/VoiceGroup.tsx
-8 apps/desktop/src/ui/WhileAway.tsx
 2 apps/desktop/src/ui/WindowControls.test.ts
 6 apps/desktop/src/ui/WindowControls.tsx
 5 apps/desktop/src/ui/WorkflowRuns.tsx

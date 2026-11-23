@@ -1,9 +1,11 @@
-// The chat recap: when the user comes back to a chat they have not looked at for a
-// while (Settings › General, an hour by default), a card at the top of that chat
-// says what they asked last, where the reply left off and whether the thread is
-// still working, waits on them or failed. It is per chat, like Claude Code's
-// recap, and built from the transcript, so it costs no model turn. Pure, so the
-// card, its setting and its tests agree on when a recap is due and what it says.
+/**
+ * The chat recap: when the user comes back to a chat they have not looked at for a
+ * while (Settings › General, an hour by default), a card at the top of that chat
+ * says what they asked last, where the reply left off and whether the thread is
+ * still working, waits on them or failed. It is per chat, like Claude Code's
+ * recap, and built from the transcript, so it costs no model turn. Pure, so the
+ * card, its setting and its tests agree on when a recap is due and what it says.
+ */
 
 import type { TranscriptItem } from "./thread";
 

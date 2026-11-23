@@ -1,8 +1,10 @@
-// The chat recap card: back in a chat after it went unseen for a while (Settings ›
-// General, an hour by default), a card at the top of that chat says what the user
-// asked last, where the reply left off and whether the thread still works, waits on
-// them or failed. One chat at a time, like Claude Code's recap; dismissing it puts
-// it away until the next return after a gap.
+/**
+ * The chat recap card: back in a chat after it went unseen for a while (Settings ›
+ * General, an hour by default), a card at the top of that chat says what the user
+ * asked last, where the reply left off and whether the thread still works, waits on
+ * them or failed. One chat at a time, like Claude Code's recap; dismissing it puts
+ * it away until the next return after a gap.
+ */
 
 import { useEffect, useMemo } from "react";
 import { chatRecapOf, type RecapState, recapDue } from "../state/recap";
@@ -30,8 +32,8 @@ export function useChatRecapWatch() {
     const seen = threadSeenAt();
     let current = useApp.getState().selectedId;
     let away = document.visibilityState !== "visible" || !document.hasFocus();
-    // App storage takes a write per few seconds at most: a write per keystroke would
-    // put localStorage in the typing path, and the gap is measured in minutes anyway.
+    /** App storage takes a write per few seconds at most: a write per keystroke would put
+     * localStorage in the typing path, and the gap is measured in minutes anyway. */
     let written = 0;
     const save = (now: number) => {
       written = now;
