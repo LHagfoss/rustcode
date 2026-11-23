@@ -869,7 +869,9 @@
 118 rustcode/engine/src/network/stream_request.rs
 38 rustcode/engine/src/network/stream_request/responses.rs
 60 rustcode/engine/src/network/stream_request_tests.rs
-75 rustcode/engine/src/network/subagents.rs
+24 rustcode/engine/src/network/subagents.rs
+29 rustcode/engine/src/network/subagents/agent_tools.rs
+22 rustcode/engine/src/network/subagents/tests.rs
 112 rustcode/engine/src/network/tests.rs
 46 rustcode/engine/src/network/tests/budget.rs
 80 rustcode/engine/src/network/tests/loop_detection.rs

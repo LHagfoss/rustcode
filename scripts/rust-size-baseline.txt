@@ -25,7 +25,6 @@
 2300 rustcode/engine/src/network/context/compact.rs
 2500 rustcode/engine/src/network/history.rs
 3700 rustcode/engine/src/network/stream_request.rs
-4000 rustcode/engine/src/network/subagents.rs
 2400 rustcode/engine/src/network/tool_exec.rs
 2900 rustcode/engine/src/network/turn/tools.rs
 3800 rustcode/engine/src/orchestration.rs
