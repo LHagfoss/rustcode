@@ -367,4 +367,30 @@ describe("a machine still connecting as the app starts", () => {
     await Bun.sleep(40);
     expect(useMachines.getState().sessions[STUDIO]?.map((s) => s.id)).toEqual(["mock-studio-old"]);
   });
+
+  test("does not flash the copy when the shell still reports stopped before first attach", async () => {
+    resetForTests();
+    resetMachineLinksForTests();
+    setCopyGraceForTests(40);
+    saveThreadList(STUDIO, [row("mock-studio-old", 100)]);
+    const shell = new AwayShell();
+    shell.machines = [machine(STUDIO, "Studio", "stopped")];
+    setShellTransport(shell);
+    await refreshMachines();
+    expect(useMachines.getState().sessions[STUDIO]).toBeUndefined();
+    await Bun.sleep(60);
+    expect(useMachines.getState().sessions[STUDIO]?.map((s) => s.id)).toEqual(["mock-studio-old"]);
+  });
+
+  test("does not flash the copy while a connected machine is still fetching its live list", async () => {
+    resetForTests();
+    resetMachineLinksForTests();
+    setCopyGraceForTests(40);
+    saveThreadList(STUDIO, [row("mock-studio-old", 100)]);
+    const shell = new AwayShell();
+    shell.machines = [machine(STUDIO, "Studio", "connected")];
+    setShellTransport(shell);
+    await refreshMachines();
+    expect(useMachines.getState().sessions[STUDIO]).toBeUndefined();
+  });
 });

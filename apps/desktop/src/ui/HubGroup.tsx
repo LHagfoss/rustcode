@@ -104,11 +104,15 @@ function Membership() {
   if (!member) return null;
   return (
     <Row
-      title={`Linked to the hub ${member.name}`}
+      title={
+        <>
+          Linked to the hub {member.name}
+          <Chip tone="ok">Linked</Chip>
+        </>
+      }
       subtitle={`${SCOPE_LABEL[member.access]} access, ${member.ask ? "asking here before each change" : "without asking"}. The remote gateway here keeps the link.`}
-      badge={<Chip tone="ok">Linked</Chip>}
     >
-      <Action disabled={busy} onClick={() => void setHub({ action: "leave" })}>
+      <Action danger disabled={busy} onClick={() => void setHub({ action: "leave" })}>
         Leave
       </Action>
     </Row>

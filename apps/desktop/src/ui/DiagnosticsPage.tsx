@@ -49,8 +49,18 @@ import { hasShell } from "../lib/shell";
 import { useClock } from "../lib/useNow";
 import { engineDetail } from "../state/engine";
 import { errorText, request, restartEngine, SERVER_LOG_LINES, toast, useApp } from "../state/store";
-import { cx, noTextHelpers, rowInset } from "./primitives";
-import { Action, ErrorDetails, fieldClass, Group, Literal, PathText, Row, Select } from "./settingsKit";
+import { cx, noTextHelpers, rowInset, Tooltip } from "./primitives";
+import {
+  Action,
+  ErrorDetails,
+  fieldClass,
+  Group,
+  Literal,
+  PathText,
+  Row,
+  Select,
+  SettingsHeaderActions,
+} from "./settingsKit";
 
 const TRANSPORT_LABEL: Record<string, string> = {
   tauri: "Run by the app",
@@ -235,22 +245,21 @@ export function DiagnosticsPage() {
   };
 
   const lastExit = server?.lastExit;
+  const reportTip = `Server, system, harnesses, last ${REPORT_LOG_LINES} log lines and recent events as Markdown, with secrets, emails and your home folder redacted.`;
   return (
     <>
-      <Group
-        title="Debug report"
-        hint={`The server, the system, the harnesses, the last ${REPORT_LOG_LINES} server log lines and recent events, as Markdown.`}
-      >
-        <Row
-          title="For a GitHub issue"
-          subtitle="Secrets, emails and your home folder are taken out. Read it before you post."
-        >
-          <Action onClick={() => void saveReport()}>Save</Action>
+      <SettingsHeaderActions>
+        <Tooltip label={reportTip}>
+          <Action quiet onClick={() => void saveReport()}>
+            Save
+          </Action>
+        </Tooltip>
+        <Tooltip label={reportTip}>
           <Action prominent onClick={() => void copyReport()}>
             Copy report
           </Action>
-        </Row>
-      </Group>
+        </Tooltip>
+      </SettingsHeaderActions>
 
       <Group title="Server">
         <Row

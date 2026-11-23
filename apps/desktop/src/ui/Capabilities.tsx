@@ -30,6 +30,7 @@ import {
   Row,
   SectionTitle,
   Select,
+  SettingsHeaderActions,
 } from "./settingsKit";
 
 interface Skill {
@@ -229,6 +230,11 @@ export function CapabilitiesPage() {
   };
   return (
     <>
+      <SettingsHeaderActions>
+        <Action onClick={() => bump((n) => n + 1)} aria-label="Refresh">
+          Refresh
+        </Action>
+      </SettingsHeaderActions>
       <SettingsScopeBar />
       <div className="mb-6 flex items-center gap-2">
         <label className={cx(fieldClass, "flex flex-1 items-center gap-2 focus-within:bg-fill-strong")}>
@@ -242,9 +248,6 @@ export function CapabilitiesPage() {
             className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-fg-faint"
           />
         </label>
-        <Action onClick={() => bump((n) => n + 1)} aria-label="Refresh">
-          Refresh
-        </Action>
       </div>
       {online.length === 0 && (
         <p className="mb-6 rounded-lg bg-warning/10 px-3 py-2 text-callout">
@@ -438,7 +441,7 @@ function McpSection({
     <Group
       title={`MCP servers · ${connected} of ${data.mcpServers.length} connected`}
       action={
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           {data.configPath && hasShell() && (
             <Tooltip label={`Edit ${data.configPath}`}>
               <Action
@@ -827,7 +830,7 @@ function SkillsSection({
       <SectionTitle
         title={`Skills · ${on} of ${data.skills.length} on`}
         action={
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <Tooltip label="Start a thread that asks an agent to write the skill with you">
               <Action quiet size="sm" onClick={() => createSkillWithAgent(host)}>
                 Create with agent

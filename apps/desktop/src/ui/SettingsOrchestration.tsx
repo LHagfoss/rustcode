@@ -142,7 +142,7 @@ function OrchestrationGroup() {
   const possible = effectivePerThreadLimit({ perThread: threadLimit, total: totalLimit });
   return (
     <>
-      <Group title="Orchestration">
+      <Group title="Delegation">
         <Row
           title="Let delegates use my named accounts without asking"
           reset={

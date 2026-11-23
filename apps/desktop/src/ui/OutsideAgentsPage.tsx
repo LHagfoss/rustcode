@@ -169,10 +169,6 @@ export function OutsideAgentsPage() {
   return (
     <>
       {picker}
-      <p className="mb-6 max-w-[70ch] px-4 text-callout text-fg-muted">
-        Let other AI apps read, start or message RustCode threads on {where}. Each gets its own access level,
-        and you can change or revoke it here.
-      </p>
       {!status.available && (
         <Group title="Not available here">
           <Row
@@ -368,7 +364,7 @@ function PasskeyRows({ host, status }: { host: string; status: OutsideStatus }) 
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <input
-              className={fieldClass}
+              className={cx(fieldClass, "w-56")}
               value={name}
               placeholder="Name, such as My phone"
               aria-label="Passkey name"

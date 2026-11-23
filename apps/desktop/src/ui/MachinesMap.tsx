@@ -45,9 +45,9 @@ const WIRE_STYLE: Record<WireState | "link", { className: string; width: number;
 };
 
 const PILL_STYLE: Record<WireState, string> = {
-  "in-use": "border-success/70 font-medium text-fg",
+  "in-use": "border-transparent bg-success/12 font-medium text-success",
   standby: "border-border text-fg-muted",
-  connecting: "border-warning/60 text-fg-muted",
+  connecting: "border-transparent bg-warning/12 text-warning",
   offline: "border-dashed border-border text-fg-faint",
   off: "border-dotted border-border text-fg-faint",
 };
@@ -201,22 +201,20 @@ export function MachinesMap({
                   onClick={() => onSelect(selected === node.id ? null : node.id)}
                   label={`${name}, ${status.label}`}
                 >
-                  <span className="relative">
-                    <DeviceGlyphIcon
-                      glyph={machineGlyph(node.machine)}
-                      tint={machineTint(node.machine)}
-                      size={16}
-                    />
-                    <span
-                      className={cx(
-                        "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-surface-2",
-                        STATUS_DOT[status.tone],
-                      )}
-                    />
-                  </span>
+                  <DeviceGlyphIcon
+                    glyph={machineGlyph(node.machine)}
+                    tint={machineTint(node.machine)}
+                    size={16}
+                  />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium text-callout text-fg">{name}</span>
-                    <span className="block truncate text-caption text-fg-faint">{status.label}</span>
+                    <span className="flex items-center gap-1.5 text-caption text-fg-faint">
+                      <span
+                        aria-hidden
+                        className={cx("size-1.5 shrink-0 rounded-full", STATUS_DOT[status.tone])}
+                      />
+                      <span className="truncate">{status.label}</span>
+                    </span>
                   </span>
                 </Node>
               );

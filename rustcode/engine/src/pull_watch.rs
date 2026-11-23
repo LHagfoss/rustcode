@@ -717,12 +717,20 @@ impl WatchStore {
         session_id: &str,
         number: u64,
     ) -> std::io::Result<Option<(Watch, Vec<WatchEvent>)>> {
+        let settled = crate::thread_status::is_settled(session_id);
         self.update(|watches| {
             let Some(watch) = watches.iter_mut().find(|watch| {
                 watch.session_id == session_id && watch.number == number && watch.link
             }) else {
                 return Ok(None);
             };
+            if settled {
+                if watch.is_watching() {
+                    watch.stop("thread settled");
+                }
+                watch.deliver();
+                return Ok(Some((watch.clone(), Vec::new())));
+            }
             // Receipts outlive watches (including unlinking and retention cleanup).
             // Write before handing news to the caller, so a restart or a stale
             // polling result cannot hand the same outcome to another client.
@@ -867,7 +875,9 @@ impl WatchStore {
         let mut watching: Vec<Watch> = self
             .load()
             .into_iter()
-            .filter(|watch| watch.is_watching())
+            .filter(|watch| {
+                watch.is_watching() && !crate::thread_status::is_settled(&watch.session_id)
+            })
             .collect();
         watching.sort_by_key(|watch| watch.next_check_at);
         let mut groups: Vec<((String, u64), Vec<Watch>)> = Vec::new();

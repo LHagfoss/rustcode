@@ -88,6 +88,11 @@ fn stored(session_id: &str) -> Option<Status> {
     }
 }
 
+/// Whether `session_id` is stored as settled (`done`).
+pub(crate) fn is_settled(session_id: &str) -> bool {
+    stored(session_id) == Some(Status::Done)
+}
+
 fn store(session_id: &str, status: Status) -> Result<(), String> {
     let dir = crate::sessions::get_active_session_dir(session_id)
         .ok_or_else(|| "session storage is unavailable".to_owned())?;

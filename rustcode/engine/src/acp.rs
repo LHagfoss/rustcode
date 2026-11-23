@@ -3157,9 +3157,7 @@ async fn dispatch_request(
                     Err(error) => serde_json::json!({ "error": error.to_string() }),
                 });
             }
-            let watches = crate::pull_watch::WatchStore::default_store()
-                .map(|store| store.list(request.session_id.as_deref()))
-                .unwrap_or_default();
+            let watches = list_pull_watches(request.session_id.as_deref());
             responder.respond(serde_json::json!({ "watches": watches }))
         }
         "_rustcode/workflows/list" => {

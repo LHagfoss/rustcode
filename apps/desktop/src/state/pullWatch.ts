@@ -29,6 +29,8 @@ export async function deliverPullWatch(conn: AcpConnection, params: JsonObject, 
     return (state.statusMarks[id] ?? sessionById(state, id)?.status) === "done";
   };
   if (settled()) return;
+  const state = useApp.getState();
+  if (host && !isLoaded(state.threads[id]) && !state.sessions.some((s) => s.host === host)) return;
   // Load before claiming: a failed load leaves the durable events pending.
   await openThread(id);
   if (!isLoaded(useApp.getState().threads[id]) || settled()) return;

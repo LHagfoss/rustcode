@@ -465,6 +465,12 @@
   scrollbar-gutter: stable;
 }
 
+/* Centered lanes (Settings) reserve equal gutter on both sides so floating headers stay aligned. */
+@utility scroll-stable-both {
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+}
+
 /* A scrolling list that fades out over its last `--rc-fade` px, above whatever floats at its foot. */
 @utility fade-bottom {
   /* design-lint: allow (mask alpha, not a colour) */
@@ -1488,6 +1494,27 @@
 }
 .rc-fade-in {
   animation: rc-fade 400ms ease-out;
+}
+/* Settings header bar and in-page title handoff: hidden at top, glides in once scrolled past. */
+.rc-settings-header-bar {
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition:
+    opacity 180ms var(--ease-snappy),
+    transform 200ms var(--ease-snappy);
+}
+.rc-settings-header-bar[data-shown="true"] {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.rc-settings-page-title {
+  transition: opacity 150ms var(--ease-snappy);
+}
+.rc-settings-page-title[data-hidden="true"] {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /*

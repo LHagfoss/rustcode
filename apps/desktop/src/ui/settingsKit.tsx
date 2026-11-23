@@ -34,6 +34,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import { displayPath } from "../acp/types";
 import {
@@ -242,6 +243,61 @@ export function RowResets({ children }: { children: ReactNode }) {
 /** The page's resettable rows, for the panel header's "Restore defaults". */
 export function useRowResets(): RowResetsState {
   return useContext(RowResetsContext);
+}
+
+/** Optional page-level title metadata for sub-pages (e.g. one machine's name and back link). */
+export interface SettingsPageMeta {
+  title: ReactNode;
+  badge?: ReactNode;
+  back?: { label: string; onClick: () => void };
+}
+
+interface SettingsHeaderContextValue {
+  titleSlot: HTMLDivElement | null;
+  headerSlot: HTMLDivElement | null;
+  setMeta: (meta: SettingsPageMeta | null) => void;
+}
+
+const SettingsHeaderContext = createContext<SettingsHeaderContextValue>({
+  titleSlot: null,
+  headerSlot: null,
+  setMeta: () => undefined,
+});
+
+/** Connects a Settings page to its title-row and floating-header action slots and page title. */
+export function SettingsHeaderProvider({
+  titleSlot,
+  headerSlot,
+  setMeta,
+  children,
+}: {
+  titleSlot: HTMLDivElement | null;
+  headerSlot: HTMLDivElement | null;
+  setMeta: (meta: SettingsPageMeta | null) => void;
+  children: ReactNode;
+}) {
+  const value = useMemo(() => ({ titleSlot, headerSlot, setMeta }), [titleSlot, headerSlot, setMeta]);
+  return <SettingsHeaderContext value={value}>{children}</SettingsHeaderContext>;
+}
+
+/** Places a Settings page's primary button(s) on the title line and glides them into the header on scroll. */
+export function SettingsHeaderActions({ children }: { children: ReactNode }) {
+  const { titleSlot, headerSlot } = useContext(SettingsHeaderContext);
+  return (
+    <>
+      {titleSlot ? createPortal(children, titleSlot) : null}
+      {headerSlot ? createPortal(children, headerSlot) : null}
+    </>
+  );
+}
+
+/** Lets a sub-page override the Settings large title and header title (cleared on unmount). */
+export function useSettingsPageMeta(meta: SettingsPageMeta | null) {
+  const { setMeta } = useContext(SettingsHeaderContext);
+  useEffect(() => {
+    setMeta(meta);
+    return () => setMeta(null);
+  }, [setMeta, meta]);
 }
 
 /**

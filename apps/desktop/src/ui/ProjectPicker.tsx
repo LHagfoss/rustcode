@@ -7,7 +7,7 @@
 // (ui/MachineFolderBrowser.tsx), since its disk has no file dialog here.
 
 import { type ReactElement, type ReactNode, useMemo, useState } from "react";
-import { projectName } from "../acp/types";
+import { displayPath, projectName } from "../acp/types";
 import { folderRows, matchSpans, middleEllipsis } from "../lib/folderList";
 import { canOpenTerminal, openFolderInEditor, openPath, openTerminalAt, pickFolder } from "../lib/native";
 import { fileManagerName } from "../lib/platform";
@@ -137,7 +137,7 @@ export function ProjectPicker({
         {/* The folders scroll under a search that filters them; "Choose Folder…" stays pinned under
           them, last in the list and last to the arrow keys. */}
         {searchable && (
-          <div data-menu-static className="px-0.5 pb-0.5">
+          <div data-menu-static className="pb-0.5">
             <MenuSearchField
               value={filter}
               onChange={setFilter}
@@ -182,7 +182,7 @@ export function ProjectPicker({
                   )}
                 </span>
                 <span className="min-w-0 shrink truncate text-caption text-fg-faint">
-                  {middleEllipsis(row.path, PATH_CHARS)}
+                  {middleEllipsis(displayPath(row.path), PATH_CHARS)}
                 </span>
                 {current && <Check size={13} className="shrink-0 text-fg-muted" />}
               </CardMenuItem>
@@ -260,7 +260,8 @@ function FolderActions({ cwd, host, remote }: { cwd: string; host: string; remot
         ]
       : []),
     {
-      label: "Copy Path",
+      label: "Copy",
+      description: "Copy path",
       icon: <Copy />,
       onSelect: () => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info")),
     },

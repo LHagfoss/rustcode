@@ -217,16 +217,22 @@ export function MachineSelectorView({
                   if (thread) void moveThreadToMachine(thread.id, choice.id);
                   else void setNewThreadHost(choice.id);
                 }}
-                className={cx("gap-2", selected && "bg-fill-subtle", !canSelect && !selected && "opacity-60")}
+                className={cx(
+                  "gap-2 py-1.5",
+                  selected && "bg-fill-subtle",
+                  !canSelect && !selected && "opacity-60",
+                )}
               >
-                <span
-                  aria-hidden
-                  data-status={choice.status.kind}
-                  className={cx("size-1.5 shrink-0 rounded-full", DOT[choice.status.kind])}
-                />
                 <DeviceGlyphIcon glyph={glyphOf(choice.id)} tint={tintOf(choice.id)} size={14} />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-body text-fg">{choice.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-body text-fg">{choice.name}</span>
+                    <span
+                      aria-hidden
+                      data-status={choice.status.kind}
+                      className={cx("size-1.5 shrink-0 rounded-full", DOT[choice.status.kind])}
+                    />
+                  </span>
                   <span className="truncate text-caption text-fg-faint">{detail}</span>
                 </span>
                 {!reachable && choice.id && (

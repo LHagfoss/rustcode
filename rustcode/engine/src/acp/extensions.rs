@@ -120,6 +120,28 @@ pub(crate) struct PullWatchNotification {
     pub events: Vec<crate::pull_watch::WatchEvent>,
 }
 
+/// Lists pull watches, settling any whose thread is already marked `done`.
+pub(super) fn list_pull_watches(session_id: Option<&str>) -> Vec<crate::pull_watch::Watch> {
+    let Some(store) = crate::pull_watch::WatchStore::default_store() else {
+        return Vec::new();
+    };
+    let list = store.list(session_id);
+    let mut settled_any = false;
+    for watch in &list {
+        if (!watch.pending().is_empty() || watch.is_watching())
+            && crate::thread_status::is_settled(&watch.session_id)
+            && store.settle(&watch.session_id).is_ok()
+        {
+            settled_any = true;
+        }
+    }
+    if settled_any {
+        store.list(session_id)
+    } else {
+        list
+    }
+}
+
 /// Start checking watches, once per engine, for every client that asked about
 /// them. Each round tries for the checking lease, so a second engine takes
 /// over when the first one exits.
@@ -143,6 +165,10 @@ pub(super) fn start_pull_watching(clients: &clients::Clients) {
             // A link can already have pending events when it is created.
             // Forward those as well as events written by another engine.
             for (watch, events) in crate::pull_watch::unannounced(&store.load(), &mut announced) {
+                if crate::thread_status::is_settled(&watch.session_id) {
+                    let _ = store.settle(&watch.session_id);
+                    continue;
+                }
                 notify.publish(
                     clients::Topic::PullWatches,
                     PullWatchNotification { watch, events },
@@ -152,6 +178,10 @@ pub(super) fn start_pull_watching(clients: &clients::Clients) {
                 crate::pull_watch::check_due(&store, |watch, events| {
                     // A worktree thread whose pull request merged is done.
                     crate::thread_status::on_pull_watch(watch);
+                    if crate::thread_status::is_settled(&watch.session_id) {
+                        let _ = store.settle(&watch.session_id);
+                        return;
+                    }
                     // A change its thread has not been told about wants the
                     // user's look: the thread's status says so in every
                     // client, and its next `status` call hands the events

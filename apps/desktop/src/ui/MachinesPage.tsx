@@ -84,7 +84,7 @@ import {
 } from "./machineLabels";
 import { ChromeButton, Segments, Spinner } from "./primitives";
 import { ServerProblems } from "./ServerProblems";
-import { Action, Chip, Group, Row, withCode } from "./settingsKit";
+import { Action, Chip, Group, Row, SettingsHeaderActions, withCode } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
 
 /** How often the page asks the shell where the machines stand. */
@@ -154,6 +154,14 @@ export function MachinesPage() {
 
   return (
     <>
+      <SettingsHeaderActions>
+        {outdated.length > 1 && (
+          <Action onClick={() => updateMachines(outdated)}>Update all ({outdated.length})</Action>
+        )}
+        <Action prominent onClick={() => setAddMachineOpen(true)}>
+          Add machine
+        </Action>
+      </SettingsHeaderActions>
       {!ready && (
         <p role="status" className="mb-4 text-callout text-fg-muted">
           Updating machines…
@@ -162,24 +170,8 @@ export function MachinesPage() {
       {error && <p className="mb-6 text-callout text-warning">Could not read the machines: {error}</p>}
 
       <Group
-        title={
-          <span className="flex items-center gap-3">
-            Machines
-            <ViewSwitch view={view} onChange={chooseView} />
-          </span>
-        }
-        action={
-          <span className="flex items-center gap-2">
-            {outdated.length > 1 && (
-              <Action size="sm" onClick={() => updateMachines(outdated)}>
-                Update all ({outdated.length})
-              </Action>
-            )}
-            <Action size="sm" onClick={() => setAddMachineOpen(true)}>
-              Add machine
-            </Action>
-          </span>
-        }
+        title="Network"
+        action={<ViewSwitch view={view} onChange={chooseView} />}
         hint="Choose where a thread runs under Run on when you start it. A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing a machine forgets its pairing here; it keeps listing this computer until you revoke it there."
       >
         {view === "map" ? (

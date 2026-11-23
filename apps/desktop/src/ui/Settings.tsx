@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
-import { currentPlatform } from "../lib/platform";
+import { appPlatform, currentPlatform } from "../lib/platform";
 import { ComputerUseGroup } from "./ComputerUseGroup";
 import { ProjectGenerators } from "./ProjectGenerators";
 import { TextGeneration } from "./TextGeneration";
@@ -15,7 +15,7 @@ import { VoiceGroup } from "./VoiceGroup";
 // themes, Usage, Statistics) read and write through `_rustcode/*` requests.
 // Diagnostics (DiagnosticsPage.tsx) asks the shell about the server itself.
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { CHAT_WIDTH_LABEL, type ChatWidth } from "../lib/chatWidth";
@@ -63,6 +63,7 @@ import {
 } from "../state/store";
 import { AddHarnessForm } from "./AddHarness";
 import {
+  ArrowLeft,
   Blocks,
   ChartColumn,
   Check,
@@ -86,11 +87,13 @@ import {
   TerminalSquare,
   X,
 } from "./icons";
-import { ViewHeader } from "./MainHeader";
+import { HEADER_HEIGHT, SidebarCluster } from "./MainHeader";
 import { RestartToApply } from "./RestartToApply";
 import { AboutPage, AdvancedPage, STATUS_READ_MS } from "./SettingsAbout";
 import { AppearancePage } from "./SettingsAppearance";
 import { OrchestrationPage } from "./SettingsOrchestration";
+import { useLightsInset } from "./Titlebar";
+import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
 
 const CapabilitiesPage = lazy(() => import("./Capabilities").then((m) => ({ default: m.CapabilitiesPage })));
 
@@ -127,6 +130,9 @@ import {
   Loading,
   Row,
   RowResets,
+  SettingsHeaderActions,
+  SettingsHeaderProvider,
+  type SettingsPageMeta,
   Slider,
   useEngineData,
   useRowResets,
@@ -618,6 +624,7 @@ function AgentsPage() {
   const chosenProject = useProjectScope((state) => state.project);
   const [saved, setSaved] = useState(false);
   const [adding, setAdding] = useState(false);
+  const harnessesRef = useRef<HTMLDivElement>(null);
   const checking = useHarnessChecks((s) => Object.values(s.byHarness).some((e) => "running" in e));
   const checkingAll = useHarnessChecks((s) => s.all);
   // Installed, signed in, versions: detected again each time the page opens and the window is back.
@@ -641,6 +648,38 @@ function AgentsPage() {
   const value = choice ?? scoped.value ?? snapshot.default;
   return (
     <>
+      {thisMachine && (
+        <SettingsHeaderActions>
+          {checkingAll && (
+            <span className="text-caption text-fg-muted tabular-nums">
+              Checking {Math.min(checkingAll.done + 1, checkingAll.total)} of {checkingAll.total}…
+            </span>
+          )}
+          <Tooltip label="Check all harnesses">
+            <button
+              type="button"
+              aria-label="Check all harnesses"
+              onClick={() => void runAllHarnessChecks()}
+              disabled={checking}
+              className="inline-flex size-7 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-60"
+            >
+              {checking ? <Spinner size={12} /> : <RefreshCw size={14} />}
+            </button>
+          </Tooltip>
+          <Action
+            prominent
+            onClick={() => {
+              setAdding(true);
+              requestAnimationFrame(() =>
+                harnessesRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
+              );
+            }}
+            disabled={adding}
+          >
+            Add harness
+          </Action>
+        </SettingsHeaderActions>
+      )}
       <SettingsScopeBar />
       {snapshot.unsupported && (
         <p className="mb-4 rounded-lg bg-warning/10 px-3 py-2 text-callout">
@@ -674,46 +713,23 @@ function AgentsPage() {
           <DefaultsForm snapshot={snapshot} value={value} onChange={change} />
         </Group>
       )}
-      <Group
-        title="Harnesses"
-        action={
-          thisMachine ? (
-            <div className="flex items-center gap-1">
-              {checkingAll && (
-                <span className="text-caption text-fg-muted tabular-nums">
-                  Checking {Math.min(checkingAll.done + 1, checkingAll.total)} of {checkingAll.total}…
-                </span>
-              )}
-              <Tooltip label="Check all">
-                <button
-                  type="button"
-                  aria-label="Check all harnesses"
-                  onClick={() => void runAllHarnessChecks()}
-                  disabled={checking}
-                  className="inline-flex size-6 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-60"
-                >
-                  {checking ? <Spinner size={12} /> : <RefreshCw size={13} />}
-                </button>
-              </Tooltip>
-              <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
-                Add harness
-              </Action>
-            </div>
-          ) : undefined
-        }
-        footer={
-          thisMachine
-            ? "Each harness signs in on its own."
-            : "A switch here turns a harness on or off on every connected machine."
-        }
-      >
-        {thisMachine && adding && <AddHarnessForm onClose={() => setAdding(false)} />}
-        {thisMachine ? (
-          <HarnessList snapshot={snapshot} />
-        ) : (
-          <ScopedHarnessList targets={targets} writes={writes} />
-        )}
-      </Group>
+      <div ref={harnessesRef}>
+        <Group
+          title="Harnesses"
+          footer={
+            thisMachine
+              ? "Each harness signs in on its own."
+              : "A switch here turns a harness on or off on every connected machine."
+          }
+        >
+          {thisMachine && adding && <AddHarnessForm onClose={() => setAdding(false)} />}
+          {thisMachine ? (
+            <HarnessList snapshot={snapshot} />
+          ) : (
+            <ScopedHarnessList targets={targets} writes={writes} />
+          )}
+        </Group>
+      </div>
       {thisMachine && <TextGeneration />}
       {thisMachine && chosenProject && <ProjectGenerators project={chosenProject} />}
     </>
@@ -1069,13 +1085,43 @@ export function SettingsPage() {
   const section = useApp((s) => s.settings) ?? "general";
   const machine = useApp((s) => s.settingsMachine);
   const current = PAGES.find((s) => s.id === section) ?? PAGES[0]!;
-  const label = section === "machines" && machine ? "Machine settings" : current.label;
+  const fallbackLabel = section === "machines" && machine ? "Machine settings" : current.label;
+  const [pageMeta, setPageMeta] = useState<SettingsPageMeta | null>(null);
+  const [titleSlot, setTitleSlot] = useState<HTMLDivElement | null>(null);
+  const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const displayTitle = pageMeta?.title ?? fallbackLabel;
+  const pageAriaLabel = typeof displayTitle === "string" ? displayTitle : fallbackLabel;
   // The row to land on, set when a result is picked (in the nav or in ⌘K) and cleared once it is lit.
   const landing = useApp((s) => s.settingsLanding);
   // The server's warnings are read once when Settings opens, if no page has read them.
   useEffect(() => {
     if (useMachines.getState().server === null) void refreshServerService();
   }, []);
+
+  const pageKey = `${section}:${machine ?? ""}`;
+  const lastPage = useRef(pageKey);
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    if (lastPage.current !== pageKey) {
+      lastPage.current = pageKey;
+      main.scrollTop = 0;
+      setScrolled(false);
+    }
+    const sync = () => {
+      const heading = titleRef.current;
+      if (!heading) return;
+      const passed =
+        heading.getBoundingClientRect().bottom <= main.getBoundingClientRect().top + HEADER_HEIGHT;
+      setScrolled((prev) => (prev === passed ? prev : passed));
+    };
+    sync();
+    main.addEventListener("scroll", sync, { passive: true });
+    return () => main.removeEventListener("scroll", sync);
+  }, [pageKey]);
 
   // The picked row lands: scroll to it once the page is on screen, then light it
   // for a moment. The class comes off in a timer of its own, so the effect can
@@ -1101,75 +1147,187 @@ export function SettingsPage() {
   }, [landing, section]);
 
   return (
-    <section aria-label="Settings" data-tab-free className="flex min-w-0 flex-1 flex-col bg-bg">
+    <section aria-label="Settings" data-tab-free className="relative flex min-w-0 flex-1 flex-col bg-bg">
       <RowResets>
-        <PanelHeader label={label} />
-        <main aria-label={label} data-focus-area="section" className="scroll-stable min-h-0 flex-1">
-          <div
-            key={`${section}:${machine ?? ""}`}
-            className="rc-in @container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24"
+        <SettingsHeaderProvider titleSlot={titleSlot} headerSlot={headerSlot} setMeta={setPageMeta}>
+          <PanelHeader
+            title={displayTitle}
+            back={pageMeta?.back}
+            scrolled={scrolled}
+            onSlotRef={setHeaderSlot}
+          />
+          <main
+            ref={mainRef}
+            aria-label={pageAriaLabel}
+            data-focus-area="section"
+            className="scroll-stable-both min-h-0 flex-1"
           >
-            <Suspense fallback={<Loading error={null} />}>
-              {section === "general" && <GeneralPage />}
-              {section === "chat" && <ChatPage />}
-              {section === "permissions" && <PermissionsPage />}
-              {section === "agents" && <AgentsPage />}
-              {section === "orchestration" && <OrchestrationPage />}
-              {section === "voice" && <VoicePage />}
-              {section === "connections" && <ConnectionsPage />}
-              {section === "capabilities" && <CapabilitiesPage />}
-              {section === "remote" && <RemoteAccessPage />}
-              {section === "outside" && <OutsideAgentsPage />}
-              {section === "machines" && (machine ? <MachineSettingsPage id={machine} /> : <MachinesPage />)}
-              {section === "appearance" && <AppearancePage />}
-              {section === "keyboard" && <ShortcutsPage />}
-              {section === "usage" && <UsagePage />}
-              {section === "statistics" && <StatisticsPage />}
-              {section === "advanced" && <AdvancedPage />}
-              {section === "diagnostics" && <DiagnosticsPage />}
-              {section === "about" && <AboutPage />}
-            </Suspense>
-          </div>
-        </main>
+            <div
+              key={`${section}:${machine ?? ""}`}
+              className="rc-in @container mx-auto w-full max-w-[760px] px-4 pb-24"
+              style={{ paddingTop: HEADER_HEIGHT + 24 }}
+            >
+              <div
+                ref={titleRef}
+                data-setting={typeof displayTitle === "string" ? displayTitle : undefined}
+                data-hidden={scrolled ? "true" : "false"}
+                className="rc-settings-page-title mb-6 px-4"
+              >
+                {pageMeta?.back && (
+                  <button
+                    type="button"
+                    tabIndex={scrolled ? -1 : 0}
+                    onClick={pageMeta.back.onClick}
+                    className="mb-1 inline-flex items-center gap-1 font-medium text-callout text-fg-muted hover:text-fg"
+                  >
+                    <ArrowLeft size={13} />
+                    {pageMeta.back.label}
+                  </button>
+                )}
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <h1 className="min-w-0 truncate font-semibold text-fg text-title tracking-tight">
+                      {displayTitle}
+                    </h1>
+                    {pageMeta?.badge}
+                  </div>
+                  <PageActions slotRef={setTitleSlot} active={!scrolled} />
+                </div>
+              </div>
+              <Suspense fallback={<Loading error={null} />}>
+                {section === "general" && <GeneralPage />}
+                {section === "chat" && <ChatPage />}
+                {section === "permissions" && <PermissionsPage />}
+                {section === "agents" && <AgentsPage />}
+                {section === "orchestration" && <OrchestrationPage />}
+                {section === "voice" && <VoicePage />}
+                {section === "connections" && <ConnectionsPage />}
+                {section === "capabilities" && <CapabilitiesPage />}
+                {section === "remote" && <RemoteAccessPage />}
+                {section === "outside" && <OutsideAgentsPage />}
+                {section === "machines" &&
+                  (machine ? <MachineSettingsPage id={machine} /> : <MachinesPage />)}
+                {section === "appearance" && <AppearancePage />}
+                {section === "keyboard" && <ShortcutsPage />}
+                {section === "usage" && <UsagePage />}
+                {section === "statistics" && <StatisticsPage />}
+                {section === "advanced" && <AdvancedPage />}
+                {section === "diagnostics" && <DiagnosticsPage />}
+                {section === "about" && <AboutPage />}
+              </Suspense>
+            </div>
+          </main>
+        </SettingsHeaderProvider>
       </RowResets>
     </section>
   );
 }
 
-/**
- * The page's header, the main column's own title row: where you are, then the
- * save status and "Restore defaults", which only shows while a row on this page
- * can go back to its default and puts back everything that changed at once
- * (settingsKit.tsx › RowResets). The sidebar's gear closes Settings.
- */
-function PanelHeader({ label }: { label: string }) {
+function PageActions({ slotRef, active }: { slotRef: (el: HTMLDivElement | null) => void; active: boolean }) {
   const save = useSettingsSave();
   const resets = useRowResets();
+  const statusText = save.pending
+    ? "Saving…"
+    : save.error
+      ? `Could not save: ${save.error}`
+      : save.saved
+        ? "Saved"
+        : "";
   return (
-    <ViewHeader
-      title={
-        <nav aria-label="Settings breadcrumb" className="min-w-0">
-          <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 font-medium text-body">
-            <li className="shrink-0 text-fg-muted">Settings</li>
-            <li aria-hidden className="shrink-0 text-fg-faint">
-              /
-            </li>
-            <li aria-current="page" className="min-w-0 truncate text-fg">
-              {label}
-            </li>
-          </ol>
-        </nav>
-      }
+    <div
+      aria-hidden={!active || undefined}
+      inert={!active || undefined}
+      className="flex shrink-0 items-center gap-2"
     >
-      <span role="status" className="text-caption text-fg-muted">
-        {save.pending ? "Saving…" : save.error ? `Could not save: ${save.error}` : save.saved ? "Saved" : ""}
+      <span
+        role={active ? "status" : undefined}
+        className={statusText ? "text-caption text-fg-muted" : "sr-only"}
+      >
+        {statusText}
       </span>
-      {resets.count > 0 && (
-        <Action size="sm" onClick={() => resets.restore()}>
-          Restore defaults
-        </Action>
+      {resets.count > 0 && <Action onClick={() => resets.restore()}>Restore defaults</Action>}
+      <div ref={slotRef} className="flex shrink-0 items-center gap-2 empty:hidden" />
+    </div>
+  );
+}
+
+/**
+ * The Settings floating glass header — the same `.rc-header-glass` chrome as thread screens,
+ * aligned with the 760px content column below. Its breadcrumb (`Settings / <page>`) and actions
+ * stay hidden while the large in-page title row is in view, then glide in smoothly together once
+ * the title row scrolls behind it.
+ */
+function PanelHeader({
+  title,
+  back,
+  scrolled,
+  onSlotRef,
+}: {
+  title: ReactNode;
+  back?: { label: string; onClick: () => void };
+  scrolled: boolean;
+  onSlotRef: (el: HTMLDivElement | null) => void;
+}) {
+  const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const lightsInset = useLightsInset();
+  const controlsInset = windowControlsInset(appPlatform());
+  const maximizes = appPlatform() === "windows";
+  return (
+    <header
+      data-tauri-drag-region
+      onDoubleClick={maximizes ? onTitleRowDoubleClick : undefined}
+      className="rc-header-glass @container absolute inset-x-0 top-0 z-10 flex items-center"
+      style={{
+        height: HEADER_HEIGHT,
+        ...(controlsInset ? { paddingRight: controlsInset } : null),
+      }}
+    >
+      {sidebarHidden && (
+        <div className="absolute top-1/2 z-20 -translate-y-1/2" style={{ left: lightsInset }}>
+          <SidebarCluster />
+        </div>
       )}
-    </ViewHeader>
+      <div
+        aria-hidden={!scrolled}
+        inert={!scrolled || undefined}
+        data-shown={scrolled ? "true" : "false"}
+        data-tauri-drag-region
+        className="rc-settings-header-bar mx-auto flex h-full w-full max-w-[760px] items-center gap-3 px-8"
+        style={
+          sidebarHidden
+            ? { paddingLeft: `max(2rem, calc(${lightsInset}px + 116px - max(0px, (100cqw - 760px) / 2)))` }
+            : undefined
+        }
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
+          <span className="shrink-0 font-medium text-body text-fg-muted" data-tauri-drag-region>
+            Settings
+          </span>
+          <span aria-hidden className="shrink-0 text-body text-fg-faint" data-tauri-drag-region>
+            /
+          </span>
+          {back && (
+            <>
+              <button
+                type="button"
+                tabIndex={scrolled ? 0 : -1}
+                onClick={back.onClick}
+                className="shrink-0 font-medium text-body text-fg-muted hover:text-fg"
+              >
+                {back.label}
+              </button>
+              <span aria-hidden className="shrink-0 text-body text-fg-faint" data-tauri-drag-region>
+                /
+              </span>
+            </>
+          )}
+          <span className="min-w-0 truncate font-semibold text-body text-fg" data-tauri-drag-region>
+            {title}
+          </span>
+        </div>
+        <PageActions slotRef={onSlotRef} active={scrolled} />
+      </div>
+    </header>
   );
 }
 

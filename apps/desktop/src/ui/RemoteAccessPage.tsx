@@ -46,7 +46,7 @@ import { Smartphone, WifiOff } from "./icons";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
 import { ServerProblems } from "./ServerProblems";
-import { Action, Chip, Group, Row, withCode } from "./settingsKit";
+import { Action, Chip, Group, Row, SettingsHeaderActions, withCode } from "./settingsKit";
 
 /** The page keeps itself current while it is open: pairing counts down in the engine. */
 const POLL_MS = 2500;
@@ -168,14 +168,17 @@ export function RemoteAccessPage() {
 
   return (
     <>
+      <SettingsHeaderActions>
+        <Action prominent disabled={unavailable || busy !== null || pending} onClick={pair}>
+          {pending ? <Spinner size={12} /> : null}
+          Pair device
+        </Action>
+      </SettingsHeaderActions>
       {remoteError && (
         <p className="mb-6 text-callout text-warning">Could not read the gateway: {remoteError}</p>
       )}
 
-      <Group
-        title="Remote access"
-        hint="Shared with the RustCode app on your phone through the remote gateway (docs/remote.md). Plain LAN traffic is authenticated but not encrypted: use NetBird away from a trusted network."
-      >
+      <Group>
         <Row
           title="Network access"
           subtitle="Let paired devices reach every thread on this computer."
@@ -213,7 +216,14 @@ export function RemoteAccessPage() {
           )}
         </Row>
         <Row
-          title="Gateway address"
+          title={
+            <>
+              Gateway address
+              <Chip tone={gateway?.connected ? "ok" : enabled ? "warn" : "idle"}>
+                {gateway?.connected ? "Connected" : enabled ? "Starting" : "Off"}
+              </Chip>
+            </>
+          }
           subtitle="What a phone on this network dials."
           hint={withCode("The terminal's `/remote status` shows the same address.")}
           status={
@@ -240,29 +250,17 @@ export function RemoteAccessPage() {
               Copy
             </Action>
           )}
-          <Chip tone={gateway?.connected ? "ok" : enabled ? "warn" : "idle"}>
-            {gateway?.connected ? "Connected" : enabled ? "Starting" : "Off"}
-          </Chip>
         </Row>
-        <Row
-          title="Pair a device"
-          subtitle="A phone or another computer scans the QR code or types the eight-digit code."
-          hint={`The code lasts two minutes and works once; a new one replaces it. ${WRONG_CODES_ALLOWED} wrong codes are allowed.`}
-          status={
-            unavailable
-              ? "Remote access needs the remote gateway, which this host does not build."
-              : pending
-                ? "Asking the gateway for a code…"
-                : expired
-                  ? expiredCodeCopy(pairing?.lastChallengeReached, gateway?.advertisedAddress)
-                  : undefined
-          }
-        >
-          <Action prominent disabled={unavailable || busy !== null || pending} onClick={pair}>
-            {pending ? <Spinner /> : null}
-            Pair device
-          </Action>
-        </Row>
+        {(unavailable || expired) && (
+          <Row
+            title="Pair a device"
+            subtitle={
+              unavailable
+                ? "Remote access needs the remote gateway, which this host does not build."
+                : expiredCodeCopy(pairing?.lastChallengeReached, gateway?.advertisedAddress)
+            }
+          />
+        )}
       </Group>
 
       {phonePairing.phase === "paired" ? (
@@ -310,7 +308,24 @@ export function RemoteAccessPage() {
           devices.map((device) => (
             <Row
               key={device.id}
-              title={device.name}
+              title={
+                <>
+                  {device.name}
+                  <Chip tone={device.connected ? "ok" : "idle"}>
+                    {device.connected ? "Connected" : "Paired"}
+                  </Chip>
+                  {device.connected &&
+                    distinctConnectionRoutes(device.routes).map((route) => (
+                      <Chip
+                        key={`${route.localAddress}-${route.path}`}
+                        tone={connectionRouteTone(route)}
+                        title={`${device.name} connects inbound to this computer at ${route.localAddress}`}
+                      >
+                        {connectionRouteLabel(route)}
+                      </Chip>
+                    ))}
+                </>
+              }
               subtitle={`${deviceLabel(device.kind, device.platform)} · ${lastSeenLabel(device, now)}`}
               hint={connectionDirection(
                 peerOutbound(device.hostId, machines),
@@ -318,17 +333,6 @@ export function RemoteAccessPage() {
                 device.name,
               )}
             >
-              {device.connected &&
-                distinctConnectionRoutes(device.routes).map((route) => (
-                  <Chip
-                    key={`${route.localAddress}-${route.path}`}
-                    tone={connectionRouteTone(route)}
-                    title={`${device.name} connects inbound to this computer at ${route.localAddress}`}
-                  >
-                    {connectionRouteLabel(route)}
-                  </Chip>
-                ))}
-              <Chip tone={device.connected ? "ok" : "idle"}>{device.connected ? "Connected" : "Paired"}</Chip>
               <RevokeDeviceAction device={device} />
             </Row>
           ))
@@ -348,11 +352,15 @@ export function RemoteAccessPage() {
           gateway.routes.map((route) => (
             <Row
               key={route.address}
-              title={routeLabel(route)}
+              title={
+                <>
+                  {routeLabel(route)}
+                  {route.address === gateway.advertisedAddress && <Chip tone="ok">Advertised</Chip>}
+                </>
+              }
               subtitle={routeHint(route)}
               status={<span className="font-mono">{route.address}</span>}
             >
-              {route.address === gateway.advertisedAddress && <Chip tone="ok">Advertised</Chip>}
               <Action
                 aria-label={`Copy the route ${route.address}`}
                 onClick={() => void copyText(route.address)}
