@@ -450,7 +450,7 @@
 16 apps/desktop/src/ui/AddMachineDialog.tsx
 13 apps/desktop/src/ui/AgentStack.tsx
 31 apps/desktop/src/ui/AgentViews.tsx
-8 apps/desktop/src/ui/Attachments.tsx
+7 apps/desktop/src/ui/Attachments.tsx
 21 apps/desktop/src/ui/AttentionCards.tsx
 4 apps/desktop/src/ui/Board.tsx
 5 apps/desktop/src/ui/Branches.tsx
