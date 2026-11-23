@@ -42,21 +42,22 @@ const input = (over: Partial<StatusInput> = {}): StatusInput => ({
 });
 
 describe("isStatusQuery", () => {
-  test("a bare status, in any case, with a question mark or room around it", () => {
-    for (const text of ["status", "Status", "status?", "  STATUS ?  ", "status??"]) {
+  test("the /status command alone, with room around it", () => {
+    for (const text of ["/status", "  /status  ", "/status\n"]) {
       expect(isStatusQuery(text)).toBe(true);
     }
   });
 
-  test("anything longer is a message for the model", () => {
+  test("a plain status or anything longer is a message for the model", () => {
     for (const text of [
       "",
+      "status",
+      "Status?",
       "status of the PR?",
       "what is the status",
-      "status please",
-      "/status",
-      "statuses",
-      "status\nand then merge",
+      "/status please",
+      "/statuses",
+      "/status\nand then merge",
     ]) {
       expect(isStatusQuery(text)).toBe(false);
     }

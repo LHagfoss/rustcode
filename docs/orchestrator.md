@@ -1031,15 +1031,16 @@ model turn:
   (`readDelegatePull` in `state/host.ts`, `_rustcode/pulls/state`), shared and
   kept for 30 s, repeated every 25 s while the panel is open and the window is
   visible, and skipped for a delegate outside a worktree.
-- **A bare `status`.** Typing `status` or `status?` (any case, nothing else) in a
-  thread with delegates is answered by the app: the message and a *Status* card
-  go into the transcript, marked **Local reply · no model turn**, and nothing is
-  sent to the harness. The card carries the same rows as the panel and fills in
-  the pull requests as they arrive. Any longer message (`status of the PR?`)
-  goes to the model as before, and so does `status` in a thread with no
-  delegates. The card is the app's, not the thread's: it is not stored by the
-  engine, so a reload drops it. The matcher and the rows are pure
-  (`state/delegateStatus.ts`).
+- **`/status`.** Typing `/status` alone in a thread with delegates adds a
+  *Status* card to the transcript, marked **Local reply · no model turn**. When
+  the harness answers `/status` as a report, that report still opens in its
+  panel above the composer; otherwise the message goes into the transcript
+  with the card and nothing is sent to the harness. The card carries the same
+  rows as the panel and fills in the pull requests as they arrive. A plain
+  `status` is a message for the model, and `/status` in a thread with no
+  delegates goes to the harness as before. The card is the app's, not the
+  thread's: it is not stored by the engine, so a reload drops it. The matcher
+  and the rows are pure (`state/delegateStatus.ts`).
 
 ## Orchestration tools v3
 

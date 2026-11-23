@@ -135,13 +135,14 @@ export function delegateStatusInputs(s: AppState, orchestrator: string, max = In
 }
 
 /**
- * A bare "status" in a thread that has delegates is answered here, from what the app already
- * knows: the user's message and a local reply row go into the transcript, and no model turn runs
- * (each one resent the whole context and cost as much as any other). The pull requests are read
- * after the row is drawn and fill in as they arrive. False for a thread with no delegates, where
- * the model answers as it always did.
+ * `/status` in a thread that has delegates adds their status here, from what the app already
+ * knows: a local reply row goes into the transcript, and no model turn runs (each one resent the
+ * whole context and cost as much as any other). With `withMessage` the user's message goes in
+ * before it; without, the harness's own `/status` report answers the message in its panel. The
+ * pull requests are read after the row is drawn and fill in as they arrive. False for a thread
+ * with no delegates, where `/status` goes to the harness as it always did.
  */
-export function answerStatusLocally(threadId: string, text: string): boolean {
+export function answerStatusLocally(threadId: string, text: string, withMessage = true): boolean {
   if (!isStatusQuery(text)) return false;
   const s = useApp.getState();
   if (!s.threads[threadId]) return false;
@@ -154,8 +155,8 @@ export function answerStatusLocally(threadId: string, text: string): boolean {
     ...t,
     items: [
       ...t.items,
-      { kind: "user", id: localId("user"), text: text.trim(), at: now },
-      { kind: "status", id: statusId, at: now, rows },
+      ...(withMessage ? [{ kind: "user" as const, id: localId("user"), text: text.trim(), at: now }] : []),
+      { kind: "status" as const, id: statusId, at: now, rows },
     ],
   }));
   for (const row of rows) {

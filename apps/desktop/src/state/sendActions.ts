@@ -42,6 +42,7 @@ import {
   engine,
   errorText,
   harnessesOn,
+  isReportCommand,
   newThreadChoice,
   peekThread,
   projectThreadChoice,
@@ -201,8 +202,11 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     await cancel(id);
     return true;
   }
-  // A bare "status" in a thread with delegates is answered from what the app knows, with no turn.
-  if (!hasExtras(extras) && !get().editing[id] && answerStatusLocally(id, trimmed)) return true;
+  // `/status` with delegates lists them locally; a harness `/status` report still opens its panel.
+  if (!hasExtras(extras) && !get().editing[id]) {
+    const report = isReportCommand(id, trimmed, extras);
+    if (answerStatusLocally(id, trimmed, !report) && !report) return true;
+  }
   const edit = get().editing[id];
   if (edit && !isRunning(thread)) {
     cancelEdit(id);
