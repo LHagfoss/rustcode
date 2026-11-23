@@ -53,11 +53,11 @@ export interface StatusInput {
 }
 
 /**
- * A bare `status` or `status?` (any case, with room around it) is a question the app answers
- * itself. Anything longer is a message for the model: "status of the PR?" is not this.
+ * The `/status` command alone (room around it is fine) asks for the delegates' status too. A plain
+ * "status" is a message for the model like any other, and so is "/status" with more after it.
  */
 export function isStatusQuery(text: string): boolean {
-  return /^\s*status\s*\?*\s*$/i.test(text);
+  return text.trim() === "/status";
 }
 
 /** The rows, working ones first (what the reader asks about), then the rest in the order given. */
