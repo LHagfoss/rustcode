@@ -16,13 +16,7 @@ import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
 import { offlineNotice } from "../state/machineCache";
 import { hasPendingChange, useOutbox } from "../state/machineOutbox";
-import {
-  machineGlyph,
-  machineTint,
-  offlineSinceLabel,
-  useMachineReconnecting,
-  useMachines,
-} from "../state/machines";
+import { offlineSinceLabel, useMachineReconnecting, useMachines } from "../state/machines";
 import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
   dismissPendingSetup,
@@ -56,15 +50,12 @@ import {
   CircleCheck,
   CircleDashed,
   CircleDot,
-  Laptop,
   ListChecks,
   type LucideIcon,
   PanelRight,
 } from "./icons";
 import { JobRunBar, useJobRun } from "./JobRunBar";
 import { LinkedThreads } from "./Links";
-import { DeviceGlyphIcon } from "./MachineGlyph";
-import { MachineSelector } from "./MachineSelector";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
@@ -183,11 +174,7 @@ function Header({
   const folderKey = useShortcutHint("thread-folder");
   const session = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id) : undefined));
   const listed = session?.title;
-  // A thread on a paired computer: the header says where it runs and opens the machine mover
-  // (docs/desktop.md › Several machines).
-  const machine = useMachineOfThread(thread?.id);
   const machineHost = thread ? splitThreadKey(thread.id).host : "";
-  const machineEntry = useMachines((s) => s.machines.find((entry) => entry.id === machineHost));
   const title = pending?.title ?? (thread ? (thread.title ?? listed ?? "New thread") : "New thread");
   const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
   const newThreadHost = useApp((s) => s.newThreadHost);
@@ -225,7 +212,7 @@ function Header({
                 <button
                   type="button"
                   aria-label={`Project: ${projectName(cwd)}`}
-                  className="-mx-1 flex max-w-[220px] shrink-0 items-center gap-1.5 rounded-sm px-1 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg data-[state=open]:bg-fill-subtle data-[state=open]:text-fg"
+                  className="-mx-1 flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-sm px-2 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg data-[state=open]:bg-fill-subtle data-[state=open]:text-fg"
                 >
                   <ProjectMark name={projectName(cwd)} />
                   <span className="min-w-0 truncate">{projectName(cwd)}</span>
@@ -239,31 +226,6 @@ function Header({
             </span>
           )}
           <ThreadTitle thread={pending ? undefined : thread} title={title} />
-          {thread && machine && (
-            <MachineSelector
-              thread={thread}
-              side="bottom"
-              align="start"
-              trigger={
-                <Pill
-                  size="sm"
-                  aria-label={`Machine: ${machine}`}
-                  className="max-w-[300px] font-normal text-fg-muted data-[state=open]:bg-fill data-[state=open]:text-fg"
-                >
-                  {machineEntry ? (
-                    <DeviceGlyphIcon
-                      glyph={machineGlyph(machineEntry)}
-                      tint={machineTint(machineEntry)}
-                      size={12}
-                    />
-                  ) : (
-                    <Laptop size={12} className="shrink-0" aria-hidden />
-                  )}
-                  <span className="truncate">{machine}</span>
-                </Pill>
-              }
-            />
-          )}
           {/* A fork, a side chat or a delegate links back to the thread it came from. */}
           {thread && <OriginChip threadId={thread.id} />}
           {/* A paired device is attached, or the thread is shared with them (RemoteAccessPage.tsx). */}
