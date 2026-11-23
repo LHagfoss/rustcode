@@ -37,7 +37,7 @@ import { ProjectMark } from "./ProjectMark";
 import { cx, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 import { StatusIcon } from "./Status";
-import { TurnEvents } from "./TurnEvents";
+import { type LogTurn, TurnEvents } from "./TurnEvents";
 import { TurnTrace } from "./TurnTrace";
 
 /**
@@ -308,6 +308,9 @@ function PullsSection({
   );
 }
 
+/** The event log of every turn rather than one. */
+const ALL = "all";
+
 /** A turn's outcome: its icon, its colour and what its tip says. */
 const OUTCOME = {
   completed: { icon: CircleCheck, tone: "text-success", label: "Completed" },
@@ -338,15 +341,35 @@ function TurnsSection({
     for (const item of items) if (item.kind === "turnEnd") map.set(item.id, item);
     return map;
   }, [items]);
-  // The turn whose event log is open (ui/TurnEvents.tsx).
+  // The event log that is open (ui/TurnEvents.tsx): one turn's, or every turn's (`ALL`).
   const [open, setOpen] = useState<string | null>(null);
-  const opened = open ? turns.find((turn) => turn.id === open) : undefined;
+  const opened = open && open !== ALL ? turns.find((turn) => turn.id === open) : undefined;
   const openedEnd = opened ? ends.get(opened.id) : undefined;
+  const logTurn = (turn: (typeof turns)[number]): LogTurn => ({ ...turn, items: byEnd[turn.id] ?? [] });
+  const log =
+    open === ALL
+      ? { title: "All turns", turns: [...turns].reverse().map(logTurn) }
+      : opened
+        ? { title: opened.prompt, turns: [logTurn(opened)] }
+        : undefined;
   return (
     <Section
       id="log"
       title="Turns"
       count={turns.length || undefined}
+      action={
+        turns.length > 1 ? (
+          <Tooltip label="Every turn's events in one log">
+            <button
+              type="button"
+              onClick={() => setOpen(ALL)}
+              className="flex h-6 items-center rounded-md px-2 text-caption text-fg-muted hover:bg-fill hover:text-fg"
+            >
+              View all
+            </button>
+          </Tooltip>
+        ) : undefined
+      }
       folded={folded}
       onToggle={onToggle}
       grow
@@ -394,16 +417,14 @@ function TurnsSection({
           </div>
         );
       })}
-      {opened && (
+      {log && (
         <TurnEvents
           open
           onOpenChange={(next) => !next && setOpen(null)}
-          title={opened.prompt}
-          items={byEnd[opened.id] ?? []}
-          elapsedMs={opened.elapsedMs}
-          outcome={opened.outcome}
+          title={log.title}
+          turns={log.turns}
           trace={
-            openedEnd && turnHasTrace(opened) ? (
+            openedEnd && opened && turnHasTrace(opened) ? (
               <TurnTrace end={openedEnd} items={byEnd[opened.id]} model={model} />
             ) : undefined
           }

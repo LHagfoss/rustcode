@@ -1,11 +1,12 @@
-// A turn's event log: every message, thought and tool call of one turn, in a list that reads like
-// the transcript laid flat. A strip of cells across the top shows the turn's shape at a glance
-// (one cell per event, coloured by kind; a press scrolls to it), and each row opens to the whole
-// reply or the call's input and output. Opened from a turn in the side panel (ui/ThreadDetails.tsx);
-// the Trace chip beside it still says where the time and money went (ui/TurnTrace.tsx).
+// The event log: every message, thought and tool call of a turn (or of every turn), laid flat in
+// the order they happened, a reading of the transcript without its layout. A thin strip across the
+// top shows the run's shape at a glance (one cell per event, coloured by kind; a press scrolls to
+// it), and each row opens to the whole reply or the call's input and output. Opened from Turns in
+// the side panel (ui/ThreadDetails.tsx); the Trace chip in the header still says where the time
+// and money went (ui/TurnTrace.tsx).
 
 import { Dialog } from "radix-ui";
-import { type ReactNode, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useRef, useState } from "react";
 import { toast } from "../state/store";
 import { formatDuration, type TranscriptItem } from "../state/thread";
 import {
@@ -17,19 +18,34 @@ import {
   type TurnEventKind,
   turnEvents,
 } from "../state/turnEvents";
-import { ChevronRight, Copy, X } from "./icons";
+import { ChevronRight, CircleCheck, CircleSlash, CircleX, Copy, X } from "./icons";
 import { cx, Pill, Segments, Tooltip } from "./primitives";
 
-/** Each kind's badge and strip cell: tool calls in the accent, the agent's words in green. */
+/** One turn of the log: the message that opened it, how it ended, and its rows. */
+export interface LogTurn {
+  id: string;
+  prompt: string;
+  outcome: "completed" | "cancelled" | "failed";
+  elapsedMs?: number;
+  items: readonly TranscriptItem[];
+}
+
+/** Each kind's badge and strip cell: commands in the accent, the agent's words in green. */
 const TONE: Record<TurnEventKind, { badge: string; cell: string }> = {
   agent: { badge: "bg-success/15 text-success", cell: "bg-success/70" },
   thinking: { badge: "bg-fill text-fg-muted", cell: "bg-fill-strong" },
   run: { badge: "bg-accent/15 text-accent", cell: "bg-accent/70" },
-  read: { badge: "bg-fill-strong text-fg", cell: "bg-accent/35" },
+  read: { badge: "bg-fill text-fg", cell: "bg-accent/35" },
   edit: { badge: "bg-warning/15 text-warning", cell: "bg-warning/70" },
-  tool: { badge: "bg-fill-strong text-fg", cell: "bg-fg-faint" },
+  tool: { badge: "bg-fill text-fg", cell: "bg-fg-faint" },
   failed: { badge: "bg-danger/15 text-danger", cell: "bg-danger/70" },
 };
+
+const OUTCOME = {
+  completed: { icon: CircleCheck, tone: "text-success", label: "Completed" },
+  cancelled: { icon: CircleSlash, tone: "text-fg-muted", label: "Cancelled" },
+  failed: { icon: CircleX, tone: "text-danger", label: "Failed" },
+} as const;
 
 function clock(at: number | undefined): string {
   return at
@@ -37,33 +53,45 @@ function clock(at: number | undefined): string {
     : "";
 }
 
-function Chip({ children }: { children: ReactNode }) {
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/** A block of an opened row: what it is, quietly, over the text itself. */
+function Block({ label, text }: { label?: string; text: string }) {
   return (
-    <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-caption text-fg-muted tabular">
-      {children}
-    </span>
+    <div className="flex min-w-0 flex-col gap-1">
+      {label && <span className="font-medium text-caption text-fg-faint">{label}</span>}
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-code-bg px-3 py-2 font-mono text-caption text-fg">
+        {text}
+      </pre>
+    </div>
   );
 }
 
 function EventRow({ event, index }: { event: TurnEvent; index: number }) {
   const [open, setOpen] = useState(false);
-  const tone = TONE[event.kind];
+  const tool = event.input !== undefined || event.output !== undefined;
   return (
-    <li id={`turn-event-${event.id}`} className="border-border border-b last:border-b-0">
+    <div id={`turn-event-${event.id}`}>
       <button
         type="button"
         aria-expanded={open}
         disabled={!event.body}
         onClick={() => setOpen(!open)}
-        className="flex min-h-9 w-full items-center gap-2 px-3 text-left enabled:hover:bg-fill-subtle"
+        className="flex min-h-10 w-full items-center gap-3 px-4 text-left enabled:hover:bg-fill-subtle"
       >
         <span
           className={cx(
-            "w-20 shrink-0 truncate rounded-md px-1.5 py-0.5 text-center font-medium text-caption",
-            tone.badge,
+            "w-16 shrink-0 truncate rounded-sm px-1.5 py-0.5 text-center font-medium text-caption",
+            TONE[event.kind].badge,
           )}
         >
           {event.badge}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-body">{event.line}</span>
+        <span className="shrink-0 text-caption text-fg-faint tabular">
+          #{index + 1} · {clock(event.at)}
         </span>
         <ChevronRight
           size={12}
@@ -73,16 +101,20 @@ function EventRow({ event, index }: { event: TurnEvent; index: number }) {
             !event.body && "invisible",
           )}
         />
-        <span className="min-w-0 flex-1 truncate text-callout">{event.line}</span>
-        <span className="shrink-0 text-caption text-fg-faint tabular">#{index + 1}</span>
-        <span className="w-20 shrink-0 text-right text-caption text-fg-faint tabular">{clock(event.at)}</span>
       </button>
       {open && (
-        <pre className="mx-3 mb-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-code-bg p-2 font-mono text-caption text-fg">
-          {event.body}
-        </pre>
+        <div className="flex flex-col gap-2 px-4 pb-3">
+          {tool ? (
+            <>
+              {event.input && <Block label="Input" text={event.input} />}
+              {event.output && <Block label="Output" text={event.output} />}
+            </>
+          ) : (
+            <Block text={event.body} />
+          )}
+        </div>
       )}
-    </li>
+    </div>
   );
 }
 
@@ -90,34 +122,47 @@ export function TurnEvents({
   open,
   onOpenChange,
   title,
-  items,
-  elapsedMs,
-  outcome,
+  turns,
   trace,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The message that opened the turn. */
   title: string;
-  /** The turn's own rows, from its message to its footer. */
-  items: readonly TranscriptItem[];
-  elapsedMs?: number;
-  outcome: "completed" | "cancelled" | "failed";
-  /** The turn's Trace chip, beside the log's own controls. */
+  /** One turn, or every turn of the thread oldest first; more than one gets a header for each. */
+  turns: readonly LogTurn[];
+  /** The turn's Trace chip, in the header. */
   trace?: ReactNode;
 }) {
-  const events = useMemo(() => turnEvents(items), [items]);
   const [newest, setNewest] = useState(false);
   const [filter, setFilter] = useState<EventFilter>("all");
-  const list = useRef<HTMLOListElement>(null);
-  const numbered = useMemo(() => events.map((event, index) => ({ event, index })), [events]);
+  const list = useRef<HTMLDivElement>(null);
+  const single = turns.length === 1 ? turns[0] : undefined;
+
+  // Every turn's events, numbered across the whole log, so a row keeps its number under a filter.
+  const groups = useMemo(() => {
+    let n = 0;
+    return turns.map((turn, at) => ({
+      turn,
+      number: at + 1,
+      events: turnEvents(turn.items).map((event) => ({ event, index: n++ })),
+    }));
+  }, [turns]);
+  const all = useMemo(() => groups.flatMap((group) => group.events.map(({ event }) => event)), [groups]);
   const shown = useMemo(() => {
-    const kept = numbered.filter(({ event }) => keepEvent(event, filter));
+    const kept = groups
+      .map((group) => {
+        const events = group.events.filter(({ event }) => keepEvent(event, filter));
+        return { ...group, events: newest ? events.reverse() : events };
+      })
+      .filter((group) => group.events.length > 0);
     return newest ? kept.reverse() : kept;
-  }, [numbered, filter, newest]);
-  const tools = events.filter((event) => event.kind !== "agent" && event.kind !== "thinking").length;
-  const start = items.find((item) => item.kind === "user");
-  const startedAt = start?.kind === "user" ? start.at : undefined;
+  }, [groups, filter, newest]);
+
+  const tools = all.filter((event) => !keepEvent(event, "agent")).length;
+  const elapsed = turns.reduce((sum, turn) => sum + (turn.elapsedMs ?? 0), 0);
+  const firstMessage = turns[0]?.items.find((item) => item.kind === "user");
+  const startedAt = firstMessage?.kind === "user" ? firstMessage.at : undefined;
+  const outcome = single ? OUTCOME[single.outcome] : undefined;
 
   const jump = (id: string) => {
     setFilter("all");
@@ -126,32 +171,46 @@ export function TurnEvents({
     );
   };
 
+  const meta = [
+    turns.length > 1 ? plural(turns.length, "turn") : undefined,
+    elapsed > 0 ? formatDuration(elapsed) : undefined,
+    plural(tools, "tool call"),
+    plural(all.length, "event"),
+    startedAt
+      ? new Date(startedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+      : undefined,
+  ].filter((part): part is string => !!part);
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-6">
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-8">
           <Dialog.Content
             aria-describedby={undefined}
-            className="elevated pointer-events-auto flex max-h-full w-[min(920px,100%)] flex-col overflow-hidden"
+            className="elevated pointer-events-auto flex max-h-[min(760px,100%)] w-[min(880px,100%)] flex-col overflow-hidden"
           >
-            <div className="flex flex-col gap-2 border-border border-b p-3">
-              <div className="flex items-center gap-2">
-                <Dialog.Title className="min-w-0 flex-1 truncate font-semibold text-body">
-                  {title}
-                </Dialog.Title>
-                <span
-                  className={cx(
-                    "shrink-0 rounded-full px-2 py-0.5 text-caption",
-                    outcome === "completed"
-                      ? "bg-success/15 text-success"
-                      : outcome === "failed"
-                        ? "bg-danger/15 text-danger"
-                        : "bg-fill text-fg-muted",
-                  )}
-                >
-                  {outcome === "completed" ? "Completed" : outcome === "failed" ? "Failed" : "Cancelled"}
-                </span>
+            {/* Title and what the run was, then how to read it, then its shape. */}
+            <div className="flex flex-col gap-3 px-4 pt-4 pb-3">
+              <div className="flex items-start gap-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <Dialog.Title className="truncate font-semibold text-title3">{title}</Dialog.Title>
+                  <p className="flex min-w-0 items-center gap-1.5 text-callout text-fg-muted tabular">
+                    {outcome && (
+                      <span className={cx("flex shrink-0 items-center gap-1", outcome.tone)}>
+                        <outcome.icon size={13} />
+                        {outcome.label}
+                      </span>
+                    )}
+                    {meta.map((part, i) => (
+                      <Fragment key={part}>
+                        {(i > 0 || outcome) && <span className="text-fg-faint">·</span>}
+                        <span className="truncate">{part}</span>
+                      </Fragment>
+                    ))}
+                  </p>
+                </div>
+                {trace}
                 <Dialog.Close asChild>
                   <button
                     type="button"
@@ -161,18 +220,6 @@ export function TurnEvents({
                     <X size={14} />
                   </button>
                 </Dialog.Close>
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {elapsedMs !== undefined && <Chip>{formatDuration(elapsedMs)}</Chip>}
-                <Chip>
-                  {tools} tool call{tools === 1 ? "" : "s"}
-                </Chip>
-                <Chip>
-                  {events.length} event{events.length === 1 ? "" : "s"}
-                </Chip>
-                {startedAt && <Chip>{new Date(startedAt).toLocaleString()}</Chip>}
-                <span className="flex-1" />
-                {trace}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Segments
@@ -196,39 +243,57 @@ export function TurnEvents({
                   size="sm"
                   onClick={() =>
                     void navigator.clipboard
-                      .writeText(eventsText(events))
-                      .then(() => toast("Turn copied", "info"))
+                      .writeText(eventsText(all))
+                      .then(() => toast("Event log copied", "info"))
                   }
                 >
                   <Copy size={12} />
                   Copy all
                 </Pill>
               </div>
-              {events.length > 1 && (
-                <div className="flex h-4 gap-0.5" aria-hidden>
-                  {events.map((event) => (
+              {all.length > 1 && (
+                <div className="flex h-1.5 gap-px">
+                  {all.map((event) => (
                     <Tooltip key={event.id} label={`${event.badge} · ${event.line}`}>
                       <button
                         type="button"
                         tabIndex={-1}
+                        aria-label={`${event.badge}: ${event.line}`}
                         onClick={() => jump(event.id)}
-                        className={cx("min-w-0 flex-1 rounded-sm hover:opacity-80", TONE[event.kind].cell)}
+                        className={cx("min-w-0 flex-1 rounded-full hover:opacity-70", TONE[event.kind].cell)}
                       />
                     </Tooltip>
                   ))}
                 </div>
               )}
             </div>
-            <ol ref={list} className="min-h-0 flex-1 overflow-y-auto">
-              {shown.map(({ event, index }) => (
-                <EventRow key={event.id} event={event} index={index} />
+            <div ref={list} className="min-h-0 flex-1 overflow-y-auto border-border border-t pb-2">
+              {shown.map((group) => (
+                <section key={group.turn.id} aria-label={single ? undefined : `Turn ${group.number}`}>
+                  {!single && (
+                    <div className="sticky top-0 z-10 flex h-8 items-center gap-2 bg-surface px-4 text-sub">
+                      <span className="shrink-0 font-medium text-fg-muted">Turn {group.number}</span>
+                      <span className="min-w-0 flex-1 truncate text-fg-faint">{group.turn.prompt}</span>
+                      {group.turn.elapsedMs !== undefined && (
+                        <span className="shrink-0 text-fg-faint tabular">
+                          {formatDuration(group.turn.elapsedMs)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <div className="rule-rows [--rc-rule-inset:1rem]">
+                    {group.events.map(({ event, index }) => (
+                      <EventRow key={event.id} event={event} index={index} />
+                    ))}
+                  </div>
+                </section>
               ))}
               {shown.length === 0 && (
-                <li className="px-3 py-6 text-center text-callout text-fg-muted">
-                  Nothing of this kind in the turn.
-                </li>
+                <p className="px-4 py-10 text-center text-callout text-fg-muted">
+                  {all.length ? "Nothing of this kind here." : "No events recorded for this turn."}
+                </p>
               )}
-            </ol>
+            </div>
           </Dialog.Content>
         </div>
       </Dialog.Portal>

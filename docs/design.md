@@ -1345,31 +1345,33 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   right edge (`ui/ChatView.tsx`), so it is never drawn over the board, the review or
   the compare view. Every view draws on one surface, the Details card's: the chat's
   own `bg-bg` with a hairline `border-border` and `rounded-2xl`, inset 12px from the
-  header's foot and the window's right edge. It is as tall as its content, up to
-  12px above the window's bottom edge; nothing in the chat (the composer included)
-  sets that cap. The chat column keeps the row's whole
+  window's top, right and bottom edges: it rises over the header's right end and
+  carries the panel's toggle ("Thread info", `ui/PanelToggle.tsx`) at its top right,
+  and runs the window's whole height. The chat column keeps the row's whole
   width, so the transcript's scrollbar stays at the window's edge; the card
   publishes the room it takes as `--rc-panel-room` on the row, and the lane pads by
   it (`.rc-lane-pad` on a scroller, `.rc-lane-inset` on an absolute box, index.css),
   so the lane re-centres in the room that is left. The header floats above both,
   and the card draws above the header's glass (`z-20` against the header's
-  `z-10`). The card starts `HEADER_HEIGHT` down, so it never covers the header's
-  controls, and the dock around it takes no pointer and carries no z-index, so the
-  chat under it still scrolls and the room above the card never takes a click
-  meant for the header.
-  A pane's header row is a 44px band with a segmented switch between the views and
-  a close button, with no rule under it; a view adds one slim toolbar (`h-9`):
+  `z-10`). The header's controls stand clear of it by `--rc-panel-room`, published on the
+  column that holds both. Where the window draws its own controls at the header's right
+  (Windows) and on a sheet, the card stays below the header and the toggle in it. The
+  dock around the card takes no pointer, so the chat under it still scrolls.
+  A pane's header row is a 44px band: "Properties" on Details, a back button and the
+  view's name on the views it opens (Changes, Pull requests, Thread), and the toggle;
+  a view adds one slim toolbar (`h-9`):
   Changes says the file count and `+/−` lines, the Unified/Split switch when the
   pane is wide enough for split, the git button (commit, push, pull, open a pull
   request) and a reload. The card draws
   420px wide by default and never wider than 560, 70% of the window, or the row
   less the 360px the chat column always keeps, nor narrower than 320; it is
   fitted down when the window or the row cannot hold what was asked and comes back
-  when it can. One width is kept for every tab and thread. The card is never
-  shorter than it is wide (about square) unless the window is shorter; a view
-  scrolls inside the card and takes the height it has. The Details tab is laid
-  out in titled sections (Workspace, Version control, Lineage, Thread, Context
-  window) of 32px rows with a hairline between them. Opening and closing animate the
+  when it can. One width is kept for every tab and thread. Details is one card with no
+  tabs: the properties (with a Changes row that opens the diff), Pull requests,
+  Activity, then Turns, which takes the height left: every turn newest first with its
+  Trace chip, and a press opens its event log (`ui/TurnEvents.tsx`), every message,
+  thought and tool call laid flat with a strip of its shape; View all opens every
+  turn's. Opening and closing animate the
   dock's width over 200ms (see Motion) with the content pinned to the card's right
   edge, so the chat uncovers it instead of the card sliding. The left edge drags
   and answers the keyboard too: ←/→ 24px from the width on screen (Shift 96px),

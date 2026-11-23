@@ -19,6 +19,9 @@ export interface TurnEvent {
   line: string;
   /** Everything there is to read when the row opens: the reply, or the call's input and output. */
   body: string;
+  /** A tool call's arguments and what came back, apart, for the opened row's two blocks. */
+  input?: string;
+  output?: string;
   at?: number;
 }
 
@@ -73,15 +76,16 @@ function capitalized(word: string): string {
   return word ? word[0]!.toUpperCase() + word.slice(1) : word;
 }
 
-/** A call's arguments and what came back, as one block of text. */
-function callBody(item: ToolItem): string {
-  const parts: string[] = [];
-  if (item.input !== undefined && item.input !== null) {
-    parts.push(typeof item.input === "string" ? item.input : JSON.stringify(item.input, null, 2));
-  }
-  const output = item.output ?? item.detail;
-  if (output?.trim()) parts.push(output.trim());
-  return parts.join("\n\n");
+/** A call's arguments and what came back, each as text, or unset when there is none. */
+function callParts(item: ToolItem): { input?: string; output?: string } {
+  const input =
+    item.input === undefined || item.input === null
+      ? undefined
+      : typeof item.input === "string"
+        ? item.input
+        : JSON.stringify(item.input, null, 2);
+  const output = (item.output ?? item.detail)?.trim() || undefined;
+  return { input: input?.trim() || undefined, output };
 }
 
 /** The rows of one turn (state/fold.ts `turnItemsByEnd`) as its events, oldest first. */
@@ -122,12 +126,15 @@ export function turnEvents(items: readonly TranscriptItem[]): TurnEvent[] {
         usefulSummary(item.summary) ??
         firstLine(item.detail ?? "") ??
         shown.title;
+      const { input, output } = callParts(item);
       events.push({
         id: item.id,
         kind: toolKindOf(item),
         badge,
         line: line || shown.title,
-        body: callBody(item),
+        body: [input, output].filter(Boolean).join("\n\n"),
+        input,
+        output,
         at: item.startedAt,
       });
     }
