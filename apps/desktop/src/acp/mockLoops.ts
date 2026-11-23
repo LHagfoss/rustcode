@@ -141,8 +141,12 @@ function seed(): JsonObject[] {
 }
 
 export class MockLoops {
-  private loops: JsonObject[] = seed();
+  private loops: JsonObject[];
   private counter = 0;
+
+  constructor(initial: JsonObject[] = seed()) {
+    this.loops = initial;
+  }
 
   /** `_rustcode/loops/*`. */
   answer(method: string, params: JsonObject): JsonObject {

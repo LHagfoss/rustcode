@@ -7,8 +7,10 @@
 
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { effortLabel, modelName, projectName } from "../acp/types";
+import { effortLabel, modelName, plainPath, projectName } from "../acp/types";
 import { modelTitle } from "../lib/modelNames";
+import { useFleet } from "../state/fleet";
+import { jobMachineTargets, remoteLoopError, runThreadKey, targetKeyOf } from "../state/fleetLoops";
 import { concreteModels, defaultEffort, firstModel, listedModel, restoreChoice } from "../state/harness";
 import { ensureHarnessModels, lastAccountFor } from "../state/harnessActions";
 import { type HubStatus, refreshHub, useHub } from "../state/hub";
@@ -17,12 +19,14 @@ import {
   cronInWords,
   cronOfForm,
   defaultForm,
+  deleteLoop,
   EVERY_DAY,
   formOfCron,
   formProblem,
   HOUR_STEPS,
   type Loop,
   type LoopDraft,
+  type LoopHubMember,
   type LoopRun,
   type LoopWebhook,
   localDateTime,
@@ -30,17 +34,21 @@ import {
   type Repeat,
   runLoopNow,
   type ScheduleForm,
-  saveLoop,
+  saveLoopResult,
+  startScheduler,
   timeZoneChoices,
   userTimeZone,
   WEEKDAYS,
   withRunAccount,
 } from "../state/loops";
-import { projectsOn } from "../state/projects";
-import { errorText, useApp } from "../state/store";
+import { selfName, useLocalIdentity, useMachines } from "../state/machines";
+import { matchProject, projectsOn } from "../state/projects";
+import { harnessesOn, loadMachineHarnesses, useApp } from "../state/store";
+import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
 import { openSettings } from "../state/viewActions";
 import { ChevronDown, ChevronRight, Trash2, Webhook } from "./icons";
 import { RunList } from "./JobRuns";
+import { MachineFolderBrowser } from "./MachineFolderBrowser";
 import { CopyButton } from "./Markdown";
 import { Callout, cx, inputClass, noTextHelpers, Pill, Segments, Select, Switch } from "./primitives";
 
@@ -220,10 +228,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 /** Why the machine picker offers only this computer, and where to change that. */
-export function machineHint(hub: HubStatus | null): string {
-  if (hub?.member) return `To run a job on another machine, make it on the hub, ${hub.member.name}.`;
-  if (hub?.hub) return "No machine has joined this hub yet.";
-  return "To run jobs on other machines, make this computer the hub in Settings › Machines.";
+export function machineHint(_hub?: HubStatus | null): string {
+  return "Pair another computer in Settings › Machines to run jobs on it.";
 }
 
 /** One part of the form (what, when, how), under a heading and a rule after the first. */
@@ -266,6 +272,10 @@ export function LoopDialog({
   open,
   loop,
   duplicate = false,
+  defaultHost = LOCAL_HOST,
+  daemonRunningByHost,
+  remoteHubMembers,
+  unsupportedHosts,
   onOpenChange,
   onDelete,
   onSaved,
@@ -277,6 +287,14 @@ export function LoopDialog({
   loop: Loop | null;
   /** Prefill from `loop` as a new job without its id or webhook secret. */
   duplicate?: boolean;
+  /** The machine a new job starts aimed at (`""` for this computer, or a paired machine id). */
+  defaultHost?: string;
+  /** Whether each host's scheduler daemon is currently running. */
+  daemonRunningByHost?: Readonly<Record<string, boolean>>;
+  /** Hub members reported by connected paired hubs, keyed by hub host id. */
+  remoteHubMembers?: Readonly<Record<string, readonly LoopHubMember[]>>;
+  /** Connected paired machines running an older RustCode without remote `_rustcode/loops/*`. */
+  unsupportedHosts?: ReadonlySet<string>;
   onOpenChange: (open: boolean) => void;
   onDelete?: () => void;
   onSaved: () => void;
@@ -289,9 +307,19 @@ export function LoopDialog({
   const showRuns = isEditing && runs !== undefined;
   const sessions = useApp((s) => s.sessions);
   const projectCwd = useApp((s) => s.projectCwd);
-  const harnesses = useApp((s) => s.harnesses);
-  const projects = useMemo(() => projectsOn(sessions), [sessions]);
-  const [draft, setDraft] = useState<LoopDraft>(() => draftOf(loop, projectCwd, duplicate));
+  const machines = useMachines((s) => s.machines);
+  const local = useLocalIdentity();
+  const localName = local.displayName ?? selfName();
+  const localHostId = useFleet((s) => s.host?.hostId ?? null);
+  const [schedulerHost, setSchedulerHost] = useState<string>(() => (loop ? loop.host : defaultHost));
+  const [browseOpen, setBrowseOpen] = useState(false);
+
+  const hostProjects = useMemo(() => projectsOn(sessions, schedulerHost), [sessions, schedulerHost]);
+  const fallbackProject = schedulerHost
+    ? (hostProjects[0]?.path ?? "")
+    : projectCwd || hostProjects[0]?.path || "";
+
+  const [draft, setDraft] = useState<LoopDraft>(() => draftOf(loop, fallbackProject, duplicate));
   const [form, setForm] = useState<ScheduleForm>(() => formOf(loop));
   const [target, setTarget] = useState<"fresh" | "one">("fresh");
   // The optional script stays folded until asked for, or when the job already has one.
@@ -300,36 +328,83 @@ export function LoopDialog({
   const [error, setError] = useState<string | null>(null);
   // The webhook URL a save just made: shown once, in place of the form, until the dialog closes.
   const [madeWebhook, setMadeWebhook] = useState<LoopWebhook | null>(null);
-  const fallbackProject = projectCwd || projects[0]?.path || "";
-  // On the fleet's hub, a Loop may run on a member: the hub keeps time and holds runs while it sleeps.
+
   const hub = useHub((s) => s.status);
   useEffect(() => {
     if (open) void refreshHub();
   }, [open]);
-  const members = hub?.hub ? (hub.members ?? []) : [];
-  const remote = Boolean(draft.machine);
-  const machineOptions = [
-    { value: "", label: "This computer" },
-    ...members.map((member) => ({
-      value: member.name,
-      label: member.online ? member.name : `${member.name} (offline)`,
-    })),
-  ];
-  if (draft.machine && !machineOptions.some((option) => option.value === draft.machine)) {
-    machineOptions.push({ value: draft.machine, label: `${draft.machine} (not a member)` });
-  }
-  const chooseMachine = (machine: string) => {
-    patch({
-      machine: machine || undefined,
-      workspace: machine ? "" : fallbackProject,
-      threadId: undefined,
-      script: undefined,
-      account: "",
-    });
-    if (machine) {
+
+  const isHubDispatch = Boolean(draft.machine);
+  const isRemoteHost = Boolean(schedulerHost) && !isHubDispatch;
+  const harnesses = useApp((s) =>
+    isHubDispatch ? s.harnesses : (harnessesOn(s, schedulerHost) ?? (schedulerHost ? null : s.harnesses)),
+  );
+  useEffect(() => {
+    if (open && schedulerHost && !isHubDispatch) {
+      void loadMachineHarnesses(schedulerHost, { report: false });
+    }
+  }, [open, schedulerHost, isHubDispatch]);
+
+  const machineTargets = useMemo(
+    () =>
+      jobMachineTargets({
+        localName,
+        localHostId,
+        machines,
+        localHub: hub,
+        remoteHubMembers,
+        unsupportedHosts,
+        current: loop ? { host: loop.host, member: loop.machine } : undefined,
+      }),
+    [localName, localHostId, machines, hub, remoteHubMembers, unsupportedHosts, loop],
+  );
+  const selectedTargetKey = targetKeyOf(schedulerHost, draft.machine);
+  const selectedTarget = machineTargets.find((entry) => entry.key === selectedTargetKey) ?? machineTargets[0];
+  const machineOptions = machineTargets.map((entry) => ({
+    value: entry.key,
+    label: entry.label,
+    disabled: entry.disabled,
+  }));
+
+  const chooseMachine = (key: string) => {
+    const next = machineTargets.find((entry) => entry.key === key);
+    if (!next) return;
+    setSchedulerHost(next.host);
+    setError(null);
+    if (next.member) {
+      patch({
+        machine: next.member,
+        workspace: "",
+        threadId: undefined,
+        script: undefined,
+        account: "",
+      });
       setTarget("fresh");
       setScriptOpen(false);
+      return;
     }
+    const nextProjects = projectsOn(sessions, next.host);
+    const currentProject = draft.workspace
+      ? (hostProjects.find((p) => p.path === draft.workspace) ?? {
+          path: draft.workspace,
+          name: projectName(draft.workspace),
+        })
+      : undefined;
+    const matched = matchProject(currentProject, nextProjects);
+    const nextWorkspace =
+      matched?.path ??
+      (next.host ? (nextProjects[0]?.path ?? "") : projectCwd || nextProjects[0]?.path || "");
+    patch({
+      machine: undefined,
+      workspace: nextWorkspace,
+      threadId: undefined,
+      harness: undefined,
+      account: "",
+      model: "",
+      effort: "",
+    });
+    setTarget("fresh");
+    if (next.host) void loadMachineHarnesses(next.host, { report: false });
   };
 
   // Each opening starts from the loop being edited, or a fresh draft in the current project, once:
@@ -339,24 +414,33 @@ export function LoopDialog({
   useEffect(() => {
     if (!open) {
       openedFor.current = null;
+      setBrowseOpen(false);
       return;
     }
-    const key = `${loop?.id ?? ""}:${duplicate ? "dup" : "edit"}`;
+    const initialHost = loop ? loop.host : defaultHost;
+    const key = `${loop?.host ?? ""}:${loop?.id ?? ""}:${duplicate ? "dup" : "edit"}:${initialHost}`;
     if (openedFor.current === key) return;
     openedFor.current = key;
-    setDraft(draftOf(loop, fallbackProject, duplicate));
+    const initialProjects = projectsOn(sessions, initialHost);
+    const initialWorkspace = initialHost
+      ? (initialProjects[0]?.path ?? "")
+      : projectCwd || initialProjects[0]?.path || "";
+    setSchedulerHost(initialHost);
+    setDraft(draftOf(loop, initialWorkspace, duplicate));
     setForm(formOf(loop));
     setTarget(loop?.threadId ? "one" : "fresh");
     setScriptOpen(Boolean(loop?.script));
     setError(null);
     setSaving(false);
     setMadeWebhook(null);
-  }, [open, loop, duplicate, fallbackProject]);
+  }, [open, loop, duplicate, defaultHost, sessions, projectCwd]);
 
   // A new loop opened before the projects were read takes the first one when they arrive.
   useEffect(() => {
-    if (open && fallbackProject) setDraft((d) => (d.workspace ? d : { ...d, workspace: fallbackProject }));
-  }, [open, fallbackProject]);
+    if (open && !isHubDispatch && fallbackProject) {
+      setDraft((d) => (d.workspace ? d : { ...d, workspace: fallbackProject }));
+    }
+  }, [open, isHubDispatch, fallbackProject]);
 
   const patch = (change: Partial<LoopDraft>) => setDraft((d) => ({ ...d, ...change }));
   const patchForm = (change: Partial<ScheduleForm>) => setForm((f) => ({ ...f, ...change }));
@@ -373,10 +457,14 @@ export function LoopDialog({
       : once
         ? onceInWords(once)
         : cronInWords(cron);
-  // The threads a loop can send every run to: this computer's threads in the loop's project.
+  // The threads a loop can send every run to: threads on the target machine in the loop's project.
   const threadOptions = sessions
-    .filter((session) => !session.host && session.cwd === draft.workspace)
-    .map((session) => ({ value: session.id, label: session.title || "New thread" }));
+    .filter(
+      (session) =>
+        (session.host ?? LOCAL_HOST) === schedulerHost &&
+        plainPath(session.cwd) === plainPath(draft.workspace),
+    )
+    .map((session) => ({ value: splitThreadKey(session.id).id, label: session.title || "New thread" }));
   if (draft.threadId && !threadOptions.some((option) => option.value === draft.threadId)) {
     threadOptions.unshift({ value: draft.threadId, label: "The job's thread" });
   }
@@ -406,7 +494,7 @@ export function LoopDialog({
       onChange={(tz) => patch({ timezone: tz })}
     />
   ) : null;
-  const projectOptions = projects.map((project) => ({ value: project.path, label: project.name }));
+  const projectOptions = hostProjects.map((project) => ({ value: project.path, label: project.name }));
   if (draft.workspace && !projectOptions.some((option) => option.value === draft.workspace)) {
     projectOptions.unshift({ value: draft.workspace, label: projectName(draft.workspace) });
   }
@@ -419,14 +507,20 @@ export function LoopDialog({
     harnessOptions.push({ value: runHarnessId, label: `${runHarnessId} (unavailable)` });
   }
   useEffect(() => {
-    if (open && target === "fresh" && runHarnessId) void ensureHarnessModels(runHarnessId);
-  }, [open, target, runHarnessId]);
+    if (open && target === "fresh" && runHarnessId && !isHubDispatch) {
+      void ensureHarnessModels(runHarnessId, schedulerHost);
+    }
+  }, [open, target, runHarnessId, schedulerHost, isHubDispatch]);
   const accounts = runHarness?.accounts ?? [];
   // A job with no account runs on the one a new thread would get, never on the bare default login
   // while named accounts exist; the picker shows it, and saving keeps it.
   const signedOut = useApp((s) => s.signedOutLogins);
   const runAccount = runHarness
-    ? newThreadAccountOn(runHarness, lastAccountFor(runHarness.id), signedOut)
+    ? newThreadAccountOn(
+        runHarness,
+        isRemoteHost ? null : lastAccountFor(runHarness.id),
+        isRemoteHost ? {} : signedOut,
+      )
     : null;
   const accountOptions = accounts.map((account) => ({ value: account.id, label: account.name }));
   if (draft.account && !accounts.some((account) => account.id === draft.account)) {
@@ -459,7 +553,7 @@ export function LoopDialog({
     draft.name.trim() &&
     draft.prompt.trim() &&
     draft.workspace &&
-    (!remote || absoluteOnAnyMachine(draft.workspace)) &&
+    (!isHubDispatch && !isRemoteHost ? true : absoluteOnAnyMachine(draft.workspace)) &&
     !cronError &&
     (target === "fresh" || threadId);
 
@@ -468,21 +562,35 @@ export function LoopDialog({
     setSaving(true);
     setError(null);
     try {
+      if (daemonRunningByHost?.[schedulerHost] === false) {
+        await startScheduler(schedulerHost);
+      }
       const agent = threadId
         ? {}
         : { harness: runHarnessId, model: runModel ?? draft.model, effort: runEffort ?? undefined };
-      const made = await saveLoop({
-        ...withRunAccount({ ...draft, ...agent, threadId }, runHarness?.id, runAccount),
-        cron,
-        once: once ?? undefined,
-        manual,
-      });
-      if (runAfter && loop?.id) await runLoopNow(loop.id);
+      const movedHost = Boolean(isEditing && loop && schedulerHost !== loop.host);
+      const saved = await saveLoopResult(
+        {
+          ...withRunAccount({ ...draft, ...agent, threadId }, runHarness?.id, runAccount),
+          ...(movedHost ? { id: undefined } : {}),
+          cron,
+          once: once ?? undefined,
+          manual,
+        },
+        schedulerHost,
+      );
+      if (movedHost && loop) {
+        await deleteLoop(loop.id, loop.host);
+      }
+      if (runAfter) {
+        const runId = saved.id ?? loop?.id;
+        if (runId) await runLoopNow(runId, schedulerHost);
+      }
       onSaved();
-      if (made) setMadeWebhook(made);
+      if (saved.webhook) setMadeWebhook(saved.webhook);
       else onOpenChange(false);
     } catch (e) {
-      setError(errorText(e));
+      setError(remoteLoopError(e, selectedTarget?.machineName ?? "that machine"));
     } finally {
       setSaving(false);
     }
@@ -522,9 +630,11 @@ export function LoopDialog({
                       {isEditing ? (loop?.name ?? "Edit job") : "New job"}
                     </Dialog.Title>
                     <p className="text-caption text-fg-muted">
-                      {remote
-                        ? `This hub keeps the schedule and sends each run to ${draft.machine}. While it’s offline, runs wait here.`
-                        : "Runs on this computer while the scheduler is on, even with RustCode closed."}
+                      {isHubDispatch
+                        ? `${selectedTarget?.viaHubName ?? "The hub"} keeps the schedule and sends each run to ${draft.machine}. While it’s offline, runs wait there.`
+                        : isRemoteHost
+                          ? `Runs on ${selectedTarget?.machineName ?? "that machine"} while its scheduler is on, even with RustCode closed.`
+                          : "Runs on this computer while the scheduler is on, even with RustCode closed."}
                     </p>
                   </div>
                   <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-4">
@@ -541,10 +651,10 @@ export function LoopDialog({
                                 patch({
                                   name: template.name,
                                   prompt: template.prompt,
-                                  script: remote ? undefined : template.script,
+                                  script: isHubDispatch ? undefined : template.script,
                                 });
                                 patchForm(template.form);
-                                if (!remote && template.script) setScriptOpen(true);
+                                if (!isHubDispatch && template.script) setScriptOpen(true);
                               }}
                             >
                               {template.label}
@@ -556,7 +666,7 @@ export function LoopDialog({
                         {machineOptions.length > 1 ? (
                           <Select
                             label="Machine"
-                            value={draft.machine ?? ""}
+                            value={selectedTargetKey}
                             options={machineOptions}
                             onChange={chooseMachine}
                             className="h-8 max-w-full justify-between self-start rounded-md bg-fill-subtle"
@@ -565,18 +675,16 @@ export function LoopDialog({
                           <>
                             <div className="flex items-center gap-2 text-callout">
                               <span>This computer</span>
-                              {!hub?.member && (
-                                <Pill
-                                  size="sm"
-                                  quiet
-                                  onClick={() => {
-                                    onOpenChange(false);
-                                    openSettings("machines");
-                                  }}
-                                >
-                                  Machines settings
-                                </Pill>
-                              )}
+                              <Pill
+                                size="sm"
+                                quiet
+                                onClick={() => {
+                                  onOpenChange(false);
+                                  openSettings("machines");
+                                }}
+                              >
+                                Machines settings
+                              </Pill>
                             </div>
                             <p className="text-caption text-fg-faint">{machineHint(hub)}</p>
                           </>
@@ -594,7 +702,7 @@ export function LoopDialog({
                           />
                         </Field>
                         <Field label="Project">
-                          {remote ? (
+                          {isHubDispatch ? (
                             <input
                               value={draft.workspace}
                               onChange={(e) => patch({ workspace: e.target.value })}
@@ -603,6 +711,30 @@ export function LoopDialog({
                               {...noTextHelpers}
                               className={cx(inputClass, "font-mono")}
                             />
+                          ) : isRemoteHost ? (
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              {projectOptions.length > 0 ? (
+                                <Select
+                                  label="Project"
+                                  value={draft.workspace}
+                                  options={projectOptions}
+                                  onChange={(workspace) => patch({ workspace, threadId: undefined })}
+                                  className="h-8! min-w-0 flex-1 justify-between rounded-md bg-fill-subtle"
+                                />
+                              ) : (
+                                <input
+                                  value={draft.workspace}
+                                  onChange={(e) => patch({ workspace: e.target.value, threadId: undefined })}
+                                  placeholder={`Folder on ${selectedTarget?.machineName ?? "machine"}`}
+                                  aria-label="Project"
+                                  {...noTextHelpers}
+                                  className={cx(inputClass, "min-w-0 flex-1 font-mono")}
+                                />
+                              )}
+                              <Pill size="sm" quiet onClick={() => setBrowseOpen(true)}>
+                                Browse…
+                              </Pill>
+                            </div>
                           ) : (
                             <Select
                               label="Project"
@@ -629,7 +761,7 @@ export function LoopDialog({
                           className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
                         />
                       </Field>
-                      {!remote && (
+                      {!isHubDispatch && (
                         <div className="flex flex-col gap-1">
                           <button
                             type="button"
@@ -828,7 +960,7 @@ export function LoopDialog({
                       )}
                     </Section>
                     <Section title="How it runs">
-                      {!remote && (
+                      {!isHubDispatch && (
                         <Field label="Each run">
                           <Segments
                             label="Each run"
@@ -865,7 +997,7 @@ export function LoopDialog({
                               onChange={(harness) => patch({ harness, account: "", model: "", effort: "" })}
                             />
                           </Field>
-                          {!remote && accountOptions.length > 0 && (
+                          {!isHubDispatch && accountOptions.length > 0 && (
                             <Field label="Account">
                               <Select
                                 label="Account"
@@ -960,7 +1092,12 @@ export function LoopDialog({
                     className="hidden w-[300px] shrink-0 flex-col gap-1 overflow-y-auto border-l border-border px-4 pt-5 pb-4 min-[820px]:flex"
                   >
                     <h3 className="pb-1 font-medium text-caption text-fg-muted">Runs</h3>
-                    <RunList runs={runs} now={Date.now()} onOpenThread={() => onOpenChange(false)} />
+                    <RunList
+                      runs={runs}
+                      now={Date.now()}
+                      threadOf={(run) => (loop ? runThreadKey(loop, run, machines, localName) : undefined)}
+                      onOpenThread={() => onOpenChange(false)}
+                    />
                   </aside>
                 )}
               </>
@@ -968,6 +1105,17 @@ export function LoopDialog({
           </Dialog.Content>
         </div>
       </Dialog.Portal>
+      {isRemoteHost && (
+        <MachineFolderBrowser
+          open={browseOpen}
+          onOpenChange={setBrowseOpen}
+          host={schedulerHost}
+          machine={selectedTarget?.machineName ?? "that machine"}
+          start={draft.workspace || undefined}
+          action="Choose"
+          onPick={(path) => patch({ workspace: path, threadId: undefined })}
+        />
+      )}
     </Dialog.Root>
   );
 }
