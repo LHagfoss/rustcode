@@ -78,10 +78,12 @@ export function Tooltip({
   label,
   children,
   side = "top",
+  sideOffset = 8,
 }: {
   label?: ReactNode;
   children: ReactNode;
   side?: "top" | "bottom" | "left" | "right";
+  sideOffset?: number;
 }) {
   // The app's own timing (lib/hover.ts) rather than the provider's: it is the same rest for every
   // tip, hands the place to a neighbour at once, and a press or a scroll puts the tip away.
@@ -95,7 +97,7 @@ export function Tooltip({
       <RadixTooltip.Portal>
         <RadixTooltip.Content
           side={side}
-          sideOffset={8}
+          sideOffset={sideOffset}
           collisionPadding={surfaceCollisionPadding}
           className={cx(tipSurface, "pointer-events-none z-50 max-w-80 px-2 py-1")}
         >

@@ -138,6 +138,10 @@ const PAD = 6;
 // any scroller.
 const MIN_HEIGHT = Math.round(LINE + PAD * 2);
 const MAX_HEIGHT = 208;
+
+// Clear the card's 12px bottom padding and leave the standard 8px gap.
+const composerActionTooltip = { side: "bottom", sideOffset: 20 } as const;
+
 // How much of a folder's path the picker shows: its ends, not the whole of a deep path.
 
 /**
@@ -1370,7 +1374,7 @@ export const Composer = memo(function Composer({
               {!offline && <DictationButton dictation={dictation} />}
               <ModelPicker thread={thread} compact={compact} />
               {queuedEdit ? (
-                <Tooltip label="Save in the queue (⏎)">
+                <Tooltip {...composerActionTooltip} label="Save in the queue (⏎)">
                   <button
                     type="button"
                     aria-label="Save the queued message"
@@ -1386,7 +1390,7 @@ export const Composer = memo(function Composer({
               ) : (
                 running &&
                 canSend && (
-                  <Tooltip label="Queue for when this turn ends (⏎)">
+                  <Tooltip {...composerActionTooltip} label="Queue for when this turn ends (⏎)">
                     <button
                       type="button"
                       aria-label="Queue message"
@@ -1399,7 +1403,10 @@ export const Composer = memo(function Composer({
                 )
               )}
               {running ? (
-                <Tooltip label={cancelReason ?? (stopping ? "Stopping…" : "Stop turn (Esc)")}>
+                <Tooltip
+                  {...composerActionTooltip}
+                  label={cancelReason ?? (stopping ? "Stopping…" : "Stop turn (Esc)")}
+                >
                   <button
                     type="button"
                     aria-label={stopping ? "Stopping…" : "Stop turn"}
@@ -1419,7 +1426,7 @@ export const Composer = memo(function Composer({
                   </button>
                 </Tooltip>
               ) : queuedEdit ? null : (
-                <Tooltip label="Send (⏎)">
+                <Tooltip {...composerActionTooltip} label="Send (⏎)">
                   <button
                     type="button"
                     aria-label="Send"
