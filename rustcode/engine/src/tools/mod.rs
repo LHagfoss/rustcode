@@ -1452,6 +1452,7 @@ pub const TOOLS: &[Tool] = &[
     misc::LOCALHOST_PREVIEW,
     misc::DESKTOP_CONTROL,
     misc::SMART_UI_PREVIEW,
+    misc::SHARE_PREVIEW,
     misc::SMART_UI_CHECK,
     misc::ASK_USER_QUESTION,
     misc::REQUEST_SECRET,

@@ -936,6 +936,7 @@ const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
 /// title, goal and preview) or talk to the user directly. A child agent
 /// reports back to its parent instead.
 const ROOT_ONLY_TOOLS: &[&str] = &[
+    crate::acp::preview_share::TOOL_NAME,
     "set_session_title",
     "complete_task",
     "ask_question",
@@ -1005,7 +1006,8 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
     };
     !((crate::computer_use::is_tool(tool.name) && !crate::computer_use::Settings::load().enabled)
         || (tool.name == "set_session_title" && !policy.include_session_title_tool)
-        || (tool.name == crate::preview::PREVIEW_TOOL_NAME && !policy.include_preview_tool)
+        || (matches!(tool.name, crate::preview::PREVIEW_TOOL_NAME | crate::acp::preview_share::TOOL_NAME)
+            && !policy.include_preview_tool)
         || (tool.name == crate::desktop_control::TOOL_NAME && !policy.include_desktop_tool)
         || (tool.name == crate::smart_ui::PREVIEW_TOOL_NAME
             && !policy.include_smart_ui_preview_tool)

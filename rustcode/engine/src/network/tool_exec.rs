@@ -1511,6 +1511,12 @@ async fn execute_tool_batch_validated(
                     None,
                     std::time::Duration::ZERO,
                 )
+            } else if name_clone == crate::acp::preview_share::TOOL_NAME {
+                (
+                    crate::acp::preview_share::execute(&state_clone, &args_clone, &cancel_token_clone).await,
+                    None,
+                    std::time::Duration::ZERO,
+                )
             } else if name_clone == crate::orchestration::secret::TOOL_NAME {
                 (crate::orchestration::secret::execute(&state_clone, &cancel_token_clone, &args_clone).await, None, std::time::Duration::ZERO)
             } else if crate::workflow::is_tool(&name_clone) {
