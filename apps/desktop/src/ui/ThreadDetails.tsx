@@ -3,7 +3,7 @@
 // branch), its uncommitted files, its pull requests, lineage, and activity (counts, tokens, cost,
 // age, context). The full diff and pull list open from their sections (ui/RightPanel.tsx).
 
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { pullErrorTitle } from "../acp/rustcode";
 import { modelName, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
@@ -146,7 +146,7 @@ export function ThreadDetails() {
   const openChanges = () => showPanel("changes");
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2 [&>*]:shrink-0">
       <div className="px-2">
         <Property label="Status">
           <StatusIcon status={status} size={13} />
@@ -244,7 +244,7 @@ export function ThreadDetails() {
           </div>
         )}
       </Section>
-      <TurnsSection items={items ?? []} model={model} folded={isFolded("log")} onToggle={toggle} />
+      <TurnsSection key={id} items={items ?? []} model={model} folded={isFolded("log")} onToggle={toggle} />
     </div>
   );
 }
@@ -312,11 +312,7 @@ const OUTCOME = {
   failed: { icon: CircleX, tone: "text-danger", label: "Failed" },
 } as const;
 
-/**
- * Every finished turn, newest first: what opened it, how long it ran, what it cost, and a Trace
- * chip that opens its waterfall beside the card (ui/TurnTrace.tsx) where the app watched the turn.
- * A press on the turn opens its event log: every message and call, laid flat (ui/TurnEvents.tsx).
- */
+/** Finished turns, newest first. Open a row for its messages and calls. */
 function TurnsSection({
   items,
   model,
@@ -352,13 +348,13 @@ function TurnsSection({
       count={turns.length || undefined}
       action={
         turns.length > 1 ? (
-          <Tooltip label="Every turn's events in one log">
+          <Tooltip label="Open the transcript for all turns">
             <button
               type="button"
               onClick={() => setOpen(ALL)}
               className="flex h-6 items-center rounded-md px-2 text-caption text-fg-muted hover:bg-fill hover:text-fg"
             >
-              View all
+              All turns
             </button>
           </Tooltip>
         ) : undefined
@@ -367,19 +363,20 @@ function TurnsSection({
       onToggle={onToggle}
       grow
     >
-      {turns.length === 0 && (
-        <p className="flex min-h-7 items-center px-2 text-callout text-fg-muted">No turns yet.</p>
-      )}
-      {turns.map((turn) => {
-        const outcome = OUTCOME[turn.outcome];
-        const Icon = outcome.icon;
-        const end = ends.get(turn.id);
-        return (
-          <div key={turn.id} className="flex min-h-8 items-center gap-1 rounded-md hover:bg-fill-subtle">
+      <TurnScroll>
+        {turns.length === 0 && (
+          <p className="flex min-h-7 items-center px-2 text-callout text-fg-muted">No turns yet.</p>
+        )}
+        {turns.map((turn) => {
+          const outcome = OUTCOME[turn.outcome];
+          const Icon = outcome.icon;
+          return (
             <button
+              key={turn.id}
               type="button"
+              aria-haspopup="dialog"
               onClick={() => setOpen(turn.id)}
-              className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md pl-2 text-left"
+              className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left hover:bg-fill-subtle"
             >
               <span
                 role="img"
@@ -389,27 +386,25 @@ function TurnsSection({
                 <Icon size={13} />
               </span>
               <span className="min-w-0 flex-1 truncate text-callout">{turn.prompt}</span>
-              {turn.elapsedMs !== undefined && (
-                <span className="shrink-0 text-caption text-fg-muted tabular">
-                  {formatDuration(turn.elapsedMs)}
-                </span>
-              )}
+              <span className="w-14 shrink-0 text-right text-caption text-fg-muted tabular">
+                {turn.elapsedMs === undefined ? "" : formatDuration(turn.elapsedMs)}
+              </span>
               {turn.cost !== undefined ? (
-                <span className="shrink-0 text-caption text-fg-muted tabular">{formatCost(turn.cost)}</span>
+                <span className="w-14 shrink-0 text-right text-caption text-fg-muted tabular">
+                  {formatCost(turn.cost)}
+                </span>
               ) : turn.tokens !== undefined ? (
-                <span className="shrink-0 text-caption text-fg-muted tabular">
+                <span className="w-14 shrink-0 text-right text-caption text-fg-muted tabular">
                   {formatTokens(turn.tokens)}
                 </span>
-              ) : null}
-            </button>
-            <span className="flex shrink-0 pr-2">
-              {end && turnHasTrace(turn) && (
-                <TurnTrace end={end} items={byEnd[turn.id]} model={model} side="left" />
+              ) : (
+                <span className="w-14 shrink-0" />
               )}
-            </span>
-          </div>
-        );
-      })}
+              <ChevronRight size={14} className="shrink-0 text-fg-muted" />
+            </button>
+          );
+        })}
+      </TurnScroll>
       {log && (
         <TurnEvents
           open
@@ -424,6 +419,44 @@ function TurnsSection({
         />
       )}
     </Section>
+  );
+}
+
+function TurnScroll({ children }: { children: ReactNode }) {
+  const viewport = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const node = viewport.current;
+    const rows = content.current;
+    if (!node || !rows) return;
+
+    const update = () => {
+      node.toggleAttribute("data-more-above", node.scrollTop > 1);
+      node.toggleAttribute("data-more-below", node.scrollHeight - node.clientHeight - node.scrollTop > 1);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    observer.observe(rows);
+    node.addEventListener("scroll", update, { passive: true });
+    update();
+    return () => {
+      observer.disconnect();
+      node.removeEventListener("scroll", update);
+    };
+  }, []);
+
+  return (
+    <div
+      ref={viewport}
+      role="region"
+      aria-label="Turn history"
+      className="turn-history min-h-0 flex-1 overflow-y-auto overscroll-y-contain scroll-py-5"
+    >
+      <div ref={content} className="py-1">
+        {children}
+      </div>
+    </div>
   );
 }
 

@@ -25,6 +25,7 @@ export interface LogTurn {
 
 /** Each kind's badge and strip cell: commands in the accent, the agent's words in green. */
 const TONE: Record<TurnEventKind, { badge: string; cell: string }> = {
+  user: { badge: "bg-fill-strong text-fg", cell: "bg-fg-muted" },
   agent: { badge: "bg-success/15 text-success", cell: "bg-success/70" },
   thinking: { badge: "bg-fill text-fg-muted", cell: "bg-fill-strong" },
   run: { badge: "bg-accent/15 text-accent", cell: "bg-accent/70" },

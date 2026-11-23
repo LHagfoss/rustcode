@@ -3,13 +3,13 @@ import { stripHarnessMarkup } from "./threadFormat";
 import { displayTool, usefulSummary } from "./toolNames";
 
 /**
- * A turn as a list of events, for the turn's event log (ui/TurnEvents.tsx): what the agent said,
+ * A turn as a list of events, for the turn's event log (ui/TurnEvents.tsx): what the user and agent said,
  * what it thought and each tool call, in the order they happened, each with a short line for its
  * row and the whole text for when the row is opened. The trace (lib/trace.ts) says where the time
  * went; this says what was done.
  */
 /** What an event is, which picks its badge's colour and the filter it falls under. */
-export type TurnEventKind = "agent" | "thinking" | "run" | "read" | "edit" | "tool" | "failed";
+export type TurnEventKind = "user" | "agent" | "thinking" | "run" | "read" | "edit" | "tool" | "failed";
 
 export interface TurnEvent {
   id: string;
@@ -37,9 +37,9 @@ export type EventFilter = (typeof EVENT_FILTERS)[number]["id"];
 
 export function keepEvent(event: TurnEvent, filter: EventFilter): boolean {
   if (filter === "all") return true;
-  if (filter === "agent") return event.kind === "agent" || event.kind === "thinking";
   if (filter === "failed") return event.kind === "failed";
-  return event.kind !== "agent" && event.kind !== "thinking";
+  const message = event.kind === "user" || event.kind === "agent" || event.kind === "thinking";
+  return filter === "agent" ? message : !message;
 }
 
 type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
@@ -93,13 +93,14 @@ function callParts(item: ToolItem): { input?: string; output?: string } {
 export function turnEvents(items: readonly TranscriptItem[]): TurnEvent[] {
   const events: TurnEvent[] = [];
   for (const item of items) {
-    if (item.kind === "assistant") {
+    if (item.kind === "user" || item.kind === "assistant") {
+      if (item.kind === "user" && (item.wake || item.continued)) continue;
       const text = stripHarnessMarkup(item.text).trim();
       if (!text) continue;
       events.push({
         id: item.id,
-        kind: "agent",
-        badge: "Agent",
+        kind: item.kind === "user" ? "user" : "agent",
+        badge: item.kind === "user" ? "You" : "Agent",
         line: firstLine(text),
         body: text,
         at: item.at,

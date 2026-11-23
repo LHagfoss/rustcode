@@ -1866,3 +1866,23 @@
   inset: -4px -12px;
   z-index: -1;
 }
+
+.turn-history {
+  --turn-fade-top: 0px;
+  --turn-fade-bottom: 0px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--turn-fade-top),
+    #000 calc(100% - var(--turn-fade-bottom)),
+    transparent
+  );
+}
+
+.turn-history[data-more-above] {
+  --turn-fade-top: 18px;
+}
+
+.turn-history[data-more-below] {
+  --turn-fade-bottom: 18px;
+}
