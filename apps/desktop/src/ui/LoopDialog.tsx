@@ -11,7 +11,7 @@ import { effortLabel, modelName, projectName } from "../acp/types";
 import { modelTitle } from "../lib/modelNames";
 import { concreteModels, defaultEffort, firstModel, listedModel, restoreChoice } from "../state/harness";
 import { ensureHarnessModels, lastAccountFor } from "../state/harnessActions";
-import { refreshHub, useHub } from "../state/hub";
+import { type HubStatus, refreshHub, useHub } from "../state/hub";
 import { newThreadAccountOn } from "../state/logins";
 import {
   cronInWords,
@@ -38,7 +38,8 @@ import {
 } from "../state/loops";
 import { projectsOn } from "../state/projects";
 import { errorText, useApp } from "../state/store";
-import { ChevronRight, Trash2, Webhook } from "./icons";
+import { openSettings } from "../state/viewActions";
+import { ChevronDown, ChevronRight, Trash2, Webhook } from "./icons";
 import { RunList } from "./JobRuns";
 import { CopyButton } from "./Markdown";
 import { Callout, cx, inputClass, noTextHelpers, Pill, Segments, Select, Switch } from "./primitives";
@@ -216,6 +217,13 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+/** Why the machine picker offers only this computer, and where to change that. */
+export function machineHint(hub: HubStatus | null): string {
+  if (hub?.member) return `To run a job on another machine, make it on the hub, ${hub.member.name}.`;
+  if (hub?.hub) return "No machine has joined this hub yet.";
+  return "To run jobs on other machines, make this computer the hub in Settings › Machines.";
 }
 
 /** One part of the form (what, when, how), under a heading and a rule after the first. */
@@ -544,8 +552,8 @@ export function LoopDialog({
                           ))}
                         </div>
                       )}
-                      {machineOptions.length > 1 && (
-                        <Field label="Machine">
+                      <Field label="Machine">
+                        {machineOptions.length > 1 ? (
                           <Select
                             label="Machine"
                             value={draft.machine ?? ""}
@@ -553,8 +561,27 @@ export function LoopDialog({
                             onChange={chooseMachine}
                             className="h-8 max-w-full justify-between self-start rounded-md bg-fill-subtle"
                           />
-                        </Field>
-                      )}
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 text-callout">
+                              <span>This computer</span>
+                              {!hub?.member && (
+                                <Pill
+                                  size="sm"
+                                  quiet
+                                  onClick={() => {
+                                    onOpenChange(false);
+                                    openSettings("machines");
+                                  }}
+                                >
+                                  Machines settings
+                                </Pill>
+                              )}
+                            </div>
+                            <p className="text-caption text-fg-faint">{machineHint(hub)}</p>
+                          </>
+                        )}
+                      </Field>
                       <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] items-start gap-3">
                         <Field label="Name">
                           <input
@@ -602,34 +629,54 @@ export function LoopDialog({
                           className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
                         />
                       </Field>
-                      {remote ? null : scriptOpen ? (
-                        <Field label="Pre-check script (optional)">
-                          <textarea
-                            value={draft.script ?? ""}
-                            onChange={(e) => patch({ script: e.target.value })}
-                            placeholder="gh run list --branch main --status failure --limit 5"
-                            aria-label="Script"
-                            rows={2}
-                            {...noTextHelpers}
-                            className="max-h-40 min-h-12 resize-y rounded-lg bg-fill-subtle px-3 py-2 font-mono text-caption text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
-                          />
-                          <p className="text-caption text-fg-muted">
-                            Runs first in the project folder. The agent starts only when it prints something,
-                            with that output added to the prompt; no output costs no tokens.
-                          </p>
-                        </Field>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setScriptOpen(true)}
-                          className="-mx-1 flex items-center gap-1 self-start rounded-md px-1 py-0.5 text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg"
-                        >
-                          <ChevronRight size={12} />
-                          Pre-check script
-                          <span className="text-fg-faint">
-                            · start the agent only when it prints something
-                          </span>
-                        </button>
+                      {!remote && (
+                        <div className="flex flex-col gap-1">
+                          <button
+                            type="button"
+                            aria-expanded={scriptOpen}
+                            onClick={() => setScriptOpen((open) => !open)}
+                            className="-mx-1 flex items-center gap-1 self-start rounded-md px-1 py-0.5 text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                          >
+                            {scriptOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                            Pre-check script
+                            <span className="text-fg-faint">
+                              {draft.script?.trim()
+                                ? "· on"
+                                : "· start the agent only when it prints something"}
+                            </span>
+                          </button>
+                          {scriptOpen && (
+                            <>
+                              <textarea
+                                value={draft.script ?? ""}
+                                onChange={(e) => patch({ script: e.target.value })}
+                                placeholder="gh run list --branch main --status failure --limit 5"
+                                aria-label="Script"
+                                rows={2}
+                                {...noTextHelpers}
+                                className="max-h-40 min-h-12 resize-y rounded-lg bg-fill-subtle px-3 py-2 font-mono text-caption text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+                              />
+                              <div className="flex items-start justify-between gap-3">
+                                <p className="text-caption text-fg-muted">
+                                  Runs first in the project folder. The agent starts only when it prints
+                                  something, with that output added to the prompt; no output costs no tokens.
+                                </p>
+                                {draft.script?.trim() ? (
+                                  <Pill
+                                    size="sm"
+                                    quiet
+                                    onClick={() => {
+                                      patch({ script: undefined });
+                                      setScriptOpen(false);
+                                    }}
+                                  >
+                                    Remove
+                                  </Pill>
+                                ) : null}
+                              </div>
+                            </>
+                          )}
+                        </div>
                       )}
                     </Section>
                     <Section title="When it runs">
