@@ -622,7 +622,9 @@
 12 harness/src/runtime/composer.rs
 9 harness/src/runtime/detached.rs
 2 harness/src/runtime/events.rs
-136 harness/src/runtime/input.rs
+60 harness/src/runtime/input.rs
+50 harness/src/runtime/input/keyboard.rs
+26 harness/src/runtime/input/tests.rs
 6 harness/src/runtime/mod.rs
 31 harness/src/runtime/orchestration.rs
 83 harness/src/runtime/remote.rs

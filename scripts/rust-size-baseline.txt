@@ -2,7 +2,6 @@
 # Lower a cap when its file is split; never raise one. See scripts/check-rust-size.py.
 3000 apps/desktop/src-tauri/src/machines.rs
 2600 apps/desktop/src-tauri/src/updater.rs
-3900 harness/src/runtime/input.rs
 2500 harness/src/runtime/remote.rs
 2400 harness/src/ui/history_cell.rs
 3300 harness/src/ui/selection.rs
