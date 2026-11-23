@@ -55,17 +55,19 @@ export function CopyButton({
   const icon = copied ? <Check size={iconSize} className="text-success" /> : <Copy size={iconSize} />;
   if (iconOnly)
     return (
-      <button
-        type="button"
-        aria-label={said}
-        onClick={copy}
-        className={cx(
-          "inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg",
-          size === "md" ? "size-7" : "size-[22px]",
-        )}
-      >
-        {icon}
-      </button>
+      <Tooltip label={label}>
+        <button
+          type="button"
+          aria-label={said}
+          onClick={copy}
+          className={cx(
+            "inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg",
+            size === "md" ? "size-7" : "size-[22px]",
+          )}
+        >
+          {icon}
+        </button>
+      </Tooltip>
     );
   return (
     <Pill quiet size="sm" aria-label={said} onClick={copy}>

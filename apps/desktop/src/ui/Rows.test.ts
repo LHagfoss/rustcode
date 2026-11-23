@@ -2,7 +2,8 @@
 // printed is only ever in the card it opens, labelled as an output.
 
 import { describe, expect, test } from "bun:test";
-import { createElement } from "react";
+import { Tooltip } from "radix-ui";
+import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseSessionUpdate } from "../acp/types";
 import { applyUpdate, beginTurn, emptyThread, finishTurn, type TranscriptItem } from "../state/thread";
@@ -42,8 +43,9 @@ const call = (bodies: Record<string, unknown>[], end = true): ToolItem => {
   return item;
 };
 
-const drawn = (item: ToolItem) => renderToStaticMarkup(createElement(ToolRow, { item, cwd: "/p" }));
-const detail = (item: ToolItem) => renderToStaticMarkup(createElement(ToolDetail, { item }));
+const render = (el: ReactElement) => renderToStaticMarkup(createElement(Tooltip.Provider, null, el));
+const drawn = (item: ToolItem) => render(createElement(ToolRow, { item, cwd: "/p" }));
+const detail = (item: ToolItem) => render(createElement(ToolDetail, { item }));
 const spinners = (markup: string) => markup.split("rc-spin").length - 1;
 
 const backgrounded = {
