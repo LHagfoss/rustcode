@@ -187,7 +187,6 @@ export function RightPanel() {
   const sheet = panelIsSheet(viewport);
   const card = panelWidth(width, viewport, row);
   const widest = panelMax(viewport, row);
-  // The docked card rises over the header and carries the panel's toggle at its top right.
   const overHeader = useCardOverHeader();
   const top = overHeader ? CARD_GAP : HEADER_HEIGHT + CARD_GAP;
 
@@ -257,7 +256,6 @@ export function RightPanel() {
     dock.current?.style.setProperty("--rc-panel-width", `${width}px`);
     const room = open ? `${width + HANDLE + CARD_GAP}px` : "0px";
     rowEl.current?.style.setProperty("--rc-panel-room", room);
-    // The header is the row's sibling: it reads the room from the column that holds both.
     rowEl.current?.parentElement?.style.setProperty("--rc-panel-room", overHeader ? room : "0px");
   }
 
@@ -336,7 +334,6 @@ export function RightPanel() {
   // Details is the panel's home: everything is on its one card. The full views it opens (the diff,
   // the pull list, a thread beside this one) get a way back to it.
   const titles: Record<Kind, string> = {
-    // Details opens on the thread's properties, so its bar names them beside the toggle.
     details: "Properties",
     changes: "Changes",
     pulls: "Pull requests",
@@ -344,8 +341,6 @@ export function RightPanel() {
   };
   const home = kind === "details";
 
-  // Every view opens under one bar: the way back to Details on the full views, and the toggle
-  // at the right, where the header's own toggle stood before the card rose over it.
   const contents = kind && (
     <>
       <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-1 pr-2 pl-2">

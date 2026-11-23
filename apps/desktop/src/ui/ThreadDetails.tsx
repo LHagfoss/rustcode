@@ -145,14 +145,8 @@ export function ThreadDetails() {
   const icon = "shrink-0 text-fg-muted";
   const openChanges = () => showPanel("changes");
 
-  // Everything about the thread on one card, no tabs: its properties, what it changed, its pull
-  // requests, what it did and how full its context is. Rows are tight and the activity is a grid;
-  // Turns comes last and takes whatever height is left, every turn newest first with its trace,
-  // scrolling inside itself, so the card fills the window with no empty foot. A window too short
-  // for that scrolls the whole card instead. The diff and the pull list open from their rows.
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
-      {/* The panel's bar says "Properties" beside the toggle, so the rows start at once. */}
       <div className="px-2">
         <Property label="Status">
           <StatusIcon status={status} size={13} />
@@ -341,7 +335,6 @@ function TurnsSection({
     for (const item of items) if (item.kind === "turnEnd") map.set(item.id, item);
     return map;
   }, [items]);
-  // The event log that is open (ui/TurnEvents.tsx): one turn's, or every turn's (`ALL`).
   const [open, setOpen] = useState<string | null>(null);
   const opened = open && open !== ALL ? turns.find((turn) => turn.id === open) : undefined;
   const openedEnd = opened ? ends.get(opened.id) : undefined;

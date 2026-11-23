@@ -1,10 +1,3 @@
-// The event log: every message, thought and tool call of a turn (or of every turn), laid flat in
-// the order they happened, a reading of the transcript without its layout. A thin strip across the
-// top shows the run's shape at a glance (one cell per event, coloured by kind; a press scrolls to
-// it), and each row opens to the whole reply or the call's input and output. Opened from Turns in
-// the side panel (ui/ThreadDetails.tsx); the Trace chip in the header still says where the time
-// and money went (ui/TurnTrace.tsx).
-
 import { Dialog } from "radix-ui";
 import { Fragment, type ReactNode, useMemo, useRef, useState } from "react";
 import { toast } from "../state/store";
@@ -118,6 +111,14 @@ function EventRow({ event, index }: { event: TurnEvent; index: number }) {
   );
 }
 
+/**
+ * The event log: every message, thought and tool call of a turn (or of every turn), laid flat in
+ * the order they happened, a reading of the transcript without its layout. A thin strip across the
+ * top shows the run's shape at a glance (one cell per event, coloured by kind; a press scrolls to
+ * it), and each row opens to the whole reply or the call's input and output. Opened from Turns in
+ * the side panel (ui/ThreadDetails.tsx); the Trace chip in the header still says where the time
+ * and money went (ui/TurnTrace.tsx).
+ */
 export function TurnEvents({
   open,
   onOpenChange,
@@ -138,7 +139,6 @@ export function TurnEvents({
   const list = useRef<HTMLDivElement>(null);
   const single = turns.length === 1 ? turns[0] : undefined;
 
-  // Every turn's events, numbered across the whole log, so a row keeps its number under a filter.
   const groups = useMemo(() => {
     let n = 0;
     return turns.map((turn, at) => ({
@@ -190,7 +190,6 @@ export function TurnEvents({
             aria-describedby={undefined}
             className="elevated pointer-events-auto flex max-h-[min(760px,100%)] w-[min(880px,100%)] flex-col overflow-hidden"
           >
-            {/* Title and what the run was, then how to read it, then its shape. */}
             <div className="flex flex-col gap-3 px-4 pt-4 pb-3">
               <div className="flex items-start gap-3">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">

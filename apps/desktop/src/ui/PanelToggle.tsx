@@ -1,7 +1,3 @@
-// The side panel's toggle, "Thread info": the header carries it while the panel is closed, and the
-// panel's card carries it while open, at the card's top right where the card rises over the header
-// (ui/RightPanel.tsx). Its `data-panel-toggle` takes the keyboard back when a panel closes.
-
 import { useSyncExternalStore } from "react";
 import { appPlatform } from "../lib/platform";
 import { toggleRightPanel, useApp, useShortcutHint } from "../state/store";
@@ -29,6 +25,11 @@ export function useCardOverHeader(): boolean {
   );
 }
 
+/**
+ * The side panel's toggle, "Thread info": the header carries it while the panel is closed, and the
+ * panel's card carries it while open, at the card's top right where the card rises over the header
+ * (ui/RightPanel.tsx). Its `data-panel-toggle` takes the keyboard back when a panel closes.
+ */
 export function PanelToggle({ className }: { className?: string }) {
   const open = useApp((s) => !!s.panel);
   const key = useShortcutHint("toggle-panel");

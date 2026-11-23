@@ -1,12 +1,13 @@
-// A turn as a list of events, for the turn's event log (ui/TurnEvents.tsx): what the agent said,
-// what it thought and each tool call, in the order they happened, each with a short line for its
-// row and the whole text for when the row is opened. The trace (lib/trace.ts) says where the time
-// went; this says what was done.
-
 import { subagentOf, type TranscriptItem } from "./thread";
 import { stripHarnessMarkup } from "./threadFormat";
 import { displayTool, usefulSummary } from "./toolNames";
 
+/**
+ * A turn as a list of events, for the turn's event log (ui/TurnEvents.tsx): what the agent said,
+ * what it thought and each tool call, in the order they happened, each with a short line for its
+ * row and the whole text for when the row is opened. The trace (lib/trace.ts) says where the time
+ * went; this says what was done.
+ */
 /** What an event is, which picks its badge's colour and the filter it falls under. */
 export type TurnEventKind = "agent" | "thinking" | "run" | "read" | "edit" | "tool" | "failed";
 
