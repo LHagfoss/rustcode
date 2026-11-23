@@ -136,6 +136,7 @@ export function JobCard({
   agent,
   machineLabel,
   onOpen,
+  onEdit,
   onDuplicate,
   onDelete,
   act,
@@ -146,6 +147,7 @@ export function JobCard({
   /** Shown in the footer when the network has more than one machine, or for hub-dispatched jobs. */
   machineLabel?: string;
   onOpen: () => void;
+  onEdit: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   act: (what: string, run: () => Promise<void>) => void;
@@ -169,7 +171,7 @@ export function JobCard({
     <li
       data-loop={loopKey(loop)}
       className={cx(
-        "group/job relative flex min-w-0 flex-col gap-2 rounded-lg bg-surface px-4 pt-3 pb-2 hover:bg-fill-subtle",
+        "group/job relative flex min-w-0 flex-col gap-2 rounded-lg bg-surface p-4 hover:bg-fill-subtle",
         reason && "ring-1 ring-danger/35",
         loop.paused && !reason && "opacity-70",
       )}
@@ -178,7 +180,7 @@ export function JobCard({
         <button
           type="button"
           onClick={onOpen}
-          className="min-w-0 flex-1 text-left font-medium text-body text-fg after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-1 focus-visible:after:ring-accent"
+          className="min-w-0 flex-1 text-left font-semibold text-title3 text-fg after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-1 focus-visible:after:ring-accent"
         >
           <span className="line-clamp-2">{loop.name}</span>
         </button>
@@ -223,7 +225,7 @@ export function JobCard({
                 )}
                 {loop.paused ? "Resume" : "Pause"}
               </DropdownMenu.Item>
-              <DropdownMenu.Item className={menuItem} onSelect={onOpen}>
+              <DropdownMenu.Item className={menuItem} onSelect={onEdit}>
                 <Pencil size={13} className="text-fg-muted" /> Edit
               </DropdownMenu.Item>
               <DropdownMenu.Item className={menuItem} onSelect={onDuplicate}>
@@ -244,7 +246,7 @@ export function JobCard({
       </div>
 
       {agent && (
-        <span className="w-fit max-w-full truncate rounded-full bg-fill-subtle px-2 py-0.5 text-caption text-fg-muted">
+        <span title={agent} className="-mt-1 truncate text-caption text-fg-muted">
           {agent}
         </span>
       )}
@@ -281,9 +283,6 @@ export function JobCard({
       )}
 
       <div className="mt-auto flex min-w-0 items-center gap-2 border-t border-border pt-2 text-caption text-fg-muted">
-        <span className="relative flex">
-          <RunHistory runs={loop.runs} />
-        </span>
         <span className="min-w-0 flex-1 truncate">
           {projectName(loop.workspace)}
           {(machineLabel || loop.machine) && ` on ${machineLabel || loop.machine}`} ·{" "}
@@ -314,6 +313,19 @@ export function JobCard({
         ) : (
           <span className="shrink-0 text-fg-faint">{nextRunText(loop, now)}</span>
         )}
+      </div>
+      <div className="flex items-center justify-between gap-2 text-caption text-fg-muted">
+        <span className="flex items-center gap-2">
+          {loop.runs.length > 0 && (
+            <span>
+              {loop.runs.length} {loop.runs.length === 1 ? "run" : "runs"}
+            </span>
+          )}
+          <RunHistory runs={loop.runs} />
+        </span>
+        <span className="shrink-0">
+          Run history <ArrowUpRight size={12} className="inline" />
+        </span>
       </div>
     </li>
   );

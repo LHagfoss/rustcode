@@ -4,7 +4,7 @@
  * from the sidebar's Jobs row. Jobs live across the entire paired machine network: every connected
  * computer's scheduler is read and managed directly over ACP, and a hub's members remain reachable
  * too. Each job is a card with its agent, last result, schedule and next run; the card opens one
- * dialog that edits the job beside its runs. Jobs paused by failures lead. Review is a timeline by
+ * dialog with its run history and a link to edit the job. Jobs paused by failures lead. Review is a timeline by
  * day of failed runs and open threads, a repeated failure folded into one row.
  */
 
@@ -39,6 +39,7 @@ import { LOCAL_HOST } from "../state/threadKeys";
 import { statusOf } from "../state/threadStatus";
 import { CheckCheck, Plus, Repeat } from "./icons";
 import { JobCard, listening } from "./JobCard";
+import { JobDetails } from "./JobDetails";
 import { JobReview } from "./JobReview";
 import { showJob } from "./JobRunBar";
 import { LoopDialog } from "./LoopDialog";
@@ -97,6 +98,7 @@ export function Loops() {
   const [error, setError] = useState<string | null>(null);
   const [scopeHost, setScopeHost] = useState<string>(ALL_MACHINES);
   const [tab, setTab] = useState<Tab>("jobs");
+  const [detailsKey, setDetailsKey] = useState<string | null>(null);
   const [editing, setEditing] = useState<Loop | null>(null);
   const [duplicating, setDuplicating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -202,13 +204,13 @@ export function Loops() {
     setTab("jobs");
     if (effectiveScope !== ALL_MACHINES && effectiveScope !== match.host) setScopeHost(ALL_MACHINES);
     useLoopThreads.setState({ reveal: null });
-    openJob(match);
+    setDetailsKey(loopKey(match));
     requestAnimationFrame(() =>
       listRef.current
         ?.querySelector(`[data-loop="${CSS.escape(loopKey(match))}"]`)
         ?.scrollIntoView({ block: "nearest" }),
     );
-  }, [reveal, byHost, allLoops, effectiveScope, openJob]);
+  }, [reveal, byHost, allLoops, effectiveScope]);
 
   const attention: Loop[] = [];
   const upcoming: Loop[] = [];
@@ -354,11 +356,22 @@ export function Loops() {
   const showToolbar = Boolean(byHost && (hasPeers || (anyDaemonRunning && loops.length > 0)));
   const canCreate = Boolean(byHost && (anyDaemonRunning || hasPeers));
 
+  const details = allLoops.find((loop) => loopKey(loop) === detailsKey);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-bg">
-      <ViewHeader title="Jobs" />
+      <ViewHeader />
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-6 pt-2 pb-8">
+          <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+            <h1 className="font-semibold text-title tracking-tight text-fg">Jobs</h1>
+            {loops.length > 0 && (
+              <p className="text-callout text-fg-muted">
+                {loops.length} {loops.length === 1 ? "job" : "jobs"} · {upcoming.length} active ·{" "}
+                {attention.length} need attention
+              </p>
+            )}
+          </div>
           {showToolbar && (
             <div className="flex flex-wrap items-center gap-2 pb-1">
               {(loops.length > 0 || tab === "review") && (
@@ -489,7 +502,8 @@ export function Loops() {
                                 ? loopMachineLabel(loop, machines, localName)
                                 : undefined
                             }
-                            onOpen={() => openJob(loop)}
+                            onOpen={() => setDetailsKey(loopKey(loop))}
+                            onEdit={() => openJob(loop)}
                             onDuplicate={() => openJob(loop, true)}
                             onDelete={() => confirmDelete(loop)}
                             act={act}
@@ -504,6 +518,18 @@ export function Loops() {
           )}
         </div>
       </div>
+      {details && (
+        <JobDetails
+          loop={details}
+          now={now}
+          machine={loopMachineLabel(details, machines, localName)}
+          onClose={() => setDetailsKey(null)}
+          onEdit={() => {
+            setDetailsKey(null);
+            openJob(details);
+          }}
+        />
+      )}
       <LoopDialog
         open={dialogOpen}
         loop={editing}
