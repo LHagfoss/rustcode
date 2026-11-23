@@ -544,11 +544,17 @@ export async function refreshMachines(): Promise<void> {
       }
     }
     // A machine this run has not listed yet draws the threads this computer last read from it, so
-    // an offline one keeps its rows (and a reconnect replaces them: `readThreads`).
+    // an offline one keeps its rows (and a reconnect replaces them: `readThreads`). One still
+    // connecting (every machine, as the app starts) waits a moment for its live list instead:
+    // drawn at once, the copy flashed old threads that the live read then took away.
     const state = useMachines.getState();
     const cached: Record<string, SessionSummary[]> = {};
     for (const machine of machines) {
       if (state.sessions[machine.id]) continue;
+      if (machine.state === "connecting") {
+        holdCopy(machine.id);
+        continue;
+      }
       const rows = loadThreadList(machine.id);
       if (rows.length) cached[machine.id] = rows;
     }
@@ -563,7 +569,7 @@ export async function refreshMachines(): Promise<void> {
     // A machine that is away also draws what this computer's disk mirrored from it, past the 200
     // newest the web view keeps (`state/machineMirror.ts`).
     for (const machine of machines) {
-      if (machine.state !== "connected") void drawMirrored(machine.id);
+      if (machine.state !== "connected" && machine.state !== "connecting") void drawMirrored(machine.id);
     }
     for (const machine of machines) void attach(machine);
     for (const [id, link] of links.entries()) {
@@ -572,6 +578,34 @@ export async function refreshMachines(): Promise<void> {
   } catch (error) {
     useMachines.setState({ ready: true, error: errorText(error) });
   }
+}
+
+/** How long a machine that is connecting gets to list its threads before its copy is drawn. */
+let copyGraceMs = 5_000;
+
+/** Tests only: how long a connecting machine's copy waits. */
+export function setCopyGraceForTests(ms: number): void {
+  copyGraceMs = ms;
+}
+/** The machines whose copy waits out `copyGraceMs`, by id. */
+const copyHolds = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Draws a connecting machine's copy only if it has not connected (or listed) by then. */
+function holdCopy(host: string): void {
+  if (copyHolds.has(host)) return;
+  copyHolds.set(
+    host,
+    setTimeout(() => {
+      copyHolds.delete(host);
+      const state = useMachines.getState();
+      const machine = state.machines.find((entry) => entry.id === host);
+      if (!machine || machine.state === "connected" || state.sessions[host]) return;
+      const rows = loadThreadList(host);
+      if (rows.length)
+        useMachines.setState((current) => ({ sessions: { ...current.sessions, [host]: rows } }));
+      void drawMirrored(host);
+    }, copyGraceMs),
+  );
 }
 
 /** Adds the mirrored rows a machine that is away lacks; a live read still replaces them all. */
@@ -770,6 +804,8 @@ export function resetMachinesForTests(): void {
     announce(id, null);
   }
   links.clear();
+  for (const timer of copyHolds.values()) clearTimeout(timer);
+  copyHolds.clear();
   linkListeners.clear();
   started = false;
   useMachines.setState({

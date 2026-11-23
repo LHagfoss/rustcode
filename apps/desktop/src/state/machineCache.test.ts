@@ -29,6 +29,7 @@ import {
   type Machine,
   refreshMachines,
   resetMachinesForTests as resetMachineLinksForTests,
+  setCopyGraceForTests,
   useMachines,
 } from "./machines";
 import {
@@ -326,5 +327,44 @@ describe("a machine that is away", () => {
     }));
     await Bun.sleep(2_300);
     expect(loadTranscript(KEY)?.items.map((i) => i.id)).toEqual(["u9", "a9"]);
+  });
+});
+
+describe("a machine still connecting as the app starts", () => {
+  beforeEach(async () => {
+    resetForTests();
+    resetMachineLinksForTests();
+    setCopyGraceForTests(20);
+    useApp.setState({ selectedId: null, threads: {} });
+    saveThreadList(STUDIO, [row("mock-studio-old", 100)]);
+    const shell = new AwayShell();
+    shell.machines = [machine(STUDIO, "Studio", "connecting")];
+    setShellTransport(shell);
+    await refreshMachines();
+  });
+
+  afterAll(() => {
+    setCopyGraceForTests(5_000);
+    resetForTests();
+    resetMachineLinksForTests();
+    setShellTransport(null);
+  });
+
+  test("does not flash its old copy while the live list is on its way", () => {
+    expect(useMachines.getState().sessions[STUDIO]).toBeUndefined();
+  });
+
+  test("draws only the live list when it connects in time", async () => {
+    useMachines.setState((s) => ({
+      machines: s.machines.map((m) => ({ ...m, state: "connected" as const })),
+      sessions: { ...s.sessions, [STUDIO]: [row("mock-studio-live", 300)] },
+    }));
+    await Bun.sleep(40);
+    expect(useMachines.getState().sessions[STUDIO]?.map((s) => s.id)).toEqual(["mock-studio-live"]);
+  });
+
+  test("draws the copy once it is clear the machine is not answering", async () => {
+    await Bun.sleep(40);
+    expect(useMachines.getState().sessions[STUDIO]?.map((s) => s.id)).toEqual(["mock-studio-old"]);
   });
 });
