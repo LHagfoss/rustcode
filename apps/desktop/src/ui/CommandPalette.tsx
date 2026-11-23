@@ -6,7 +6,7 @@
 // projects and this one.
 
 import { Dialog } from "radix-ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { modelName, projectName } from "../acp/types";
 import { copyPromptLink, copyThreadLink } from "../state/deepLinks";
 import { PREF, usePref, useSidebarSort } from "../state/sidebarPrefs";
@@ -317,6 +317,10 @@ export function CommandPalette() {
   const [sort] = useSidebarSort();
   const scope = onlyProject && projectCwd ? "project" : "all";
   const [index, setIndex] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    listRef.current?.querySelectorAll('[role="option"]')[index]?.scrollIntoView({ block: "nearest" });
+  }, [index]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a changed result order resets keyboard selection
   useEffect(() => {
@@ -477,7 +481,12 @@ export function CommandPalette() {
               <FilterMenu filtering={scope === "project"} />
             </div>
           </div>
-          <div className="max-h-[440px] overflow-y-auto p-2" role="listbox" aria-label="Results">
+          <div
+            ref={listRef}
+            className="max-h-[440px] overflow-y-auto p-2"
+            role="listbox"
+            aria-label="Results"
+          >
             {!results.length && (
               <div className="px-3 py-4 text-center text-callout text-fg-muted">Nothing matches “{q}”.</div>
             )}
@@ -501,13 +510,13 @@ export function CommandPalette() {
                   className={cx(
                     "flex w-full items-center gap-3 rounded-lg px-3 text-left",
                     r.kind === "thread" ? "min-h-[48px] py-2" : "min-h-[36px] py-1.5",
-                    i === index && "bg-accent/16",
+                    i === index && "bg-fill",
                     r.kind === "action" && r.action.disabled && "opacity-45",
                   )}
                 >
                   {r.kind === "thread" ? (
                     <>
-                      <MessageSquare size={13} className={i === index ? "text-accent" : "text-fg-muted"} />
+                      <MessageSquare size={13} className={i === index ? "text-fg" : "text-fg-muted"} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-body">{highlight(r.title, q)}</span>
                         <span className="block truncate text-caption text-fg-muted">{r.detail}</span>
@@ -520,7 +529,7 @@ export function CommandPalette() {
                     </>
                   ) : (
                     <>
-                      <r.action.icon size={13} className={i === index ? "text-accent" : "text-fg-muted"} />
+                      <r.action.icon size={13} className={i === index ? "text-fg" : "text-fg-muted"} />
                       <span className="min-w-0 flex-1 truncate text-body">
                         {highlight(r.action.label, q)}
                         {r.action.group && r.action.detail && (
