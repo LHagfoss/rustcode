@@ -4,18 +4,31 @@
  * opens its run's thread, and its check marks it reviewed.
  */
 
+import { loopMachineLabel, runThreadKey } from "../state/fleetLoops";
 import { REVIEW_DAYS, type ReviewGroup, reviewAt, reviewDayLabel } from "../state/loops";
+import { selfName, useLocalIdentity, useMachines } from "../state/machines";
 import { useApp } from "../state/store";
 import { selectThread } from "../state/threadOpen";
 import { Check } from "./icons";
-import { runThread } from "./JobRuns";
 import { cx, Tooltip } from "./primitives";
 
 const TIME = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 
-function ReviewRow({ group, onReviewed }: { group: ReviewGroup; onReviewed: (runIds: string[]) => void }) {
+function ReviewRow({
+  group,
+  showMachine,
+  onReviewed,
+}: {
+  group: ReviewGroup;
+  showMachine: boolean;
+  onReviewed: (runIds: string[]) => void;
+}) {
   const { loop, run, kind } = group.item;
-  const threadId = runThread(run);
+  const machines = useMachines((s) => s.machines);
+  const local = useLocalIdentity();
+  const localName = local.displayName ?? selfName();
+  const threadId = runThreadKey(loop, run, machines, localName);
+  const machineLabel = showMachine || loop.machine ? loopMachineLabel(loop, machines, localName) : null;
   const title = useApp((s) =>
     threadId ? s.sessions.find((session) => session.id === threadId)?.title : undefined,
   );
@@ -36,17 +49,20 @@ function ReviewRow({ group, onReviewed }: { group: ReviewGroup; onReviewed: (run
         <span aria-hidden className={cx("size-1.5 rounded-full", failed ? "bg-danger" : "bg-warning")} />
       </span>
       <div className="flex min-w-0 flex-col gap-0.5">
-        {threadId ? (
-          <button
-            type="button"
-            onClick={() => selectThread(threadId)}
-            className="truncate text-left font-medium text-callout text-fg after:absolute after:inset-0 after:rounded-md focus-visible:outline-none focus-visible:after:ring-1 focus-visible:after:ring-accent"
-          >
-            {loop.name}
-          </button>
-        ) : (
-          <span className="truncate font-medium text-callout text-fg">{loop.name}</span>
-        )}
+        <div className="flex min-w-0 items-baseline gap-2">
+          {threadId ? (
+            <button
+              type="button"
+              onClick={() => selectThread(threadId)}
+              className="truncate text-left font-medium text-callout text-fg after:absolute after:inset-0 after:rounded-md focus-visible:outline-none focus-visible:after:ring-1 focus-visible:after:ring-accent"
+            >
+              {loop.name}
+            </button>
+          ) : (
+            <span className="truncate font-medium text-callout text-fg">{loop.name}</span>
+          )}
+          {machineLabel && <span className="shrink-0 text-caption text-fg-faint">{machineLabel}</span>}
+        </div>
         <p className={cx("line-clamp-2 text-caption", failed ? "text-danger" : "text-fg-muted")}>
           {text}
           {count > 1 && <span className="text-fg-faint"> · {count} runs</span>}
@@ -69,10 +85,12 @@ function ReviewRow({ group, onReviewed }: { group: ReviewGroup; onReviewed: (run
 export function JobReview({
   groups,
   now,
+  showMachine = false,
   onReviewed,
 }: {
   groups: readonly ReviewGroup[];
   now: number;
+  showMachine?: boolean;
   onReviewed: (runIds: string[]) => void;
 }) {
   if (!groups.length) {
@@ -98,7 +116,12 @@ export function JobReview({
           </h2>
           <ol className="relative flex flex-col before:absolute before:top-3 before:bottom-3 before:left-[calc(4rem-0.5px)] before:w-px before:bg-border">
             {day.groups.map((group) => (
-              <ReviewRow key={group.item.run.id} group={group} onReviewed={onReviewed} />
+              <ReviewRow
+                key={`${group.item.loop.host}/${group.item.run.id}`}
+                group={group}
+                showMachine={showMachine}
+                onReviewed={onReviewed}
+              />
             ))}
           </ol>
         </section>

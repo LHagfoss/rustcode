@@ -199,15 +199,16 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/usage/shared",
     "_rustcode/data/usage",
 ];
-// Settings › Outside agents for this machine: its connected apps, the
-// sign-ins its public sign-in page waits on, and sign-in codes. A paired
-// device can already run `rc outside` in a thread here, so this gives
-// it nothing new; it lets the owner approve a hosted agent from any device.
+// Settings › Outside agents and Jobs for this machine. A paired device can
+// already run `rc outside` or `rc jobs` in a thread or `_rustcode/machine/exec`
+// here, so this gives it nothing new; it lets any paired computer in the fleet
+// approve hosted agents and manage jobs on every other connected machine directly.
 const METHOD_PREFIXES: &[&str] = &[
     "session/",
     "_rustcode/pulls",
     "_rustcode/capabilities",
     "_rustcode/outside/",
+    "_rustcode/loops/",
 ];
 
 fn allowed(method: &str) -> bool {
@@ -529,7 +530,8 @@ mod tests {
                 "session/",
                 "_rustcode/pulls",
                 "_rustcode/capabilities",
-                "_rustcode/outside/"
+                "_rustcode/outside/",
+                "_rustcode/loops/",
             ]
         );
         for method in [
@@ -585,6 +587,13 @@ mod tests {
             "_rustcode/outside/passkey/add",
             "_rustcode/outside/passkey/remove",
             "_rustcode/outside/web/sign-out",
+            "_rustcode/loops/list",
+            "_rustcode/loops/save",
+            "_rustcode/loops/set_paused",
+            "_rustcode/loops/run",
+            "_rustcode/loops/cancel",
+            "_rustcode/loops/delete",
+            "_rustcode/loops/start_daemon",
         ] {
             assert!(allowed(method), "{method}");
         }

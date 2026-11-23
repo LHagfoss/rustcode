@@ -238,7 +238,37 @@ pub(crate) fn loop_json(job: &JobRecord, runs: &[JobRunRecord]) -> Option<Value>
 pub(crate) async fn list() -> Result<Value, String> {
     // The page still lists what an old scheduler holds; the next save says why it waits.
     let _ = current_daemon().await;
-    list_with(&client()?).await
+    let mut answer = list_with(&client()?).await?;
+    if let Some(members) = hub_members().await {
+        answer["hubMembers"] = json!(members);
+    }
+    Ok(answer)
+}
+
+/// Members joined to this hub, so paired computers can also schedule jobs for
+/// machines reachable only through this hub.
+async fn hub_members() -> Option<Vec<Value>> {
+    let config_dir = crate::config::get_config_dir()?;
+    if !crate::remote_gateway::hub_link::HubConfig::load(&config_dir).hub {
+        return None;
+    }
+    let members = crate::remote_gateway::lifecycle::RemoteLifecycle::new(&config_dir)
+        .hub_members()
+        .await
+        .ok()
+        .flatten()?;
+    Some(
+        members
+            .into_iter()
+            .map(|member| {
+                json!({
+                    "hostId": member.host_id,
+                    "name": member.name,
+                    "online": member.online,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Whether a scheduler that reports `version` runs this build's job format.

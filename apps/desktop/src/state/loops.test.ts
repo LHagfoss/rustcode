@@ -43,6 +43,7 @@ function run(id: string, state: LoopRun["state"], hoursAgo: number, extra: Parti
 function loop(extra: Partial<Loop> = {}): Loop {
   return {
     id: "loop-1",
+    host: "",
     name: "CI watch",
     paused: false,
     schedule: { kind: "cron", expression: "0 */4 * * *" },
@@ -546,5 +547,31 @@ describe("reviewDayLabel", () => {
     expect(reviewDayLabel(NOW - HOUR, NOW)).toBe("Today");
     expect(reviewDayLabel(NOW - 24 * HOUR, NOW)).toBe("Yesterday");
     expect(reviewDayLabel(NOW - 72 * HOUR, NOW)).not.toMatch(/Today|Yesterday/);
+  });
+});
+
+describe("paired machine loops", () => {
+  test("parses host and hubMembers and keys remote run threads by host", () => {
+    const snapshot = parseLoops(
+      {
+        daemonRunning: true,
+        hubMembers: [{ hostId: "arch-id", name: "arch-pc", online: true }],
+        loops: [
+          {
+            id: "loop-vps",
+            name: "Cleanup VPS",
+            workspace: "/home/lucas/code/rustcode",
+            prompt: "Clean up",
+            runs: [{ id: "r1", state: "succeeded", scheduledAt: "2026-11-17T10:00:00Z", threadId: "t-9" }],
+          },
+        ],
+      },
+      "gw-vps",
+    );
+    expect(snapshot.hubMembers).toEqual([{ hostId: "arch-id", name: "arch-pc", online: true }]);
+    expect(snapshot.loops[0]?.host).toBe("gw-vps");
+    expect(loopRunThreads(snapshot.loops)).toEqual({ "gw-vps/t-9": true });
+    expect(loopThreadNames(snapshot.loops)).toEqual({ "gw-vps/t-9": "Cleanup VPS" });
+    expect(loopIdsByThread(snapshot.loops)).toEqual({ "gw-vps/t-9": "gw-vps/loop-vps" });
   });
 });

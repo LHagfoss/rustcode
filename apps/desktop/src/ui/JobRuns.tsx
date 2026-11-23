@@ -62,14 +62,17 @@ export function RunHistory({ runs }: { runs: readonly LoopRun[] }) {
   );
 }
 
-/** Every recorded run, newest first; a run with a thread here opens it. */
+/** Every recorded run, newest first; a run with a thread opens it. */
 export function RunList({
   runs,
   now,
+  threadOf = runThread,
   onOpenThread,
 }: {
   runs: readonly LoopRun[];
   now: number;
+  /** App thread key (`host/id` or local `id`) to open for a run. */
+  threadOf?: (run: LoopRun) => string | undefined;
   /** After a run's thread opens: the dialog showing the list closes. */
   onOpenThread?: () => void;
 }) {
@@ -79,7 +82,7 @@ export function RunList({
       {runs.map((run) => {
         const at = run.finishedAt ?? run.startedAt ?? run.scheduledAt;
         const duration = runDurationText(run.startedAt, run.finishedAt);
-        const threadId = runThread(run);
+        const threadId = threadOf(run);
         const actionable = run.state === "succeeded" && !run.quiet && !run.silent;
         const body = (
           <>
