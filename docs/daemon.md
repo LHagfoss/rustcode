@@ -230,10 +230,17 @@ login while named accounts exist.
   the command that signs it in, and the job pauses after that one run.
 - A run's agent turn may take 25 minutes before it is stopped.
 
-### On another machine, from the hub
+### Across paired machines (and optional hub fallback)
 
-On the fleet's hub (`docs/remote.md` › The hub), a job may name a member in
-`machine` (the editor's *Machine* choice, or `machine` on an outside agent's
+Paired machines form one bidirectional network: the remote ACP relay exposes
+`_rustcode/loops/*`, so the Jobs page reads and manages jobs directly on every
+connected paired computer's own scheduler daemon—with full project browsing,
+that machine's harnesses and accounts, pre-check scripts, existing-thread runs
+and clickable run threads—without requiring a hub.
+
+On a hub (`docs/remote.md` › The hub), a job may also name a hub member in
+`machine` (the editor's *Machine* choice for an offline paired member or an
+unpaired member reachable through a hub, or `machine` on an outside agent's
 `create_loop`). The hub keeps the schedule, so a run is due while that machine
 sleeps, and `daemon/hub_run.rs` sends each run over the hub link: a fresh
 thread is `start_session` there (standalone, in the folder `workspace` names

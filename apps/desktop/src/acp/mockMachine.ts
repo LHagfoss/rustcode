@@ -1,6 +1,7 @@
 import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import { mockSettingsAnswer, mockSettingsSet, withoutSkillContent } from "./mockFixtures";
 import { EFFORTS, initialHarnesses, RUSTCODE_MODELS, withLast } from "./mockHarnesses";
+import { MockLoops } from "./mockLoops";
 import {
   MOCK_FLEET_PI,
   MOCK_MACHINE,
@@ -45,12 +46,59 @@ export class MockMachine {
   private ownNameAt: string | null = null;
   /** How far an update asked from Settings › Machines got, or null before one. */
   private updateStep: number | null = null;
+  /** This machine's own scheduled jobs (`_rustcode/loops/*`). */
+  private readonly loops: MockLoops;
 
   constructor(
     private readonly name: string,
     private readonly threads?: number,
   ) {
     const studio = name === MOCK_STUDIO.name;
+    this.loops = new MockLoops(
+      studio
+        ? [
+            {
+              id: "loop-studio-builds",
+              name: "Nightly macOS build",
+              paused: false,
+              schedule: {
+                kind: "cron",
+                expression: "0 3 * * *",
+                timezone: "Europe/Oslo",
+                misfire_policy: "run_once",
+              },
+              workspace: "/Users/lars/code/rustcode",
+              prompt: "Build the macOS bundle and report any signing or compile errors.",
+              harness: "claude-code",
+              model: "sonnet-5.5",
+              effort: "medium",
+              readOnly: true,
+              nextDueAt: new Date(Date.now() + 5 * 3_600_000).toISOString(),
+              runs: [],
+            },
+          ]
+        : [
+            {
+              id: "loop-linux-cleanup",
+              name: "Cleanup VPS",
+              paused: false,
+              schedule: {
+                kind: "cron",
+                expression: "0 8 * * MON",
+                timezone: "Europe/Oslo",
+                misfire_policy: "run_once",
+              },
+              workspace: "/home/lars/code/rustcode",
+              prompt: "Check disk usage, stale build caches, and systemd logs; report anything unusual.",
+              harness: "codex",
+              model: "gpt-5.5-codex",
+              effort: "medium",
+              readOnly: true,
+              nextDueAt: new Date(Date.now() + 18 * 3_600_000).toISOString(),
+              runs: [],
+            },
+          ],
+    );
     this.settings = {
       "default-permission-mode": studio ? "ask" : "edits",
       "resume-after-restart": studio,
@@ -147,6 +195,15 @@ export class MockMachine {
     }
     if (frame.method === "session/list")
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { sessions: this.sessions() } })];
+    if (typeof frame.method === "string" && frame.method.startsWith("_rustcode/loops/")) {
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: this.loops.answer(frame.method, obj(frame.params) ?? {}),
+        }),
+      ];
+    }
     if (frame.method === "_rustcode/harnesses")
       return [
         JSON.stringify({

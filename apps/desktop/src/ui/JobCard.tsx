@@ -6,6 +6,7 @@
 
 import { DropdownMenu } from "radix-ui";
 import { projectName } from "../acp/types";
+import { loopKey, runThreadKey } from "../state/fleetLoops";
 import {
   cancelLoopRun,
   type Loop,
@@ -17,6 +18,7 @@ import {
   scheduleInWords,
   setLoopPaused,
 } from "../state/loops";
+import { selfName, useLocalIdentity, useMachines } from "../state/machines";
 import { openSettings } from "../state/store";
 import { selectThread } from "../state/threadOpen";
 import {
@@ -31,7 +33,7 @@ import {
   Trash2,
   Webhook,
 } from "./icons";
-import { FULL_RUN_FORMAT, RunHistory, runThread } from "./JobRuns";
+import { FULL_RUN_FORMAT, RunHistory } from "./JobRuns";
 import {
   cx,
   MenuContent,
@@ -132,6 +134,7 @@ export function JobCard({
   loop,
   now,
   agent,
+  machineLabel,
   onOpen,
   onDuplicate,
   onDelete,
@@ -140,26 +143,31 @@ export function JobCard({
   loop: Loop;
   now: number;
   agent: string;
+  /** Shown in the footer when the network has more than one machine, or for hub-dispatched jobs. */
+  machineLabel?: string;
   onOpen: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   act: (what: string, run: () => Promise<void>) => void;
 }) {
+  const machines = useMachines((s) => s.machines);
+  const local = useLocalIdentity();
+  const localName = local.displayName ?? selfName();
   const state = loopState(loop);
   const running = state === "running";
   const reason = pauseReason(loop);
   const result = lastResult(loop, now);
   const latest = loop.runs[0];
-  const lastThread = running ? undefined : runThread(latest);
+  const lastThread = running ? undefined : runThreadKey(loop, latest, machines, localName);
   const next = !loop.paused && loop.nextDueAt !== undefined ? loop.nextDueAt : undefined;
   const waiting = state === "active" && next === undefined && listening(loop);
   const quiet = latest?.state === "succeeded" && (latest.quiet || latest.silent);
   const togglePause = () =>
-    act(loop.paused ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !loop.paused));
+    act(loop.paused ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !loop.paused, loop.host));
 
   return (
     <li
-      data-loop={loop.id}
+      data-loop={loopKey(loop)}
       className={cx(
         "group/job relative flex min-w-0 flex-col gap-2 rounded-lg bg-surface px-4 pt-3 pb-2 hover:bg-fill-subtle",
         reason && "ring-1 ring-danger/35",
@@ -180,14 +188,17 @@ export function JobCard({
             <IconAction
               label="Stop running job"
               tone="danger"
-              onClick={() => act("Stopped run", () => cancelLoopRun(loop.id))}
+              onClick={() => act("Stopped run", () => cancelLoopRun(loop.id, loop.host))}
             >
               <SquareStop size={14} />
             </IconAction>
           ) : (
             !loop.paused && (
               <span className="opacity-0 transition-opacity group-focus-within/job:opacity-100 group-hover/job:opacity-100">
-                <IconAction label="Run now" onClick={() => act("Started a run", () => runLoopNow(loop.id))}>
+                <IconAction
+                  label="Run now"
+                  onClick={() => act("Started a run", () => runLoopNow(loop.id, loop.host))}
+                >
                   <Play size={14} />
                 </IconAction>
               </span>
@@ -275,7 +286,8 @@ export function JobCard({
         </span>
         <span className="min-w-0 flex-1 truncate">
           {projectName(loop.workspace)}
-          {loop.machine && ` on ${loop.machine}`} · {scheduleInWords(loop.schedule)}
+          {(machineLabel || loop.machine) && ` on ${machineLabel || loop.machine}`} ·{" "}
+          {scheduleInWords(loop.schedule)}
         </span>
         {loop.script && (
           <Tooltip label="Runs a pre-check script first">

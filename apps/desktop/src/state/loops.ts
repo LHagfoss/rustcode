@@ -5,7 +5,8 @@
 import { create } from "zustand";
 import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
-import { request } from "./store";
+import { connectionFor, request, useApp } from "./store";
+import { LOCAL_HOST, threadKey } from "./threadKeys";
 
 /** Failed runs in a row that pause a loop: the daemon's `LOOP_FAILURE_LIMIT`. */
 export const LOOP_FAILURE_LIMIT = 3;
@@ -52,6 +53,8 @@ export interface LoopRun {
 
 export interface Loop {
   id: string;
+  /** The machine whose scheduler owns this job (`""` for this computer, else a paired machine id). */
+  host: string;
   name: string;
   paused: boolean;
   schedule: LoopSchedule;
@@ -75,9 +78,18 @@ export interface Loop {
   runs: LoopRun[];
 }
 
+/** A member joined to a hub, as `_rustcode/loops/list` reports it when the host is a hub. */
+export interface LoopHubMember {
+  hostId: string;
+  name: string;
+  online: boolean;
+}
+
 export interface LoopsSnapshot {
   daemonRunning: boolean;
   loops: Loop[];
+  /** Present when this host is a hub and its gateway answered. */
+  hubMembers?: LoopHubMember[];
 }
 
 const RUN_STATES: readonly LoopRunState[] = [
@@ -144,12 +156,13 @@ function runOf(value: Json): LoopRun | null {
   };
 }
 
-function loopOf(value: Json): Loop | null {
+function loopOf(value: Json, host = LOCAL_HOST): Loop | null {
   const raw = obj(value);
   const id = str(raw?.id);
   if (!raw || !id) return null;
   return {
     id,
+    host,
     name: str(raw.name) || id,
     paused: bool(raw.paused) ?? false,
     schedule: scheduleOf(raw.schedule),
@@ -169,12 +182,25 @@ function loopOf(value: Json): Loop | null {
   };
 }
 
+function hubMembersOf(value: Json | undefined): LoopHubMember[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((entry) => {
+    const raw = obj(entry);
+    const hostId = str(raw?.hostId);
+    const name = str(raw?.name);
+    if (!raw || !hostId || !name) return [];
+    return [{ hostId, name, online: bool(raw.online) ?? false }];
+  });
+}
+
 /** `_rustcode/loops/list`, read leniently: a field the engine left out reads as its default. */
-export function parseLoops(value: Json): LoopsSnapshot {
+export function parseLoops(value: Json, host = LOCAL_HOST): LoopsSnapshot {
   const raw = obj(value) ?? {};
+  const hubMembers = hubMembersOf(raw.hubMembers);
   return {
     daemonRunning: bool(raw.daemonRunning) ?? false,
-    loops: arr(raw.loops).flatMap((loop) => loopOf(loop) ?? []),
+    loops: arr(raw.loops).flatMap((loop) => loopOf(loop, host) ?? []),
+    ...(hubMembers !== undefined ? { hubMembers } : {}),
   };
 }
 
@@ -602,8 +628,10 @@ export function reviewItems(
       const at = run.finishedAt ?? run.startedAt ?? run.scheduledAt;
       if (at < since || reviewed.has(run.id) || isActive(run)) continue;
       if (isFailure(run)) items.push({ loop, run, kind: "failed" });
-      else if (run.state === "succeeded" && run.threadId && isOpen(run.threadId))
-        items.push({ loop, run, kind: "open" });
+      else if (run.state === "succeeded" && run.threadId && !run.machine) {
+        const key = threadKey(loop.host ?? LOCAL_HOST, run.threadId);
+        if (isOpen(key)) items.push({ loop, run, kind: "open" });
+      }
     }
   }
   const at = (item: ReviewItem) => item.run.finishedAt ?? item.run.startedAt ?? item.run.scheduledAt;
@@ -620,8 +648,8 @@ export interface ReviewGroup {
 
 const reviewKey = ({ loop, run, kind }: ReviewItem) =>
   kind === "failed"
-    ? `${loop.id}\u0000failed\u0000${run.error ?? ""}`
-    : `${loop.id}\u0000open\u0000${run.id}`;
+    ? `${loop.host ?? LOCAL_HOST}\u0000${loop.id}\u0000failed\u0000${run.error ?? ""}`
+    : `${loop.host ?? LOCAL_HOST}\u0000${loop.id}\u0000open\u0000${run.id}`;
 
 /**
  * Fold the review list: a job that failed the same way on every run is one row with a count, not one
@@ -786,29 +814,56 @@ export function webhookOf(value: Json): LoopWebhook | null {
   return { url, public: bool(raw.public) ?? false, secret };
 }
 
+function loopRequest<T = Json>(
+  host: string,
+  method: string,
+  params: JsonObject,
+  timeoutMs: number,
+): Promise<T> {
+  if (!host) return request<T>(method, params, timeoutMs);
+  const conn = connectionFor(host);
+  if (!conn) throw new Error("That machine is not connected.");
+  return conn.request<T>(method, params, timeoutMs);
+}
+
+/** Read one machine's jobs and scheduler state. */
+export async function fetchLoopsOn(host = LOCAL_HOST): Promise<LoopsSnapshot> {
+  return parseLoops(await loopRequest(host, Method.loopsList, {}, 20_000), host);
+}
+
+/** Save a loop on `host`; answers its saved id and any newly created webhook URL. */
+export async function saveLoopResult(
+  draft: LoopDraft,
+  host = LOCAL_HOST,
+): Promise<{ id?: string; webhook: LoopWebhook | null }> {
+  const answer = await loopRequest(host, Method.loopsSave, saveParams(draft), 30_000);
+  const id = str(obj(obj(answer)?.loop)?.id);
+  return { id, webhook: webhookOf(answer) };
+}
+
 /** Save a loop; answers its webhook when the save made a new URL, which is shown only then. */
-export async function saveLoop(draft: LoopDraft): Promise<LoopWebhook | null> {
-  return webhookOf(await request(Method.loopsSave, saveParams(draft), 30_000));
+export async function saveLoop(draft: LoopDraft, host = LOCAL_HOST): Promise<LoopWebhook | null> {
+  return (await saveLoopResult(draft, host)).webhook;
 }
 
-export async function setLoopPaused(id: string, paused: boolean): Promise<void> {
-  await request(Method.loopsSetPaused, { id, paused }, 20_000);
+export async function setLoopPaused(id: string, paused: boolean, host = LOCAL_HOST): Promise<void> {
+  await loopRequest(host, Method.loopsSetPaused, { id, paused }, 20_000);
 }
 
-export async function runLoopNow(id: string): Promise<void> {
-  await request(Method.loopsRun, { id }, 20_000);
+export async function runLoopNow(id: string, host = LOCAL_HOST): Promise<void> {
+  await loopRequest(host, Method.loopsRun, { id }, 20_000);
 }
 
-export async function cancelLoopRun(id: string): Promise<void> {
-  await request(Method.loopsCancel, { id }, 20_000);
+export async function cancelLoopRun(id: string, host = LOCAL_HOST): Promise<void> {
+  await loopRequest(host, Method.loopsCancel, { id }, 20_000);
 }
 
-export async function deleteLoop(id: string): Promise<void> {
-  await request(Method.loopsDelete, { id }, 20_000);
+export async function deleteLoop(id: string, host = LOCAL_HOST): Promise<void> {
+  await loopRequest(host, Method.loopsDelete, { id }, 20_000);
 }
 
-export async function startScheduler(): Promise<void> {
-  await request(Method.loopsStartDaemon, {}, 30_000);
+export async function startScheduler(host = LOCAL_HOST): Promise<void> {
+  await loopRequest(host, Method.loopsStartDaemon, {}, 30_000);
 }
 
 // ---------------------------------------------------------------- loop threads in the sidebar
@@ -820,7 +875,7 @@ export async function startScheduler(): Promise<void> {
 export const useLoopThreads = create<{
   byThread: Record<string, string>;
   runs: Record<string, true>;
-  /** The job id each run's thread belongs to, so a run thread can lead back to its job. */
+  /** The job id (or `host/id` for a remote job) each run's thread belongs to, so a run thread can lead back to its job. */
   loopOf: Record<string, string>;
   /** The job the Jobs view opens on: shown expanded, once. */
   reveal: string | null;
@@ -831,6 +886,8 @@ export const useLoopThreads = create<{
   reveal: null,
 }));
 
+const loopThreadKey = (loop: Pick<Loop, "host">, id: string) => threadKey(loop.host ?? LOCAL_HOST, id);
+
 /**
  * The threads fresh runs started, by id. A job that sends every run to one thread leaves that
  * thread out: the user picked it, and it stays in the list.
@@ -839,7 +896,8 @@ export function loopRunThreads(loops: readonly Loop[]): Record<string, true> {
   const runs: Record<string, true> = {};
   for (const loop of loops) {
     for (const run of loop.runs)
-      if (run.threadId && run.threadId !== loop.threadId) runs[run.threadId] = true;
+      if (run.threadId && !run.machine && run.threadId !== loop.threadId)
+        runs[loopThreadKey(loop, run.threadId)] = true;
   }
   return runs;
 }
@@ -859,36 +917,46 @@ export function isJobRunThread(
 export function loopThreadNames(loops: readonly Loop[]): Record<string, string> {
   const byThread: Record<string, string> = {};
   for (const loop of loops) {
-    if (loop.threadId) byThread[loop.threadId] = loop.name;
-    for (const run of loop.runs) if (run.threadId) byThread[run.threadId] = loop.name;
+    if (loop.threadId && !loop.machine) byThread[loopThreadKey(loop, loop.threadId)] = loop.name;
+    for (const run of loop.runs)
+      if (run.threadId && !run.machine) byThread[loopThreadKey(loop, run.threadId)] = loop.name;
   }
   return byThread;
 }
 
-/** Every thread the loops' recorded runs went to, and the loop's id. */
+/** Every thread the loops' recorded runs went to, and the loop's id (prefixed with host when remote). */
 export function loopIdsByThread(loops: readonly Loop[]): Record<string, string> {
   const byThread: Record<string, string> = {};
   for (const loop of loops) {
-    if (loop.threadId) byThread[loop.threadId] = loop.id;
-    for (const run of loop.runs) if (run.threadId) byThread[run.threadId] = loop.id;
+    const id = loop.host ? `${loop.host}/${loop.id}` : loop.id;
+    if (loop.threadId && !loop.machine) byThread[loopThreadKey(loop, loop.threadId)] = id;
+    for (const run of loop.runs)
+      if (run.threadId && !run.machine) byThread[loopThreadKey(loop, run.threadId)] = id;
   }
   return byThread;
 }
 
 /** Keep the sidebar's Loop badges in step with a list the page or a refresh read. */
-export function rememberLoops(snapshot: LoopsSnapshot): void {
+export function rememberLoops(snapshot: LoopsSnapshot | readonly Loop[]): void {
+  const loops = "loops" in snapshot ? snapshot.loops : snapshot;
   useLoopThreads.setState({
-    byThread: loopThreadNames(snapshot.loops),
-    runs: loopRunThreads(snapshot.loops),
-    loopOf: loopIdsByThread(snapshot.loops),
+    byThread: loopThreadNames(loops),
+    runs: loopRunThreads(loops),
+    loopOf: loopIdsByThread(loops),
   });
 }
 
-/** Read the loops once for the badges; a scheduler that is not running leaves them empty. */
+/** Read the loops on this computer and every connected paired machine for the sidebar badges. */
 export async function refreshLoopThreads(): Promise<void> {
-  try {
-    rememberLoops(parseLoops(await request(Method.loopsList, {}, 20_000)));
-  } catch {
-    // No engine yet or no scheduler: no badges, and the next refresh tries again.
+  const hosts = [LOCAL_HOST, ...useApp.getState().connectedHosts.filter(Boolean)];
+  const settled = await Promise.allSettled(hosts.map((host) => fetchLoopsOn(host)));
+  const loops: Loop[] = [];
+  let anySucceeded = false;
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
+      anySucceeded = true;
+      loops.push(...result.value.loops);
+    }
   }
+  if (anySucceeded) rememberLoops(loops);
 }
