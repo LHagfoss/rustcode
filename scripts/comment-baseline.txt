@@ -550,7 +550,7 @@
 71 apps/desktop/src/ui/RightPanel.tsx
 9 apps/desktop/src/ui/RollingNumber.tsx
 5 apps/desktop/src/ui/Rows.test.ts
-50 apps/desktop/src/ui/Rows.tsx
+48 apps/desktop/src/ui/Rows.tsx
 5 apps/desktop/src/ui/ScheduledMessages.tsx
 3 apps/desktop/src/ui/SchemeWarning.tsx
 9 apps/desktop/src/ui/ScopedHarnesses.tsx

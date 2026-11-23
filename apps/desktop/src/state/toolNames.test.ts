@@ -21,6 +21,14 @@ describe("tool names", () => {
       tool: "start_session",
     });
     expect(splitToolName("mcp__mail__search_messages")).toEqual({ server: "mail", tool: "search_messages" });
+    expect(splitToolName("Run mcp_rustcode_list_threads")).toEqual({
+      server: "rustcode",
+      tool: "list_threads",
+    });
+    expect(splitToolName("Run mcp_socraticode_codebase_search")).toEqual({
+      server: "socraticode",
+      tool: "codebase_search",
+    });
   });
 
   test("a dotted name splits only for a server we know", () => {

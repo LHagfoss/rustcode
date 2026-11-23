@@ -10,7 +10,7 @@
 
 import type { Checkpoint } from "../acp/v2";
 import { subagentOf, type TranscriptItem, type TurnCompletion } from "./thread";
-import { orchestrationTool } from "./toolNames";
+import { orchestrationTool, runToolIdent, splitToolName } from "./toolNames";
 
 export interface TurnFold {
   /** Stable per turn: its footer's id, else its first step's. */
@@ -356,6 +356,14 @@ export function inferToolKind(item: { toolKind?: string; title: string }): strin
   // tool, and reads as it always did.
   const called = orchestrationTool(item.title);
   if (called) return ORCHESTRATION_KIND[called]!;
+  const split = splitToolName(item.title);
+  const wrapped = runToolIdent(item.title);
+  if (split.server || wrapped) {
+    const name = split.tool.toLowerCase();
+    if (/(search|find|grep|glob)/.test(name)) return "search";
+    if (/(subagent|agent|delegate)/.test(name)) return "agent";
+    return "other";
+  }
   if (/^(glob|grep|rg|search|find|list|ls)/.test(t)) return "search";
   if (/^(read|cat|view|open)/.test(t)) return "read";
   if (/^(edit|write|apply|patch|create|replace)/.test(t)) return "edit";
@@ -474,13 +482,14 @@ export function groupTools(rows: FoldRow[], open: ReadonlySet<string>): FoldRow[
     } else {
       const key = `tools-${run[0]!.key}`;
       const kinds = run.flatMap((r) => kindsOf(r.item));
+      const toolKinds = kinds.filter((k) => k !== "think");
       const group: ToolGroup = {
         key,
         open: open.has(key),
         count: run.length,
         failed: run.filter((r) => r.item.kind === "tool" && r.item.status === "failed").length,
-        label: toolGroupLabel(kinds),
-        kind: dominantKind(kinds.filter((k) => k !== "think")),
+        label: toolGroupLabel(toolKinds.length ? toolKinds : kinds),
+        kind: dominantKind(toolKinds),
       };
       out.push({ key, group, inFold: row.inFold });
       if (group.open) for (const r of run) out.push({ ...r, inFold: key });

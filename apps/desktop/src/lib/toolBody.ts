@@ -6,6 +6,7 @@
 import type { Json } from "../acp/jsonrpc";
 import { unwrapToolError } from "../state/toolNames";
 import { type AnsiLine, ansiPlainText, hasTerminalCodes, parseAnsi } from "./ansi";
+import { shortenHome } from "./paths";
 import { stripAnsi } from "./toolOutput";
 
 /** One argument as a row: `inline` on the key's line, `text` a wrapped block, `json` its own small block. */
@@ -35,8 +36,9 @@ export type ToolBody =
 const INLINE_MAX = 80;
 
 /** Keys the row already says: the harness's one-line summary of the call. */
-const SUMMARY_KEYS = new Set(["summary"]);
-const COMMAND_KEYS = ["command", "cmd"];
+const SUMMARY_KEYS = new Set(["summary", "toolSummary"]);
+const COMMAND_KEYS = ["command", "cmd", "CommandLine"];
+const EXECUTE_INTERNAL_KEYS = ["WaitMsBeforeAsync"];
 
 function isRecord(input: Json | undefined): input is { [key: string]: Json } {
   return !!input && typeof input === "object" && !Array.isArray(input);
@@ -97,7 +99,8 @@ export function toolBody(
   const output = outputOf(item.output);
   if (kind === "execute") {
     const command = commandOf(item.input) ?? item.detail;
-    const skip = new Set([...SUMMARY_KEYS, ...COMMAND_KEYS, "description"]);
+    const skip = new Set([...SUMMARY_KEYS, ...COMMAND_KEYS, "description", ...EXECUTE_INTERNAL_KEYS]);
+    if (isRecord(item.input) && item.input.IsDaemon === false) skip.add("IsDaemon");
     const args = argRows(item.input, skip);
     const raw = item.output === undefined ? "" : unwrapToolError(item.output) || item.output;
     if (hasTerminalCodes(raw)) {
@@ -120,10 +123,38 @@ export function toolBody(
   if (kind === "search" || kind === "read") {
     return {
       kind: "lookup",
-      args: argRows(item.input),
+      args: kind === "read" ? readArgRows(item.input) : argRows(item.input),
       output,
       outputLabel: kind === "search" ? "Results" : "Content",
     };
   }
   return { kind: "args", args: argRows(item.input), output };
+}
+
+/** Normalizes Antigravity's PascalCase read arguments into concise lowercase rows. */
+function readArgRows(input: Json | undefined): ArgRow[] {
+  if (!isRecord(input) || typeof input.Path !== "string") return argRows(input);
+  const rows: ArgRow[] = [argRow("path", shortenHome(input.Path))];
+  const start = typeof input.StartLine === "number" ? input.StartLine : undefined;
+  const end = typeof input.EndLine === "number" ? input.EndLine : undefined;
+  if (start !== undefined && end !== undefined) rows.push(argRow("lines", `${start}–${end}`));
+  else if (start !== undefined) rows.push(argRow("lines", `${start}+`));
+  else if (end !== undefined) rows.push(argRow("lines", `1–${end}`));
+  if (typeof input.ByteOffset === "number" && input.ByteOffset > 0) {
+    rows.push(argRow("offset", input.ByteOffset));
+  }
+  for (const [key, value] of Object.entries(input)) {
+    if (
+      key === "Path" ||
+      key === "StartLine" ||
+      key === "EndLine" ||
+      key === "ByteOffset" ||
+      SUMMARY_KEYS.has(key) ||
+      value === undefined
+    ) {
+      continue;
+    }
+    rows.push(argRow(key, value));
+  }
+  return rows;
 }

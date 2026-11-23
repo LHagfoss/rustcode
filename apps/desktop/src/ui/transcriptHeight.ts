@@ -41,7 +41,7 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   // The status card: a header line, then two lines a delegate.
   if (item.kind === "status") return 34 + item.rows.length * 44;
   // Thoughts start collapsed; the virtualizer measures the row when expanded.
-  if (item.kind === "thought") return 17;
+  if (item.kind === "thought") return 24;
   // A sent bubble: its pictures and files above it, 8px of padding each way, its text, and the
   // 24px line under it that holds the time (shown on hover, laid out always). A long one folds at
   // `COLLAPSED_MESSAGE_HEIGHT` and keeps its "Show full message" pill, so its estimate never
