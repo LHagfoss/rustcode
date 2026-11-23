@@ -1,3 +1,15 @@
+## [v1.50.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.50.0) - 2026-11-23
+
+### Features
+- Claude Code and Pi threads start again on computers whose npm cache was older than the adapter's dependencies, instead of failing with `ETARGET`. (#4255)
+- Recaps are now per chat: back in a chat after a while, a card says what you asked and where it stands; Settings › General › Chat recaps turns them off. (#4256)
+- Restarting the app no longer flashes old threads from paired machines in the sidebar. (#4257)
+- Jobs: cards with each job's last result, one dialog to edit a job beside its runs, a day-grouped Review that folds repeated failures, and job runs no longer show up in the thread list. (#4258)
+- The side panel is now one Thread info card that rises over the header, with a list of turns that opens a full event log of what the agent did. (#4259)
+- Machines now pair both ways by default and can be allowed back with one click; the Map/List switch is rounded again. (#4260)
+- Settings actions are easier to scan, with shorter labels, rounded selectors and clearer icons. (#4261)
+- The job dialog folds the pre-check script again and explains why only this computer can run a job. (#4262)
+- Smart UI tables and source lists read better, and every pasted image can be previewed and removed before sending. (#4263)
 ## [v1.49.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.49.0) - 2026-11-22
 
 ### Features
