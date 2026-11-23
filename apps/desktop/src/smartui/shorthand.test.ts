@@ -128,6 +128,9 @@ describe("shorthand", () => {
       '<a title="x|y">z</a>',
     ]);
     expect(cells("a | b | c", 2)).toEqual(["a", "b | c"]);
+    expect(inline("Load **`model`** and **use `4-bit`**")).toBe(
+      "Load <b><code>model</code></b> and <b>use <code>4-bit</code></b>",
+    );
     expect(inline("<span class=rc-badge>x</span> `<b>`")).toBe(
       "<span class=rc-badge>x</span> <code>&lt;b&gt;</code>",
     );

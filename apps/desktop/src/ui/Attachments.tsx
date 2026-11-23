@@ -2,6 +2,7 @@
 // QuestionCard): reading pasted, dropped and picked files into attachments under the composer's
 // limits (state/compose.ts), and the strip of thumbnails and chips that shows them with Remove.
 
+import { useState } from "react";
 import { readImage } from "../lib/native";
 import { basename } from "../lib/paths";
 import {
@@ -16,7 +17,7 @@ import { localId } from "../state/thread";
 import { FileText, X } from "./icons";
 import { openLightbox } from "./Lightbox";
 import { PasteChip } from "./PasteChip";
-import { cx, Tooltip } from "./primitives";
+import { cx, Pill, Tooltip } from "./primitives";
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -89,13 +90,6 @@ export async function attachmentsFromPaths(
   return out;
 }
 
-/**
- * How many thumbnails a draft shows before the rest become one count.
- *
- * Past two or three pictures the band is a wall of thumbnails that pushes the field down for
- * nothing: the count says `+3` and opens the whole set, the way a full attachment row collapses in
- * T3 Code (`getRestingComposerImagePreviewCounts`). Files keep their own chips, after them.
- */
 const IMAGE_PREVIEW_LIMIT = 3;
 
 export function AttachmentStrip({
@@ -108,61 +102,58 @@ export function AttachmentStrip({
   /** Its inset: the composer's clears the card's rounder corner. */
   className?: string;
 }) {
-  const pictures = attachments.flatMap((a) =>
-    a.kind === "image" ? [{ src: `data:${a.mimeType};base64,${a.data}`, alt: a.name }] : [],
-  );
+  const [expanded, setExpanded] = useState(false);
   const images = attachments.filter((a) => a.kind === "image");
-  const shown = images.slice(0, IMAGE_PREVIEW_LIMIT);
-  const more = images.slice(IMAGE_PREVIEW_LIMIT);
+  const pictures = images.map((a) => ({ src: `data:${a.mimeType};base64,${a.data}`, alt: a.name }));
+  const shown = expanded ? images : images.slice(0, IMAGE_PREVIEW_LIMIT);
+  const hiddenCount = images.length - IMAGE_PREVIEW_LIMIT;
+  const thumbnails = shown.map((a, index) => (
+    <div key={a.id} className="relative shrink-0 rc-in">
+      <button
+        type="button"
+        aria-label={`Open ${a.name}`}
+        onClick={() => openLightbox(pictures, index)}
+        className="block rounded-lg"
+      >
+        <img
+          src={pictures[index]?.src}
+          alt={a.name}
+          title={a.name}
+          className="size-16 rounded-lg object-cover shadow-1"
+        />
+      </button>
+      {/* Inside the corner, so the strip's scroll never crops it. */}
+      <button
+        type="button"
+        aria-label={`Remove ${a.name}`}
+        onClick={() => onRemove(a.id)}
+        className="rc-glass absolute top-1.5 right-1.5 flex size-[20px] items-center justify-center rounded-full text-fg shadow-1 hover:bg-surface-3"
+      >
+        <X size={12} strokeWidth={2.5} />
+      </button>
+    </div>
+  ));
   return (
     // Its own band above the field, inset from the box's rounder corner and never shrinking, so the
     // thumbnails clear the curve and only the field below scrolls.
     <div className={cx("flex shrink-0 gap-2 overflow-x-auto", className)}>
-      {shown.map((a) =>
-        a.kind === "image" ? (
-          <div key={a.id} className="group relative shrink-0 rc-in">
-            <button
-              type="button"
-              aria-label={`Open ${a.name}`}
-              onClick={() =>
-                openLightbox(
-                  pictures,
-                  pictures.findIndex((p) => p.alt === a.name),
-                )
-              }
-              className="block rounded-lg"
-            >
-              <img
-                src={`data:${a.mimeType};base64,${a.data}`}
-                alt={a.name}
-                title={a.name}
-                className="size-16 rounded-lg object-cover shadow-1"
-              />
-            </button>
-            {/* Inside the corner, so the strip's scroll never crops it. */}
-            <button
-              type="button"
-              aria-label={`Remove ${a.name}`}
-              onClick={() => onRemove(a.id)}
-              className="rc-glass absolute top-1.5 right-1.5 flex size-[20px] items-center justify-center rounded-full text-fg opacity-0 shadow-1 hover:bg-surface-3 group-hover:opacity-100 focus-visible:opacity-100"
-            >
-              <X size={12} strokeWidth={2.5} />
-            </button>
-          </div>
-        ) : null,
-      )}
-      {more.length > 0 && (
-        // The count is a way in, not a dead label: it opens the whole set at the first one it hides.
-        <button
-          key="more"
+      {thumbnails.slice(0, IMAGE_PREVIEW_LIMIT)}
+      {hiddenCount > 0 && (
+        <Pill
           type="button"
-          aria-label={`Show all ${images.length} images`}
-          onClick={() => openLightbox(pictures, IMAGE_PREVIEW_LIMIT)}
-          className="group relative size-16 shrink-0 rounded-lg bg-fill-strong text-callout text-fg-muted shadow-1 rc-in hover:text-fg"
+          aria-label={
+            expanded
+              ? "Show fewer images"
+              : `Show ${hiddenCount} more ${hiddenCount === 1 ? "image" : "images"}`
+          }
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+          className="shrink-0 self-center"
         >
-          +{more.length}
-        </button>
+          {expanded ? "Less" : `+${hiddenCount}`}
+        </Pill>
       )}
+      {thumbnails.slice(IMAGE_PREVIEW_LIMIT)}
       {attachments.map((a) =>
         // A long paste keeps its size in the chip, and its text in the panel it opens.
         a.kind === "text" ? (
