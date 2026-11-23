@@ -660,7 +660,7 @@ rounded rectangle.** Pills (`rounded-full`): labelled buttons (`Pill`, never a
 circle), segmented controls and their items, status chips, toolbar clusters,
 switches, selects, the composer's footer chips, and the chat header's machine
 pill and side-panel toggle (a quiet pill that names the tab it opens, the
-panel icon after the name). A labelled button with an icon always has a fill;
+panel icon before the name). A labelled button with an icon always has a fill;
 `quiet` (no fill at rest) is for text-only actions. Settings' `Action` is
 `Pill`, so every labelled button in the app shares one shape.
 Rounded rectangles from the scale: text fields (`rounded-lg`), icon

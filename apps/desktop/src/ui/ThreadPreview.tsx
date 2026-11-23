@@ -23,7 +23,7 @@ export function ThreadPreview({ threadId }: { threadId: string }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger className="rounded-md px-2 py-1 text-callout text-fg-muted hover:bg-fill">
+      <Dialog.Trigger className="inline-flex h-7 items-center rounded-full px-3 text-callout text-fg-muted hover:bg-fill hover:text-fg">
         Preview
       </Dialog.Trigger>
       {open && <PreviewDialog key={threadId} threadId={threadId} />}
