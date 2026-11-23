@@ -45,6 +45,13 @@ export function keepUnlisted(summary: SessionSummary): void {
   keptUnlistedThreads.set(summary.id, { summary, at: Date.now() });
 }
 
+/** Update a kept unlisted thread's cached summary in place (e.g. after moving it to another folder). */
+export function patchKeptUnlisted(key: string, patch: Partial<SessionSummary>): void {
+  const kept = keptUnlistedThreads.get(key);
+  if (!kept) return;
+  keptUnlistedThreads.set(key, { ...kept, summary: { ...kept.summary, ...patch } });
+}
+
 /**
  * Whether the app still keeps `key`'s row for a list that has not named it: the backstop for a
  * link whose thread is gone (`state/host.ts` `vanished`). An expired row is dropped here.

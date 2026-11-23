@@ -4,7 +4,7 @@ import { isLoaded, isLoading } from "./thread";
 // and the setup a new worktree runs. Split out of state/store.ts; the state these write still lives
 // in the app store.
 
-import { type AcpConnection, type Json, type JsonObject, RpcError, str } from "../acp/jsonrpc";
+import { type AcpConnection, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
 import {
   fallbackHarnessSnapshot,
   type HarnessSnapshot,
@@ -73,6 +73,7 @@ import {
 import { emptyThread, finishLoad, isRunning, localId, type ThreadState } from "./thread";
 import { renameThread } from "./threadActions";
 import { LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
+import { patchKeptUnlisted } from "./threadListGuards";
 import { clearFinished } from "./threadNotices";
 import { sessionById } from "./threadStatus";
 
@@ -376,6 +377,31 @@ export function setDefaultCwd(cwd: string) {
 }
 
 /**
+ * Update a thread's recorded folder across the app's session list, the unlisted-thread guard,
+ * the paired machine's list cache (for remote threads) and the machine-move origin memory.
+ */
+async function applySessionFolder(
+  id: string,
+  patch: Partial<SessionSummary> & { cwd: string },
+  options: { clearThread?: boolean } = {},
+): Promise<void> {
+  const { host, id: sessionId } = splitThreadKey(id);
+  patchKeptUnlisted(id, patch);
+  set((s) => {
+    const sessions = s.sessions.map((x) => (x.id === id ? { ...x, ...patch } : x));
+    if (!options.clearThread) return { sessions };
+    const { [id]: _old, ...threads } = s.threads;
+    return { threads, sessions };
+  });
+  if (host) {
+    const { patchMachineSession } = await import("./machines");
+    patchMachineSession(host, sessionId, patch);
+  }
+  const { rememberMachineOrigin } = await import("./threadMoveMachine");
+  rememberMachineOrigin(sessionId, host, patch.cwd);
+}
+
+/**
  * ⌘O on an open thread: it works in another folder from now on. The engine
  * moves only a closed session, so the thread is closed, moved and loaded
  * again; a running turn has to stop first.
@@ -398,22 +424,24 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
     return false;
   }
   if (thread && get().agent?.closeSession) await closeThread(id);
+  let answer: Json;
   try {
-    await conn.request(Method.sessionMove, { sessionId: splitThreadKey(id).id, cwd }, 10_000);
+    answer = await conn.request(Method.sessionMove, { sessionId: splitThreadKey(id).id, cwd }, 10_000);
   } catch (error) {
     toast(`Could not move the thread: ${errorText(error)}`, "error");
     if (thread) void openThread(id);
     return false;
   }
-  set((s) => {
-    const { [id]: _old, ...threads } = s.threads;
-    return {
-      threads,
-      sessions: s.sessions.map((x) => (x.id === id ? { ...x, cwd, worktree: undefined } : x)),
-    };
-  });
+  const movedCwd = str(obj(answer)?.cwd) || cwd;
+  const { host } = splitThreadKey(id);
+  const remote = projectAt(get().sessions, movedCwd, host)?.remote;
+  await applySessionFolder(
+    id,
+    { cwd: movedCwd, worktree: undefined, repo: undefined, remote, workspaceUnknown: false },
+    { clearThread: true },
+  );
   await openThread(id);
-  toast(`Moved to ${projectName(cwd)}`, "success");
+  toast(`Moved to ${projectName(movedCwd)}`, "success");
   return true;
 }
 
@@ -561,7 +589,7 @@ async function repairBeforeRetry(id: string, conn: AcpConnection, error: unknown
     const problems = Array.isArray(answer.problems) ? answer.problems : [];
     const cwd = typeof answer.cwd === "string" ? answer.cwd : null;
     if (problems.length || !cwd) return null;
-    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, cwd } : x)) }));
+    await applySessionFolder(id, { cwd, workspaceUnknown: false });
     return cwd;
   } catch {
     return null;
@@ -596,13 +624,14 @@ export async function repairThread(id: string): Promise<void> {
   const fixed = list(answer.fixed);
   const problems = list(answer.problems);
   const cwd = typeof answer.cwd === "string" ? answer.cwd : undefined;
-  set((s) => {
-    const { [id]: _old, ...threads } = s.threads;
-    return {
-      threads,
-      sessions: cwd ? s.sessions.map((x) => (x.id === id ? { ...x, cwd } : x)) : s.sessions,
-    };
-  });
+  if (cwd) {
+    await applySessionFolder(id, { cwd, workspaceUnknown: false }, { clearThread: true });
+  } else {
+    set((s) => {
+      const { [id]: _old, ...threads } = s.threads;
+      return { threads };
+    });
+  }
   if (problems.length) {
     toast(problems.join(" "), "error", {
       action: { label: "Move…", run: () => void import("./folders").then((f) => f.chooseFolder(false)) },
