@@ -815,7 +815,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `fg-muted`, with 14px folder icons: the label,
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
-- **Sidebar rows:** project groups inset their threads by 32px. A full-width New thread
+- **Sidebar rows:** project threads line up with their project header; only
+  delegates are indented. A full-width New thread
   button sits above search, and a hairline and the Threads label set it apart from the
   list. A detailed thread row is a fixed grid of two lines, 54px tall, with `rounded-xl`
   (`ui/Sidebar.tsx` `ROW_GRID`), so every row has the same height. Line 1 is the project
@@ -830,8 +831,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   mark with its model name, never cut. The Threads label carries no count and sits close
   above its rows. Each line
   is a left part that truncates and a right part against the row's edge that
-  takes what it needs (at least 76px on line 1, room for the three 24px hover
-  actions), so the right side is never cut and every right edge lines up.
+  takes what it needs (as wide as its state or age at rest, widening to 76px
+  for the three 24px hover actions), so the right side is never cut and every
+  right edge lines up.
   Line 1: the project’s 14px mark, pin, fork or side-chat glyph and the title (`text-body`); at the
   right, one state by `rowStatus` as an icon and a word in its tone (`Working`
   with its clock in `accent`, `Needs you` in `warning`, `Waiting` muted,
@@ -853,7 +855,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   works, waits or is settled recedes to weight 400 at 75%, back to full on
   hover, with its mark at 60% so a column of marks never competes with the
   titles. Hovering swaps line 1's state for Pin, Settle (or Unsettle) and the
-  menu in the same 76px, so nothing shifts. Dragging a row slides the rows it
+  menu; the slot widens to their 76px and the title gives up that room, so
+  nothing is drawn over text. Dragging a row slides the rows it
   passes aside to open the place it would land in, and near the list's top or
   bottom edge the list scrolls (`ui/sidebarDrag.tsx`). Logic:
   `state/sidebarRows.ts` `rowStatus`.
