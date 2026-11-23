@@ -1,3 +1,26 @@
+## [v1.51.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.51.0) - 2026-11-23
+
+### Features
+- Manage scheduled jobs across all paired machines directly without requiring a hub (#4266)
+- Start a top-level thread when asked to open a new thread, and reserve delegation for explicit requests. (#4269)
+- Clean up Antigravity and Gemini tool rows, thought previews, and expanded tool groups in the chat transcript. (#4267)
+- Fix sidebar keeping the old folder group after moving a thread to another machine and changing its directory. (#4268)
+- Fix settled threads waking on restart, stop cached remote threads from flashing at launch, and clean up Settings and popover button/badge hierarchy. (#4265)
+- Keep a faint theme tint on the macOS sidebar at maximum transparency. (#4271)
+- Give thread header buttons more room and show the device in the composer footer. (#4272)
+- Open a running app privately from a paired RustCode desktop or share it with a temporary public link. (#4273)
+- Keep thread properties visible while scrolling turns, and open individual or combined transcripts from the sidebar. (#4274)
+- Open a job to see its run history, schedule, and outcome counts. (#4275)
+- Make desktop thread settling immediate and prevent a stale refresh from bringing settled threads back. (#4277)
+- Preview Markdown headings and continue lists automatically in the chat composer. (#4278)
+- Show matching Settings entries and actions above threads in Cmd+K. (#4281)
+- Fixed paired-machine harness listings to report the calling thread's harness and search models across every listed harness. (#4283)
+- Composer Send, Queue and Stop tooltips open below the box instead of covering the draft. (#4285)
+- The thread header's Preview button is now a pill, matching the other header buttons. (#4291)
+- Hovering a job card's run dots shows how its recent runs went again. (#4292)
+- Icon-only copy buttons in the transcript show what they copy on hover. (#4293)
+- The delegate status card now opens on `/status`; a plain "status" goes to the model. (#4294)
+- The command palette keeps the selected result in view while you arrow through it, and highlights it in the neutral fill. (#4295)
 ## [v1.50.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.50.0) - 2026-11-23
 
 ### Features
