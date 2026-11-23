@@ -544,9 +544,7 @@ export async function refreshMachines(): Promise<void> {
       }
     }
     // A machine this run has not listed yet draws the threads this computer last read from it, so
-    // an offline one keeps its rows (and a reconnect replaces them: `readThreads`). One still
-    // connecting (every machine, as the app starts) waits a moment for its live list instead:
-    // drawn at once, the copy flashed old threads that the live read then took away.
+    // an offline one keeps its rows (and a reconnect replaces them: `readThreads`).
     const state = useMachines.getState();
     const cached: Record<string, SessionSummary[]> = {};
     for (const machine of machines) {
@@ -580,17 +578,13 @@ export async function refreshMachines(): Promise<void> {
   }
 }
 
-/** How long a machine that is connecting gets to list its threads before its copy is drawn. */
 let copyGraceMs = 5_000;
 
-/** Tests only: how long a connecting machine's copy waits. */
 export function setCopyGraceForTests(ms: number): void {
   copyGraceMs = ms;
 }
-/** The machines whose copy waits out `copyGraceMs`, by id. */
 const copyHolds = new Map<string, ReturnType<typeof setTimeout>>();
 
-/** Draws a connecting machine's copy only if it has not connected (or listed) by then. */
 function holdCopy(host: string): void {
   if (copyHolds.has(host)) return;
   copyHolds.set(
