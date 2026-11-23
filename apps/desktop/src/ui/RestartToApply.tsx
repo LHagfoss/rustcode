@@ -2,7 +2,6 @@
 // so the wording, the icon and the "not while a thread runs" rule are the same on every page.
 import { restartEngine, useApp } from "../state/store";
 import { isRunning } from "../state/thread";
-import { RefreshCw } from "./icons";
 import { Action, Row } from "./settingsKit";
 
 export function RestartToApply({ plural, onRestart }: { plural?: boolean; onRestart?: () => void }) {
@@ -20,7 +19,6 @@ export function RestartToApply({ plural, onRestart }: { plural?: boolean; onRest
           void restartEngine();
         }}
       >
-        <RefreshCw size={13} />
         Restart server
       </Action>
     </Row>

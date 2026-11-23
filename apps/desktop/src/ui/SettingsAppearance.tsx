@@ -20,7 +20,7 @@ import {
   useApp,
 } from "../state/store";
 import { ChatBackgroundGroup } from "./ChatBackgroundGroup";
-import { Check, FolderOpen, Minus, Plus } from "./icons";
+import { Check, Minus, Plus } from "./icons";
 import { LiveBackgroundGroup } from "./LiveBackgroundGroup";
 import { cx, noTextHelpers, Switch } from "./primitives";
 import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
@@ -302,11 +302,11 @@ export function AppearancePage() {
           <div className="flex items-center gap-1">
             {hasShell() && (
               <Action size="sm" onClick={() => revealPath(userDir)}>
-                <FolderOpen size={12} /> Open themes folder
+                Open folder
               </Action>
             )}
             <Action size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
-              <Plus size={12} /> New theme
+              New theme
             </Action>
           </div>
         }

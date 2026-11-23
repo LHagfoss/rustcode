@@ -5,7 +5,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { opError, opRunning, useOp } from "../lib/op";
 import { request } from "../state/store";
-import { Plus, Trash2 } from "./icons";
+import { Trash2 } from "./icons";
 import { cx, Tooltip } from "./primitives";
 import { Action, fieldClass, Group, Row, Select } from "./settingsKit";
 
@@ -62,7 +62,6 @@ export function TextGeneration() {
         action={
           !adding && (
             <Action quiet size="sm" onClick={() => setAdding(true)}>
-              <Plus size={12} />
               Add model
             </Action>
           )

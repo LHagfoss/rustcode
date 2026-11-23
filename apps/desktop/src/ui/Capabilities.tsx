@@ -17,19 +17,7 @@ import { failureSummary, mcpCopy, runOnMachines, secretTargetReason } from "../s
 import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { createSkillWithAgent } from "../state/threadOpen";
-import {
-  ChevronRight,
-  Copy,
-  Ellipsis,
-  FilePlus2,
-  FolderOpen,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Search,
-  Sparkles,
-  Trash2,
-} from "./icons";
+import { ChevronRight, Copy, Ellipsis, FolderOpen, Pencil, RefreshCw, Search } from "./icons";
 import { cardInset, cx, MenuContent, menuItem, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
 import { SettingsScopeBar } from "./SettingsScope";
 import {
@@ -255,7 +243,7 @@ export function CapabilitiesPage() {
           />
         </label>
         <Action onClick={() => bump((n) => n + 1)} aria-label="Refresh">
-          <RefreshCw size={12} /> Refresh
+          Refresh
         </Action>
       </div>
       {online.length === 0 && (
@@ -268,7 +256,7 @@ export function CapabilitiesPage() {
           title="Add to all machines"
           action={
             <Action size="sm" onClick={() => setAddingAll(!addingAll)} aria-expanded={addingAll}>
-              <Plus size={12} /> Add server to all
+              Add server to all
             </Action>
           }
           footer="Added to every connected machine. Environment variables and headers stay on this one."
@@ -459,12 +447,12 @@ function McpSection({
                 aria-label="Edit the config file"
                 onClick={() => openPath(data.configPath!)}
               >
-                <Pencil size={12} /> Edit config
+                Edit config
               </Action>
             </Tooltip>
           )}
           <Action size="sm" onClick={() => setAdding(!adding)} aria-expanded={adding}>
-            <Plus size={12} /> Add server
+            Add server
           </Action>
         </div>
       }
@@ -733,7 +721,7 @@ function McpRow({
                 })
               }
             >
-              <Trash2 size={12} /> Remove
+              Remove
             </Action>
           )}
         </div>
@@ -842,12 +830,12 @@ function SkillsSection({
           <div className="flex items-center gap-1">
             <Tooltip label="Start a thread that asks an agent to write the skill with you">
               <Action quiet size="sm" onClick={() => createSkillWithAgent(host)}>
-                <Sparkles size={12} /> Create with agent
+                Create with agent
               </Action>
             </Tooltip>
             {hasShell() && (
               <Action size="sm" onClick={() => setCreating(!creating)} aria-expanded={creating}>
-                <FilePlus2 size={12} /> New skill
+                New skill
               </Action>
             )}
           </div>

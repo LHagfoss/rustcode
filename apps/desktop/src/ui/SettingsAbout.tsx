@@ -28,7 +28,7 @@ import {
   useUpdates,
   waitingReason,
 } from "../state/updates";
-import { Info, RefreshCw } from "./icons";
+import { Info } from "./icons";
 import { cx, Spinner, Switch } from "./primitives";
 import { RestartToApply } from "./RestartToApply";
 import { Action, Chip, Choice, Group, Loading, Row, withCode } from "./settingsKit";
@@ -295,7 +295,7 @@ function SystemSetupGroup() {
       footer={error ?? undefined}
       action={
         <Action size="sm" disabled={running !== null} onClick={() => void run()}>
-          {running === "all" ? <Spinner size={12} /> : <RefreshCw size={12} />}
+          {running === "all" ? <Spinner size={12} /> : null}
           Run again
         </Action>
       }

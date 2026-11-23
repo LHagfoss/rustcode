@@ -49,7 +49,6 @@ import { hasShell } from "../lib/shell";
 import { useClock } from "../lib/useNow";
 import { engineDetail } from "../state/engine";
 import { errorText, request, restartEngine, SERVER_LOG_LINES, toast, useApp } from "../state/store";
-import { Copy, Download, FileText, FolderOpen, Pause, Play, RefreshCw } from "./icons";
 import { cx, noTextHelpers, rowInset } from "./primitives";
 import { Action, ErrorDetails, fieldClass, Group, Literal, PathText, Row, Select } from "./settingsKit";
 
@@ -246,12 +245,8 @@ export function DiagnosticsPage() {
           title="For a GitHub issue"
           subtitle="Secrets, emails and your home folder are taken out. Read it before you post."
         >
-          <Action onClick={() => void saveReport()}>
-            <Download size={13} />
-            Save to file
-          </Action>
+          <Action onClick={() => void saveReport()}>Save</Action>
           <Action prominent onClick={() => void copyReport()}>
-            <Copy size={13} />
             Copy report
           </Action>
         </Row>
@@ -276,14 +271,10 @@ export function DiagnosticsPage() {
                 )
               }
             >
-              <FolderOpen size={13} />
-              Open logs folder
+              Open folder
             </Action>
           )}
-          <Action onClick={() => void restartEngine()}>
-            <RefreshCw size={13} />
-            Restart server
-          </Action>
+          <Action onClick={() => void restartEngine()}>Restart server</Action>
         </Row>
         {server ? (
           <Facts
@@ -444,7 +435,6 @@ function ServerLog() {
             setPaused((p) => (p ? null : [...live]));
           }}
         >
-          {paused ? <Play size={13} /> : <Pause size={13} />}
           {paused ? (waiting ? `Follow (${waiting} new)` : "Follow") : "Pause"}
         </Action>
         <Action
@@ -456,7 +446,6 @@ function ServerLog() {
             )
           }
         >
-          <Copy size={13} />
           Copy
         </Action>
         <Action
@@ -468,8 +457,7 @@ function ServerLog() {
             )
           }
         >
-          <Download size={13} />
-          Save to file
+          Save
         </Action>
       </div>
       <pre
@@ -515,8 +503,7 @@ function ThreadLogGroup() {
             )
           }
         >
-          <FileText size={13} />
-          Open thread log
+          Open log
         </Action>
       </Row>
     </Group>

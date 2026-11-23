@@ -56,7 +56,7 @@ import {
 } from "../state/settingsScope";
 import { errorText, openSettings, toast, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
-import { ArrowLeft, Plus, RefreshCw, Trash2, Unplug } from "./icons";
+import { Trash2 } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import { cx, noTextHelpers, Segments, Spinner, Switch, Tooltip } from "./primitives";
@@ -74,10 +74,7 @@ export function MachineSettingsPage({ id }: { id: string }) {
           title="That machine is no longer saved"
           subtitle="It was removed on this computer. Back to Machines lists the others."
         >
-          <Action onClick={() => openSettings("machines")}>
-            <ArrowLeft size={13} />
-            Machines
-          </Action>
+          <Action onClick={() => openSettings("machines")}>Machines</Action>
         </Row>
       </Group>
     );
@@ -89,7 +86,6 @@ function BackToMachines() {
   return (
     <div className="mb-3 flex items-center gap-2 px-4">
       <Action quiet size="sm" onClick={() => openSettings("machines")}>
-        <ArrowLeft size={13} />
         Machines
       </Action>
     </div>
@@ -115,7 +111,7 @@ function LocalMachineSettings() {
           />
         </Row>
         <Row title="Remote access" subtitle="Manage how other devices connect to this computer.">
-          <Action onClick={() => openSettings("remote")}>Open Remote access</Action>
+          <Action onClick={() => openSettings("remote")}>Remote access</Action>
         </Row>
       </Group>
     </>
@@ -186,11 +182,9 @@ function MachineSettings({ machine }: { machine: Machine }) {
               disabled={machine.state === "connecting" || machine.state === "needsPairing"}
               onClick={() => reconnectMachine(machine)}
             >
-              <RefreshCw size={12} />
               Reconnect
             </Action>
             <Action size="sm" disabled={!online} onClick={() => void disconnectMachine(machine)}>
-              <Unplug size={12} />
               Disconnect
             </Action>
           </div>
@@ -225,7 +219,7 @@ function MachineSettings({ machine }: { machine: Machine }) {
               })
             }
           >
-            <Trash2 size={13} /> Remove machine
+            Remove machine
           </Action>
         </Row>
       </Group>
@@ -289,12 +283,10 @@ function Routes({ machine }: { machine: Machine }) {
       action={
         <div className="flex items-center gap-1">
           <Action quiet size="sm" disabled={probing} onClick={() => void probeMachineRoutes(machine)}>
-            <RefreshCw size={12} />
             {probing ? "Testing…" : "Test routes"}
           </Action>
           {!adding && (
             <Action quiet size="sm" onClick={() => setAdding(true)}>
-              <Plus size={12} />
               Add route
             </Action>
           )}
@@ -479,7 +471,6 @@ function Harnesses({ machine }: { machine: Machine }) {
       title="Harnesses"
       action={
         <Action quiet size="sm" disabled={!online || busy} onClick={() => void check()}>
-          <RefreshCw size={12} />
           {busy ? "Checking…" : "Check"}
         </Action>
       }

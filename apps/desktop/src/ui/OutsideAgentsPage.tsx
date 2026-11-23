@@ -45,7 +45,7 @@ import { useScopeMachines } from "../state/settingsScope";
 import { askConfirm, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
 import { HarnessIcon } from "./HarnessIcon";
-import { Copy, ExternalLink, Globe, KeyRound, Plug } from "./icons";
+import { Globe, Plug } from "./icons";
 import { AgentTile, LevelPoints, SignInCard } from "./OutsideSignIn";
 import { copyText, cx, Switch } from "./primitives";
 import { Action, Chip, fieldClass, Group, Loading, Row, Select } from "./settingsKit";
@@ -295,10 +295,7 @@ function HostedGroup({ host, status, where }: { host: string; status: OutsideSta
       hint="The agent signs in on this machine's page. Approve it there with RustCode, or with a sign-in code."
     >
       <Row title="Connector URL" subtitle={url}>
-        <Action onClick={() => void copyText(url)}>
-          <Copy size={14} />
-          Copy
-        </Action>
+        <Action onClick={() => void copyText(url)}>Copy</Action>
       </Row>
       {/* One block: the pick, its steps and its action, with no rule between them. */}
       <div className="flex flex-col gap-4 px-4 py-4">
@@ -337,7 +334,6 @@ function HostedGroup({ host, status, where }: { host: string; status: OutsideSta
             </ol>
             <div>
               <Action prominent onClick={() => app.run(url)}>
-                {app.id === "claude" ? <ExternalLink size={14} /> : <Copy size={14} />}
                 {app.action}
               </Action>
             </div>
@@ -387,8 +383,7 @@ function PasskeyRows({ host, status }: { host: string; status: OutsideStatus }) 
                 }
               }}
             >
-              <KeyRound size={14} />
-              Add a passkey
+              Add passkey
             </Action>
           </div>
           {link && left > 0 && (
@@ -399,14 +394,8 @@ function PasskeyRows({ host, status }: { host: string; status: OutsideStatus }) 
                   Works once · {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")} left · Do not
                   share it
                 </span>
-                <Action onClick={() => void copyText(link.link)}>
-                  <Copy size={14} />
-                  Copy
-                </Action>
-                <Action onClick={() => void openExternal(link.link)}>
-                  <ExternalLink size={14} />
-                  Open
-                </Action>
+                <Action onClick={() => void copyText(link.link)}>Copy</Action>
+                <Action onClick={() => void openExternal(link.link)}>Open</Action>
               </span>
             </div>
           )}
@@ -455,12 +444,7 @@ function WebAppRows({ host, status, url }: { host: string; status: OutsideStatus
               : undefined
         }
       >
-        {status.webInstalled && signIn && (
-          <Action onClick={() => void openExternal(origin)}>
-            <ExternalLink size={14} />
-            Open
-          </Action>
-        )}
+        {status.webInstalled && signIn && <Action onClick={() => void openExternal(origin)}>Open</Action>}
       </Row>
       {status.webSessions.map((session) => (
         <WebSessionRow key={session.id} host={host} session={session} />
@@ -531,8 +515,7 @@ function CodeRow({ host, status }: { host: string; status: OutsideStatus }) {
               }
             }}
           >
-            <KeyRound size={14} />
-            Get a sign-in code
+            Get code
           </Action>
         </div>
         <LevelPoints level={level} />
@@ -681,7 +664,6 @@ function ConnectGroup({
         }
       >
         <Action prominent disabled={disabled || full || busy} onClick={() => void connect()}>
-          <Plug size={14} />
           {busy ? "Connecting…" : "Connect app"}
         </Action>
       </Row>

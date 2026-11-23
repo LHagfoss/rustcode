@@ -18,7 +18,6 @@ import {
 import { PERMISSION_MODES } from "../state/permissions";
 import { useScopedSetting } from "../state/settingsScope";
 import { useApp } from "../state/store";
-import { Plus } from "./icons";
 import { cx, noTextHelpers } from "./primitives";
 import { Action, fieldClass, Group, Row, Select } from "./settingsKit";
 
@@ -41,7 +40,6 @@ export function DelegatePresetsGroup() {
       action={
         editing === undefined ? (
           <Action quiet size="sm" onClick={() => setEditing(null)}>
-            <Plus size={12} />
             New preset
           </Action>
         ) : undefined

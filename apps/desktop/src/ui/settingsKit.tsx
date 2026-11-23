@@ -366,14 +366,14 @@ export function Row({
 /** A switch setting's value as a row reads it. */
 export const boolLabel = (value: Json | undefined) => (value ? "On" : "Off");
 
-export const fieldClass =
-  "h-7 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
+const fieldSurface = "h-7 bg-fill px-3 text-callout text-fg hover:bg-fill-strong focus:bg-fill-strong";
+
+export const fieldClass = cx(fieldSurface, "rounded-lg placeholder:text-fg-faint");
 
 /**
  * A labelled action in a row: the app's one labelled button (`Pill`), so Settings and the rest of
  * the app share its shape and fills. Secondary by default, `prominent` for the one primary action,
- * `danger` for a destructive one, `quiet` only for a text-only action that rests without a fill
- * (an action with an icon keeps its fill, so it reads as a button).
+ * `danger` for a destructive one, `quiet` for an action that rests without a fill. Prefer a short text label.
  */
 export function Action({
   size = "md",
@@ -422,16 +422,16 @@ export function Select({
       <RadixSelect.Trigger
         aria-label={label}
         className={cx(
-          fieldClass,
-          "inline-flex max-w-[260px] min-w-0 items-center gap-1.5 font-medium outline-none disabled:opacity-40",
+          fieldSurface,
+          "inline-flex max-w-[260px] min-w-0 items-center justify-between gap-2 rounded-full font-medium disabled:opacity-40",
           className,
         )}
       >
         <span className="min-w-0 truncate">
           <RadixSelect.Value />
         </span>
-        <RadixSelect.Icon className="shrink-0 text-fg-faint">
-          <ChevronDown size={12} strokeWidth={2} />
+        <RadixSelect.Icon className="shrink-0 text-fg-muted">
+          <ChevronDown size={12} strokeWidth={2.25} />
         </RadixSelect.Icon>
       </RadixSelect.Trigger>
       <RadixSelect.Portal>

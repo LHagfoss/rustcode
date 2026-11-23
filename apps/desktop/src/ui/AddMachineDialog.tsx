@@ -39,7 +39,7 @@ import {
   versionSkew,
 } from "../state/machines";
 import { toast } from "../state/store";
-import { Check, Copy, KeyRound, Minus, Search, X } from "./icons";
+import { Check, Minus, X } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import {
   ADD_METHODS,
@@ -350,7 +350,7 @@ function CodePane() {
           ) : (
             <div>
               <Action disabled={busy} onClick={() => void createConnectCode()}>
-                {busy ? <Spinner /> : <KeyRound size={13} />}
+                {busy ? <Spinner /> : null}
                 Create connect code
               </Action>
             </div>
@@ -406,7 +406,7 @@ function OfferView({ offer, now }: { offer: ConnectOffer; now: number }) {
       <div className="flex flex-wrap items-center gap-3">
         <code className="select-all font-mono text-title text-fg tabular tracking-wider">{offer.code}</code>
         <Action size="sm" onClick={() => void copyText(offer.code)}>
-          <Copy size={12} /> Copy
+          Copy
         </Action>
         <Action quiet size="sm" onClick={() => void copyText(offer.link)}>
           Copy link
@@ -655,7 +655,7 @@ function AddressPane({ local }: { local: string | null }) {
         </div>
         <div>
           <Action quiet disabled={discovering} onClick={discover}>
-            {discovering ? <Spinner /> : <Search size={13} />}
+            {discovering ? <Spinner /> : null}
             {discovering ? "Looking…" : "Look again"}
           </Action>
         </div>

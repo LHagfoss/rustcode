@@ -12,7 +12,7 @@ import {
   useDismissedProblems,
   visibleProblems,
 } from "../state/settingsAttention";
-import { Copy, Server, SquareTerminal, TriangleAlert, X } from "./icons";
+import { TriangleAlert } from "./icons";
 import { copyText, Spinner } from "./primitives";
 import { Action, withCode } from "./settingsKit";
 
@@ -22,7 +22,7 @@ function Fix({ problem }: { problem: ServerProblem }) {
   if (problem.code === "path-version-mismatch") {
     return (
       <Action size="sm" disabled={linking} onClick={() => void linkCliToApp()}>
-        {linking ? <Spinner /> : <SquareTerminal size={12} />}
+        {linking ? <Spinner /> : null}
         Use this app's version
       </Action>
     );
@@ -30,7 +30,7 @@ function Fix({ problem }: { problem: ServerProblem }) {
   if (problem.code === "path-version-mismatch-server") {
     return (
       <Action size="sm" disabled={installing} onClick={() => void installServer()}>
-        {installing ? <Spinner /> : <Server size={12} />}
+        {installing ? <Spinner /> : null}
         Run the server from this app
       </Action>
     );
@@ -39,7 +39,6 @@ function Fix({ problem }: { problem: ServerProblem }) {
   if (!command) return null;
   return (
     <Action size="sm" aria-label={`Copy ${command}`} onClick={() => void copyText(command)}>
-      <Copy size={12} />
       Copy command
     </Action>
   );
@@ -62,7 +61,6 @@ export function ServerProblems({ problems }: { problems: readonly ServerProblem[
             <div className="flex flex-wrap items-center gap-1.5">
               <Fix problem={problem} />
               <Action size="sm" quiet onClick={() => dismissProblem(problem)}>
-                <X size={12} />
                 Dismiss
               </Action>
             </div>

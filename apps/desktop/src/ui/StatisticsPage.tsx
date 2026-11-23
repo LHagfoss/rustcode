@@ -51,7 +51,7 @@ import { openSettings, useApp } from "../state/store";
 import { formatTokens as compactTokens, relativeAge } from "../state/thread";
 import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
-import { ChevronRight, RefreshCw } from "./icons";
+import { ChevronRight } from "./icons";
 import { cx, Skeleton, Spinner, Tooltip } from "./primitives";
 import {
   ChartSkeleton,
@@ -251,7 +251,7 @@ export function StatisticsPage() {
                 onChange={setPeriod}
               />
               <Action onClick={() => void refresh()} disabled={refreshing}>
-                {refreshing ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
+                {refreshing ? <Spinner size={12} /> : null} Refresh
               </Action>
             </div>
           }
@@ -953,9 +953,7 @@ function StatisticsSkeleton({
                 options={STATS_PERIODS.map((one) => ({ value: one.value, label: one.label }))}
                 onChange={onPeriod}
               />
-              <Action onClick={onRefresh}>
-                <RefreshCw size={12} /> Refresh
-              </Action>
+              <Action onClick={onRefresh}>Refresh</Action>
             </div>
           }
         />
@@ -999,7 +997,7 @@ function NothingRecorded({
       title="Recorded usage"
       action={
         <Action onClick={() => void refresh()} disabled={refreshing}>
-          {refreshing ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
+          {refreshing ? <Spinner size={12} /> : null} Refresh
         </Action>
       }
       footer={error ? <span className="block text-warning">Could not refresh: {error}</span> : undefined}

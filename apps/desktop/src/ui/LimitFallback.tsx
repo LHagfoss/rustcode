@@ -17,7 +17,6 @@ import {
 } from "../state/limitFallback";
 import { useScopedSetting } from "../state/settingsScope";
 import { useApp } from "../state/store";
-import { Plus } from "./icons";
 import { cx, noTextHelpers, Switch } from "./primitives";
 import { ScopedValue } from "./SettingsScope";
 import { Action, fieldClass, Group, Row, Select } from "./settingsKit";
@@ -44,7 +43,6 @@ export function LimitFallbackGroup() {
       action={
         on && editing === undefined ? (
           <Action quiet size="sm" onClick={() => setEditing(null)}>
-            <Plus size={12} />
             New model
           </Action>
         ) : undefined

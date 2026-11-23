@@ -71,7 +71,7 @@ import { AddMachineDialog } from "./AddMachineDialog";
 import { connectionDirection, peerInbound } from "./connectionDirection";
 import { ForwardTakeover } from "./ForwardTakeover";
 import { HubGroup } from "./HubGroup";
-import { ArrowUpCircle, EyeOff, Plus, RefreshCw, Server, Settings } from "./icons";
+import { Settings } from "./icons";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachinesMap, SELF_NODE } from "./MachinesMap";
 import {
@@ -172,12 +172,10 @@ export function MachinesPage() {
           <span className="flex items-center gap-2">
             {outdated.length > 1 && (
               <Action size="sm" onClick={() => updateMachines(outdated)}>
-                <ArrowUpCircle size={12} />
                 Update all ({outdated.length})
               </Action>
             )}
             <Action size="sm" onClick={() => setAddMachineOpen(true)}>
-              <Plus size={12} />
               Add machine
             </Action>
           </span>
@@ -305,7 +303,7 @@ function ThisComputer() {
     >
       {server && !installed && (
         <Action disabled={installing} onClick={() => askInstallServer()}>
-          {installing ? <Spinner /> : <Server size={13} />}
+          {installing ? <Spinner /> : null}
           Install server
         </Action>
       )}
@@ -380,12 +378,8 @@ function KnownMachineRow({ entry, now, local }: { entry: FleetEntry; now: number
       }
       status={row.facts.join(" · ")}
     >
-      <Action onClick={() => setKnownHidden(entry.hostId, true)}>
-        <EyeOff size={12} /> Hide
-      </Action>
-      <Action onClick={() => setAddMachineOpen(true)}>
-        <Plus size={12} /> Pair
-      </Action>
+      <Action onClick={() => setKnownHidden(entry.hostId, true)}> Hide</Action>
+      <Action onClick={() => setAddMachineOpen(true)}> Pair</Action>
     </Row>
   );
 }
@@ -396,10 +390,7 @@ function NoMachines() {
       title="No other machines yet"
       subtitle="Add a computer running RustCode to see its threads here, and to start threads on it."
     >
-      <Action onClick={() => setAddMachineOpen(true)}>
-        <Plus size={13} />
-        Add machine
-      </Action>
+      <Action onClick={() => setAddMachineOpen(true)}>Add machine</Action>
     </Row>
   );
 }
@@ -483,7 +474,7 @@ export function MachineRow({
     >
       {(outdated || updating) && connected && (
         <Action disabled={updating} onClick={() => void updateMachine(machine)}>
-          {updating ? <Spinner /> : <ArrowUpCircle size={12} />}
+          {updating ? <Spinner /> : null}
           {updating ? "Updating…" : update?.phase === "failed" ? "Retry update" : "Update"}
         </Action>
       )}
@@ -491,7 +482,7 @@ export function MachineRow({
         <PairAgainAction machine={machine} />
       ) : recovery ? (
         <Action onClick={() => reconnectMachine(machine)}>
-          <RefreshCw size={12} /> {status.kind === "connecting" ? "Retry now" : recoveryLabel(recovery)}
+          {status.kind === "connecting" ? "Retry now" : recoveryLabel(recovery)}
         </Action>
       ) : null}
       <MachineSettingsButton name={name} onClick={() => openMachineSettings(machine.id)} />
@@ -511,7 +502,7 @@ function PairAgainAction({ machine }: { machine: Machine }) {
         setAddMachineOpen(true);
       }}
     >
-      <RefreshCw size={12} /> Pair again
+      Pair again
     </Action>
   );
 }

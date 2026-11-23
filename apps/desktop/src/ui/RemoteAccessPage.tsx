@@ -42,7 +42,7 @@ import {
 import { remainingPairingSeconds } from "../state/remotePairing";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { connectionDirection, peerOutbound } from "./connectionDirection";
-import { Copy, RefreshCw, Smartphone, WifiOff } from "./icons";
+import { Smartphone, WifiOff } from "./icons";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
 import { ServerProblems } from "./ServerProblems";
@@ -237,7 +237,7 @@ export function RemoteAccessPage() {
               aria-label="Copy the gateway address"
               onClick={() => void copyText(gateway.advertisedAddress!)}
             >
-              <Copy size={12} /> Copy
+              Copy
             </Action>
           )}
           <Chip tone={gateway?.connected ? "ok" : enabled ? "warn" : "idle"}>
@@ -259,8 +259,8 @@ export function RemoteAccessPage() {
           }
         >
           <Action prominent disabled={unavailable || busy !== null || pending} onClick={pair}>
-            {pending ? <Spinner /> : <Smartphone size={13} />}
-            Show pairing code
+            {pending ? <Spinner /> : null}
+            Pair device
           </Action>
         </Row>
       </Group>
@@ -273,8 +273,7 @@ export function RemoteAccessPage() {
               <span className="font-medium">{phonePairing.name}</span> can now open the shared threads.
             </p>
             <Action disabled={busy !== null} onClick={pair}>
-              <Smartphone size={12} />
-              Pair another device
+              Pair device
             </Action>
           </div>
         </Group>
@@ -358,7 +357,7 @@ export function RemoteAccessPage() {
                 aria-label={`Copy the route ${route.address}`}
                 onClick={() => void copyText(route.address)}
               >
-                <Copy size={12} /> Copy
+                Copy
               </Action>
             </Row>
           ))
@@ -552,7 +551,7 @@ export function PairingCard({
                     aria-label="Copy the pairing code"
                     onClick={() => void copyText(offer.code)}
                   >
-                    <Copy size={12} /> Copy
+                    Copy
                   </Action>
                 </div>
               </div>
@@ -570,7 +569,7 @@ export function PairingCard({
                 Dismiss
               </Action>
               <Action quiet size="sm" disabled={busy} onClick={onRenew}>
-                {busy ? <Spinner /> : <RefreshCw size={12} />}
+                {busy ? <Spinner /> : null}
                 New code
               </Action>
             </div>
@@ -596,9 +595,7 @@ export function PairingCard({
               or turn remote access off for this computer.
             </p>
             <div className="flex items-center gap-2">
-              <Action onClick={onRenew}>
-                <RefreshCw size={12} /> Pair again
-              </Action>
+              <Action onClick={onRenew}>Pair again</Action>
               <Action onClick={onStop}>Turn off remote access</Action>
             </div>
           </div>
