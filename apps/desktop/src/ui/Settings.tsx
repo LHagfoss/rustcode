@@ -78,9 +78,7 @@ import {
   Network,
   Palette,
   Plug,
-  Plus,
   RefreshCw,
-  RotateCcw,
   Search,
   ShieldCheck,
   Smartphone,
@@ -309,7 +307,7 @@ function GeneralPage() {
           subtitle="What threads may do without asking, by default and per project."
           status={permissionLabel(defaultAccess.value ?? SETTINGS_DEFAULTS.defaultPermissionMode)}
         >
-          <Action onClick={() => openSettings("permissions")}>Open Permissions</Action>
+          <Action onClick={() => openSettings("permissions")}>Permissions</Action>
         </Row>
       </Group>
       <Group title="Threads">
@@ -698,7 +696,6 @@ function AgentsPage() {
                 </button>
               </Tooltip>
               <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
-                <Plus size={12} />
                 Add harness
               </Action>
             </div>
@@ -1048,7 +1045,7 @@ export function SettingsNav() {
                     s.id === section ? "bg-fill text-fg" : "text-fg-muted hover:bg-fill hover:text-fg",
                   )}
                 >
-                  <s.icon size={16} className="shrink-0" />
+                  <s.icon size={16} strokeWidth={1.85} className="shrink-0" />
                   <span className="min-w-0 flex-1 truncate">{s.label}</span>
                   {attention[s.id] && (
                     <span
@@ -1169,7 +1166,6 @@ function PanelHeader({ label }: { label: string }) {
       </span>
       {resets.count > 0 && (
         <Action size="sm" onClick={() => resets.restore()}>
-          <RotateCcw size={13} />
           Restore defaults
         </Action>
       )}

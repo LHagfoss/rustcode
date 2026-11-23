@@ -57,7 +57,7 @@ import {
 } from "../state/store";
 import { HarnessCommandFields } from "./AddHarness";
 import { HarnessIcon } from "./HarnessIcon";
-import { Check, ChevronRight, Minus, Plus, RefreshCw, SquareTerminal, X } from "./icons";
+import { Check, ChevronRight, Minus, Plus, RefreshCw, X } from "./icons";
 import { CopyButton } from "./Markdown";
 import { cx, noTextHelpers, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, Chip, Choice, ErrorDetails, PathText, Select, type SelectOption } from "./settingsKit";
@@ -101,7 +101,6 @@ function SignIn({ harness }: { harness: Harness }) {
           </div>
           {canOpenTerminal() && (
             <Action onClick={() => void openInTerminal(command)} className="self-start">
-              <SquareTerminal size={13} />
               Open in Terminal
             </Action>
           )}

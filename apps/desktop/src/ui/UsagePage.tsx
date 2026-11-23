@@ -56,7 +56,6 @@ import {
 } from "../state/usagePage";
 import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
-import { RefreshCw } from "./icons";
 import { Skeleton, Spinner, Tooltip } from "./primitives";
 import { Action, Chip, Choice, Group, Row, SectionTitle } from "./settingsKit";
 
@@ -404,7 +403,7 @@ export function UsagePage() {
           ) : null}
         </span>
         <Action onClick={refreshAll} disabled={busy}>
-          {busy ? <Spinner size={12} /> : <RefreshCw size={12} />} Refresh
+          {busy ? <Spinner size={12} /> : null} Refresh
         </Action>
       </div>
       {includesLocal && (

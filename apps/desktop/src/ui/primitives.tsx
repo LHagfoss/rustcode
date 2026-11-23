@@ -31,7 +31,8 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 
 /** The running indicator: a 12px arc trimmed to 70%, one turn per second. */
 export function Spinner({ size = 12, className }: { size?: number; className?: string }) {
-  const r = size / 2 - 1;
+  const strokeWidth = size >= 12 ? 2.25 : 1.75;
+  const r = (size - strokeWidth) / 2;
   const c = 2 * Math.PI * r;
   return (
     <svg
@@ -48,7 +49,7 @@ export function Spinner({ size = 12, className }: { size?: number; className?: s
         r={r}
         fill="none"
         stroke="currentColor"
-        strokeWidth={1.75}
+        strokeWidth={strokeWidth}
         strokeLinecap="round"
         strokeDasharray={`${c * 0.7} ${c}`}
       />

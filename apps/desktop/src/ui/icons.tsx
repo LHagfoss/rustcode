@@ -206,7 +206,7 @@ export const ArrowRight = (props: IconProps) => (
 );
 export const ArrowUp = (props: IconProps) => <Rounded name="ArrowUp" icon={ArrowUp02Icon} {...props} />;
 export const ArrowUpCircle = (props: IconProps) => (
-  <Rounded name="ArrowUpCircle" icon={CircleArrowUp01Icon} {...props} />
+  <Rounded name="ArrowUpCircle" icon={CircleArrowUp01Icon} strokeWidth={2} {...props} />
 );
 export const ArrowUpRight = (props: IconProps) => (
   <Rounded name="ArrowUpRight" icon={ArrowUpRight01Icon} {...props} />
@@ -414,10 +414,14 @@ export const PinOff = (props: IconProps) => <Rounded name="PinOff" icon={PinOffI
 export const Play = (props: IconProps) => <Rounded name="Play" icon={PlayIcon} {...props} />;
 export const Plug = (props: IconProps) => <Rounded name="Plug" icon={Plug01Icon} {...props} />;
 export const Plus = (props: IconProps) => <Rounded name="Plus" icon={PlusSignIcon} {...props} />;
-export const RefreshCw = (props: IconProps) => <Rounded name="RefreshCw" icon={RefreshIcon} {...props} />;
+export const RefreshCw = (props: IconProps) => (
+  <Rounded name="RefreshCw" icon={RefreshIcon} strokeWidth={2} {...props} />
+);
 // Reset, restart, retry and refresh are one glyph, the arrow circle: three near-identical arrows
 // read as three different actions.
-export const RotateCcw = (props: IconProps) => <Rounded name="RotateCcw" icon={RefreshIcon} {...props} />;
+export const RotateCcw = (props: IconProps) => (
+  <Rounded name="RotateCcw" icon={RefreshIcon} strokeWidth={2} {...props} />
+);
 export const Repeat = (props: IconProps) => <Rounded name="Repeat" icon={RepeatIcon} {...props} />;
 export const RotateCw = (props: IconProps) => <Rounded name="RotateCw" icon={RefreshIcon} {...props} />;
 export const Rows3 = (props: IconProps) => <Rounded name="Rows3" icon={LayoutThreeRowIcon} {...props} />;
