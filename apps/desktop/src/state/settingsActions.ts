@@ -22,7 +22,7 @@ import {
   MIN_DELEGATES_TOTAL,
   WAKE_BATCH_MAX_S,
 } from "./orchestration";
-import { parseRecapHours } from "./recap";
+import { parseRecapMinutes, pruneSeen } from "./recap";
 import { useApp } from "./store";
 
 const get = () => useApp.getState();
@@ -45,41 +45,43 @@ export function setNotificationsBackgroundOnly(on: boolean) {
   store(STORAGE.notificationsBackgroundOnly, on ? "1" : "0");
 }
 
-export function setRecapWhileAway(on: boolean) {
-  set({ recapWhileAway: on, ...(on ? {} : { recapSince: null }) });
-  store(STORAGE.recapWhileAway, on ? "1" : "0");
+export function setChatRecaps(on: boolean) {
+  set({ chatRecaps: on, ...(on ? {} : { chatRecap: null }) });
+  store(STORAGE.chatRecaps, on ? "1" : "0");
 }
 
-export function setRecapHours(hours: number) {
-  const kept = parseRecapHours(String(hours));
-  set({ recapHours: kept });
-  store(STORAGE.recapHours, String(kept));
+export function setRecapMinutes(minutes: number) {
+  const kept = parseRecapMinutes(String(minutes));
+  set({ recapMinutes: kept });
+  store(STORAGE.recapMinutes, String(kept));
 }
 
-/** A return after a long enough break: the recap starts at the moment the user left. */
-export function beginRecap(since: number) {
-  set({ recapSince: since, recapDismissed: false });
+/** A return to a chat after a long enough gap: its recap, from when it was last seen. */
+export function openChatRecap(threadId: string, since: number) {
+  set({ chatRecap: { threadId, since } });
 }
 
-/** Puts the card away until the next break; the inbox keeps a row that brings it back. */
-export function dismissRecap() {
-  set({ recapDismissed: true });
+/** Puts the chat's recap away until the next return after a gap. */
+export function dismissChatRecap() {
+  set({ chatRecap: null });
 }
 
-export function showRecap() {
-  set({ recapDismissed: false });
+/** When each chat was last on screen, from app storage. */
+export function threadSeenAt(): Record<string, number> {
+  const raw = stored(STORAGE.threadSeen);
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    return pruneSeen(parsed as Record<string, number>);
+  } catch {
+    return {};
+  }
 }
 
-/** When the app was last used, from app storage; 0 on a first run. */
-export function lastActiveAt(): number {
-  const raw = stored(STORAGE.lastActive);
-  const n = raw === null ? Number.NaN : Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-/** Records that the app was used now, so a later return measured from here. */
-export function markActive(now = Date.now()) {
-  store(STORAGE.lastActive, String(now));
+/** Records when each chat was last on screen. */
+export function storeThreadSeen(seen: Readonly<Record<string, number>>) {
+  store(STORAGE.threadSeen, JSON.stringify(pruneSeen(seen)));
 }
 
 export type AppFont = "inter" | "system" | "rounded";

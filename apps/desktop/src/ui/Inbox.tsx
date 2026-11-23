@@ -21,25 +21,14 @@ import {
   retryThread,
   selectThread,
   setView,
-  showRecap,
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { orderedOptions, QuestionCard } from "./AttentionCards";
-import {
-  ArrowUpRight,
-  CircleAlert,
-  CircleCheck,
-  CornerDownRight,
-  Hand,
-  MessageCircleQuestion,
-  Sparkles,
-  X,
-} from "./icons";
+import { CircleAlert, CircleCheck, CornerDownRight, Hand, MessageCircleQuestion, X } from "./icons";
 import { ViewHeader } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
 import { cx, Kbd, Pill, Tooltip } from "./primitives";
-import { WhileAwayCard } from "./WhileAway";
 
 /** One thing a row offers, in the order the digit keys pick it. */
 interface RowAction {
@@ -361,12 +350,10 @@ export function NeedsYouRow({ threadIds }: { threadIds: ReadonlySet<string> }) {
 
 /**
  * The inbox itself. It keeps one row lit for the keyboard, folds answered rows
- * into Decided, and holds the away recap at its top while one is due.
+ * into Decided.
  */
 export function Inbox() {
   const items = useInboxItems();
-  const recapSince = useApp((s) => s.recapSince);
-  const recapDismissed = useApp((s) => s.recapDismissed);
   const now = useClock();
   const groups = useMemo(() => groupInbox(items), [items]);
   // Where each group's first row sits in the flat list the keyboard moves through.
@@ -483,19 +470,6 @@ export function Inbox() {
       </ViewHeader>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-10 sm:px-12">
         <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-4 pt-1">
-          <WhileAwayCard />
-          {recapSince !== null && recapDismissed && (
-            <button
-              type="button"
-              onClick={showRecap}
-              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
-            >
-              <Sparkles size={13} className="shrink-0 text-accent" />
-              <span className="min-w-0 flex-1">Show the while-you-were-away recap</span>
-              <ArrowUpRight size={12} className="shrink-0 text-fg-faint" />
-            </button>
-          )}
-
           {items.length > 0 ? (
             <section aria-label="Waiting on you" className="flex flex-col">
               <span className="px-2 pb-1 font-medium text-caption text-fg-faint">Waiting on you</span>
