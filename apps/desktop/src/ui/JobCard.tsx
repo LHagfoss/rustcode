@@ -321,7 +321,7 @@ export function JobCard({
               {loop.runs.length} {loop.runs.length === 1 ? "run" : "runs"}
             </span>
           )}
-          <RunHistory runs={loop.runs} />
+          <RunHistory runs={loop.runs} onOpen={onOpen} />
         </span>
         <span className="shrink-0">
           Run history <ArrowUpRight size={12} className="inline" />

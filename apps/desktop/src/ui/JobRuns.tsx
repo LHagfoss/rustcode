@@ -44,20 +44,33 @@ export function runText(run: LoopRun): string {
 const HISTORY_DOTS = 5;
 
 /** The last few runs as dots, oldest first. */
-export function RunHistory({ runs }: { runs: readonly LoopRun[] }) {
+export function RunHistory({ runs, onOpen }: { runs: readonly LoopRun[]; onOpen?: () => void }) {
   const recent = runs.slice(0, HISTORY_DOTS).reverse();
   if (!recent.length) return <span className="text-caption text-fg-faint">No runs yet</span>;
   const failed = recent.filter(isFailedRun).length;
   const label = failed
     ? `${failed} of the last ${recent.length} runs failed`
     : `The last ${recent.length} runs, oldest first`;
+  const dots = recent.map((run) => (
+    <span key={run.id} className={cx("size-1.5 rounded-full", runDotTint(run))} />
+  ));
   return (
     <Tooltip label={label}>
-      <span role="img" aria-label={label} className="flex shrink-0 items-center gap-0.5">
-        {recent.map((run) => (
-          <span key={run.id} className={cx("size-1.5 rounded-full", runDotTint(run))} />
-        ))}
-      </span>
+      {onOpen ? (
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={label}
+          onClick={onOpen}
+          className="relative flex shrink-0 items-center gap-0.5 py-1"
+        >
+          {dots}
+        </button>
+      ) : (
+        <span role="img" aria-label={label} className="flex shrink-0 items-center gap-0.5">
+          {dots}
+        </span>
+      )}
     </Tooltip>
   );
 }
