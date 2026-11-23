@@ -1014,7 +1014,12 @@
 2 rustcode/engine/src/tools/misc/web.rs
 44 rustcode/engine/src/tools/mod.rs
 2 rustcode/engine/src/tools/scheduled_jobs_tests.rs
-190 rustcode/engine/src/tools/schema.rs
+42 rustcode/engine/src/tools/schema.rs
+5 rustcode/engine/src/tools/schema/mcp_read_classification_tests.rs
+90 rustcode/engine/src/tools/schema/mcp_selection.rs
+23 rustcode/engine/src/tools/schema/prompts.rs
+5 rustcode/engine/src/tools/schema/response_limit_tests.rs
+25 rustcode/engine/src/tools/schema/schema_budget_tests.rs
 7 rustcode/engine/src/tools/search.rs
 93 rustcode/engine/src/tools/tests.rs
 156 rustcode/engine/src/tools/tests/protocol.rs
