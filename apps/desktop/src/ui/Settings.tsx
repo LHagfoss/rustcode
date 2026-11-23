@@ -1087,6 +1087,7 @@ export function SettingsPage() {
   const current = PAGES.find((s) => s.id === section) ?? PAGES[0]!;
   const fallbackLabel = section === "machines" && machine ? "Machine settings" : current.label;
   const [pageMeta, setPageMeta] = useState<SettingsPageMeta | null>(null);
+  const [titleSlot, setTitleSlot] = useState<HTMLDivElement | null>(null);
   const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null);
   const mainRef = useRef<HTMLElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
@@ -1148,7 +1149,7 @@ export function SettingsPage() {
   return (
     <section aria-label="Settings" data-tab-free className="relative flex min-w-0 flex-1 flex-col bg-bg">
       <RowResets>
-        <SettingsHeaderProvider slot={headerSlot} setMeta={setPageMeta}>
+        <SettingsHeaderProvider titleSlot={titleSlot} headerSlot={headerSlot} setMeta={setPageMeta}>
           <PanelHeader
             title={displayTitle}
             back={pageMeta?.back}
@@ -1169,11 +1170,13 @@ export function SettingsPage() {
               <div
                 ref={titleRef}
                 data-setting={typeof displayTitle === "string" ? displayTitle : undefined}
-                className="mb-6 px-4"
+                data-hidden={scrolled ? "true" : "false"}
+                className="rc-settings-page-title mb-6 px-4"
               >
                 {pageMeta?.back && (
                   <button
                     type="button"
+                    tabIndex={scrolled ? -1 : 0}
                     onClick={pageMeta.back.onClick}
                     className="mb-1 inline-flex items-center gap-1 font-medium text-callout text-fg-muted hover:text-fg"
                   >
@@ -1181,9 +1184,14 @@ export function SettingsPage() {
                     {pageMeta.back.label}
                   </button>
                 )}
-                <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="font-semibold text-fg text-title tracking-tight">{displayTitle}</h1>
-                  {pageMeta?.badge}
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <h1 className="min-w-0 truncate font-semibold text-fg text-title tracking-tight">
+                      {displayTitle}
+                    </h1>
+                    {pageMeta?.badge}
+                  </div>
+                  <PageActions slotRef={setTitleSlot} active={!scrolled} />
                 </div>
               </div>
               <Suspense fallback={<Loading error={null} />}>
@@ -1215,11 +1223,39 @@ export function SettingsPage() {
   );
 }
 
+function PageActions({ slotRef, active }: { slotRef: (el: HTMLDivElement | null) => void; active: boolean }) {
+  const save = useSettingsSave();
+  const resets = useRowResets();
+  const statusText = save.pending
+    ? "Saving…"
+    : save.error
+      ? `Could not save: ${save.error}`
+      : save.saved
+        ? "Saved"
+        : "";
+  return (
+    <div
+      aria-hidden={!active || undefined}
+      inert={!active || undefined}
+      className="flex shrink-0 items-center gap-2"
+    >
+      <span
+        role={active ? "status" : undefined}
+        className={statusText ? "text-caption text-fg-muted" : "sr-only"}
+      >
+        {statusText}
+      </span>
+      {resets.count > 0 && <Action onClick={() => resets.restore()}>Restore defaults</Action>}
+      <div ref={slotRef} className="flex shrink-0 items-center gap-2 empty:hidden" />
+    </div>
+  );
+}
+
 /**
  * The Settings floating glass header — the same `.rc-header-glass` chrome as thread screens,
- * aligned with the 760px content column below. Its title stays hidden until the large in-page
- * heading scrolls behind it, then glides in smoothly; right-side actions stay anchored to the
- * content's right rail for every page's primary button and "Restore defaults".
+ * aligned with the 760px content column below. Its breadcrumb (`Settings / <page>`) and actions
+ * stay hidden while the large in-page title row is in view, then glide in smoothly together once
+ * the title row scrolls behind it.
  */
 function PanelHeader({
   title,
@@ -1236,8 +1272,6 @@ function PanelHeader({
   const lightsInset = useLightsInset();
   const controlsInset = windowControlsInset(appPlatform());
   const maximizes = appPlatform() === "windows";
-  const save = useSettingsSave();
-  const resets = useRowResets();
   return (
     <header
       data-tauri-drag-region
@@ -1254,32 +1288,35 @@ function PanelHeader({
         </div>
       )}
       <div
+        aria-hidden={!scrolled}
+        inert={!scrolled || undefined}
+        data-shown={scrolled ? "true" : "false"}
         data-tauri-drag-region
-        className="mx-auto flex h-full w-full max-w-[760px] items-center gap-3 px-8"
+        className="rc-settings-header-bar mx-auto flex h-full w-full max-w-[760px] items-center gap-3 px-8"
         style={
           sidebarHidden
             ? { paddingLeft: `max(2rem, calc(${lightsInset}px + 116px - max(0px, (100cqw - 760px) / 2)))` }
             : undefined
         }
       >
-        <div
-          aria-hidden={!scrolled}
-          data-shown={scrolled ? "true" : "false"}
-          data-tauri-drag-region
-          className="rc-settings-header-title flex min-w-0 flex-1 items-center gap-1.5"
-        >
+        <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
+          <span className="shrink-0 font-medium text-body text-fg-muted" data-tauri-drag-region>
+            Settings
+          </span>
+          <span aria-hidden className="shrink-0 text-body text-fg-faint" data-tauri-drag-region>
+            /
+          </span>
           {back && (
             <>
               <button
                 type="button"
                 tabIndex={scrolled ? 0 : -1}
                 onClick={back.onClick}
-                className="inline-flex shrink-0 items-center gap-1 font-medium text-body text-fg-muted hover:text-fg"
+                className="shrink-0 font-medium text-body text-fg-muted hover:text-fg"
               >
-                <ArrowLeft size={13} />
                 {back.label}
               </button>
-              <span aria-hidden className="shrink-0 text-body text-fg-faint">
+              <span aria-hidden className="shrink-0 text-body text-fg-faint" data-tauri-drag-region>
                 /
               </span>
             </>
@@ -1288,19 +1325,7 @@ function PanelHeader({
             {title}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span role="status" className="text-caption text-fg-muted">
-            {save.pending
-              ? "Saving…"
-              : save.error
-                ? `Could not save: ${save.error}`
-                : save.saved
-                  ? "Saved"
-                  : ""}
-          </span>
-          {resets.count > 0 && <Action onClick={() => resets.restore()}>Restore defaults</Action>}
-          <div ref={onSlotRef} className="flex shrink-0 items-center gap-2 empty:hidden" />
-        </div>
+        <PageActions slotRef={onSlotRef} active={scrolled} />
       </div>
     </header>
   );

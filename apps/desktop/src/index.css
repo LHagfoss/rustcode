@@ -1495,8 +1495,8 @@
 .rc-fade-in {
   animation: rc-fade 400ms ease-out;
 }
-/* Settings header title: hidden while the large page title is in view, glides in once scrolled past. */
-.rc-settings-header-title {
+/* Settings header bar and in-page title handoff: hidden at top, glides in once scrolled past. */
+.rc-settings-header-bar {
   opacity: 0;
   transform: translateY(6px);
   pointer-events: none;
@@ -1504,10 +1504,17 @@
     opacity 180ms var(--ease-snappy),
     transform 200ms var(--ease-snappy);
 }
-.rc-settings-header-title[data-shown="true"] {
+.rc-settings-header-bar[data-shown="true"] {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
+}
+.rc-settings-page-title {
+  transition: opacity 150ms var(--ease-snappy);
+}
+.rc-settings-page-title[data-hidden="true"] {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /*

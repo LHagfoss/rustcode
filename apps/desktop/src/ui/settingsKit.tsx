@@ -253,34 +253,42 @@ export interface SettingsPageMeta {
 }
 
 interface SettingsHeaderContextValue {
-  slot: HTMLDivElement | null;
+  titleSlot: HTMLDivElement | null;
+  headerSlot: HTMLDivElement | null;
   setMeta: (meta: SettingsPageMeta | null) => void;
 }
 
 const SettingsHeaderContext = createContext<SettingsHeaderContextValue>({
-  slot: null,
+  titleSlot: null,
+  headerSlot: null,
   setMeta: () => undefined,
 });
 
-/** Connects a Settings page to its floating header's right-side action slot and page title. */
+/** Connects a Settings page to its title-row and floating-header action slots and page title. */
 export function SettingsHeaderProvider({
-  slot,
+  titleSlot,
+  headerSlot,
   setMeta,
   children,
 }: {
-  slot: HTMLDivElement | null;
+  titleSlot: HTMLDivElement | null;
+  headerSlot: HTMLDivElement | null;
   setMeta: (meta: SettingsPageMeta | null) => void;
   children: ReactNode;
 }) {
-  const value = useMemo(() => ({ slot, setMeta }), [slot, setMeta]);
+  const value = useMemo(() => ({ titleSlot, headerSlot, setMeta }), [titleSlot, headerSlot, setMeta]);
   return <SettingsHeaderContext value={value}>{children}</SettingsHeaderContext>;
 }
 
-/** Places a Settings page's primary button(s) in the floating Settings header, aligned with content. */
+/** Places a Settings page's primary button(s) on the title line and glides them into the header on scroll. */
 export function SettingsHeaderActions({ children }: { children: ReactNode }) {
-  const { slot } = useContext(SettingsHeaderContext);
-  if (!slot) return null;
-  return createPortal(children, slot);
+  const { titleSlot, headerSlot } = useContext(SettingsHeaderContext);
+  return (
+    <>
+      {titleSlot ? createPortal(children, titleSlot) : null}
+      {headerSlot ? createPortal(children, headerSlot) : null}
+    </>
+  );
 }
 
 /** Lets a sub-page override the Settings large title and header title (cleared on unmount). */
