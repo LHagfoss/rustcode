@@ -896,7 +896,7 @@
 5 rustcode/engine/src/network/turn/workspace_note.rs
 37 rustcode/engine/src/network/ui_adapter.rs
 22 rustcode/engine/src/network/verification.rs
-139 rustcode/engine/src/orchestration.rs
+32 rustcode/engine/src/orchestration.rs
 2 rustcode/engine/src/orchestration/ask_user.rs
 33 rustcode/engine/src/orchestration/local.rs
 2 rustcode/engine/src/orchestration/local_merge.rs
@@ -912,7 +912,9 @@
 3 rustcode/engine/src/orchestration/outside_signin.rs
 7 rustcode/engine/src/orchestration/outside_web.rs
 9 rustcode/engine/src/orchestration/secret.rs
+94 rustcode/engine/src/orchestration/tests.rs
 18 rustcode/engine/src/orchestration/tool_socket.rs
+13 rustcode/engine/src/orchestration/validation.rs
 2 rustcode/engine/src/platform.rs
 7 rustcode/engine/src/preview.rs
 7 rustcode/engine/src/provider_auth/antigravity_usage.rs
