@@ -1700,6 +1700,7 @@ mod tests {
         // for every client and answered by this server (#3369).
         expected.push(crate::pull_watch::LINK_TOOL_NAME.to_owned());
         expected.push(super::super::secret::TOOL_NAME.to_owned());
+        expected.push(crate::acp::preview_share::TOOL_NAME.to_owned());
         expected.extend(crate::manage::TOOL_NAMES.map(str::to_owned));
         // The workflow tools follow it for a client that can start threads.
         expected.extend(crate::workflow::TOOL_NAMES.map(str::to_owned));
