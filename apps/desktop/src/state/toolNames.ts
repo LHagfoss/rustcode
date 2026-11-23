@@ -76,8 +76,11 @@ const THREAD_TOOLS = new Map([
   ["run_loop", "run_scheduled_task_now"],
 ]);
 
-/** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
+/** `mcp__server__tool`, `mcp_server_tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
 const MCP_PREFIX = /^mcp__/;
+const MCP_FLAT_PREFIX = /^mcp_([A-Za-z][A-Za-z0-9-]*)_([A-Za-z][A-Za-z0-9_-]*)$/;
+const RUN_TOOL_PREFIX = /^Run\s+([A-Za-z][A-Za-z0-9_.:/-]*)$/;
+const WEB_SEARCH_TITLE = /^"([\s\S]+)"\s+on\s+Web$/;
 const IDENT = /^[A-Za-z][A-Za-z0-9_-]*$/;
 /**
  * The servers whose dotted (or slashed, or colon-separated) spelling is a tool call.
@@ -93,14 +96,20 @@ const objectOf = (input: Json | undefined): Record<string, Json> =>
 
 const text = (value: Json | undefined) => (typeof value === "string" ? value.trim() : "");
 
+/** Unwraps Antigravity's `Run <tool_name>` title prefix when it wraps a single identifier. */
+export function runToolIdent(name: string): string | undefined {
+  return RUN_TOOL_PREFIX.exec(name.trim())?.[1];
+}
+
 /**
- * The server and tool a call's name holds, when it names one: `mcp__mail__send`
- * and `rustcode.start_session` both give `{ server, tool }`. A plain tool name
- * stays whole (`bash`), and so does a title that only looks like a server and a
+ * The server and tool a call's name holds, when it names one: `mcp__mail__send`,
+ * `Run mcp_rustcode_list_threads` and `rustcode.start_session` all give `{ server, tool }`.
+ * A plain tool name stays whole (`bash`), and so does a title that only looks like a server and a
  * tool (`bin/run_tests`, `foo.barBaz`): those are not MCP calls.
  */
 export function splitToolName(name: string): { server?: string; tool: string } {
-  const trimmed = name.trim();
+  const raw = name.trim();
+  const trimmed = runToolIdent(raw) ?? raw;
   // The `mcp__` prefix is the MCP convention itself, so it always names a server.
   if (MCP_PREFIX.test(trimmed)) {
     const rest = trimmed.replace(MCP_PREFIX, "");
@@ -111,6 +120,8 @@ export function splitToolName(name: string): { server?: string; tool: string } {
     if (IDENT.test(rest)) return { server: rest, tool: rest };
     return { tool: trimmed };
   }
+  const flat = MCP_FLAT_PREFIX.exec(trimmed);
+  if (flat) return { server: flat[1]!, tool: flat[2]! };
   // The other spellings are only a call when the server is one we know.
   const at = trimmed.search(/[./:]/);
   if (at > 0) {
@@ -214,12 +225,65 @@ export function displayTool(name: string, input?: Json, status?: ToolStatus): To
     if (special) return { ...special, source: server ?? "rustcode" };
     if (server) return { title: humanizeTool(tool), source: server };
   }
-  if (!server) return { title: name.trim(), summary: usefulSummary(text(args.summary) || undefined) };
+  if (server === "rustcode") {
+    const helper = rustcodeUtilityLabel(tool, args);
+    if (helper) return { ...helper, source: server };
+  }
+  const webSearch = WEB_SEARCH_TITLE.exec(name.trim());
+  if (webSearch) {
+    return { title: "Searched web", summary: usefulSummary(text(args.query) || webSearch[1]) };
+  }
+  if (!server) {
+    const wrapped = runToolIdent(name);
+    if (wrapped && IDENT.test(wrapped)) {
+      return {
+        title: humanizeTool(wrapped),
+        summary: usefulSummary(text(args.toolSummary) || text(args.summary) || undefined),
+      };
+    }
+    return { title: name.trim(), summary: usefulSummary(text(args.summary) || undefined) };
+  }
   return {
     title: humanizeTool(tool),
     source: server,
-    summary: usefulSummary(text(args.summary) || text(args.description) || undefined),
+    summary: usefulSummary(
+      text(args.toolSummary) || text(args.summary) || text(args.description) || text(args.query) || undefined,
+    ),
   };
+}
+
+/** Non-orchestration RustCode MCP helpers, phrased like the orchestration tools. */
+function rustcodeUtilityLabel(
+  tool: string,
+  args: Record<string, Json>,
+): { title: string; summary?: string } | undefined {
+  switch (tool) {
+    case "smart_ui_check":
+      return { title: "Checked Smart UI" };
+    case "query_data":
+      return { title: "Queried data" };
+    case "read_activity":
+      return { title: "Read activity" };
+    case "manage_pull_links": {
+      const action = text(args.action);
+      const num = typeof args.number === "number" ? `#${args.number}` : "";
+      const title =
+        action === "unlink"
+          ? "Unlinked pull request"
+          : action === "list"
+            ? "Listed pull links"
+            : "Linked pull request";
+      return { title, summary: num || undefined };
+    }
+    case "tool_search":
+      return { title: "Searched tools", summary: text(args.query) || undefined };
+    case "ask_user_question":
+      return { title: "Asked a question" };
+    case "request_secret":
+      return { title: "Requested secret", summary: text(args.name) || undefined };
+    default:
+      return undefined;
+  }
 }
 
 /** RustCode's orchestration tools, with what they did. */

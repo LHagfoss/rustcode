@@ -1239,6 +1239,8 @@ export function Transcript({
               }
               // A turn whose footer has nothing to add leaves no row, and no gap for one.
               if (item?.kind === "turnEnd" && footerless.has(item.id)) return null;
+              const inToolGroup = !!row.inFold?.startsWith("tools-");
+              const lastInToolGroup = inToolGroup && rows[v.index + 1]?.inFold !== row.inFold;
               return (
                 <div key={v.key} data-index={v.index} ref={measureRef} className="w-full">
                   <div
@@ -1246,10 +1248,20 @@ export function Transcript({
                     className={cx(
                       "mx-auto w-full max-w-[var(--rc-chat-content-max-width)]",
                       LANE_MOTION,
+                      inToolGroup && "relative pl-6",
                       row.inFold ? "rc-expand" : fresh(row.key) && row.key !== sentRow?.key && "rc-row-in",
                     )}
                     style={{ paddingTop: turnGap }}
                   >
+                    {inToolGroup && (
+                      <span
+                        aria-hidden
+                        className={cx(
+                          "pointer-events-none absolute top-0 left-[9px] w-px bg-border-strong",
+                          lastInToolGroup ? "bottom-2" : "bottom-0",
+                        )}
+                      />
+                    )}
                     {row.approval ? (
                       <ApprovalRow
                         request={row.approval}

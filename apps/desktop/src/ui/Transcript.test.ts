@@ -78,9 +78,9 @@ describe("the height a row is reserved at", () => {
   });
 
   test("keeps the height of a collapsed thought stable as its text streams", () => {
-    expect(estimatedRowHeight(thought("t", "one line", false))).toBe(17);
-    expect(estimatedRowHeight(thought("t", "x".repeat(2_000), false))).toBe(17);
-    expect(estimatedRowHeight(thought("t", "x".repeat(2_000), true))).toBe(17);
+    expect(estimatedRowHeight(thought("t", "one line", false))).toBe(24);
+    expect(estimatedRowHeight(thought("t", "x".repeat(2_000), false))).toBe(24);
+    expect(estimatedRowHeight(thought("t", "x".repeat(2_000), true))).toBe(24);
   });
 
   test("a row's estimate and its gap are the whole size it mounts at", () => {

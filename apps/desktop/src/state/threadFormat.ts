@@ -4,6 +4,7 @@
 
 import type { Json } from "../acp/jsonrpc";
 import type { FileDiff } from "../acp/types";
+import { clip } from "../lib/clip";
 import { unwrapShell } from "../lib/command";
 import { splitImageMarkers } from "./compose";
 import type { Link } from "./orchestration";
@@ -241,7 +242,7 @@ export function workingLabel(items: TranscriptItem[], short = false): string {
     }
     if (item.kind === "thought") {
       if (item.done) return "Working";
-      const heading = thoughtHeadings(item.text).at(-1);
+      const heading = thoughtHeadings(item.text).at(-1) ?? thoughtPreview(item.text);
       return heading ? `Thinking · ${heading}` : "Thinking";
     }
     if (item.kind === "assistant") return "Writing the reply";
@@ -497,6 +498,35 @@ export function stepLabel(item: ToolItem): string {
 
 export function thoughtHeadings(text: string): string[] {
   return [...text.matchAll(/\*\*([^*\n]+)\*\*/g)].map((m) => m[1]!.trim()).filter(Boolean);
+}
+
+const THOUGHT_FILLER = /^I'm thinking through how to approach this\.?$/i;
+const THOUGHT_PREVIEW_MAX = 96;
+
+/**
+ * One-line gist of a thought for its collapsed row: bold `**headings**` when a
+ * harness emits them (Codex), otherwise the first meaningful sentence of plain
+ * prose (Antigravity / Gemini) without its boilerplate opener.
+ */
+export function thoughtPreview(text: string): string | undefined {
+  const headings = thoughtHeadings(text);
+  if (headings.length) return headings.join(" · ");
+  const line = text
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0 && !THOUGHT_FILLER.test(l));
+  if (!line) return undefined;
+  const plain = line
+    .replace(/^(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+)/, "")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!plain) return undefined;
+  const sentence = /^(.+?[.!?])(?:\s|$)/.exec(plain)?.[1] ?? plain;
+  const chosen = sentence.length >= 16 ? sentence : plain;
+  return chosen.length > THOUGHT_PREVIEW_MAX ? `${clip(chosen, THOUGHT_PREVIEW_MAX - 1).trimEnd()}…` : chosen;
 }
 
 export function diffCounts(diffs: FileDiff[]): { added: number; removed: number } {
