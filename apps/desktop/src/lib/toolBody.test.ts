@@ -69,6 +69,47 @@ describe("tool body by kind", () => {
     );
     expect(body.kind).toBe("args");
   });
+
+  test("normalizes Antigravity CommandLine and PascalCase read arguments", () => {
+    const cmd = toolBody(
+      {
+        diffs: [],
+        input: {
+          CommandLine: "git status",
+          WaitMsBeforeAsync: 5000,
+          toolSummary: "Check git",
+          IsDaemon: false,
+        },
+        output: "clean",
+        exitCode: 0,
+      },
+      "execute",
+    );
+    expect(cmd).toEqual({
+      kind: "command",
+      command: "git status",
+      output: "clean",
+      exitCode: 0,
+      args: [],
+    });
+    const read = toolBody(
+      {
+        diffs: [],
+        input: { Path: "/home/lucas/code/rustcode/AGENTS.md", StartLine: 1, EndLine: 80 },
+        output: "# AGENTS",
+      },
+      "read",
+    );
+    expect(read).toEqual({
+      kind: "lookup",
+      args: [
+        { key: "path", value: "~/code/rustcode/AGENTS.md", shape: "inline" },
+        { key: "lines", value: "1–80", shape: "inline" },
+      ],
+      output: "# AGENTS",
+      outputLabel: "Content",
+    });
+  });
 });
 
 describe("argument rows", () => {

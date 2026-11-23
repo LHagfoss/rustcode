@@ -3,7 +3,6 @@
 // tool rows that open to their diff or output, and a turn footer.
 
 import { Fragment, memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Json } from "../acp/jsonrpc";
 import { effortLabel, type HarnessDenial, modelName } from "../acp/types";
 import { type AnsiLine, ansiClass } from "../lib/ansi";
 import { displayCommand } from "../lib/command";
@@ -37,20 +36,13 @@ import {
   stripMarks,
   type TranscriptItem,
   type TurnCompletion,
-  thoughtHeadings,
+  thoughtPreview,
   toolInFlight,
   wakeLine,
 } from "../state/thread";
 import { isRemoteThread } from "../state/threadKeys";
-import {
-  displayTool,
-  failureReason,
-  orchestrationTool,
-  printedExitCode,
-  runIdOf,
-  sessionIdOf,
-  usefulSummary,
-} from "../state/toolNames";
+import { failureReason, orchestrationTool, printedExitCode, runIdOf, sessionIdOf } from "../state/toolNames";
+import { formatToolRow } from "../state/toolRowFormat";
 import { type Waiting, waitingLabel, waitingNext, waitingTitle } from "../state/waiting";
 import { harnessId, wakeNotice } from "../state/wakeNotice";
 import { DiffView } from "./DiffView";
@@ -539,30 +531,38 @@ export const ThoughtRow = memo(function ThoughtRow({ item, live }: { item: Item<
       : item.summary
         ? "Reasoning summary"
         : "Thinking";
-  const headings = thoughtHeadings(item.text);
+  const preview = thoughtPreview(item.text);
   return (
     <div className="text-callout">
-      <div className={cx("flex max-w-full items-center gap-1", open && "rc-sticky-head")}>
+      <div className={cx("group flex max-w-full items-center gap-1", open && "rc-sticky-head")}>
         <button
           type="button"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          className="-mx-1 flex min-w-0 max-w-full items-center gap-1.5 rounded-sm px-1 text-fg-faint hover:text-fg-muted"
+          className="-mx-0.5 flex min-h-6 min-w-0 max-w-[calc(100%+4px)] items-center gap-1.5 rounded-chip px-0.5 text-left leading-chat text-fg-faint hover:bg-fill-subtle hover:text-fg-muted"
         >
-          {live && <Spinner size={10} />}
+          <span className="flex w-[18px] shrink-0 justify-center">
+            {live ? <Spinner size={12} /> : <Brain size={14} className="text-fg-faint" />}
+          </span>
           <span className="shrink-0">{label}</span>
-          {!open && !live && headings.length > 0 && (
-            <span className="truncate italic">· {headings.join(" · ")}</span>
+          {!open && preview && (
+            <>
+              <span aria-hidden className="size-0.5 shrink-0 rounded-full bg-fg-faint" />
+              <span className="min-w-0 truncate text-fg-faint">{preview}</span>
+            </>
           )}
           <ChevronRight
             size={12}
-            className={cx("shrink-0 transition-transform duration-200", open && "rotate-90")}
+            className={cx(
+              "shrink-0 transition-[transform,opacity] duration-200",
+              open ? "rotate-90" : "opacity-60 group-hover:opacity-100",
+            )}
           />
         </button>
         {open && item.text.trim() && <CopyButton text={item.text} iconOnly label="Copy thinking" />}
       </div>
       {open && (
-        <div className="pt-2 text-fg-muted">
+        <div className="ml-[26px] pt-1.5 text-fg-muted">
           <Markdown text={item.text} streaming={live} className="gap-1.5 text-callout" />
         </div>
       )}
@@ -591,23 +591,6 @@ export const KIND_ICON: Record<string, typeof Wrench> = {
   wait: Hourglass,
   other: Wrench,
 };
-
-function inputField(input: Json | undefined, ...keys: string[]): string | undefined {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
-  for (const key of keys) {
-    const v = input[key];
-    if (typeof v === "string" && v) return v;
-  }
-  return undefined;
-}
-
-function toolDetail(item: Item<"tool">, kind: string): { text?: string; mono: boolean } {
-  if (item.detail) return { text: item.detail, mono: true };
-  if (kind === "execute") return { text: inputField(item.input, "command", "cmd"), mono: true };
-  if (kind === "search") return { text: inputField(item.input, "pattern", "query", "path"), mono: true };
-  if (kind === "fetch") return { text: inputField(item.input, "url", "query"), mono: false };
-  return { text: inputField(item.input, "path", "file_path", "filePath", "file"), mono: true };
-}
 
 export function DiffCount({ added, removed }: { added: number; removed: number }) {
   if (!added && !removed) return null;
@@ -810,22 +793,13 @@ export const ToolRow = memo(function ToolRow({
   const turnRunning = useApp((s) => (threadId ? isRunning(s.threads[threadId]) : true));
   const running = toolInFlight(item.status, turnRunning);
   const failed = item.status === "failed";
-  const detail = toolDetail(item, kind);
   // MCP calls come named `mcp__server__tool`: the row says what they did instead.
-  const label = displayTool(item.title, item.input, item.status);
-  const title = displayCommand(label.title);
-  // The line that tells two calls apart; a lone fence marker is not one.
-  const summary = usefulSummary(item.summary) ?? label.summary;
+  const row = formatToolRow(item, kind, cwd);
   const startedId = orchestrationTool(item.title) === "start_session" ? sessionIdOf(item.output) : undefined;
   const startedRun = orchestrationTool(item.title) === "run_workflow" ? runIdOf(item.output) : undefined;
   const link = useApp((s) => (startedId ? s.links.links.find((l) => l.target === startedId) : undefined));
   const linkState = useApp((s) => (link ? stateOf(s, link) : undefined));
   const opensThread = !!startedId && !!link;
-  const relative =
-    detail.text && cwd && detail.text.startsWith(`${cwd}/`) ? detail.text.slice(cwd.length + 1) : detail.text;
-  const trimmed = relative && displayCommand(relative);
-  // A command whose title already is the command line shows it once.
-  const shownDetail = trimmed && !title.includes(trimmed) ? trimmed : undefined;
   // Why it failed, on the row itself: the first line of what it printed, when no exit code says it.
   const exitCode = item.exitCode ?? (failed ? printedExitCode(item.output) : undefined);
   const reason =
@@ -853,26 +827,47 @@ export const ToolRow = memo(function ToolRow({
               <Icon size={16} className="text-fg-muted" />
             )}
           </span>
-          <span className="min-w-0 max-w-full shrink truncate text-body text-fg-muted" title={item.title}>
-            {title}
+          <span
+            className={cx(
+              "min-w-0 truncate text-fg-muted",
+              row.pathFile
+                ? "shrink-0 text-body"
+                : row.titleMono
+                  ? "max-w-full shrink font-mono text-callout"
+                  : row.summary || row.detail
+                    ? "max-w-[55%] shrink-0 text-body"
+                    : "max-w-full shrink text-body",
+            )}
+            title={item.title}
+          >
+            {row.title}
           </span>
-          {summary && (
+          {row.pathFile && (
+            <span className="flex min-w-0 shrink items-baseline truncate font-mono text-callout" dir="auto">
+              {row.pathDir && <span className="min-w-0 truncate text-fg-faint">{row.pathDir}</span>}
+              <span className="shrink-0 text-fg-muted">{row.pathFile}</span>
+            </span>
+          )}
+          {row.lineRange && (
+            <span className="shrink-0 font-mono text-caption text-fg-faint tabular">{row.lineRange}</span>
+          )}
+          {row.summary && (
             <>
               <span aria-hidden className="size-0.5 shrink-0 rounded-full bg-fg-faint" />
               <span className="min-w-0 shrink truncate text-callout leading-chat-sub text-fg-faint">
-                {summary}
+                {row.summary}
               </span>
             </>
           )}
-          {shownDetail && (
+          {row.detail && (
             <span
               className={cx(
-                "min-w-0 max-w-[42ch] shrink truncate text-caption text-fg-faint",
-                detail.mono && "font-mono",
+                "min-w-0 shrink truncate text-caption text-fg-faint",
+                row.detailMono && "font-mono",
               )}
               dir="auto"
             >
-              {shownDetail}
+              {row.detail}
             </span>
           )}
           {item.background === "command" && (

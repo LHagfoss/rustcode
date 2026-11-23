@@ -48,6 +48,7 @@ import {
   type ThreadState,
   type TranscriptItem,
   thoughtHeadings,
+  thoughtPreview,
   waitingOn,
   wakeLine,
   wakeTurn,
@@ -488,6 +489,13 @@ describe("helpers", () => {
     expect(formatDuration(12_000)).toBe("12s");
     expect(formatDuration(65_000)).toBe("1m 5s");
     expect(thoughtHeadings("**Reading**\ntext **Editing files**")).toEqual(["Reading", "Editing files"]);
+    expect(thoughtPreview("**Reading**\ntext **Editing files**")).toBe("Reading · Editing files");
+    expect(
+      thoughtPreview(
+        "I'm thinking through how to approach this.\n\nInspecting `pullWatch.ts` first. Then tests.",
+      ),
+    ).toBe("Inspecting pullWatch.ts first.");
+    expect(thoughtPreview("I'm thinking through how to approach this.")).toBeUndefined();
   });
 });
 
