@@ -1,8 +1,3 @@
-// The second direction of a pairing without SSH: this computer creates a connect code and has the
-// machine it already reaches redeem it over that connection (`_rustcode/machine/exec`), so the
-// machine reaches this computer too (docs/remote.md › Mutual access). Pairing a machine does this
-// on its own while "Both ways" is chosen, which is the default.
-
 import { create } from "zustand";
 import { type JsonObject, obj, str } from "../acp/jsonrpc";
 import { RemoteMethod } from "../acp/remote";

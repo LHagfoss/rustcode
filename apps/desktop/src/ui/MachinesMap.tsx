@@ -88,7 +88,6 @@ export function MachinesMap({
   const zoomBy = (delta: number) =>
     setZoom(Math.min(ZOOM.max, Math.max(ZOOM.min, Math.round((scale + delta) / ZOOM.step) * ZOOM.step)));
 
-  // Only the wire kinds this map draws are explained; a search only helps once the map is crowded.
   const drawn = new Set(layout.wires.map((wire) => wire.state));
   const searchable = graph.machines.length + graph.known.length + 1 >= SEARCH_FROM;
 
