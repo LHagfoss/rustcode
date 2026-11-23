@@ -1296,8 +1296,10 @@ composer's keys stay outside the table.
 - **Thread header buttons.** The chat header's buttons come from one
   registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): the
   plan's progress and the side panel's toggle, each on its own with no shared
-  pill behind them. The toggle is a quiet button that names the tab it opens
-  (Details, Changes, Pull requests). The title is a breadcrumb after the
+  pill behind them. The toggle is a quiet pill, its icon then "Thread info". While
+  the panel is open on a wide window the card rises over the header's right end and
+  carries the toggle at its top right, and the header leaves it out
+  (`ui/PanelToggle.tsx`). The title is a breadcrumb after the
   project (t3code-style): it opens the thread's menu, the sidebar row's own,
   with a chevron on hover, and its Rename edits the title in place. Settings › Chat › Thread
   header buttons lists them as Shown and Hidden: drag a row to reorder it or

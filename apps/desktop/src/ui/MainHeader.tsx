@@ -130,7 +130,7 @@ export function MainHeader({
       style={{
         height: HEADER_HEIGHT,
         ...(underLights ? { paddingLeft: lightsInset } : null),
-        ...(controlsInset ? { paddingRight: controlsInset } : null),
+        paddingRight: controlsInset || "calc(0.5rem + var(--rc-panel-room, 0px))",
       }}
     >
       {sidebarHidden && !lights && <SidebarCluster />}

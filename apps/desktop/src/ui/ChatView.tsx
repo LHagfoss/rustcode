@@ -35,7 +35,6 @@ import {
   seeFailure,
   setThreadStatus,
   statusOf,
-  toggleRightPanel,
   useApp,
   useMachineOfThread,
   useShortcutHint,
@@ -45,7 +44,6 @@ import { formatClock, isRunning, type ThreadState } from "../state/thread";
 import { retryStalledFirstMessage, retryThread } from "../state/threadActions";
 import { splitThreadKey } from "../state/threadKeys";
 import { failureHarness, turnErrorAdvice } from "../state/turnError";
-import type { PanelKind } from "../state/viewActions";
 import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
@@ -71,6 +69,7 @@ import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
 import { boundTips } from "./newThreadTips";
+import { PANEL_TOGGLE_LABEL, PanelToggle, useCardOverHeader } from "./PanelToggle";
 import { ProjectMark } from "./ProjectMark";
 import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import { Callout, cx, Kbd, Pill, Skeleton, Spinner, surfaceCollisionPadding, Tooltip } from "./primitives";
@@ -155,44 +154,18 @@ function PlanHeaderButton({ thread }: { thread?: ThreadState }) {
 }
 
 /**
- * The side panel's toggle names the tab it opens (this thread's last: Details, Changes, Pull
- * requests). Its `data-panel-toggle` takes the keyboard back when a panel closes (ui/RightPanel.tsx).
+ * The side panel's toggle, "Thread info". While the panel is open the card rises over the header
+ * and carries the toggle itself (ui/PanelToggle.tsx), so the header leaves it out.
  */
-const PANEL_LABELS: Record<PanelKind, string> = {
-  details: "Details",
-  changes: "Changes",
-  pulls: "Pull requests",
-  peek: "Thread",
-};
-
 function DetailsHeaderButton() {
-  const panel = useApp((s) => s.panel);
-  const remembered = useApp((s) => (s.selectedId ? s.panelByThread[s.selectedId] : undefined));
-  const key = useShortcutHint("toggle-panel");
-  const label = PANEL_LABELS[panel ?? remembered ?? "details"];
-  return (
-    <Tooltip label={panel ? `Close side panel (${key})` : `Side panel (${key})`} side="bottom">
-      <button
-        type="button"
-        aria-label="Side panel"
-        aria-pressed={!!panel}
-        data-panel-toggle
-        onClick={toggleRightPanel}
-        className={cx(
-          "inline-flex h-7 items-center gap-1.5 rounded-full pr-2 pl-3 text-callout text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong",
-          panel && "bg-fill text-fg",
-        )}
-      >
-        {label}
-        <PanelRight size={16} />
-      </button>
-    </Tooltip>
-  );
+  const open = useApp((s) => !!s.panel);
+  const overHeader = useCardOverHeader();
+  return open && overHeader ? null : <PanelToggle />;
 }
 
 export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
   plan: { label: "Plan", icon: ListChecks, Button: PlanHeaderButton },
-  details: { label: "Side panel", icon: PanelRight, Button: DetailsHeaderButton },
+  details: { label: PANEL_TOGGLE_LABEL, icon: PanelRight, Button: DetailsHeaderButton },
 };
 
 function Header({

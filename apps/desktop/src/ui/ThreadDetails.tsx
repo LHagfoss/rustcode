@@ -1,35 +1,44 @@
-// The side panel's Details tab, Multica-style: foldable sections of label and value rows. The
-// thread's properties (status, agent, model, account, machine, project, branch), its uncommitted
-// changes, lineage, activity (messages, tool calls, tokens, cost, age) and context usage.
-// Changes and Pull requests are the panel's other tabs (ui/RightPanel.tsx).
+// The side panel's home, Multica-style: foldable sections of label and value rows, all on one
+// card with no tabs. The thread's properties (status, agent and model, account, machine, project,
+// branch), its uncommitted files, its pull requests, lineage, and activity (counts, tokens, cost,
+// age, context). The full diff and pull list open from their sections (ui/RightPanel.tsx).
 
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { pullErrorTitle } from "../acp/rustcode";
 import { modelName, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
-import { type GitChanges, gitChangeSummary, openPath } from "../lib/native";
+import { type GitChanges, gitChangeSummary, openExternal, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { contextPercent } from "../state/details";
+import { turnItemsByEnd } from "../state/fold";
 import { formatCost } from "../state/pricing";
+import { PULL_LIMIT, usePullList } from "../state/pullQueries";
 import { showPanel, useApp, worktreeOf } from "../state/store";
-import { formatTokens, isRunning, type TranscriptItem } from "../state/thread";
+import { formatDuration, formatTokens, isRunning, type TranscriptItem } from "../state/thread";
 import { relativeAge } from "../state/threadFormat";
 import { splitThreadKey } from "../state/threadKeys";
 import { statusOf } from "../state/threadStatus";
 import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
 import { HarnessIcon } from "./HarnessIcon";
-import { ChevronDown, ChevronRight, FileDiff, GitBranch, Laptop } from "./icons";
+import { ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, GitBranch, Laptop } from "./icons";
+import { PullRow } from "./OverviewPulls";
 import {
   FOLDED_EVENT,
   isFolded as isFoldedOf,
+  pullsForBranches,
   readFolded,
   type OverviewSection as SectionId,
   toggleFolded,
+  turnEntries,
+  turnHasTrace,
   writeFolded,
 } from "./overview";
 import { ProjectMark } from "./ProjectMark";
 import { cx, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 import { StatusIcon } from "./Status";
+import { type LogTurn, TurnEvents } from "./TurnEvents";
+import { TurnTrace } from "./TurnTrace";
 
 /**
  * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
@@ -75,6 +84,7 @@ export function ThreadDetails() {
   const host = id ? splitThreadKey(id).host : "";
   const machine = useApp((s) => s.machineNames[host]);
   const summary = useApp((s) => (s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) : undefined));
+  const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const harnessId = thread?.harness?.id ?? summary?.harness;
   const harnessName = useApp((s) =>
     harnessId ? (s.harnesses?.harnesses.find((h) => h.id === harnessId)?.name ?? harnessId) : undefined,
@@ -114,49 +124,39 @@ export function ThreadDetails() {
   const used = contextPercent(usage);
   const model = modelName(summary?.model);
   const account = thread.harness?.account ?? summary?.account;
-  const stats: [string, string][] = [];
-  if (harnessName || model) stats.push(["Agent", [harnessName, model].filter(Boolean).join(" · ")]);
-  if (account) stats.push(["Account", account]);
-  stats.push(["Messages", String(counts.messages)]);
-  stats.push(["Tool calls", String(counts.tools)]);
-  if (usage?.inputTokens !== undefined || usage?.outputTokens !== undefined)
-    stats.push([
-      "Tokens",
-      `${formatTokens(usage.inputTokens ?? 0)} in · ${formatTokens(usage.outputTokens ?? 0)} out`,
-    ]);
+  const activity: [string, string][] = [
+    ["Messages", String(counts.messages)],
+    ["Tool calls", String(counts.tools)],
+  ];
   if (usage?.cost !== undefined && (!usage.currency || usage.currency === "USD"))
-    stats.push(["Cost", formatCost(usage.cost)]);
-  if (counts.startedAt) stats.push(["Started", relativeAge(counts.startedAt)]);
-  if (summary?.updatedAt) stats.push(["Last active", relativeAge(summary.updatedAt)]);
+    activity.push(["Cost", formatCost(usage.cost)]);
+  if (usage?.inputTokens !== undefined) activity.push(["Tokens in", formatTokens(usage.inputTokens)]);
+  if (usage?.outputTokens !== undefined) activity.push(["Tokens out", formatTokens(usage.outputTokens)]);
+  if (counts.startedAt) activity.push(["Started", relativeAge(counts.startedAt)]);
+  if (summary?.updatedAt) activity.push(["Last active", relativeAge(summary.updatedAt)]);
 
-  const fileCount = changes?.files.length ?? 0;
-  const added = changes?.files.reduce((sum, f) => sum + f.added, 0) ?? 0;
-  const removed = changes?.files.reduce((sum, f) => sum + f.removed, 0) ?? 0;
+  const files = changes?.files ?? [];
+  const added = files.reduce((sum, f) => sum + f.added, 0);
+  const removed = files.reduce((sum, f) => sum + f.removed, 0);
 
   const project = projectName(worktree?.repo || thread.cwd);
   const machineLabel =
     machine ?? (host ? "Paired computer" : appPlatform() === "mac" ? "This Mac" : "This computer");
   const icon = "shrink-0 text-fg-muted";
-  const activity = stats.filter(([label]) => label !== "Agent" && label !== "Account");
+  const openChanges = () => showPanel("changes");
 
-  // Multica-style sections: a title you can fold, then label and value rows, the label in a fixed
-  // column and the value beside it with its icon, so the eye runs down one edge.
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pb-3">
-      <Section id="properties" title="Properties" folded={isFolded("properties")} onToggle={toggle}>
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
+      <div className="px-2">
         <Property label="Status">
           <StatusIcon status={status} size={13} />
           <span className="truncate">{STATUS_LABEL[status]}</span>
         </Property>
         {harnessId && (
-          <Property label="Agent">
+          <Property label="Agent" tip={model ? `${harnessName} · ${model}` : undefined}>
             <HarnessIcon id={harnessId} size={14} />
-            <span className="truncate">{harnessName}</span>
-          </Property>
-        )}
-        {model && (
-          <Property label="Model">
-            <span className="truncate">{model}</span>
+            <span className="shrink-0">{harnessName}</span>
+            {model && <span className="truncate text-fg-muted">{model}</span>}
           </Property>
         )}
         {account && (
@@ -182,40 +182,30 @@ export function ThreadDetails() {
             <span className="truncate font-mono text-caption">{branch}</span>
           </Property>
         )}
-      </Section>
-      {changes && (
-        <Section
-          id="changes"
-          title="Changes"
-          folded={isFolded("changes")}
+        {changes && (
+          <Property label="Changes" onClick={openChanges} tip="Open the diff">
+            {files.length ? (
+              <>
+                <span className="shrink-0">
+                  {files.length} file{files.length === 1 ? "" : "s"}
+                </span>
+                <DiffCount added={added} removed={removed} />
+              </>
+            ) : (
+              <span className="truncate text-fg-muted">None uncommitted</span>
+            )}
+            <span className="flex-1" />
+            <ChevronRight size={14} className={icon} />
+          </Property>
+        )}
+      </div>
+      {pullsOn && (
+        <PullsSection
+          cwd={worktree?.repo || thread.cwd}
+          branch={branch}
+          folded={isFolded("pulls")}
           onToggle={toggle}
-          action={
-            <Tooltip label="Open Changes">
-              <button
-                type="button"
-                aria-label="Open Changes"
-                onClick={() => showPanel("changes")}
-                className="flex size-6 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
-              >
-                <ChevronRight size={14} />
-              </button>
-            </Tooltip>
-          }
-        >
-          <button
-            type="button"
-            onClick={() => showPanel("changes")}
-            className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-callout hover:bg-fill-subtle"
-          >
-            <FileDiff size={14} className={icon} />
-            <span className="flex-1 truncate">
-              {fileCount
-                ? `${fileCount} changed file${fileCount === 1 ? "" : "s"}`
-                : "No uncommitted changes"}
-            </span>
-            {fileCount > 0 && <DiffCount added={added} removed={removed} />}
-          </button>
-        </Section>
+        />
       )}
       {delegates > 0 && (
         <Section id="delegates" title="Lineage" folded={false} onToggle={toggle}>
@@ -227,15 +217,17 @@ export function ThreadDetails() {
         </Section>
       )}
       <Section id="activity" title="Activity" folded={isFolded("activity")} onToggle={toggle}>
-        {activity.map(([label, value]) => (
-          <Property key={label} label={label}>
-            <span className="truncate tabular">{value}</span>
-          </Property>
-        ))}
-      </Section>
-      {usage && used !== undefined && (
-        <Section id="context" title="Context window" folded={isFolded("context")} onToggle={toggle}>
-          <div className="flex min-h-8 items-center gap-3 px-2 text-callout">
+        <dl className="grid grid-cols-3 gap-x-2 gap-y-2 px-2 py-1">
+          {activity.map(([label, value]) => (
+            <div key={label} className="min-w-0">
+              <dt className="truncate text-caption text-fg-muted">{label}</dt>
+              <dd className="truncate text-callout text-fg tabular">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {usage && used !== undefined && (
+          <div className="flex min-h-8 items-center gap-3 px-2 pt-1 text-callout">
+            <span className="shrink-0 text-caption text-fg-muted">Context</span>
             <div
               role="meter"
               aria-label="Context used"
@@ -246,13 +238,208 @@ export function ThreadDetails() {
             >
               <div className="h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
             </div>
-            <span className="shrink-0 text-fg-muted tabular">
+            <span className="shrink-0 text-caption text-fg-muted tabular">
               {formatTokens(usage.used)} / {formatTokens(usage.size)}
             </span>
           </div>
-        </Section>
-      )}
+        )}
+      </Section>
+      <TurnsSection items={items ?? []} model={model} folded={isFolded("log")} onToggle={toggle} />
     </div>
+  );
+}
+
+/** How many pull requests the card lists before it points to the full list. */
+const PULL_ROWS = 2;
+
+/** The pulls opened from the thread's branch: the first few, the full list one press away. */
+function PullsSection({
+  cwd,
+  branch,
+  folded,
+  onToggle,
+}: {
+  cwd: string | undefined;
+  branch: string | undefined;
+  folded: boolean;
+  onToggle: (id: SectionId) => void;
+}) {
+  const branches = useMemo(() => (branch ? [branch] : []), [branch]);
+  const { data, error } = usePullList(cwd, "all", { limit: PULL_LIMIT, enabled: !!branch });
+  const rows = useMemo(() => pullsForBranches(data, branches), [data, branches]);
+  const openAll = () => showPanel("pulls");
+  return (
+    <Section
+      id="pulls"
+      title="Pull requests"
+      count={rows.length || undefined}
+      folded={folded}
+      onToggle={onToggle}
+      action={<OpenButton label="All pull requests" onClick={openAll} />}
+    >
+      {rows.slice(0, PULL_ROWS).map((pull) => (
+        <PullRow
+          key={pull.number}
+          pull={pull}
+          onOpen={() => (pull.url ? openExternal(pull.url) : openAll())}
+        />
+      ))}
+      {rows.length > PULL_ROWS && (
+        <button
+          type="button"
+          onClick={openAll}
+          className="flex min-h-7 w-full items-center rounded-md px-2 text-left text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg"
+        >
+          {rows.length - PULL_ROWS} more
+        </button>
+      )}
+      {rows.length === 0 && (
+        <p className="flex min-h-7 items-center px-2 text-callout text-fg-muted">
+          {error ? pullErrorTitle(error.code) : branch ? "None for this branch yet." : "No branch yet."}
+        </p>
+      )}
+    </Section>
+  );
+}
+
+/** The event log of every turn rather than one. */
+const ALL = "all";
+
+/** A turn's outcome: its icon, its colour and what its tip says. */
+const OUTCOME = {
+  completed: { icon: CircleCheck, tone: "text-success", label: "Completed" },
+  cancelled: { icon: CircleSlash, tone: "text-fg-muted", label: "Cancelled" },
+  failed: { icon: CircleX, tone: "text-danger", label: "Failed" },
+} as const;
+
+/**
+ * Every finished turn, newest first: what opened it, how long it ran, what it cost, and a Trace
+ * chip that opens its waterfall beside the card (ui/TurnTrace.tsx) where the app watched the turn.
+ * A press on the turn opens its event log: every message and call, laid flat (ui/TurnEvents.tsx).
+ */
+function TurnsSection({
+  items,
+  model,
+  folded,
+  onToggle,
+}: {
+  items: readonly TranscriptItem[];
+  model?: string;
+  folded: boolean;
+  onToggle: (id: SectionId) => void;
+}) {
+  const turns = useMemo(() => [...turnEntries(items)].reverse(), [items]);
+  const byEnd = useMemo(() => turnItemsByEnd(items), [items]);
+  const ends = useMemo(() => {
+    const map = new Map<string, Extract<TranscriptItem, { kind: "turnEnd" }>>();
+    for (const item of items) if (item.kind === "turnEnd") map.set(item.id, item);
+    return map;
+  }, [items]);
+  const [open, setOpen] = useState<string | null>(null);
+  const opened = open && open !== ALL ? turns.find((turn) => turn.id === open) : undefined;
+  const openedEnd = opened ? ends.get(opened.id) : undefined;
+  const logTurn = (turn: (typeof turns)[number]): LogTurn => ({ ...turn, items: byEnd[turn.id] ?? [] });
+  const log =
+    open === ALL
+      ? { title: "All turns", turns: [...turns].reverse().map(logTurn) }
+      : opened
+        ? { title: opened.prompt, turns: [logTurn(opened)] }
+        : undefined;
+  return (
+    <Section
+      id="log"
+      title="Turns"
+      count={turns.length || undefined}
+      action={
+        turns.length > 1 ? (
+          <Tooltip label="Every turn's events in one log">
+            <button
+              type="button"
+              onClick={() => setOpen(ALL)}
+              className="flex h-6 items-center rounded-md px-2 text-caption text-fg-muted hover:bg-fill hover:text-fg"
+            >
+              View all
+            </button>
+          </Tooltip>
+        ) : undefined
+      }
+      folded={folded}
+      onToggle={onToggle}
+      grow
+    >
+      {turns.length === 0 && (
+        <p className="flex min-h-7 items-center px-2 text-callout text-fg-muted">No turns yet.</p>
+      )}
+      {turns.map((turn) => {
+        const outcome = OUTCOME[turn.outcome];
+        const Icon = outcome.icon;
+        const end = ends.get(turn.id);
+        return (
+          <div key={turn.id} className="flex min-h-8 items-center gap-1 rounded-md hover:bg-fill-subtle">
+            <button
+              type="button"
+              onClick={() => setOpen(turn.id)}
+              className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md pl-2 text-left"
+            >
+              <span
+                role="img"
+                aria-label={outcome.label}
+                className={cx("flex size-4 shrink-0 items-center justify-center", outcome.tone)}
+              >
+                <Icon size={13} />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-callout">{turn.prompt}</span>
+              {turn.elapsedMs !== undefined && (
+                <span className="shrink-0 text-caption text-fg-muted tabular">
+                  {formatDuration(turn.elapsedMs)}
+                </span>
+              )}
+              {turn.cost !== undefined ? (
+                <span className="shrink-0 text-caption text-fg-muted tabular">{formatCost(turn.cost)}</span>
+              ) : turn.tokens !== undefined ? (
+                <span className="shrink-0 text-caption text-fg-muted tabular">
+                  {formatTokens(turn.tokens)}
+                </span>
+              ) : null}
+            </button>
+            <span className="flex shrink-0 pr-2">
+              {end && turnHasTrace(turn) && (
+                <TurnTrace end={end} items={byEnd[turn.id]} model={model} side="left" />
+              )}
+            </span>
+          </div>
+        );
+      })}
+      {log && (
+        <TurnEvents
+          open
+          onOpenChange={(next) => !next && setOpen(null)}
+          title={log.title}
+          turns={log.turns}
+          trace={
+            openedEnd && opened && turnHasTrace(opened) ? (
+              <TurnTrace end={openedEnd} items={byEnd[opened.id]} model={model} />
+            ) : undefined
+          }
+        />
+      )}
+    </Section>
+  );
+}
+
+/** A section's way to its full view: the diff, the pull list. */
+function OpenButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <Tooltip label={label}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={onClick}
+        className="flex size-6 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+      >
+        <ChevronRight size={14} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -269,7 +456,7 @@ function Property({
   tip?: string;
 }) {
   const value =
-    "flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-callout text-fg";
+    "flex min-h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-callout text-fg";
   const body = onClick ? (
     <button type="button" onClick={onClick} className={cx(value, "hover:bg-fill-subtle")}>
       {children}
@@ -289,21 +476,26 @@ function Property({
 function Section({
   id,
   title,
+  count,
   folded,
   onToggle,
   action,
+  grow,
   children,
 }: {
   id: SectionId;
   title: string;
+  count?: number;
+  /** Take the card's remaining height and scroll the rows inside it. */
+  grow?: boolean;
   folded: boolean;
   onToggle: (id: SectionId) => void;
   action?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <section className="px-2 pt-2">
-      <div className="flex min-h-8 items-center gap-1 pr-1">
+    <section className={cx("px-2 pt-1.5", grow && !folded && "flex min-h-40 flex-1 flex-col")}>
+      <div className="flex min-h-7 items-center gap-1 pr-1">
         <button
           type="button"
           aria-expanded={!folded}
@@ -311,15 +503,16 @@ function Section({
           className="flex min-h-7 items-center gap-1 rounded-md px-2 font-medium text-callout text-fg hover:bg-fill-subtle"
         >
           {title}
+          {count !== undefined && <span className="text-caption text-fg-faint tabular">{count}</span>}
           <ChevronDown
             size={12}
             className={cx("text-fg-muted transition-transform", folded && "-rotate-90")}
           />
         </button>
         <span className="flex-1" />
-        {action}
+        <div className="flex shrink-0 items-center gap-1.5">{action}</div>
       </div>
-      {!folded && <div className="pb-1">{children}</div>}
+      {!folded && <div className={cx("pb-1", grow && "flex min-h-0 flex-1 flex-col")}>{children}</div>}
     </section>
   );
 }

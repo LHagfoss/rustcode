@@ -64,12 +64,15 @@ export function TurnTrace({
   end,
   items,
   model,
+  side = "top",
 }: {
   end: TurnEnd;
   /** The turn's transcript rows, from the message that started it to its footer. */
   items?: TranscriptItem[];
   /** The thread's model, which names its model calls. */
   model?: string;
+  /** Where the waterfall opens: above the chip in the transcript, beside it in the side panel. */
+  side?: "top" | "left";
 }) {
   if (!hasTimeline(end)) return null;
   return (
@@ -85,11 +88,11 @@ export function TurnTrace({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          side="top"
-          align="start"
+          side={side}
+          align={side === "left" ? "center" : "start"}
           sideOffset={6}
           aria-label="Turn trace"
-          className="elevated z-40 flex max-h-[min(560px,75vh)] w-[min(640px,85vw)] flex-col gap-2 p-3 outline-none"
+          className="elevated z-50 flex max-h-[min(560px,75vh)] w-[min(640px,85vw)] flex-col gap-2 p-3 outline-none"
         >
           <TracePanel end={end} items={items ?? []} model={model} />
         </Popover.Content>
