@@ -460,7 +460,7 @@
 21 apps/desktop/src/ui/ChangesPanel.tsx
 5 apps/desktop/src/ui/ChatBackgroundGroup.tsx
 5 apps/desktop/src/ui/ChatLight.tsx
-111 apps/desktop/src/ui/ChatView.tsx
+109 apps/desktop/src/ui/ChatView.tsx
 14 apps/desktop/src/ui/CommandPalette.tsx
 5 apps/desktop/src/ui/Compare.tsx
 222 apps/desktop/src/ui/Composer.tsx
