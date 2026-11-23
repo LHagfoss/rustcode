@@ -10,17 +10,17 @@ import { STATUS_LABEL } from "../acp/v2";
 import { type GitChanges, gitChangeSummary, openExternal, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { contextPercent } from "../state/details";
+import { turnItemsByEnd } from "../state/fold";
 import { formatCost } from "../state/pricing";
 import { PULL_LIMIT, usePullList } from "../state/pullQueries";
 import { showPanel, useApp, worktreeOf } from "../state/store";
-import { formatTokens, isRunning, type TranscriptItem } from "../state/thread";
+import { formatDuration, formatTokens, isRunning, type TranscriptItem } from "../state/thread";
 import { relativeAge } from "../state/threadFormat";
 import { splitThreadKey } from "../state/threadKeys";
 import { statusOf } from "../state/threadStatus";
-import { ChangesPanel } from "./ChangesPanel";
 import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
 import { HarnessIcon } from "./HarnessIcon";
-import { ChevronDown, ChevronRight, GitBranch, Laptop } from "./icons";
+import { ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, GitBranch, Laptop } from "./icons";
 import { PullRow } from "./OverviewPulls";
 import {
   FOLDED_EVENT,
@@ -29,12 +29,15 @@ import {
   readFolded,
   type OverviewSection as SectionId,
   toggleFolded,
+  turnEntries,
+  turnHasTrace,
   writeFolded,
 } from "./overview";
 import { ProjectMark } from "./ProjectMark";
 import { cx, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 import { StatusIcon } from "./Status";
+import { TurnTrace } from "./TurnTrace";
 
 /**
  * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
@@ -143,12 +146,13 @@ export function ThreadDetails() {
 
   // Everything about the thread on one card, no tabs: its properties, what it changed, its pull
   // requests, what it did and how full its context is. Rows are tight and the activity is a grid;
-  // Changes comes last and takes whatever height is left, listing every file and scrolling inside
-  // itself, so the card fills the window with no empty foot. A window too short for that scrolls
-  // the whole card instead. The diff and the pull list open from their sections.
+  // Turns comes last and takes whatever height is left, every turn newest first with its trace,
+  // scrolling inside itself, so the card fills the window with no empty foot. A window too short
+  // for that scrolls the whole card instead. The diff and the pull list open from their rows.
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
-      <Section id="properties" title="Properties" folded={isFolded("properties")} onToggle={toggle}>
+      {/* The panel's bar says "Properties" beside the toggle, so the rows start at once. */}
+      <div className="px-2">
         <Property label="Status">
           <StatusIcon status={status} size={13} />
           <span className="truncate">{STATUS_LABEL[status]}</span>
@@ -183,7 +187,23 @@ export function ThreadDetails() {
             <span className="truncate font-mono text-caption">{branch}</span>
           </Property>
         )}
-      </Section>
+        {changes && (
+          <Property label="Changes" onClick={openChanges} tip="Open the diff">
+            {files.length ? (
+              <>
+                <span className="shrink-0">
+                  {files.length} file{files.length === 1 ? "" : "s"}
+                </span>
+                <DiffCount added={added} removed={removed} />
+              </>
+            ) : (
+              <span className="truncate text-fg-muted">None uncommitted</span>
+            )}
+            <span className="flex-1" />
+            <ChevronRight size={14} className={icon} />
+          </Property>
+        )}
+      </div>
       {pullsOn && (
         <PullsSection
           cwd={worktree?.repo || thread.cwd}
@@ -229,24 +249,7 @@ export function ThreadDetails() {
           </div>
         )}
       </Section>
-      {changes && (
-        <Section
-          id="changes"
-          title="Changes"
-          grow
-          count={files.length || undefined}
-          folded={isFolded("changes")}
-          onToggle={toggle}
-          action={
-            <>
-              {files.length > 0 && <DiffCount added={added} removed={removed} />}
-              <OpenButton label="Open the diff" onClick={openChanges} />
-            </>
-          }
-        >
-          <ChangesPanel bare />
-        </Section>
-      )}
+      <TurnsSection items={items ?? []} model={model} folded={isFolded("log")} onToggle={toggle} />
     </div>
   );
 }
@@ -300,6 +303,81 @@ function PullsSection({
           {error ? pullErrorTitle(error.code) : branch ? "None for this branch yet." : "No branch yet."}
         </p>
       )}
+    </Section>
+  );
+}
+
+/** A turn's outcome: its icon, its colour and what its tip says. */
+const OUTCOME = {
+  completed: { icon: CircleCheck, tone: "text-success", label: "Completed" },
+  cancelled: { icon: CircleSlash, tone: "text-fg-muted", label: "Cancelled" },
+  failed: { icon: CircleX, tone: "text-danger", label: "Failed" },
+} as const;
+
+/**
+ * Every finished turn, newest first: what opened it, how long it ran, what it cost, and a Trace
+ * chip that opens its waterfall beside the card (ui/TurnTrace.tsx) where the app watched the turn.
+ */
+function TurnsSection({
+  items,
+  model,
+  folded,
+  onToggle,
+}: {
+  items: readonly TranscriptItem[];
+  model?: string;
+  folded: boolean;
+  onToggle: (id: SectionId) => void;
+}) {
+  const turns = useMemo(() => [...turnEntries(items)].reverse(), [items]);
+  const byEnd = useMemo(() => turnItemsByEnd(items), [items]);
+  const ends = useMemo(() => {
+    const map = new Map<string, Extract<TranscriptItem, { kind: "turnEnd" }>>();
+    for (const item of items) if (item.kind === "turnEnd") map.set(item.id, item);
+    return map;
+  }, [items]);
+  return (
+    <Section
+      id="log"
+      title="Turns"
+      count={turns.length || undefined}
+      folded={folded}
+      onToggle={onToggle}
+      grow
+    >
+      {turns.length === 0 && (
+        <p className="flex min-h-7 items-center px-2 text-callout text-fg-muted">No turns yet.</p>
+      )}
+      {turns.map((turn) => {
+        const outcome = OUTCOME[turn.outcome];
+        const Icon = outcome.icon;
+        const end = ends.get(turn.id);
+        return (
+          <div key={turn.id} className="flex min-h-8 items-center gap-2 rounded-md px-2 hover:bg-fill-subtle">
+            <Tooltip label={outcome.label}>
+              <span className={cx("flex size-4 shrink-0 items-center justify-center", outcome.tone)}>
+                <Icon size={13} />
+              </span>
+            </Tooltip>
+            <Tooltip label={turn.prompt}>
+              <span className="min-w-0 flex-1 truncate text-callout">{turn.prompt}</span>
+            </Tooltip>
+            {turn.elapsedMs !== undefined && (
+              <span className="shrink-0 text-caption text-fg-muted tabular">
+                {formatDuration(turn.elapsedMs)}
+              </span>
+            )}
+            {turn.cost !== undefined ? (
+              <span className="shrink-0 text-caption text-fg-muted tabular">{formatCost(turn.cost)}</span>
+            ) : turn.tokens !== undefined ? (
+              <span className="shrink-0 text-caption text-fg-muted tabular">{formatTokens(turn.tokens)}</span>
+            ) : null}
+            {end && turnHasTrace(turn) && (
+              <TurnTrace end={end} items={byEnd[turn.id]} model={model} side="left" />
+            )}
+          </div>
+        );
+      })}
     </Section>
   );
 }

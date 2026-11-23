@@ -336,7 +336,8 @@ export function RightPanel() {
   // Details is the panel's home: everything is on its one card. The full views it opens (the diff,
   // the pull list, a thread beside this one) get a way back to it.
   const titles: Record<Kind, string> = {
-    details: "Details",
+    // Details opens on the thread's properties, so its bar names them beside the toggle.
+    details: "Properties",
     changes: "Changes",
     pulls: "Pull requests",
     peek: peekIsSideChat ? "Side chat" : "Thread",
@@ -348,7 +349,9 @@ export function RightPanel() {
   const contents = kind && (
     <>
       <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-1 pr-2 pl-2">
-        {!home && (
+        {home ? (
+          <span className="truncate px-2 font-medium text-callout text-fg">{titles[kind]}</span>
+        ) : (
           <>
             <Tooltip label="Back to thread info">
               <button
