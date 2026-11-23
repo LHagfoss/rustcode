@@ -519,7 +519,6 @@ describe("moveThreadToMachine end-to-end", () => {
     selectThread(origId);
     await openThread(origId);
 
-    // Move Local -> Linux (initially lands in /home/lars/code/rustcode), then move its folder.
     const onLinux = await moveThreadToMachine(origId, LINUX_ID);
     expect(onLinux).toBe(`${LINUX_ID}/${origId}`);
     expect(keptUnlistedThreads.get(onLinux!)?.summary.cwd).toBe("/home/lars/code/rustcode");
@@ -527,21 +526,18 @@ describe("moveThreadToMachine end-to-end", () => {
     const nextCwd = "/home/lars/code/notes-app";
     expect(await moveThread(onLinux!, nextCwd)).toBe(true);
 
-    // Both the app store, the machine cache, the unlisted guard and origin memory reflect the new folder.
     expect(useApp.getState().threads[onLinux!]?.cwd).toBe(nextCwd);
     expect(useApp.getState().sessions.find((s) => s.id === onLinux)?.cwd).toBe(nextCwd);
     expect(useMachines.getState().sessions[LINUX_ID]?.find((s) => s.id === origId)?.cwd).toBe(nextCwd);
     expect(keptUnlistedThreads.get(onLinux!)?.summary.cwd).toBe(nextCwd);
     expect(rememberedMachineOrigin(origId, LINUX_ID)).toBe(nextCwd);
 
-    // Any later machine mirror / mergeMachineLists must keep the new folder in the sidebar.
     mergeMachineLists(useMachines.getState().sessions);
     expect(useApp.getState().sessions.find((s) => s.id === onLinux)?.cwd).toBe(nextCwd);
     const groups = sidebarProjects(useApp.getState().sessions);
     expect(groups.find((g) => g.label === "notes-app")?.items.some((s) => s.id === onLinux)).toBe(true);
     expect(groups.find((g) => g.label === "rustcode")?.items.some((s) => s.id === onLinux)).toBeFalsy();
 
-    // Even if a stale machine list omits the thread and falls back to keptUnlisted, it keeps the new folder.
     mergeMachineLists({
       ...useMachines.getState().sessions,
       [LINUX_ID]: (useMachines.getState().sessions[LINUX_ID] ?? []).filter((s) => s.id !== origId),
