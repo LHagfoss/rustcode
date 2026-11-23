@@ -420,7 +420,7 @@ describe("smart ui", () => {
   test("a table's long code and links wrap cleanly so it fits the reply", () => {
     // Inline code wraps at path/identifier boundaries (<wbr> + break-word) before splitting mid-word,
     // keys and raw URLs break anywhere, and headings wrap at spaces.
-    expect(BASE_CSS).toContain(".rc-table code { overflow-wrap: break-word; }");
+    expect(BASE_CSS).toContain(".rc-table .rc-badge { max-width: min(28ch, 100%); white-space: normal;");
     expect(BASE_CSS).toContain(".rc-table :is(kbd, a) { overflow-wrap: anywhere; }");
     expect(BASE_CSS).toContain(".rc-table { overflow-wrap: normal;");
     expect(BASE_CSS).toContain(".rc-table-box { overflow-x: auto;");

@@ -289,7 +289,9 @@ tr:is([data-rc-send], [data-rc-copy]):hover > td { background: color-mix(in srgb
    wraps at / . _ - : before breaking a word; keys and raw URLs break anywhere so a long URL
    never widens the table past the reply. A table that still cannot fit scrolls in its own box. */
 .rc-table { overflow-wrap: normal; font-variant-numeric: tabular-nums; }
-.rc-table code { overflow-wrap: break-word; }
+.rc-table :is(th, td) { min-width: 4ch; vertical-align: top; }
+.rc-table code { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+.rc-table .rc-badge { max-width: min(28ch, 100%); white-space: normal; overflow-wrap: anywhere; }
 .rc-table :is(kbd, a) { overflow-wrap: anywhere; }
 .rc-table .rc-num { white-space: nowrap; }
 .rc-table-box { overflow-x: auto; overscroll-behavior-x: contain; }
@@ -942,6 +944,34 @@ ${KIT_SCRIPT}
       if (!link.hasAttribute("title")) link.title = href;
       link.replaceChildren(icon, label);
       link.classList.add("rc-github-chip");
+    }
+    // Coalesce adjacent bibliography folds, including the plain HTML form.
+    const sourceList = (fold) => {
+      if (!fold || !fold.matches("details")) return null;
+      const [summary, list] = fold.children;
+      if (fold.children.length !== 2 || !summary.matches("summary") || !list.matches("ol, ul")) return null;
+      if (!fold.classList.contains("rc-sources") && !/^sources?$/i.test(summary.textContent.trim())) return null;
+      return Array.from(list.children).every((row) => row.matches("li") && row.querySelectorAll("a[href]").length === 1)
+        ? list : null;
+    };
+    for (const fold of document.querySelectorAll("details")) {
+      if (!fold.isConnected) continue;
+      const list = sourceList(fold);
+      if (!list) continue;
+      fold.classList.add("rc-sources");
+      let next = fold.nextElementSibling;
+      while (sourceList(next)) {
+        list.append(...sourceList(next).children);
+        fold.open ||= next.open;
+        next.remove();
+        next = fold.nextElementSibling;
+      }
+      const seen = new Set();
+      for (const row of Array.from(list.children)) {
+        const url = row.querySelector("a[href]").href;
+        if (seen.has(url)) row.remove();
+        seen.add(url);
+      }
     }
     // A sources fold says how many it holds and which site each link is on.
     for (const sources of document.querySelectorAll("details.rc-sources")) {

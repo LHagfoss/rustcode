@@ -53,14 +53,11 @@ const escapeAttr = (text: string) => escapeHtml(text).replace(/"/g, "&quot;");
 
 /** `code` and **bold** in a line of text; HTML in it is kept as written. */
 export function inline(text: string): string {
-  return text
-    .split(/(`[^`]+`)/)
-    .map((part, i) =>
-      i % 2 === 1
-        ? `<code>${escapeHtml(part.slice(1, -1))}</code>`
-        : part.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>"),
-    )
-    .join("");
+  const code = (value: string) =>
+    value.replace(/`([^`]+)`/g, (_, body: string) => `<code>${escapeHtml(body)}</code>`);
+  return text.replace(/`([^`]+)`|\*\*((?:`[^`]+`|[^*`])+)\*\*/g, (match, literal, bold) =>
+    literal === undefined ? `<b>${code(bold)}</b>` : code(match),
+  );
 }
 
 /** A row's cells: split at `|` outside backticks and HTML tags/`<code>` (`\|` keeps one), trimmed; at most `max`, the last keeping the rest. */
