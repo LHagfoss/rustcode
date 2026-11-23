@@ -68,10 +68,10 @@ test("known machines link to the machine they came through, or stand alone", () 
   ]);
   expect(layout.wires.filter((wire) => wire.state !== "link")).toHaveLength(4);
   expect(layout.columns.map((column) => column.label)).toEqual([
-    "This app",
+    "This computer",
     "Routes",
     "Paired machines",
-    "Known through another",
+    "Seen by another machine",
   ]);
 });
 

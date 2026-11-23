@@ -210,14 +210,7 @@ export function machineAccess(
   const name = machine.displayName?.trim() || machine.name;
   const outbound = machine.state !== "needsPairing";
   const inbound = devices.find((device) => device.hostId === machine.id) ?? null;
-  const label =
-    outbound && inbound
-      ? "Both ways"
-      : outbound
-        ? "This computer \u2192 it"
-        : inbound
-          ? "It \u2192 this computer"
-          : "No access";
+  const label = outbound && inbound ? "Both ways" : outbound || inbound ? "One way" : "No access";
   return {
     outbound,
     inbound,
