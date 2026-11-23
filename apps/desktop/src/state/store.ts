@@ -1373,8 +1373,10 @@ export function threadCreated(params: unknown) {
   // A thread trashed a moment ago is not made again by a late announcement.
   if (isTombstoned(key)) return;
   const { host } = splitThreadKey(key);
-  const parent = parseSessionList({ sessions: [p ?? {}] }).sessions[0]?.parent;
+  const listed = parseSessionList({ sessions: [p ?? {}] }).sessions[0];
+  const parent = listed?.parent;
   const summary: SessionSummary = {
+    scheduledJob: listed?.scheduledJob,
     parent: parent
       ? { ...parent, id: parent.id && host ? threadKey(host, parent.id) : parent.id }
       : undefined,

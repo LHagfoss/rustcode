@@ -743,11 +743,18 @@ impl AcpServer {
     /// connected app list the new row at once, whichever client asked for
     /// `session/new` (docs/desktop.md › Several machines).
     fn announce_thread_created(&self, mut notification: ThreadCreatedNotification) {
+        let mut rustcode = serde_json::Map::new();
         if let Some(parent) = crate::sessions::load_session_parent(&notification.session_id) {
-            notification.meta = Some(serde_json::json!({"rustcode": {"parent": {
+            rustcode.insert("parent".into(), serde_json::json!({
                 "sessionId": parent.id, "title": parent.title,
                 "relationship": parent.relationship.unwrap_or(rustcode_session::SessionRelationship::Delegate).as_str()
-            }}}));
+            }));
+        }
+        if let Some(job) = crate::sessions::load_session_scheduled_job(&notification.session_id) {
+            rustcode.insert("scheduledJob".into(), serde_json::json!(job));
+        }
+        if !rustcode.is_empty() {
+            notification.meta = Some(serde_json::json!({ "rustcode": rustcode }));
         }
         self.clients
             .broadcast_to(clients::Capability::Threads, notification);

@@ -629,6 +629,7 @@ function rememberCreated(machine: string, params: JsonObject): void {
   if (deferAnnouncement(threadKey(machine, id), () => rememberCreated(machine, params))) return;
   // A thread trashed a moment ago is not made again by a late announcement.
   if (isTombstoned(threadKey(machine, id))) return;
+  const announced = parseSessionList({ sessions: [params] }).sessions[0];
   useMachines.setState((state) => {
     const listed = state.sessions[machine] ?? [];
     if (listed.some((session) => session.id === id)) return {};
@@ -639,7 +640,8 @@ function rememberCreated(machine: string, params: JsonObject): void {
       title: str(params.title) || undefined,
       harness: str(params.harness) || undefined,
       model: str(params.model) || undefined,
-      parent: parseSessionList({ sessions: [params] }).sessions[0]?.parent,
+      parent: announced?.parent,
+      scheduledJob: announced?.scheduledJob,
     };
     return {
       sessions: { ...state.sessions, [machine]: [summary, ...listed] },

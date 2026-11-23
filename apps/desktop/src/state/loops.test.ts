@@ -9,6 +9,7 @@ import {
   defaultForm,
   formOfCron,
   formProblem,
+  groupReview,
   isJobRunThread,
   type Loop,
   type LoopRun,
@@ -20,6 +21,7 @@ import {
   nextRunText,
   parseLoops,
   pauseReason,
+  reviewDayLabel,
   reviewItems,
   runDurationText,
   runTimestampText,
@@ -513,5 +515,36 @@ describe("hub Loops (#3957)", () => {
     const zones = timeZoneChoices("Europe/Oslo");
     expect(zones).toContain("Europe/Oslo");
     expect(zones).toContain("UTC");
+  });
+});
+
+describe("groupReview", () => {
+  test("folds one job's repeated failure into one row and keeps each open thread", () => {
+    const loops = [
+      loop({
+        runs: [
+          run("open-1", "succeeded", 1, { threadId: "t-1" }),
+          run("auth-1", "failed", 2, { error: "Authentication required" }),
+          run("open-2", "succeeded", 3, { threadId: "t-2" }),
+          run("auth-2", "failed", 4, { error: "Authentication required" }),
+          run("other", "failed", 5, { error: "Timed out" }),
+        ],
+      }),
+    ];
+    const groups = groupReview(reviewItems(loops, () => true, new Set(), NOW));
+    expect(groups.map((group) => [group.item.run.id, group.runIds])).toEqual([
+      ["open-1", ["open-1"]],
+      ["auth-1", ["auth-1", "auth-2"]],
+      ["open-2", ["open-2"]],
+      ["other", ["other"]],
+    ]);
+  });
+});
+
+describe("reviewDayLabel", () => {
+  test("says Today and Yesterday, then the date", () => {
+    expect(reviewDayLabel(NOW - HOUR, NOW)).toBe("Today");
+    expect(reviewDayLabel(NOW - 24 * HOUR, NOW)).toBe("Yesterday");
+    expect(reviewDayLabel(NOW - 72 * HOUR, NOW)).not.toMatch(/Today|Yesterday/);
   });
 });
