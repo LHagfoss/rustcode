@@ -828,6 +828,17 @@ A Codex thread on Windows is told this in its developer instructions
 instead of retrying WMI or reporting the machine's details as unavailable
 (#3526).
 
+## Testing
+
+`rustcode/cli/tests/agent_e2e.rs` runs whole turns through the real binary
+with no model: the test speaks ACP to `rc acp`, and the thread runs on a
+scripted fake ACP agent (a short Python script) registered as a custom
+harness in a scratch config. It covers an approved and a declined edit, a
+cancelled turn and the next message after it, and what the thread store keeps.
+Add a scenario there for a regression that crosses the engine and a harness
+process; the in-process fake in `harness/acp_child_tests.rs` stays the place
+for adapter details.
+
 ## MCP servers and skills
 
 A thread on an external harness runs with the workspace's MCP servers: the
