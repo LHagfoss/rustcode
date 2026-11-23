@@ -874,7 +874,7 @@ async function perform(
     case "list_harnesses": {
       const machine = checkedMachine(call.machine, callerHost);
       if (isFailure(machine)) return failureJson(machine);
-      if (machine.host) return listHarnessesOn(machine, call);
+      if (machine.host) return listHarnessesOn(machine, caller, call);
       const answer = await listHarnesses(caller, call);
       return answer.error ? answer : { ...answer, ...machineFields(machine) };
     }

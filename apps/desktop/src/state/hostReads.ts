@@ -40,7 +40,7 @@ export const FILTERED_MODELS = 50;
 /** Said beside `omitted_models`, so an agent narrows instead of guessing at what it cannot see. */
 const MODEL_FILTER_HINT = "pass model to search the omitted ones";
 /** Said when a `model` filter matched nothing, so an agent narrows it again. */
-const MODEL_MISS_HINT = "no model matches; pass a shorter substring";
+export const MODEL_MISS_HINT = "no model matches; pass a shorter substring";
 
 /** Whether a model matches a `model` filter: its id or its name, either case. */
 const matchesModel = (m: HarnessModel, filter: string) =>

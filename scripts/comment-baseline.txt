@@ -265,7 +265,7 @@
 75 apps/desktop/src/state/host.ts
 30 apps/desktop/src/state/hostDelegates.ts
 26 apps/desktop/src/state/hostLinkTurns.ts
-23 apps/desktop/src/state/hostMachines.ts
+22 apps/desktop/src/state/hostMachines.ts
 65 apps/desktop/src/state/hostManage.ts
 4 apps/desktop/src/state/hostProjects.ts
 10 apps/desktop/src/state/hostQueue.ts

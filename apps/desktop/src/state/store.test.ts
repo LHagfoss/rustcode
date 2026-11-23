@@ -21,6 +21,7 @@ import {
   threadTurnEnded,
   wakeTick,
 } from "./host";
+import { listHarnessesOn } from "./hostMachines";
 import { deriveInbox } from "./inbox";
 import { badgeCount } from "./notify";
 import {
@@ -3537,6 +3538,48 @@ describe("a thread that sleeps through its work", () => {
     expect(isLoaded(s.threads[a.id])).toBe(true);
     expect(a.id in s.snoozed).toBe(true);
   });
+});
+
+test("list_harnesses on a paired machine lists every harness and reports the caller", async () => {
+  await connect(new MockTransport({ delayMs: 0 }));
+  await until(() => useApp.getState().harnesses !== null);
+  const snapshot = useApp.getState().harnesses!;
+  const machine = { host: "gw-test", id: "gw-test", name: "Paired machine", platform: "linux" };
+  const caller = {
+    id: "gw-test/caller",
+    title: "Caller",
+    folder: "/project",
+    running: true,
+    harness: "claude-code",
+  };
+  const harnesses = ["codex", "claude-code"].map((id) => ({
+    ...snapshot.harnesses.find((h) => h.id === id)!,
+    enabled: true,
+    auth: "ok" as const,
+    models:
+      id === "codex"
+        ? [{ id: "gpt-5.5", name: "GPT-5.5", efforts: [] }]
+        : [{ id: "opus-5.5", name: "Opus 5.5", efforts: [] }],
+  }));
+  useApp.setState({
+    remoteHarnesses: {
+      [machine.host]: {
+        ...snapshot,
+        default: { harness: "codex", model: "gpt-5.5", effort: null },
+        harnesses,
+      },
+    },
+  });
+
+  const all = await listHarnessesOn(machine, caller, {});
+  expect(all.current).toEqual({ harness: "claude-code" });
+  expect(all.harnesses).toMatchObject([{ id: "codex" }, { id: "claude-code" }]);
+
+  const filtered = await listHarnessesOn(machine, caller, { model: "opus" });
+  expect(filtered.harnesses).toMatchObject([
+    { id: "codex", models: [], filter: "no model matches; pass a shorter substring" },
+    { id: "claude-code", models: [{ id: "opus-5.5" }] },
+  ]);
 });
 
 describe("list_harnesses on a harness with hundreds of models", () => {
