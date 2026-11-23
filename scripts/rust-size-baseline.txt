@@ -12,7 +12,6 @@
 2400 rustcode/client/src/registry.rs
 3700 rustcode/core/rustcode-session/src/lib.rs
 2300 rustcode/core/rustcode-tasks/src/lib.rs
-4100 rustcode/engine/src/acp.rs
 2100 rustcode/engine/src/acp/clients.rs
 3300 rustcode/engine/src/acp/remote.rs
 3200 rustcode/engine/src/app/state.rs
