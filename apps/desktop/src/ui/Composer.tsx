@@ -138,6 +138,10 @@ const PAD = 6;
 // any scroller.
 const MIN_HEIGHT = Math.round(LINE + PAD * 2);
 const MAX_HEIGHT = 208;
+const CARD_BOTTOM_PADDING = 12;
+const TOOLTIP_GAP = 8;
+const tooltipBelowCard = { side: "bottom", sideOffset: CARD_BOTTOM_PADDING + TOOLTIP_GAP } as const;
+
 // How much of a folder's path the picker shows: its ends, not the whole of a deep path.
 
 /**
@@ -1370,7 +1374,7 @@ export const Composer = memo(function Composer({
               {!offline && <DictationButton dictation={dictation} />}
               <ModelPicker thread={thread} compact={compact} />
               {queuedEdit ? (
-                <Tooltip label="Save in the queue (⏎)">
+                <Tooltip {...tooltipBelowCard} label="Save in the queue (⏎)">
                   <button
                     type="button"
                     aria-label="Save the queued message"
@@ -1386,7 +1390,7 @@ export const Composer = memo(function Composer({
               ) : (
                 running &&
                 canSend && (
-                  <Tooltip label="Queue for when this turn ends (⏎)">
+                  <Tooltip {...tooltipBelowCard} label="Queue for when this turn ends (⏎)">
                     <button
                       type="button"
                       aria-label="Queue message"
@@ -1399,7 +1403,10 @@ export const Composer = memo(function Composer({
                 )
               )}
               {running ? (
-                <Tooltip label={cancelReason ?? (stopping ? "Stopping…" : "Stop turn (Esc)")}>
+                <Tooltip
+                  {...tooltipBelowCard}
+                  label={cancelReason ?? (stopping ? "Stopping…" : "Stop turn (Esc)")}
+                >
                   <button
                     type="button"
                     aria-label={stopping ? "Stopping…" : "Stop turn"}
@@ -1419,7 +1426,7 @@ export const Composer = memo(function Composer({
                   </button>
                 </Tooltip>
               ) : queuedEdit ? null : (
-                <Tooltip label="Send (⏎)">
+                <Tooltip {...tooltipBelowCard} label="Send (⏎)">
                   <button
                     type="button"
                     aria-label="Send"
