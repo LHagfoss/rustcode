@@ -130,7 +130,7 @@ async fn start(session_id: String, port: u16) -> Result<Value, String> {
         let outcome = run(&id, &session_id, &address, cancel, ready).await;
         SHARES.lock().unwrap().remove(&id);
         if let Err(error) = outcome {
-            tracing::debug!(%error, "preview tunnel stopped");
+            crate::dbg_log!("preview tunnel stopped: {error}");
         }
     });
     result

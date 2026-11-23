@@ -40,7 +40,7 @@ pub(super) async fn handle(request: Request) -> Result<Value, String> {
             super::preview_share::validate(&session_id, port)?;
             let socket = timeout(
                 Duration::from_secs(3),
-                TcpStream::connect(([127, 0, 0, 1], port)),
+                TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)),
             )
             .await
             .map_err(|_| "The preview server did not answer.".to_owned())?
