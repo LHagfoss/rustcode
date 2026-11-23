@@ -700,7 +700,7 @@
 102 rustcode/core/rustcode-tools/src/filesystem.rs
 145 rustcode/core/rustcode-tools/src/filesystem_tests.rs
 12 rustcode/core/rustcode-tools/src/lib.rs
-141 rustcode/engine/src/acp.rs
+98 rustcode/engine/src/acp.rs
 5 rustcode/engine/src/acp/agents.rs
 8 rustcode/engine/src/acp/builtin_open.rs
 38 rustcode/engine/src/acp/clients.rs
@@ -710,6 +710,7 @@
 2 rustcode/engine/src/acp/cursor.rs
 10 rustcode/engine/src/acp/data.rs
 8 rustcode/engine/src/acp/edit_diff.rs
+43 rustcode/engine/src/acp/extension_dispatch.rs
 9 rustcode/engine/src/acp/extensions.rs
 41 rustcode/engine/src/acp/harnesses.rs
 9 rustcode/engine/src/acp/hosted.rs
