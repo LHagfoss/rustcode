@@ -26,7 +26,6 @@
 3700 rustcode/engine/src/network/stream_request.rs
 2400 rustcode/engine/src/network/tool_exec.rs
 2900 rustcode/engine/src/network/turn/tools.rs
-3800 rustcode/engine/src/orchestration.rs
 2500 rustcode/engine/src/orchestration/local.rs
 3600 rustcode/engine/src/orchestration/local_threads.rs
 2500 rustcode/engine/src/orchestration/mcp_server.rs
