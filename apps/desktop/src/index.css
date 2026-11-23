@@ -1617,7 +1617,12 @@
  * which this one's `:not` defers to).
  */
 :root[data-material]:not(.reduce-transparency) {
-  --rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) calc(100% - var(--rc-transparency)), transparent);
+  /* Keep 8% of the theme color at maximum transparency. */
+  --rc-sidebar-bg: color-mix(
+    in srgb,
+    var(--rc-sidebar) calc(100% - 0.92 * var(--rc-transparency)),
+    transparent
+  );
 }
 :root[data-material]:not(.reduce-transparency) body {
   background: transparent;

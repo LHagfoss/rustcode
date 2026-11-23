@@ -39,7 +39,7 @@ export function ThreadTitle({ thread, title }: { thread?: ThreadState; title: st
           if (e.key === "Enter") commit();
           if (e.key === "Escape") setRenaming(false);
         }}
-        className="-mx-1 h-6 min-w-0 max-w-[480px] flex-1 rounded-sm bg-fill px-1 font-medium text-body text-fg outline-none"
+        className="-mx-1 h-7 min-w-0 max-w-[480px] flex-1 rounded-sm bg-fill px-2 font-medium text-body text-fg outline-none"
       />
     );
   }
@@ -49,7 +49,7 @@ export function ThreadTitle({ thread, title }: { thread?: ThreadState; title: st
         <button
           type="button"
           aria-label={`Thread actions for ${title}`}
-          className="group -mx-1 flex h-6 min-w-0 items-center gap-0.5 rounded-sm px-1 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
+          className="group -mx-1 flex h-7 min-w-0 items-center gap-0.5 rounded-sm px-2 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
         >
           <h1 className="min-w-0 truncate font-medium text-body text-fg">{title}</h1>
           <ChevronDown
