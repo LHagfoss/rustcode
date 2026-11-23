@@ -6,8 +6,8 @@ import { titleFrom } from "../lib/title";
 import { unavailableReason } from "./harness";
 import { book, delegateLimits, permitted, ruleThread, setBook } from "./host";
 import { addLink, deliver, type FanOutCall, type StartCall } from "./hostManage";
-import { FILTERED_MODELS, LISTED_MODELS, listProjects } from "./hostReads";
-import { accessOf, childMode, choiceLabel, deliverOwn, narrowed, ownMode } from "./hostStart";
+import { FILTERED_MODELS, LISTED_MODELS, listProjects, MODEL_MISS_HINT } from "./hostReads";
+import { accessOf, childMode, choiceLabel, deliverOwn, narrowed, ownMode, ranWith } from "./hostStart";
 import { accountSignedOut } from "./logins";
 import {
   LOCAL_MACHINE_ID,
@@ -709,27 +709,28 @@ export async function projectsOnMachine(machine: MachineRef): Promise<JsonObject
  */
 export async function listHarnessesOn(
   machine: MachineRef,
+  caller: RuleThread,
   asked: { harness?: string; model?: string },
 ): Promise<JsonObject> {
   const snapshot = await remoteSnapshot(machine);
   if (isFailure(snapshot)) return failureJson(snapshot);
-  const harness = harnessOn(snapshot, asked.harness, machine);
-  // A filter that matches nothing names what is there, like the start it would serve.
-  if (isFailure(harness) && asked.harness) return failureJson(harness);
+  let listed = snapshot.harnesses;
+  if (asked.harness) {
+    const harness = harnessOn(snapshot, asked.harness, machine);
+    if (isFailure(harness)) return failureJson(harness);
+    listed = [harness];
+  }
   const filter = asked.model?.toLowerCase();
-  const listed = isFailure(harness) ? snapshot.harnesses : [harness];
   return {
     ...machineFields(machine),
-    current: {
-      harness: snapshot.default.harness,
-      ...(snapshot.default.model ? { model: snapshot.default.model } : {}),
-    },
+    current: { harness: caller.harness ?? "rustcode", ...ranWith(caller.id) },
     harnesses: listed.map((h): JsonObject => {
       const reason = unavailableReason(h);
       if (reason) return { id: h.id, name: h.name, available: false, reason };
-      const models = (
-        filter ? h.models.filter((m) => `${m.id} ${m.name}`.toLowerCase().includes(filter)) : h.models
-      )
+      const matches = filter
+        ? h.models.filter((m) => `${m.id} ${m.name}`.toLowerCase().includes(filter))
+        : h.models;
+      const models = matches
         .slice(0, filter ? FILTERED_MODELS : LISTED_MODELS)
         .map((m) => ({ id: m.id, name: m.name, ...(m.efforts.length ? { efforts: m.efforts } : {}) }));
       return {
@@ -749,7 +750,8 @@ export async function listHarnessesOn(
             }
           : {}),
         models,
-        ...(models.length < h.models.length ? { omitted_models: h.models.length - models.length } : {}),
+        ...(models.length < matches.length ? { omitted_models: matches.length - models.length } : {}),
+        ...(filter && !models.length ? { filter: MODEL_MISS_HINT } : {}),
       };
     }),
   };
