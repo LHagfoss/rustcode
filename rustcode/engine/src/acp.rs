@@ -22,6 +22,8 @@ pub(crate) mod outside;
 mod permissions;
 mod presence;
 mod preview;
+mod preview_connection;
+pub(crate) mod preview_share;
 mod project_relocate;
 pub(crate) mod projects;
 mod prompt;
@@ -1726,6 +1728,9 @@ async fn dispatch_request(
                 Err(error) => responder
                     .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
             }
+        }
+        "_rustcode/preview/share" | "_rustcode/preview/connection" => {
+            connection.spawn(preview_share::dispatch(method, params, responder))
         }
         "_rustcode/machine/exec" => {
             let request: machine_exec::MachineExecRequest = parse_params(params)?;

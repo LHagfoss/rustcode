@@ -461,6 +461,22 @@ impl Hub {
             return crate::computer_use::answer(&request, self.questions_for(&request), cancel)
                 .await;
         }
+        if request.tool == crate::acp::preview_share::TOOL_NAME {
+            return match crate::acp::preview_share::answer(
+                &request.session_id,
+                &request.args,
+                self.questions_for(&request),
+                cancel,
+            )
+            .await
+            {
+                Ok(value) => CallAnswer {
+                    success: true,
+                    content: value.to_string(),
+                },
+                Err(error) => CallAnswer::failure(error),
+            };
+        }
         if request.tool == super::secret::TOOL_NAME {
             let workspace = self
                 .lock()

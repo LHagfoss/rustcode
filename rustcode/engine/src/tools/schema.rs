@@ -936,6 +936,7 @@ const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
 /// title, goal and preview) or talk to the user directly. A child agent
 /// reports back to its parent instead.
 const ROOT_ONLY_TOOLS: &[&str] = &[
+    crate::acp::preview_share::TOOL_NAME,
     "set_session_title",
     "complete_task",
     "ask_question",
