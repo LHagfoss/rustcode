@@ -37,6 +37,7 @@ import { ProjectMark } from "./ProjectMark";
 import { cx, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 import { StatusIcon } from "./Status";
+import { TurnEvents } from "./TurnEvents";
 import { TurnTrace } from "./TurnTrace";
 
 /**
@@ -317,6 +318,7 @@ const OUTCOME = {
 /**
  * Every finished turn, newest first: what opened it, how long it ran, what it cost, and a Trace
  * chip that opens its waterfall beside the card (ui/TurnTrace.tsx) where the app watched the turn.
+ * A press on the turn opens its event log: every message and call, laid flat (ui/TurnEvents.tsx).
  */
 function TurnsSection({
   items,
@@ -336,6 +338,10 @@ function TurnsSection({
     for (const item of items) if (item.kind === "turnEnd") map.set(item.id, item);
     return map;
   }, [items]);
+  // The turn whose event log is open (ui/TurnEvents.tsx).
+  const [open, setOpen] = useState<string | null>(null);
+  const opened = open ? turns.find((turn) => turn.id === open) : undefined;
+  const openedEnd = opened ? ends.get(opened.id) : undefined;
   return (
     <Section
       id="log"
@@ -353,31 +359,56 @@ function TurnsSection({
         const Icon = outcome.icon;
         const end = ends.get(turn.id);
         return (
-          <div key={turn.id} className="flex min-h-8 items-center gap-2 rounded-md px-2 hover:bg-fill-subtle">
-            <Tooltip label={outcome.label}>
-              <span className={cx("flex size-4 shrink-0 items-center justify-center", outcome.tone)}>
+          <div key={turn.id} className="flex min-h-8 items-center gap-1 rounded-md hover:bg-fill-subtle">
+            <button
+              type="button"
+              onClick={() => setOpen(turn.id)}
+              className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md pl-2 text-left"
+            >
+              <span
+                role="img"
+                aria-label={outcome.label}
+                className={cx("flex size-4 shrink-0 items-center justify-center", outcome.tone)}
+              >
                 <Icon size={13} />
               </span>
-            </Tooltip>
-            <Tooltip label={turn.prompt}>
               <span className="min-w-0 flex-1 truncate text-callout">{turn.prompt}</span>
-            </Tooltip>
-            {turn.elapsedMs !== undefined && (
-              <span className="shrink-0 text-caption text-fg-muted tabular">
-                {formatDuration(turn.elapsedMs)}
-              </span>
-            )}
-            {turn.cost !== undefined ? (
-              <span className="shrink-0 text-caption text-fg-muted tabular">{formatCost(turn.cost)}</span>
-            ) : turn.tokens !== undefined ? (
-              <span className="shrink-0 text-caption text-fg-muted tabular">{formatTokens(turn.tokens)}</span>
-            ) : null}
-            {end && turnHasTrace(turn) && (
-              <TurnTrace end={end} items={byEnd[turn.id]} model={model} side="left" />
-            )}
+              {turn.elapsedMs !== undefined && (
+                <span className="shrink-0 text-caption text-fg-muted tabular">
+                  {formatDuration(turn.elapsedMs)}
+                </span>
+              )}
+              {turn.cost !== undefined ? (
+                <span className="shrink-0 text-caption text-fg-muted tabular">{formatCost(turn.cost)}</span>
+              ) : turn.tokens !== undefined ? (
+                <span className="shrink-0 text-caption text-fg-muted tabular">
+                  {formatTokens(turn.tokens)}
+                </span>
+              ) : null}
+            </button>
+            <span className="flex shrink-0 pr-2">
+              {end && turnHasTrace(turn) && (
+                <TurnTrace end={end} items={byEnd[turn.id]} model={model} side="left" />
+              )}
+            </span>
           </div>
         );
       })}
+      {opened && (
+        <TurnEvents
+          open
+          onOpenChange={(next) => !next && setOpen(null)}
+          title={opened.prompt}
+          items={byEnd[opened.id] ?? []}
+          elapsedMs={opened.elapsedMs}
+          outcome={opened.outcome}
+          trace={
+            openedEnd && turnHasTrace(opened) ? (
+              <TurnTrace end={openedEnd} items={byEnd[opened.id]} model={model} />
+            ) : undefined
+          }
+        />
+      )}
     </Section>
   );
 }

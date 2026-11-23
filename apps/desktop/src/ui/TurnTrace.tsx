@@ -92,7 +92,7 @@ export function TurnTrace({
           align={side === "left" ? "center" : "start"}
           sideOffset={6}
           aria-label="Turn trace"
-          className="elevated z-40 flex max-h-[min(560px,75vh)] w-[min(640px,85vw)] flex-col gap-2 p-3 outline-none"
+          className="elevated z-50 flex max-h-[min(560px,75vh)] w-[min(640px,85vw)] flex-col gap-2 p-3 outline-none"
         >
           <TracePanel end={end} items={items ?? []} model={model} />
         </Popover.Content>
