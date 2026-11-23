@@ -13,15 +13,7 @@ import { primaryModifier } from "../lib/platform";
 // closes suggestions, then leaves a queued edit, then clears the draft, then
 // stops the turn.
 
-import {
-  memo,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SlashCommand } from "../acp/types";
 import { fieldBeat } from "../lib/backdrop/events";
@@ -29,13 +21,7 @@ import { insertTranscript } from "../lib/dictation";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { measuredFieldHeight } from "../lib/fieldHeight";
 import { haptic } from "../lib/haptics";
-import {
-  clipboardImage,
-  type ImageFile,
-  onFileDrop,
-  pickFiles,
-  projectFiles,
-} from "../lib/native";
+import { clipboardImage, type ImageFile, onFileDrop, pickFiles, projectFiles } from "../lib/native";
 import {
   dismissNextPrompt,
   nextPromptDismissed,
@@ -65,26 +51,11 @@ import {
   type ThreadChoice,
   trackPastes,
 } from "../state/compose";
-import {
-  agentStateOf,
-  type DelegateNode,
-  delegateTree,
-} from "../state/delegates";
-import {
-  atToken,
-  insertKeyword,
-  insertRef,
-  type MentionScope,
-  rankFiles,
-} from "../state/fileRefs";
+import { agentStateOf, type DelegateNode, delegateTree } from "../state/delegates";
+import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles } from "../state/fileRefs";
 import { controlDisabledReason } from "../state/harness";
 import { useMachineReconnecting } from "../state/machines";
-import {
-  type MentionNode,
-  type MentionSection,
-  mentionNodes,
-  rankMachines,
-} from "../state/mentionDrawer";
+import { type MentionNode, type MentionSection, mentionNodes, rankMachines } from "../state/mentionDrawer";
 import { noteRecentFile, recentFiles, recentFirst } from "../state/recentFiles";
 import { scheduledSummary, scheduleRefusalText } from "../state/schedule";
 import { useStops } from "../state/stopTrace";
@@ -114,11 +85,7 @@ import {
 } from "../state/store";
 import { isRunning, localId, type ThreadState } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
-import {
-  AttachmentStrip,
-  attachmentsFromFiles,
-  attachmentsFromPaths,
-} from "./Attachments";
+import { AttachmentStrip, attachmentsFromFiles, attachmentsFromPaths } from "./Attachments";
 import { ComposerDrawer } from "./ComposerDrawer";
 import {
   FolderMenu,
@@ -173,10 +140,7 @@ const MIN_HEIGHT = Math.round(LINE + PAD * 2);
 const MAX_HEIGHT = 208;
 const CARD_BOTTOM_PADDING = 12;
 const TOOLTIP_GAP = 8;
-const tooltipBelowCard = {
-  side: "bottom",
-  sideOffset: CARD_BOTTOM_PADDING + TOOLTIP_GAP,
-} as const;
+const tooltipBelowCard = { side: "bottom", sideOffset: CARD_BOTTOM_PADDING + TOOLTIP_GAP } as const;
 
 // How much of a folder's path the picker shows: its ends, not the whole of a deep path.
 
@@ -200,12 +164,7 @@ function sameComposer(
   if (a.thread === b.thread) return true;
   if (!a.thread || !b.thread) return false;
   for (const key of Object.keys(b.thread) as (keyof ThreadState)[]) {
-    if (
-      key !== "items" &&
-      key !== "toolIndex" &&
-      key !== "usage" &&
-      a.thread[key] !== b.thread[key]
-    )
+    if (key !== "items" && key !== "toolIndex" && key !== "usage" && a.thread[key] !== b.thread[key])
       return false;
   }
   return Object.keys(a.thread).length === Object.keys(b.thread).length;
@@ -226,9 +185,7 @@ export const Composer = memo(function Composer({
   const extras = useApp((s) => s.extras[key] ?? emptyExtras);
   const editing = useApp((s) => s.editing[key]);
   // This thread's own session list, or else the menu of its harness (the engine's catalog for a new thread).
-  const commands = useApp(
-    useShallow((s) => commandsFor(s, thread?.id ?? null)),
-  );
+  const commands = useApp(useShallow((s) => commandsFor(s, thread?.id ?? null)));
   const projectCwd = useApp((s) => s.projectCwd);
   // The computer this composer speaks for: the thread's own, or the one **Run on** names for a new
   // thread. Its harnesses are what the `@` agents and the model picker offer (docs/desktop.md ›
@@ -247,11 +204,7 @@ export const Composer = memo(function Composer({
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
-  const [files, setFiles] = useState<{
-    cwd: string;
-    at: number;
-    paths: string[];
-  } | null>(null);
+  const [files, setFiles] = useState<{ cwd: string; at: number; paths: string[] } | null>(null);
   const [dropping, setDropping] = useState(false);
   // The send-later dialog: opened from the + menu, with the draft it is scheduling.
   const [sendLater, setSendLater] = useState(false);
@@ -263,26 +216,20 @@ export const Composer = memo(function Composer({
   const offline = useThreadOffline(thread?.id);
   const offMachine = useMachineOfThread(thread?.id);
   // Away, but on the shell's own retry clock: the field says it is coming back, not that it is gone.
-  const offReconnecting = useMachineReconnecting(
-    thread ? splitThreadKey(thread.id).host : undefined,
-  );
+  const offReconnecting = useMachineReconnecting(thread ? splitThreadKey(thread.id).host : undefined);
   // What ⌘⏎ would do with what is in the field now, by the same rule the queued row uses: the
   // placeholder says it, so a message that will wait does not read as one that steers.
   const decision = thread ? sendDecisionFor(thread, extras) : undefined;
   // The queued message the composer is editing (its pencil, or ↑): ⏎ saves it where it waits, and
   // never sends it. What the composer held before comes back when the edit ends.
-  const queuedEdit = useApp((s) =>
-    s.queuedEdit?.threadId === key ? s.queuedEdit : null,
-  );
+  const queuedEdit = useApp((s) => (s.queuedEdit?.threadId === key ? s.queuedEdit : null));
   // `/`: the commands, at the start or anywhere after whitespace, filtered by the
   // token the caret is in. `/usr/bin` is a path, not a command (state/compose.ts).
-  const slash =
-    dismissed === draft || extras.command ? null : slashToken(draft, caret);
+  const slash = dismissed === draft || extras.command ? null : slashToken(draft, caret);
   const commandQuery = slash?.query ?? null;
   const list = useMemo(() => {
     if (commandQuery === null) return [];
-    if (slash?.start !== 0 || queuedEdit)
-      return commandSuggestions(commandQuery, commands);
+    if (slash?.start !== 0 || queuedEdit) return commandSuggestions(commandQuery, commands);
     return commandSuggestions(commandQuery, [
       {
         name: "/report",
@@ -301,11 +248,7 @@ export const Composer = memo(function Composer({
   const cwdForFiles = thread?.cwd ?? projectCwd;
   const wantsFiles = !!at && !!cwdForFiles;
   useEffect(() => {
-    if (
-      !wantsFiles ||
-      (files?.cwd === cwdForFiles && Date.now() - files.at < FILES_FRESH_MS)
-    )
-      return;
+    if (!wantsFiles || (files?.cwd === cwdForFiles && Date.now() - files.at < FILES_FRESH_MS)) return;
     let live = true;
     void projectFiles(cwdForFiles).then((paths) => {
       if (live) setFiles({ cwd: cwdForFiles, at: Date.now(), paths });
@@ -316,8 +259,7 @@ export const Composer = memo(function Composer({
   }, [wantsFiles, cwdForFiles, files]);
   // `#`: the threads this message can point at. It opens like `/` and `@` do, and never inside a
   // word, a heading or code (state/compose.ts `hashToken`).
-  const hash =
-    dismissed === draft || slash || at ? null : hashToken(draft, caret);
+  const hash = dismissed === draft || slash || at ? null : hashToken(draft, caret);
   // What is typed after the trigger, and the group the trigger narrowed to (`#` narrows to threads).
   const mentionQuery = hash?.query ?? at?.query ?? "";
   const scope: MentionScope | null = hash ? "threads" : (at?.scope ?? null);
@@ -337,16 +279,10 @@ export const Composer = memo(function Composer({
   // The threads that work or ask right now, as their rows say it: read as lists so a streamed chunk
   // somewhere else does not redraw the composer.
   const working = useApp(
-    useShallow((s) =>
-      Object.values(s.threads).flatMap((t) => (isRunning(t) ? [t.id] : [])),
-    ),
+    useShallow((s) => Object.values(s.threads).flatMap((t) => (isRunning(t) ? [t.id] : []))),
   );
   const asking = useApp(
-    useShallow((s) =>
-      Object.values(s.threads).flatMap((t) =>
-        t.permissions.length ? [t.id] : [],
-      ),
-    ),
+    useShallow((s) => Object.values(s.threads).flatMap((t) => (t.permissions.length ? [t.id] : []))),
   );
   const threadChoices = useMemo(() => {
     const workingIds = new Set(working);
@@ -363,11 +299,7 @@ export const Composer = memo(function Composer({
           harness: session.harness,
           project: project ? projectName(project) : undefined,
           home: project === home || session.cwd === home,
-          state: mentionStateOf(
-            session,
-            workingIds.has(session.id),
-            askingIds.has(session.id),
-          ),
+          state: mentionStateOf(session, workingIds.has(session.id), askingIds.has(session.id)),
           updatedAt: session.updatedAt,
         },
       ];
@@ -412,12 +344,8 @@ export const Composer = memo(function Composer({
   // The thread a delegate would be started from: a child on this harness inherits its login.
   const parent = useMemo(
     () => ({
-      harness: openId
-        ? sessions.find((x) => x.id === openId)?.harness
-        : newHarness,
-      account: openId
-        ? (sessions.find((x) => x.id === openId)?.account ?? null)
-        : newAccount,
+      harness: openId ? sessions.find((x) => x.id === openId)?.harness : newHarness,
+      account: openId ? (sessions.find((x) => x.id === openId)?.account ?? null) : newAccount,
     }),
     [openId, sessions, newHarness, newAccount],
   );
@@ -433,8 +361,7 @@ export const Composer = memo(function Composer({
   const machineMentions = useMachineMentions(host);
   // The sections the reader opened whole with a `Show all` row: a few rows of each is what the
   // drawer offers first, and this is the rest of the ones they asked for.
-  const [expanded, setExpanded] =
-    useState<ReadonlySet<MentionSection>>(NOT_EXPANDED);
+  const [expanded, setExpanded] = useState<ReadonlySet<MentionSection>>(NOT_EXPANDED);
   // The harnesses' names, for the sub-heading an agent's harness gets (`@` groups by harness).
   const harnessNames = useMemo(
     () => Object.fromEntries((harnesses ?? []).map((h) => [h.id, h.name])),
@@ -451,17 +378,13 @@ export const Composer = memo(function Composer({
     return mentionNodes({
       query: mentionQuery,
       scope,
-      keywords: scope
-        ? []
-        : keywordEntries(mentionQuery, machineMentions.length > 0),
+      keywords: scope ? [] : keywordEntries(mentionQuery, machineMentions.length > 0),
       // Ranked over everything, so a match past the few rows on screen still answers what is typed.
       agents: rankAgents(mentionQuery, agents, ALL_MATCHES),
       machines: rankMachines(machineMentions, mentionQuery),
       delegates: rankThreads(delegates, mentionQuery, ALL_MATCHES),
       threads: rankThreads(threadChoices, mentionQuery, ALL_MATCHES),
-      files: mentionQuery.trim()
-        ? ranked
-        : recentFirst(ranked, recentFiles(cwdForFiles)),
+      files: mentionQuery.trim() ? ranked : recentFirst(ranked, recentFiles(cwdForFiles)),
       expanded,
       harnessNames,
     });
@@ -482,26 +405,15 @@ export const Composer = memo(function Composer({
   // one list so the arrow keys walk the rows across the sections and never land on a heading.
   const drawerRows = useMemo((): DrawerRowItem[] => {
     if (slash) {
-      return list.map((command, index) => ({
-        kind: "row",
-        entry: { kind: "command", command },
-        index,
-      }));
+      return list.map((command, index) => ({ kind: "row", entry: { kind: "command", command }, index }));
     }
     const rows: DrawerRowItem[] = [];
     let index = 0;
     for (const node of mention) {
-      if (node.kind === "entry")
-        rows.push({ kind: "row", entry: node.entry, index: index++ });
+      if (node.kind === "entry") rows.push({ kind: "row", entry: node.entry, index: index++ });
       else if (node.kind === "more")
-        rows.push({
-          kind: "more",
-          section: node.section,
-          hidden: node.hidden,
-          index: index++,
-        });
-      else if (node.kind === "less")
-        rows.push({ kind: "less", section: node.section, index: index++ });
+        rows.push({ kind: "more", section: node.section, hidden: node.hidden, index: index++ });
+      else if (node.kind === "less") rows.push({ kind: "less", section: node.section, index: index++ });
       else rows.push(node);
     }
     return rows;
@@ -511,10 +423,8 @@ export const Composer = memo(function Composer({
     (): DrawerPick[] =>
       drawerRows.flatMap((row): DrawerPick[] => {
         if (row.kind === "row") return [{ kind: "entry", entry: row.entry }];
-        if (row.kind === "more")
-          return [{ kind: "more", section: row.section }];
-        if (row.kind === "less")
-          return [{ kind: "less", section: row.section }];
+        if (row.kind === "more") return [{ kind: "more", section: row.section }];
+        if (row.kind === "less") return [{ kind: "less", section: row.section }];
         return [];
       }),
     [drawerRows],
@@ -530,17 +440,10 @@ export const Composer = memo(function Composer({
   const speakingTo = useApp((s) => {
     if (harness) return harness.name;
     const id = newThreadChoice(s)?.harness;
-    return (
-      harnessesOn(s, s.newThreadHost)?.harnesses.find((h) => h.id === id)
-        ?.name ?? "RustCode"
-    );
+    return harnessesOn(s, s.newThreadHost)?.harnesses.find((h) => h.id === id)?.name ?? "RustCode";
   });
   const images = acceptsImages(thread);
-  const cancelReason = controlDisabledReason(
-    "cancel",
-    thread?.harness?.capabilities,
-    harnessName,
-  );
+  const cancelReason = controlDisabledReason("cancel", thread?.harness?.capabilities, harnessName);
   // A Stop in flight (state/stopTrace.ts): the button says so until the turn ends or the Stop fails.
   const stopping = useStops((s) => !!thread?.id && !!s.pending[thread.id]);
   const cwd = thread?.cwd ?? projectCwd;
@@ -556,32 +459,26 @@ export const Composer = memo(function Composer({
       draftMirror(
         draft,
         extras.mentions,
-        selectionEnd === null
-          ? undefined
-          : { start: caret, end: Math.max(caret, selectionEnd) },
+        selectionEnd === null ? undefined : { start: caret, end: Math.max(caret, selectionEnd) },
       ),
     [draft, extras.mentions, caret, selectionEnd],
   );
   useLayoutEffect(() => {
-    if (mirror.current && field.current)
-      mirror.current.scrollTop = field.current.scrollTop;
+    if (mirror.current && field.current) mirror.current.scrollTop = field.current.scrollTop;
   });
   // Which edges of the scrolled field fade (lib/fade.ts); nothing to fade while the draft fits.
   const [fade, setFade] = useState<FieldFade>("none");
   // Carried by the field and the mirror alike: the mask (`.rc-field-fade`) takes its two depths.
   const fadeStyle = {
-    "--rc-fade-top":
-      fade === "top" || fade === "both" ? `${FIELD_FADE}px` : "0px",
-    "--rc-fade-bottom":
-      fade === "bottom" || fade === "both" ? `${FIELD_FADE}px` : "0px",
+    "--rc-fade-top": fade === "top" || fade === "both" ? `${FIELD_FADE}px` : "0px",
+    "--rc-fade-bottom": fade === "bottom" || fade === "both" ? `${FIELD_FADE}px` : "0px",
   } as React.CSSProperties;
   // The field's scroll is read twice: the mirror keeps the highlighted text under the textarea, and
   // the fade follows which edge the draft is cut at.
   const syncField = () => {
     const el = field.current;
     if (!el) return;
-    if (mirror.current && mirror.current.scrollTop !== el.scrollTop)
-      mirror.current.scrollTop = el.scrollTop;
+    if (mirror.current && mirror.current.scrollTop !== el.scrollTop) mirror.current.scrollTop = el.scrollTop;
     setFade(fieldFade(el.scrollTop, el.scrollHeight, el.clientHeight));
   };
 
@@ -593,10 +490,7 @@ export const Composer = memo(function Composer({
   const followCaret = () => {
     const el = field.current;
     if (!el || el.scrollHeight <= el.clientHeight) return;
-    if (
-      el.selectionStart === el.value.length &&
-      el.selectionStart === el.selectionEnd
-    ) {
+    if (el.selectionStart === el.value.length && el.selectionStart === el.selectionEnd) {
       el.scrollTop = el.scrollHeight;
     }
   };
@@ -610,21 +504,14 @@ export const Composer = memo(function Composer({
     if (!el) return;
     const twin = gauge.current;
     const height = twin
-      ? measuredFieldHeight(
-          twin,
-          { value: el.value, width: el.clientWidth },
-          MIN_HEIGHT,
-          MAX_HEIGHT,
-        )
+      ? measuredFieldHeight(twin, { value: el.value, width: el.clientWidth }, MIN_HEIGHT, MAX_HEIGHT)
       : Math.min(Math.max(el.scrollHeight, MIN_HEIGHT), MAX_HEIGHT);
     el.style.height = `${height}px`;
   };
 
   // Ready to type on entering a thread, and again on coming back to the chat from Settings or
   // another view (the draft is kept either way).
-  const inChat = useApp(
-    (s) => !s.settings && s.view.kind === "chat" && !s.switcherOpen,
-  );
+  const inChat = useApp((s) => !s.settings && s.view.kind === "chat" && !s.switcherOpen);
   // biome-ignore lint/correctness/useExhaustiveDependencies: refocus on thread change
   useEffect(() => {
     history.current = null;
@@ -729,23 +616,17 @@ export const Composer = memo(function Composer({
       if (el) el.selectionStart = el.selectionEnd = el.value.length;
     });
   };
-  const change = (fn: (e: ComposeExtras) => ComposeExtras) =>
-    setExtras(key, fn);
+  const change = (fn: (e: ComposeExtras) => ComposeExtras) => setExtras(key, fn);
 
   // A queued message that leaves the queue while it is open here (it started, or it was removed)
   // ends its edit; the store keeps what the user typed only when the composer was empty before it.
   const queue = thread?.queue;
   useEffect(() => {
     if (!queuedEdit) return;
-    if (
-      queuedEdit.threadId !== key ||
-      !queue?.some((q) => q.id === queuedEdit.queuedId)
-    )
-      endQueuedEdit();
+    if (queuedEdit.threadId !== key || !queue?.some((q) => q.id === queuedEdit.queuedId)) endQueuedEdit();
   }, [key, queue, queuedEdit]);
   const attach = (more: Attachment[]) => {
-    if (more.length)
-      change((e) => ({ ...e, attachments: [...e.attachments, ...more] }));
+    if (more.length) change((e) => ({ ...e, attachments: [...e.attachments, ...more] }));
   };
   // A picture WebKitGTK keeps to the native clipboard (Linux): the shell reads it as the PNG an
   // attachment carries, and a harness that does not take images refuses it as it does a dropped one.
@@ -754,10 +635,7 @@ export const Composer = memo(function Composer({
     try {
       image = await clipboardImage();
     } catch (error) {
-      toast(
-        `Could not paste the image: ${error instanceof Error ? error.message : String(error)}`,
-        "error",
-      );
+      toast(`Could not paste the image: ${error instanceof Error ? error.message : String(error)}`, "error");
       return;
     }
     if (!image) return;
@@ -770,19 +648,16 @@ export const Composer = memo(function Composer({
 
   // Files dropped on the app window arrive as paths from the shell.
   const dropped = useRef<(paths: string[]) => void>(() => undefined);
-  dropped.current = (paths) =>
-    void attachmentsFromPaths(paths, images, harnessName).then(attach);
+  dropped.current = (paths) => void attachmentsFromPaths(paths, images, harnessName).then(attach);
   useEffect(() => {
     let stop: (() => void) | undefined;
     let live = true;
     void onFileDrop((event) => {
       // A drag over the sidebar is a folder becoming a project there, and one over a question's
       // form goes with its answer: neither is the composer's attachment.
-      const elsewhere =
-        overFolderDrop(event.position) || overQuestionDrop(event.position);
+      const elsewhere = overFolderDrop(event.position) || overQuestionDrop(event.position);
       setDropping(event.type === "over" && !elsewhere);
-      if (event.type === "drop" && event.paths.length && !elsewhere)
-        dropped.current(event.paths);
+      if (event.type === "drop" && event.paths.length && !elsewhere) dropped.current(event.paths);
     }).then((unlisten) => {
       if (live) stop = unlisten;
       else unlisten();
@@ -828,11 +703,7 @@ export const Composer = memo(function Composer({
     setReportOpen(true);
   };
   const send = (steer: boolean) => {
-    if (
-      !queuedEdit &&
-      !extras.command &&
-      draft.trim().toLowerCase() === "/report"
-    ) {
+    if (!queuedEdit && !extras.command && draft.trim().toLowerCase() === "/report") {
       openIssueReport();
       return;
     }
@@ -860,9 +731,7 @@ export const Composer = memo(function Composer({
     fadeClearedField(fieldBox.current);
     // The live background answers with a wave from the composer (lib/backdrop/events.ts).
     fieldBeat("send", fieldBox.current);
-    const sending = steer
-      ? steerOrSubmit(text, sentExtras)
-      : submit(text, sentExtras);
+    const sending = steer ? steerOrSubmit(text, sentExtras) : submit(text, sentExtras);
     void sending.then((sent) => {
       // A thread that could not start keeps the message for another try.
       if (!sent && !useApp.getState().drafts[key]) {
@@ -902,9 +771,7 @@ export const Composer = memo(function Composer({
     const next = insertRef(draft, at, path);
     update(next.text);
     setCaret(next.caret);
-    requestAnimationFrame(() =>
-      field.current?.setSelectionRange(next.caret, next.caret),
-    );
+    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
   };
 
   const complete = (command: SlashCommand, run: boolean) => {
@@ -912,16 +779,10 @@ export const Composer = memo(function Composer({
     // A leading command keeps its path. A command the app answers itself (a picker, a new
     // thread) runs at once, arguments or not; one that wants arguments becomes the token in
     // front of the field.
-    if (
-      slash.start === 0 &&
-      slash.start + 1 + slash.query.length === draft.length
-    ) {
+    if (slash.start === 0 && slash.start + 1 + slash.query.length === draft.length) {
       if (command.action === "issue_report") {
         openIssueReport();
-      } else if (
-        run &&
-        (!command.takesArguments || command.action !== "execute")
-      ) {
+      } else if (run && (!command.takesArguments || command.action !== "execute")) {
         update("");
         const message = commandSubmission(command);
         void submit(message.text, message.extras);
@@ -936,9 +797,7 @@ export const Composer = memo(function Composer({
     const next = insertCommand(draft, slash, command.name);
     update(next.text);
     setCaret(next.caret);
-    requestAnimationFrame(() =>
-      field.current?.setSelectionRange(next.caret, next.caret),
-    );
+    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
   };
 
   const addMention = (mention: Mention) => {
@@ -952,9 +811,7 @@ export const Composer = memo(function Composer({
     // the draft's own words say only the title (state/compose.ts `Mention`).
     change((e) => ({ ...e, mentions: [...(e.mentions ?? []), mention] }));
     setCaret(next.caret);
-    requestAnimationFrame(() =>
-      field.current?.setSelectionRange(next.caret, next.caret),
-    );
+    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
   };
 
   // A group's keyword is written at the token, so the drawer stays open on that group and the next
@@ -964,9 +821,7 @@ export const Composer = memo(function Composer({
     const next = insertKeyword(draft, at, scope);
     update(next.text);
     setCaret(next.caret);
-    requestAnimationFrame(() =>
-      field.current?.setSelectionRange(next.caret, next.caret),
-    );
+    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
   };
 
   // Accepting a row: `Enter` runs a command the app answers itself, as it always has; the arrows'
@@ -995,18 +850,10 @@ export const Composer = memo(function Composer({
         });
         return;
       case "machine":
-        addMention({
-          kind: "machine",
-          id: entry.machine.id,
-          name: entry.machine.name,
-        });
+        addMention({ kind: "machine", id: entry.machine.id, name: entry.machine.name });
         return;
       case "thread":
-        addMention({
-          kind: "thread",
-          id: entry.thread.id,
-          title: entry.thread.title,
-        });
+        addMention({ kind: "thread", id: entry.thread.id, title: entry.thread.title });
         return;
     }
   };
@@ -1014,10 +861,7 @@ export const Composer = memo(function Composer({
   const onChange = (text: string) => {
     // `/name ` typed out becomes the token too, as in the SwiftUI app.
     const typed = /^(\/\S+) (.*)$/s.exec(text);
-    const command =
-      typed && !extras.command
-        ? commands.find((c) => c.name === typed[1])
-        : undefined;
+    const command = typed && !extras.command ? commands.find((c) => c.name === typed[1]) : undefined;
     if (command?.takesArguments) {
       change((e) => ({ ...e, command }));
       update(typed![2] ?? "");
@@ -1063,9 +907,7 @@ export const Composer = memo(function Composer({
     // complete a command or send a draft that was still being written.
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     // A completion menu keeps Tab and Escape; an open popover keeps its Escape.
-    const onSuggestion = suggestion
-      ? suggestionKeyAction(e, picks.length > 0 || !!drawer)
-      : null;
+    const onSuggestion = suggestion ? suggestionKeyAction(e, picks.length > 0 || !!drawer) : null;
     if (onSuggestion === "accept") {
       e.preventDefault();
       acceptSuggestion();
@@ -1079,16 +921,10 @@ export const Composer = memo(function Composer({
     if (picks.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        setSelected(
-          (i) =>
-            (i + (e.key === "ArrowDown" ? 1 : picks.length - 1)) % picks.length,
-        );
+        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : picks.length - 1)) % picks.length);
         return;
       }
-      if (
-        e.key === "Tab" ||
-        (e.key === "Enter" && !e.shiftKey && !primaryModifier(e))
-      ) {
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !primaryModifier(e))) {
         e.preventDefault();
         const pick = picks[selected] ?? picks[0];
         if (!pick) return;
@@ -1105,11 +941,7 @@ export const Composer = memo(function Composer({
       return;
     }
     const el = e.currentTarget;
-    if (
-      e.key === "Backspace" &&
-      el.selectionStart === 0 &&
-      el.selectionEnd === 0
-    ) {
+    if (e.key === "Backspace" && el.selectionStart === 0 && el.selectionEnd === 0) {
       // ⌫ at the start takes back the last chip: a link, then the command (as text).
       if (extras.links.length) {
         e.preventDefault();
@@ -1125,11 +957,7 @@ export const Composer = memo(function Composer({
       }
     }
     if (e.key === "Enter" && !primaryModifier(e) && !e.altKey && !offline) {
-      const continuation = listContinuation(
-        el.value,
-        el.selectionStart,
-        el.selectionEnd,
-      );
+      const continuation = listContinuation(el.value, el.selectionStart, el.selectionEnd);
       if (continuation) {
         e.preventDefault();
         const start = el.selectionStart;
@@ -1139,11 +967,7 @@ export const Composer = memo(function Composer({
           : document.execCommand("delete");
         if (!edited) {
           const next = continuation.start + continuation.text.length;
-          onChange(
-            el.value.slice(0, continuation.start) +
-              continuation.text +
-              el.value.slice(start),
-          );
+          onChange(el.value.slice(0, continuation.start) + continuation.text + el.value.slice(start));
           setCaret(next);
           setSelectionEnd(next);
           requestAnimationFrame(() => el.setSelectionRange(next, next));
@@ -1184,12 +1008,7 @@ export const Composer = memo(function Composer({
     // ↑ and ↓ walk what this thread was sent, newest first, a line at a time: ↑ at the first line
     // goes back, ↓ at the last line comes forward, and past the newest the draft returns. What is
     // queued here opens before the history does (it is edited, never sent again).
-    if (
-      (e.key === "ArrowUp" || e.key === "ArrowDown") &&
-      !hasExtras(extras) &&
-      thread &&
-      !queuedEdit
-    ) {
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !hasExtras(extras) && thread && !queuedEdit) {
       if (el.selectionStart !== el.selectionEnd) return;
       // The first and last line, not the first and last character: a recalled message keeps ↑ and ↓
       // walking from its own ends, and a draft of several lines still moves its caret line by line.
@@ -1201,9 +1020,7 @@ export const Composer = memo(function Composer({
         if (!atFirst) return;
         if (!walking) {
           if (draft) return;
-          const queued = [...live.queue]
-            .reverse()
-            .find((q) => !q.link && !q.wake);
+          const queued = [...live.queue].reverse().find((q) => !q.link && !q.wake);
           if (queued) {
             e.preventDefault();
             startQueuedEdit(thread.id, queued.id);
@@ -1213,9 +1030,7 @@ export const Composer = memo(function Composer({
         const sent = sentMessages(live.items ?? thread.items);
         if (!sent.length) return;
         e.preventDefault();
-        const index = walking
-          ? Math.min(walking.index + 1, sent.length - 1)
-          : 0;
+        const index = walking ? Math.min(walking.index + 1, sent.length - 1) : 0;
         history.current = { draft: walking?.draft ?? draft, index };
         recall(sent[sent.length - 1 - index]!);
         return;
@@ -1262,8 +1077,7 @@ export const Composer = memo(function Composer({
   // The drawer over the box: the commands `/` is looking for, the threads `#` is, or the agents and
   // files `@` is. A token that matches nothing still opens it and says so, where the field is about
   // to be typed in. It rises from the box's top edge, so it never covers the line being typed on.
-  const drawerLabel =
-    drawer === "commands" ? "Commands" : "Agents, threads and files";
+  const drawerLabel = drawer === "commands" ? "Commands" : "Agents, threads and files";
   // What the drawer says when nothing answers what is typed, by what was asked for.
   const emptyText =
     drawer === "commands"
@@ -1290,19 +1104,12 @@ export const Composer = memo(function Composer({
       // mid-animation leaves the pill a few px short of the drawer's settled top.
       const top =
         el && parent
-          ? main.getBoundingClientRect().bottom -
-            parent.getBoundingClientRect().top -
-            el.offsetTop
+          ? main.getBoundingClientRect().bottom - parent.getBoundingClientRect().top - el.offsetTop
           : 0;
-      main.style.setProperty(
-        "--rc-composer-float",
-        `${Math.max(0, Math.round(top))}px`,
-      );
+      main.style.setProperty("--rc-composer-float", `${Math.max(0, Math.round(top))}px`);
     };
     publish();
-    const stop = drawerRef.current
-      ? observeSize(drawerRef.current, publish)
-      : undefined;
+    const stop = drawerRef.current ? observeSize(drawerRef.current, publish) : undefined;
     window.addEventListener("resize", publish);
     return () => {
       stop?.();
@@ -1317,10 +1124,7 @@ export const Composer = memo(function Composer({
       role="region"
       aria-label="Message input"
       data-focus-area="composer"
-      className={cx(
-        "rc-composer-shell relative @container/composer",
-        className,
-      )}
+      className={cx("rc-composer-shell relative @container/composer", className)}
     >
       {thread && <QueuedAnnouncer threadId={thread.id} />}
       {/* What waits for a time the user picked, over the box: it leaves the transcript's own lane
@@ -1375,11 +1179,7 @@ export const Composer = memo(function Composer({
             if (!e.dataTransfer.files.length) return;
             e.preventDefault();
             setDropping(false);
-            void attachmentsFromFiles(
-              [...e.dataTransfer.files],
-              images,
-              harnessName,
-            ).then(attach);
+            void attachmentsFromFiles([...e.dataTransfer.files], images, harnessName).then(attach);
           }}
         >
           {thread && <LimitWaitRow threadId={thread.id} />}
@@ -1389,15 +1189,8 @@ export const Composer = memo(function Composer({
             <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-accent">
               <Pencil size={12} />
               <b>Editing a queued message</b>
-              <span className="text-fg-muted">
-                · ⏎ saves it in the queue, esc leaves it
-              </span>
-              <Pill
-                quiet
-                size="sm"
-                className="ml-auto"
-                onClick={() => cancelQueuedEdit()}
-              >
+              <span className="text-fg-muted">· ⏎ saves it in the queue, esc leaves it</span>
+              <Pill quiet size="sm" className="ml-auto" onClick={() => cancelQueuedEdit()}>
                 Cancel
               </Pill>
             </div>
@@ -1406,9 +1199,7 @@ export const Composer = memo(function Composer({
             <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-accent">
               <Pencil size={12} />
               <b>Editing a sent message</b>
-              <span className="text-fg-muted">
-                · sending takes the thread back to it
-              </span>
+              <span className="text-fg-muted">· sending takes the thread back to it</span>
               <Pill
                 quiet
                 size="sm"
@@ -1426,10 +1217,7 @@ export const Composer = memo(function Composer({
             <AttachmentStrip
               attachments={extras.attachments}
               onRemove={(id) =>
-                change((e) => ({
-                  ...e,
-                  attachments: e.attachments.filter((a) => a.id !== id),
-                }))
+                change((e) => ({ ...e, attachments: e.attachments.filter((a) => a.id !== id) }))
               }
             />
           )}
@@ -1463,12 +1251,7 @@ export const Composer = memo(function Composer({
                 url={url}
                 variant="token"
                 className="mt-1.5 rc-in"
-                onRemove={() =>
-                  change((e) => ({
-                    ...e,
-                    links: e.links.filter((l) => l !== url),
-                  }))
-                }
+                onRemove={() => change((e) => ({ ...e, links: e.links.filter((l) => l !== url) }))}
               />
             ))}
             {/* Tokens in the draft read as tokens: a mirror under the field draws the same text with
@@ -1478,10 +1261,7 @@ export const Composer = memo(function Composer({
                   text is selected. The two take the same padding, the same scroll offset and
                   the same mask, so neither drifts from the other; a token's span adds no horizontal
                   padding, which is what keeps the caret on its character. */}
-            <div
-              ref={fieldBox}
-              className="relative min-w-[160px] flex-1 basis-[160px]"
-            >
+            <div ref={fieldBox} className="relative min-w-[160px] flex-1 basis-[160px]">
               {highlightedDraft && (
                 <div
                   ref={mirror}
@@ -1542,8 +1322,7 @@ export const Composer = memo(function Composer({
               />
               {suggestion && (
                 <span id={suggestionHint} className="sr-only">
-                  Suggestion: {suggestion.text} Press Tab to insert, Escape to
-                  dismiss.
+                  Suggestion: {suggestion.text} Press Tab to insert, Escape to dismiss.
                 </span>
               )}
             </div>
@@ -1587,9 +1366,7 @@ export const Composer = memo(function Composer({
               onChange={(e) => {
                 const files = [...(e.target.files ?? [])];
                 e.target.value = "";
-                void attachmentsFromFiles(files, images, harnessName).then(
-                  attach,
-                );
+                void attachmentsFromFiles(files, images, harnessName).then(attach);
               }}
             />
             <span className="flex-1" />
@@ -1613,10 +1390,7 @@ export const Composer = memo(function Composer({
               ) : (
                 running &&
                 canSend && (
-                  <Tooltip
-                    {...tooltipBelowCard}
-                    label="Queue for when this turn ends (⏎)"
-                  >
+                  <Tooltip {...tooltipBelowCard} label="Queue for when this turn ends (⏎)">
                     <button
                       type="button"
                       aria-label="Queue message"
@@ -1631,9 +1405,7 @@ export const Composer = memo(function Composer({
               {running ? (
                 <Tooltip
                   {...tooltipBelowCard}
-                  label={
-                    cancelReason ?? (stopping ? "Stopping…" : "Stop turn (Esc)")
-                  }
+                  label={cancelReason ?? (stopping ? "Stopping…" : "Stop turn (Esc)")}
                 >
                   <button
                     type="button"
@@ -1658,15 +1430,8 @@ export const Composer = memo(function Composer({
                   <button
                     type="button"
                     aria-label="Send"
-                    disabled={
-                      !canSend ||
-                      offline ||
-                      status !== "ready" ||
-                      (!thread && !projectCwd)
-                    }
-                    onPointerEnter={(e) =>
-                      !e.currentTarget.disabled && haptic("alignment")
-                    }
+                    disabled={!canSend || offline || status !== "ready" || (!thread && !projectCwd)}
+                    onPointerEnter={(e) => !e.currentTarget.disabled && haptic("alignment")}
                     onClick={() => send(false)}
                     className="flex size-9 items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fill-strong disabled:text-fg-muted sm:size-8"
                   >
@@ -1703,11 +1468,7 @@ export const Composer = memo(function Composer({
         </div>
         <span className="flex-1" />
         <div className="flex shrink-0 items-center gap-1.5">
-          <PermissionMenu
-            threadId={thread?.id}
-            cwd={thread ? undefined : cwd}
-            compact={compact}
-          />
+          <PermissionMenu threadId={thread?.id} cwd={thread ? undefined : cwd} compact={compact} />
           <span className="flex h-7 shrink-0 items-center empty:hidden">
             <UsageMeter threadId={thread?.id} />
           </span>
