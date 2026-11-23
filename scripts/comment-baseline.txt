@@ -501,7 +501,7 @@
 6 apps/desktop/src/ui/LiveBackgroundGroup.tsx
 2 apps/desktop/src/ui/LoopBadge.tsx
 21 apps/desktop/src/ui/LoopDialog.tsx
-11 apps/desktop/src/ui/Loops.tsx
+5 apps/desktop/src/ui/Loops.tsx
 9 apps/desktop/src/ui/MachineFolderBrowser.tsx
 4 apps/desktop/src/ui/MachineGlyph.tsx
 5 apps/desktop/src/ui/MachineProfile.tsx

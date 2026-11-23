@@ -23,6 +23,7 @@ import {
   HOUR_STEPS,
   type Loop,
   type LoopDraft,
+  type LoopRun,
   type LoopWebhook,
   localDateTime,
   onceOfForm,
@@ -38,6 +39,7 @@ import {
 import { projectsOn } from "../state/projects";
 import { errorText, useApp } from "../state/store";
 import { ChevronRight, Trash2, Webhook } from "./icons";
+import { RunList } from "./JobRuns";
 import { CopyButton } from "./Markdown";
 import { Callout, cx, inputClass, noTextHelpers, Pill, Segments, Select, Switch } from "./primitives";
 
@@ -259,6 +261,8 @@ export function LoopDialog({
   onOpenChange,
   onDelete,
   onSaved,
+  runs,
+  running = false,
 }: {
   open: boolean;
   /** The job to edit (or duplicate); null makes a new one. */
@@ -268,8 +272,13 @@ export function LoopDialog({
   onOpenChange: (open: boolean) => void;
   onDelete?: () => void;
   onSaved: () => void;
+  /** The job's runs, newest first: shown beside the form when editing. */
+  runs?: readonly LoopRun[];
+  /** A run is going: the job cannot be saved until it ends. */
+  running?: boolean;
 }) {
   const isEditing = Boolean(loop && !duplicate);
+  const showRuns = isEditing && runs !== undefined;
   const sessions = useApp((s) => s.sessions);
   const projectCwd = useApp((s) => s.projectCwd);
   const harnesses = useApp((s) => s.harnesses);
@@ -486,399 +495,427 @@ export function LoopDialog({
               e.preventDefault();
               (e.currentTarget as HTMLElement).focus({ preventScroll: true });
             }}
-            className="elevated pointer-events-auto flex max-h-[calc(100%-48px)] w-[min(580px,calc(100vw-48px))] flex-col overflow-hidden"
+            className={cx(
+              "elevated pointer-events-auto flex max-h-[calc(100%-48px)] overflow-hidden",
+              showRuns && !madeWebhook
+                ? "w-[min(900px,calc(100vw-48px))]"
+                : "w-[min(580px,calc(100vw-48px))]",
+            )}
           >
             {madeWebhook ? (
-              <WebhookMade webhook={madeWebhook} onDone={() => onOpenChange(false)} />
+              <div className="flex min-w-0 flex-1 flex-col">
+                <WebhookMade webhook={madeWebhook} onDone={() => onOpenChange(false)} />
+              </div>
             ) : (
               <>
-                <div className="flex shrink-0 flex-col gap-1 px-5 pt-5 pb-3">
-                  <Dialog.Title className="font-semibold text-title3">
-                    {isEditing ? "Edit job" : "New job"}
-                  </Dialog.Title>
-                  <p className="text-caption text-fg-muted">
-                    {remote
-                      ? `This hub keeps the schedule and sends each run to ${draft.machine}. While it’s offline, runs wait here.`
-                      : "Runs on this computer while the scheduler is on, even with RustCode closed."}
-                  </p>
-                </div>
-                <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-4">
-                  <Section title="Task">
-                    {!isEditing && !duplicate && (
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="mr-0.5 text-caption text-fg-faint">Templates</span>
-                        {TEMPLATES.map((template) => (
-                          <Pill
-                            key={template.label}
-                            size="sm"
-                            quiet
-                            onClick={() => {
-                              patch({
-                                name: template.name,
-                                prompt: template.prompt,
-                                script: remote ? undefined : template.script,
-                              });
-                              patchForm(template.form);
-                              if (!remote && template.script) setScriptOpen(true);
-                            }}
-                          >
-                            {template.label}
-                          </Pill>
-                        ))}
-                      </div>
-                    )}
-                    {machineOptions.length > 1 && (
-                      <Field label="Machine">
-                        <Select
-                          label="Machine"
-                          value={draft.machine ?? ""}
-                          options={machineOptions}
-                          onChange={chooseMachine}
-                          className="h-8 max-w-full justify-between self-start rounded-md bg-fill-subtle"
-                        />
-                      </Field>
-                    )}
-                    <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] items-start gap-3">
-                      <Field label="Name">
-                        <input
-                          value={draft.name}
-                          onChange={(e) => patch({ name: e.target.value })}
-                          placeholder="CI watch"
-                          aria-label="Name"
-                          {...noTextHelpers}
-                          className={inputClass}
-                        />
-                      </Field>
-                      <Field label="Project">
-                        {remote ? (
-                          <input
-                            value={draft.workspace}
-                            onChange={(e) => patch({ workspace: e.target.value })}
-                            placeholder={`Absolute folder on ${draft.machine}`}
-                            aria-label="Project"
-                            {...noTextHelpers}
-                            className={cx(inputClass, "font-mono")}
-                          />
-                        ) : (
-                          <Select
-                            label="Project"
-                            value={draft.workspace}
-                            options={
-                              projectOptions.length
-                                ? projectOptions
-                                : [{ value: "", label: "No projects yet" }]
-                            }
-                            onChange={(workspace) => patch({ workspace, threadId: undefined })}
-                            className="h-8! max-w-full justify-between rounded-md bg-fill-subtle"
-                          />
-                        )}
-                      </Field>
-                    </div>
-                    <Field label="Prompt">
-                      <textarea
-                        value={draft.prompt}
-                        onChange={(e) => patch({ prompt: e.target.value })}
-                        placeholder="Check CI on main and tell me only if something broke."
-                        aria-label="Prompt"
-                        rows={3}
-                        {...noTextHelpers}
-                        className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
-                      />
-                    </Field>
-                    {remote ? null : scriptOpen ? (
-                      <Field label="Pre-check script (optional)">
-                        <textarea
-                          value={draft.script ?? ""}
-                          onChange={(e) => patch({ script: e.target.value })}
-                          placeholder="gh run list --branch main --status failure --limit 5"
-                          aria-label="Script"
-                          rows={2}
-                          {...noTextHelpers}
-                          className="max-h-40 min-h-12 resize-y rounded-lg bg-fill-subtle px-3 py-2 font-mono text-caption text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
-                        />
-                        <p className="text-caption text-fg-muted">
-                          Runs first in the project folder. The agent starts only when it prints something,
-                          with that output added to the prompt; no output costs no tokens.
-                        </p>
-                      </Field>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setScriptOpen(true)}
-                        className="-mx-1 flex items-center gap-1 self-start rounded-md px-1 py-0.5 text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg"
-                      >
-                        <ChevronRight size={12} />
-                        Pre-check script
-                        <span className="text-fg-faint">· start the agent only when it prints something</span>
-                      </button>
-                    )}
-                  </Section>
-                  <Section title="When it runs">
-                    <Field label="Schedule">
-                      <Segments
-                        label="Schedule"
-                        value={repeatChoice}
-                        options={REPEATS}
-                        onChange={chooseRepeat}
-                      />
-                      {form.repeat === "hours" && (
-                        <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
-                          <span>Every</span>
-                          <Select
-                            label="Hours between runs"
-                            value={String(form.everyHours)}
-                            options={HOUR_STEPS.map((n) => ({
-                              value: String(n),
-                              label: n === 1 ? "hour" : `${n} hours`,
-                            }))}
-                            onChange={(n) => patchForm({ everyHours: Number(n) })}
-                          />
-                          {zone}
-                        </div>
-                      )}
-                      {repeatChoice === "weekly" && (
-                        <div role="group" aria-label="Days" className="flex flex-wrap gap-1">
-                          {DAY_TOGGLES.map(({ day, label }) => {
-                            const on = form.days.includes(day);
-                            return (
-                              <Pill
-                                key={day}
-                                size="sm"
-                                prominent={on}
-                                aria-pressed={on}
-                                className="w-11"
-                                onClick={() =>
-                                  setForm((f) => ({
-                                    ...f,
-                                    days: f.days.includes(day)
-                                      ? f.days.filter((d) => d !== day)
-                                      : [...f.days, day],
-                                  }))
-                                }
-                              >
-                                {label}
-                              </Pill>
-                            );
-                          })}
-                        </div>
-                      )}
-                      {form.repeat === "days" && (
-                        <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
-                          <span>At</span>
-                          <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
-                          {zone}
-                        </div>
-                      )}
-                      {form.repeat === "monthly" && (
-                        <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
-                          <span>On the</span>
-                          <Select
-                            label="Day of the month"
-                            value={String(form.monthDay)}
-                            options={MONTH_DAYS}
-                            onChange={(day) => patchForm({ monthDay: Number(day) })}
-                          />
-                          <span>at</span>
-                          <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
-                          {zone}
-                        </div>
-                      )}
-                      {form.repeat === "once" && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <input
-                            type="datetime-local"
-                            value={form.onceAt}
-                            min={localDateTime(new Date())}
-                            onChange={(e) => patchForm({ onceAt: e.target.value })}
-                            aria-label="Date and time"
-                            className={cx(inputClass, "w-auto")}
-                          />
-                          {onceShortcuts().map((shortcut) => (
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <div className="flex shrink-0 flex-col gap-1 px-5 pt-5 pb-3">
+                    <Dialog.Title className="font-semibold text-title3">
+                      {isEditing ? (loop?.name ?? "Edit job") : "New job"}
+                    </Dialog.Title>
+                    <p className="text-caption text-fg-muted">
+                      {remote
+                        ? `This hub keeps the schedule and sends each run to ${draft.machine}. While it’s offline, runs wait here.`
+                        : "Runs on this computer while the scheduler is on, even with RustCode closed."}
+                    </p>
+                  </div>
+                  <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-4">
+                    <Section title="Task">
+                      {!isEditing && !duplicate && (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="mr-0.5 text-caption text-fg-faint">Templates</span>
+                          {TEMPLATES.map((template) => (
                             <Pill
-                              key={shortcut.label}
-                              quiet
+                              key={template.label}
                               size="sm"
-                              onClick={() => patchForm({ onceAt: shortcut.at })}
+                              quiet
+                              onClick={() => {
+                                patch({
+                                  name: template.name,
+                                  prompt: template.prompt,
+                                  script: remote ? undefined : template.script,
+                                });
+                                patchForm(template.form);
+                                if (!remote && template.script) setScriptOpen(true);
+                              }}
                             >
-                              {shortcut.label}
+                              {template.label}
                             </Pill>
                           ))}
                         </div>
                       )}
-                      {form.repeat === "cron" && (
-                        <div className="flex items-center gap-2">
-                          <input
-                            value={form.cron}
-                            onChange={(e) => patchForm({ cron: e.target.value })}
-                            placeholder="0 9 * * MON-FRI"
-                            aria-label="Cron expression"
-                            {...noTextHelpers}
-                            className={cx(inputClass, "min-w-0 flex-1 font-mono")}
-                          />
-                          {zone}
-                        </div>
-                      )}
-                      {(cronError || form.repeat === "cron" || once || manual) && (
-                        <p
-                          aria-live="polite"
-                          className={cx("pt-0.5 text-caption", cronError ? "text-danger" : "text-fg-muted")}
-                        >
-                          {cronError ?? words ?? `Cron ${cron}`}
-                        </p>
-                      )}
-                    </Field>
-                    <ToggleRow
-                      label="Webhook"
-                      hint={
-                        draft.webhook
-                          ? "A POST to the job’s URL starts a run, with the request body added to the prompt as data."
-                          : "Also start runs from GitHub or another service by calling a URL."
-                      }
-                      checked={draft.webhook ?? false}
-                      onChange={(webhook) => patch({ webhook, rotateWebhook: false })}
-                    />
-                    {draft.webhook && isEditing && loop?.webhook && (
-                      <div className="flex items-center gap-3 rounded-lg bg-fill-subtle px-3 py-2">
-                        <Webhook size={14} className="shrink-0 text-fg-muted" />
-                        <div className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate font-mono text-caption text-fg">
-                            POST /hooks/{loop.id}/••••••••
-                          </span>
-                          <span className="text-caption text-fg-muted">
-                            {draft.rotateWebhook
-                              ? "A new URL is shown after saving, and this one stops working."
-                              : "Its URL was shown once, when it was made."}
-                          </span>
-                        </div>
-                        <Pill
-                          size="sm"
-                          prominent={draft.rotateWebhook}
-                          aria-pressed={draft.rotateWebhook ?? false}
-                          onClick={() => patch({ rotateWebhook: !draft.rotateWebhook })}
-                        >
-                          {draft.rotateWebhook ? "Keep URL" : "Replace URL"}
-                        </Pill>
-                      </div>
-                    )}
-                  </Section>
-                  <Section title="How it runs">
-                    {!remote && (
-                      <Field label="Each run">
-                        <Segments
-                          label="Each run"
-                          value={target}
-                          options={TARGETS.map((t) => ({ value: t.value, label: t.label }))}
-                          onChange={setTarget}
-                        />
-                        {target === "one" &&
-                          (threadOptions.length ? (
-                            <Select
-                              label="Thread"
-                              value={threadId ?? ""}
-                              options={threadOptions}
-                              onChange={(id) => patch({ threadId: id })}
-                              className="max-w-full self-start"
-                            />
-                          ) : (
-                            <p className="text-caption text-danger">This project has no threads yet.</p>
-                          ))}
-                        <p className="text-caption text-fg-muted">
-                          {target === "one"
-                            ? "Sends the prompt to this thread when it’s idle."
-                            : "Starts a new thread each time, and archives it when there’s nothing to report."}
-                        </p>
-                      </Field>
-                    )}
-                    {target === "fresh" && (
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
-                        <Field label="Harness">
+                      {machineOptions.length > 1 && (
+                        <Field label="Machine">
                           <Select
-                            label="Harness"
-                            value={runHarnessId ?? ""}
-                            options={harnessOptions}
-                            onChange={(harness) => patch({ harness, account: "", model: "", effort: "" })}
+                            label="Machine"
+                            value={draft.machine ?? ""}
+                            options={machineOptions}
+                            onChange={chooseMachine}
+                            className="h-8 max-w-full justify-between self-start rounded-md bg-fill-subtle"
                           />
                         </Field>
-                        {!remote && accountOptions.length > 0 && (
-                          <Field label="Account">
-                            <Select
-                              label="Account"
-                              value={draft.account || runAccount || ""}
-                              options={accountOptions}
-                              disabled={accountOptions.length === 1}
-                              onChange={(account) => patch({ account })}
-                            />
-                          </Field>
-                        )}
-                        <Field label="Model">
-                          {models.length ? (
-                            <Select
-                              label="Model"
-                              value={runModel ?? ""}
-                              options={modelOptions}
-                              onChange={(model) => patch({ model, effort: "" })}
+                      )}
+                      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] items-start gap-3">
+                        <Field label="Name">
+                          <input
+                            value={draft.name}
+                            onChange={(e) => patch({ name: e.target.value })}
+                            placeholder="CI watch"
+                            aria-label="Name"
+                            {...noTextHelpers}
+                            className={inputClass}
+                          />
+                        </Field>
+                        <Field label="Project">
+                          {remote ? (
+                            <input
+                              value={draft.workspace}
+                              onChange={(e) => patch({ workspace: e.target.value })}
+                              placeholder={`Absolute folder on ${draft.machine}`}
+                              aria-label="Project"
+                              {...noTextHelpers}
+                              className={cx(inputClass, "font-mono")}
                             />
                           ) : (
-                            <input
-                              value={draft.model ?? ""}
-                              onChange={(e) => patch({ model: e.target.value, effort: "" })}
-                              placeholder="Model ID"
-                              aria-label="Model"
-                              {...noTextHelpers}
-                              className={cx(inputClass, "h-[26px] min-w-0")}
+                            <Select
+                              label="Project"
+                              value={draft.workspace}
+                              options={
+                                projectOptions.length
+                                  ? projectOptions
+                                  : [{ value: "", label: "No projects yet" }]
+                              }
+                              onChange={(workspace) => patch({ workspace, threadId: undefined })}
+                              className="h-8! max-w-full justify-between rounded-md bg-fill-subtle"
                             />
                           )}
                         </Field>
-                        {effortOptions.length > 0 && (
-                          <Field label="Effort">
+                      </div>
+                      <Field label="Prompt">
+                        <textarea
+                          value={draft.prompt}
+                          onChange={(e) => patch({ prompt: e.target.value })}
+                          placeholder="Check CI on main and tell me only if something broke."
+                          aria-label="Prompt"
+                          rows={3}
+                          {...noTextHelpers}
+                          className="max-h-56 min-h-18 resize-y rounded-lg bg-fill-subtle px-3 py-2 text-callout text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+                        />
+                      </Field>
+                      {remote ? null : scriptOpen ? (
+                        <Field label="Pre-check script (optional)">
+                          <textarea
+                            value={draft.script ?? ""}
+                            onChange={(e) => patch({ script: e.target.value })}
+                            placeholder="gh run list --branch main --status failure --limit 5"
+                            aria-label="Script"
+                            rows={2}
+                            {...noTextHelpers}
+                            className="max-h-40 min-h-12 resize-y rounded-lg bg-fill-subtle px-3 py-2 font-mono text-caption text-fg placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
+                          />
+                          <p className="text-caption text-fg-muted">
+                            Runs first in the project folder. The agent starts only when it prints something,
+                            with that output added to the prompt; no output costs no tokens.
+                          </p>
+                        </Field>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setScriptOpen(true)}
+                          className="-mx-1 flex items-center gap-1 self-start rounded-md px-1 py-0.5 text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                        >
+                          <ChevronRight size={12} />
+                          Pre-check script
+                          <span className="text-fg-faint">
+                            · start the agent only when it prints something
+                          </span>
+                        </button>
+                      )}
+                    </Section>
+                    <Section title="When it runs">
+                      <Field label="Schedule">
+                        <Segments
+                          label="Schedule"
+                          value={repeatChoice}
+                          options={REPEATS}
+                          onChange={chooseRepeat}
+                        />
+                        {form.repeat === "hours" && (
+                          <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
+                            <span>Every</span>
                             <Select
-                              label="Effort"
-                              value={runEffort ?? ""}
-                              options={
-                                runEffort
-                                  ? effortOptions
-                                  : [{ value: "", label: "Choose effort", disabled: true }, ...effortOptions]
-                              }
-                              onChange={(effort) => patch({ effort })}
+                              label="Hours between runs"
+                              value={String(form.everyHours)}
+                              options={HOUR_STEPS.map((n) => ({
+                                value: String(n),
+                                label: n === 1 ? "hour" : `${n} hours`,
+                              }))}
+                              onChange={(n) => patchForm({ everyHours: Number(n) })}
+                            />
+                            {zone}
+                          </div>
+                        )}
+                        {repeatChoice === "weekly" && (
+                          <div role="group" aria-label="Days" className="flex flex-wrap gap-1">
+                            {DAY_TOGGLES.map(({ day, label }) => {
+                              const on = form.days.includes(day);
+                              return (
+                                <Pill
+                                  key={day}
+                                  size="sm"
+                                  prominent={on}
+                                  aria-pressed={on}
+                                  className="w-11"
+                                  onClick={() =>
+                                    setForm((f) => ({
+                                      ...f,
+                                      days: f.days.includes(day)
+                                        ? f.days.filter((d) => d !== day)
+                                        : [...f.days, day],
+                                    }))
+                                  }
+                                >
+                                  {label}
+                                </Pill>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {form.repeat === "days" && (
+                          <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
+                            <span>At</span>
+                            <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
+                            {zone}
+                          </div>
+                        )}
+                        {form.repeat === "monthly" && (
+                          <div className="flex flex-wrap items-center gap-2 text-callout text-fg-muted">
+                            <span>On the</span>
+                            <Select
+                              label="Day of the month"
+                              value={String(form.monthDay)}
+                              options={MONTH_DAYS}
+                              onChange={(day) => patchForm({ monthDay: Number(day) })}
+                            />
+                            <span>at</span>
+                            <TimeInput value={form.time} onChange={(time) => patchForm({ time })} />
+                            {zone}
+                          </div>
+                        )}
+                        {form.repeat === "once" && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="datetime-local"
+                              value={form.onceAt}
+                              min={localDateTime(new Date())}
+                              onChange={(e) => patchForm({ onceAt: e.target.value })}
+                              aria-label="Date and time"
+                              className={cx(inputClass, "w-auto")}
+                            />
+                            {onceShortcuts().map((shortcut) => (
+                              <Pill
+                                key={shortcut.label}
+                                quiet
+                                size="sm"
+                                onClick={() => patchForm({ onceAt: shortcut.at })}
+                              >
+                                {shortcut.label}
+                              </Pill>
+                            ))}
+                          </div>
+                        )}
+                        {form.repeat === "cron" && (
+                          <div className="flex items-center gap-2">
+                            <input
+                              value={form.cron}
+                              onChange={(e) => patchForm({ cron: e.target.value })}
+                              placeholder="0 9 * * MON-FRI"
+                              aria-label="Cron expression"
+                              {...noTextHelpers}
+                              className={cx(inputClass, "min-w-0 flex-1 font-mono")}
+                            />
+                            {zone}
+                          </div>
+                        )}
+                        {(cronError || form.repeat === "cron" || once || manual) && (
+                          <p
+                            aria-live="polite"
+                            className={cx("pt-0.5 text-caption", cronError ? "text-danger" : "text-fg-muted")}
+                          >
+                            {cronError ?? words ?? `Cron ${cron}`}
+                          </p>
+                        )}
+                      </Field>
+                      <ToggleRow
+                        label="Webhook"
+                        hint={
+                          draft.webhook
+                            ? "A POST to the job’s URL starts a run, with the request body added to the prompt as data."
+                            : "Also start runs from GitHub or another service by calling a URL."
+                        }
+                        checked={draft.webhook ?? false}
+                        onChange={(webhook) => patch({ webhook, rotateWebhook: false })}
+                      />
+                      {draft.webhook && isEditing && loop?.webhook && (
+                        <div className="flex items-center gap-3 rounded-lg bg-fill-subtle px-3 py-2">
+                          <Webhook size={14} className="shrink-0 text-fg-muted" />
+                          <div className="flex min-w-0 flex-1 flex-col">
+                            <span className="truncate font-mono text-caption text-fg">
+                              POST /hooks/{loop.id}/••••••••
+                            </span>
+                            <span className="text-caption text-fg-muted">
+                              {draft.rotateWebhook
+                                ? "A new URL is shown after saving, and this one stops working."
+                                : "Its URL was shown once, when it was made."}
+                            </span>
+                          </div>
+                          <Pill
+                            size="sm"
+                            prominent={draft.rotateWebhook}
+                            aria-pressed={draft.rotateWebhook ?? false}
+                            onClick={() => patch({ rotateWebhook: !draft.rotateWebhook })}
+                          >
+                            {draft.rotateWebhook ? "Keep URL" : "Replace URL"}
+                          </Pill>
+                        </div>
+                      )}
+                    </Section>
+                    <Section title="How it runs">
+                      {!remote && (
+                        <Field label="Each run">
+                          <Segments
+                            label="Each run"
+                            value={target}
+                            options={TARGETS.map((t) => ({ value: t.value, label: t.label }))}
+                            onChange={setTarget}
+                          />
+                          {target === "one" &&
+                            (threadOptions.length ? (
+                              <Select
+                                label="Thread"
+                                value={threadId ?? ""}
+                                options={threadOptions}
+                                onChange={(id) => patch({ threadId: id })}
+                                className="max-w-full self-start"
+                              />
+                            ) : (
+                              <p className="text-caption text-danger">This project has no threads yet.</p>
+                            ))}
+                          <p className="text-caption text-fg-muted">
+                            {target === "one"
+                              ? "Sends the prompt to this thread when it’s idle."
+                              : "Starts a new thread each time, and archives it when there’s nothing to report."}
+                          </p>
+                        </Field>
+                      )}
+                      {target === "fresh" && (
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
+                          <Field label="Harness">
+                            <Select
+                              label="Harness"
+                              value={runHarnessId ?? ""}
+                              options={harnessOptions}
+                              onChange={(harness) => patch({ harness, account: "", model: "", effort: "" })}
                             />
                           </Field>
-                        )}
-                      </div>
+                          {!remote && accountOptions.length > 0 && (
+                            <Field label="Account">
+                              <Select
+                                label="Account"
+                                value={draft.account || runAccount || ""}
+                                options={accountOptions}
+                                disabled={accountOptions.length === 1}
+                                onChange={(account) => patch({ account })}
+                              />
+                            </Field>
+                          )}
+                          <Field label="Model">
+                            {models.length ? (
+                              <Select
+                                label="Model"
+                                value={runModel ?? ""}
+                                options={modelOptions}
+                                onChange={(model) => patch({ model, effort: "" })}
+                              />
+                            ) : (
+                              <input
+                                value={draft.model ?? ""}
+                                onChange={(e) => patch({ model: e.target.value, effort: "" })}
+                                placeholder="Model ID"
+                                aria-label="Model"
+                                {...noTextHelpers}
+                                className={cx(inputClass, "h-[26px] min-w-0")}
+                              />
+                            )}
+                          </Field>
+                          {effortOptions.length > 0 && (
+                            <Field label="Effort">
+                              <Select
+                                label="Effort"
+                                value={runEffort ?? ""}
+                                options={
+                                  runEffort
+                                    ? effortOptions
+                                    : [
+                                        { value: "", label: "Choose effort", disabled: true },
+                                        ...effortOptions,
+                                      ]
+                                }
+                                onChange={(effort) => patch({ effort })}
+                              />
+                            </Field>
+                          )}
+                        </div>
+                      )}
+                      <ToggleRow
+                        label="Read-only"
+                        hint={
+                          draft.readOnly
+                            ? "Decline approvals for edits, commits, pushes, and other actions."
+                            : "Runs with full access, including edits, commits, and pushes."
+                        }
+                        checked={draft.readOnly}
+                        onChange={(readOnly) => patch({ readOnly })}
+                      />
+                    </Section>
+                  </div>
+                  <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-5 py-3">
+                    {/* In the footer, not under the form: a refused save is seen without scrolling. */}
+                    {onDelete && !error && (
+                      <Pill danger size="sm" onClick={onDelete} className="mr-auto">
+                        <Trash2 size={12} /> Delete
+                      </Pill>
                     )}
-                    <ToggleRow
-                      label="Read-only"
-                      hint={
-                        draft.readOnly
-                          ? "Decline approvals for edits, commits, pushes, and other actions."
-                          : "Runs with full access, including edits, commits, and pushes."
-                      }
-                      checked={draft.readOnly}
-                      onChange={(readOnly) => patch({ readOnly })}
-                    />
-                  </Section>
-                </div>
-                <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-5 py-3">
-                  {/* In the footer, not under the form: a refused save is seen without scrolling. */}
-                  {onDelete && !error && (
-                    <Pill danger size="sm" onClick={onDelete} className="mr-auto">
-                      <Trash2 size={12} /> Delete
+                    {error && (
+                      <p role="alert" className="mr-auto min-w-0 text-caption text-danger">
+                        {error}
+                      </p>
+                    )}
+                    <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
+                    {running && !error && (
+                      <p className="mr-auto min-w-0 text-caption text-fg-muted">
+                        Save once the run finishes.
+                      </p>
+                    )}
+                    {isEditing && (
+                      <Pill disabled={!ready || saving || running} onClick={() => void save(true)}>
+                        Save and run
+                      </Pill>
+                    )}
+                    <Pill prominent disabled={!ready || saving || running} onClick={() => void save()}>
+                      {saving ? "Saving…" : isEditing ? "Save changes" : "Create job"}
                     </Pill>
-                  )}
-                  {error && (
-                    <p role="alert" className="mr-auto min-w-0 text-caption text-danger">
-                      {error}
-                    </p>
-                  )}
-                  <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
-                  {isEditing && (
-                    <Pill disabled={!ready || saving} onClick={() => void save(true)}>
-                      Save and run
-                    </Pill>
-                  )}
-                  <Pill prominent disabled={!ready || saving} onClick={() => void save()}>
-                    {saving ? "Saving…" : isEditing ? "Save changes" : "Create job"}
-                  </Pill>
+                  </div>
                 </div>
+                {showRuns && (
+                  <aside
+                    aria-label="Runs"
+                    className="hidden w-[300px] shrink-0 flex-col gap-1 overflow-y-auto border-l border-border px-4 pt-5 pb-4 min-[820px]:flex"
+                  >
+                    <h3 className="pb-1 font-medium text-caption text-fg-muted">Runs</h3>
+                    <RunList runs={runs} now={Date.now()} onOpenThread={() => onOpenChange(false)} />
+                  </aside>
+                )}
               </>
             )}
           </Dialog.Content>

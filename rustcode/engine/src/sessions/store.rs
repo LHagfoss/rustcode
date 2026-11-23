@@ -925,6 +925,11 @@ pub fn load_session_parent(session_id: &str) -> Option<rustcode_session::Session
     store()?.load_session_parent(session_id)
 }
 
+/// The scheduled job whose run started this thread, if one did.
+pub fn load_session_scheduled_job(session_id: &str) -> Option<String> {
+    store()?.load_session_metadata(session_id)?.scheduled_job
+}
+
 /// Record the repository a thread's folder belongs to (`None` forgets it), so
 /// `session/list` can report it without running git per thread (#3162).
 pub fn save_session_repo(session_id: &str, repo: Option<&Path>) {
