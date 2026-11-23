@@ -677,6 +677,24 @@ export function forgetMachineThread(machine: string, sessionId: string): void {
 }
 
 /**
+ * Update one thread's row in a paired machine's list cache (e.g. after moving it to another folder
+ * or repairing its recorded workspace), so later `mergeMachineLists` runs and disk/storage caches
+ * keep the new metadata instead of snapping the sidebar back to the old folder.
+ */
+export function patchMachineSession(host: string, sessionId: string, patch: Partial<SessionSummary>): void {
+  useMachines.setState((state) => {
+    const rows = state.sessions[host];
+    if (!rows?.some((row) => row.id === sessionId)) return {};
+    return {
+      sessions: {
+        ...state.sessions,
+        [host]: rows.map((row) => (row.id === sessionId ? { ...row, ...patch } : row)),
+      },
+    };
+  });
+}
+
+/**
  * Give one machine a channel of its own. The supervisor inside the shell keeps
  * retrying on that channel, so it is made once and kept while the machine is
  * saved, whatever state it is in.

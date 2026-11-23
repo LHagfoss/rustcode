@@ -6,9 +6,13 @@ import { MOCK_MACHINE, MOCK_STUDIO } from "../acp/mockMachineFixtures";
 import { MockTransport } from "../acp/mockTransport";
 import type { HarnessSnapshot, SessionSummary } from "../acp/types";
 import { setShellTransport } from "../lib/shell";
+import { mergeMachineLists } from "./machineSync";
 import { type Machine, useMachines } from "./machines";
+import { sidebarProjects } from "./sidebarGroups";
 import {
   connect,
+  keptUnlistedThreads,
+  moveThread,
   openThread,
   refreshSessions,
   resetForTests,
@@ -507,5 +511,37 @@ describe("moveThreadToMachine end-to-end", () => {
     expect(receivedChunks.length).toBe(2);
     expect(receivedChunks.join("")).toBe(exportedPayload);
     expect(removed).toBe(true);
+  });
+
+  test("changing folder after moving a thread to a paired machine updates the sidebar and survives machine list syncs", async () => {
+    const localSession = useApp.getState().sessions.find((s) => !s.host)!;
+    const origId = localSession.id;
+    selectThread(origId);
+    await openThread(origId);
+
+    const onLinux = await moveThreadToMachine(origId, LINUX_ID);
+    expect(onLinux).toBe(`${LINUX_ID}/${origId}`);
+    expect(keptUnlistedThreads.get(onLinux!)?.summary.cwd).toBe("/home/lars/code/rustcode");
+
+    const nextCwd = "/home/lars/code/notes-app";
+    expect(await moveThread(onLinux!, nextCwd)).toBe(true);
+
+    expect(useApp.getState().threads[onLinux!]?.cwd).toBe(nextCwd);
+    expect(useApp.getState().sessions.find((s) => s.id === onLinux)?.cwd).toBe(nextCwd);
+    expect(useMachines.getState().sessions[LINUX_ID]?.find((s) => s.id === origId)?.cwd).toBe(nextCwd);
+    expect(keptUnlistedThreads.get(onLinux!)?.summary.cwd).toBe(nextCwd);
+    expect(rememberedMachineOrigin(origId, LINUX_ID)).toBe(nextCwd);
+
+    mergeMachineLists(useMachines.getState().sessions);
+    expect(useApp.getState().sessions.find((s) => s.id === onLinux)?.cwd).toBe(nextCwd);
+    const groups = sidebarProjects(useApp.getState().sessions);
+    expect(groups.find((g) => g.label === "notes-app")?.items.some((s) => s.id === onLinux)).toBe(true);
+    expect(groups.find((g) => g.label === "rustcode")?.items.some((s) => s.id === onLinux)).toBeFalsy();
+
+    mergeMachineLists({
+      ...useMachines.getState().sessions,
+      [LINUX_ID]: (useMachines.getState().sessions[LINUX_ID] ?? []).filter((s) => s.id !== origId),
+    });
+    expect(useApp.getState().sessions.find((s) => s.id === onLinux)?.cwd).toBe(nextCwd);
   });
 });

@@ -29,6 +29,7 @@ export class MockMachine {
     origins?: Record<string, JsonObject>;
   }[] = [];
   private readonly removedIds = new Set<string>();
+  private readonly movedCwds = new Map<string, string>();
   private createdCount = 0;
   /** The server settings of this machine, differing from this app's own. */
   private settings: JsonObject;
@@ -419,6 +420,26 @@ export class MockMachine {
       return [...gone, JSON.stringify({ jsonrpc: "2.0", id, result: { sessionId, removed: true } })];
     }
     if (frame.method === "session/load") return this.load(id, frame.params);
+    if (frame.method === "session/close") return [JSON.stringify({ jsonrpc: "2.0", id, result: {} })];
+    if (frame.method === "_rustcode/session/move") {
+      const sessionId = str(obj(frame.params)?.sessionId) ?? "";
+      const cwd = str(obj(frame.params)?.cwd) ?? "";
+      const entry = this.created.find((item) => item.sessionId === sessionId);
+      if (entry) {
+        entry.cwd = cwd;
+      } else if (this.sessions().some((item) => item.sessionId === sessionId)) {
+        this.movedCwds.set(sessionId, cwd);
+      } else {
+        return [
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32602, message: `unknown session: ${sessionId}` },
+          }),
+        ];
+      }
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: { cwd } })];
+    }
     if (frame.method === "session/prompt") {
       const sessionId = str(obj(frame.params)?.sessionId);
       this.titleFromPrompt(sessionId, frame.params);
@@ -770,11 +791,15 @@ export class MockMachine {
       ...this.created.filter((session) => session.title !== "New thread"),
       ...seeded
         .slice(0, count)
-        .map((session, index) => ({
-          ...session,
-          sessionId: `${studio ? "mock-studio" : "mock-linux"}-${index + 1}`,
-          updatedAt: now,
-        }))
+        .map((session, index) => {
+          const sessionId = `${studio ? "mock-studio" : "mock-linux"}-${index + 1}`;
+          return {
+            ...session,
+            sessionId,
+            cwd: this.movedCwds.get(sessionId) ?? session.cwd,
+            updatedAt: now,
+          };
+        })
         .filter((session) => !this.removedIds.has(session.sessionId)),
     ];
     return listed.map((session, index) => ({
