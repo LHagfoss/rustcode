@@ -202,8 +202,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     await cancel(id);
     return true;
   }
-  // `/status` in a thread with delegates lists them from what the app knows. When the harness
-  // answers `/status` as a report too, that still runs and opens its panel; otherwise no turn runs.
+  // `/status` with delegates lists them locally; a harness `/status` report still opens its panel.
   if (!hasExtras(extras) && !get().editing[id]) {
     const report = isReportCommand(id, trimmed, extras);
     if (answerStatusLocally(id, trimmed, !report) && !report) return true;
