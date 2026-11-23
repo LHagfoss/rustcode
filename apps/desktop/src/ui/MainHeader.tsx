@@ -130,7 +130,9 @@ export function MainHeader({
       style={{
         height: HEADER_HEIGHT,
         ...(underLights ? { paddingLeft: lightsInset } : null),
-        ...(controlsInset ? { paddingRight: controlsInset } : null),
+        // The side panel's card rises over the header's right end (ui/RightPanel.tsx): the header's
+        // own controls stand clear of it, by the room it takes (0 while it is closed).
+        paddingRight: controlsInset || "calc(0.5rem + var(--rc-panel-room, 0px))",
       }}
     >
       {sidebarHidden && !lights && <SidebarCluster />}

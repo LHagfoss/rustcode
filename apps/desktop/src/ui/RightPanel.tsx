@@ -3,8 +3,9 @@
 // back. Every tab and every thread share one width,
 // so switching tabs or threads never moves the card's edge or the chat beside
 // it. Every view draws on one surface, the chat's own dark ground with a
-// hairline edge, as tall as its content but never shorter than it is wide
-// (about square), so a short tab does not shrink to a strip. On a wide window the card floats over the chat's row: the
+// hairline edge, the window's whole height: on a wide window it rises over the
+// header's right end and carries the panel's toggle itself (ui/PanelToggle.tsx),
+// and the header's controls stand clear of it. The card floats over the chat's row: the
 // transcript keeps the row's full width (its scrollbar stays at the window's
 // edge) and pads its lane by the room the card takes, published on the row as
 // `--rc-panel-room`, so the lane stays centred in what is left. A narrow window
@@ -12,7 +13,7 @@
 //
 // Keys: the left edge is a `separator` that takes focus (←/→ move it 24px from
 // the width on screen, Shift 96px, Home/End to the ends, ⏎ back to the
-// default), Escape inside the panel and the header's toggle close it (the card has no close button), focus moves in when a shortcut
+// default), Escape inside the panel and the toggle on the card close it, focus moves in when a shortcut
 // opens it with nothing focused, and closing hands the focus back to the
 // header's toggle. The card is beside the composer rather than over it, so a
 // field being typed in always keeps the keyboard.
@@ -34,6 +35,7 @@ import { type AppState, setPanel, showPanel, useApp } from "../state/store";
 import { PANEL_SHEET_AT } from "../state/viewActions";
 import { ChevronLeft } from "./icons";
 import { HEADER_HEIGHT } from "./MainHeader";
+import { PanelToggle, useCardOverHeader } from "./PanelToggle";
 import { cx, Tooltip } from "./primitives";
 import { ThreadPeek } from "./ThreadPeek";
 
@@ -185,6 +187,9 @@ export function RightPanel() {
   const sheet = panelIsSheet(viewport);
   const card = panelWidth(width, viewport, row);
   const widest = panelMax(viewport, row);
+  // The docked card rises over the header and carries the panel's toggle at its top right.
+  const overHeader = useCardOverHeader();
+  const top = overHeader ? CARD_GAP : HEADER_HEIGHT + CARD_GAP;
 
   // Width animates only for an open or a close: any other change (a tab, a
   // window resize, the end of a drag) turns the transition off in the same
@@ -214,6 +219,7 @@ export function RightPanel() {
     // A sheet takes no room from the row: the lane gets its whole width back.
     if (!el) {
       rowEl.current?.style.removeProperty("--rc-panel-room");
+      rowEl.current?.parentElement?.style.removeProperty("--rc-panel-room");
       rowEl.current?.classList.remove(MOVING);
     }
     const parent = el?.parentElement;
@@ -249,7 +255,10 @@ export function RightPanel() {
   // its resize edge straddles, or nothing while it is closed.
   function publish(width: number) {
     dock.current?.style.setProperty("--rc-panel-width", `${width}px`);
-    rowEl.current?.style.setProperty("--rc-panel-room", open ? `${width + HANDLE + CARD_GAP}px` : "0px");
+    const room = open ? `${width + HANDLE + CARD_GAP}px` : "0px";
+    rowEl.current?.style.setProperty("--rc-panel-room", room);
+    // The header is the row's sibling: it reads the room from the column that holds both.
+    rowEl.current?.parentElement?.style.setProperty("--rc-panel-room", overHeader ? room : "0px");
   }
 
   const commit = (next: number) => {
@@ -324,8 +333,8 @@ export function RightPanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, sheet]);
 
-  // Details is the panel's home and carries no header: everything is on its one card. The full
-  // views it opens (the diff, the pull list, a thread beside this one) get a way back to it.
+  // Details is the panel's home: everything is on its one card. The full views it opens (the diff,
+  // the pull list, a thread beside this one) get a way back to it.
   const titles: Record<Kind, string> = {
     details: "Details",
     changes: "Changes",
@@ -334,24 +343,29 @@ export function RightPanel() {
   };
   const home = kind === "details";
 
+  // Every view opens under one bar: the way back to Details on the full views, and the toggle
+  // at the right, where the header's own toggle stood before the card rose over it.
   const contents = kind && (
     <>
-      {!home && (
-        <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-1 px-2">
-          <Tooltip label="Back to details">
-            <button
-              type="button"
-              aria-label="Back to details"
-              onClick={() => showPanel("details")}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
-            >
-              <ChevronLeft size={16} />
-            </button>
-          </Tooltip>
-          <span className="truncate font-semibold text-body">{titles[kind]}</span>
-          <span className="flex-1" data-tauri-drag-region />
-        </div>
-      )}
+      <div data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-1 pr-2 pl-2">
+        {!home && (
+          <>
+            <Tooltip label="Back to thread info">
+              <button
+                type="button"
+                aria-label="Back to thread info"
+                onClick={() => showPanel("details")}
+                className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
+              >
+                <ChevronLeft size={16} />
+              </button>
+            </Tooltip>
+            <span className="truncate font-semibold text-body">{titles[kind]}</span>
+          </>
+        )}
+        <span className="flex-1" data-tauri-drag-region />
+        <PanelToggle />
+      </div>
       <Suspense fallback={<div className="flex-1" />}>
         {kind === "details" && <ThreadDetails />}
         {kind === "changes" && <ChangesPanel />}
@@ -433,28 +447,22 @@ export function RightPanel() {
         }}
         className={cx(
           CARD_SURFACE,
-          // Details is one card as tall as what it holds; the full views (the diff, the pull list, a
-          // thread) take the row's whole height below the header, a floating sidebar.
-          home ? "self-start" : "self-stretch",
-          // Above the header's glass (`z-10`): the header spans the whole view and fades 24px past
-          // its foot, which would otherwise wash over the card's top 12px. The card starts below
-          // the header's band, so nothing of it covers the header's own controls.
+          // Every view takes the row's whole height, a floating sidebar: Details fills it (its
+          // Changes section takes what is left), and so do the diff, the pull list and a thread.
+          "self-stretch",
+          // Above the header's glass (`z-10`): the card rises over the header's right end, which
+          // stands its own controls clear of it (`--rc-panel-room`, ui/MainHeader.tsx).
           "relative z-20 flex flex-col overflow-hidden outline-none transition-opacity duration-200",
           open ? "pointer-events-auto opacity-100" : "opacity-0",
         )}
         style={{
           width: "var(--rc-panel-width)",
-          marginTop: HEADER_HEIGHT + CARD_GAP,
+          marginTop: top,
           marginRight: CARD_GAP,
           // Fit to the content, capped by the window alone: the card may run down to 12px above the
           // window's bottom edge, whatever the composer or anything else in the chat is doing.
           marginBottom: CARD_GAP,
-          maxHeight: `calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px)`,
-          // Never shorter than it is wide, so the card stays about square whatever the tab shows;
-          // the window's own height still wins.
-          minHeight: home
-            ? undefined
-            : `min(var(--rc-panel-width), calc(100% - ${HEADER_HEIGHT + 2 * CARD_GAP}px))`,
+          maxHeight: `calc(100% - ${top + CARD_GAP}px)`,
         }}
       >
         {contents}

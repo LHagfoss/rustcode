@@ -17,9 +17,10 @@ import { formatTokens, isRunning, type TranscriptItem } from "../state/thread";
 import { relativeAge } from "../state/threadFormat";
 import { splitThreadKey } from "../state/threadKeys";
 import { statusOf } from "../state/threadStatus";
+import { ChangesPanel } from "./ChangesPanel";
 import { DelegatePreview, delegateBranchCount } from "./DelegateTree";
 import { HarnessIcon } from "./HarnessIcon";
-import { ChevronDown, ChevronRight, FileDiff, GitBranch, Laptop } from "./icons";
+import { ChevronDown, ChevronRight, GitBranch, Laptop } from "./icons";
 import { PullRow } from "./OverviewPulls";
 import {
   FOLDED_EVENT,
@@ -133,7 +134,6 @@ export function ThreadDetails() {
   const files = changes?.files ?? [];
   const added = files.reduce((sum, f) => sum + f.added, 0);
   const removed = files.reduce((sum, f) => sum + f.removed, 0);
-  const shownFiles = files.slice(0, FILE_ROWS);
 
   const project = projectName(worktree?.repo || thread.cwd);
   const machineLabel =
@@ -142,10 +142,12 @@ export function ThreadDetails() {
   const openChanges = () => showPanel("changes");
 
   // Everything about the thread on one card, no tabs: its properties, what it changed, its pull
-  // requests, what it did and how full its context is. Rows are tight and the activity is a grid,
-  // so the whole card fits the window; the diff and the pull list open from their sections.
+  // requests, what it did and how full its context is. Rows are tight and the activity is a grid;
+  // Changes comes last and takes whatever height is left, listing every file and scrolling inside
+  // itself, so the card fills the window with no empty foot. A window too short for that scrolls
+  // the whole card instead. The diff and the pull list open from their sections.
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pt-1 pb-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
       <Section id="properties" title="Properties" folded={isFolded("properties")} onToggle={toggle}>
         <Property label="Status">
           <StatusIcon status={status} size={13} />
@@ -182,46 +184,6 @@ export function ThreadDetails() {
           </Property>
         )}
       </Section>
-      {changes && (
-        <Section
-          id="changes"
-          title="Changes"
-          count={files.length || undefined}
-          folded={isFolded("changes")}
-          onToggle={toggle}
-          action={
-            <>
-              {files.length > 0 && <DiffCount added={added} removed={removed} />}
-              <OpenButton label="Open the diff" onClick={openChanges} />
-            </>
-          }
-        >
-          {files.length === 0 && (
-            <p className="flex min-h-7 items-center gap-2 px-2 text-callout text-fg-muted">
-              <FileDiff size={14} className={icon} />
-              No uncommitted changes
-            </p>
-          )}
-          {shownFiles.map((file) => (
-            <FileRow
-              key={file.path}
-              path={file.path}
-              added={file.added}
-              removed={file.removed}
-              onOpen={openChanges}
-            />
-          ))}
-          {files.length > shownFiles.length && (
-            <button
-              type="button"
-              onClick={openChanges}
-              className="flex min-h-7 w-full items-center rounded-md px-2 text-left text-caption text-fg-muted hover:bg-fill-subtle hover:text-fg"
-            >
-              {files.length - shownFiles.length} more file{files.length - shownFiles.length === 1 ? "" : "s"}
-            </button>
-          )}
-        </Section>
-      )}
       {pullsOn && (
         <PullsSection
           cwd={worktree?.repo || thread.cwd}
@@ -267,44 +229,30 @@ export function ThreadDetails() {
           </div>
         )}
       </Section>
+      {changes && (
+        <Section
+          id="changes"
+          title="Changes"
+          grow
+          count={files.length || undefined}
+          folded={isFolded("changes")}
+          onToggle={toggle}
+          action={
+            <>
+              {files.length > 0 && <DiffCount added={added} removed={removed} />}
+              <OpenButton label="Open the diff" onClick={openChanges} />
+            </>
+          }
+        >
+          <ChangesPanel bare />
+        </Section>
+      )}
     </div>
   );
 }
 
-/** How many changed files the card lists before it points to the diff. */
-const FILE_ROWS = 4;
 /** How many pull requests the card lists before it points to the full list. */
 const PULL_ROWS = 2;
-
-/** A changed file: its name, the folder it sits in, quieter, and its line counts. */
-function FileRow({
-  path,
-  added,
-  removed,
-  onOpen,
-}: {
-  path: string;
-  added: number;
-  removed: number;
-  onOpen: () => void;
-}) {
-  const cut = path.lastIndexOf("/");
-  const name = path.slice(cut + 1);
-  const folder = cut > 0 ? path.slice(0, cut) : "";
-  return (
-    <Tooltip label={path}>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex min-h-7 w-full items-center gap-2 rounded-md px-2 text-left text-callout hover:bg-fill-subtle"
-      >
-        <span className="shrink-0 truncate">{name}</span>
-        <span className="min-w-0 flex-1 truncate text-caption text-fg-faint">{folder}</span>
-        <DiffCount added={added} removed={removed} />
-      </button>
-    </Tooltip>
-  );
-}
 
 /** The pulls opened from the thread's branch: the first few, the full list one press away. */
 function PullsSection({
@@ -409,18 +357,21 @@ function Section({
   folded,
   onToggle,
   action,
+  grow,
   children,
 }: {
   id: SectionId;
   title: string;
   count?: number;
+  /** Take the card's remaining height and scroll the rows inside it. */
+  grow?: boolean;
   folded: boolean;
   onToggle: (id: SectionId) => void;
   action?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <section className="px-2 pt-1.5">
+    <section className={cx("px-2 pt-1.5", grow && !folded && "flex min-h-40 flex-1 flex-col")}>
       <div className="flex min-h-7 items-center gap-1 pr-1">
         <button
           type="button"
@@ -438,7 +389,7 @@ function Section({
         <span className="flex-1" />
         <div className="flex shrink-0 items-center gap-1.5">{action}</div>
       </div>
-      {!folded && <div className="pb-1">{children}</div>}
+      {!folded && <div className={cx("pb-1", grow && "flex min-h-0 flex-1 flex-col")}>{children}</div>}
     </section>
   );
 }

@@ -130,7 +130,12 @@ function FileSection({
   );
 }
 
-export function ChangesPanel() {
+/**
+ * The diff of the thread's uncommitted changes. `bare` draws the diff alone, for the Details card's
+ * Changes section (ui/ThreadDetails.tsx), whose header already counts the files and opens this full
+ * view with its git actions.
+ */
+export function ChangesPanel({ bare = false }: { bare?: boolean }) {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
   const running = useApp((s) => (s.selectedId ? isRunning(s.threads[s.selectedId]) : false));
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
@@ -211,7 +216,7 @@ export function ChangesPanel() {
       {/* One bar: what changed, the layout when there is room for two columns, git's actions
           (commit, push, open a pull request) and a reload. The panel's tab already says "Changes",
           and the branch is on the Details card. */}
-      <div className="flex h-9 shrink-0 items-center gap-2 px-3 text-callout tabular">
+      <div className={cx("flex h-9 shrink-0 items-center gap-2 px-3 text-callout tabular", bare && "hidden")}>
         {data && !error ? (
           <>
             <span className="font-semibold">
@@ -242,7 +247,7 @@ export function ChangesPanel() {
           {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}
         </ClusterButton>
       </div>
-      <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+      <div ref={bodyRef} className={cx("min-h-0 flex-1 overflow-y-auto", bare ? "px-2" : "px-3 pb-3")}>
         {error && <p className="text-callout text-fg-muted">{error}</p>}
         {!error && data && (
           <>
