@@ -57,7 +57,7 @@ import {
 import { PlanWindow } from "./ComposerUsage";
 import { HarnessIcon } from "./HarnessIcon";
 import { Skeleton, Spinner, Tooltip } from "./primitives";
-import { Action, Chip, Choice, Group, Row, SectionTitle } from "./settingsKit";
+import { Action, Chip, Choice, Group, Row, SectionTitle, SettingsHeaderActions } from "./settingsKit";
 
 /** One page read, optionally bypassing the cache as an explicit look. */
 interface PageRead {
@@ -364,6 +364,12 @@ export function UsagePage() {
 
   return (
     <>
+      <SettingsHeaderActions>
+        <Action onClick={refreshAll} disabled={busy}>
+          {busy ? <Spinner size={12} /> : null}
+          Refresh
+        </Action>
+      </SettingsHeaderActions>
       {hasConnected && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4">
           <Choice<MachineScope>
@@ -402,9 +408,6 @@ export function UsagePage() {
             } minutes. ${soonestReset(displayedPlans) ?? ""}`
           ) : null}
         </span>
-        <Action onClick={refreshAll} disabled={busy}>
-          {busy ? <Spinner size={12} /> : null} Refresh
-        </Action>
       </div>
       {includesLocal && (
         <p className="px-4 text-caption text-fg-muted">

@@ -34,6 +34,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import { displayPath } from "../acp/types";
 import {
@@ -242,6 +243,53 @@ export function RowResets({ children }: { children: ReactNode }) {
 /** The page's resettable rows, for the panel header's "Restore defaults". */
 export function useRowResets(): RowResetsState {
   return useContext(RowResetsContext);
+}
+
+/** Optional page-level title metadata for sub-pages (e.g. one machine's name and back link). */
+export interface SettingsPageMeta {
+  title: ReactNode;
+  badge?: ReactNode;
+  back?: { label: string; onClick: () => void };
+}
+
+interface SettingsHeaderContextValue {
+  slot: HTMLDivElement | null;
+  setMeta: (meta: SettingsPageMeta | null) => void;
+}
+
+const SettingsHeaderContext = createContext<SettingsHeaderContextValue>({
+  slot: null,
+  setMeta: () => undefined,
+});
+
+/** Connects a Settings page to its floating header's right-side action slot and page title. */
+export function SettingsHeaderProvider({
+  slot,
+  setMeta,
+  children,
+}: {
+  slot: HTMLDivElement | null;
+  setMeta: (meta: SettingsPageMeta | null) => void;
+  children: ReactNode;
+}) {
+  const value = useMemo(() => ({ slot, setMeta }), [slot, setMeta]);
+  return <SettingsHeaderContext value={value}>{children}</SettingsHeaderContext>;
+}
+
+/** Places a Settings page's primary button(s) in the floating Settings header, aligned with content. */
+export function SettingsHeaderActions({ children }: { children: ReactNode }) {
+  const { slot } = useContext(SettingsHeaderContext);
+  if (!slot) return null;
+  return createPortal(children, slot);
+}
+
+/** Lets a sub-page override the Settings large title and header title (cleared on unmount). */
+export function useSettingsPageMeta(meta: SettingsPageMeta | null) {
+  const { setMeta } = useContext(SettingsHeaderContext);
+  useEffect(() => {
+    setMeta(meta);
+    return () => setMeta(null);
+  }, [setMeta, meta]);
 }
 
 /**

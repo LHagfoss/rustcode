@@ -169,10 +169,6 @@ export function OutsideAgentsPage() {
   return (
     <>
       {picker}
-      <p className="mb-6 max-w-[70ch] px-4 text-callout text-fg-muted">
-        Let other AI apps read, start or message RustCode threads on {where}. Each gets its own access level,
-        and you can change or revoke it here.
-      </p>
       {!status.available && (
         <Group title="Not available here">
           <Row

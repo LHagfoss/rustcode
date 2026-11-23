@@ -30,6 +30,7 @@ import {
   Row,
   SectionTitle,
   Select,
+  SettingsHeaderActions,
 } from "./settingsKit";
 
 interface Skill {
@@ -229,6 +230,11 @@ export function CapabilitiesPage() {
   };
   return (
     <>
+      <SettingsHeaderActions>
+        <Action onClick={() => bump((n) => n + 1)} aria-label="Refresh">
+          Refresh
+        </Action>
+      </SettingsHeaderActions>
       <SettingsScopeBar />
       <div className="mb-6 flex items-center gap-2">
         <label className={cx(fieldClass, "flex flex-1 items-center gap-2 focus-within:bg-fill-strong")}>
@@ -242,9 +248,6 @@ export function CapabilitiesPage() {
             className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-fg-faint"
           />
         </label>
-        <Action onClick={() => bump((n) => n + 1)} aria-label="Refresh">
-          Refresh
-        </Action>
       </div>
       {online.length === 0 && (
         <p className="mb-6 rounded-lg bg-warning/10 px-3 py-2 text-callout">

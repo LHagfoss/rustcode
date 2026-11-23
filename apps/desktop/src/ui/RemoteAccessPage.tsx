@@ -46,7 +46,7 @@ import { Smartphone, WifiOff } from "./icons";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
 import { ServerProblems } from "./ServerProblems";
-import { Action, Chip, Group, Row, withCode } from "./settingsKit";
+import { Action, Chip, Group, Row, SettingsHeaderActions, withCode } from "./settingsKit";
 
 /** The page keeps itself current while it is open: pairing counts down in the engine. */
 const POLL_MS = 2500;
@@ -168,14 +168,17 @@ export function RemoteAccessPage() {
 
   return (
     <>
+      <SettingsHeaderActions>
+        <Action prominent disabled={unavailable || busy !== null || pending} onClick={pair}>
+          {pending ? <Spinner size={12} /> : null}
+          Pair device
+        </Action>
+      </SettingsHeaderActions>
       {remoteError && (
         <p className="mb-6 text-callout text-warning">Could not read the gateway: {remoteError}</p>
       )}
 
-      <Group
-        title="Remote access"
-        hint="Shared with the RustCode app on your phone through the remote gateway (docs/remote.md). Plain LAN traffic is authenticated but not encrypted: use NetBird away from a trusted network."
-      >
+      <Group>
         <Row
           title="Network access"
           subtitle="Let paired devices reach every thread on this computer."
@@ -248,25 +251,16 @@ export function RemoteAccessPage() {
             </Action>
           )}
         </Row>
-        <Row
-          title="Pair a device"
-          subtitle="A phone or another computer scans the QR code or types the eight-digit code."
-          hint={`The code lasts two minutes and works once; a new one replaces it. ${WRONG_CODES_ALLOWED} wrong codes are allowed.`}
-          status={
-            unavailable
-              ? "Remote access needs the remote gateway, which this host does not build."
-              : pending
-                ? "Asking the gateway for a code…"
-                : expired
-                  ? expiredCodeCopy(pairing?.lastChallengeReached, gateway?.advertisedAddress)
-                  : undefined
-          }
-        >
-          <Action prominent disabled={unavailable || busy !== null || pending} onClick={pair}>
-            {pending ? <Spinner /> : null}
-            Pair device
-          </Action>
-        </Row>
+        {(unavailable || expired) && (
+          <Row
+            title="Pair a device"
+            subtitle={
+              unavailable
+                ? "Remote access needs the remote gateway, which this host does not build."
+                : expiredCodeCopy(pairing?.lastChallengeReached, gateway?.advertisedAddress)
+            }
+          />
+        )}
       </Group>
 
       {phonePairing.phase === "paired" ? (
