@@ -259,10 +259,10 @@ export function layoutMachinesGraph(graph: MachinesGraph): MachinesLayout {
 
   const hasKnown = graph.known.length > 0;
   const columns = [
-    { label: "This app", x: X.self },
+    { label: "This computer", x: X.self },
     ...(graph.machines.length > 0 ? [{ label: "Routes", x: X.pill }] : []),
     ...(graph.machines.length > 0 ? [{ label: "Paired machines", x: X.machine }] : []),
-    ...(hasKnown ? [{ label: "Known through another", x: X.known }] : []),
+    ...(hasKnown ? [{ label: "Seen by another machine", x: X.known }] : []),
   ];
   const right = hasKnown
     ? X.known + KNOWN.w

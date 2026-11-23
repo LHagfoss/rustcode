@@ -1276,6 +1276,7 @@ export async function pairMachine(code: string): Promise<void> {
     }));
     toast(`Connected to ${machine.name}.`, "success");
     await refreshMachines();
+    void import("./machineAccess").then(({ afterPaired }) => afterPaired(machine));
   } catch (error) {
     // The request is spent either way; asking again is what recovers it.
     useMachines.setState({ pairing: { status: "failed", error: errorText(error) } });

@@ -130,6 +130,7 @@ export async function connectWithCode(code: string, address?: string): Promise<b
     toast(`Connected to ${machine.name}.`, "success");
     await refreshMachines();
     useMachines.setState({ connect: { status: "idle" } });
+    void import("./machineAccess").then(({ afterPaired }) => afterPaired(machine));
     return true;
   } catch (error) {
     useMachines.setState({ connect: { status: "failed", error: errorText(error) } });

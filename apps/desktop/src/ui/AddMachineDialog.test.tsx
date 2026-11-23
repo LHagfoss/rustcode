@@ -38,14 +38,14 @@ describe("the digit boxes", () => {
 });
 
 describe("the access choice", () => {
-  test("says which computer can reach which, and defaults to the stated one", () => {
+  test("says which computer can reach which, with Both ways first", () => {
     const one = renderToStaticMarkup(<AccessChoice mutual={false} host="box" onChange={() => undefined} />);
     expect(one).toContain("One way:");
-    expect(one).toContain("box cannot reach this computer");
-    expect(one).toContain("Both ways:");
+    expect(one).toContain("box cannot reach this");
+    expect(one.indexOf("Both ways")).toBeLessThan(one.indexOf("One way:"));
     expect(one.match(/checked=""/g)?.length).toBe(1);
     const both = renderToStaticMarkup(<AccessChoice mutual host="box" onChange={() => undefined} />);
-    expect(both).toContain("box can also see and run all threads on this");
-    expect(both.indexOf('checked=""')).toBeGreaterThan(both.indexOf("Both ways") - 120);
+    expect(both).toContain("each computer can see and run threads");
+    expect(both.indexOf('checked=""')).toBeLessThan(both.indexOf("One way:"));
   });
 });

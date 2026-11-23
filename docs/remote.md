@@ -904,10 +904,18 @@ code can reach the computer that created it. Connect over SSH can grant the
 other direction as well, in the same step, so nobody repeats an opaque pairing
 by hand: Add machine › SSH › **Both ways**, or `--mutual`.
 
+In the desktop app *Both ways* is the default for every way in. After a pairing
+by connect code or by address, the app creates a code here and has the new
+machine redeem it over the connection it just made (`rc machines connect` run
+through `_rustcode/machine/exec`), so no SSH is needed
+(`apps/desktop/src/state/machineAccess.ts`). Machines › ‹machine› › Access
+has **Allow** for a machine that cannot reach this computer yet, which does the
+same.
+
 | Choice | This computer reaches `box` | `box` reaches this computer |
 | --- | --- | --- |
-| **One way** (default) | yes | no |
-| **Both ways** | yes | yes |
+| **Both ways** (default in the app) | yes | yes |
+| **One way** | yes | no |
 
 - **Consent.** Choosing *Both ways* here is this computer's consent: it creates
   a fresh connect code, which pairs `box` as a `desktop` device with ACP
@@ -961,7 +969,7 @@ are all visible at once.
 | In the app | What it does |
 | --- | --- |
 | **Add machine › SSH** | A host field and *Install or update RustCode there when needed* (on by default), *Who can reach whom* (*One way*, the default: this computer reaches the host and not the other way round; *Both ways*: the host also sees and runs all threads on this computer), then the steps of [Connect over SSH](#connect-over-ssh) ticking off, each with its detail, and the failed step's sentence. A second direction that fails leaves the connection one way and says why under the steps. |
-| **Machines › ‹machine› › Access** | The direction in the title (*Both ways*, *This computer → it*, *It → this computer*), then one row per direction: whether this computer reaches the machine (*Allowed* or *Ended*, removed with Forget) and whether the machine reaches this computer (*Allowed* with **Revoke**, or *Not allowed* with how to allow it). |
+| **Machines › ‹machine› › Access** | *Both ways*, *One way* or *No access* in the title, then one row per direction: whether this computer reaches the machine (*Allowed* or *Ended*, removed with Forget) and whether the machine reaches this computer (*Allowed* with **Revoke**, or *Not allowed* with **Allow**, which pairs it back over the connection this computer has). |
 | **Add machine › Connect code** | *Create connect code* shows a code for another computer to pair with this one ([Connect codes](#connect-codes)); *I have a code* takes a code or link created there, with an optional address for a short code that carries none. |
 | **Add machine › Address › Found on this network** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
 | **Add machine › Address › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
@@ -1403,7 +1411,7 @@ rc machines hub join vps --access delegate
   and when it was last seen.
 - **In the app**, Settings › Machines › *Hub* does the same: a switch makes
   this computer the hub and lists its members (linked or offline, their
-  ceiling, calls waiting), and on a member *Join a hub* picks the paired hub,
+  ceiling, calls waiting), and on a member *Link to a hub* picks the paired hub,
   its access and whether to ask, with *Leave* to undo. The app runs these
   commands (`apps/desktop/src-tauri/src/hub.rs`).
 - `rc machines hub status` shows the role and, on the hub, each member

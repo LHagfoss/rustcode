@@ -133,7 +133,7 @@ export function UpdateRow() {
                 }),
             )
           }
-          className="mt-1 w-full rounded px-2 py-1 text-left text-caption text-fg-muted hover:text-fg"
+          className="mt-1 w-full rounded-chip px-2 py-1 text-left text-caption text-fg-muted hover:text-fg"
         >
           {installNowLabel(resume)}
         </button>
@@ -142,7 +142,7 @@ export function UpdateRow() {
         <button
           type="button"
           onClick={skip}
-          className="mt-1 w-full rounded px-2 py-1 text-left text-caption text-fg-muted hover:text-fg"
+          className="mt-1 w-full rounded-chip px-2 py-1 text-left text-caption text-fg-muted hover:text-fg"
         >
           Skip this beta
         </button>

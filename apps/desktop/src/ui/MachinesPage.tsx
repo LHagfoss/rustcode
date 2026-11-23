@@ -82,7 +82,7 @@ import {
   machineStatus,
   recoveryLabel,
 } from "./machineLabels";
-import { ChromeButton, cx, Spinner } from "./primitives";
+import { ChromeButton, Segments, Spinner } from "./primitives";
 import { ServerProblems } from "./ServerProblems";
 import { Action, Chip, Group, Row, withCode } from "./settingsKit";
 import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
@@ -317,27 +317,15 @@ function ThisComputer() {
 /** Switches the Machines group between the map and the list; the choice is kept. */
 function ViewSwitch({ view, onChange }: { view: MachinesView; onChange: (view: MachinesView) => void }) {
   return (
-    <span
-      role="tablist"
-      aria-label="Machines view"
-      className="flex items-center gap-0.5 rounded-md bg-fill-subtle p-0.5"
-    >
-      {(["map", "list"] as const).map((option) => (
-        <button
-          key={option}
-          type="button"
-          role="tab"
-          aria-selected={view === option}
-          onClick={() => onChange(option)}
-          className={cx(
-            "h-6 rounded px-2 font-normal text-callout",
-            view === option ? "bg-surface-3 text-fg" : "text-fg-faint hover:text-fg-muted",
-          )}
-        >
-          {option === "map" ? "Map" : "List"}
-        </button>
-      ))}
-    </span>
+    <Segments
+      label="Machines view"
+      value={view}
+      options={[
+        { value: "map", label: "Map" },
+        { value: "list", label: "List" },
+      ]}
+      onChange={onChange}
+    />
   );
 }
 

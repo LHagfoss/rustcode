@@ -88,23 +88,34 @@ export function MachinesMap({
   const zoomBy = (delta: number) =>
     setZoom(Math.min(ZOOM.max, Math.max(ZOOM.min, Math.round((scale + delta) / ZOOM.step) * ZOOM.step)));
 
+  const drawn = new Set(layout.wires.map((wire) => wire.state));
+  const searchable = graph.machines.length + graph.known.length + 1 >= SEARCH_FROM;
+
   return (
     <div className="flex flex-col" data-machines-map>
-      <div className="rule-b flex items-center gap-2 px-4 py-3">
-        <label className="flex h-7 min-w-0 max-w-64 flex-1 items-center gap-1.5 rounded-md bg-fill-subtle px-2 text-fg-muted">
-          <Search size={13} />
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Find a machine"
-            aria-label="Find a machine"
-            className="min-w-0 flex-1 bg-transparent text-callout text-fg outline-none placeholder:text-fg-faint"
-          />
-        </label>
-      </div>
+      {searchable && (
+        <div className="rule-b flex items-center gap-2 px-4 py-3">
+          <label className="flex h-7 min-w-0 max-w-64 flex-1 items-center gap-1.5 rounded-md bg-fill-subtle px-2 text-fg-muted">
+            <Search size={13} />
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Find a machine"
+              aria-label="Find a machine"
+              className="min-w-0 flex-1 bg-transparent text-callout text-fg outline-none placeholder:text-fg-faint"
+            />
+          </label>
+        </div>
+      )}
 
-      <div ref={viewport} className="relative overflow-auto" style={{ maxHeight: 560 }}>
+      <div
+        ref={viewport}
+        role="group"
+        aria-label={`Machines map: ${mapSummary(graph)}`}
+        className="relative overflow-auto"
+        style={{ maxHeight: 560 }}
+      >
         <div style={{ width: layout.width * scale, height: layout.height * scale }}>
           <div
             className="relative origin-top-left"
@@ -271,11 +282,9 @@ export function MachinesMap({
       </div>
 
       <div className="rule-t flex flex-wrap items-center gap-x-4 gap-y-1 py-2 pr-2 pl-4 text-caption text-fg-muted">
-        <Legend state="in-use" />
-        <Legend state="standby" />
-        <Legend state="connecting" />
-        <Legend state="offline" />
-        {graph.known.length > 0 && <Legend state="link" />}
+        {LEGEND_ORDER.filter((state) => drawn.has(state)).map((state) => (
+          <Legend key={state} state={state} />
+        ))}
         <span className="ml-auto flex items-center">
           <ChromeButton label="Zoom out" onClick={() => zoomBy(-ZOOM.step)} disabled={scale <= ZOOM.min}>
             <Minus size={13} />
@@ -287,10 +296,6 @@ export function MachinesMap({
             <Maximize2 size={13} />
           </ChromeButton>
         </span>
-      </div>
-
-      <div className="rule-t px-4 py-3 text-caption text-fg-muted" role="status">
-        {mapSummary(graph)}
       </div>
       {footer && <div className="rule-t">{footer}</div>}
     </div>
@@ -362,6 +367,11 @@ function Pill({
   );
 }
 
+/** A map with at least this many machines (this one included) gets a search box. */
+const SEARCH_FROM = 6;
+
+const LEGEND_ORDER = ["in-use", "standby", "connecting", "offline", "link"] as const;
+
 function Legend({ state }: { state: WireState | "link" }) {
   const style = WIRE_STYLE[state];
   return (
@@ -370,14 +380,15 @@ function Legend({ state }: { state: WireState | "link" }) {
         <line
           x1="0"
           y1="3"
-          x2="20"
+          x2={state === "link" ? 15 : 20}
           y2="3"
           stroke="currentColor"
           strokeWidth={style.width}
           strokeDasharray={style.dash}
         />
+        {state === "link" && <path d="M14,0 L20,3 L14,6 z" fill="currentColor" />}
       </svg>
-      {state === "link" ? "Known through" : wireStateLabel(state)}
+      {state === "link" ? "Seen by another" : wireStateLabel(state)}
     </span>
   );
 }

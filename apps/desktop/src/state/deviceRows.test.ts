@@ -241,7 +241,7 @@ describe("access between this computer and a machine", () => {
 
   test("a machine this computer reaches and nothing reaches back is one way", () => {
     const access = machineAccess(machine, []);
-    expect(access.label).toBe("This computer \u2192 it");
+    expect(access.label).toBe("One way");
     expect(access.outbound).toBe(true);
     expect(access.inbound).toBeNull();
     expect(access.inboundText).toContain("cannot reach this computer");
@@ -257,7 +257,7 @@ describe("access between this computer and a machine", () => {
 
   test("each direction is judged alone: an ended pairing here leaves the one there", () => {
     const ended = machineAccess({ ...machine, state: "needsPairing" }, [device(LINUX)]);
-    expect(ended.label).toBe("It \u2192 this computer");
+    expect(ended.label).toBe("One way");
     expect(ended.outbound).toBe(false);
     expect(ended.outboundText).toContain("Pair it again");
     expect(machineAccess({ ...machine, state: "needsPairing" }, []).label).toBe("No access");
