@@ -289,7 +289,7 @@
 28 apps/desktop/src/state/logins.test.ts
 12 apps/desktop/src/state/logins.ts
 3 apps/desktop/src/state/loops.test.ts
-15 apps/desktop/src/state/loops.ts
+14 apps/desktop/src/state/loops.ts
 11 apps/desktop/src/state/lostTurn.test.ts
 16 apps/desktop/src/state/lostTurns.ts
 8 apps/desktop/src/state/machineCache.test.ts
@@ -499,8 +499,7 @@
 12 apps/desktop/src/ui/LiveBackdrop.tsx
 6 apps/desktop/src/ui/LiveBackgroundGroup.tsx
 2 apps/desktop/src/ui/LoopBadge.tsx
-21 apps/desktop/src/ui/LoopDialog.tsx
-5 apps/desktop/src/ui/Loops.tsx
+20 apps/desktop/src/ui/LoopDialog.tsx
 9 apps/desktop/src/ui/MachineFolderBrowser.tsx
 4 apps/desktop/src/ui/MachineGlyph.tsx
 5 apps/desktop/src/ui/MachineProfile.tsx
@@ -550,7 +549,7 @@
 71 apps/desktop/src/ui/RightPanel.tsx
 9 apps/desktop/src/ui/RollingNumber.tsx
 5 apps/desktop/src/ui/Rows.test.ts
-50 apps/desktop/src/ui/Rows.tsx
+48 apps/desktop/src/ui/Rows.tsx
 5 apps/desktop/src/ui/ScheduledMessages.tsx
 3 apps/desktop/src/ui/SchemeWarning.tsx
 9 apps/desktop/src/ui/ScopedHarnesses.tsx

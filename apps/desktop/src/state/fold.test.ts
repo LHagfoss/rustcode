@@ -263,6 +263,9 @@ describe("tool groups", () => {
     expect(kindOf("mcp__rustcode__wait_session")).toBe("wait");
     expect(kindOf("read_session")).toBe("read_thread");
     expect(kindOf("mcp__rustcode__list_sessions")).toBe("list_thread");
+    expect(kindOf("Run mcp_rustcode_list_threads")).toBe("list_thread");
+    expect(kindOf("Run mcp_socraticode_codebase_search")).toBe("search");
+    expect(kindOf("Run manage_task")).toBe("other");
     // Another server's tool of the same name is not RustCode's: it keeps its own reading.
     expect(kindOf("mcp__github__list_sessions")).toBe("other");
     expect(kindOf("mcp__github__start_session")).toBe("other");
@@ -294,6 +297,21 @@ describe("the running turn", () => {
     expect(rows.map((r) => r.key)).toEqual(["u", "tools-t", "r", "tools-b1"]);
     const first = rows[1]!;
     expect("group" in first && first.group).toMatchObject({ count: 4, failed: 1 });
+  });
+
+  test("thoughts inside a tool group are not counted as other actions", () => {
+    const run = [
+      user("u"),
+      thought("t1"),
+      { ...tool("r1"), toolKind: "read" },
+      thought("t2"),
+      { ...tool("e1"), toolKind: "execute" },
+      thought("t3"),
+      { ...tool("r2"), toolKind: "read" },
+    ] as TranscriptItem[];
+    const rows = groupTools(foldTurns(run, true, new Set()), new Set());
+    const group = rows[1]!;
+    expect("group" in group && group.group.label).toBe("Read 2 files and ran 1 command");
   });
 });
 

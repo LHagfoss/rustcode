@@ -1,7 +1,9 @@
-// Jobs across the paired machine network: every connected paired machine runs its own scheduler
-// daemon reachable directly over ACP (`_rustcode/loops/*`), so any machine can list, create, edit,
-// run, pause, stop and delete jobs on any other connected machine without needing a hub. A hub's
-// members still appear as fallback targets for offline or unpaired machines reachable through a hub.
+/**
+ * Jobs across the paired machine network: every connected paired machine runs its own scheduler
+ * daemon reachable directly over ACP (`_rustcode/loops/*`), so any machine can list, create, edit,
+ * run, pause, stop and delete jobs on any other connected machine without needing a hub. A hub's
+ * members still appear as fallback targets for offline or unpaired machines reachable through a hub.
+ */
 
 import { RpcError } from "../acp/jsonrpc";
 import type { HubStatus } from "./hub";
@@ -221,7 +223,6 @@ export function jobMachineTargets({
     });
   }
 
-  // Hub members not directly paired with this computer (e.g. a machine paired with the VPS hub).
   for (const roster of rosters) {
     for (const member of roster.members) {
       if (coveredIds.has(member.hostId) || coveredNames.has(member.name.toLowerCase())) continue;
