@@ -34,7 +34,7 @@ import {
   MIN_DELEGATES_TOTAL,
 } from "./orchestration";
 import { type PermissionMode, parsePermissionMode } from "./permissions";
-import { RECAP_HOURS_DEFAULT } from "./recap";
+import { RECAP_MINUTES_DEFAULT } from "./recap";
 import type { PhonePairing } from "./remotePairing";
 import type { ScheduleBook } from "./schedule";
 import type { PendingSetup } from "./setup";
@@ -297,14 +297,12 @@ export interface AppState {
   systemNotifications: boolean;
   /** Those notifications only while the app is in the background (Settings › General). */
   notificationsBackgroundOnly: boolean;
-  /** A recap of what happened while the app was idle (Settings › Notifications). */
-  recapWhileAway: boolean;
-  /** How long the app must be idle before that recap is due, in hours. */
-  recapHours: number;
-  /** When the user left, while a recap is on screen; null when there is none. */
-  recapSince: number | null;
-  /** The recap was dismissed until the next break. */
-  recapDismissed: boolean;
+  /** A recap at the top of a chat the user comes back to after a while (Settings › General). */
+  chatRecaps: boolean;
+  /** How long a chat goes unseen before that recap is due, in minutes. */
+  recapMinutes: number;
+  /** The chat whose recap is on screen and when it was last seen before; null when none is. */
+  chatRecap: { threadId: string; since: number } | null;
   /** A thread stopped by its plan's limit continues when the limit resets. */
   continueAfterLimit: boolean;
   /** The threads waiting on that, by thread id (state/limitResume.ts). */
@@ -465,10 +463,11 @@ export const STORAGE = {
   resumeAfterRestart: "rustcode.resumeAfterRestart",
   systemNotifications: "rustcode.systemNotifications",
   notificationsBackgroundOnly: "rustcode.notificationsBackgroundOnly",
-  recapWhileAway: "rustcode.recapWhileAway",
-  recapHours: "rustcode.recapHours",
-  /** When the app was last used, so a return after hours knows how long the break was. */
-  lastActive: "rustcode.lastActiveAt",
+  /** Kept from the while-you-were-away recap, so turning that off also turns chat recaps off. */
+  chatRecaps: "rustcode.recapWhileAway",
+  recapMinutes: "rustcode.recapMinutes",
+  /** When each chat was last on screen, so a return knows how long it went unseen. */
+  threadSeen: "rustcode.threadSeenAt",
   continueAfterLimit: "rustcode.continueAfterLimit",
   limitWaits: "rustcode.limitWaits",
   /** The threads waiting for the internet to come back, by thread id. */
@@ -536,8 +535,8 @@ export const SETTINGS_DEFAULTS = {
   resumeAfterRestart: true,
   systemNotifications: true,
   notificationsBackgroundOnly: true,
-  recapWhileAway: true,
-  recapHours: RECAP_HOURS_DEFAULT,
+  chatRecaps: true,
+  recapMinutes: RECAP_MINUTES_DEFAULT,
   continueAfterLimit: true,
   orchestration: true,
   threadLimit: DEFAULT_DELEGATES_PER_THREAD,

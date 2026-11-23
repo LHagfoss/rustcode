@@ -48,6 +48,7 @@ import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
 import { NewThreadLight, ThreadLight } from "./ChatLight";
+import { ChatRecapCard } from "./ChatRecap";
 import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
 import {
@@ -80,7 +81,6 @@ import { UserRow } from "./Rows";
 import { useThreadStatus } from "./Status";
 import { ThreadTitle } from "./ThreadTitle";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
-import { WhileAwayCard } from "./WhileAway";
 
 function PlanButton({ thread }: { thread: ThreadState }) {
   if (!thread.plan.length) return null;
@@ -798,12 +798,14 @@ export function ChatView() {
           {thread && !isNew && !showsPending && (
             <ThreadLight threadId={thread.id} stack={stackRef} stackHeight={stackHeight} />
           )}
-          <div
-            className="rc-lane-inset pointer-events-none absolute z-20 mx-auto max-w-[var(--rc-chat-content-max-width)]"
-            style={{ top: HEADER_HEIGHT + 8 }}
-          >
-            <WhileAwayCard className="pointer-events-auto" />
-          </div>
+          {thread && !isNew && !showsPending && (
+            <div
+              className="rc-lane-inset pointer-events-none absolute z-20 mx-auto max-w-[var(--rc-chat-content-max-width)]"
+              style={{ top: HEADER_HEIGHT + 8 }}
+            >
+              <ChatRecapCard threadId={thread.id} className="pointer-events-auto" />
+            </div>
+          )}
           {showsPending && setup ? (
             // Preferred over the thread: while its message is still arriving, the screen that has it
             // is this one, and the row it draws is the row the transcript draws (`FIRST_ROW_PAD`).

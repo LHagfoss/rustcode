@@ -549,6 +549,10 @@ export async function refreshMachines(): Promise<void> {
     const cached: Record<string, SessionSummary[]> = {};
     for (const machine of machines) {
       if (state.sessions[machine.id]) continue;
+      if (machine.state === "connecting") {
+        holdCopy(machine.id);
+        continue;
+      }
       const rows = loadThreadList(machine.id);
       if (rows.length) cached[machine.id] = rows;
     }
@@ -563,7 +567,7 @@ export async function refreshMachines(): Promise<void> {
     // A machine that is away also draws what this computer's disk mirrored from it, past the 200
     // newest the web view keeps (`state/machineMirror.ts`).
     for (const machine of machines) {
-      if (machine.state !== "connected") void drawMirrored(machine.id);
+      if (machine.state !== "connected" && machine.state !== "connecting") void drawMirrored(machine.id);
     }
     for (const machine of machines) void attach(machine);
     for (const [id, link] of links.entries()) {
@@ -572,6 +576,30 @@ export async function refreshMachines(): Promise<void> {
   } catch (error) {
     useMachines.setState({ ready: true, error: errorText(error) });
   }
+}
+
+let copyGraceMs = 5_000;
+
+export function setCopyGraceForTests(ms: number): void {
+  copyGraceMs = ms;
+}
+const copyHolds = new Map<string, ReturnType<typeof setTimeout>>();
+
+function holdCopy(host: string): void {
+  if (copyHolds.has(host)) return;
+  copyHolds.set(
+    host,
+    setTimeout(() => {
+      copyHolds.delete(host);
+      const state = useMachines.getState();
+      const machine = state.machines.find((entry) => entry.id === host);
+      if (!machine || machine.state === "connected" || state.sessions[host]) return;
+      const rows = loadThreadList(host);
+      if (rows.length)
+        useMachines.setState((current) => ({ sessions: { ...current.sessions, [host]: rows } }));
+      void drawMirrored(host);
+    }, copyGraceMs),
+  );
 }
 
 /** Adds the mirrored rows a machine that is away lacks; a live read still replaces them all. */
@@ -601,6 +629,7 @@ function rememberCreated(machine: string, params: JsonObject): void {
   if (deferAnnouncement(threadKey(machine, id), () => rememberCreated(machine, params))) return;
   // A thread trashed a moment ago is not made again by a late announcement.
   if (isTombstoned(threadKey(machine, id))) return;
+  const announced = parseSessionList({ sessions: [params] }).sessions[0];
   useMachines.setState((state) => {
     const listed = state.sessions[machine] ?? [];
     if (listed.some((session) => session.id === id)) return {};
@@ -611,7 +640,8 @@ function rememberCreated(machine: string, params: JsonObject): void {
       title: str(params.title) || undefined,
       harness: str(params.harness) || undefined,
       model: str(params.model) || undefined,
-      parent: parseSessionList({ sessions: [params] }).sessions[0]?.parent,
+      parent: announced?.parent,
+      scheduledJob: announced?.scheduledJob,
     };
     return {
       sessions: { ...state.sessions, [machine]: [summary, ...listed] },
@@ -770,6 +800,8 @@ export function resetMachinesForTests(): void {
     announce(id, null);
   }
   links.clear();
+  for (const timer of copyHolds.values()) clearTimeout(timer);
+  copyHolds.clear();
   linkListeners.clear();
   started = false;
   useMachines.setState({

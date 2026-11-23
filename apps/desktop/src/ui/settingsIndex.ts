@@ -92,13 +92,13 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
-    title: "While-you-were-away recap",
-    keywords: "away recap summary digest idle returned after lunch dismissed",
+    title: "Chat recaps",
+    keywords: "recap summary summaries away while you were away idle returned chat thread dismissed",
   },
   {
     section: "general",
-    title: "Away for",
-    keywords: "away recap hours idle threshold",
+    title: "Recap after",
+    keywords: "recap summary away minutes hours idle unseen threshold",
   },
   {
     section: "general",

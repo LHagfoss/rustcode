@@ -171,7 +171,34 @@ fn launch_env(
 }
 
 impl Adapter {
+    /// Start `harness`'s child and connect to it. An npm adapter that found no
+    /// matching version in a stale cache starts once more from the registry
+    /// (`super::npx`).
     pub(crate) async fn start(
+        harness: &ResolvedHarness,
+        cwd: &Path,
+        options: StartOptions,
+        out: OutputSender,
+    ) -> Result<Self, String> {
+        let started = Self::start_once(harness, cwd, options.clone(), out.clone()).await;
+        let Err(error) = &started else {
+            return started;
+        };
+        let Some(command) = super::npx::online_retry(&harness.command, error) else {
+            return started;
+        };
+        crate::dbg_log!(
+            "{}: npm found no matching version in its cache; starting again from the registry",
+            harness.name
+        );
+        let online = ResolvedHarness {
+            command,
+            ..harness.clone()
+        };
+        Self::start_once(&online, cwd, options, out).await
+    }
+
+    async fn start_once(
         harness: &ResolvedHarness,
         cwd: &Path,
         options: StartOptions,

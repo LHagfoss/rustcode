@@ -33,7 +33,7 @@ import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/aut
 import { validateDefault } from "../state/harness";
 import { runAllHarnessChecks, useHarnessChecks } from "../state/harnessChecks";
 import { PERMISSION_MODES } from "../state/permissions";
-import { RECAP_HOUR_OPTIONS } from "../state/recap";
+import { RECAP_MINUTE_OPTIONS, recapMinutesLabel } from "../state/recap";
 import {
   useLoadScopeSettings,
   useProjectScope,
@@ -50,11 +50,11 @@ import {
   request,
   SETTINGS_DEFAULTS,
   type SettingsSection,
+  setChatRecaps,
   setChatWidth,
   setDefaultCwd,
   setNotificationsBackgroundOnly,
-  setRecapHours,
-  setRecapWhileAway,
+  setRecapMinutes,
   setShowToolCalls,
   setSmartUi,
   setSystemNotifications,
@@ -283,8 +283,8 @@ function GeneralPage() {
   const autoCompactThresholdValue = Number(autoCompactThreshold.value ?? AUTO_COMPACT_DEFAULT_THRESHOLD);
   const notifications = useApp((s) => s.systemNotifications);
   const backgroundOnly = useApp((s) => s.notificationsBackgroundOnly);
-  const recap = useApp((s) => s.recapWhileAway);
-  const recapHours = useApp((s) => s.recapHours);
+  const recap = useApp((s) => s.chatRecaps);
+  const recapMinutes = useApp((s) => s.recapMinutes);
   const [tabFocus, setTabFocus] = useState(tabMovesFocus);
   const [haptics, setHapticsState] = useState(hapticsEnabled);
   const [crashReports, setCrashReportsState] = useState(crashReportsEnabled);
@@ -430,27 +430,27 @@ function GeneralPage() {
           />
         </Row>
         <Row
-          title="While-you-were-away recap"
-          reset={recap ? undefined : () => setRecapWhileAway(SETTINGS_DEFAULTS.recapWhileAway)}
-          subtitle="A card after the app sat idle: what needs you, what failed, what finished."
-          hint="It shows at the top of the chat and the inbox. Dismissed, the inbox keeps a row that brings it back."
+          title="Chat recaps"
+          reset={recap ? undefined : () => setChatRecaps(SETTINGS_DEFAULTS.chatRecaps)}
+          subtitle="Back in a chat after a while, a card says what you asked and where it stands."
+          hint="Per chat, built from its transcript: no model turn. Dismissed, it waits for the next return."
         >
-          <Switch label="While-you-were-away recap" checked={recap} onChange={setRecapWhileAway} />
+          <Switch label="Chat recaps" checked={recap} onChange={setChatRecaps} />
         </Row>
         <Row
-          title="Away for"
+          title="Recap after"
           reset={
-            recapHours !== SETTINGS_DEFAULTS.recapHours
-              ? () => setRecapHours(SETTINGS_DEFAULTS.recapHours)
+            recapMinutes !== SETTINGS_DEFAULTS.recapMinutes
+              ? () => setRecapMinutes(SETTINGS_DEFAULTS.recapMinutes)
               : undefined
           }
-          subtitle="How long the app sits idle before the recap."
+          subtitle="How long a chat goes unseen before its recap."
         >
           <Choice
-            label="Away before the recap"
-            value={String(recapHours)}
-            options={RECAP_HOUR_OPTIONS.map((h) => ({ value: String(h), label: `${h}h` }))}
-            onChange={(value) => setRecapHours(Number(value))}
+            label="Unseen before the recap"
+            value={String(recapMinutes)}
+            options={RECAP_MINUTE_OPTIONS.map((m) => ({ value: String(m), label: recapMinutesLabel(m) }))}
+            onChange={(value) => setRecapMinutes(Number(value))}
           />
         </Row>
       </Group>

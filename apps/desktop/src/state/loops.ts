@@ -610,6 +610,51 @@ export function reviewItems(
   return items.sort((a, b) => at(b) - at(a));
 }
 
+/** Review items that say the same thing: one job's failures with one error, or its open threads. */
+export interface ReviewGroup {
+  /** The newest of them, which the row shows and opens. */
+  item: ReviewItem;
+  /** Every run in the group: marking the row reviewed marks them all. */
+  runIds: string[];
+}
+
+const reviewKey = ({ loop, run, kind }: ReviewItem) =>
+  kind === "failed"
+    ? `${loop.id}\u0000failed\u0000${run.error ?? ""}`
+    : `${loop.id}\u0000open\u0000${run.id}`;
+
+/**
+ * Fold the review list: a job that failed the same way on every run is one row with a count, not one
+ * row per run. An open thread stays a row of its own, since each needs reading. Newest first, as given.
+ */
+export function groupReview(items: readonly ReviewItem[]): ReviewGroup[] {
+  const groups = new Map<string, ReviewGroup>();
+  for (const item of items) {
+    const key = reviewKey(item);
+    const group = groups.get(key);
+    if (group) group.runIds.push(item.run.id);
+    else groups.set(key, { item, runIds: [item.run.id] });
+  }
+  return [...groups.values()];
+}
+
+/** When a review item happened. */
+export const reviewAt = ({ run }: ReviewItem) => run.finishedAt ?? run.startedAt ?? run.scheduledAt;
+
+const DAY_LABEL = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" });
+
+/** "Today", "Yesterday", or the date: the review timeline's day headings. */
+export function reviewDayLabel(at: number, now = Date.now()): string {
+  const day = new Date(at);
+  day.setHours(0, 0, 0, 0);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const days = Math.round((today.getTime() - day.getTime()) / DAY);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return DAY_LABEL.format(at);
+}
+
 // ---------------------------------------------------------------- reviewed runs
 
 const REVIEWED_KEY = "rustcode.loopsReviewed";

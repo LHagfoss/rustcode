@@ -29,6 +29,7 @@ import {
   useApp,
 } from "./state/store";
 import { startUpdateChecks } from "./state/updates";
+import { useChatRecapWatch } from "./ui/ChatRecap";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
 import { ConnectRequests } from "./ui/ConnectRequests";
@@ -43,7 +44,6 @@ import { SettingsPage } from "./ui/Settings";
 import { Sidebar } from "./ui/Sidebar";
 import { Toaster } from "./ui/Toaster";
 import { WhatsNewDialog } from "./ui/Updates";
-import { useAwayWatch } from "./ui/WhileAway";
 import { WindowControls } from "./ui/WindowControls";
 
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
@@ -233,7 +233,7 @@ export function App() {
   useEffect(() => startDeepLinks(), []);
   useTheme();
   useShortcuts();
-  useAwayWatch();
+  useChatRecapWatch();
   useCrashReportNotice();
   useEffect(() => restoreZoom(), []);
   useEffect(() => startUpdateChecks(), []);
