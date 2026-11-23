@@ -1004,7 +1004,10 @@
 2 rustcode/engine/src/tools/github.rs
 15 rustcode/engine/src/tools/mcp_discovery.rs
 7 rustcode/engine/src/tools/mcp_servers_tests.rs
-29 rustcode/engine/src/tools/misc.rs
+17 rustcode/engine/src/tools/misc.rs
+2 rustcode/engine/src/tools/misc/orchestration_tools.rs
+8 rustcode/engine/src/tools/misc/tests.rs
+2 rustcode/engine/src/tools/misc/web.rs
 44 rustcode/engine/src/tools/mod.rs
 2 rustcode/engine/src/tools/scheduled_jobs_tests.rs
 190 rustcode/engine/src/tools/schema.rs
