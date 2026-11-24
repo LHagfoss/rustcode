@@ -70,7 +70,6 @@ import { RightPanel } from "./RightPanel";
 import { RollingNumber } from "./RollingNumber";
 import { UserRow } from "./Rows";
 import { useThreadStatus } from "./Status";
-import { ThreadPreview } from "./ThreadPreview";
 import { ThreadTitle } from "./ThreadTitle";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
 
@@ -233,7 +232,7 @@ function Header({
           <RemoteThreadIndicator sessionId={thread?.id} />
         </>
       }
-      right={thread ? [<ThreadPreview key={thread.id} threadId={thread.id} />, ...right] : right}
+      right={right.length ? right : undefined}
     />
   );
 }

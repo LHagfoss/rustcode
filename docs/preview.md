@@ -155,30 +155,3 @@ the full app under Instruments for hours; the test window is not frontmost, so
 WebKit may already treat the "visible" page as occluded (CPU barely moves in
 either state); and it has no WebSocket/HMR server. Sustained use in the app
 itself remains to be checked.
-
-## Open a thread's preview from another desktop
-
-Start the app's HTTP server on the machine where the thread runs. In RustCode
-desktop, open that thread, choose **Preview**, enter the server's IPv4
-loopback port and choose **Open privately**. A local thread opens its local
-server directly. For a paired machine, RustCode opens a browser URL on this
-computer's loopback and relays traffic over the saved machine's authenticated
-gateway connection. It forwards HTTP and WebSocket traffic. The listener
-expires after an hour or when you quit RustCode. The remote server has to be
-reachable on `127.0.0.1`.
-
-## Share a public link
-
-In the same dialog, choose **Share preview** and confirm **Create public
-link**. An agent can call `share_preview` with the port and RustCode shows a
-one-time approval card naming the port and what will be exposed. The machine
-running the server needs `cloudflared` in the engine's PATH. RustCode starts a
-[Cloudflare Quick Tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
-and presents the resulting link and its expiry. The tunnel uses the loopback
-Host header so Vite accepts the request.
-
-Anyone with the link can reach the server. A dev server may expose source
-files and development endpoints. Where possible, serve a static build from
-its own loopback port and share that port. The preview dialog lists public
-links with **Copy link** and **Stop**. Links expire after one hour and stop
-when their thread is settled or the engine managing the tunnel exits.

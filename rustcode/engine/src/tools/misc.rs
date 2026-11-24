@@ -286,17 +286,6 @@ pub const DESKTOP_CONTROL: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
-pub const SHARE_PREVIEW: Tool = Tool {
-    name: crate::acp::preview_share::TOOL_NAME,
-    description: "Ask for one-time approval to share this thread's loopback HTTP server via a public link for one hour. Anyone with the link can access the server. Prefer a static build server to avoid exposing a dev server's source files.",
-    arguments: r#"{"port": 4173}"#,
-    handler: |_| Err("Preview sharing needs a thread and a RustCode approval window.".to_owned()),
-    requires_confirmation: false,
-    schema: crate::acp::preview_share::schema,
-    capabilities: &[ToolCapability::UserInteraction],
-    safety: ToolSafety::Interactive,
-};
-
 fn localhost_preview_schema() -> Value {
     crate::preview::operation_schema()
 }

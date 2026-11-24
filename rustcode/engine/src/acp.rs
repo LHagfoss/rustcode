@@ -23,8 +23,6 @@ pub(crate) mod outside;
 mod permissions;
 mod presence;
 mod preview;
-mod preview_connection;
-pub(crate) mod preview_share;
 mod project_relocate;
 pub(crate) mod projects;
 mod prompt;

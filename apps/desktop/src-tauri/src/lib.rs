@@ -77,7 +77,6 @@ pub fn run() {
             engine_restart,
             engine_stop,
             machines::machines_list,
-            machines::preview::machines_preview,
             machines::machines_discover,
             machines::machines_ask,
             machines::machines_pair,
