@@ -76,6 +76,40 @@ export function heatmapWeeks(
   return columns;
 }
 
+/** A run of days in a row with at least one turn, as the activity card counts it. */
+export interface Streak {
+  /** Days in a row up to today, or up to yesterday while today has nothing yet. */
+  current: number;
+  /** The longest run in the days read, the current one included. */
+  longest: number;
+  /** Whether today already counts. */
+  today: boolean;
+  /** The days of the current run, so the heatmap can mark them. */
+  days: ReadonlySet<string>;
+}
+
+/**
+ * The streak in a day-by-day report. A quiet today does not break it: the run
+ * still counts up to yesterday until the day is over, so the card says what
+ * keeps it going instead of showing zero every morning.
+ */
+export function streakOf(turns: ReadonlyMap<string, number>, today: Date = new Date()): Streak {
+  const active = (day: string) => (turns.get(day) ?? 0) > 0;
+  const last = today.toISOString().slice(0, 10);
+  const days = new Set<string>();
+  const ranToday = active(last);
+  for (let day = ranToday ? last : plusDays(last, -1); active(day); day = plusDays(day, -1)) days.add(day);
+  let longest = days.size;
+  let run = 0;
+  let previous = "";
+  for (const day of [...turns.keys()].filter(active).sort()) {
+    run = previous && plusDays(previous, 1) === day ? run + 1 : 1;
+    previous = day;
+    if (run > longest) longest = run;
+  }
+  return { current: days.size, longest, today: ranToday, days };
+}
+
 /** The UTC days a month starts on: this one, and the one before it. */
 export function monthBounds(now: Date = new Date()): { since: string; previousSince: string } {
   const year = now.getUTCFullYear();

@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { UsageRow } from "../acp/rustcode";
 import type { SessionSummary } from "../acp/types";
-import { heatmapWeeks, monthBounds, projectThreads, turnsPerDay } from "./widgets";
+import { heatmapWeeks, monthBounds, projectThreads, streakOf, turnsPerDay } from "./widgets";
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
   harness: "codex",
@@ -132,4 +132,37 @@ test("the overview defaults closed and persists its choice", async () => {
     if (previous) scope.localStorage = previous;
     else Reflect.deleteProperty(scope, "localStorage");
   }
+});
+
+describe("the activity streak", () => {
+  const today = new Date("2026-06-10T12:00:00Z");
+  const days = (...entries: [string, number][]) => new Map(entries);
+
+  test("counts the days in a row up to today", () => {
+    const streak = streakOf(days(["2026-06-08", 2], ["2026-06-09", 1], ["2026-06-10", 4]), today);
+    expect(streak).toMatchObject({ current: 3, longest: 3, today: true });
+    expect([...streak.days].sort()).toEqual(["2026-06-08", "2026-06-09", "2026-06-10"]);
+  });
+
+  test("a quiet today keeps yesterday's run alive", () => {
+    expect(streakOf(days(["2026-06-08", 1], ["2026-06-09", 1]), today)).toMatchObject({
+      current: 2,
+      today: false,
+    });
+  });
+
+  test("a missed day ends the run, and the longest one is remembered", () => {
+    const streak = streakOf(
+      days(["2026-05-01", 1], ["2026-05-02", 1], ["2026-05-03", 1], ["2026-05-04", 1], ["2026-06-08", 1]),
+      today,
+    );
+    expect(streak).toMatchObject({ current: 0, longest: 4, today: false });
+  });
+
+  test("a day with no turns does not count", () => {
+    expect(streakOf(days(["2026-06-09", 0], ["2026-06-10", 1]), today)).toMatchObject({
+      current: 1,
+      longest: 1,
+    });
+  });
 });

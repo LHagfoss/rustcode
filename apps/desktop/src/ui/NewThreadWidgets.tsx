@@ -29,11 +29,14 @@ import {
   heatmapWeeks,
   monthBounds,
   projectThreads,
+  type Streak,
+  streakOf,
   turnsPerDay,
 } from "../state/widgets";
 import {
   Activity,
   CalendarDays,
+  Flame,
   Gauge,
   GitMerge,
   GitPullRequest,
@@ -71,10 +74,13 @@ function Card({
   label,
   icon: Icon,
   span,
+  aside,
   children,
 }: {
   label: string;
   icon: LucideIcon;
+  /** Something small at the end of the card's label row. */
+  aside?: ReactNode;
   /** How wide the card is in the dashboard's six columns (from `lg`). */
   span: string;
   children: ReactNode;
@@ -92,10 +98,13 @@ function Card({
       )}
     >
       <div className="rc-overview-body flex min-h-0 flex-1 flex-col gap-2">
-        <h3 className="flex shrink-0 items-center gap-1.5 text-caption font-medium text-fg-muted">
-          <Icon size={12} className="shrink-0" />
-          {label}
-        </h3>
+        <div className="flex shrink-0 items-center justify-between gap-2">
+          <h3 className="flex min-w-0 items-center gap-1.5 text-caption font-medium text-fg-muted">
+            <Icon size={12} className="shrink-0" />
+            {label}
+          </h3>
+          {aside}
+        </div>
         {children}
       </div>
     </section>
@@ -122,17 +131,59 @@ function CardRow({ onClick, title, children }: { onClick: () => void; title: str
   );
 }
 
+/** Streak lengths worth a little more warmth: a week, a month, a hundred days. */
+const MILESTONES = [7, 30, 100] as const;
+
+/**
+ * The streak at the end of the activity card's label: a flame and the days in a row
+ * with a turn. It is lit once today counts; until then it is quiet and says what keeps
+ * the run going. A run that reaches a milestone glows.
+ */
+function StreakBadge({ streak }: { streak: Streak }) {
+  if (streak.current === 0 && streak.longest === 0) return null;
+  const milestone = [...MILESTONES].reverse().find((days) => streak.current >= days);
+  const best = streak.longest > streak.current ? ` · best ${count(streak.longest, "day")}` : "";
+  const label =
+    streak.current === 0
+      ? `No streak right now${best}. Run a turn today to start one.`
+      : streak.today
+        ? `${count(streak.current, "day")} in a row${best}. Today counts.`
+        : `${count(streak.current, "day")} in a row${best}. Run a turn today to keep it.`;
+  return (
+    <Tooltip label={label}>
+      <span
+        role="img"
+        aria-label={label}
+        className={cx(
+          "rc-streak flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-caption font-medium tabular",
+          streak.today ? "bg-accent/15 text-accent" : "bg-fill-subtle text-fg-muted",
+          streak.today && milestone && "rc-streak-milestone",
+        )}
+      >
+        <Flame size={12} className={cx("shrink-0", streak.today && "rc-streak-flame")} />
+        {streak.current === 0 ? "Start a streak" : `${streak.current}-day streak`}
+      </span>
+    </Tooltip>
+  );
+}
+
 function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
   const sessions = useApp((s) => s.sessions);
   const turns = useMemo(() => turnsPerDay(rows ?? []), [rows]);
   const columns = useMemo(() => heatmapWeeks(turns, HEATMAP_WEEKS), [turns]);
+  const streak = useMemo(() => streakOf(turns), [turns]);
   const totalTurns = useMemo(() => [...turns.values()].reduce((sum, n) => sum + n, 0), [turns]);
   const activeThreads = useMemo(() => {
     const from = Date.parse(`${since}T00:00:00Z`);
     return sessions.filter((session) => (session.updatedAt ?? 0) >= from).length;
   }, [sessions, since]);
   return (
-    <Card label="Activity" icon={Activity} span="lg:col-span-3">
+    <Card
+      label="Activity"
+      icon={Activity}
+      span="lg:col-span-3"
+      aside={rows === undefined ? undefined : <StreakBadge streak={streak} />}
+    >
       {rows === undefined ? (
         <Skeleton className="h-[62px] w-full flex-1" />
       ) : totalTurns === 0 ? (
@@ -152,7 +203,11 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
                   <span
                     key={cell.day}
                     title={`${cell.day} · ${count(cell.turns, "turn")}`}
-                    className={cx("rc-heat-cell h-[7px] w-full", SHADE[cell.level])}
+                    className={cx(
+                      "rc-heat-cell h-[7px] w-full",
+                      SHADE[cell.level],
+                      streak.days.has(cell.day) && "rc-heat-streak",
+                    )}
                   />
                 ) : (
                   <span key={`future-${index}-${day}`} className="h-[7px] w-full" />
