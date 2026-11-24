@@ -964,7 +964,7 @@
 67 rustcode/engine/src/remote_gateway/session_registry/tests.rs
 31 rustcode/engine/src/remote_gateway/transport.rs
 2 rustcode/engine/src/remote_gateway/wire_names.rs
-77 rustcode/engine/src/remote_gateway/workspace.rs
+75 rustcode/engine/src/remote_gateway/workspace.rs
 8 rustcode/engine/src/serve/server.rs
 13 rustcode/engine/src/server/auto_update.rs
 3 rustcode/engine/src/server/engine_endpoint.rs

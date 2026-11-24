@@ -1154,6 +1154,48 @@
       ],
       "type": "string"
     },
+    "RemoteProject": {
+      "description": "One project as `list_projects` and `saved_sessions_changed` report it.",
+      "properties": {
+        "name": {
+          "description": "The folder's name, as the desktop app's sidebar labels it.",
+          "type": "string"
+        },
+        "needs_input": {
+          "description": "A thread of the project waits on an approval or a question.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "The project's folder, the same value saved threads carry in `project`.",
+          "type": "string"
+        },
+        "running": {
+          "description": "A thread of the project has a turn running or waits on the user.",
+          "type": "boolean"
+        },
+        "thread_count": {
+          "description": "Saved threads in the project, settled ones included.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "updated_at": {
+          "description": "RFC 3339 time the project's most recently written thread was written.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "thread_count",
+        "running",
+        "needs_input"
+      ],
+      "type": "object"
+    },
     "RemoteQuestion": {
       "properties": {
         "chain_length": {
@@ -1454,6 +1496,44 @@
             "type",
             "session_id",
             "settled"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to `list_projects`.",
+          "properties": {
+            "projects": {
+              "items": {
+                "$ref": "#/$defs/RemoteProject"
+              },
+              "type": "array"
+            },
+            "truncated": {
+              "description": "More than [`MAX_PROJECTS`] projects, or more than one frame holds,\nexist; the least recently updated were left out.",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "projects",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "projects",
+            "truncated"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`subscribe_saved_sessions` took effect: changes after this answer\narrive as `saved_sessions_changed` frames.",
+          "properties": {
+            "type": {
+              "const": "saved_sessions_subscribed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         },
@@ -1855,10 +1935,24 @@
     "RemoteSavedSession": {
       "description": "One saved session as `list_saved_sessions` reports it.",
       "properties": {
+        "harness": {
+          "description": "The harness the thread runs on: `rustcode` for the built-in one, else\nthe harness id (`claude-code`, `codex`, `pi`, …).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message_count": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "model": {
+          "description": "The model or model profile recorded for the thread, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "open_in": {
           "anyOf": [
@@ -1882,8 +1976,20 @@
           ],
           "description": "The thread this one was started from, so a client folds delegates,\nforks and side chats under their parent here as it does in the live\nlist. Absent for a top-level thread and from a host that predates the\nfield."
         },
+        "pinned": {
+          "default": false,
+          "description": "Pinned in the desktop app's sidebar. False from older hosts.",
+          "type": "boolean"
+        },
         "project": {
           "description": "The project the thread belongs to: its recorded workspace directory,\nso a device can group threads of one project together. Absent for a\nsession that predates workspace recording; such a session cannot be\nresumed from a device.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scheduled_job": {
+          "description": "The scheduled job whose run this thread is. The desktop app shows such\nthreads under the job, not in the sidebar.",
           "type": [
             "string",
             "null"
@@ -1892,8 +1998,22 @@
         "session_id": {
           "type": "string"
         },
+        "snoozed_until": {
+          "description": "RFC 3339 time a snoozed thread wakes; absent when it is not snoozed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "state": {
           "$ref": "#/$defs/SavedSessionState"
+        },
+        "status": {
+          "description": "The thread's status as the desktop app shows it: `idle`, `running`,\n`needs_input` (an approval or question waits), `stalled`, `review` or\n`done` (settled). Absent from older hosts. A later release may add\nvalues; a client shows one it does not know as `idle`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "title": {
           "type": "string"
@@ -1918,6 +2038,48 @@
         "title",
         "message_count",
         "state"
+      ],
+      "type": "object"
+    },
+    "RemoteSavedSessionsChanged": {
+      "description": "Saved threads and projects that changed since the previous frame (or since\n`saved_sessions_subscribed`). Each entry is whole: replace what the client\nholds under its `session_id` or `path`.",
+      "properties": {
+        "projects": {
+          "description": "Added or changed projects, as `list_projects` reports them.",
+          "items": {
+            "$ref": "#/$defs/RemoteProject"
+          },
+          "type": "array"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed": {
+          "description": "IDs of threads that are no longer saved on the host.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "removed_projects": {
+          "description": "Paths of projects that no longer have a saved thread.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sessions": {
+          "description": "Added or changed threads, as `list_saved_sessions` reports them.",
+          "items": {
+            "$ref": "#/$defs/RemoteSavedSession"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "protocol_version"
       ],
       "type": "object"
     },
@@ -2714,6 +2876,20 @@
       "properties": {
         "kind": {
           "const": "sessions",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    {
+      "$ref": "#/$defs/RemoteSavedSessionsChanged",
+      "description": "Pushed after `subscribe_saved_sessions` when saved threads or\nprojects change.",
+      "properties": {
+        "kind": {
+          "const": "saved_sessions_changed",
           "type": "string"
         }
       },

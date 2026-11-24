@@ -34,6 +34,8 @@ const TAGS: &[(&str, &str)] = &[
     ("list_sessions", "list_threads"),
     ("resume_session", "resume_thread"),
     ("saved_sessions", "saved_threads"),
+    ("saved_sessions_changed", "saved_threads_changed"),
+    ("saved_sessions_subscribed", "saved_threads_subscribed"),
     ("session_changed", "thread_changed"),
     ("session_closed", "thread_closed"),
     ("session_created", "thread_created"),
@@ -42,6 +44,7 @@ const TAGS: &[(&str, &str)] = &[
     ("sessions", "threads"),
     ("set_session_settings", "set_thread_settings"),
     ("stale_session", "stale_thread"),
+    ("subscribe_saved_sessions", "subscribe_saved_threads"),
     ("subscribe_sessions", "subscribe_threads"),
 ];
 

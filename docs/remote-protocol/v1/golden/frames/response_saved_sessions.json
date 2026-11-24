@@ -9,10 +9,16 @@
         "session_id": "20260714-091502-3fa2c1",
         "title": "Fix the parser",
         "project": "/Users/example/projects/parser",
-        "workspace": "/Users/example/projects/parser",
+        "workspace": "/Users/example/worktrees/parser-fix",
         "updated_at": "2026-07-14T09:40:12Z",
         "message_count": 42,
-        "state": "saved"
+        "state": "saved",
+        "status": "review",
+        "pinned": true,
+        "snoozed_until": "2026-07-15T08:00:00Z",
+        "harness": "codex",
+        "model": "gpt-5.5",
+        "scheduled_job": "nightly-triage"
       },
       {
         "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
@@ -21,14 +27,20 @@
         "workspace": "/Users/example/projects/rustcode",
         "updated_at": "2026-07-14T08:02:55Z",
         "message_count": 118,
-        "state": "shared"
+        "state": "shared",
+        "status": "running",
+        "pinned": false,
+        "harness": "claude-code",
+        "model": "gpt-5.5"
       },
       {
         "session_id": "20260713-171233-9b0e44",
         "title": "Untitled",
         "message_count": 3,
         "state": "open",
-        "open_in": "app"
+        "open_in": "app",
+        "status": "idle",
+        "pinned": false
       }
     ],
     "next_cursor": "20260713-171233-9b0e44"

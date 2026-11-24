@@ -24,6 +24,9 @@ const OWNER_START_TIMEOUT: Duration = Duration::from_secs(60);
 const ANSWER_DEADLINE: Duration = Duration::from_secs(15);
 const OWNER_LEASE: &str = "remote session";
 
+mod saved_threads;
+use saved_threads::{Live, SavedIndex, SavedWatch, live_state};
+
 /// The owner of a new session could not be started, and nothing is left of
 /// the attempt: no process and no receipt. The device may simply ask again.
 #[derive(Debug)]
@@ -474,7 +477,7 @@ fn spawn_host<F>(
 /// applies.
 fn list_saved_sessions(
     config: &Path,
-    state_of: impl Fn(&str) -> SavedSessionState,
+    live: impl Fn(&str) -> Live,
     cursor: Option<&str>,
     limit: Option<u32>,
     query: Option<&str>,
@@ -544,42 +547,8 @@ fn list_saved_sessions(
         else {
             continue;
         };
-        let updated_at = std::fs::metadata(&meta.path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .map(|modified| {
-                chrono::DateTime::<chrono::Utc>::from(modified)
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            });
-        let state = state_of(&session_id);
-        let open_in = (state == SavedSessionState::Open)
-            .then(|| crate::sessions::session_open_by(config, &session_id))
-            .flatten()
-            .flatten()
-            .map(saved_session_holder);
-        // A device shows the folder, not a Windows API detail: the verbatim
-        // prefix a canonical path carries makes one project look like two (#3425).
-        let workspace = meta.workspace_cwd.as_ref().map(|cwd| {
-            rustcode_session::strip_verbatim(cwd)
-                .to_string_lossy()
-                .into_owned()
-        });
-        let parent = crate::remote::session_parent(&session_id);
-        let session = RemoteSavedSession {
-            state,
-            open_in,
-            parent,
-            title: meta
-                .title
-                .chars()
-                .take(MAX_SAVED_SESSION_TITLE_CHARS)
-                .collect(),
-            project: workspace.clone(),
-            workspace,
-            updated_at,
-            message_count: meta.message_count as u64,
-            session_id,
-        };
+        let session =
+            saved_threads::entry(config, &store, &meta, session_id.clone(), live(&session_id));
         bytes += serde_json::to_vec(&session)?.len() + 1;
         // Long workspace paths must not push the page past one frame: end
         // the page early and continue after the last session that fits.
@@ -671,6 +640,8 @@ pub struct WorkspaceRouter {
     config: PathBuf,
     program: PathBuf,
     creation: Arc<tokio::sync::Mutex<()>>,
+    saved: Arc<std::sync::Mutex<SavedIndex>>,
+    watch: Arc<SavedWatch>,
 }
 impl WorkspaceRouter {
     pub fn new(hub: Arc<SessionHub>, config: PathBuf, program: PathBuf) -> Self {
@@ -684,13 +655,25 @@ impl WorkspaceRouter {
             host_capability::THREAD_UNPIN,
             host_capability::THREAD_SETTLE,
             host_capability::THREAD_UNSETTLE,
+            host_capability::PROJECTS,
+            host_capability::SAVED_SESSION_UPDATES,
         ]);
         Self {
             hub,
             config,
             program,
             creation: Arc::new(tokio::sync::Mutex::new(())),
+            saved: Arc::default(),
+            watch: Arc::default(),
         }
+    }
+    /// Every saved thread's entry, read through the shared transcript cache.
+    fn scan(&self) -> Arc<dyn Fn() -> Vec<RemoteSavedSession> + Send + Sync> {
+        let (hub, config, saved) = (self.hub.clone(), self.config.clone(), self.saved.clone());
+        Arc::new(move || {
+            let mut index = saved.lock().unwrap_or_else(|error| error.into_inner());
+            index.scan(&config, &|id| live_state(&hub, &config, id))
+        })
     }
     fn receipt_path(config: &Path, device: &str, request: &str) -> PathBuf {
         let mut digest = Sha256::new();
@@ -751,7 +734,7 @@ impl WorkspaceRouter {
         if let Some(response) = previous.as_ref().and_then(|stored| stored.response.clone()) {
             return Ok(response);
         }
-        let directory = resolve_directory(path, &allowed_roots(config)?)?;
+        let directory = saved_threads::resolve_creation_directory(config, path)?;
         // A home directory works but tracks hundreds of thousands of files:
         // flag it in the session log so the next slow-turn report starts with
         // the workspace root, not the network (#1954).
@@ -1129,6 +1112,7 @@ impl FrameRouter for WorkspaceRouter {
         self.hub.connected(device, sink);
     }
     fn disconnected(&self, device: &DeviceContext) {
+        self.watch.unsubscribe(device.connection_id);
         self.hub.disconnected(device);
     }
     fn frame(&self, device: &DeviceContext, frame: &str, sink: &FrameSink) {
@@ -1172,23 +1156,10 @@ impl FrameRouter for WorkspaceRouter {
                 let config = self.config.clone();
                 let sink = sink.clone();
                 tokio::spawn(async move {
-                    let owners = config.join("remote").join("owners");
                     let result = tokio::task::spawn_blocking(move || {
                         list_saved_sessions(
                             &config,
-                            |session_id| {
-                                if hub.session_info(session_id).is_some() {
-                                    SavedSessionState::Shared
-                                } else if hub.is_announced(session_id)
-                                    || owner_alive(&owners, session_id)
-                                    || crate::sessions::session_open_by(&config, session_id)
-                                        .is_some()
-                                {
-                                    SavedSessionState::Open
-                                } else {
-                                    SavedSessionState::Saved
-                                }
-                            },
+                            |session_id| live_state(&hub, &config, session_id),
                             cursor.as_deref(),
                             limit,
                             query.as_deref(),
@@ -1213,6 +1184,23 @@ impl FrameRouter for WorkspaceRouter {
                     };
                     send(&sink, response);
                 });
+            }
+            RemoteOperation::ListProjects => {
+                let scan = self.scan();
+                spawn_host(
+                    sink,
+                    request.request_id.clone(),
+                    false,
+                    RemoteErrorCode::Internal,
+                    move || {
+                        saved_threads::list_projects(&scan()).map_err(|error| error.to_string())
+                    },
+                );
+            }
+            RemoteOperation::SubscribeSavedSessions => {
+                let scan = self.scan();
+                self.watch
+                    .subscribe(device.connection_id, sink, request.request_id.clone(), scan);
             }
             RemoteOperation::GetUsage => {
                 let config = self.config.clone();
@@ -1308,8 +1296,8 @@ impl FrameRouter for WorkspaceRouter {
                 } = &request.operation
                     && self.hub.hosts_threads()
                 {
-                    let directory = allowed_roots(&self.config)
-                        .and_then(|roots| resolve_directory(path.as_deref(), &roots));
+                    let directory =
+                        saved_threads::resolve_creation_directory(&self.config, path.as_deref());
                     match directory {
                         Ok(directory) => {
                             let mut forwarded = request.clone();
@@ -2403,12 +2391,13 @@ mod tests {
             ],
         );
         let shared = ids[1].clone();
-        let state_of = |id: &str| {
-            if id == shared {
+        let state_of = |id: &str| Live {
+            state: if id == shared {
                 SavedSessionState::Shared
             } else {
                 SavedSessionState::Saved
-            }
+            },
+            activity: None,
         };
         let (first, cursor) =
             saved_page(list_saved_sessions(config.path(), state_of, None, Some(2), None).unwrap());
@@ -2645,12 +2634,13 @@ mod tests {
         }
         let saved = list_saved_sessions(
             config.path(),
-            |id| {
-                if crate::sessions::session_open_by(config.path(), id).is_some() {
+            |id| Live {
+                state: if crate::sessions::session_open_by(config.path(), id).is_some() {
                     SavedSessionState::Open
                 } else {
                     SavedSessionState::Saved
-                }
+                },
+                activity: None,
             },
             None,
             None,
@@ -2757,7 +2747,9 @@ mod tests {
                     host_capability::THREAD_PIN,
                     host_capability::THREAD_UNPIN,
                     host_capability::THREAD_SETTLE,
-                    host_capability::THREAD_UNSETTLE
+                    host_capability::THREAD_UNSETTLE,
+                    host_capability::PROJECTS,
+                    host_capability::SAVED_SESSION_UPDATES
                 ]
             );
         });
