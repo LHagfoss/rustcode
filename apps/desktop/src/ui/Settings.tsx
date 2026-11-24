@@ -120,6 +120,7 @@ const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ defa
 
 import { refreshServerService, useMachines } from "../state/machines";
 import { useSettingsAttention } from "../state/settingsAttention";
+import { type SettingsNavPage, SettingsSectionList } from "./SettingsSectionList";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
@@ -141,11 +142,7 @@ import {
 
 const UsagePage = lazy(() => import("./UsagePage").then((m) => ({ default: m.UsagePage })));
 
-interface Page {
-  id: SettingsSection;
-  label: string;
-  icon: typeof Gear;
-}
+type Page = SettingsNavPage;
 
 /**
  * The nav, top to bottom: pages, then groups of pages under a heading. One
@@ -1044,36 +1041,12 @@ export function SettingsNav() {
             <p className="px-2 py-1.5 text-caption text-fg-muted">Nothing matches “{query.trim()}”.</p>
           )
         ) : (
-          NAV.map((group) => (
-            <div key={group.heading ?? group.pages[0]?.id} className="flex flex-col gap-1">
-              {group.heading && (
-                <div className="px-2 pb-0.5 font-medium text-callout text-fg-muted">{group.heading}</div>
-              )}
-              {group.pages.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  aria-current={s.id === section ? "page" : undefined}
-                  aria-description={attention[s.id]}
-                  onClick={() => openSettings(s.id)}
-                  className={cx(
-                    "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
-                    s.id === section ? "bg-fill text-fg" : "text-fg-muted hover:bg-fill hover:text-fg",
-                  )}
-                >
-                  <s.icon size={16} strokeWidth={1.85} className="shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                  {attention[s.id] && (
-                    <span
-                      data-testid={`settings-attention-${s.id}`}
-                      title={attention[s.id]}
-                      className="size-1.5 shrink-0 rounded-full bg-warning"
-                    />
-                  )}
-                </button>
-              ))}
-            </div>
-          ))
+          <SettingsSectionList
+            groups={NAV}
+            section={section}
+            attention={attention}
+            onOpen={(id) => openSettings(id)}
+          />
         )}
       </div>
     </nav>
