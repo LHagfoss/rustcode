@@ -15,6 +15,7 @@ import {
 } from "../state/connections";
 import { useScope } from "../state/settingsScope";
 import { askConfirm, errorText, request, toast } from "../state/store";
+import { ConnectorGallery } from "./Connectors";
 import { HarnessIcon } from "./HarnessIcon";
 import { ExternalLink, Github, LogOut, RefreshCw } from "./icons";
 import { CopyButton } from "./Markdown";
@@ -67,6 +68,7 @@ export function ConnectionsPage() {
       <SettingsScopeBar machineOnly />
       <GitHubGroup data={data} onChange={setData} />
       <ModelAccountsGroup accounts={data.accounts} onChange={setData} />
+      <ConnectorGallery />
     </>
   );
 }

@@ -44,7 +44,7 @@ interface Skill {
   enabled: boolean;
 }
 
-interface McpServer {
+export interface McpServer {
   name: string;
   transport: string;
   target: string;
@@ -62,16 +62,16 @@ interface McpServer {
 }
 
 /** A browser sign-in waits up to five minutes for the user (the engine's loopback limit). */
-const SIGN_IN_TIMEOUT = 310_000;
+export const SIGN_IN_TIMEOUT = 310_000;
 
-interface Capabilities {
+export interface Capabilities {
   skills: Skill[];
   mcpServers: McpServer[];
   configPath?: string;
 }
 
 /** The engine sends `tools` as the tool names; an older mock sent a count. */
-const parseCapabilities = (v: Json): Capabilities => {
+export const parseCapabilities = (v: Json): Capabilities => {
   const root = obj(v) ?? {};
   return {
     configPath: str(root.configPath),
