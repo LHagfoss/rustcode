@@ -201,6 +201,25 @@ describe("the thread's turns", () => {
     expect(turn?.tokens).toBe(260);
   });
 
+  test("a turn begun before the app knew the totals is priced from the turn before it", () => {
+    const sample = (inputTokens: number, cost: number) => ({
+      used: 0,
+      size: 0,
+      estimated: false,
+      inputTokens,
+      outputTokens: 0,
+      cost,
+    });
+    const turns = turnEntries([
+      { kind: "user", id: "u1", text: "One" },
+      turnEnd("e1", { usage: { before: sample(0, 0), samples: [{ at: 1, usage: sample(100, 0.2) }] } }),
+      { kind: "user", id: "u2", text: "Two" },
+      turnEnd("e2", { usage: { samples: [{ at: 2, usage: sample(250, 0.5) }] } }),
+    ]);
+    expect(turns[1]?.cost).toBeCloseTo(0.3);
+    expect(turns[1]?.tokens).toBe(150);
+  });
+
   test("a turn the engine priced nothing for has no numbers, rather than a guess", () => {
     const [turn] = turnEntries([
       { kind: "user", id: "u1", text: "Go" },

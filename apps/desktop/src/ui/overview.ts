@@ -6,7 +6,7 @@
 import type { PullRequest } from "../acp/rustcode";
 import type { FileDiff } from "../acp/types";
 import { readStorage, writeStorage } from "../lib/storage";
-import { rowTokens, usageDelta } from "../lib/trace";
+import { rowTokens, type TraceUsage, usageDelta } from "../lib/trace";
 import { type DelegateNode, delegateTree } from "../state/delegates";
 import type { Link } from "../state/orchestration";
 import { diffCounts, stripHarnessMarkup, type TranscriptItem, type TurnUsage } from "../state/thread";
@@ -284,6 +284,8 @@ export interface TurnEntry {
   cost?: number;
   /** Its input and output tokens together, when the engine reported them. */
   tokens?: number;
+  /** Its token counts, so a turn the harness did not price can be estimated at list price. */
+  counts?: TraceUsage;
 }
 
 /** What the log's stats row adds up (docs/design.md › the panel's rates). */
@@ -296,12 +298,20 @@ export interface LogTotals {
   agentMs: number;
 }
 
-/** What a turn used: the last sample the engine sent it, minus the session's totals at its start. */
-function turnUsage(usage: TurnUsage | undefined): { cost?: number; tokens?: number } {
+/**
+ * What a turn used: the last sample the engine sent it, minus the session's
+ * totals at its start. A turn that began before the app knew those totals
+ * (the first one after a reload) has no baseline of its own, so it starts
+ * from the last sample of the turn before it: the numbers are cumulative.
+ */
+function turnUsage(
+  usage: TurnUsage | undefined,
+  previous: TraceUsage | undefined,
+): Pick<TurnEntry, "cost" | "tokens" | "counts"> {
   const last = usage?.samples.at(-1)?.usage;
-  const delta = usageDelta(last, usage?.before);
+  const delta = usageDelta(last, usage?.before ?? previous);
   if (!delta) return {};
-  return { cost: delta.cost, tokens: rowTokens(delta) };
+  return { cost: delta.cost, tokens: rowTokens(delta), counts: delta };
 }
 
 /** A turn's opening line, without harness markup or the wake marker that starts one. */
@@ -325,6 +335,7 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
   let prompt = "";
   let userId: string | undefined;
   let worked = false;
+  let lastSample: TraceUsage | undefined;
   for (let i = 0; i <= items.length; i++) {
     const item = items[i];
     const ended = i > from && items[i - 1]!.kind === "turnEnd";
@@ -342,8 +353,9 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
         startedAt: end.startedAt,
         outcome: end.outcome,
         elapsedMs: end.elapsedMs,
-        ...turnUsage(end.usage),
+        ...turnUsage(end.usage, lastSample),
       });
+      lastSample = end.usage?.samples.at(-1)?.usage;
       from = i;
       userId = undefined;
       worked = false;
@@ -353,6 +365,7 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
         prompt: prompt || "No message",
         outcome: "completed",
       });
+      lastSample = undefined;
       from = i;
       userId = undefined;
       worked = false;
