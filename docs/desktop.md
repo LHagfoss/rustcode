@@ -2200,7 +2200,8 @@ From the SwiftUI app, still missing or partial:
   are not offered.
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
-- GitHub sign-in flow, model account switching (Connections is read-only).
+- Model account switching (Connections signs GitHub in and out, and model
+  accounts out, but adding one is still `/login` in a thread).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The
   Smart UI `rcui://` path was checked by unit test and the page itself in

@@ -68,6 +68,7 @@ import {
   GitCommitHorizontalIcon,
   GitCompareIcon,
   GitForkIcon,
+  GithubIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestDraftIcon,
@@ -91,6 +92,7 @@ import {
   LinkSquare02Icon,
   ListViewIcon,
   Loading03Icon,
+  Logout01Icon,
   Maximize01Icon,
   Message01Icon,
   Message02Icon,
@@ -321,6 +323,8 @@ export const GitCompareArrows = (props: IconProps) => (
 );
 export const GitFork = (props: IconProps) => <Rounded name="GitFork" icon={GitForkIcon} {...props} />;
 export const GitMerge = (props: IconProps) => <Rounded name="GitMerge" icon={GitMergeIcon} {...props} />;
+export const Github = (props: IconProps) => <Rounded name="Github" icon={GithubIcon} {...props} />;
+export const LogOut = (props: IconProps) => <Rounded name="LogOut" icon={Logout01Icon} {...props} />;
 export const GitPullRequest = (props: IconProps) => (
   <Rounded name="GitPullRequest" icon={GitPullRequestIcon} {...props} />
 );

@@ -97,6 +97,7 @@ export const Method = {
   githubCancel: "_rustcode/connections/github/cancel",
   githubLogout: "_rustcode/connections/github/logout",
   accountLogout: "_rustcode/connections/account/logout",
+  accountRefresh: "_rustcode/connections/account/refresh",
   pulls: "_rustcode/pulls",
   /** The timed approvals still in force ("Allow for 1 hour"), and revoking one. */
   permissions: "_rustcode/permissions",
