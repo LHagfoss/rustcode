@@ -449,7 +449,8 @@ that change use `tabular`.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
   closing 120ms `ease-in`. Dialogs 180ms.
 - Nothing animates layout on hover. Height transitions only for folding
-  sections, and for the composer's field, which grows and shrinks with its
+  sections (`ui/Fold.tsx`: the sidebar's sections, a Settings row's details,
+  an inline add form, a card a feature switch turns on), and for the composer's field, which grows and shrinks with its
   lines over 150ms `--ease-snappy` instead of jumping between them; the
   transcript stays pinned to its end as the card rises, so the last line never
   goes under it mid-animation.

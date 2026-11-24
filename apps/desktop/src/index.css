@@ -466,6 +466,11 @@
 }
 
 /* Centered lanes (Settings) reserve equal gutter on both sides so floating headers stay aligned. */
+@utility gutter-stable {
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+
 @utility scroll-stable-both {
   overflow-y: auto;
   scrollbar-gutter: stable both-edges;
