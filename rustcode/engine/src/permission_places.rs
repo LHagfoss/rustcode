@@ -56,7 +56,7 @@ mod tests {
             assert!(index.contains(&format!("title: \"{title}\"")), "{title}");
         }
         let settings = include_str!("../../../apps/desktop/src/ui/Settings.tsx");
-        for label in ["\"Orchestration\"", "\"Permissions\"", "\"Outside agents\""] {
+        for label in ["\"Delegation\"", "\"Permissions\"", "\"Outside agents\""] {
             assert!(settings.contains(label), "{label}");
         }
         let inbox = include_str!("../../../apps/desktop/src/ui/Inbox.tsx");
