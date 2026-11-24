@@ -967,36 +967,38 @@ export function SettingsNav() {
       data-focus-area="sections"
       className="rc-in flex h-full min-h-0 flex-col gap-3 px-3 pb-3 outline-none"
     >
-      <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
-        <Search size={16} className="shrink-0 text-fg-faint" />
-        <input
-          ref={field}
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setActive(0);
-          }}
-          onKeyDown={onFieldKey}
-          placeholder="Search settings"
-          aria-label="Search settings"
-          {...noTextHelpers}
-          className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
-        />
-        {query ? (
-          <button
-            type="button"
-            aria-label="Clear search"
-            onClick={() => {
-              clear();
-              field.current?.focus();
+      <div className="gutter-stable shrink-0">
+        <div className="flex h-8 items-center gap-2 rounded-lg bg-fill-subtle px-2 text-body focus-within:bg-fill">
+          <Search size={16} className="shrink-0 text-fg-faint" />
+          <input
+            ref={field}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActive(0);
             }}
-            className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
-          >
-            <X size={12} strokeWidth={2.5} />
-          </button>
-        ) : (
-          <Kbd>/</Kbd>
-        )}
+            onKeyDown={onFieldKey}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            {...noTextHelpers}
+            className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
+          />
+          {query ? (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => {
+                clear();
+                field.current?.focus();
+              }}
+              className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
+            >
+              <X size={12} strokeWidth={2.5} />
+            </button>
+          ) : (
+            <Kbd>/</Kbd>
+          )}
+        </div>
       </div>
       <div ref={resultsScroll} className="scroll-stable flex min-h-0 flex-1 flex-col gap-4 pb-1">
         {query.trim() ? (

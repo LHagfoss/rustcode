@@ -44,7 +44,10 @@ export function Fold({
   return (
     <div
       data-fold={shown ? "open" : "closed"}
-      className="grid transition-[grid-template-rows,opacity] duration-200 ease-snappy"
+      className={cx(
+        "grid transition-[grid-template-rows,opacity] duration-200 ease-snappy",
+        !still && "overflow-hidden",
+      )}
       style={{ gridTemplateRows: shown ? "1fr" : "0fr", opacity: shown ? 1 : 0 }}
       onTransitionEnd={(e) => {
         if (e.target !== e.currentTarget || e.propertyName !== "grid-template-rows") return;

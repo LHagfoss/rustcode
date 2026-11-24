@@ -49,7 +49,7 @@ export function SettingsSectionList({
           aria-hidden
           data-testid="settings-nav-highlight"
           className={cx(
-            "pointer-events-none absolute inset-x-0 top-0 rounded-md bg-fill",
+            "pointer-events-none absolute inset-x-0 top-0 rounded-lg bg-fill",
             highlight.ready && "transition-transform duration-200 ease-snappy",
           )}
           style={{ height: highlight.height, transform: `translateY(${highlight.top}px)` }}
@@ -71,8 +71,8 @@ export function SettingsSectionList({
                 aria-description={attention[s.id]}
                 onClick={() => onOpen(s.id)}
                 className={cx(
-                  "relative flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
-                  current ? "text-fg" : "text-fg-muted hover:bg-fill hover:text-fg",
+                  "relative flex h-8 items-center gap-2 rounded-lg px-2 text-left font-medium text-body",
+                  current ? "text-fg" : "text-fg-muted hover:bg-fill-subtle hover:text-fg",
                   current && !highlight && "bg-fill",
                 )}
               >
