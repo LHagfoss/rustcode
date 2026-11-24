@@ -467,8 +467,9 @@ that change use `tabular`.
   `transform`, `opacity` and those two; never `filter` or `box-shadow` on
   something that moves every frame.
 - Toasts rise in with `rc-toast-in` (220ms, from 10px below) and drop away
-  in 140ms `ease-in`; a drag slides it right only (other ways rubber-band at
-  a sixth) and it snaps back or flies off the right edge in 160ms, and a card shown meanwhile takes the top of the stack. At rest only
+  in 140ms `ease-in` (at a top position `rc-toast-in-top` and `rc-toast-out-top`, from and to
+  above); a drag slides it toward its edge only (other ways rubber-band at
+  a sixth) and it snaps back or flies off that edge in 160ms, and a card shown meanwhile takes the top of the stack. At rest only
   the front card is in flow, the ones behind peeking 6px above it; hovering or
   focusing the stack fans them out 8px apart (`transform` only).
 - A new transcript row rises in with `rc-row-in` (260ms, fade + 6px), once:
@@ -726,27 +727,27 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   Pickers, long command names and destructive actions stay as ordinary rows.
   **Popover:** `popoverSurface` (`elevated p-3`).
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
-- **Toast:** `.rc-toast rounded-2xl` (strong glass and a slight shadow), 380px wide, `py-1.5 pl-3 pr-1.5 text-callout`: an icon
-  (info `text-fg-muted`, success `text-success`, error `text-danger`, a
-  spinner while it has progress), the text in `text-fg` (up to 3 lines), at
-  most one action as a tinted button on the close button's row (`h-6
-  bg-accent/12 text-accent`, the action's icon before its label: Undo ↶,
-  Open ↗), and a quiet close button. The card is as tall as its text.
-  Progress is a 2px accent bar along its foot. `Toaster` shows at most three
-  (`state/toasts.ts` enforces the queue), newest on top: at rest only the
-  front card is fully shown, the others taking its height with their text
-  hidden and peeking 6px above it, and hovering or
-  focusing the stack fans them out 8px apart, upward. In the window's
-  bottom-right corner, 16px in, away from the transcript being read. No timer
-  line: a card's clock is not drawn. A card replaced in place from spinner to check settles
-  onto the check. The same message again refreshes its card and
-  restarts its time instead of stacking; past three, the oldest is dropped.
+- **Toast:** `.rc-toast rounded-2xl` (the composer's surface, edge and glass with a soft lift),
+  340px wide, `py-2 pl-4 pr-2 text-callout`: a 6px tone dot (info `bg-fg-muted`, success
+  `bg-success`, error `bg-danger`, a spinner while it has progress), the text in `text-fg` (up to 3
+  lines), at most one action as an outlined pill (`h-6 rounded-full ring-1 ring-border-strong
+  text-sub`, label only), and a close button that is collapsed until the card is hovered or the
+  button focused. The card is as tall as its text. Progress is a 2px accent bar along its foot.
+  `Toaster` shows at most three (`state/toasts.ts` enforces the queue), newest in front: at rest
+  only the front card is fully shown, the others taking its height with their text hidden and
+  peeking 6px past it, and hovering or focusing the stack fans them out 8px apart, away from the
+  window edge. Settings › Appearance › Toast position puts the stack 16px in from the bottom-right
+  corner (the default, away from the transcript being read), the bottom-left, the top-right or the
+  top center (52px down, under the header); at the top it stacks and enters downward. No timer
+  line: a card's clock is not drawn. A card replaced in place from spinner to dot settles onto the
+  dot. The same message again refreshes its card and restarts its time instead of stacking; past
+  three, the oldest is dropped.
   Info and success leave after 2.5s, errors after 5s. The pointer or focus on
   the stack, a drag, and a window in the background stop every clock, which
   resumes with what was left. A click anywhere on the card, ×, Escape (after a
-  draft or an open overlay has taken it), or a drag right past 48px or a quick
-  flick right dismisses; the card slides right only, rubber-bands any other
-  way, snaps back in 160ms, and never selects text. Use a
+  draft or an open overlay has taken it), or a drag toward the card's edge (left
+  in the bottom-left corner, right elsewhere) past 48px or a quick flick that way
+  dismisses; the card slides that way only, rubber-bands any other way, snaps back in 160ms, and never selects text. Use a
   toast for what is not tied to a message (copied, engine events, errors of an
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn

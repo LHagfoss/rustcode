@@ -25,6 +25,7 @@ import { LiveBackgroundGroup } from "./LiveBackgroundGroup";
 import { cx, noTextHelpers, Switch } from "./primitives";
 import { SettleAfterSetting, SidebarDensitySetting, SidebarToolbarSetting } from "./SidebarDensitySetting";
 import { Action, Choice, fieldClass, Group, Row, SectionTitle, Slider } from "./settingsKit";
+import { ToastPositionSetting } from "./ToastPositionSetting";
 
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -295,6 +296,7 @@ export function AppearancePage() {
         <SidebarDensitySetting />
         <SidebarToolbarSetting />
         <SettleAfterSetting />
+        <ToastPositionSetting />
       </Group>
       <Group
         title="Theme"

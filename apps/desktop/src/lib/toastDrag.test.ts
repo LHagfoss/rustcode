@@ -33,6 +33,14 @@ describe("toast drag", () => {
     expect(dragState(0, -60).dy).toBe(-10);
   });
 
+  test("in the left corner the card swipes left instead", () => {
+    expect(dragState(-(TOAST_DISMISS_PX + 1), 0, Number.POSITIVE_INFINITY, -1).dismiss).toBe(true);
+    expect(dragState(TOAST_DISMISS_PX + 1, 0, Number.POSITIVE_INFINITY, -1).dismiss).toBe(false);
+    expect(dragState(-30, 0, 40, -1).dismiss).toBe(true);
+    expect(dragState(-40, 0, Number.POSITIVE_INFINITY, -1)).toMatchObject({ dx: -40, away: 40 });
+    expect(dragState(60, 0, Number.POSITIVE_INFINITY, -1)).toMatchObject({ dx: 10, away: 0 });
+  });
+
   test("the card fades as it travels but never below a fifth", () => {
     expect(dragOpacity(0)).toBe(1);
     expect(dragOpacity(100)).toBe(0.5);
