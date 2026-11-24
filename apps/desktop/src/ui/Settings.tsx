@@ -16,8 +16,7 @@ import { VoiceGroup } from "./VoiceGroup";
 // Diagnostics (DiagnosticsPage.tsx) asks the shell about the server itself.
 
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc";
-import { Method } from "../acp/types";
+import { type Json, type JsonObject, obj } from "../acp/jsonrpc";
 import { CHAT_WIDTH_LABEL, type ChatWidth } from "../lib/chatWidth";
 import {
   CRASH_REPORTS_DEFAULT,
@@ -90,6 +89,7 @@ import { HEADER_HEIGHT, SidebarCluster } from "./MainHeader";
 import { RestartToApply } from "./RestartToApply";
 import { AboutPage, STATUS_READ_MS } from "./SettingsAbout";
 import { AppearancePage } from "./SettingsAppearance";
+import { ConnectionsPage } from "./SettingsConnections";
 import { OrchestrationPage } from "./SettingsOrchestration";
 import { useLightsInset } from "./Titlebar";
 import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
@@ -134,9 +134,7 @@ import {
   SettingsHeaderProvider,
   type SettingsPageMeta,
   Slider,
-  useEngineData,
   useRowResets,
-  withCode,
 } from "./settingsKit";
 
 const UsagePage = lazy(() => import("./UsagePage").then((m) => ({ default: m.UsagePage })));
@@ -754,125 +752,6 @@ function VoicePage() {
           <ComputerUseGroup />
         </>
       )}
-    </>
-  );
-}
-
-interface Connections {
-  github?: {
-    cliInstalled: boolean;
-    installHint?: string;
-    accounts: { host: string; login: string; active: boolean; valid: boolean }[];
-    error?: string;
-  };
-  accounts: { provider: string; display: string; method: string; active: boolean; needsSignIn: boolean }[];
-}
-
-const parseConnections = (v: Json): Connections => {
-  const root = obj(v) ?? {};
-  const gh = obj(root.github);
-  return {
-    github: gh
-      ? {
-          cliInstalled: bool(gh.cliInstalled) ?? false,
-          installHint: str(gh.installHint),
-          accounts: arr(gh.accounts).map((a) => {
-            const o = obj(a) ?? {};
-            return {
-              host: str(o.host) ?? "",
-              login: str(o.login) ?? "",
-              active: bool(o.active) ?? false,
-              valid: bool(o.valid) ?? false,
-            };
-          }),
-          error: str(gh.error),
-        }
-      : undefined,
-    accounts: arr(root.accounts).map((a) => {
-      const o = obj(a) ?? {};
-      return {
-        provider: str(o.provider) ?? "",
-        display: str(o.display) ?? "",
-        method: str(o.method) ?? "",
-        active: bool(o.active) ?? false,
-        needsSignIn: bool(o.needsSignIn) ?? false,
-      };
-    }),
-  };
-};
-
-function ConnectionsPage() {
-  const { data, error } = useEngineData(Method.connections, parseConnections);
-  const { scope, machines } = useScope();
-  const remote =
-    scope.mode === "machine"
-      ? machines.find((machine) => machine.host === scope.host && !machine.local)
-      : undefined;
-  if (remote)
-    return (
-      <>
-        <SettingsScopeBar machineOnly />
-        <Group title="Credentials and accounts">
-          <Row
-            title={`Sign in on ${remote.name} itself`}
-            subtitle="Sign in on that computer. Credentials never leave their machine."
-          />
-        </Group>
-      </>
-    );
-  if (!data)
-    return (
-      <>
-        <SettingsScopeBar machineOnly />
-        <Loading error={error} />
-      </>
-    );
-  return (
-    <>
-      <SettingsScopeBar machineOnly />
-      <Group title="GitHub" footer="Pull requests use the GitHub CLI's sign-in.">
-        {!data.github?.cliInstalled ? (
-          <Row
-            title="GitHub CLI not installed"
-            subtitle={
-              data.github?.installHint
-                ? `Install it with: ${data.github.installHint}`
-                : "Install GitHub CLI: https://cli.github.com"
-            }
-          />
-        ) : data.github.accounts.length ? (
-          data.github.accounts.map((a) => (
-            <Row key={`${a.host}/${a.login}`} title={a.login} subtitle={a.host}>
-              {a.valid ? (
-                <Chip tone="ok">{a.active ? "Signed in" : "Usable"}</Chip>
-              ) : (
-                <Chip tone="warn" title="Run: gh auth login">
-                  Token invalid
-                </Chip>
-              )}
-            </Row>
-          ))
-        ) : (
-          <Row title="Not signed in" subtitle="Run: gh auth login" />
-        )}
-      </Group>
-      <Group title="Model accounts" footer={withCode("Sign in or out with `/login` in a thread.")}>
-        {data.accounts.length ? (
-          data.accounts.map((a, i) => (
-            <Row key={i} title={a.display || a.provider} subtitle={`${a.provider} · ${a.method}`}>
-              {a.needsSignIn ? (
-                <Chip tone="warn">Sign in again</Chip>
-              ) : a.active ? (
-                <Chip tone="ok">Active</Chip>
-              ) : (
-                <Chip>Idle</Chip>
-              )}
-            </Row>
-          ))
-        ) : (
-          <Row title="No accounts" />
-        )}
-      </Group>
     </>
   );
 }
