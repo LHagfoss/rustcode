@@ -195,6 +195,8 @@ describe("thread reducer", () => {
         { kind: "user", text: "1" },
         { kind: "agent", text: "a", turn: { elapsedMs: 5000, outcome: "completed" } },
         { kind: "user", text: "2" },
+        { kind: "agent", text: "", turn: { elapsedMs: 3000, outcome: "cancelled" } },
+        { kind: "user", text: "3" },
         { kind: "agent", text: "b", turn: { elapsedMs: 7000, outcome: "completed" } },
       ]),
     );
@@ -203,10 +205,13 @@ describe("thread reducer", () => {
       "assistant",
       "turnEnd",
       "user",
+      "turnEnd",
+      "user",
       "assistant",
       "turnEnd",
     ]);
-    expect(s.items[5]).toMatchObject({ elapsedMs: 7000 });
+    expect(s.items[4]).toMatchObject({ elapsedMs: 3000, outcome: "cancelled" });
+    expect(s.items[7]).toMatchObject({ elapsedMs: 7000 });
     expect(isLoaded(s)).toBe(true);
   });
 

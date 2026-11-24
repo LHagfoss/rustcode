@@ -760,9 +760,9 @@ export function Transcript({
   // A finished turn keeps its array, so its memoised footer skips a streamed chunk.
   const drawnTurnItems = useRef<Record<string, TranscriptItem[]>>({});
   const turnItems = useMemo(() => {
-    drawnTurnItems.current = turnItemsByEnd(thread.items, drawnTurnItems.current);
+    drawnTurnItems.current = turnItemsByEnd(thread.items, drawnTurnItems.current, running);
     return drawnTurnItems.current;
-  }, [thread.items]);
+  }, [thread.items, running]);
 
   // Turn footers that render nothing at all. Nothing measures a row that never mounts, so the
   // virtualizer has to estimate no height for it, or every row below drifts by a footer.

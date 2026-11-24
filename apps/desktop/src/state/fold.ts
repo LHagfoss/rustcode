@@ -598,26 +598,51 @@ export function keepUnchangedRows<T extends { key: string }>(previous: readonly 
 }
 
 /**
- * Each finished turn's own items, by its footer's id: everything since the
- * turn before it, so a wake turn (which has no message of its own) comes out
- * whole. A turn whose items are the ones `previous` held keeps that array, so
- * its footer's Trace is not handed a new one on every streamed chunk.
+ * Each finished turn's own items, by its footer's id (or its opening row's id
+ * for a replayed turn without a footer): everything since the turn before it,
+ * so a wake turn (which has no message of its own) comes out whole. A turn
+ * whose items are the ones `previous` held keeps that array, so its footer's
+ * Trace is not handed a new one on every streamed chunk.
  */
 export function turnItemsByEnd(
   items: readonly TranscriptItem[],
   previous: Readonly<Record<string, TranscriptItem[]>> = {},
+  running = false,
 ): Record<string, TranscriptItem[]> {
   const map: Record<string, TranscriptItem[]> = {};
   let from = 0;
-  items.forEach((item, i) => {
-    if (item.kind !== "turnEnd") return;
-    const old = previous[item.id];
-    const length = i + 1 - from;
+  let userId: string | undefined;
+  let worked = false;
+  const record = (id: string, to: number) => {
+    const old = previous[id];
+    const length = to - from;
     let kept = old?.length === length;
     for (let k = 0; kept && k < length; k++) kept = old![k] === items[from + k];
-    map[item.id] = kept ? old! : items.slice(from, i + 1);
-    from = i + 1;
-  });
+    map[id] = kept ? old! : items.slice(from, to);
+    from = to;
+    userId = undefined;
+    worked = false;
+  };
+  for (let i = 0; i <= items.length; i++) {
+    const item = items[i];
+    const ended = i > from && items[i - 1]!.kind === "turnEnd";
+    const nextTurn =
+      i > from &&
+      !ended &&
+      worked &&
+      ((item?.kind === "user" && !item.steered) || (i === items.length && !running));
+    if (ended) {
+      record(items[i - 1]!.id, i);
+    } else if (nextTurn) {
+      record(userId ?? items[from]!.id, i);
+    }
+    if (!item) break;
+    if (item.kind === "user" && !item.steered) {
+      userId ??= item.id;
+    } else if (item.kind === "assistant" || item.kind === "tool" || item.kind === "thought") {
+      worked = true;
+    }
+  }
   return map;
 }
 

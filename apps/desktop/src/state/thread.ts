@@ -640,7 +640,6 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       };
     }
     case "agent": {
-      if (!update.text) return state;
       const pendingTurn = update.turn
         ? {
             id: update.turn.id,
@@ -649,13 +648,18 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
             outcome: update.turn.outcome,
           }
         : state.pendingTurn;
+      if (!update.text) return pendingTurn === state.pendingTurn ? state : { ...state, pendingTurn };
       const items = finishThoughts(state.items, now);
       const tail = items[items.length - 1];
       if (tail?.kind === "assistant") {
         return {
           ...state,
           pendingTurn,
-          items: replaceLast(items, { ...tail, text: tail.text + update.text }),
+          items: replaceLast(items, {
+            ...tail,
+            text: tail.text + update.text,
+            ...(update.at !== undefined ? { at: update.at } : {}),
+          }),
         };
       }
       return {

@@ -14,6 +14,7 @@ import {
   toolGroupLabel,
   turnChangeLine,
   turnFoldKey,
+  turnItemsByEnd,
 } from "./fold";
 import type { TranscriptItem } from "./thread";
 
@@ -679,5 +680,24 @@ describe("woken continuation turns", () => {
     ];
     const rows = foldTurns(items, false, new Set());
     expect(keys(rows)).toEqual(["u1", `[${turnFoldKey("e1")}]`, "r1", "e1", "[fold-cmd2]", "r2"]);
+  });
+
+  test("turnItemsByEnd slices replayed turns without turnEnd and keeps them out of later live turns", () => {
+    const replayed: TranscriptItem[] = [
+      user("u1"),
+      tool("c1"),
+      reply("r1"),
+      user("u2"),
+      reply("r2"),
+      user("u3"),
+      tool("c3"),
+      reply("r3"),
+      end("e3", 4_000),
+    ];
+    const byEnd = turnItemsByEnd(replayed);
+    expect(Object.keys(byEnd)).toEqual(["u1", "u2", "e3"]);
+    expect(byEnd.u1?.map((item) => item.id)).toEqual(["u1", "c1", "r1"]);
+    expect(byEnd.u2?.map((item) => item.id)).toEqual(["u2", "r2"]);
+    expect(byEnd.e3?.map((item) => item.id)).toEqual(["u3", "c3", "r3", "e3"]);
   });
 });
