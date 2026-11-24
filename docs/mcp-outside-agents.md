@@ -67,7 +67,7 @@ for its own threads, and each one takes the thread's `thread_id` (there is no
 Work an outside agent starts is the ceiling of its level: threads are
 standalone threads of yours (not delegates of a thread), and run at Auto-edit
 under Delegate (files can change; a command that needs approval is declined)
-and at Full only under Manage. Reads follow Settings › Orchestration › "Let agents
+and at Full only under Manage. Reads follow Settings › Delegation › "Let agents
 read threads in other projects": with it off, outside agents cannot read across
 projects, `thread_usage` or `query_data`.
 

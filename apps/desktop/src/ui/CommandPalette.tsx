@@ -78,7 +78,7 @@ const SETTINGS: Record<SettingsSection, string> = {
   chat: "Chat",
   permissions: "Permissions: default access and remembered approvals",
   agents: "Harnesses: install, sign in, models and text generation",
-  orchestration: "Orchestration: delegates, workflows and presets",
+  orchestration: "Delegation: delegates, workflows and presets",
   voice: "Voice & computer use: dictation and browser tools",
   connections: "Connections",
   capabilities: "Capabilities: skills and MCP servers",
@@ -89,8 +89,7 @@ const SETTINGS: Record<SettingsSection, string> = {
   keyboard: "Keyboard",
   usage: "Usage",
   statistics: "Statistics: recorded tokens and reported cost",
-  advanced: "Advanced: request bodies and setup",
-  diagnostics: "Diagnostics: server status, logs and debug report",
+  diagnostics: "Diagnostics: server status, logs, debug report, request bodies and setup",
   about: "About",
 };
 

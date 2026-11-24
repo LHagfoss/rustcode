@@ -329,7 +329,7 @@ export function forgetThreadGrant(caller: string, key: string) {
   setBook((b) => revokeThreadGrant(b, caller, key));
 }
 
-/** The two delegate limits (Settings › Orchestration): one thread's own, and the machine's total. */
+/** The two delegate limits (Settings › Delegation): one thread's own, and the machine's total. */
 export const delegateLimits = (): DelegateLimits => ({
   perThread: useApp.getState().threadLimit,
   total: useApp.getState().totalLimit,
@@ -770,7 +770,7 @@ export function reachRefused(): JsonObject {
   return failureJson(
     failure(
       "not_allowed",
-      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Orchestration",
+      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Delegation",
     ),
   );
 }

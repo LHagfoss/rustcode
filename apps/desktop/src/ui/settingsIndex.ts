@@ -175,7 +175,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "titles commit message git drafts generator openai anthropic custom endpoint model key",
   },
 
-  // ------------------------------------------------------------ Orchestration
+  // --------------------------------------------------------------- Delegation
   {
     section: "orchestration",
     title: "Let delegates use my named accounts without asking",
@@ -184,32 +184,32 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   {
     section: "orchestration",
     title: "Threads can start and message other threads",
-    keywords: "orchestration subagents spawn compare message agents",
+    keywords: "delegation orchestration subagents spawn compare message agents",
   },
   {
     section: "orchestration",
     title: "Delegation",
-    keywords: "orchestration delegates delegate slots limit concurrent children total",
+    keywords: "delegation orchestration delegates delegate slots limit concurrent children total",
   },
   {
     section: "orchestration",
     title: "Delegates across all threads",
-    keywords: "orchestration delegation total machine wide global slots limit concurrent running at once",
+    keywords: "delegation orchestration total machine wide global slots limit concurrent running at once",
   },
   {
     section: "orchestration",
     title: "Delegates one thread can run at once",
-    keywords: "orchestration delegation per thread parallel slots limit concurrent children",
+    keywords: "delegation orchestration per thread parallel slots limit concurrent children",
   },
   {
     section: "orchestration",
     title: "Merge delegate wakes within",
-    keywords: "orchestration delegation wake batch window finished stalled orchestrator turn cost seconds",
+    keywords: "delegation orchestration wake batch window finished stalled orchestrator turn cost seconds",
   },
   {
     section: "orchestration",
     title: "Let agents read threads in other projects",
-    keywords: "orchestration read search across all projects privacy agents",
+    keywords: "delegation orchestration read search across all projects privacy agents",
   },
   {
     section: "orchestration",
@@ -478,24 +478,23 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "per thread totals delegates subagents children cost tokens",
   },
 
-  // ------------------------------------------------------------ Advanced
   {
-    section: "advanced",
+    section: "diagnostics",
     title: "Record request bodies",
     keywords: "capture payload telemetry privacy redact clip query_data store request body response",
   },
   {
-    section: "advanced",
+    section: "diagnostics",
     title: "Provider requests (built-in harness)",
     keywords: "capture payload provider request body response redact privacy built-in",
   },
   {
-    section: "advanced",
+    section: "diagnostics",
     title: "Harness messages",
     keywords: "capture payload harness acp jsonrpc protocol message redact privacy",
   },
   {
-    section: "advanced",
+    section: "diagnostics",
     title: "Agent setup",
     keywords: "setup onboarding install sign in harness start over run again",
   },

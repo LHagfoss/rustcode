@@ -74,7 +74,7 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
     "a glyph in the machine icon picker; its fill marks the one chosen",
   ],
   ["ui/ShortcutSettings.tsx", "recording ?", "the keycap button; its fill marks recording"],
-  ["ui/Settings.tsx", "aria-current={s.id === section", "a settings section row"],
+  ["ui/SettingsSectionList.tsx", "aria-current={current", "a settings section row"],
 ];
 
 /**

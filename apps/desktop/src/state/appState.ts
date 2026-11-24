@@ -59,7 +59,6 @@ export type SettingsSection =
   | "keyboard"
   | "usage"
   | "statistics"
-  | "advanced"
   | "diagnostics"
   | "about";
 
@@ -80,19 +79,20 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "outside",
   "usage",
   "statistics",
-  "advanced",
   "diagnostics",
   "about",
 ];
 
 /**
  * What an older build's section id opens: the Harnesses page keeps its old
- * `agents` id, so a stored `harnesses` opens it, and Engine became Advanced.
+ * `agents` id, so a stored `harnesses` opens it, and Engine and later Advanced became part of
+ * Diagnostics.
  * An id no build knows opens General.
  */
 const LEGACY_SECTIONS: Record<string, SettingsSection> = {
   harnesses: "agents",
-  engine: "advanced",
+  engine: "diagnostics",
+  advanced: "diagnostics",
 };
 
 /** A section id as the panel shows it, with the fallbacks a stored old one needs. */
@@ -270,15 +270,15 @@ export interface AppState {
     /** A second, less prominent action (e.g. "Files and conversation"). */
     alt?: { action: string; run: () => void };
   } | null;
-  /** Threads can start and message other threads (Settings › Orchestration); the engine learns it at initialize. */
+  /** Threads can start and message other threads (Settings › Delegation); the engine learns it at initialize. */
   orchestration: boolean;
-  /** How many delegates one thread may run at once (Settings › Orchestration). */
+  /** How many delegates one thread may run at once (Settings › Delegation). */
   threadLimit: number;
-  /** How many delegates may run at once across this app (Settings › Orchestration). */
+  /** How many delegates may run at once across this app (Settings › Delegation). */
   totalLimit: number;
   /** Trust this computer's named logins for delegation (default off). */
   trustDelegateAccounts: boolean;
-  /** Agents may read threads of every project, not only the calling thread's (Settings › Orchestration). */
+  /** Agents may read threads of every project, not only the calling thread's (Settings › Delegation). */
   readAcrossProjects: boolean;
   /**
    * A delegate that stops on a usage limit goes on at once on the table's model of the other

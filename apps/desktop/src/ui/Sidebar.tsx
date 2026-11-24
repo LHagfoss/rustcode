@@ -107,6 +107,7 @@ import {
 } from "../state/topLevel";
 import { useWaitingIds } from "../state/waiting";
 import { CustomSnooze } from "./CustomSnooze";
+import { Fold } from "./Fold";
 import { FOLDER_DROP_ATTR, overFolderDrop } from "./folderDropTarget";
 import { NeedsYouRow } from "./Inbox";
 import { ChevronDown, ChevronRight, CornerDownRight, FolderPlus, PanelLeft, Search } from "./icons";
@@ -160,42 +161,6 @@ interface Section {
   hidden?: HiddenKind;
   /** Threads, split by project when there are several, and by machine when one is paired. */
   projects?: ProjectGroup[];
-}
-
-/**
- * A section's rows, unfolding with a height transition. Folded rows are not
- * rendered at all, so a long Settled section costs nothing until opened.
- */
-function Fold({ open, children }: { open: boolean; children: React.ReactNode }) {
-  const [mounted, setMounted] = useState(open);
-  const [shown, setShown] = useState(open);
-  // Open and done unfolding.
-  const [still, setStill] = useState(open);
-  useEffect(() => {
-    if (open) {
-      setMounted(true);
-      const frame = requestAnimationFrame(() => setShown(true));
-      const t = setTimeout(() => setStill(true), 220);
-      return () => {
-        cancelAnimationFrame(frame);
-        clearTimeout(t);
-      };
-    }
-    setStill(false);
-    setShown(false);
-    const t = setTimeout(() => setMounted(false), 200);
-    return () => clearTimeout(t);
-  }, [open]);
-  if (!mounted) return null;
-  return (
-    <div
-      className="grid transition-[grid-template-rows,opacity] duration-200 ease-snappy"
-      style={{ gridTemplateRows: shown ? "1fr" : "0fr", opacity: shown ? 1 : 0 }}
-    >
-      {/* Clipped only while it folds: an open section lets a dragged row travel past its last row. */}
-      <div className={cx("min-h-0", !still && "overflow-hidden")}>{children}</div>
-    </div>
-  );
 }
 
 /**

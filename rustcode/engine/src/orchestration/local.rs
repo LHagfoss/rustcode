@@ -216,7 +216,7 @@ fn thread_usage(session_id: &str, args: &Value) -> Value {
         let refused = || {
             error(
                 "not_allowed",
-                "reading usage across projects is off; turn on “Let agents read threads in other projects” in Settings › Orchestration",
+                "reading usage across projects is off; turn on “Let agents read threads in other projects” in Settings › Delegation",
             )
         };
         let Some(own) = own else {
@@ -253,7 +253,7 @@ fn query_data(args: &Value) -> Value {
     if !read_across_projects() {
         return error(
             "not_allowed",
-            "SQL reads every project, so it needs “Let agents read threads in other projects” in Settings › Orchestration",
+            "SQL reads every project, so it needs “Let agents read threads in other projects” in Settings › Delegation",
         );
     }
     let request = crate::acp::data::DataQueryRequest {

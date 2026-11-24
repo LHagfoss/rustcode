@@ -34,7 +34,6 @@ export const SECTION_KIND: Record<SettingsSection, SettingKind> = {
   keyboard: "app",
   usage: "app",
   statistics: "app",
-  advanced: "server",
   diagnostics: "machine",
   about: "app",
 };
@@ -85,8 +84,8 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   { section: "remote", title: "Gateway address", kind: "machine" },
   { section: "machines", title: "Machines", kind: "machine" },
   // Advanced's telemetry switches are kept by each server.
-  { section: "advanced", title: "Provider request bodies", kind: "server" },
-  { section: "advanced", title: "Harness messages", kind: "server" },
+  { section: "diagnostics", title: "Provider request bodies", kind: "server" },
+  { section: "diagnostics", title: "Harness messages", kind: "server" },
 ];
 
 const ROW_INDEX = new Map(ROW_KINDS.map((row) => [`${row.section}\u0000${row.title}`, row.kind]));

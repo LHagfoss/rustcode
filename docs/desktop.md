@@ -166,7 +166,7 @@ thread here can list the paired computers (`list_machines`), start, message,
 read, wait on and stop threads there, and be woken when a remote delegate
 finishes — the delegate is nested under its caller and its stack mark names the
 machine. The app executes those calls over the machine's own connection; see
-`docs/orchestrator.md` › Orchestration tools v12 for the tool set, the approval
+`docs/orchestrator.md` › Delegation tools v12 for the tool set, the approval
 card and what v1 leaves out (this app must be running, and a remote delegate
 keeps the title its first message gives it there).
 
@@ -910,7 +910,7 @@ composer's keys stay outside the table.
   `operational_events` in one Markdown block for a GitHub issue, with
   tokens, API keys, email addresses and the home folder (`~`) taken out
   (`src/lib/diagnostics.ts`); *Save…* writes it where the save panel says.
-- **Settings › Advanced › Record request bodies.** The two payload-capture
+- **Settings › Diagnostics › Record request bodies.** The two payload-capture
   switches (`docs/data-store.md` › Captured payloads), off by default:
   *Provider requests (built-in harness)* for the built-in harness's request
   bodies, *Harness messages* for each ACP or Codex JSON-RPC message. They are
@@ -1535,7 +1535,7 @@ composer's keys stay outside the table.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
-  On by default (Settings › Orchestration turns it off). The app answers `_rustcode/orchestration`
+  On by default (Settings › Delegation turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
   `start_session` and `fan_out`. Same project only — the repository, so a main
@@ -2050,7 +2050,7 @@ a skeleton, and reads either form through `src/lib/releaseNotes.ts`: one badge
 per category, GitHub's `by @user in <pull url>` tail as a compact `#N` link,
 and the release commit and full-changelog line out of the way. A first install
 and a dev build skip
-it; Settings › Advanced opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser
+it; Settings › About opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser
 shows both with sample data.
 
 `src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›
@@ -2200,7 +2200,8 @@ From the SwiftUI app, still missing or partial:
   are not offered.
 - The vibrancy was not checked by eye in a native window yet (the display
   was off during the change); the CSS and config were.
-- GitHub sign-in flow, model account switching (Connections is read-only).
+- Model account switching (Connections signs GitHub in and out, and model
+  accounts out, but adding one is still `/login` in a thread).
 - An E2E driver for the native window; Developer ID signing and
   notarization run only once the secrets exist (#2034). The
   Smart UI `rcui://` path was checked by unit test and the page itself in

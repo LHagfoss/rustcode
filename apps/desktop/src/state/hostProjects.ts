@@ -92,7 +92,7 @@ function projectRefusal(caller: RuleThread, path: string): Failure | null {
   if (useApp.getState().readAcrossProjects) return null;
   return failure(
     "not_allowed",
-    "that project is outside this thread's; turn on “Let agents read threads in other projects” in Settings › Orchestration",
+    "that project is outside this thread's; turn on “Let agents read threads in other projects” in Settings › Delegation",
   );
 }
 

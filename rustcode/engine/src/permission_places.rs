@@ -12,7 +12,7 @@ pub const THREAD_ACCESS: &str = "the thread's Permissions menu under its compose
 
 /// The switch that lets delegates spend named accounts without a card.
 pub const TRUST_ACCOUNTS: &str =
-    "Settings › Orchestration › “Let delegates use my named accounts without asking”";
+    "Settings › Delegation › “Let delegates use my named accounts without asking”";
 
 /// Where every pending approval is answered.
 pub const NEEDS_YOU: &str = "“Needs you” at the top of the RustCode sidebar";
@@ -43,7 +43,7 @@ mod tests {
         );
         assert_eq!(
             text,
-            "delegate account “work” on codex was not started. Refused by the delegate account check. To allow it: Settings › Orchestration › “Let delegates use my named accounts without asking”."
+            "delegate account “work” on codex was not started. Refused by the delegate account check. To allow it: Settings › Delegation › “Let delegates use my named accounts without asking”."
         );
     }
 
@@ -56,7 +56,7 @@ mod tests {
             assert!(index.contains(&format!("title: \"{title}\"")), "{title}");
         }
         let settings = include_str!("../../../apps/desktop/src/ui/Settings.tsx");
-        for label in ["\"Orchestration\"", "\"Permissions\"", "\"Outside agents\""] {
+        for label in ["\"Delegation\"", "\"Permissions\"", "\"Outside agents\""] {
             assert!(settings.contains(label), "{label}");
         }
         let inbox = include_str!("../../../apps/desktop/src/ui/Inbox.tsx");

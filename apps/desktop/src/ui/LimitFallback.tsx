@@ -1,4 +1,4 @@
-// Settings › Orchestration › Switch a delegate at a limit (issue 3392): with the
+// Settings › Delegation › Switch a delegate at a limit (issue 3392): with the
 // switch on, a delegate that stops on a usage limit goes on at once on the other
 // provider's model of the same tier, from a table kept here, instead of waiting
 // for the reset. Both are server settings (`limit-fallback`,

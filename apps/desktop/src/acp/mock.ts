@@ -21,6 +21,7 @@ import { mockGit, mockQrRows } from "./mockGit";
 
 import { BUILTIN_THEMES } from "../lib/themes";
 import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
+import { MockConnections } from "./mockConnections";
 import { mockBrowse, mockCreate } from "./mockFolders";
 import { ACP_CAPS, HARNESS_MODELS, initialHarnesses, MOCK_CUSTOM_MODELS, withLast } from "./mockHarnesses";
 import { MockLoops } from "./mockLoops";
@@ -94,6 +95,7 @@ export class MockEngine {
   private waiting = new Map<number, (result: JsonObject) => void>();
   private counter = 0;
   private loops = new MockLoops();
+  private connections = new MockConnections();
   private agents = new Map<string, JsonObject[]>();
   /** The inbox seed runs once, after the list the app first reads. */
   private needsYouSeeded = false;
@@ -849,6 +851,8 @@ export class MockEngine {
 
   private async handle(method: string, params: JsonObject): Promise<Json> {
     if (method.startsWith("_rustcode/loops/")) return this.loops.answer(method, obj(params) ?? {});
+    if (method === "_rustcode/connections" || method.startsWith("_rustcode/connections/"))
+      return this.connections.answer(method, obj(params) ?? {});
     if (isMockTransferMethod(method)) {
       return handleMockTransfer(method, params, {
         getThread: (id) => this.thread(id),
@@ -2458,26 +2462,6 @@ export class MockEngine {
         this.mcpRestarted.add(name);
         return this.handle("_rustcode/capabilities", {});
       }
-      case "_rustcode/connections":
-        return {
-          github: {
-            cliInstalled: true,
-            accounts: [{ host: "github.com", login: "octocat", active: true, valid: true, scopes: ["repo"] }],
-            pending: null,
-            error: null,
-          },
-          accounts: [
-            {
-              provider: "openai",
-              account: "a1",
-              display: "you@example.com",
-              method: "chat_gpt",
-              active: true,
-              expiresAt: null,
-              needsSignIn: false,
-            },
-          ],
-        };
       default:
         throw Object.assign(new Error("Method not found"), { code: -32601 });
     }

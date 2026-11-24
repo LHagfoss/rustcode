@@ -499,7 +499,7 @@ does not turn any of this on. Project configuration cannot enable either key:
 capturing payloads is a choice about the user's own data, so it is global
 only, like skill roots.
 
-The app writes both keys from Settings › Advanced › **Record request bodies**
+The app writes both keys from Settings › Diagnostics › **Record request bodies**
 through `_rustcode/config/telemetry` / `_rustcode/config/telemetry/set`
 (`engine/src/acp/telemetry.rs`), which edits only these two keys and leaves the
 rest of `config.toml` as it was. The engine reads them from the config it
@@ -702,7 +702,7 @@ for an agent in a thread, forwarded through the app like `list_sessions`:
 | `read_activity` | `{ session_id, after?, limit?, order? }` — `limit` 1..200 (default 50); `order` is `oldest` (default) or `newest`; pass `next` as `after` with the same order | `{ session_id, items, next, has_more, last_provider_error }`, one merged time-ordered list: `{ source: "event", at, type, fields }`, `{ source: "provider_request", at, provider, model, status_code, latency_ms, error_kind, input_tokens, output_tokens, cached_tokens, attempt }` and `{ source: "rpc_message", at, direction, kind, method, latency_ms, byte_size }`. Items are ordered by `(at, source, row id)`; `next` encodes the last one, so pages join with no gap and no repeat. Payload columns (`request_payload_json`, `response_summary_json`, `payload_json`) are never selected |
 
 They are reads, so none asks the user. They follow **Let agents read threads
-in other projects** (Settings › Orchestration, on by default), because the store
+in other projects** (Settings › Delegation, on by default), because the store
 crosses projects and holds thread titles and paths:
 
 - With it on, `thread_usage` covers every project, or the one `project` names.

@@ -297,8 +297,8 @@ fn version_four_adds_the_data_store_tools_only_for_its_clients() {
     }
     // Every agent is asked to name its own thread once (issue 3599).
     assert!(PROMPT_HINT_V16.contains(
-            "When you start work on a thread whose title is still automatic, call `update_session` once with a short title (6 words or fewer)"
-        ));
+        "If you have not named this thread yet, make `update_session` your first tool call"
+    ));
     // "Settle" means settling this thread, or the one the user names, and nothing else.
     assert!(PROMPT_HINT_V16.contains("When the user says to settle"));
     assert!(PROMPT_HINT_V16.contains("it does not merge, push or clean anything up"));
@@ -444,6 +444,7 @@ fn the_mcp_instructions_fit_what_a_client_keeps() {
         "never fall back to this computer when it is offline",
         "`link_ids` and `all: true`",
         "it does not merge, push or clean anything up",
+        "Name this thread first",
         CREATE_LOOP,
     ] {
         assert!(text.contains(said), "{said}");

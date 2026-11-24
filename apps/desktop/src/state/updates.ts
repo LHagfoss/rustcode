@@ -116,7 +116,7 @@ interface UpdatesState {
   skipped: string | null;
   /** Install a newer release on this channel by itself once no thread is working. */
   autoInstall: boolean;
-  /** Why the last check failed, for Settings › Advanced; null after a good check. */
+  /** Why the last check failed, for Settings › About; null after a good check. */
   error: string | null;
   checkedAt: number | null;
   install: UpdateInstall;
@@ -284,7 +284,7 @@ let retryDelay = RETRY_FIRST_MS;
 
 let checking: Promise<void> | null = null;
 
-/** Check now: on launch, on the interval, when the app comes back, and from Settings › Advanced. */
+/** Check now: on launch, on the interval, when the app comes back, and from Settings › About. */
 export function checkNow(): Promise<void> {
   // One check at a time: a second caller waits for the one already running.
   checking ??= runCheck().finally(() => {
@@ -721,7 +721,7 @@ export function closeWhatsNew() {
   useUpdates.setState({ whatsNew: null });
 }
 
-/** What's New for the running version on demand (Settings › Advanced). */
+/** What's New for the running version on demand (Settings › About). */
 export async function showWhatsNew(version: string) {
   useUpdates.setState({ whatsNew: { version, notes: null, state: "loading" } });
   await loadNotes(version);
