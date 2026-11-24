@@ -11,7 +11,7 @@ import { type GitChanges, gitChangeSummary, openExternal, openPath } from "../li
 import { appPlatform, fileManagerName } from "../lib/platform";
 import { contextPercent } from "../state/details";
 import { turnItemsByEnd } from "../state/fold";
-import { formatCost } from "../state/pricing";
+import { estimateUsd, formatCost } from "../state/pricing";
 import { PULL_LIMIT, usePullList } from "../state/pullQueries";
 import { engineBusy } from "../state/runState";
 import { showPanel, useApp, worktreeOf } from "../state/store";
@@ -29,6 +29,7 @@ import {
   pullsForBranches,
   readFolded,
   type OverviewSection as SectionId,
+  type TurnEntry,
   toggleFolded,
   turnEntries,
   turnHasTrace,
@@ -251,6 +252,8 @@ export function ThreadDetails() {
         items={items ?? []}
         running={running}
         model={model}
+        harness={harnessId}
+        rawModel={summary?.model}
         folded={isFolded("log")}
         onToggle={toggle}
       />
@@ -322,16 +325,40 @@ const OUTCOME = {
 } as const;
 
 /** Finished turns, newest first. Open a row for its messages and calls. */
+/**
+ * A turn's price: what the harness reported, else its tokens at list price
+ * (marked `~`), else a dash, so every row has one.
+ */
+function turnPrice(turn: TurnEntry, harness: string | undefined, model: string | undefined): string {
+  if (turn.cost !== undefined) return formatCost(turn.cost);
+  const counts = turn.counts;
+  const estimate =
+    harness && counts
+      ? estimateUsd(harness, model, {
+          input: counts.inputTokens,
+          output: counts.outputTokens,
+          cached: counts.cachedTokens,
+        })
+      : undefined;
+  if (estimate !== undefined) return `~${formatCost(estimate)}`;
+  return "$–";
+}
+
 function TurnsSection({
   items,
   running,
   model,
+  harness,
+  rawModel,
   folded,
   onToggle,
 }: {
   items: readonly TranscriptItem[];
   running?: boolean;
   model?: string;
+  harness?: string;
+  /** The model's id as the harness names it, for list prices. */
+  rawModel?: string;
   folded: boolean;
   onToggle: (id: SectionId) => void;
 }) {
@@ -387,7 +414,7 @@ function TurnsSection({
               type="button"
               aria-haspopup="dialog"
               onClick={() => setOpen(turn.id)}
-              className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left hover:bg-fill-subtle"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-fill-subtle"
             >
               <span
                 role="img"
@@ -396,21 +423,17 @@ function TurnsSection({
               >
                 <Icon size={13} />
               </span>
-              <span className="min-w-0 flex-1 truncate text-callout">{turn.prompt}</span>
-              <span className="w-14 shrink-0 text-right text-caption text-fg-muted tabular">
-                {turn.elapsedMs === undefined ? "" : formatDuration(turn.elapsedMs)}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-callout">{turn.prompt}</span>
+                <span className="truncate text-caption text-fg-muted tabular">
+                  {[
+                    turn.elapsedMs === undefined ? undefined : formatDuration(turn.elapsedMs),
+                    turnPrice(turn, harness, rawModel),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
               </span>
-              {turn.cost !== undefined ? (
-                <span className="w-14 shrink-0 text-right text-caption text-fg-muted tabular">
-                  {formatCost(turn.cost)}
-                </span>
-              ) : turn.tokens !== undefined ? (
-                <span className="w-14 shrink-0 text-right text-caption text-fg-muted tabular">
-                  {formatTokens(turn.tokens)}
-                </span>
-              ) : (
-                <span className="w-14 shrink-0" />
-              )}
               <ChevronRight size={14} className="shrink-0 text-fg-muted" />
             </button>
           );
