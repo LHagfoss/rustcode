@@ -42,7 +42,6 @@ import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
 import { NewThreadLight, ThreadLight } from "./ChatLight";
-import { ChatRecapCard } from "./ChatRecap";
 import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
 import {
@@ -759,14 +758,6 @@ export function ChatView() {
           />
           {thread && !isNew && !showsPending && (
             <ThreadLight threadId={thread.id} stack={stackRef} stackHeight={stackHeight} />
-          )}
-          {thread && !isNew && !showsPending && (
-            <div
-              className="rc-lane-inset pointer-events-none absolute z-20 mx-auto max-w-[var(--rc-chat-content-max-width)]"
-              style={{ top: HEADER_HEIGHT + 8 }}
-            >
-              <ChatRecapCard threadId={thread.id} className="pointer-events-auto" />
-            </div>
           )}
           {showsPending && setup ? (
             // Preferred over the thread: while its message is still arriving, the screen that has it

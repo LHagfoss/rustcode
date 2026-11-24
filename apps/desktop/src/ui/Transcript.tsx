@@ -75,6 +75,7 @@ import { useWaiting, type Waiting, waitingLabel } from "../state/waiting";
 import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { BranchRow } from "./Branches";
+import { ChatRecapCard } from "./ChatRecap";
 import { StatusReplyRow } from "./DelegateStatus";
 import { EarlierAttempts } from "./EarlierAttempts";
 import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "./icons";
@@ -167,6 +168,8 @@ export type Row = {
   leaving?: QueuedPrompt;
   /** Resume, under a queue a stopped or failed turn held. */
   resume?: { threadId: string; count: number };
+  /** The chat's recap (ui/ChatRecap.tsx), after the last turn: where the reader comes back in. */
+  recap?: true;
 };
 
 /** The turns the reader opened, by thread: kept while the app runs, so going back keeps them. */
@@ -468,6 +471,7 @@ export function Transcript({
   // skips a streamed chunk (state/fold.ts keepUnchangedRows).
   const drawnRows = useRef<Row[]>([]);
   const showTools = useApp((s) => s.showToolCalls);
+  const recapOpen = useApp((s) => !peek && s.chatRecaps && s.chatRecap?.threadId === thread.id);
   // The messages that open a day keep their time in view: where a long thread's days begin.
   const newDays = useMemo(() => newDayMessages(visible), [visible]);
   const rows = useMemo<Row[]>(() => {
@@ -610,6 +614,7 @@ export function Transcript({
     // What waits for the thread comes after all of it: its queued messages, the one quiet line a
     // wake turn waits under, and Resume when a stopped or failed turn held them. They scroll with
     // the transcript, and the pinned view follows them like any other row.
+    if (recapOpen) out.push({ key: "recap", recap: true });
     out.push(...queueRows(thread, links));
     // A steering note the plan does not hold is not drawn again here: the message it was sent as
     // already says `Steered` on its own bubble, and one steer reads once.
@@ -629,6 +634,7 @@ export function Transcript({
     settleEnd,
     branches,
     showTools,
+    recapOpen,
   ]);
   // Footers of folded turns: their time is in the summary row, not repeated. The turn that just
   // finished still counts as folded while its live header holds the place of that summary row.
@@ -1322,6 +1328,8 @@ export function Transcript({
                         flat
                         item={{ kind: "notice", id: row.key, text: row.queueNotice.line, tone: "info" }}
                       />
+                    ) : row.recap ? (
+                      <ChatRecapCard threadId={thread.id} />
                     ) : row.resume ? (
                       <ResumeQueueRow threadId={row.resume.threadId} count={row.resume.count} />
                     ) : row.working ? (
