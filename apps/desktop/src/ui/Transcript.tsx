@@ -614,7 +614,6 @@ export function Transcript({
     // What waits for the thread comes after all of it: its queued messages, the one quiet line a
     // wake turn waits under, and Resume when a stopped or failed turn held them. They scroll with
     // the transcript, and the pinned view follows them like any other row.
-    // The recap sits after the last turn, where the reader picks the chat back up, and scrolls with it.
     if (recapOpen) out.push({ key: "recap", recap: true });
     out.push(...queueRows(thread, links));
     // A steering note the plan does not hold is not drawn again here: the message it was sent as
