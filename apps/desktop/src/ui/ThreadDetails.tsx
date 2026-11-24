@@ -13,8 +13,9 @@ import { contextPercent } from "../state/details";
 import { turnItemsByEnd } from "../state/fold";
 import { formatCost } from "../state/pricing";
 import { PULL_LIMIT, usePullList } from "../state/pullQueries";
+import { engineBusy } from "../state/runState";
 import { showPanel, useApp, worktreeOf } from "../state/store";
-import { formatDuration, formatTokens, isRunning, type TranscriptItem } from "../state/thread";
+import { formatDuration, formatTokens, isLoading, isRunning, type TranscriptItem } from "../state/thread";
 import { relativeAge } from "../state/threadFormat";
 import { splitThreadKey } from "../state/threadKeys";
 import { statusOf } from "../state/threadStatus";
@@ -92,6 +93,7 @@ export function ThreadDetails() {
   const status = useApp((s) => (s.selectedId ? statusOf(s, s.selectedId) : "idle"));
   const items = thread?.items;
   const counts = useMemo(() => threadCounts(items ?? []), [items]);
+  const running = isRunning(thread) || isLoading(thread) || !!thread?.enginePhase || engineBusy(status);
   const changes = useChanges(host ? undefined : thread?.cwd, isRunning(thread));
   // Which sections are folded away: the reader's habit, kept for every thread.
   const [folded, setFolded] = useState<SectionId[]>(readFolded);
@@ -244,7 +246,14 @@ export function ThreadDetails() {
           </div>
         )}
       </Section>
-      <TurnsSection key={id} items={items ?? []} model={model} folded={isFolded("log")} onToggle={toggle} />
+      <TurnsSection
+        key={id}
+        items={items ?? []}
+        running={running}
+        model={model}
+        folded={isFolded("log")}
+        onToggle={toggle}
+      />
     </div>
   );
 }
@@ -315,17 +324,19 @@ const OUTCOME = {
 /** Finished turns, newest first. Open a row for its messages and calls. */
 function TurnsSection({
   items,
+  running,
   model,
   folded,
   onToggle,
 }: {
   items: readonly TranscriptItem[];
+  running?: boolean;
   model?: string;
   folded: boolean;
   onToggle: (id: SectionId) => void;
 }) {
-  const turns = useMemo(() => [...turnEntries(items)].reverse(), [items]);
-  const byEnd = useMemo(() => turnItemsByEnd(items), [items]);
+  const turns = useMemo(() => [...turnEntries(items, running)].reverse(), [items, running]);
+  const byEnd = useMemo(() => turnItemsByEnd(items, undefined, running), [items, running]);
   const ends = useMemo(() => {
     const map = new Map<string, Extract<TranscriptItem, { kind: "turnEnd" }>>();
     for (const item of items) if (item.kind === "turnEnd") map.set(item.id, item);

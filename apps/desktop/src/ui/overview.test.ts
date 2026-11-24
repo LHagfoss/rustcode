@@ -215,6 +215,32 @@ describe("the thread's turns", () => {
     expect(turnHasTrace({ id: "e1", prompt: "", outcome: "completed", startedAt: 5, at: 5 })).toBe(false);
     expect(turnHasTrace({ id: "e1", prompt: "", outcome: "completed", at: 5 })).toBe(false);
   });
+
+  test("replayed turns without turnEnd footers stay listed across restarts and while a new turn runs", () => {
+    const replayed: TranscriptItem[] = [
+      { kind: "user", id: "u1", text: "Inspect the sidebar" },
+      { kind: "tool", id: "c1", title: "Read", status: "completed", diffs: [] },
+      { kind: "assistant", id: "a1", text: "Found the turns section." },
+      { kind: "user", id: "u2", text: "Fix the replay" },
+      { kind: "assistant", id: "a2", text: "Done." },
+    ];
+    expect(turnEntries(replayed)).toEqual([
+      { id: "u1", prompt: "Inspect the sidebar", outcome: "completed" },
+      { id: "u2", prompt: "Fix the replay", outcome: "completed" },
+    ]);
+    const withLiveTail: TranscriptItem[] = [
+      ...replayed,
+      { kind: "user", id: "u3", text: "Run the checks" },
+      { kind: "thought", id: "t3", text: "Checking", summary: false, startedAt: 1, done: false },
+    ];
+    expect(turnEntries(withLiveTail, true).map((turn) => turn.id)).toEqual(["u1", "u2"]);
+    const afterLiveEnd: TranscriptItem[] = [...withLiveTail, turnEnd("e3", { elapsedMs: 3000 })];
+    expect(turnEntries(afterLiveEnd, false).map((turn) => [turn.id, turn.prompt])).toEqual([
+      ["u1", "Inspect the sidebar"],
+      ["u2", "Fix the replay"],
+      ["e3", "Run the checks"],
+    ]);
+  });
 });
 
 describe("the log's stats", () => {

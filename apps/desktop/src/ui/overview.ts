@@ -315,28 +315,55 @@ function promptLine(text: string): string {
 /**
  * The thread's turns, oldest first, each with the message that opened it. A
  * turn the app woke the thread for has no message of its own, so its row says
- * what woke it instead of borrowing the one above.
+ * what woke it instead of borrowing the one above. A replayed turn that carries
+ * no `turnEnd` footer of its own still closes before the next message, and at
+ * the end of the transcript once the thread is idle.
  */
-export function turnEntries(items: readonly TranscriptItem[]): TurnEntry[] {
+export function turnEntries(items: readonly TranscriptItem[], running = false): TurnEntry[] {
   const entries: TurnEntry[] = [];
+  let from = 0;
   let prompt = "";
-  let woke = false;
-  for (const item of items) {
-    if (item.kind === "user") {
-      woke = !!item.wake;
-      prompt = woke ? "Woken for a delegate" : promptLine(item.text);
-      continue;
+  let userId: string | undefined;
+  let worked = false;
+  for (let i = 0; i <= items.length; i++) {
+    const item = items[i];
+    const ended = i > from && items[i - 1]!.kind === "turnEnd";
+    const nextTurn =
+      i > from &&
+      !ended &&
+      worked &&
+      ((item?.kind === "user" && !item.steered) || (i === items.length && !running));
+    if (ended) {
+      const end = items[i - 1] as Extract<TranscriptItem, { kind: "turnEnd" }>;
+      entries.push({
+        id: end.id,
+        prompt: prompt || "No message",
+        at: end.at,
+        startedAt: end.startedAt,
+        outcome: end.outcome,
+        elapsedMs: end.elapsedMs,
+        ...turnUsage(end.usage),
+      });
+      from = i;
+      userId = undefined;
+      worked = false;
+    } else if (nextTurn) {
+      entries.push({
+        id: userId ?? items[from]!.id,
+        prompt: prompt || "No message",
+        outcome: "completed",
+      });
+      from = i;
+      userId = undefined;
+      worked = false;
     }
-    if (item.kind !== "turnEnd") continue;
-    entries.push({
-      id: item.id,
-      prompt: prompt || "No message",
-      at: item.at,
-      startedAt: item.startedAt,
-      outcome: item.outcome,
-      elapsedMs: item.elapsedMs,
-      ...turnUsage(item.usage),
-    });
+    if (!item) break;
+    if (item.kind === "user" && !item.steered) {
+      prompt = item.wake ? "Woken for a delegate" : promptLine(item.text);
+      userId ??= item.id;
+    } else if (item.kind === "assistant" || item.kind === "tool" || item.kind === "thought") {
+      worked = true;
+    }
   }
   return entries;
 }

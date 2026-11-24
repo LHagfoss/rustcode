@@ -114,6 +114,7 @@ function TurnRow({
 
 export function ExecutionLogSection({
   items,
+  running,
   usage,
   harness,
   model,
@@ -121,6 +122,7 @@ export function ExecutionLogSection({
   onToggle,
 }: {
   items: readonly TranscriptItem[];
+  running?: boolean;
   /** The thread's own totals, which are what the store says it spent. */
   usage?: SessionUsage;
   harness?: string;
@@ -129,7 +131,7 @@ export function ExecutionLogSection({
   folded: boolean;
   onToggle: () => void;
 }) {
-  const turns = useMemo(() => turnEntries(items), [items]);
+  const turns = useMemo(() => turnEntries(items, running), [items, running]);
   const totals = useMemo(() => logTotals(turns, usage), [turns, usage]);
   const [all, setAll] = useState(false);
   // Newest first: the turn a reader is waiting on is the one at the top of the list.
@@ -139,7 +141,10 @@ export function ExecutionLogSection({
   }, [turns, all]);
   // Each finished turn with the rows it ran, for the waterfall its row can open:
   // read when the log is expanded and not on every chunk of the turn it watches.
-  const turnItems = useMemo(() => (all ? turnItemsByEnd(items) : NO_TURNS), [items, all]);
+  const turnItems = useMemo(
+    () => (all ? turnItemsByEnd(items, undefined, running) : NO_TURNS),
+    [items, all, running],
+  );
   const ends = useMemo(() => {
     const map = new Map<string, Extract<TranscriptItem, { kind: "turnEnd" }>>();
     for (const item of items) if (item.kind === "turnEnd") map.set(item.id, item);
