@@ -58,6 +58,7 @@ import {
   FileDiffIcon,
   FilterHorizontalIcon,
   FilterIcon,
+  FireIcon,
   Folder01Icon,
   FolderAddIcon,
   FolderGitTwoIcon,
@@ -297,6 +298,7 @@ export const FilePlus = (props: IconProps) => <Rounded name="FilePlus" icon={Fil
 export const FilePlus2 = (props: IconProps) => <Rounded name="FilePlus2" icon={FileAddIcon} {...props} />;
 export const FileText = (props: IconProps) => <Rounded name="FileText" icon={File02Icon} {...props} />;
 export const Filter = (props: IconProps) => <Rounded name="Filter" icon={FilterIcon} {...props} />;
+export const Flame = (props: IconProps) => <Rounded name="Flame" icon={FireIcon} {...props} />;
 export const FlaskConical = (props: IconProps) => (
   <Rounded name="FlaskConical" icon={Chemistry01Icon} {...props} />
 );
