@@ -888,16 +888,30 @@ export const useLoopThreads = create<{
 
 const loopThreadKey = (loop: Pick<Loop, "host">, id: string) => threadKey(loop.host ?? LOCAL_HOST, id);
 
+/** Resolves a run's thread key across local, paired, or hub-dispatched targets. */
+export type RunThreadResolver = (
+  loop: Pick<Loop, "host">,
+  run: Pick<LoopRun, "machine" | "threadId">,
+) => string | undefined;
+
+const defaultRunThread: RunThreadResolver = (loop, run) =>
+  run.threadId && !run.machine ? loopThreadKey(loop, run.threadId) : undefined;
+
 /**
  * The threads fresh runs started, by id. A job that sends every run to one thread leaves that
  * thread out: the user picked it, and it stays in the list.
  */
-export function loopRunThreads(loops: readonly Loop[]): Record<string, true> {
+export function loopRunThreads(
+  loops: readonly Loop[],
+  resolveRunThread: RunThreadResolver = defaultRunThread,
+): Record<string, true> {
   const runs: Record<string, true> = {};
   for (const loop of loops) {
-    for (const run of loop.runs)
-      if (run.threadId && !run.machine && run.threadId !== loop.threadId)
-        runs[loopThreadKey(loop, run.threadId)] = true;
+    for (const run of loop.runs) {
+      if (!run.threadId || run.threadId === loop.threadId) continue;
+      const key = resolveRunThread(loop, run);
+      if (key) runs[key] = true;
+    }
   }
   return runs;
 }
@@ -914,41 +928,57 @@ export function isJobRunThread(
 }
 
 /** Every thread the loops' recorded runs went to, and the loop's name. */
-export function loopThreadNames(loops: readonly Loop[]): Record<string, string> {
+export function loopThreadNames(
+  loops: readonly Loop[],
+  resolveRunThread: RunThreadResolver = defaultRunThread,
+): Record<string, string> {
   const byThread: Record<string, string> = {};
   for (const loop of loops) {
     if (loop.threadId && !loop.machine) byThread[loopThreadKey(loop, loop.threadId)] = loop.name;
-    for (const run of loop.runs)
-      if (run.threadId && !run.machine) byThread[loopThreadKey(loop, run.threadId)] = loop.name;
+    for (const run of loop.runs) {
+      const key = resolveRunThread(loop, run);
+      if (key) byThread[key] = loop.name;
+    }
   }
   return byThread;
 }
 
 /** Every thread the loops' recorded runs went to, and the loop's id (prefixed with host when remote). */
-export function loopIdsByThread(loops: readonly Loop[]): Record<string, string> {
+export function loopIdsByThread(
+  loops: readonly Loop[],
+  resolveRunThread: RunThreadResolver = defaultRunThread,
+): Record<string, string> {
   const byThread: Record<string, string> = {};
   for (const loop of loops) {
     const id = loop.host ? `${loop.host}/${loop.id}` : loop.id;
     if (loop.threadId && !loop.machine) byThread[loopThreadKey(loop, loop.threadId)] = id;
-    for (const run of loop.runs)
-      if (run.threadId && !run.machine) byThread[loopThreadKey(loop, run.threadId)] = id;
+    for (const run of loop.runs) {
+      const key = resolveRunThread(loop, run);
+      if (key) byThread[key] = id;
+    }
   }
   return byThread;
 }
 
 /** Keep the sidebar's Loop badges in step with a list the page or a refresh read. */
-export function rememberLoops(snapshot: LoopsSnapshot | readonly Loop[]): void {
+export function rememberLoops(
+  snapshot: LoopsSnapshot | readonly Loop[],
+  resolveRunThread: RunThreadResolver = defaultRunThread,
+): void {
   const loops = "loops" in snapshot ? snapshot.loops : snapshot;
   useLoopThreads.setState({
-    byThread: loopThreadNames(loops),
-    runs: loopRunThreads(loops),
-    loopOf: loopIdsByThread(loops),
+    byThread: loopThreadNames(loops, resolveRunThread),
+    runs: loopRunThreads(loops, resolveRunThread),
+    loopOf: loopIdsByThread(loops, resolveRunThread),
   });
 }
 
 /** Read the loops on this computer and every connected paired machine for the sidebar badges. */
-export async function refreshLoopThreads(): Promise<void> {
-  const hosts = [LOCAL_HOST, ...useApp.getState().connectedHosts.filter(Boolean)];
+export async function refreshLoopThreads(
+  resolveRunThread?: RunThreadResolver,
+  remoteHosts?: readonly string[],
+): Promise<void> {
+  const hosts = [LOCAL_HOST, ...(remoteHosts ?? useApp.getState().connectedHosts).filter(Boolean)];
   const settled = await Promise.allSettled(hosts.map((host) => fetchLoopsOn(host)));
   const loops: Loop[] = [];
   let anySucceeded = false;
@@ -958,5 +988,5 @@ export async function refreshLoopThreads(): Promise<void> {
       loops.push(...result.value.loops);
     }
   }
-  if (anySucceeded) rememberLoops(loops);
+  if (anySucceeded) rememberLoops(loops, resolveRunThread);
 }

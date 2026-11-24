@@ -574,4 +574,22 @@ describe("paired machine loops", () => {
     expect(loopThreadNames(snapshot.loops)).toEqual({ "gw-vps/t-9": "Cleanup VPS" });
     expect(loopIdsByThread(snapshot.loops)).toEqual({ "gw-vps/t-9": "gw-vps/loop-vps" });
   });
+
+  test("resolves hub-dispatched run threads when a resolver is provided", () => {
+    const dispatched = [
+      loop({
+        id: "loop-hub",
+        host: "gw-hub",
+        name: "Nightly macOS",
+        machine: "Main Mac",
+        runs: [run("r1", "succeeded", 1, { machine: "Main Mac", threadId: "t-mac" })],
+      }),
+    ];
+    const resolve = (_loop: { host: string }, r: { machine?: string; threadId?: string }) =>
+      r.machine === "Main Mac" && r.threadId ? `mac-1/${r.threadId}` : undefined;
+    expect(loopRunThreads(dispatched, resolve)).toEqual({ "mac-1/t-mac": true });
+    expect(loopThreadNames(dispatched, resolve)).toEqual({ "mac-1/t-mac": "Nightly macOS" });
+    expect(loopIdsByThread(dispatched, resolve)).toEqual({ "mac-1/t-mac": "gw-hub/loop-hub" });
+    expect(isJobRunThread({ id: "mac-1/t-mac" }, loopRunThreads(dispatched, resolve))).toBe(true);
+  });
 });

@@ -17,6 +17,7 @@ import {
   loopKey,
   loopMachineLabel,
   remoteLoopError,
+  runThreadKey,
 } from "../state/fleetLoops";
 import { lastAccountFor } from "../state/harnessActions";
 import { newThreadAccountOn } from "../state/logins";
@@ -118,8 +119,8 @@ export function Loops() {
     setError(null);
     setByHost(result.byHost);
     const every = Object.values(result.byHost).flatMap((entry) => entry.loops);
-    rememberLoops(every);
-  }, [enginePhase, connectedKey]);
+    rememberLoops(every, (loop, run) => runThreadKey(loop, run, useMachines.getState().machines, localName));
+  }, [enginePhase, connectedKey, localName]);
 
   useEffect(() => {
     void reload();
@@ -486,7 +487,7 @@ export function Loops() {
                         {group.title} · {group.loops.length}
                       </h2>
                     )}
-                    <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
+                    <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,320px),1fr))] gap-3">
                       {group.loops.map((loop) => {
                         const loopHarnesses = loop.host
                           ? (remoteHarnesses[loop.host] ?? harnesses)
@@ -522,12 +523,27 @@ export function Loops() {
         <JobDetails
           loop={details}
           now={now}
+          agent={jobAgent(
+            details,
+            details.host ? (remoteHarnesses[details.host] ?? harnesses) : harnesses,
+            signedOut,
+          )}
           machine={loopMachineLabel(details, machines, localName)}
           onClose={() => setDetailsKey(null)}
           onEdit={() => {
             setDetailsKey(null);
             openJob(details);
           }}
+          onDuplicate={() => {
+            setDetailsKey(null);
+            openJob(details, true);
+          }}
+          onDelete={() =>
+            confirmDelete(details, () => {
+              setDetailsKey(null);
+            })
+          }
+          act={act}
         />
       )}
       <LoopDialog

@@ -1,7 +1,7 @@
 /**
- * One job on the Jobs page: everything worth a glance without opening it (its agent, what the last
- * run said, the schedule, recent runs and the next one). The card opens the job's dialog, where it
- * is edited and its runs are listed; Run now and the menu stay on the card.
+ * One job on the Jobs page: everything worth a glance without opening it (its agent, last run or
+ * prompt preview, project, machine, schedule, next run, and recent runs). The card opens the job
+ * overview dialog; Run now and the menu stay on the card.
  */
 
 import { DropdownMenu } from "radix-ui";
@@ -23,11 +23,14 @@ import { openSettings } from "../state/store";
 import { selectThread } from "../state/threadOpen";
 import {
   ArrowUpRight,
+  Clock,
   Copy,
   Ellipsis,
+  Folder,
   Pause,
   Pencil,
   Play,
+  ShieldAlert,
   SquareStop,
   Terminal,
   Trash2,
@@ -90,7 +93,7 @@ function StatusChip({ loop, waiting }: { loop: Loop; waiting: boolean }) {
       </span>
     );
   if (state === "failing")
-    return <span className={cx(chip, "bg-danger/12 font-medium text-danger")}>Paused</span>;
+    return <span className={cx(chip, "bg-danger/12 font-medium text-danger")}>Needs attention</span>;
   if (state === "paused") return <span className={cx(chip, "bg-fill text-fg-muted")}>Paused</span>;
   if (waiting)
     return (
@@ -164,6 +167,8 @@ export function JobCard({
   const next = !loop.paused && loop.nextDueAt !== undefined ? loop.nextDueAt : undefined;
   const waiting = state === "active" && next === undefined && listening(loop);
   const quiet = latest?.state === "succeeded" && (latest.quiet || latest.silent);
+  const hasRuns = loop.runs.length > 0;
+  const promptPreview = loop.prompt.trim();
   const togglePause = () =>
     act(loop.paused ? "Resumed" : "Paused", () => setLoopPaused(loop.id, !loop.paused, loop.host));
 
@@ -171,16 +176,16 @@ export function JobCard({
     <li
       data-loop={loopKey(loop)}
       className={cx(
-        "group/job relative flex min-w-0 flex-col gap-2 rounded-lg bg-surface p-4 hover:bg-fill-subtle",
+        "group/job relative flex min-w-0 flex-col gap-2 rounded-xl bg-surface p-4 hover:bg-surface-2",
         reason && "ring-1 ring-danger/35",
-        loop.paused && !reason && "opacity-70",
+        loop.paused && !reason && "opacity-75",
       )}
     >
       <div className="flex items-start gap-2">
         <button
           type="button"
           onClick={onOpen}
-          className="min-w-0 flex-1 text-left font-semibold text-title3 text-fg after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-1 focus-visible:after:ring-accent"
+          className="min-w-0 flex-1 text-left font-semibold text-title3 text-fg after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-1 focus-visible:after:ring-accent"
         >
           <span className="line-clamp-2">{loop.name}</span>
         </button>
@@ -245,14 +250,26 @@ export function JobCard({
         </div>
       </div>
 
-      {agent && (
-        <span title={agent} className="-mt-1 truncate text-caption text-fg-muted">
-          {agent}
-        </span>
+      {(agent || !loop.readOnly) && (
+        <div className="-mt-1 flex min-w-0 items-center gap-2 text-caption text-fg-muted">
+          {agent && (
+            <span title={agent} className="min-w-0 truncate">
+              {agent}
+            </span>
+          )}
+          {!loop.readOnly && (
+            <Tooltip label="Runs with full access (can edit files, commit, and push)">
+              <span className="relative inline-flex shrink-0 items-center gap-1 text-warning">
+                <ShieldAlert size={12} />
+                Full access
+              </span>
+            </Tooltip>
+          )}
+        </div>
       )}
 
       {reason ? (
-        <div className="relative flex items-center gap-2">
+        <div className="relative flex items-center gap-2 pt-0.5">
           <p title={reason} className="line-clamp-2 min-w-0 flex-1 text-callout text-danger">
             {reason}
           </p>
@@ -266,11 +283,11 @@ export function JobCard({
             </Pill>
           )}
         </div>
-      ) : (
+      ) : hasRuns ? (
         <p
           title={result.text}
           className={cx(
-            "line-clamp-2 text-callout",
+            "line-clamp-2 pt-0.5 text-callout",
             result.tone === "bad"
               ? "text-danger"
               : quiet || result.tone === "muted"
@@ -280,52 +297,61 @@ export function JobCard({
         >
           {result.text}
         </p>
+      ) : (
+        <p title={promptPreview || undefined} className="line-clamp-2 pt-0.5 text-callout text-fg-muted">
+          {promptPreview || "No prompt set"}
+        </p>
       )}
 
-      <div className="mt-auto flex min-w-0 items-center gap-2 border-t border-border pt-2 text-caption text-fg-muted">
-        <span className="min-w-0 flex-1 truncate">
-          {projectName(loop.workspace)}
-          {(machineLabel || loop.machine) && ` on ${machineLabel || loop.machine}`} ·{" "}
-          {scheduleInWords(loop.schedule)}
-        </span>
-        {loop.script && (
-          <Tooltip label="Runs a pre-check script first">
-            <span className="relative inline-flex shrink-0 text-fg-faint">
-              <Terminal size={12} />
+      <div className="mt-auto flex flex-col gap-1.5 border-t border-border pt-3 text-caption text-fg-muted">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5 truncate">
+            <Folder size={12} className="shrink-0 text-fg-faint" />
+            <span className="truncate">
+              {projectName(loop.workspace)}
+              {(machineLabel || loop.machine) && ` · ${machineLabel || loop.machine}`}
             </span>
-          </Tooltip>
-        )}
-        {loop.webhook && loop.schedule.kind !== "manual" && (
-          <Tooltip label="Webhook trigger enabled">
-            <span className="relative inline-flex shrink-0 text-fg-faint">
-              <Webhook size={12} />
-            </span>
-          </Tooltip>
-        )}
-        {next !== undefined ? (
-          <time
-            dateTime={new Date(next).toISOString()}
-            title={`${nextRunText(loop, now)} · ${FULL_RUN_FORMAT.format(next)}`}
-            className="tabular shrink-0 text-fg-faint"
-          >
-            {nextRunLine(next, now)}
-          </time>
-        ) : (
-          <span className="shrink-0 text-fg-faint">{nextRunText(loop, now)}</span>
-        )}
-      </div>
-      <div className="flex items-center justify-between gap-2 text-caption text-fg-muted">
-        <span className="flex items-center gap-2">
-          {loop.runs.length > 0 && (
-            <span>
-              {loop.runs.length} {loop.runs.length === 1 ? "run" : "runs"}
-            </span>
+          </span>
+          {next !== undefined ? (
+            <time
+              dateTime={new Date(next).toISOString()}
+              title={`${nextRunText(loop, now)} · ${FULL_RUN_FORMAT.format(next)}`}
+              className="tabular shrink-0 text-fg-faint"
+            >
+              {nextRunLine(next, now)}
+            </time>
+          ) : (
+            <span className="shrink-0 text-fg-faint">{nextRunText(loop, now)}</span>
           )}
-          <RunHistory runs={loop.runs} onOpen={onOpen} />
-        </span>
-        <span className="shrink-0">
-          Run history <ArrowUpRight size={12} className="inline" />
-        </span>
+        </div>
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Clock size={12} className="shrink-0 text-fg-faint" />
+            <span className="truncate">{scheduleInWords(loop.schedule)}</span>
+            {loop.script && (
+              <Tooltip label="Runs a pre-check script first">
+                <span className="relative inline-flex shrink-0 text-fg-faint">
+                  <Terminal size={12} />
+                </span>
+              </Tooltip>
+            )}
+            {loop.webhook && loop.schedule.kind !== "manual" && (
+              <Tooltip label="Webhook trigger enabled">
+                <span className="relative inline-flex shrink-0 text-fg-faint">
+                  <Webhook size={12} />
+                </span>
+              </Tooltip>
+            )}
+          </span>
+          <span className="flex shrink-0 items-center gap-1.5 text-fg-faint">
+            <RunHistory runs={loop.runs} onOpen={onOpen} />
+            {hasRuns && (
+              <span className="tabular">
+                {loop.runs.length} {loop.runs.length === 1 ? "run" : "runs"}
+              </span>
+            )}
+          </span>
+        </div>
       </div>
     </li>
   );
