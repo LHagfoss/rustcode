@@ -1,6 +1,6 @@
 /**
  * The chat recap: when the user comes back to a chat they have not looked at for a
- * while (Settings › General, an hour by default), a card at the top of that chat
+ * while (Settings › General, an hour by default), a card after its last turn
  * says what they asked last, where the reply left off and whether the thread is
  * still working, waits on them or failed. It is per chat, like Claude Code's
  * recap, and built from the transcript, so it costs no model turn. Pure, so the

@@ -1,6 +1,6 @@
 /**
  * The chat recap card: back in a chat after it went unseen for a while (Settings ›
- * General, an hour by default), a card at the top of that chat says what the user
+ * General, an hour by default), a card after its last turn says what the user
  * asked last, where the reply left off and whether the thread still works, waits on
  * them or failed. One chat at a time, like Claude Code's recap; dismissing it puts
  * it away until the next return after a gap.
@@ -108,7 +108,7 @@ const STATE_TONE: Record<RecapState, string> = {
   done: "text-success",
 };
 
-/** The recap of the chat on screen, floating over the top of its transcript. */
+/** The recap of the chat on screen: a row after its last turn (ui/Transcript.tsx). */
 export function ChatRecapCard({ threadId, className }: { threadId: string; className?: string }) {
   const open = useApp((s) => (s.chatRecaps && s.chatRecap?.threadId === threadId ? s.chatRecap : null));
   const items = useApp((s) => s.threads[threadId]?.items);
