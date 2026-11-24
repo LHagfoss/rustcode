@@ -50,6 +50,7 @@ import { useClock } from "../lib/useNow";
 import { engineDetail } from "../state/engine";
 import { errorText, request, restartEngine, SERVER_LOG_LINES, toast, useApp } from "../state/store";
 import { cx, noTextHelpers, rowInset, Tooltip } from "./primitives";
+import { CaptureAndSetupGroups } from "./SettingsAbout";
 import {
   Action,
   ErrorDetails,
@@ -386,6 +387,7 @@ export function DiagnosticsPage() {
       </Group>
 
       <ThreadLogGroup />
+      <CaptureAndSetupGroups />
     </>
   );
 }

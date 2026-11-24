@@ -84,12 +84,11 @@ import {
   ShieldCheck,
   Smartphone,
   Stethoscope,
-  TerminalSquare,
   X,
 } from "./icons";
 import { HEADER_HEIGHT, SidebarCluster } from "./MainHeader";
 import { RestartToApply } from "./RestartToApply";
-import { AboutPage, AdvancedPage, STATUS_READ_MS } from "./SettingsAbout";
+import { AboutPage, STATUS_READ_MS } from "./SettingsAbout";
 import { AppearancePage } from "./SettingsAppearance";
 import { OrchestrationPage } from "./SettingsOrchestration";
 import { useLightsInset } from "./Titlebar";
@@ -189,7 +188,6 @@ const NAV: { heading?: string; pages: Page[] }[] = [
   {
     heading: "System",
     pages: [
-      { id: "advanced", label: "Advanced", icon: TerminalSquare },
       { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
       { id: "about", label: "About", icon: Info },
     ],
@@ -1186,7 +1184,6 @@ export function SettingsPage() {
                 {section === "keyboard" && <ShortcutsPage />}
                 {section === "usage" && <UsagePage />}
                 {section === "statistics" && <StatisticsPage />}
-                {section === "advanced" && <AdvancedPage />}
                 {section === "diagnostics" && <DiagnosticsPage />}
                 {section === "about" && <AboutPage />}
               </Suspense>

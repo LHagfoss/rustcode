@@ -211,7 +211,7 @@ function OrchestrationGroup() {
         {pending && <RestartToApply />}
       </Group>
       <Group
-        title="Delegation"
+        title="Delegate limits"
         disabled={!orchestrationValue}
         footer={
           orchestrationValue
