@@ -26,8 +26,6 @@ const RETIRED =
   /(?<![\w-])(?:bg|text|border|ring|from|to|via|fill|stroke|outline|divide|accent|placeholder)-(?:fg-[234]|fill-[1-4]|hairline|brand|brand-fill|chat|field|attention|info)(?![\w-])|(?<![\w-])shadow-(?:float|panel)(?![\w-])|--rc-(?:fg|chat|hairline|brand|attention|red|green|orange|blue|field|fill-[1-4])(?![\w-])|(?<![\w-])text-(?:text(?:-muted|-faint)?|accent-text|xs|sm|base|lg|xl|2xl|3xl)(?![\w-])/;
 const ARBITRARY_RADIUS = /(?<![\w-])rounded(?:-[trblse]{1,2})?-(?:\[|4xl)/;
 const NATIVE_SELECT = /<select\b/;
-// index.css resets `--shadow-*`, so a shadow class outside the theme's own (`shadow-1`,
-// `shadow-2`, `shadow-knob`) generates no CSS and the element silently loses its shadow.
 const THEME_SHADOWS = new Set(
   [...readFileSync(join(SRC, "index.css"), "utf8").matchAll(/^\s*--shadow-([\w-]+):/gm)].map((m) => m[1]),
 );
