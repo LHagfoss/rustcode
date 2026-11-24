@@ -165,8 +165,6 @@ const EXACT_METHODS: &[&str] = &[
     // Running a shell command on this machine for another machine in the fleet
     // (`acp/machine_exec.rs`), subject to this machine's command policy.
     "_rustcode/machine/exec",
-    "_rustcode/preview/share",
-    "_rustcode/preview/connection",
     // Updating RustCode here when a paired machine asks (Settings › Machines ›
     // Update, `acp/machine_update.rs`): only the newest stable release, checked
     // as `rc --update` checks it, and restarted onto once no turn runs.
@@ -513,8 +511,6 @@ mod tests {
                 "_rustcode/worktrees/state",
                 "_rustcode/environment/sync",
                 "_rustcode/machine/exec",
-                "_rustcode/preview/share",
-                "_rustcode/preview/connection",
                 "_rustcode/machine/update",
                 "_rustcode/session/harness",
                 "_rustcode/session/move",

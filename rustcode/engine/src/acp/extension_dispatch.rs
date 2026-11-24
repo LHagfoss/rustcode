@@ -426,9 +426,6 @@ pub(super) async fn dispatch_request(
                     .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
             }
         }
-        "_rustcode/preview/share" | "_rustcode/preview/connection" => {
-            connection.spawn(preview_share::dispatch(method, params, responder))
-        }
         "_rustcode/machine/exec" => {
             let request: machine_exec::MachineExecRequest = parse_params(params)?;
 

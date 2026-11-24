@@ -128,7 +128,6 @@ pub fn tools_with(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
         // orchestration version gates it (#3369).
         std::iter::once(crate::pull_watch::LINK_TOOL_NAME)
             .chain(std::iter::once(super::secret::TOOL_NAME))
-            .chain(std::iter::once(crate::acp::preview_share::TOOL_NAME))
             // Managing RustCode itself (#3821): answered by the engine, which
             // asks the user before a write through the thread's own card.
             .chain(crate::manage::TOOL_NAMES)
@@ -273,11 +272,6 @@ const LISTING: &[(&str, &str, Effect)] = &[
         Effect::Adds,
     ),
     (super::ask_user::TOOL_NAME, "Ask the user", Effect::Adds),
-    (
-        crate::acp::preview_share::TOOL_NAME,
-        "Share preview publicly",
-        Effect::Adds,
-    ),
     (super::COMPACT_SESSION, "Compact a thread", Effect::Adds),
     (super::UPDATE_SESSION, "Update a thread", Effect::Sets),
     (super::CONFIGURE_SESSION, "Configure a thread", Effect::Sets),
@@ -737,7 +731,7 @@ async fn call_inside(
         }
         return forward.call(inside_request(identity, tool, args)).await;
     }
-    if tool == super::secret::TOOL_NAME || tool == crate::acp::preview_share::TOOL_NAME {
+    if tool == super::secret::TOOL_NAME {
         return forward.call(inside_request(identity, tool, args)).await;
     }
     // The engine asks the user through the thread's own channel; checked
@@ -1700,7 +1694,6 @@ mod tests {
         // for every client and answered by this server (#3369).
         expected.push(crate::pull_watch::LINK_TOOL_NAME.to_owned());
         expected.push(super::super::secret::TOOL_NAME.to_owned());
-        expected.push(crate::acp::preview_share::TOOL_NAME.to_owned());
         expected.extend(crate::manage::TOOL_NAMES.map(str::to_owned));
         // The workflow tools follow it for a client that can start threads.
         expected.extend(crate::workflow::TOOL_NAMES.map(str::to_owned));

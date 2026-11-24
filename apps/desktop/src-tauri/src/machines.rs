@@ -16,8 +16,6 @@
 //! Names follow docs/terminology.md: a **machine** is a computer, Settings ›
 //! Machines lists them, and the server is what runs on each one.
 
-pub(crate) mod preview;
-
 use crate::engine::EngineEvent;
 use anyhow::Error;
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
