@@ -185,9 +185,6 @@ pub fn read_thread_image_chunk(
     }
     let scratch = scratch_roots();
     let path = match thread_image_in(path_or_uri, &roots, &scratch, home.as_deref()) {
-        // A worktree the agent added with git itself (`git worktree add`) is a
-        // checkout of the thread's repository too, so its screenshots show. Git
-        // is asked only when the cheaper check fails.
         Err(error) if error == OUTSIDE_THREAD_FOLDERS => {
             let checkouts = roots
                 .first()
