@@ -97,6 +97,14 @@ failure. Fix from the CI log and push again.
   run in CI's lint job) nor a TypeScript one 1,500 (`apps/desktop/src/fileSize.test.ts`).
   Files already past it are listed with a cap that may only come down: put new
   code in a module of its own, and lower the cap when a split lands.
+- No new code comments: CI's lint job fails a file that has more comment lines
+  than `scripts/comment-baseline.txt` allows, new files included (doc
+  comments, `/** */` and `///`, do not count). Put the reason in a name, a type
+  or a test, or in an ADR under `docs/adr/`. After removing comments, run
+  `python3 scripts/check-comments.py --update` and commit the lowered baseline.
+- Before pushing, run the repository's own lints, which take seconds and are
+  not part of `bun run check` or `cargo check`: `python3
+  scripts/check-comments.py` and `python3 scripts/check-rust-size.py`.
 - A UI-only change needs no cargo run, and a Rust-only one no
   `bun run check`, unless the change crosses the ACP boundary between them.
 
