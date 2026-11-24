@@ -298,7 +298,7 @@ export function HeaderButtonsSetting() {
             <div
               ref={preview}
               aria-hidden
-              className="pointer-events-none fixed z-50 flex h-9 items-center gap-2 rounded-md bg-surface-2 px-1.5 text-body shadow-lg motion-safe:scale-[1.03]"
+              className="pointer-events-none fixed z-50 flex h-9 items-center gap-2 rounded-md bg-surface-2 px-1.5 text-body shadow-2 motion-safe:scale-[1.03]"
               style={{ left: drag.x + drag.left, top: drag.y + drag.top, width: drag.width }}
             >
               <GripVertical size={13} className="mx-1 shrink-0 text-fg-faint" />

@@ -2,7 +2,7 @@
 // palette classes outside the tokens, no retired class names, no arbitrary
 // radii, no native selects, hand-timed hover, hand-made blur or menu items,
 // no hand-styled labelled buttons, no spacing off the scale, no native `title`
-// tips on controls, and index.css's built-in themes equal to BUILTIN_THEMES.
+// tips on controls, no shadow outside the theme, and index.css's built-in themes equal to BUILTIN_THEMES.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -26,6 +26,10 @@ const RETIRED =
   /(?<![\w-])(?:bg|text|border|ring|from|to|via|fill|stroke|outline|divide|accent|placeholder)-(?:fg-[234]|fill-[1-4]|hairline|brand|brand-fill|chat|field|attention|info)(?![\w-])|(?<![\w-])shadow-(?:float|panel)(?![\w-])|--rc-(?:fg|chat|hairline|brand|attention|red|green|orange|blue|field|fill-[1-4])(?![\w-])|(?<![\w-])text-(?:text(?:-muted|-faint)?|accent-text|xs|sm|base|lg|xl|2xl|3xl)(?![\w-])/;
 const ARBITRARY_RADIUS = /(?<![\w-])rounded(?:-[trblse]{1,2})?-(?:\[|4xl)/;
 const NATIVE_SELECT = /<select\b/;
+const THEME_SHADOWS = new Set(
+  [...readFileSync(join(SRC, "index.css"), "utf8").matchAll(/^\s*--shadow-([\w-]+):/gm)].map((m) => m[1]),
+);
+const SHADOW_CLASS = /(?<![\w-])shadow-([\w-]+)/g;
 const HAND_TIMED_HOVER = /(?<![\w-])transition-colors(?![\w-])/;
 const HAND_MADE_BLUR = /(?<![\w-])backdrop-blur/;
 const HAND_MADE_MENU_ITEM = /data-\[highlighted\]:/;
@@ -178,6 +182,9 @@ describe("design system", () => {
       if (PALETTE.test(line)) violations.push(`${where} palette class: ${line.trim()}`);
       if (RETIRED.test(line)) violations.push(`${where} retired token: ${line.trim()}`);
       if (ARBITRARY_RADIUS.test(line)) violations.push(`${where} arbitrary radius: ${line.trim()}`);
+      for (const [, name] of line.matchAll(SHADOW_CLASS))
+        if (name !== "none" && !THEME_SHADOWS.has(name))
+          violations.push(`${where} shadow-${name} is not a theme shadow: ${line.trim()}`);
       if (NATIVE_SELECT.test(line)) violations.push(`${where} native select, use Select: ${line.trim()}`);
       if (HAND_TIMED_HOVER.test(line))
         violations.push(`${where} hover is timed in index.css: ${line.trim()}`);
