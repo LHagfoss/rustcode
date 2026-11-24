@@ -1,4 +1,4 @@
-// Settings › Orchestration › Delegate presets (issue 3391): named sets of harness,
+// Settings › Delegation › Delegate presets (issue 3391): named sets of harness,
 // model, effort, account, access, worktree and instructions an agent passes to
 // `start_session` or a `fan_out` entry as `preset`. They are the
 // `delegate-presets` server setting; the engine expands them

@@ -270,15 +270,15 @@ export interface AppState {
     /** A second, less prominent action (e.g. "Files and conversation"). */
     alt?: { action: string; run: () => void };
   } | null;
-  /** Threads can start and message other threads (Settings › Orchestration); the engine learns it at initialize. */
+  /** Threads can start and message other threads (Settings › Delegation); the engine learns it at initialize. */
   orchestration: boolean;
-  /** How many delegates one thread may run at once (Settings › Orchestration). */
+  /** How many delegates one thread may run at once (Settings › Delegation). */
   threadLimit: number;
-  /** How many delegates may run at once across this app (Settings › Orchestration). */
+  /** How many delegates may run at once across this app (Settings › Delegation). */
   totalLimit: number;
   /** Trust this computer's named logins for delegation (default off). */
   trustDelegateAccounts: boolean;
-  /** Agents may read threads of every project, not only the calling thread's (Settings › Orchestration). */
+  /** Agents may read threads of every project, not only the calling thread's (Settings › Delegation). */
   readAcrossProjects: boolean;
   /**
    * A delegate that stops on a usage limit goes on at once on the table's model of the other

@@ -577,7 +577,7 @@ timed out leaves the worktree mid-state, so inspect it before rerunning.
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
 at most 8 delegates working for one thread at once by default, set to 2 to 32
-in Settings › Orchestration, and at most 16 delegates running at once across this app
+in Settings › Delegation, and at most 16 delegates running at once across this app
 instance, set to 2 to 64 (a `busy` refusal names the limit it hit and the
 current count, says `links_left` and that `wait_session` on one comes first).
 The CLI and TUI start no delegates, so the total is one app's own. A message
@@ -662,7 +662,7 @@ does not move it.
 ### Delegate presets
 
 A preset is a named set of `start_session` / `fan_out` arguments the user keeps
-in Settings › Orchestration › Delegate presets (#3391), so an orchestrator does not
+in Settings › Delegation › Delegate presets (#3391), so an orchestrator does not
 restate the harness, model, effort, account, access, worktree and the same
 boilerplate instructions in every call. They are the `delegate-presets` server
 setting (`acp/settings.rs`), a list of
@@ -693,7 +693,7 @@ setting (`ui/DelegatePresets.tsx`, `state/delegatePresets.ts`).
 By default a delegate that stops on a subscription limit waits for the reset
 and carries on (Settings › General › Continue threads on their own,
 `state/limitResume.ts`). With the opt-in `limit-fallback` server setting
-(Settings › Orchestration › Switch a delegate at a limit, #3392) it instead goes on
+(Settings › Delegation › Switch a delegate at a limit, #3392) it instead goes on
 at once on the other provider, at the same tier, from a table the user keeps.
 
 - The table is the `limit-fallback-map` server setting, a list of

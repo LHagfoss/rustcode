@@ -161,7 +161,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
     heading: "Agents",
     pages: [
       { id: "agents", label: "Harnesses", icon: Layers },
-      { id: "orchestration", label: "Orchestration", icon: Network },
+      { id: "orchestration", label: "Delegation", icon: Network },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
       { id: "connections", label: "Connections", icon: KeyRound },
       { id: "voice", label: "Voice & computer use", icon: Mic },

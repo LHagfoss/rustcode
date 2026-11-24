@@ -166,7 +166,7 @@ thread here can list the paired computers (`list_machines`), start, message,
 read, wait on and stop threads there, and be woken when a remote delegate
 finishes — the delegate is nested under its caller and its stack mark names the
 machine. The app executes those calls over the machine's own connection; see
-`docs/orchestrator.md` › Orchestration tools v12 for the tool set, the approval
+`docs/orchestrator.md` › Delegation tools v12 for the tool set, the approval
 card and what v1 leaves out (this app must be running, and a remote delegate
 keeps the title its first message gives it there).
 
@@ -1535,7 +1535,7 @@ composer's keys stay outside the table.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
-  On by default (Settings › Orchestration turns it off). The app answers `_rustcode/orchestration`
+  On by default (Settings › Delegation turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
   `start_session` and `fan_out`. Same project only — the repository, so a main

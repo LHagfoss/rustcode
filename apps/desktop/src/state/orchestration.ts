@@ -79,7 +79,7 @@ export const READ_BYTES = 16 * 1024;
 export const MAILBOX = 32;
 /**
  * The default number of delegates one thread may have working for it at once
- * (Settings › Orchestration). A message to a thread it already has a link to is a
+ * (Settings › Delegation). A message to a thread it already has a link to is a
  * follow-up, not another slot.
  */
 export const DEFAULT_DELEGATES_PER_THREAD = 8;
@@ -87,7 +87,7 @@ export const MIN_DELEGATES_PER_THREAD = 2;
 export const MAX_DELEGATES_PER_THREAD = 32;
 /**
  * The default number of delegates that may run at once across this app
- * instance (Settings › Orchestration), whichever thread started them. A delegate
+ * instance (Settings › Delegation), whichever thread started them. A delegate
  * takes one slot whether it is a child this thread started or a thread it
  * messaged.
  */
