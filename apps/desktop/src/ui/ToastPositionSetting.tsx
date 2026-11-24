@@ -1,6 +1,3 @@
-// Settings › Appearance › Toast position: the corner toasts appear in (state/toastPosition.ts).
-// Picking one shows a sample there, so the choice is seen rather than described.
-
 import { toast } from "../state/store";
 import {
   DEFAULT_TOAST_POSITION,

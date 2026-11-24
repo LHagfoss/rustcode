@@ -1,14 +1,10 @@
-// Up to three toasts, newest in front (state/toasts.ts keeps the queue), on the
-// composer's glass, in the corner Settings › Appearance › Toast position picks
-// (bottom right by default, away from the transcript being read). A coloured dot
-// says the tone; the × shows on hover or focus. At rest the cards behind the
-// front one take its height and hide their text, so only their edges peek past
-// it, above it at the bottom and below it at the top. Info and success leave
-// after 2.5 s, errors after 5 s.
-// The pointer or focus on the stack, a drag, or the window in the background
-// stops the clock. A click anywhere on the card, ×, Escape, or a drag toward the
-// card's own edge past 48px (or a quick flick that way) dismisses; a drag never
-// selects text anywhere.
+// Up to three toasts, newest in front (state/toasts.ts keeps the queue), on the composer's glass in
+// the corner Settings › Appearance › Toast position picks (bottom right by default). A dot says the
+// tone; the × shows on hover or focus. At rest the cards behind the front one take its height and
+// hide their text, so only their edges peek past it. Info and success leave after 2.5 s, errors
+// after 5 s. The pointer or focus on the stack, a drag, or the window in the background stops the
+// clock. A click on the card, ×, Escape, or a drag toward the card's own edge past 48px (or a quick
+// flick that way) dismisses; a drag never selects text anywhere.
 
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { observeSize } from "../lib/resize";
@@ -228,8 +224,6 @@ function ToastCard({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {toast.action && <ToastActionButton toast={toast} compact={compact} />}
-          {/* Out of the way until the card is hovered or the button is focused: a click on the
-              card already dismisses it, so the × is the visible way, not the only one. */}
           <button
             type="button"
             aria-label="Dismiss"
@@ -289,7 +283,6 @@ export function Toaster() {
   const toasts = useApp((s) => s.toasts);
   const [position] = useToastPosition();
   const fromTop = toastFromTop(position);
-  // Toward the stack's open side: up from the bottom, down from the top.
   const away = fromTop ? 1 : -1;
   const sign = toastSwipeSign(position);
   const section = useRef<HTMLElement>(null);

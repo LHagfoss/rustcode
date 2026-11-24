@@ -1,9 +1,8 @@
-// Pure drag math and one DOM guard (ui/Toaster.tsx): the card slides toward
-// its own edge only (right, or left for the bottom-left corner) and
-// rubber-bands any other way; past 48px or a quick flick that way it
-// dismisses, and a barely-moving press is a click. A drag never selects text:
-// the guard turns selection off and blocks `selectstart` until released, and
-// every way a drag ends releases it.
+// Pure drag math and one DOM guard (ui/Toaster.tsx): the card slides toward its own edge only
+// (left in the bottom-left corner) and rubber-bands any other way; past 48px or a quick flick that
+// way it dismisses, and a barely-moving press is a click. A drag never selects text: the guard
+// turns selection off and blocks `selectstart` until released, and every way a drag ends
+// releases it.
 
 /** How far a drag must travel to dismiss the toast. */
 export const TOAST_DISMISS_PX = 48;

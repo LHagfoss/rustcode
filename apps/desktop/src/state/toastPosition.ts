@@ -1,6 +1,3 @@
-// Where toasts appear (Settings › Appearance › Toast position), kept in localStorage beside the
-// sidebar's view preferences and read by ui/Toaster.tsx.
-
 import { usePref } from "./sidebarPrefs";
 
 export const TOAST_POSITION_PREF = "rustcode.toasts.position";

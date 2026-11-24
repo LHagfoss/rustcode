@@ -578,7 +578,7 @@
 4 apps/desktop/src/ui/TimelineRail.test.ts
 24 apps/desktop/src/ui/TimelineRail.tsx
 6 apps/desktop/src/ui/Titlebar.tsx
-29 apps/desktop/src/ui/Toaster.tsx
+28 apps/desktop/src/ui/Toaster.tsx
 12 apps/desktop/src/ui/Transcript.test.ts
 161 apps/desktop/src/ui/Transcript.tsx
 9 apps/desktop/src/ui/TurnChanges.tsx
