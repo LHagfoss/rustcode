@@ -12,6 +12,7 @@
 use crate::worktrees::{git_with, toplevel};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -222,14 +223,7 @@ fn snapshot_with(
     if let Some(user_index) = user_index {
         message.push_str(&format!("{USER_INDEX_KEY}{user_index}\n"));
     }
-    let head = run(
-        &repo.top,
-        &["rev-parse", "--verify", "-q", "HEAD"],
-        deadline,
-    )
-    .ok()
-    .map(|head| head.trim().to_owned())
-    .filter(|head| !head.is_empty());
+    let head = commit_of(&repo.top, "HEAD", deadline);
     let mut args = vec!["commit-tree", tree.as_str()];
     if let Some(head) = head.as_deref() {
         args.extend(["-p", head]);
@@ -322,7 +316,77 @@ pub(crate) fn next_user_index(history: &[rustcode_core::ChatMessage]) -> usize {
 
 // ------------------------------------------------------------- reading ---
 
-fn numstat_totals(top: &Path, from: &str, to: &str, deadline: Instant) -> (u64, u64, u64) {
+/// The commit `rev` names, `None` when it names none (an unborn `HEAD`, a root's parent).
+fn commit_of(top: &Path, rev: &str, deadline: Instant) -> Option<String> {
+    run(top, &["rev-parse", "--verify", "-q", rev], deadline)
+        .ok()
+        .map(|commit| commit.trim().to_owned())
+        .filter(|commit| !commit.is_empty())
+}
+
+/// The `HEAD` a checkpoint was taken on: its parent.
+fn head_of_checkpoint(top: &Path, checkpoint: &str, deadline: Instant) -> Option<String> {
+    commit_of(top, &format!("{checkpoint}^"), deadline)
+}
+
+fn changed_paths(top: &Path, from: &str, to: &str, deadline: Instant) -> HashSet<String> {
+    run(
+        top,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            from,
+            to,
+        ],
+        deadline,
+    )
+    .unwrap_or_default()
+    .split('\0')
+    .filter(|name| !name.is_empty())
+    .map(str::to_owned)
+    .collect()
+}
+
+/// Two states of the work tree, each with the `HEAD` it stood on.
+struct Span<'a> {
+    from: &'a str,
+    from_head: Option<String>,
+    to: &'a str,
+    to_head: Option<String>,
+}
+
+/// Paths whose change between the two states came from `HEAD` moving (a pull, checkout or
+/// merge) rather than from an edit: changed between the two heads, and matching its `HEAD`
+/// in both states. A file the turn also edited is not among them.
+fn moved_with_head(top: &Path, span: &Span, deadline: Instant) -> HashSet<String> {
+    let (Some(from_head), Some(to_head)) = (span.from_head.as_deref(), span.to_head.as_deref())
+    else {
+        return HashSet::new();
+    };
+    if from_head == to_head {
+        return HashSet::new();
+    }
+    let moved = changed_paths(top, from_head, to_head, deadline);
+    if moved.is_empty() {
+        return moved;
+    }
+    let dirty_before = changed_paths(top, from_head, span.from, deadline);
+    let dirty_after = changed_paths(top, to_head, span.to, deadline);
+    moved
+        .into_iter()
+        .filter(|path| !dirty_before.contains(path) && !dirty_after.contains(path))
+        .collect()
+}
+
+fn only_moved(moved: &HashSet<String>, paths: &[String]) -> bool {
+    !paths.is_empty() && paths.iter().all(|path| moved.contains(path))
+}
+
+fn numstat_totals(top: &Path, span: &Span, deadline: Instant) -> (u64, u64, u64) {
+    let moved = moved_with_head(top, span, deadline);
     let out = run(
         top,
         &[
@@ -332,15 +396,16 @@ fn numstat_totals(top: &Path, from: &str, to: &str, deadline: Instant) -> (u64, 
             "-M",
             "--numstat",
             "-z",
-            from,
-            to,
+            span.from,
+            span.to,
         ],
         deadline,
     )
     .unwrap_or_default();
-    numstat(&out)
+    numstat_paths(&out)
         .iter()
-        .fold((0, 0, 0), |(files, ins, del), (i, d)| {
+        .filter(|(_, paths)| !only_moved(&moved, paths))
+        .fold((0, 0, 0), |(files, ins, del), ((i, d), _)| {
             (files + 1, ins + i, del + d)
         })
 }
@@ -348,6 +413,11 @@ fn numstat_totals(top: &Path, from: &str, to: &str, deadline: Instant) -> (u64, 
 /// `(insertions, deletions)` per file of `git diff --numstat -z`; binary
 /// files count as 0.
 fn numstat(out: &str) -> Vec<(u64, u64)> {
+    numstat_paths(out).into_iter().map(|(row, _)| row).collect()
+}
+
+/// [`numstat`], with each row's path (a rename's old and new paths).
+fn numstat_paths(out: &str) -> Vec<((u64, u64), Vec<String>)> {
     let mut rows = Vec::new();
     let mut fields = out.split('\0').peekable();
     while let Some(field) = fields.next() {
@@ -358,11 +428,17 @@ fn numstat(out: &str) -> Vec<(u64, u64)> {
         let insertions = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
         let deletions = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
         // A rename leaves the path empty and names old and new next.
-        if parts.next().is_some_and(str::is_empty) {
-            fields.next();
-            fields.next();
-        }
-        rows.push((insertions, deletions));
+        let paths = match parts.next() {
+            Some("") => fields
+                .next()
+                .into_iter()
+                .chain(fields.next())
+                .map(str::to_owned)
+                .collect(),
+            Some(path) => vec![path.to_owned()],
+            None => Vec::new(),
+        };
+        rows.push(((insertions, deletions), paths));
     }
     rows
 }
@@ -431,14 +507,24 @@ pub(crate) fn list(cwd: &Path, session_id: &str) -> Result<Vec<Checkpoint>, Stri
     } else {
         work_tree(&repo, deadline).ok()
     };
+    let heads: Vec<Option<String>> = checkpoints
+        .iter()
+        .map(|checkpoint| head_of_checkpoint(&repo.top, &checkpoint.reference, deadline))
+        .collect();
+    let head_now = commit_of(&repo.top, "HEAD", deadline);
     for index in 0..checkpoints.len() {
-        let next = checkpoints
-            .get(index + 1)
-            .map(|next| next.reference.clone())
-            .or_else(|| now.clone());
-        if let Some(next) = next {
-            let (files, insertions, deletions) =
-                numstat_totals(&repo.top, &checkpoints[index].reference, &next, deadline);
+        let next = match checkpoints.get(index + 1) {
+            Some(next) => Some((next.reference.clone(), heads[index + 1].clone())),
+            None => now.clone().map(|now| (now, head_now.clone())),
+        };
+        if let Some((next, to_head)) = next {
+            let span = Span {
+                from: &checkpoints[index].reference,
+                from_head: heads[index].clone(),
+                to: &next,
+                to_head,
+            };
+            let (files, insertions, deletions) = numstat_totals(&repo.top, &span, deadline);
             let checkpoint = &mut checkpoints[index];
             checkpoint.files_changed = files;
             checkpoint.insertions = insertions;
@@ -474,10 +560,24 @@ pub(crate) fn diff(cwd: &Path, session_id: &str, turn: u64) -> Result<Vec<Value>
     let (repo, turns) = find(cwd, session_id, turn)?;
     let deadline = Instant::now() + REQUEST_BUDGET;
     let from = ref_name(session_id, turn);
-    let to = match turns.iter().find(|later| **later > turn) {
-        Some(next) => ref_name(session_id, *next),
-        None => work_tree(&repo, deadline)?,
+    let (to, to_head) = match turns.iter().find(|later| **later > turn) {
+        Some(next) => {
+            let next = ref_name(session_id, *next);
+            let head = head_of_checkpoint(&repo.top, &next, deadline);
+            (next, head)
+        }
+        None => (
+            work_tree(&repo, deadline)?,
+            commit_of(&repo.top, "HEAD", deadline),
+        ),
     };
+    let span = Span {
+        from: &from,
+        from_head: head_of_checkpoint(&repo.top, &from, deadline),
+        to: &to,
+        to_head,
+    };
+    let moved = moved_with_head(&repo.top, &span, deadline);
     let base = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-M"];
     let with = |extra: &[&str]| {
         let mut args = base.to_vec();
@@ -502,6 +602,7 @@ pub(crate) fn diff(cwd: &Path, session_id: &str, turn: u64) -> Result<Vec<Value>
     let mut fields = names.split('\0').filter(|field| !field.is_empty());
     let mut files = Vec::new();
     let mut total = 0usize;
+    let mut position = 0;
     while let Some(code) = fields.next() {
         let renamed = code.starts_with('R') || code.starts_with('C');
         let first = fields.next().unwrap_or_default();
@@ -510,7 +611,15 @@ pub(crate) fn diff(cwd: &Path, session_id: &str, turn: u64) -> Result<Vec<Value>
         } else {
             (first, None)
         };
-        let index = files.len();
+        let index = position;
+        position += 1;
+        let paths: Vec<String> = std::iter::once(path)
+            .chain(old_path)
+            .map(str::to_owned)
+            .collect();
+        if only_moved(&moved, &paths) {
+            continue;
+        }
         let (insertions, deletions) = stats.get(index).copied().unwrap_or((0, 0));
         let mut text = if patches.len() > index {
             patches[index].clone()
@@ -558,7 +667,8 @@ fn inside(top: &Path, relative: &str) -> Option<PathBuf> {
 /// Put the work tree back to the checkpoint before turn `turn`: files the
 /// checkpoint has are written back, files it did not have (and that are not
 /// ignored) are deleted. Ignored files, the index, HEAD and the stash are
-/// left alone.
+/// left alone, and so are files that only changed because HEAD moved since (a pull keeps what
+/// it brought in).
 pub(crate) fn restore(cwd: &Path, session_id: &str, turn: u64) -> Result<(), String> {
     let (repo, _) = find(cwd, session_id, turn)?;
     let deadline = Instant::now() + REQUEST_BUDGET;
@@ -585,8 +695,17 @@ pub(crate) fn restore(cwd: &Path, session_id: &str, turn: u64) -> Result<(), Str
             .map(str::to_owned)
             .collect())
     };
-    let added = names("--diff-filter=A")?;
-    let changed = names("--diff-filter=MDT")?;
+    let span = Span {
+        from: &checkpoint,
+        from_head: head_of_checkpoint(&repo.top, &checkpoint, deadline),
+        to: &now,
+        to_head: commit_of(&repo.top, "HEAD", deadline),
+    };
+    let moved = moved_with_head(&repo.top, &span, deadline);
+    let mut added = names("--diff-filter=A")?;
+    let mut changed = names("--diff-filter=MDT")?;
+    added.retain(|name| !moved.contains(name));
+    changed.retain(|name| !moved.contains(name));
     for name in &added {
         if let Some(path) = inside(&repo.top, name) {
             let _ = std::fs::remove_file(&path);
@@ -935,6 +1054,59 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(repo.join("README.md")).unwrap(),
             "v3\n"
+        );
+    }
+
+    fn upstream_commit(repo: &Path) {
+        git(repo, &["checkout", "-q", "-b", "upstream"]).unwrap();
+        std::fs::write(repo.join("pulled.txt"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\nbuild/\n").unwrap();
+        git(repo, &["add", "-A"]).unwrap();
+        git(repo, &["commit", "-q", "-m", "upstream"]).unwrap();
+        git(repo, &["checkout", "-q", "main"]).unwrap();
+    }
+
+    #[test]
+    fn a_pull_during_the_turn_is_not_the_turns_change() {
+        let (_dir, repo) = repo();
+        upstream_commit(&repo);
+        assert_eq!(take(&repo, "cp-h", "pull only"), 1);
+        git(&repo, &["merge", "-q", "--ff-only", "upstream"]).unwrap();
+
+        assert!(diff(&repo, "cp-h", 1).unwrap().is_empty());
+        let listed = list(&repo, "cp-h").unwrap();
+        assert_eq!(listed[0].files_changed, 0);
+        assert_eq!(listed[0].insertions, 0);
+
+        assert_eq!(take(&repo, "cp-h", "pull, then edit"), 2);
+        git(&repo, &["reset", "-q", "--hard", "HEAD~1"]).unwrap();
+        assert_eq!(take(&repo, "cp-h", "the pull and an edit"), 3);
+        git(&repo, &["merge", "-q", "--ff-only", "upstream"]).unwrap();
+        std::fs::write(repo.join("README.md"), "hello\nedited\n").unwrap();
+        std::fs::write(repo.join("pulled.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+
+        let files = diff(&repo, "cp-h", 3).unwrap();
+        let paths: Vec<_> = files
+            .iter()
+            .map(|file| file["path"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            ["README.md", "pulled.txt"],
+            "edits stay, .gitignore went"
+        );
+        let listed = list(&repo, "cp-h").unwrap();
+        assert_eq!(listed[2].files_changed, 2);
+
+        restore(&repo, "cp-h", 3).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(repo.join("README.md")).unwrap(),
+            "hello\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.join(".gitignore")).unwrap(),
+            "ignored.txt\nbuild/\n",
+            "a rewind keeps what the pull brought in"
         );
     }
 
