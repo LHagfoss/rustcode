@@ -48,6 +48,7 @@ import {
   sameValue,
 } from "../state/pageCache";
 import { connectionFor, request, useApp } from "../state/store";
+import { Fold } from "./Fold";
 import { Check, ChevronDown, Info, RotateCcw } from "./icons";
 import { cx, menuItem, Pill, rowInset, Segments, Skeleton, Switch, Tooltip } from "./primitives";
 
@@ -157,7 +158,7 @@ export function Group({
           )
         }
       />
-      {!folded && (
+      <Fold open={!folded}>
         <fieldset
           disabled={disabled}
           className={cx(
@@ -167,8 +168,8 @@ export function Group({
         >
           {children}
         </fieldset>
-      )}
-      {footer && !folded && <div className="mt-2 max-w-[70ch] px-4 text-caption text-fg-muted">{footer}</div>}
+        {footer && <div className="mt-2 max-w-[70ch] px-4 text-caption text-fg-muted">{footer}</div>}
+      </Fold>
     </section>
   );
 }
