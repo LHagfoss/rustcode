@@ -180,7 +180,7 @@ function MarkdownTable({ children }: { children: ReactNode }) {
           {children}
         </table>
       </div>
-      <div className="absolute top-1 right-1 flex gap-0.5 rounded-md bg-surface opacity-0 shadow-sm transition-opacity duration-100 group-hover/table:opacity-100 focus-within:opacity-100">
+      <div className="absolute top-1 right-1 flex gap-0.5 rounded-md bg-surface opacity-0 shadow-1 transition-opacity duration-100 group-hover/table:opacity-100 focus-within:opacity-100">
         {button("md", "Markdown")}
         {button("csv", "CSV")}
       </div>
