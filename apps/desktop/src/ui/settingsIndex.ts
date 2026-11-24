@@ -384,6 +384,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "appearance",
+    title: "Toast position",
+    keywords: "notification notice toast corner top bottom left right center placement",
+  },
+  {
+    section: "appearance",
     title: "Transparency",
     keywords: "opacity see through translucent sidebar window alpha",
   },

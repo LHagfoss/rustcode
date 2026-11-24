@@ -1251,8 +1251,14 @@
     0 0 0 1px var(--rc-separator);
   transition: background-color 160ms ease-out;
 }
+/* A toast is a small sibling of the composer: its surface, its edge and a lift that reads over the
+   panel or transcript under it. */
 .rc-toast {
-  background: var(--rc-glass-bg-strong);
+  background: var(--rc-composer-bg);
+  box-shadow:
+    0 3px 12px -4px var(--rc-shadow-soft),
+    0 10px 28px -14px var(--rc-shadow-soft),
+    0 0 0 1px var(--rc-separator);
 }
 /* The composer and the question panel over it share the sidebar surface, glass, shadow and corner. */
 .rc-composer-card,
@@ -1405,7 +1411,7 @@
   height: 56px;
   background: linear-gradient(to bottom, transparent 0, var(--rc-bg) 56px);
 }
-/* A toast rises into the window's bottom-right corner and drops away. */
+/* A toast rises into its corner and drops away. */
 @keyframes rc-toast-in {
   from {
     opacity: 0;
@@ -1424,13 +1430,31 @@
 .rc-toast-out {
   animation: rc-toast-out 140ms ease-in forwards;
 }
+/* At a top position it drops in from above and lifts away. */
+@keyframes rc-toast-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+}
+@keyframes rc-toast-out-top {
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+.rc-toast-in-top {
+  animation: rc-toast-in-top 220ms var(--ease-snappy);
+}
+.rc-toast-out-top {
+  animation: rc-toast-out-top 140ms ease-in forwards;
+}
 /*
  * The stack: only the front card is in flow, so the stack is one card tall; the cards behind
  * it are absolute, 6px higher and a touch smaller each, so they peek over its top edge and
  * fan up over each other when the pointer or the keyboard is on the stack.
  */
 .rc-toast-slot {
-  transform-origin: bottom center;
   transition: transform 220ms var(--ease-snappy);
 }
 
@@ -1667,6 +1691,12 @@
     transform: translateY(10px);
   }
 }
+@keyframes rc-toast-in-top-flat {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
 /* The decorative blurs are macOS's alone: on Windows and Linux the reveal fades without its 4px. */
 :root:is([data-platform="windows"], [data-platform="linux"]) .rc-reveal {
   animation-name: rc-fade;
@@ -1677,6 +1707,9 @@
 }
 :root[data-platform="linux"] .rc-toast-in {
   animation-name: rc-toast-in-flat;
+}
+:root[data-platform="linux"] .rc-toast-in-top {
+  animation-name: rc-toast-in-top-flat;
 }
 :root[data-platform="linux"] [role="dialog"].rc-whatsnew[data-state="open"] {
   animation-name: rc-fade;

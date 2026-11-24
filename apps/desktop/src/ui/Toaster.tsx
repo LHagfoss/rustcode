@@ -1,11 +1,14 @@
-// Up to three toasts, newest in front (state/toasts.ts keeps the queue), frosted
-// like the composer, in the window's bottom-right corner, away from the
-// transcript being read. At rest the cards behind the front one take its
-// height and hide their text, so only their edges peek above it. Info and
-// success leave after 2.5 s, errors after 5 s.
+// Up to three toasts, newest in front (state/toasts.ts keeps the queue), on the
+// composer's glass, in the corner Settings › Appearance › Toast position picks
+// (bottom right by default, away from the transcript being read). A coloured dot
+// says the tone; the × shows on hover or focus. At rest the cards behind the
+// front one take its height and hide their text, so only their edges peek past
+// it, above it at the bottom and below it at the top. Info and success leave
+// after 2.5 s, errors after 5 s.
 // The pointer or focus on the stack, a drag, or the window in the background
-// stops the clock. A click anywhere on the card, ×, Escape, or a drag right past
-// 48px (or a quick flick right) dismisses; a drag never selects text anywhere.
+// stops the clock. A click anywhere on the card, ×, Escape, or a drag toward the
+// card's own edge past 48px (or a quick flick that way) dismisses; a drag never
+// selects text anywhere.
 
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { observeSize } from "../lib/resize";
@@ -16,28 +19,21 @@ import {
   isClick,
   startsDrag,
   TOAST_DRAG_MS,
-  TOAST_EXIT,
+  toastExit,
 } from "../lib/toastDrag";
 import { dismissToast, expireToasts, setToastsPaused, type Toast, useApp } from "../state/store";
+import { type ToastPosition, toastFromTop, toastSwipeSign, useToastPosition } from "../state/toastPosition";
 import { nextExpiry } from "../state/toasts";
-import {
-  ArrowUpRight,
-  CircleAlert,
-  CircleCheck,
-  ExternalLink,
-  FolderOpen,
-  Info,
-  RotateCcw,
-  Undo2,
-  X,
-} from "./icons";
+import { X } from "./icons";
 import { cx, Spinner } from "./primitives";
 
-/** How far the cards behind the front one peek over its top edge, and how much smaller each is. */
+/** How far the cards behind the front one peek past its edge, and how much smaller each is. */
 const TOAST_PEEK = 6;
 const TOAST_SHRINK = 0.04;
-/** The stack's distance from the window's bottom and right edges. */
+/** The stack's distance from the window's edges. */
 const TOAST_INSET = 16;
+/** At the top, the stack clears the window's header. */
+const TOAST_TOP = 52;
 /** The 8px between fanned-out cards. */
 const TOAST_GAP = 8;
 /** A quiet settle on the check after a spinner finishes. */
@@ -65,11 +61,17 @@ interface DragSession {
 function ToastCard({
   toast,
   compactHeight,
+  sign,
+  fromTop,
   onDrag,
 }: {
   toast: Toast;
   /** A card behind the front one at rest: drawn at the front card's height with its text hidden. */
   compactHeight?: number;
+  /** The side a swipe dismisses toward: 1 right, -1 left. */
+  sign: 1 | -1;
+  /** Anchored at the top: it drops in from above. */
+  fromTop: boolean;
   onDrag: (dragging: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -92,7 +94,7 @@ function ToastCard({
       }
       if (flyOut && session && el) {
         el.style.transition = `transform ${TOAST_DRAG_MS}ms var(--ease-snappy), opacity ${TOAST_DRAG_MS}ms ease-out`;
-        el.style.transform = TOAST_EXIT;
+        el.style.transform = toastExit(sign);
         el.style.opacity = "0";
         setFlung(true);
         dismissToast(toast.id);
@@ -104,7 +106,7 @@ function ToastCard({
         el.style.opacity = "";
       }
     },
-    [onDrag, toast.id],
+    [onDrag, sign, toast.id],
   );
   useEffect(() => () => end(false), [end]);
 
@@ -142,7 +144,7 @@ function ToastCard({
     if (!session || !el || session.pointerId !== e.pointerId) return;
     session.dx = e.clientX - session.x;
     session.dy = e.clientY - session.y;
-    const state = dragState(session.dx, session.dy);
+    const state = dragState(session.dx, session.dy, Number.POSITIVE_INFINITY, sign);
     el.style.transition = "none";
     el.style.transform = `translate(${state.dx}px, ${state.dy}px)`;
     el.style.opacity = String(dragOpacity(state.away));
@@ -159,7 +161,7 @@ function ToastCard({
       dismissToast(toast.id);
       return;
     }
-    end(dragState(session.dx, session.dy, e.timeStamp - session.at).dismiss);
+    end(dragState(session.dx, session.dy, e.timeStamp - session.at, sign).dismiss);
   };
 
   const onPointerCancel = () => end(false);
@@ -168,9 +170,8 @@ function ToastCard({
   };
 
   const error = toast.tone === "error";
-  const Icon = error ? CircleAlert : toast.tone === "success" ? CircleCheck : Info;
   // A promise-style toast (the engine's start) is replaced in place by its success; the spinner
-  // it had morphs into the check instead of swapping between two unrelated icons.
+  // it had settles into the green dot instead of swapping between two unrelated marks.
   const spinning = toast.progress !== undefined && !error;
   const wasSpinning = useRef(spinning);
   const [settled, setSettled] = useState(false);
@@ -183,6 +184,8 @@ function ToastCard({
     return () => clearTimeout(timer);
   }, [spinning, toast.tone]);
   const compact = compactHeight !== undefined;
+  const edge = fromTop ? "-top" : "";
+  const motion = toast.leaving ? (flung ? "" : `rc-toast-out${edge}`) : `rc-toast-in${edge}`;
   return (
     <div
       ref={ref}
@@ -195,28 +198,28 @@ function ToastCard({
       onLostPointerCapture={onLostPointerCapture}
       style={compact ? { height: compactHeight } : undefined}
       className={cx(
-        "rc-toast pointer-events-auto relative w-[380px] max-w-[calc(100vw-32px)] cursor-pointer touch-none overflow-hidden rounded-xl text-callout select-none active:cursor-grabbing",
-        toast.leaving ? (flung ? "" : "rc-toast-out") : "rc-toast-in",
+        "rc-toast group pointer-events-auto relative w-[340px] max-w-[calc(100vw-32px)] cursor-pointer touch-none overflow-hidden rounded-2xl text-callout select-none active:cursor-grabbing",
+        motion,
       )}
     >
       <div
         data-toast-body
         aria-hidden={compact || undefined}
         className={cx(
-          "flex items-start gap-2 py-1.5 pr-1.5 pl-3 transition-opacity duration-150 ease-out",
+          "flex items-center gap-2 py-2 pr-2 pl-4 transition-opacity duration-150 ease-out",
           compact && "opacity-0",
         )}
       >
-        <div className="flex min-w-0 flex-1 items-start gap-2">
-          <span className="flex h-6 shrink-0 items-center">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <span className="flex size-3 shrink-0 items-center justify-center" data-toast-tone={toast.tone}>
             {spinning ? (
-              <Spinner size={13} />
+              <Spinner size={12} />
             ) : (
-              <Icon
-                size={14}
+              <span
                 className={cx(
+                  "size-1.5 rounded-full",
                   settled && "rc-dot-in",
-                  error ? "text-danger" : toast.tone === "success" ? "text-success" : "text-fg-muted",
+                  error ? "bg-danger" : toast.tone === "success" ? "bg-success" : "bg-fg-muted",
                 )}
               />
             )}
@@ -225,12 +228,14 @@ function ToastCard({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {toast.action && <ToastActionButton toast={toast} compact={compact} />}
+          {/* Out of the way until the card is hovered or the button is focused: a click on the
+              card already dismisses it, so the × is the visible way, not the only one. */}
           <button
             type="button"
             aria-label="Dismiss"
             tabIndex={compact ? -1 : undefined}
             onClick={() => dismissToast(toast.id)}
-            className="flex size-6 items-center justify-center rounded-full text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
+            className="-ml-1 flex size-6 w-0 items-center justify-center overflow-hidden rounded-full text-fg-faint opacity-0 transition-[width,margin,opacity] duration-150 ease-out group-hover:ml-0 group-hover:w-6 group-hover:opacity-100 hover:bg-fill hover:text-fg focus-visible:ml-0 focus-visible:w-6 focus-visible:opacity-100 active:bg-fill-strong"
           >
             <X size={12} />
           </button>
@@ -248,18 +253,9 @@ function ToastCard({
   );
 }
 
-const ACTION_ICONS: Record<string, (props: { size?: number }) => ReactNode> = {
-  Undo: Undo2,
-  Open: ArrowUpRight,
-  "Release page": ExternalLink,
-  Restart: RotateCcw,
-  "Move…": FolderOpen,
-};
-
 function ToastActionButton({ toast, compact }: { toast: Toast; compact: boolean }) {
   const action = toast.action;
   if (!action) return null;
-  const ActionIcon = ACTION_ICONS[action.label];
   return (
     <button
       type="button"
@@ -268,16 +264,34 @@ function ToastActionButton({ toast, compact }: { toast: Toast; compact: boolean 
         action.run();
         dismissToast(toast.id);
       }}
-      className="flex h-6 items-center gap-1 rounded-full bg-accent/12 pr-3 pl-2 font-medium whitespace-nowrap text-accent hover:bg-accent/18 active:bg-accent/24"
+      className="flex h-6 items-center rounded-full px-3 text-sub font-medium whitespace-nowrap text-fg ring-1 ring-border-strong ring-inset hover:bg-fill active:bg-fill-strong"
     >
-      {ActionIcon && <ActionIcon size={13} />}
       {action.label}
     </button>
   );
 }
 
+/** The stack's place in the window for a position. */
+function anchorStyle(position: ToastPosition): CSSProperties {
+  switch (position) {
+    case "bottom-left":
+      return { left: TOAST_INSET, bottom: TOAST_INSET };
+    case "top-right":
+      return { right: TOAST_INSET, top: TOAST_TOP };
+    case "top-center":
+      return { left: "50%", top: TOAST_TOP, transform: "translateX(-50%)" };
+    default:
+      return { right: TOAST_INSET, bottom: TOAST_INSET };
+  }
+}
+
 export function Toaster() {
   const toasts = useApp((s) => s.toasts);
+  const [position] = useToastPosition();
+  const fromTop = toastFromTop(position);
+  // Toward the stack's open side: up from the bottom, down from the top.
+  const away = fromTop ? 1 : -1;
+  const sign = toastSwipeSign(position);
   const section = useRef<HTMLElement>(null);
   const [hovering, setHovering] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -358,8 +372,9 @@ export function Toaster() {
     <section
       ref={section}
       aria-label="Notifications"
-      className="pointer-events-none fixed z-50 flex w-[380px] max-w-[calc(100vw-32px)] flex-col items-stretch"
-      style={{ right: TOAST_INSET, bottom: TOAST_INSET }}
+      data-position={position}
+      className="pointer-events-none fixed z-50 flex w-[340px] max-w-[calc(100vw-32px)] flex-col items-stretch"
+      style={anchorStyle(position)}
       onPointerEnter={() => setHovering(true)}
       onPointerLeave={() => setHovering(false)}
       onFocus={() => setFocused(true)}
@@ -372,7 +387,7 @@ export function Toaster() {
             up to a card behind, so the stack does not fold before it is reached. */}
         {expanded && stackHeight > 0 && (
           <span
-            className="pointer-events-auto absolute inset-x-0 bottom-0"
+            className={cx("pointer-events-auto absolute inset-x-0", fromTop ? "top-0" : "bottom-0")}
             style={{ height: stackHeight }}
             aria-hidden
           />
@@ -382,16 +397,21 @@ export function Toaster() {
             key={toast.id}
             id={toast.id}
             onHeight={measure}
-            className={index === 0 ? "relative" : "absolute inset-x-0 bottom-0"}
+            className={cx(
+              index === 0 ? "relative" : cx("absolute inset-x-0", fromTop ? "top-0" : "bottom-0"),
+              fromTop ? "origin-top" : "origin-bottom",
+            )}
             style={{
               zIndex: toasts.length - index,
               transform: expanded
-                ? `translateY(${-(offsets[index] ?? 0)}px) scale(1)`
-                : `translateY(${-index * TOAST_PEEK}px) scale(${Math.max(0.9, 1 - index * TOAST_SHRINK)})`,
+                ? `translateY(${away * (offsets[index] ?? 0)}px) scale(1)`
+                : `translateY(${away * index * TOAST_PEEK}px) scale(${Math.max(0.9, 1 - index * TOAST_SHRINK)})`,
             }}
           >
             <ToastCard
               toast={toast}
+              sign={sign}
+              fromTop={fromTop}
               compactHeight={!expanded && index > 0 ? heights[toasts[0]?.id ?? ""] : undefined}
               onDrag={setDragging}
             />
