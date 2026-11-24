@@ -561,7 +561,7 @@
 6 apps/desktop/src/ui/SettingsOrchestration.tsx
 7 apps/desktop/src/ui/SettingsScope.tsx
 13 apps/desktop/src/ui/ShortcutSettings.tsx
-180 apps/desktop/src/ui/Sidebar.tsx
+178 apps/desktop/src/ui/Sidebar.tsx
 2 apps/desktop/src/ui/SidebarDensitySetting.tsx
 55 apps/desktop/src/ui/SidebarThreadRow.tsx
 2 apps/desktop/src/ui/SidebarToolbar.tsx
@@ -610,7 +610,7 @@
 1 apps/desktop/src/ui/replyActions.test.ts
 9 apps/desktop/src/ui/replyActions.ts
 5 apps/desktop/src/ui/settingsIndex.test.ts
-26 apps/desktop/src/ui/settingsIndex.ts
+25 apps/desktop/src/ui/settingsIndex.ts
 32 apps/desktop/src/ui/settingsKit.tsx
 21 apps/desktop/src/ui/sidebarDrag.tsx
 1 apps/desktop/src/ui/syncRows.test.ts

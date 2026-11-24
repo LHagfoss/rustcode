@@ -89,8 +89,7 @@ const SETTINGS: Record<SettingsSection, string> = {
   keyboard: "Keyboard",
   usage: "Usage",
   statistics: "Statistics: recorded tokens and reported cost",
-  advanced: "Advanced: request bodies and setup",
-  diagnostics: "Diagnostics: server status, logs and debug report",
+  diagnostics: "Diagnostics: server status, logs, debug report, request bodies and setup",
   about: "About",
 };
 

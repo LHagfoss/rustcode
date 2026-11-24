@@ -910,7 +910,7 @@ composer's keys stay outside the table.
   `operational_events` in one Markdown block for a GitHub issue, with
   tokens, API keys, email addresses and the home folder (`~`) taken out
   (`src/lib/diagnostics.ts`); *Save…* writes it where the save panel says.
-- **Settings › Advanced › Record request bodies.** The two payload-capture
+- **Settings › Diagnostics › Record request bodies.** The two payload-capture
   switches (`docs/data-store.md` › Captured payloads), off by default:
   *Provider requests (built-in harness)* for the built-in harness's request
   bodies, *Harness messages* for each ACP or Codex JSON-RPC message. They are
@@ -2050,7 +2050,7 @@ a skeleton, and reads either form through `src/lib/releaseNotes.ts`: one badge
 per category, GitHub's `by @user in <pull url>` tail as a compact `#N` link,
 and the release commit and full-changelog line out of the way. A first install
 and a dev build skip
-it; Settings › Advanced opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser
+it; Settings › About opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser
 shows both with sample data.
 
 `src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›

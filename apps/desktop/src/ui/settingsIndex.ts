@@ -472,24 +472,23 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "per thread totals delegates subagents children cost tokens",
   },
 
-  // ------------------------------------------------------------ Advanced
   {
-    section: "advanced",
+    section: "diagnostics",
     title: "Record request bodies",
     keywords: "capture payload telemetry privacy redact clip query_data store request body response",
   },
   {
-    section: "advanced",
+    section: "diagnostics",
     title: "Provider requests (built-in harness)",
     keywords: "capture payload provider request body response redact privacy built-in",
   },
   {
-    section: "advanced",
+    section: "diagnostics",
     title: "Harness messages",
     keywords: "capture payload harness acp jsonrpc protocol message redact privacy",
   },
   {
-    section: "advanced",
+    section: "diagnostics",
     title: "Agent setup",
     keywords: "setup onboarding install sign in harness start over run again",
   },

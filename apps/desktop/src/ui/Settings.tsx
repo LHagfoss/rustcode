@@ -83,12 +83,11 @@ import {
   ShieldCheck,
   Smartphone,
   Stethoscope,
-  TerminalSquare,
   X,
 } from "./icons";
 import { HEADER_HEIGHT, SidebarCluster } from "./MainHeader";
 import { RestartToApply } from "./RestartToApply";
-import { AboutPage, AdvancedPage, STATUS_READ_MS } from "./SettingsAbout";
+import { AboutPage, STATUS_READ_MS } from "./SettingsAbout";
 import { AppearancePage } from "./SettingsAppearance";
 import { ConnectionsPage } from "./SettingsConnections";
 import { OrchestrationPage } from "./SettingsOrchestration";
@@ -120,6 +119,7 @@ const StatisticsPage = lazy(() => import("./StatisticsPage").then((m) => ({ defa
 
 import { refreshServerService, useMachines } from "../state/machines";
 import { useSettingsAttention } from "../state/settingsAttention";
+import { type SettingsNavPage, SettingsSectionList } from "./SettingsSectionList";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
 import {
   Action,
@@ -139,11 +139,7 @@ import {
 
 const UsagePage = lazy(() => import("./UsagePage").then((m) => ({ default: m.UsagePage })));
 
-interface Page {
-  id: SettingsSection;
-  label: string;
-  icon: typeof Gear;
-}
+type Page = SettingsNavPage;
 
 /**
  * The nav, top to bottom: pages, then groups of pages under a heading. One
@@ -190,7 +186,6 @@ const NAV: { heading?: string; pages: Page[] }[] = [
   {
     heading: "System",
     pages: [
-      { id: "advanced", label: "Advanced", icon: TerminalSquare },
       { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
       { id: "about", label: "About", icon: Info },
     ],
@@ -849,36 +844,38 @@ export function SettingsNav() {
       data-focus-area="sections"
       className="rc-in flex h-full min-h-0 flex-col gap-3 px-3 pb-3 outline-none"
     >
-      <div className="flex h-8 shrink-0 items-center gap-2 rounded-md bg-fill-subtle px-2 text-body focus-within:bg-fill">
-        <Search size={16} className="shrink-0 text-fg-faint" />
-        <input
-          ref={field}
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setActive(0);
-          }}
-          onKeyDown={onFieldKey}
-          placeholder="Search settings"
-          aria-label="Search settings"
-          {...noTextHelpers}
-          className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
-        />
-        {query ? (
-          <button
-            type="button"
-            aria-label="Clear search"
-            onClick={() => {
-              clear();
-              field.current?.focus();
+      <div className="gutter-stable shrink-0">
+        <div className="flex h-8 items-center gap-2 rounded-lg bg-fill-subtle px-2 text-body focus-within:bg-fill">
+          <Search size={16} className="shrink-0 text-fg-faint" />
+          <input
+            ref={field}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActive(0);
             }}
-            className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
-          >
-            <X size={12} strokeWidth={2.5} />
-          </button>
-        ) : (
-          <Kbd>/</Kbd>
-        )}
+            onKeyDown={onFieldKey}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            {...noTextHelpers}
+            className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
+          />
+          {query ? (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => {
+                clear();
+                field.current?.focus();
+              }}
+              className="flex size-4 shrink-0 items-center justify-center rounded-xs text-fg-faint hover:text-fg"
+            >
+              <X size={12} strokeWidth={2.5} />
+            </button>
+          ) : (
+            <Kbd>/</Kbd>
+          )}
+        </div>
       </div>
       <div ref={resultsScroll} className="scroll-stable flex min-h-0 flex-1 flex-col gap-4 pb-1">
         {query.trim() ? (
@@ -923,36 +920,12 @@ export function SettingsNav() {
             <p className="px-2 py-1.5 text-caption text-fg-muted">Nothing matches “{query.trim()}”.</p>
           )
         ) : (
-          NAV.map((group) => (
-            <div key={group.heading ?? group.pages[0]?.id} className="flex flex-col gap-1">
-              {group.heading && (
-                <div className="px-2 pb-0.5 font-medium text-callout text-fg-muted">{group.heading}</div>
-              )}
-              {group.pages.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  aria-current={s.id === section ? "page" : undefined}
-                  aria-description={attention[s.id]}
-                  onClick={() => openSettings(s.id)}
-                  className={cx(
-                    "flex h-8 items-center gap-2 rounded-md px-2 text-left font-medium text-body",
-                    s.id === section ? "bg-fill text-fg" : "text-fg-muted hover:bg-fill hover:text-fg",
-                  )}
-                >
-                  <s.icon size={16} strokeWidth={1.85} className="shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                  {attention[s.id] && (
-                    <span
-                      data-testid={`settings-attention-${s.id}`}
-                      title={attention[s.id]}
-                      className="size-1.5 shrink-0 rounded-full bg-warning"
-                    />
-                  )}
-                </button>
-              ))}
-            </div>
-          ))
+          <SettingsSectionList
+            groups={NAV}
+            section={section}
+            attention={attention}
+            onOpen={(id) => openSettings(id)}
+          />
         )}
       </div>
     </nav>
@@ -1090,7 +1063,6 @@ export function SettingsPage() {
                 {section === "keyboard" && <ShortcutsPage />}
                 {section === "usage" && <UsagePage />}
                 {section === "statistics" && <StatisticsPage />}
-                {section === "advanced" && <AdvancedPage />}
                 {section === "diagnostics" && <DiagnosticsPage />}
                 {section === "about" && <AboutPage />}
               </Suspense>

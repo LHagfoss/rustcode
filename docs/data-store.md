@@ -499,7 +499,7 @@ does not turn any of this on. Project configuration cannot enable either key:
 capturing payloads is a choice about the user's own data, so it is global
 only, like skill roots.
 
-The app writes both keys from Settings › Advanced › **Record request bodies**
+The app writes both keys from Settings › Diagnostics › **Record request bodies**
 through `_rustcode/config/telemetry` / `_rustcode/config/telemetry/set`
 (`engine/src/acp/telemetry.rs`), which edits only these two keys and leaves the
 rest of `config.toml` as it was. The engine reads them from the config it

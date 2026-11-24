@@ -59,7 +59,6 @@ export type SettingsSection =
   | "keyboard"
   | "usage"
   | "statistics"
-  | "advanced"
   | "diagnostics"
   | "about";
 
@@ -80,19 +79,20 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "outside",
   "usage",
   "statistics",
-  "advanced",
   "diagnostics",
   "about",
 ];
 
 /**
  * What an older build's section id opens: the Harnesses page keeps its old
- * `agents` id, so a stored `harnesses` opens it, and Engine became Advanced.
+ * `agents` id, so a stored `harnesses` opens it, and Engine and later Advanced became part of
+ * Diagnostics.
  * An id no build knows opens General.
  */
 const LEGACY_SECTIONS: Record<string, SettingsSection> = {
   harnesses: "agents",
-  engine: "advanced",
+  engine: "diagnostics",
+  advanced: "diagnostics",
 };
 
 /** A section id as the panel shows it, with the fallbacks a stored old one needs. */

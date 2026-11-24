@@ -24,7 +24,6 @@ import {
 import { encodeQr } from "../lib/qr";
 import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
 import {
-  gatewayLine,
   installServer,
   refreshMachines,
   refreshServerService,
@@ -40,11 +39,13 @@ import {
   tickRemotePairing,
 } from "../state/remoteAccess";
 import { remainingPairingSeconds } from "../state/remotePairing";
+import { remoteSummary } from "../state/remoteSummary";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { connectionDirection, peerOutbound } from "./connectionDirection";
 import { Smartphone, WifiOff } from "./icons";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
+import { RemoteStatusBanner } from "./RemoteStatusBanner";
 import { ServerProblems } from "./ServerProblems";
 import { Action, Chip, Group, Row, SettingsHeaderActions, withCode } from "./settingsKit";
 
@@ -174,16 +175,14 @@ export function RemoteAccessPage() {
           Pair device
         </Action>
       </SettingsHeaderActions>
-      {remoteError && (
-        <p className="mb-6 text-callout text-warning">Could not read the gateway: {remoteError}</p>
-      )}
+      <RemoteStatusBanner summary={remoteSummary(remote, server, remoteError)} />
 
       <Group>
         <Row
           title="Network access"
           subtitle="Let paired devices reach every thread on this computer."
           hint="Starts the gateway, across all projects, not only the ones open here. Off stops remote access for this computer, including a share a terminal started; paired devices stay paired."
-          status={status}
+          status={enabled && sharedCount > 0 ? status : undefined}
         >
           <Switch
             label="Network access"
@@ -199,9 +198,6 @@ export function RemoteAccessPage() {
           status={
             <>
               {server && !server.installed ? <span className="tabular">{serverLine(server)}</span> : null}
-              {server?.gateway.remoteEnabled || server?.gateway.running ? (
-                <span className="block">Gateway: {gatewayLine(server.gateway, server.installed)}</span>
-              ) : null}
               <ServerProblems problems={server?.problems} />
             </>
           }
@@ -216,14 +212,7 @@ export function RemoteAccessPage() {
           )}
         </Row>
         <Row
-          title={
-            <>
-              Gateway address
-              <Chip tone={gateway?.connected ? "ok" : enabled ? "warn" : "idle"}>
-                {gateway?.connected ? "Connected" : enabled ? "Starting" : "Off"}
-              </Chip>
-            </>
-          }
+          title="Gateway address"
           subtitle="What a phone on this network dials."
           hint={withCode("The terminal's `/remote status` shows the same address.")}
           status={
@@ -241,16 +230,7 @@ export function RemoteAccessPage() {
               "The gateway is not running."
             )
           }
-        >
-          {gateway?.advertisedAddress && (
-            <Action
-              aria-label="Copy the gateway address"
-              onClick={() => void copyText(gateway.advertisedAddress!)}
-            >
-              Copy
-            </Action>
-          )}
-        </Row>
+        />
         {(unavailable || expired) && (
           <Row
             title="Pair a device"

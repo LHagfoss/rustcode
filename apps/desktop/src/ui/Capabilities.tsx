@@ -17,6 +17,7 @@ import { failureSummary, mcpCopy, runOnMachines, secretTargetReason } from "../s
 import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { createSkillWithAgent } from "../state/threadOpen";
+import { Fold } from "./Fold";
 import { ChevronRight, Copy, Ellipsis, FolderOpen, Pencil, RefreshCw, Search } from "./icons";
 import { cardInset, cx, MenuContent, menuItem, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
 import { SettingsScopeBar } from "./SettingsScope";
@@ -461,7 +462,9 @@ function McpSection({
       }
       footer={data.configPath ? `Saved in ${data.configPath}` : undefined}
     >
-      {adding && <AddServer run={run} onDone={() => setAdding(false)} />}
+      <Fold open={adding}>
+        <AddServer run={run} onDone={() => setAdding(false)} />
+      </Fold>
       {shown.length === 0 && !adding && (
         <Row
           title={filter ? "No matching servers" : "No MCP servers"}
@@ -664,8 +667,8 @@ function McpRow({
           ) : null}
         </div>
       </div>
-      {open && (
-        <div className="rc-expand flex flex-col gap-3 px-4 pb-3 pl-10">
+      <Fold open={open}>
+        <div className="flex flex-col gap-3 px-4 pb-3 pl-10">
           <dl className="grid grid-cols-[88px_1fr] gap-x-3 gap-y-1 text-callout">
             <dt className="text-fg-faint">Command</dt>
             <dd className="selectable m-0 truncate font-mono text-fg-muted" title={s.target}>
@@ -728,7 +731,7 @@ function McpRow({
             </Action>
           )}
         </div>
-      )}
+      </Fold>
     </div>
   );
 }
@@ -844,7 +847,9 @@ function SkillsSection({
           </div>
         }
       />
-      {creating && <NewSkill onDone={() => setCreating(false)} />}
+      <Fold open={creating}>
+        <NewSkill onDone={() => setCreating(false)} />
+      </Fold>
       {groups.length === 0 && (
         <Group>
           <Row title={filter ? "No matching skills" : "No skills yet"} />

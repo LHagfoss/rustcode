@@ -56,6 +56,7 @@ import {
   useApp,
 } from "../state/store";
 import { HarnessCommandFields } from "./AddHarness";
+import { Fold } from "./Fold";
 import { HarnessIcon } from "./HarnessIcon";
 import { Check, ChevronRight, Minus, Plus, RefreshCw, X } from "./icons";
 import { CopyButton } from "./Markdown";
@@ -581,7 +582,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           detail={result ? result.text : harness.error}
         />
       )}
-      {open && (
+      <Fold open={open}>
         <div className="ml-11 flex flex-col gap-4 pb-1">
           {hasAccounts && <AccountsList harness={harness} />}
           <section className="flex flex-col gap-2">
@@ -642,7 +643,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
             </button>
           )}
         </div>
-      )}
+      </Fold>
     </div>
   );
 }
