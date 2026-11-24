@@ -60,7 +60,8 @@ fn rfc3339(time: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 /// The status the desktop app shows: a settled thread stays `done` while its
-/// last turn winds down, a live turn comes next, then what the store holds.
+/// last turn winds down, a live turn comes next (from the share, else from the
+/// turn locks of whichever process runs it), then what the store holds.
 fn status_of(directory: &Path, activity: Option<SessionActivity>) -> &'static str {
     let stored = read_json(&directory.join("status.json"))
         .and_then(|value| value.get("status")?.as_str().map(str::to_owned));
@@ -72,11 +73,20 @@ fn status_of(directory: &Path, activity: Option<SessionActivity>) -> &'static st
         Some(SessionActivity::AwaitingApproval | SessionActivity::AwaitingQuestion) => {
             "needs_input"
         }
-        Some(SessionActivity::Idle) | None => match stored.as_deref() {
-            Some("review") => "review",
-            Some("stalled") => "stalled",
-            _ => "idle",
+        Some(SessionActivity::Idle) => stored_status(stored.as_deref()),
+        None => match crate::sessions::activity::activity_in(directory) {
+            (_, true) => "needs_input",
+            (true, false) => "running",
+            (false, false) => stored_status(stored.as_deref()),
         },
+    }
+}
+
+fn stored_status(stored: Option<&str>) -> &'static str {
+    match stored {
+        Some("review") => "review",
+        Some("stalled") => "stalled",
+        _ => "idle",
     }
 }
 

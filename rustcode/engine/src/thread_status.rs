@@ -265,6 +265,7 @@ fn change(session_id: &str, edit: impl FnOnce(&mut Live)) {
         let mut live = live().lock().unwrap_or_else(|error| error.into_inner());
         let entry = live.entry(session_id.to_owned()).or_default();
         edit(entry);
+        crate::sessions::activity::publish(session_id, entry.turns > 0, entry.waits > 0);
         if entry.turns == 0 && entry.waits == 0 {
             live.remove(session_id);
         }

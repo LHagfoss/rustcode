@@ -852,10 +852,6 @@ discover them:
 - On Unix, a fallback `/tmp/rustcode-<uid>` socket directory can remain after
   gateway shutdown. Socket files are removed; the private directory is retained
   to avoid racing another process using it. Clients never need that path.
-- A saved thread's `status` is `running` or `needs_input` only while it is in
-  the live list. The desktop app shares at most 32 threads at once, the most
-  recently used, so a turn running in a thread beyond those shows the status
-  stored for it (usually `idle`) until it is shared.
 - `resync_required` with reason `gateway_restarted` is never sent as an
   event: a restart closes the connection, and the reason reaches the client
   in `attached.resync`.
@@ -1063,7 +1059,7 @@ written), `message_count` and `state`. Hosts that list `projects` or
 
 | Field | Meaning |
 | --- | --- |
-| `status` | `idle`, `running`, `needs_input` (an approval or question waits), `stalled`, `review` or `done` (settled). A settled thread stays `done` while its last turn winds down; `running` and `needs_input` come from the live list, the rest from the store. A later host may add values: show one you do not know as `idle`. |
+| `status` | `idle`, `running`, `needs_input` (an approval or question waits), `stalled`, `review` or `done` (settled). A settled thread stays `done` while its last turn winds down. `running` and `needs_input` come from the live list for a shared thread; for any other, from the advisory locks the engine running a turn holds on `turn.lock` (while a turn runs) and `wait.lock` (while an approval or question waits) in the thread's directory, so a thread beyond the desktop's 32 shares still reports its turn. The rest comes from the store. A later host may add values: show one you do not know as `idle`. |
 | `pinned` | Pinned in the desktop sidebar (`pin_thread`). `false` when absent. |
 | `snoozed_until` | RFC 3339 time a snoozed thread wakes; absent when not snoozed. Read-only: a device cannot snooze. |
 | `harness` | `rustcode` for the built-in harness, else the harness id (`claude-code`, `codex`, `pi`, …). |

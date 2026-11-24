@@ -450,3 +450,47 @@ fn a_project_outside_the_roots_can_be_started_in() {
         assert_eq!(code, Some(RemoteErrorCode::InvalidRequest));
     }
 }
+
+/// Holds a thread's lock as the engine running it would.
+fn hold(dir: &Path, file: &str) -> std::fs::File {
+    let lock = std::fs::File::create(dir.join(file)).unwrap();
+    lock.try_lock().unwrap();
+    lock
+}
+
+#[test]
+fn an_unshared_thread_reports_the_turn_another_process_runs() {
+    let config = tempfile::tempdir().unwrap();
+    let id = thread(config.path(), "Running in the app", None);
+    let dir = directory(config.path(), &id);
+    write(
+        config.path(),
+        &id,
+        "status.json",
+        serde_json::json!({"status": "review"}),
+    );
+
+    let turn = hold(&dir, "turn.lock");
+    assert_eq!(status_of(&dir, None), "running");
+    assert_eq!(
+        status_of(&dir, Some(SessionActivity::Idle)),
+        "review",
+        "a share's own activity wins"
+    );
+    let wait = hold(&dir, "wait.lock");
+    assert_eq!(status_of(&dir, None), "needs_input");
+    drop((turn, wait));
+    assert_eq!(
+        status_of(&dir, None),
+        "review",
+        "a released lock reads as free"
+    );
+    write(
+        config.path(),
+        &id,
+        "status.json",
+        serde_json::json!({"status": "done"}),
+    );
+    let _turn = hold(&dir, "turn.lock");
+    assert_eq!(status_of(&dir, None), "done");
+}
