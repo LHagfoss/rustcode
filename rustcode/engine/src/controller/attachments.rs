@@ -183,8 +183,40 @@ pub fn read_thread_image_chunk(
             crate::harness::native_artifact_dir(&record.harness, &native, home)
         }));
     }
-    let path = thread_image_in(path_or_uri, &roots, &scratch_roots(), home.as_deref())?;
+    let scratch = scratch_roots();
+    let path = match thread_image_in(path_or_uri, &roots, &scratch, home.as_deref()) {
+        Err(error) if error == OUTSIDE_THREAD_FOLDERS => {
+            let checkouts = roots
+                .first()
+                .map(|cwd| repository_checkouts(cwd))
+                .unwrap_or_default();
+            if checkouts.is_empty() {
+                return Err(error);
+            }
+            roots.extend(checkouts);
+            thread_image_in(path_or_uri, &roots, &scratch, home.as_deref())?
+        }
+        other => other?,
+    };
     read_chunk(&path, offset, true)
+}
+
+const OUTSIDE_THREAD_FOLDERS: &str =
+    "outside the thread's folders, its repository's worktrees and the temporary folders";
+
+/// Every checkout of `dir`'s repository: the main one and its worktrees.
+fn repository_checkouts(dir: &Path) -> Vec<PathBuf> {
+    crate::worktrees::git(dir, &["worktree", "list", "--porcelain"])
+        .map(|listed| checkouts_in_porcelain(&listed))
+        .unwrap_or_default()
+}
+
+fn checkouts_in_porcelain(porcelain: &str) -> Vec<PathBuf> {
+    porcelain
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// The OS scratch folders a thread's pictures may also be in.
@@ -233,7 +265,7 @@ fn thread_image_in(
         .filter_map(|root| fs::canonicalize(root).ok())
         .any(|root| real.starts_with(root));
     if !inside {
-        return Err("outside the thread's folders and the temporary folders".to_owned());
+        return Err(OUTSIDE_THREAD_FOLDERS.to_owned());
     }
     Ok(real)
 }
@@ -547,6 +579,22 @@ mod tests {
         assert!(read_chunk(&relative, 0, true).unwrap().done);
         let renamed = resolve("notes.png").unwrap();
         assert!(read_chunk(&renamed, 0, true).is_err());
+    }
+
+    #[test]
+    fn lists_every_checkout_of_a_repository() {
+        let porcelain = "worktree /home/ada/code/rustcode\nHEAD 1a2b\nbranch refs/heads/main\n\n\
+                         worktree /home/ada/code/worktrees/rustcode-streak\nHEAD 3c4d\n\
+                         branch refs/heads/feat/streak\n\nworktree /tmp/detached\nHEAD 5e6f\ndetached\n";
+        assert_eq!(
+            checkouts_in_porcelain(porcelain),
+            [
+                PathBuf::from("/home/ada/code/rustcode"),
+                PathBuf::from("/home/ada/code/worktrees/rustcode-streak"),
+                PathBuf::from("/tmp/detached"),
+            ]
+        );
+        assert!(checkouts_in_porcelain("").is_empty());
     }
 
     #[test]
