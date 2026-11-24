@@ -996,7 +996,7 @@
 6 rustcode/engine/src/themes/tests.rs
 1 rustcode/engine/src/themes/watch.rs
 4 rustcode/engine/src/thread_index.rs
-11 rustcode/engine/src/thread_parent.rs
+7 rustcode/engine/src/thread_parent.rs
 11 rustcode/engine/src/thread_status.rs
 3 rustcode/engine/src/tools/context_archive.rs
 10 rustcode/engine/src/tools/dispatch.rs

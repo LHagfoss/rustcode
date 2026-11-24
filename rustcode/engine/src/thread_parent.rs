@@ -24,7 +24,11 @@ use crate::message_origin::{AGENT_HEADING as HEADING, delivered_title};
 /// `store_meta` key and version of the one-time pass for threads that predate
 /// the record. A later release that can read more bumps the version.
 const BACKFILL_KEY: &str = "thread_parents_version";
-const BACKFILL_VERSION: i64 = 1;
+const BACKFILL_VERSION: i64 = 2;
+
+/// First-message prefix written by the scheduler daemon for both legacy Loops
+/// and Jobs (`orchestration::local_threads::loop_prompt`).
+const SCHEDULED_HEADING: &str = "This is a scheduled run of the ";
 
 /// What the one-time pass did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,6 +37,8 @@ pub(crate) struct Report {
     pub(crate) threads: usize,
     /// Threads with no parent record that the heading showed were delegated.
     pub(crate) delegated: usize,
+    /// Threads with no scheduled_job record that the first message showed were job runs.
+    pub(crate) scheduled_runs: usize,
 }
 
 /// The parent `session/new` named in `_meta.rustcode.parent`, when it is a
@@ -119,9 +125,20 @@ fn linked_parent(links: &[Value], child: &str) -> Option<(String, Option<String>
     Some((id.to_owned(), title))
 }
 
-/// Records the parent of every thread an older release started and the
-/// heading still shows. Idempotent: a thread with a record is skipped, and a
-/// transcript without the heading's bytes is not parsed at all.
+/// The job name a scheduled run's first message opens with (`job “…”` or legacy `Loop “…”`).
+fn scheduled_job_name(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix(SCHEDULED_HEADING)?;
+    let after_kind = rest
+        .strip_prefix("job “")
+        .or_else(|| rest.strip_prefix("Loop “"))?;
+    let (name, _) = after_kind.split_once("”.")?;
+    let name = name.trim();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Records the parent and scheduled-job marker of every thread an older release
+/// started whose first message still shows it. Idempotent: recorded threads are
+/// skipped, and transcripts without either heading's bytes are not parsed at all.
 pub(crate) fn backfill() -> Report {
     let links = crate::data_store::load_link_book()
         .ok()
@@ -133,39 +150,48 @@ pub(crate) fn backfill() -> Report {
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
-        // Most transcripts never carried a task from an agent: one byte scan
-        // is enough to know, and only a match is worth parsing.
-        if !bytes
+        let has_parent_heading = bytes
             .windows(HEADING.len())
-            .any(|window| window == HEADING.as_bytes())
-        {
+            .any(|window| window == HEADING.as_bytes());
+        let has_scheduled_heading = bytes
+            .windows(SCHEDULED_HEADING.len())
+            .any(|window| window == SCHEDULED_HEADING.as_bytes());
+        if !has_parent_heading && !has_scheduled_heading {
             continue;
         }
         let Some(id) = crate::sessions::session_id_from_path(&path) else {
             continue;
         };
-        if crate::sessions::load_session_parent(&id).is_some() {
+        let needs_parent =
+            has_parent_heading && crate::sessions::load_session_parent(&id).is_none();
+        let needs_scheduled =
+            has_scheduled_heading && crate::sessions::load_session_scheduled_job(&id).is_none();
+        if !needs_parent && !needs_scheduled {
             continue;
         }
         let Ok(history) = serde_json::from_slice::<Vec<ChatMessage>>(&bytes) else {
             continue;
         };
-        let Some(title) = first_task(&history).and_then(delivered_title) else {
+        let Some(first) = first_task(&history) else {
             continue;
         };
-        let (parent_id, parent_title) = match linked_parent(&links, &id) {
-            Some((parent_id, parent_title)) => (Some(parent_id), parent_title),
-            None => (None, None),
-        };
-        let parent = rustcode_session::SessionParent {
-            id: parent_id,
-            // The heading is what the parent was called when it handed the
-            // task over; the link, when it survives, has it as it was later.
-            title: parent_title.or_else(|| Some(title.to_owned())),
-            relationship: Some(SessionRelationship::Delegate),
-        };
-        crate::sessions::save_session_parent(&id, &parent);
-        report.delegated += 1;
+        if needs_parent && let Some(title) = delivered_title(first) {
+            let (parent_id, parent_title) = match linked_parent(&links, &id) {
+                Some((parent_id, parent_title)) => (Some(parent_id), parent_title),
+                None => (None, None),
+            };
+            let parent = rustcode_session::SessionParent {
+                id: parent_id,
+                title: parent_title.or_else(|| Some(title.to_owned())),
+                relationship: Some(SessionRelationship::Delegate),
+            };
+            crate::sessions::save_session_parent(&id, &parent);
+            report.delegated += 1;
+        }
+        if needs_scheduled && let Some(job_name) = scheduled_job_name(first) {
+            crate::sessions::save_session_scheduled_job(&id, job_name);
+            report.scheduled_runs += 1;
+        }
     }
     report
 }
@@ -186,7 +212,11 @@ pub(crate) fn ensure_ready() {
     }
     crate::logger::operational_event(
         "thread_parents.backfill",
-        serde_json::json!({ "threads": report.threads, "delegated": report.delegated }),
+        serde_json::json!({
+            "threads": report.threads,
+            "delegated": report.delegated,
+            "scheduled_runs": report.scheduled_runs,
+        }),
     );
 }
 
@@ -329,5 +359,57 @@ mod tests {
         let before = crate::sessions::load_session_parent(&child);
         backfill();
         assert_eq!(crate::sessions::load_session_parent(&child), before);
+    }
+
+    #[test]
+    fn scheduled_run_headings_recover_both_loop_and_job_names() {
+        assert_eq!(
+            scheduled_job_name(
+                "This is a scheduled run of the Loop “Check Daily Dev”. Nobody is watching it run.\n\nCheck feed"
+            ),
+            Some("Check Daily Dev")
+        );
+        assert_eq!(
+            scheduled_job_name(
+                "This is a scheduled run of the job “CI watch”. Nobody is watching it run."
+            ),
+            Some("CI watch")
+        );
+        assert_eq!(
+            scheduled_job_name("This is a scheduled run of the job “”. Nobody is watching."),
+            None
+        );
+        assert_eq!(scheduled_job_name("Check Daily Dev"), None);
+    }
+
+    #[test]
+    fn the_pass_marks_legacy_scheduled_runs_once() {
+        let run = crate::sessions::create_detached_session();
+        assert!(!run.is_empty());
+        let dir = crate::sessions::get_active_session_dir(&run).expect("session dir");
+        let history = vec![
+            ChatMessage::new(
+                "user",
+                "This is a scheduled run of the Loop “Check Daily Dev”. Nobody is watching it run.\n\nCheck feed",
+            ),
+            ChatMessage::new("assistant", "Nothing to report."),
+        ];
+        std::fs::write(
+            dir.join("history.json"),
+            serde_json::to_string(&history).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(crate::sessions::load_session_scheduled_job(&run), None);
+        let first = backfill();
+        assert!(first.scheduled_runs >= 1);
+        assert_eq!(
+            crate::sessions::load_session_scheduled_job(&run).as_deref(),
+            Some("Check Daily Dev")
+        );
+
+        let before = crate::sessions::load_session_scheduled_job(&run);
+        backfill();
+        assert_eq!(crate::sessions::load_session_scheduled_job(&run), before);
     }
 }

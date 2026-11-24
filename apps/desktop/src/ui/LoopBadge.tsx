@@ -2,7 +2,10 @@
 // loop sends every run to. What belongs to which loop comes from the loops list (state/loops.ts).
 
 import { useEffect } from "react";
+import { runThreadKey } from "../state/fleetLoops";
 import { refreshLoopThreads, useLoopThreads } from "../state/loops";
+import { selfName, useLocalIdentity, useMachines } from "../state/machines";
+import { useApp } from "../state/store";
 import { Repeat } from "./icons";
 import { LinkBadge } from "./Links";
 import { Tooltip } from "./primitives";
@@ -20,14 +23,21 @@ export function LoopBadge({ threadId }: { threadId: string }) {
   );
 }
 
-/** Read the loops once the engine's list is in, and again every few minutes. */
+/** Read the loops once the engine's list is in, whenever paired machines connect, and every few minutes. */
 export function useLoopBadges(ready: boolean): void {
+  const connectedKey = useApp((s) => s.connectedHosts.join(","));
+  const machines = useMachines((s) => s.machines);
+  const local = useLocalIdentity();
+  const localName = local.displayName ?? selfName();
   useEffect(() => {
     if (!ready) return;
-    void refreshLoopThreads();
-    const timer = setInterval(() => void refreshLoopThreads(), REFRESH_MS);
+    const remoteHosts = connectedKey ? connectedKey.split(",") : [];
+    const resolve = (loop: { host: string }, run: { machine?: string; threadId?: string }) =>
+      runThreadKey(loop, run, machines, localName);
+    void refreshLoopThreads(resolve, remoteHosts);
+    const timer = setInterval(() => void refreshLoopThreads(resolve, remoteHosts), REFRESH_MS);
     return () => clearInterval(timer);
-  }, [ready]);
+  }, [ready, connectedKey, machines, localName]);
 }
 
 /** A sidebar row's badges before its title: working for another thread, and run by a loop. */
