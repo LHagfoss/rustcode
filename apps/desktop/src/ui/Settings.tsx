@@ -95,6 +95,7 @@ import { OrchestrationPage } from "./SettingsOrchestration";
 import { useLightsInset } from "./Titlebar";
 import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
 
+const ConnectorGallery = lazy(() => import("./Connectors").then((m) => ({ default: m.ConnectorGallery })));
 const CapabilitiesPage = lazy(() => import("./Capabilities").then((m) => ({ default: m.CapabilitiesPage })));
 
 const DiagnosticsPage = lazy(() => import("./DiagnosticsPage").then((m) => ({ default: m.DiagnosticsPage })));
@@ -878,6 +879,7 @@ function ConnectionsPage() {
           <Row title="No accounts" />
         )}
       </Group>
+      <ConnectorGallery />
     </>
   );
 }

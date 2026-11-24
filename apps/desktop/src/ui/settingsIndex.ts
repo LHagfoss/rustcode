@@ -260,6 +260,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   { section: "connections", title: "Not signed in", keywords: "auth login account token" },
   { section: "connections", title: "No accounts", keywords: "provider sign in auth login" },
+  {
+    section: "connections",
+    title: "Apps",
+    keywords:
+      "connectors plugins integrations apps gallery linear notion jira confluence sentry vercel cloudflare zapier canva mcp oauth connect",
+  },
 
   // ------------------------------------------------------------ Capabilities
   {

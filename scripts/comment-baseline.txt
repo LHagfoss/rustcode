@@ -36,7 +36,7 @@
 4 apps/desktop/src/acp/mock.notices.test.ts
 8 apps/desktop/src/acp/mock.remote.test.ts
 3 apps/desktop/src/acp/mock.tools.test.ts
-115 apps/desktop/src/acp/mock.ts
+114 apps/desktop/src/acp/mock.ts
 3 apps/desktop/src/acp/mockFixtures.ts
 3 apps/desktop/src/acp/mockFolders.ts
 4 apps/desktop/src/acp/mockGit.ts
