@@ -4,7 +4,7 @@ The one-line installers and Homebrew are covered in the [README](../README.md#in
 This page covers supported platforms, building from source, the desktop app and
 updating.
 
-The installers put the `rc` orchestrator CLI on your machine and, unless you
+The installers put the `rc` CLI on your machine and, unless you
 pass `--no-app` (`-NoApp` on Windows), the RustCode desktop app as well: see
 [Native desktop app](#native-desktop-app). Pass `--with-harness` (`-WithHarness`
 on Windows) to also install the standalone `rustcode` TUI/harness binary.
@@ -20,7 +20,7 @@ targets, but those targets are not covered by release CI.
 
 ## From Source (Rust / Cargo)
 
-The `rc` orchestrator CLI lives in `rustcode/cli` (`rustcode-cli`) and the
+The `rc` CLI lives in `rustcode/cli` (`rustcode-cli`) and the
 standalone `rustcode` TUI/harness lives in `harness` (`rustcode-harness`); the
 repository root is the engine library and has no binary target.
 

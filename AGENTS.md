@@ -2,10 +2,10 @@
 
 ## What RustCode is
 
-RustCode is the orchestrator: the app and the `rc` CLI that own threads,
-projects, settings and usage data, and run each thread on a harness (Codex,
-Claude Code, Gemini CLI, OpenCode, Pi, or the optional standalone `rustcode`
-TUI/harness in `harness/`). Query it from an agent with the
+RustCode is an agentic development environment (ADE): the app and the `rc`
+CLI that own threads, projects, settings and usage data, and run each thread
+on a harness (Codex, Claude Code, Gemini CLI, OpenCode, Pi, or the optional
+standalone `rustcode` TUI/harness in `harness/`). Query it from an agent with the
 `mcp__rustcode__*` tools, `rc threads list --all`, `rc threads path <id>`,
 `rc usage` (tokens and the cost each harness reported) and
 `rc data query "<sql>"` (the local data store, `docs/data-store.md`).
@@ -91,7 +91,7 @@ failure. Fix from the CI log and push again.
   seconds; it runs `bun install --frozen-lockfile` first when a new
   worktree has no `node_modules`), and `cargo fmt --check` and `cargo clippy --all-targets --
   -D warnings` in `apps/desktop/src-tauri` (its own Cargo workspace; CI runs
-  its tests). This is the product: the RustCode orchestrator app. Start from
+  its tests). This is the product: the RustCode app. Start from
   `docs/desktop.md` › "Status and roadmap" and follow `docs/design.md`.
 - Size caps: a Rust file may not pass 2,000 lines (`scripts/check-rust-size.py`,
   run in CI's lint job) nor a TypeScript one 1,500 (`apps/desktop/src/fileSize.test.ts`).
@@ -212,7 +212,7 @@ profile and stale dependency version leaves artifacts behind.
   long-lived: restart the server (`close`, then `open`) for a fresh check.
   After an edit, HMR serves the module under a `?t=` URL and the import
   returns a second, empty copy. `?updatePreview` stages the update row.
-- To test an engine change in the app, rebuild the orchestrator binary with
+- To test an engine change in the app, rebuild the `rc` binary with
   `cargo build -p rustcode-cli --bin rc`, then run `bun tauri dev` (it uses
   `target/debug/rc`). A plain `cargo build` does not rebuild that binary, and
   the app then talks to the old engine.

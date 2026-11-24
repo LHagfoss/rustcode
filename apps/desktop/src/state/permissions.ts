@@ -48,7 +48,7 @@ export const ALWAYS_ASKS: { title: string; why: string }[] = [
   },
   {
     title: "A delegate on a named account",
-    why: "Starting a thread on a signed-in account spends that account's usage. Trusted across your machines by default; turn off Settings › Orchestration › Let delegates use my named accounts without asking to approve each account per thread.",
+    why: "Starting a thread on a signed-in account spends that account's usage. Trusted across your machines by default; turn off Settings › Delegation › Let delegates use my named accounts without asking to approve each account per thread.",
   },
   {
     title: "Outside apps",

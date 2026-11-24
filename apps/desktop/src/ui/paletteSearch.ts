@@ -34,7 +34,7 @@ const PAGE_NAMES: Record<SettingsSection, string> = {
   appearance: "Appearance",
   keyboard: "Keyboard",
   agents: "Harnesses",
-  orchestration: "Orchestration",
+  orchestration: "Delegation",
   capabilities: "Capabilities",
   connections: "Connections",
   voice: "Voice & computer use",

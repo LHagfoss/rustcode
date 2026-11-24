@@ -138,7 +138,7 @@ export interface WakeContext {
   /** Each link target's last activity, for the stall notice and `wait_session`'s idle time. */
   activity?: Readonly<Record<string, LinkActivity>>;
   /**
-   * The batch window in ms (Settings › Orchestration, `wake-batch-seconds`). With one, a parent
+   * The batch window in ms (Settings › Delegation, `wake-batch-seconds`). With one, a parent
    * hears about its delegates when the oldest unreported finish or stall is that old, all in one
    * wake; a question for the user goes at once and takes whatever else is waiting along. Without
    * one (0 or unset) a settled child waits {@link WAKE_COALESCE_MS} for its siblings only while

@@ -4,7 +4,7 @@ use clap::Parser;
 #[command(
     name = "rc",
     version = env!("CARGO_PKG_VERSION"),
-    about = "RustCode orchestrator CLI: threads, config, harnesses, machines, remote access, and server"
+    about = "RustCode CLI: threads, config, harnesses, machines, remote access, and server"
 )]
 pub struct Cli {
     /// Check for and install the latest GitHub Release, using Homebrew for Homebrew installs
@@ -452,10 +452,7 @@ impl Cli {
 /// visible command is in exactly one (`help_groups_cover_every_command`);
 /// `config` lists its own commands.
 const HELP_GROUPS: &[(&str, &[&str])] = &[
-    (
-        "Orchestrator",
-        &["init", "acp", "doctor", "bench", "discord"],
-    ),
+    ("General", &["init", "acp", "doctor", "bench", "discord"]),
     (
         "Threads",
         &["threads", "export", "worktree", "usage", "data", "storage"],

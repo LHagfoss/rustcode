@@ -19,7 +19,7 @@ You need a recent stable Rust (1.85 or newer).
 ```bash
 git clone https://github.com/LHagfoss/rustcode.git
 cd rustcode
-cargo run -p rustcode-cli -- --help  # run the `rc` orchestrator CLI from source
+cargo run -p rustcode-cli -- --help  # run the `rc` CLI from source
 cargo run -p rustcode-harness        # run the standalone `rustcode` TUI harness from source
 ```
 
@@ -29,8 +29,8 @@ The repo has a few parts:
 
 | Path | What it is |
 | --- | --- |
-| `rustcode/engine` | The orchestrator & agent core: ACP server, harness manager, tools, sessions |
-| `rustcode/cli` | The lean `rc` orchestrator CLI and desktop app sidecar (no TUI deps) |
+| `rustcode/engine` | The app engine & agent core: ACP server, harness manager, tools, sessions |
+| `rustcode/cli` | The lean `rc` CLI and desktop app sidecar (no TUI deps) |
 | `harness/` | The standalone `rustcode` terminal harness (TUI and headless runner) |
 | `rustcode/core` | Shared crates |
 | `apps/desktop` | The RustCode app (Tauri + React) |
