@@ -621,6 +621,32 @@
             "session_id"
           ],
           "type": "object"
+        },
+        {
+          "description": "Every project the host's saved threads belong to, most recently\nupdated first. Read-only. Requires the `projects` host capability.",
+          "properties": {
+            "type": {
+              "const": "list_projects",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Push a `saved_sessions_changed` frame whenever a saved thread or a\nproject is added, changed or removed, until the connection ends.\nAnswered with `saved_sessions_subscribed` once the host holds the\nstate later frames are measured against: list after that answer.\nRequires the `saved_session_updates` host capability.",
+          "properties": {
+            "type": {
+              "const": "subscribe_saved_sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },

@@ -1,0 +1,37 @@
+{
+  "kind": "saved_sessions_changed",
+  "protocol_version": 1,
+  "sessions": [
+    {
+      "session_id": "20260714-091502-3fa2c1",
+      "title": "Fix the parser",
+      "project": "/Users/example/projects/parser",
+      "workspace": "/Users/example/worktrees/parser-fix",
+      "updated_at": "2026-07-14T09:40:12Z",
+      "message_count": 42,
+      "state": "saved",
+      "status": "review",
+      "pinned": true,
+      "snoozed_until": "2026-07-15T08:00:00Z",
+      "harness": "codex",
+      "model": "gpt-5.5",
+      "scheduled_job": "nightly-triage"
+    }
+  ],
+  "removed": [
+    "20260713-171233-9b0e44"
+  ],
+  "projects": [
+    {
+      "path": "/Users/example/projects/parser",
+      "name": "parser",
+      "thread_count": 12,
+      "running": true,
+      "needs_input": false,
+      "updated_at": "2026-07-14T09:40:12Z"
+    }
+  ],
+  "removed_projects": [
+    "/Users/example/projects/old"
+  ]
+}

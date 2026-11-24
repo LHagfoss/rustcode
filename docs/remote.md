@@ -184,7 +184,9 @@ already sent to the client.
 A host streams at most 32 live shares at once, the threads used most recently.
 That bound limits streaming, not what a device sees: every thread on the
 machine is in the paged `list_saved_sessions` list, newest first, with its
-project, title, last write and state, and a device opens one that is not
+project, title, last write, state, status, pin and harness, `list_projects`
+lists every project, `subscribe_saved_sessions` pushes their changes, and a
+device opens one that is not
 shared with `resume_session` (see [Saved sessions](#saved-sessions)). Prompts a
 device queues on a thread are dropped when sharing ends, and a share the
 gateway turns down is retried no more than once a minute.

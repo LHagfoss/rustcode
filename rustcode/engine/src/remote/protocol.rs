@@ -53,6 +53,11 @@ pub mod host_capability {
     pub const THREAD_SETTLE: &str = "thread_settle";
     /// `unsettle_thread`: return a settled thread to idle.
     pub const THREAD_UNSETTLE: &str = "thread_unsettle";
+    /// `list_projects`: every project the host's saved threads belong to.
+    pub const PROJECTS: &str = "projects";
+    /// `subscribe_saved_sessions`: `saved_sessions_changed` frames whenever a
+    /// saved thread or project is added, changed or removed.
+    pub const SAVED_SESSION_UPDATES: &str = "saved_session_updates";
 }
 
 /// Optional operations one session owner implements, in
@@ -63,6 +68,9 @@ pub mod session_capability {
     /// it; a terminal's and a session owner's do not.
     pub const HOST_THREADS: &str = "host_threads";
 }
+
+/// Most projects one `projects` result lists.
+pub const MAX_PROJECTS: usize = 500;
 
 /// Default and largest page of `list_saved_sessions`.
 pub const SAVED_SESSIONS_DEFAULT_LIMIT: u32 = 30;
@@ -251,11 +259,20 @@ pub enum RemoteOperation {
     UnsettleThread {
         session_id: String,
     },
+    /// Every project the host's saved threads belong to, most recently
+    /// updated first. Read-only. Requires the `projects` host capability.
+    ListProjects,
+    /// Push a `saved_sessions_changed` frame whenever a saved thread or a
+    /// project is added, changed or removed, until the connection ends.
+    /// Answered with `saved_sessions_subscribed` once the host holds the
+    /// state later frames are measured against: list after that answer.
+    /// Requires the `saved_session_updates` host capability.
+    SubscribeSavedSessions,
 }
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 30] = [
+    pub const NAMES: [&'static str; 32] = [
         "list_sessions",
         "list_directories",
         "create_session",
@@ -286,6 +303,8 @@ impl RemoteOperation {
         "unpin_thread",
         "settle_thread",
         "unsettle_thread",
+        "list_projects",
+        "subscribe_saved_sessions",
     ];
 
     pub fn name(&self) -> &'static str {
@@ -320,6 +339,8 @@ impl RemoteOperation {
             Self::UnpinThread { .. } => "unpin_thread",
             Self::SettleThread { .. } => "settle_thread",
             Self::UnsettleThread { .. } => "unsettle_thread",
+            Self::ListProjects => "list_projects",
+            Self::SubscribeSavedSessions => "subscribe_saved_sessions",
         }
     }
 
@@ -343,6 +364,8 @@ impl RemoteOperation {
                 | Self::UnpinThread { .. }
                 | Self::SettleThread { .. }
                 | Self::UnsettleThread { .. }
+                | Self::ListProjects
+                | Self::SubscribeSavedSessions
         )
     }
 
@@ -413,6 +436,9 @@ pub enum RemoteFrame {
     Response(RemoteResponse),
     Event(RemoteEventFrame),
     Sessions(RemoteSessionsFrame),
+    /// Pushed after `subscribe_saved_sessions` when saved threads or
+    /// projects change.
+    SavedSessionsChanged(RemoteSavedSessionsChanged),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -504,6 +530,16 @@ pub enum RemoteResult {
         session_id: String,
         settled: bool,
     },
+    /// The answer to `list_projects`.
+    Projects {
+        projects: Vec<RemoteProject>,
+        /// More than [`MAX_PROJECTS`] projects, or more than one frame holds,
+        /// exist; the least recently updated were left out.
+        truncated: bool,
+    },
+    /// `subscribe_saved_sessions` took effect: changes after this answer
+    /// arrive as `saved_sessions_changed` frames.
+    SavedSessionsSubscribed,
     /// One page of `list_saved_sessions`.
     SavedSessions {
         sessions: Vec<RemoteSavedSession>,
@@ -967,7 +1003,7 @@ pub struct RemoteChangedFile {
 }
 
 /// One saved session as `list_saved_sessions` reports it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteSavedSession {
     pub session_id: String,
     pub title: String,
@@ -997,12 +1033,74 @@ pub struct RemoteSavedSession {
     /// place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_in: Option<SavedSessionHolder>,
+    /// The thread's status as the desktop app shows it: `idle`, `running`,
+    /// `needs_input` (an approval or question waits), `stalled`, `review` or
+    /// `done` (settled). Absent from older hosts. A later release may add
+    /// values; a client shows one it does not know as `idle`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Pinned in the desktop app's sidebar. False from older hosts.
+    #[serde(default)]
+    pub pinned: bool,
+    /// RFC 3339 time a snoozed thread wakes; absent when it is not snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<String>,
+    /// The harness the thread runs on: `rustcode` for the built-in one, else
+    /// the harness id (`claude-code`, `codex`, `pi`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    /// The model or model profile recorded for the thread, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The scheduled job whose run this thread is. The desktop app shows such
+    /// threads under the job, not in the sidebar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_job: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// One project as `list_projects` and `saved_sessions_changed` report it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteProject {
+    /// The project's folder, the same value saved threads carry in `project`.
+    pub path: String,
+    /// The folder's name, as the desktop app's sidebar labels it.
+    pub name: String,
+    /// Saved threads in the project, settled ones included.
+    pub thread_count: u64,
+    /// A thread of the project has a turn running or waits on the user.
+    pub running: bool,
+    /// A thread of the project waits on an approval or a question.
+    pub needs_input: bool,
+    /// RFC 3339 time the project's most recently written thread was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+/// Saved threads and projects that changed since the previous frame (or since
+/// `saved_sessions_subscribed`). Each entry is whole: replace what the client
+/// holds under its `session_id` or `path`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteSavedSessionsChanged {
+    pub protocol_version: u32,
+    /// Added or changed threads, as `list_saved_sessions` reports them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<RemoteSavedSession>,
+    /// IDs of threads that are no longer saved on the host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<String>,
+    /// Added or changed projects, as `list_projects` reports them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<RemoteProject>,
+    /// Paths of projects that no longer have a saved thread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_projects: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SavedSessionState {
     /// No process holds it: `resume_session` opens it.
+    #[default]
     Saved,
     /// Shared and in the live list: attach to it.
     Shared,
@@ -1751,6 +1849,8 @@ mod tests {
             RemoteOperation::UnsettleThread {
                 session_id: String::new(),
             },
+            RemoteOperation::ListProjects,
+            RemoteOperation::SubscribeSavedSessions,
         ];
         assert_eq!(operations.len(), RemoteOperation::NAMES.len());
         for (operation, name) in operations.iter().zip(RemoteOperation::NAMES) {

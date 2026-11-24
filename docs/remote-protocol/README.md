@@ -71,9 +71,10 @@ prompts, messages) is never rewritten.
 | `session_id` | `thread_id` | field |
 | `session` | `thread` | field |
 | `sessions` | `threads` | field, and `kind` of the list push frame |
-| `subscribe_sessions`, `list_sessions`, `list_saved_sessions` | `subscribe_threads`, `list_threads`, `list_saved_threads` | operation `type` |
+| `subscribe_sessions`, `list_sessions`, `list_saved_sessions`, `subscribe_saved_sessions` | `subscribe_threads`, `list_threads`, `list_saved_threads`, `subscribe_saved_threads` | operation `type` |
 | `create_session`, `attach_session`, `detach_session`, `resume_session`, `set_session_settings` | `create_thread`, `attach_thread`, `detach_thread`, `resume_thread`, `set_thread_settings` | operation `type` |
-| `sessions`, `saved_sessions`, `session_created`, `session_resumed`, `session_settings_updated` | `threads`, `saved_threads`, `thread_created`, `thread_resumed`, `thread_settings_updated` | result `type` |
+| `sessions`, `saved_sessions`, `saved_sessions_subscribed`, `session_created`, `session_resumed`, `session_settings_updated` | `threads`, `saved_threads`, `saved_threads_subscribed`, `thread_created`, `thread_resumed`, `thread_settings_updated` | result `type` |
+| `saved_sessions_changed` | `saved_threads_changed` | `kind` of the saved-thread push frame |
 | `session_closed` | `thread_closed` | event `type` |
 | `session_changed` | `thread_changed` | close `reason` |
 | `stale_session` | `stale_thread` | error `code` |
@@ -502,7 +503,8 @@ client holds.
 the host-wide ones: `list_sessions`, `subscribe_sessions`, `get_request_status`,
 `list_directories`, `create_session`, `request_share`, `list_saved_sessions`,
 `resume_session`, `get_usage`, `get_settings`, `set_settings`, `pin_thread`,
-`unpin_thread`, `settle_thread` and `unsettle_thread`. Device identity
+`unpin_thread`, `settle_thread`, `unsettle_thread`, `list_projects` and
+`subscribe_saved_sessions`. Device identity
 comes from authentication and is never part of a frame.
 
 ## Operations
@@ -529,6 +531,8 @@ comes from authentication and is never part of a frame.
 | `set_settings` | gateway (`settings_set`) | `settings` | `invalid_request`, `internal` |
 | `pin_thread`, `unpin_thread` | gateway (`thread_pin`, `thread_unpin`) | `thread_pinned` | `invalid_request` |
 | `settle_thread`, `unsettle_thread` | gateway (`thread_settle`, `thread_unsettle`) | `thread_settled` | `invalid_request` |
+| `list_projects` | gateway (`projects`) | `projects` | `internal` |
+| `subscribe_saved_sessions` | gateway (`saved_session_updates`) | `saved_sessions_subscribed`, then `saved_sessions_changed` frames | |
 
 Any request can also be rejected with:
 
@@ -599,7 +603,8 @@ The `sessions` result also carries `capabilities`, the optional host-wide
 operations the gateway implements. It is absent from gateways that implement
 none; the flags are `saved_sessions`, `session_changes`,
 `thread_create_options`, `usage_summary`, `settings_get`, `settings_set`,
-`thread_pin`, `thread_unpin`, `thread_settle` and `thread_unsettle`. A client
+`thread_pin`, `thread_unpin`, `thread_settle`, `thread_unsettle`, `projects`
+and `saved_session_updates`. A client
 offers a feature only when its flag is listed; an older owner answers
 `get_changes` with `unsupported_operation`.
 `thread_create_options` is not a fixed feature of the gateway: it is listed
@@ -963,6 +968,10 @@ Discovery does not pair a device or grant access; a
 Authenticated clients can use `list_directories { path? }` to browse existing
 folders (default `~/`) and `create_session { path?, harness?, model? }` to
 create a session there. The latter returns `session_created { session }`.
+`path` must lie inside the home folder or a configured `[remote] roots`
+folder, or be exactly the `path` of a project `list_projects` reports, wherever
+that lies; a subfolder of such a project outside the roots is refused with
+`invalid_request`.
 
 A gateway routes that request to the running desktop app when one is sharing a
 thread: the app's shares advertise `host_threads` in their snapshot's
@@ -1037,12 +1046,31 @@ nothing holds.
 session was started; pass `next_cursor` back as `cursor` for the next page.
 `limit` is 1 to 100 (30 when absent). `query` keeps sessions whose title,
 workspace or ID contains it, ignoring case. Each entry has `session_id`,
-`title`, `project` (the recorded workspace directory, so a client groups
-threads by project; absent when unknown), `parent` (the thread this one was
+`title` (the title the desktop app shows, a rename included), `project` (the
+project the desktop app's sidebar files the thread under: a worktree's
+repository, else the repository recorded for its folder, else the folder;
+absent when no folder was recorded or the folder is a drive's root or
+RustCode's own data folder), `parent` (the thread this one was
 started from, the same `{ session_id, relationship }` the live list carries;
 absent for a top-level thread), `workspace` (absent for sessions
 that predate workspace recording), `updated_at` (when the transcript was last
-written), `message_count` and `state`:
+written), `message_count` and `state`. Hosts that list `projects` or
+`saved_session_updates` also send what the desktop sidebar shows:
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `idle`, `running`, `needs_input` (an approval or question waits), `stalled`, `review` or `done` (settled). A settled thread stays `done` while its last turn winds down. `running` and `needs_input` come from the live list for a shared thread; for any other, from the advisory locks the engine running a turn holds on `turn.lock` (while a turn runs) and `wait.lock` (while an approval or question waits) in the thread's directory, so a thread beyond the desktop's 32 shares still reports its turn. The rest comes from the store. A later host may add values: show one you do not know as `idle`. |
+| `pinned` | Pinned in the desktop sidebar (`pin_thread`). `false` when absent. |
+| `snoozed_until` | RFC 3339 time a snoozed thread wakes; absent when not snoozed. Read-only: a device cannot snooze. |
+| `harness` | `rustcode` for the built-in harness, else the harness id (`claude-code`, `codex`, `pi`, …). |
+| `model` | The model or model profile recorded for the thread, when known. |
+| `scheduled_job` | The scheduled job this thread is a run of. The desktop app shows these under the job, not in the sidebar; a client that mirrors the sidebar hides them. |
+
+All of them are optional to a client: an older host sends none. Unread marks
+and the sidebar's manual order live only in the desktop app's own storage, so
+no device sees them.
+
+`state` says what a client can do with the thread:
 
 | `state` | Meaning | What the client does |
 | --- | --- | --- |
@@ -1074,6 +1102,67 @@ when the process ends, so a lock left by a dead process does not count. A
 session without a recorded workspace, or whose
 workspace no longer exists, with `invalid_request`, an unknown ID with
 `not_found`; nothing is started for any of them.
+
+### Projects and keeping the thread list in sync
+
+`list_projects` (capability `projects`) returns every project the host's saved
+threads belong to, the same projects the desktop app's sidebar shows, whether
+or not any of their threads is open. It is read-only and host-wide. Projects are
+most recently updated first, the desktop's own default order; at most 500, and
+`truncated` says when more exist. Each has `path` (the value saved threads
+carry in `project`), `name` (the folder's name), `thread_count`, `running` (a
+thread's turn runs or waits on the user), `needs_input` (a thread waits on an
+approval or question) and `updated_at`. A folder the desktop app knows before
+its first thread, and the sidebar's manual project order, live only in the app
+and are not listed.
+
+```json
+{"protocol_version": 1, "request_id": "req-projects", "operation": {"type": "list_projects"}}
+```
+
+```json
+{"kind": "response", "protocol_version": 1, "request_id": "req-projects", "result": {"type": "projects", "projects": [{"path": "/Users/example/projects/parser", "name": "parser", "thread_count": 12, "running": true, "needs_input": false, "updated_at": "2026-07-14T09:40:12Z"}], "truncated": false}}
+```
+
+`subscribe_saved_sessions` (capability `saved_session_updates`) keeps a device's
+copy of the saved list and the projects current without paging through it
+again. The gateway answers `saved_sessions_subscribed` once it holds the state
+later changes are measured against, then pushes a `saved_sessions_changed`
+frame whenever a saved thread or project is added, changed or removed, until
+the connection ends. A client subscribes first, waits for the answer, then
+pages `list_saved_sessions` and calls `list_projects`; a change that races the
+listing arrives again in a frame, so applying both in arrival order converges.
+After a reconnect it does the same again.
+
+```json
+{"protocol_version": 1, "request_id": "req-saved-sub", "operation": {"type": "subscribe_saved_sessions"}}
+```
+
+```json
+{"kind": "response", "protocol_version": 1, "request_id": "req-saved-sub", "result": {"type": "saved_sessions_subscribed"}}
+```
+
+Each frame holds whole entries: `sessions` replaces the entry the client holds
+under each `session_id` (or adds it), `removed` lists thread IDs that are gone,
+`projects` replaces or adds projects by `path`, and `removed_projects` lists
+project paths with no thread left. Empty lists are left out. A large change is
+split over several frames, each within the frame limit. The gateway looks for
+changes about every 5 seconds while a device is subscribed, so a title, status,
+pin, snooze, new or deleted thread reaches the device within that time.
+
+```json
+{
+  "kind": "saved_sessions_changed", "protocol_version": 1,
+  "sessions": [{"session_id": "20260714-091502-3fa2c1", "title": "Fix the parser", "project": "/Users/example/projects/parser", "workspace": "/Users/example/worktrees/parser-fix", "updated_at": "2026-07-14T09:40:12Z", "message_count": 42, "state": "saved", "status": "review", "pinned": true, "snoozed_until": "2026-07-15T08:00:00Z", "harness": "codex", "model": "gpt-5.5", "scheduled_job": "nightly-triage"}],
+  "removed": ["20260713-171233-9b0e44"],
+  "projects": [{"path": "/Users/example/projects/parser", "name": "parser", "thread_count": 12, "running": true, "needs_input": false, "updated_at": "2026-07-14T09:40:12Z"}],
+  "removed_projects": ["/Users/example/projects/old"]
+}
+```
+
+A device that asked for thread names receives `saved_threads_subscribed` and
+`kind: "saved_threads_changed"` with `threads` and `thread_id` in place of
+`sessions` and `session_id`, and subscribes with `subscribe_saved_threads`.
 
 ### Usage, host settings and thread status
 
@@ -1152,9 +1241,8 @@ Answers are `thread_pinned { session_id, pinned }` and
 {"kind": "response", "protocol_version": 1, "request_id": "req-settle", "receipt": "applied", "result": {"type": "thread_settled", "session_id": "20260714-091502-3fa2c1", "settled": true}}
 ```
 
-Snooze is not in this list: it lives in the desktop app's own local storage,
-not in the engine or the host's session store, so a paired device cannot set
-it and no capability advertises it.
+Snooze is not in this list: a device reads a thread's `snoozed_until` in the
+saved list but cannot snooze or wake it, and no capability advertises that.
 
 ### Who sent a message
 

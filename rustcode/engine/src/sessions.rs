@@ -3,6 +3,7 @@
 //! [`crate::config`], which is the user's settings, so reading settings does not
 //! pull in the agent's history types.
 
+pub(crate) mod activity;
 mod export;
 mod open;
 mod store;

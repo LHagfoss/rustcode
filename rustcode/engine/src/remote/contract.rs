@@ -723,6 +723,18 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
             request("req-changes", session, RemoteOperation::GetChanges),
         ),
         (
+            "list_projects",
+            request("req-projects", None, RemoteOperation::ListProjects),
+        ),
+        (
+            "subscribe_saved_sessions",
+            request(
+                "req-saved-sub",
+                None,
+                RemoteOperation::SubscribeSavedSessions,
+            ),
+        ),
+        (
             "get_usage",
             request("req-usage", None, RemoteOperation::GetUsage),
         ),
@@ -1408,42 +1420,49 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
             None,
             RemoteResult::SavedSessions {
                 sessions: vec![
-                    RemoteSavedSession {
-                        session_id: SAVED_SESSION.to_owned(),
-                        title: "Fix the parser".to_owned(),
-                        project: Some("/Users/example/projects/parser".to_owned()),
-                        parent: None,
-                        workspace: Some("/Users/example/projects/parser".to_owned()),
-                        updated_at: Some("2026-07-14T09:40:12Z".to_owned()),
-                        message_count: 42,
-                        state: SavedSessionState::Saved,
-                        open_in: None,
-                    },
+                    golden_saved_session(),
                     RemoteSavedSession {
                         session_id: SESSION.0.to_owned(),
                         title: "Refactor the session store".to_owned(),
                         project: Some("/Users/example/projects/rustcode".to_owned()),
-                        parent: None,
                         workspace: Some("/Users/example/projects/rustcode".to_owned()),
                         updated_at: Some("2026-07-14T08:02:55Z".to_owned()),
                         message_count: 118,
                         state: SavedSessionState::Shared,
-                        open_in: None,
+                        status: Some("running".to_owned()),
+                        pinned: false,
+                        snoozed_until: None,
+                        harness: Some("claude-code".to_owned()),
+                        scheduled_job: None,
+                        ..golden_saved_session()
                     },
                     RemoteSavedSession {
                         session_id: "20260713-171233-9b0e44".to_owned(),
                         title: "Untitled".to_owned(),
-                        project: None,
-                        parent: None,
-                        workspace: None,
-                        updated_at: None,
                         message_count: 3,
                         state: SavedSessionState::Open,
                         open_in: Some(SavedSessionHolder::App),
+                        status: Some("idle".to_owned()),
+                        ..RemoteSavedSession::default()
                     },
                 ],
                 next_cursor: Some("20260713-171233-9b0e44".to_owned()),
             },
+        ),
+        response(
+            "projects",
+            "req-projects",
+            None,
+            RemoteResult::Projects {
+                projects: vec![golden_project()],
+                truncated: false,
+            },
+        ),
+        response(
+            "saved_sessions_subscribed",
+            "req-saved-sub",
+            None,
+            RemoteResult::SavedSessionsSubscribed,
         ),
         response(
             "share_request_sent",
@@ -1852,7 +1871,47 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                 ],
             }),
         ),
+        (
+            "saved_sessions_changed".to_owned(),
+            RemoteFrame::SavedSessionsChanged(RemoteSavedSessionsChanged {
+                protocol_version: REMOTE_PROTOCOL_VERSION,
+                sessions: vec![golden_saved_session()],
+                removed: vec!["20260713-171233-9b0e44".to_owned()],
+                projects: vec![golden_project()],
+                removed_projects: vec!["/Users/example/projects/old".to_owned()],
+            }),
+        ),
     ]
+}
+
+/// A saved thread with every optional field the sidebar shows.
+fn golden_saved_session() -> RemoteSavedSession {
+    RemoteSavedSession {
+        session_id: SAVED_SESSION.to_owned(),
+        title: "Fix the parser".to_owned(),
+        project: Some("/Users/example/projects/parser".to_owned()),
+        workspace: Some("/Users/example/worktrees/parser-fix".to_owned()),
+        updated_at: Some("2026-07-14T09:40:12Z".to_owned()),
+        message_count: 42,
+        status: Some("review".to_owned()),
+        pinned: true,
+        snoozed_until: Some("2026-07-15T08:00:00Z".to_owned()),
+        harness: Some("codex".to_owned()),
+        model: Some("gpt-5.5".to_owned()),
+        scheduled_job: Some("nightly-triage".to_owned()),
+        ..RemoteSavedSession::default()
+    }
+}
+
+fn golden_project() -> RemoteProject {
+    RemoteProject {
+        path: "/Users/example/projects/parser".to_owned(),
+        name: "parser".to_owned(),
+        thread_count: 12,
+        running: true,
+        needs_input: false,
+        updated_at: Some("2026-07-14T09:40:12Z".to_owned()),
+    }
 }
 
 /// Every committed file as `(path relative to CONTRACT_DIR, contents)`.
