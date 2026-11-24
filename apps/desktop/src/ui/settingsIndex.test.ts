@@ -68,7 +68,8 @@ describe("settings search", () => {
     // The Harnesses page kept its old `agents` id and Engine became Advanced;
     // nothing else moved.
     expect(settingsSection("harnesses")).toBe("agents");
-    expect(settingsSection("engine")).toBe("advanced");
+    expect(settingsSection("engine")).toBe("diagnostics");
+    expect(settingsSection("advanced")).toBe("diagnostics");
     expect(settingsSection("usage")).toBe("usage");
     expect(settingsSection("orchestration")).toBe("orchestration");
     expect(settingsSection("voice")).toBe("voice");

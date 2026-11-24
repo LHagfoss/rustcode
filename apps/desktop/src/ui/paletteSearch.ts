@@ -43,7 +43,6 @@ const PAGE_NAMES: Record<SettingsSection, string> = {
   outside: "Outside agents",
   usage: "Usage",
   statistics: "Statistics",
-  advanced: "Advanced",
   diagnostics: "Diagnostics",
   about: "About",
 };

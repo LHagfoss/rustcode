@@ -235,7 +235,8 @@ function RecordRequestBodiesGroup() {
   );
 }
 
-export function AdvancedPage() {
+/** Diagnostics' last groups: recording request bodies, and running agent setup again. */
+export function CaptureAndSetupGroups() {
   return (
     <>
       <RecordRequestBodiesGroup />
