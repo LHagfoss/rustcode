@@ -16,6 +16,7 @@ import { useApp } from "../state/store";
 import { formatTokens } from "../state/thread";
 import { isRunning } from "../state/turn";
 import {
+  modelGroup,
   periodTotals,
   type Share,
   sharePercent,
@@ -287,7 +288,7 @@ export function ModelsCard({ month }: { month?: UsageRow[] }) {
   const costs = useMemo(() => {
     const byModel = new Map<string, UsageRow[]>();
     for (const row of month ?? []) {
-      const key = row.model || "Default model";
+      const key = modelGroup(row);
       byModel.set(key, [...(byModel.get(key) ?? []), row]);
     }
     return new Map([...byModel].map(([key, rows]) => [key, costOfRows(rows)]));

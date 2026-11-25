@@ -237,13 +237,16 @@ describe("the dashboard's splits", () => {
       row({ day: "2026-11-01", harness: "codex", turns: 9, input: 10, output: 5 }),
       row({ day: "2026-11-20", harness: "codex", turns: 1, input: 1, output: 1 }),
       row({ day: "2026-11-21", harness: "claude-code", model: undefined, turns: 3 }),
+      row({ day: "2026-11-22", harness: "claude-code", model: "claude-opus-5-5", turns: 2 }),
+      row({ day: "2026-11-23", harness: "claude-code", model: "opus", turns: 2 }),
     ];
     expect(sharesBy(rows, "harness", "2026-11-10")).toEqual([
-      { key: "claude-code", turns: 3, tokens: 0, part: 0.75 },
-      { key: "codex", turns: 1, tokens: 2, part: 0.25 },
+      { key: "claude-code", turns: 7, tokens: 0, part: 0.875 },
+      { key: "codex", turns: 1, tokens: 2, part: 0.125 },
     ]);
     expect(sharesBy(rows, "model").map((share) => [share.key, share.turns])).toEqual([
-      ["gpt-6-luna", 10],
+      ["GPT 6 Luna", 10],
+      ["Opus 5.5", 4],
       ["Default model", 3],
     ]);
   });

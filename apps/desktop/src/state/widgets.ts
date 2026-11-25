@@ -5,7 +5,7 @@
 // pure — no React, no store — so the screen and its tests share one answer.
 
 import type { UsageRow } from "../acp/rustcode";
-import type { SessionSummary } from "../acp/types";
+import { modelName, type SessionSummary } from "../acp/types";
 import { sameProject } from "./orchestration";
 import { DAY_MS } from "./period";
 
@@ -201,13 +201,17 @@ export interface Share {
  * A report's rows added up by harness or by model from `since` on, busiest first. A model row
  * that names no model is the harness's default, so it is counted under "Default model".
  */
+/** The name a row's model is counted under: ids and aliases of one model share it (`opus`, `claude-opus-5-5`). */
+export function modelGroup(row: UsageRow): string {
+  return modelName(row.model) || "Default model";
+}
+
 export function sharesBy(rows: readonly UsageRow[], key: "harness" | "model", since = ""): Share[] {
   const groups = new Map<string, { turns: number; tokens: number }>();
   let all = 0;
   for (const row of rows) {
     if (since && (row.day ?? "") < since) continue;
-    const name =
-      (key === "model" ? row.model : row.harness) || (key === "model" ? "Default model" : "unknown");
+    const name = key === "model" ? modelGroup(row) : row.harness || "unknown";
     const group = groups.get(name) ?? { turns: 0, tokens: 0 };
     group.turns += row.turns;
     group.tokens += (row.input ?? 0) + (row.output ?? 0);
