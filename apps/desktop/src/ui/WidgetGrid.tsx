@@ -1,7 +1,7 @@
 /**
  * The new-thread overview's grid and its edit mode: cards are dragged by their grip to a new
  * place (the others make room as the pointer passes over them), widened or narrowed, removed and
- * added back from a tray. The arrangement lives in `state/widgetLayout.ts`.
+ * added back from a gallery of the removed cards. The arrangement lives in `state/widgetLayout.ts`.
  */
 
 import {
@@ -11,6 +11,7 @@ import {
   type PointerEvent,
   type ReactNode,
   useContext,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -367,7 +368,6 @@ export function WidgetGrid({
             {render(slot.id)}
           </FrameContext.Provider>
         ))}
-        {isEditing && <AddTray hidden={hidden} layout={layout} />}
         {!isEditing && layout.length === 0 && (
           <div className="col-span-full flex items-center justify-center gap-2 py-6 text-caption text-fg-muted">
             The overview is empty.
@@ -377,6 +377,7 @@ export function WidgetGrid({
           </div>
         )}
       </div>
+      {isEditing && <AddTray hidden={hidden} layout={layout} />}
       {dragId && ghost && (
         <div
           aria-hidden
@@ -393,10 +394,15 @@ export function WidgetGrid({
 
 function AddTray({ hidden, layout }: { hidden: WidgetId[]; layout: WidgetSlot[] }) {
   const changed = !sameLayout(layout, DEFAULT_LAYOUT);
+  const tray = useRef<HTMLElement>(null);
+  useEffect(() => {
+    tray.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, []);
   return (
     <section
+      ref={tray}
       aria-label="Add cards"
-      className="col-span-full flex flex-col gap-2 rounded-xl border border-accent/35 border-dashed p-3"
+      className="mt-2 flex flex-col gap-2 rounded-xl border border-accent/35 border-dashed p-3"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-caption font-medium text-fg-muted">
@@ -415,14 +421,21 @@ function AddTray({ hidden, layout }: { hidden: WidgetId[]; layout: WidgetSlot[] 
         </span>
       </div>
       {hidden.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-1.5">
           {hidden.map((id) => (
-            <Tooltip key={id} label={WIDGET_BLURBS[id]}>
-              <Pill quiet onClick={() => setWidgetLayout(addWidget(layout, id))}>
-                <Plus size={12} />
-                {WIDGET_NAMES[id]}
-              </Pill>
-            </Tooltip>
+            <button
+              key={id}
+              type="button"
+              aria-label={`Add ${WIDGET_NAMES[id]}`}
+              onClick={() => setWidgetLayout(addWidget(layout, id))}
+              className="flex items-start gap-2 rounded-lg border border-border px-3 py-2 text-left hover:bg-fill-subtle"
+            >
+              <Plus size={12} className="mt-0.5 shrink-0 text-accent" aria-hidden />
+              <span className="flex min-w-0 flex-col">
+                <span className="text-caption font-medium text-fg">{WIDGET_NAMES[id]}</span>
+                <span className="text-caption text-fg-muted">{WIDGET_BLURBS[id]}</span>
+              </span>
+            </button>
           ))}
         </div>
       )}
