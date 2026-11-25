@@ -62,6 +62,10 @@ export interface PaletteAction {
   disabled?: string;
   /** The heading it is listed under (ui/paletteSearch.ts); none is Actions. */
   group?: string;
+  /** Listed only once something is typed, so the full list keeps to what is used often. */
+  searchOnly?: boolean;
+  /** The part of its label a query must name for it to lead the results (`Chat` of `Settings: Chat`). */
+  name?: string;
   run: () => void;
 }
 

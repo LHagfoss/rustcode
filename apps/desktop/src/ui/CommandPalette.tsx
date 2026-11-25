@@ -73,26 +73,29 @@ import { FilterMenu, SortMenu } from "./SidebarToolbar";
 
 export type { PaletteAction };
 
-/** Every Settings page, by its id: a `Record` so a page added to `SettingsSection` must be named here. */
-const SETTINGS: Record<SettingsSection, string> = {
-  general: "General",
-  chat: "Chat",
-  permissions: "Permissions: default access and remembered approvals",
-  agents: "Harnesses: install, sign in, models and text generation",
-  orchestration: "Delegation: delegates, workflows and presets",
-  voice: "Voice & computer use: dictation and browser tools",
-  connections: "Connections",
-  capabilities: "Capabilities: skills and MCP servers",
-  remote: "Remote access: phones and paired devices",
-  machines: "Machines: other computers to run threads on",
-  outside: "Outside agents: other apps that use RustCode's tools",
-  appearance: "Appearance",
-  keyboard: "Keyboard",
-  usage: "Usage",
-  statistics: "Statistics: recorded tokens and reported cost",
-  diagnostics: "Diagnostics: server status, logs, debug report, request bodies and setup",
-  about: "About",
+/** Every Settings page, by its id, with what it holds: a `Record` so a page added to `SettingsSection` must be named here. */
+const SETTINGS: Record<SettingsSection, [name: string, holds?: string]> = {
+  general: ["General"],
+  chat: ["Chat"],
+  permissions: ["Permissions", "default access and remembered approvals"],
+  agents: ["Harnesses", "install, sign in, models and text generation"],
+  orchestration: ["Delegation", "delegates, workflows and presets"],
+  voice: ["Voice & computer use", "dictation and browser tools"],
+  connections: ["Connections"],
+  capabilities: ["Capabilities", "skills and MCP servers"],
+  remote: ["Remote access", "phones and paired devices"],
+  machines: ["Machines", "other computers to run threads on"],
+  outside: ["Outside agents", "other apps that use RustCode's tools"],
+  appearance: ["Appearance"],
+  keyboard: ["Keyboard"],
+  usage: ["Usage"],
+  statistics: ["Statistics", "recorded tokens and reported cost"],
+  diagnostics: ["Diagnostics", "server status, logs, debug report, request bodies and setup"],
+  about: ["About"],
 };
+
+/** Pages an action of their own already opens (Open Usage, Statistics), so the palette lists them once. */
+const PAGES_WITH_ACTIONS: ReadonlySet<SettingsSection> = new Set(["usage", "statistics"]);
 
 /** Actions other views add (board, review, …), so the palette lists them without knowing them. */
 const extra: (() => PaletteAction[])[] = [];
@@ -254,18 +257,29 @@ export function baseActions(): PaletteAction[] {
       keys: shortcutHint("toggle-sidebar"),
       run: toggleSidebar,
     },
-    ...(Object.entries(SETTINGS) as [SettingsSection, string][]).map(
-      ([id, label]): PaletteAction => ({
-        id: `settings-${id}`,
-        // The page the sidebar's Settings button opened (its Escape closes it) is named for what
-        // that button did; the rest are the pages inside Settings.
-        label: id === "general" ? "Open Settings" : `Settings: ${label}`,
-        icon: Gear,
-        keys: id === "general" ? shortcutHint("settings") : undefined,
-        words: id === "general" ? "open preferences general" : "preferences",
-        run: () => openSettings(id),
-      }),
-    ),
+    ...(Object.entries(SETTINGS) as [SettingsSection, [string, string?]][])
+      .filter(([id]) => !PAGES_WITH_ACTIONS.has(id))
+      .map(
+        ([id, [name, holds]]): PaletteAction =>
+          id === "general"
+            ? {
+                id: `settings-${id}`,
+                label: "Open Settings",
+                icon: Gear,
+                keys: shortcutHint("settings"),
+                words: "open preferences general",
+                run: () => openSettings(id),
+              }
+            : {
+                id: `settings-${id}`,
+                label: `Settings: ${name}`,
+                name,
+                icon: Gear,
+                words: `preferences ${holds ?? ""}`,
+                searchOnly: true,
+                run: () => openSettings(id),
+              },
+      ),
     {
       id: "theme-system",
       label: "Appearance: System",
@@ -315,7 +329,13 @@ function highlight(text: string, query: string) {
 
 type Result =
   | { kind: "thread"; id: string; title: string; detail: string; open: boolean }
-  | { kind: "action"; action: PaletteAction };
+  | { kind: "action"; action: PaletteAction; lead?: boolean };
+
+/** The heading an action is listed under: the best matches above the threads, then Actions and each search group. */
+function groupOf(result: Result | undefined): string | undefined {
+  if (result?.kind !== "action") return undefined;
+  return result.lead ? "Best matches" : (result.action.group ?? "Actions");
+}
 
 export function CommandPalette() {
   const open = useApp((s) => s.switcherOpen);
@@ -361,7 +381,7 @@ export function CommandPalette() {
   const results = useMemo<Result[]>(() => {
     const all = [...baseActions(), ...extra.flatMap((p) => p())];
     const actions = ranked(
-      all.filter((a) => !q || matches(`${a.label} ${a.words ?? ""} ${a.detail ?? ""}`, q)),
+      all.filter((a) => (q ? matches(`${a.label} ${a.words ?? ""} ${a.detail ?? ""}`, q) : !a.searchOnly)),
       q,
     ).map((action): Result => ({ kind: "action", action }));
     // Settings rows, projects, pull requests and shortcuts, each under its heading after the actions.
@@ -407,13 +427,17 @@ export function CommandPalette() {
 
     // Direct destinations are useful immediately. Keep keyword-only matches below threads.
     const destinations = [...actions.slice(0, 12), ...found];
-    const leads = (result: Result) =>
+    const leads = (result: Result): result is Extract<Result, { kind: "action" }> =>
       result.kind === "action" &&
       !result.action.disabled &&
       (result.action.group === undefined || result.action.group === "Settings") &&
-      titleMatches(result.action.label, q);
+      titleMatches(result.action.name ?? result.action.label, q);
     const leading = destinations.filter(leads).slice(0, LEADING_ACTIONS);
-    return [...leading, ...threads, ...destinations.filter((result) => !leading.includes(result))];
+    return [
+      ...leading.map((result): Result => ({ ...result, lead: true })),
+      ...threads,
+      ...destinations.filter((result) => !(leading as Result[]).includes(result)),
+    ];
   }, [sessions, q, scope, projectCwd, selectedId, actionsOnly, open, contentHits, sort, liveThreads]);
 
   const choose = (i: number) => {
@@ -426,14 +450,9 @@ export function CommandPalette() {
     }
   };
 
-  // A heading where the kind of result changes: Actions, then each search group.
   const heading = (i: number): string | undefined => {
-    const r = results[i];
-    if (r?.kind !== "action") return undefined;
-    const group = r.action.group ?? "Actions";
-    const before = results[i - 1];
-    const prev = before?.kind === "action" ? (before.action.group ?? "Actions") : undefined;
-    return group === prev ? undefined : group;
+    const group = groupOf(results[i]);
+    return group === groupOf(results[i - 1]) ? undefined : group;
   };
 
   return (

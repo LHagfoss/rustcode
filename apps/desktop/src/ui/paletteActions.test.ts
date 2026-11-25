@@ -123,6 +123,17 @@ describe("the buttons the sidebar's header and foot lost to ⌘K", () => {
     // Nothing typed keeps the order the palette lists: the actions as the app draws them.
     expect(ranked(actions(), "").map((a) => a.id)).toEqual(actions().map((a) => a.id));
   });
+
+  test("each settings page is listed once, by its short name, and only for a search", () => {
+    const pages = actions().filter((a) => a.id.startsWith("settings-") && a.id !== "settings-general");
+    expect(pages.every((a) => a.searchOnly)).toBe(true);
+    expect(pages.map((a) => a.id)).not.toContain("settings-usage");
+    expect(pages.map((a) => a.id)).not.toContain("settings-statistics");
+    const permissions = pages.find((a) => a.id === "settings-permissions")!;
+    expect(permissions.label).toBe("Settings: Permissions");
+    expect(matches(found(permissions), "remembered approvals")).toBe(true);
+    expect(actions().find((a) => a.id === "settings-general")?.searchOnly).toBeUndefined();
+  });
 });
 
 describe("the actions the sidebar's buttons and filter left for ⌘K", () => {
