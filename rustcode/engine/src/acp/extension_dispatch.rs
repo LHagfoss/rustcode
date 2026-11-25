@@ -1885,32 +1885,12 @@ pub(super) async fn dispatch_request(
         }
         "_rustcode/workflows/resume" => {
             let request: workflows::WorkflowResumeRequest = parse_params(params)?;
-            let asker = server.clients.info(client_id).orchestration;
-            let host = (asker >= 2)
-                .then(|| {
-                    super::preview::orchestration_client_for(
-                        true,
-                        &server.clients.session(&request.session_id),
-                    )
-                })
-                .flatten()
-                .map(|client| (client, asker));
-
+            let host = workflows::host(&server.clients, client_id, &request.session_id);
             responder.respond(workflows::resume(request, host))
         }
         "_rustcode/workflows/retry" => {
             let request: workflows::WorkflowRetryRequest = parse_params(params)?;
-            let asker = server.clients.info(client_id).orchestration;
-            let host = (asker >= 2)
-                .then(|| {
-                    super::preview::orchestration_client_for(
-                        true,
-                        &server.clients.session(&request.session_id),
-                    )
-                })
-                .flatten()
-                .map(|client| (client, asker));
-
+            let host = workflows::host(&server.clients, client_id, &request.session_id);
             responder.respond(workflows::retry(request, host))
         }
         "_rustcode/workflows/wake" => {

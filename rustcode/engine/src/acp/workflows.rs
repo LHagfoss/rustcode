@@ -69,6 +69,20 @@ pub(crate) fn resume(
     }
 }
 
+/// The orchestration host a resume or retry asked by `client_id` starts its
+/// workers through: that client's, when it advertised orchestration v2 or up.
+pub(crate) fn host(
+    clients: &Clients,
+    client_id: super::clients::ClientId,
+    session_id: &str,
+) -> Option<(Arc<dyn crate::preview::PreviewClient>, u8)> {
+    let asker = clients.info(client_id).orchestration;
+    (asker >= 2)
+        .then(|| super::preview::orchestration_client_for(true, &clients.session(session_id)))
+        .flatten()
+        .map(|client| (client, asker))
+}
+
 /// Retry one failed, timed-out or stopped run from its finished calls (#4383).
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
