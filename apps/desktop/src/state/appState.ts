@@ -409,6 +409,7 @@ export interface AppState {
     | { kind: "inbox" }
     | { kind: "board" }
     | { kind: "loops" }
+    | { kind: "dashboard" }
     | { kind: "review"; threadId: string }
     | { kind: "compare"; fanOut: string };
   /** Each thread's per-turn checkpoints (`_rustcode/checkpoints/list`). */

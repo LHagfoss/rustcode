@@ -2,7 +2,7 @@ import { isLoading, openError } from "../state/thread";
 // The chat view: the header (project / title, plan, usage, panels), then one row
 // holding the chat column — transcript and composer stack with error and
 // approval cards — and the right panel docked beside it (ui/RightPanel.tsx). A
-// new thread centres the composer and places its optional overview below it.
+// new thread centres the composer.
 
 import { Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -38,26 +38,16 @@ import { formatClock, isRunning, type ThreadState } from "../state/thread";
 import { retryStalledFirstMessage, retryThread } from "../state/threadActions";
 import { splitThreadKey } from "../state/threadKeys";
 import { failureHarness, turnErrorAdvice } from "../state/turnError";
-import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
 import { NewThreadLight, ThreadLight } from "./ChatLight";
 import { Composer } from "./Composer";
 import { DelegateStatusPanel } from "./DelegateStatus";
-import {
-  ChevronDown,
-  CircleCheck,
-  CircleDashed,
-  CircleDot,
-  ListChecks,
-  type LucideIcon,
-  PanelRight,
-} from "./icons";
+import { CircleCheck, CircleDashed, CircleDot, ListChecks, type LucideIcon, PanelRight } from "./icons";
 import { JobRunBar, useJobRun } from "./JobRunBar";
 import { LinkedThreads } from "./Links";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
 import { boundTips } from "./newThreadTips";
 import { PANEL_TOGGLE_LABEL, PanelToggle, useCardOverHeader } from "./PanelToggle";
 import { ProjectMark } from "./ProjectMark";
@@ -589,25 +579,6 @@ export function ChatView() {
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
   const stackRef = useRef<HTMLDivElement>(null);
   const [stackHeight, setStackHeight] = useState(140);
-  const [overview, setOverview] = useState(overviewExpanded);
-  // The overview stays mounted for the length of its exit, so closing fades and drops it instead of
-  // cutting it; once hidden it unmounts and costs nothing. `leaving` picks the exit over the entry.
-  const [overviewMounted, setOverviewMounted] = useState(overviewExpanded);
-  const [overviewLeaving, setOverviewLeaving] = useState(false);
-  const toggleOverview = () => {
-    const next = !overview;
-    setOverviewExpanded(next);
-    setOverview(next);
-    if (next) {
-      setOverviewLeaving(false);
-      setOverviewMounted(true);
-    } else if (motionAllowed()) {
-      setOverviewLeaving(true);
-    } else {
-      // Nothing to play where motion is off: the overview is simply gone.
-      setOverviewMounted(false);
-    }
-  };
   const [dismissed, setDismissed] = useState<string | undefined>();
   const [width, setWidth] = useState(1000);
   const [height, setHeight] = useState(800);
@@ -795,15 +766,7 @@ export function ChatView() {
             )}
           >
             <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2">
-              {isNew && (
-                <NewThreadHeading
-                  project={projectCwd}
-                  banner={showsBanner}
-                  // The overview's cards scroll in the room below the field and never move it, so
-                  // the tip above the field has its height either way: it stays while it is open.
-                  showTip={height >= NEW_THREAD_WIDGETS_MIN_HEIGHT}
-                />
-              )}
+              {isNew && <NewThreadHeading project={projectCwd} banner={showsBanner} showTip />}
               {stalled && thread && !offline && <StalledFirstMessage thread={thread} />}
               {thread && offline && (
                 <LaneItem over>
@@ -890,54 +853,6 @@ export function ChatView() {
               </LaneItem>
             </div>
           </div>
-          {isNew && height >= NEW_THREAD_WIDGETS_MIN_HEIGHT && (
-            <div
-              className="rc-lane-inset absolute bottom-0 mx-auto flex max-w-[1100px] flex-col items-center gap-2 pt-2"
-              style={{ top: `calc(50% + ${Math.round(stackHeight / 2)}px)` }}
-            >
-              <button
-                type="button"
-                aria-expanded={overview}
-                aria-controls="new-thread-overview"
-                className={cx(
-                  "flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted",
-                  // Over a picture the label needs the floating pills' glass to read.
-                  showsBanner ? "rc-glass hover:text-fg" : "hover:bg-fill-subtle",
-                )}
-                onClick={toggleOverview}
-              >
-                <ChevronDown
-                  size={14}
-                  aria-hidden
-                  className={cx("transition-transform duration-200 ease-snappy", overview && "rotate-180")}
-                />
-                {overview ? "Hide overview" : "Show overview"}
-              </button>
-              {overviewMounted && (
-                <div
-                  id="new-thread-overview"
-                  aria-hidden={!overview}
-                  // Nothing on this box animates: it holds the cards' glass, and a fade or a slide
-                  // here would take the blur with it. The classes pick the motion their contents
-                  // play (index.css, `rc-overview`).
-                  className={cx(
-                    "min-h-0 w-full overflow-y-auto pb-3",
-                    overviewLeaving ? "rc-overview-out" : "rc-overview-in",
-                  )}
-                  onAnimationEnd={(event) => {
-                    // The motion runs inside the cards, whose animation ends here (index.css,
-                    // `rc-overview`): only the exit's own end unmounts the box, and a widget's own
-                    // animation is filtered out by its name.
-                    if (!overviewLeaving || !event.animationName.startsWith("rc-overview")) return;
-                    setOverviewLeaving(false);
-                    setOverviewMounted(false);
-                  }}
-                >
-                  <NewThreadWidgets project={projectCwd} />
-                </div>
-              )}
-            </div>
-          )}
         </div>
         <RightPanel />
       </div>

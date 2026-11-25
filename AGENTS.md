@@ -206,6 +206,12 @@ profile and stale dependency version leaves artifacts behind.
   `screenshot <file.png>` saves a PNG; `--selector "<css>"` crops it to that
   element and `--clip <x>,<y>,<w>,<h>` to a viewport rectangle, so no image
   tool is needed.
+- Show a UI change in the theme the user runs: read `theme` from
+  `~/.config/rustcode/config.toml`, then `mode` under `[desktop]` in
+  `~/.config/rustcode/themes/<theme>.toml`; with no file or no mode, use dark.
+  Set it in the mock before the screenshot
+  (`(await import("/src/state/viewActions.ts")).setTheme("dark")`, or
+  `"light"`) and wait about 3 seconds for the theme's fade.
 - To stage a state the mock does not reach (a finished thread, an update in
   progress, a Settings page), evaluate `await import("/src/state/store.ts")`
   (or `updates.ts`) in the page and set state on it. The window is

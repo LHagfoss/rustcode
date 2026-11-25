@@ -673,9 +673,17 @@ async function type(text: string) {
   });
 }
 
+/** A letter as a real key press, so a page's keydown sees it before its text lands. */
+function letterKey(name: string) {
+  if (!/^[a-z]$/i.test(name)) return undefined;
+  const upper = name.toUpperCase();
+  return { code: `Key${upper}`, vk: upper.charCodeAt(0), text: name };
+}
+
 async function press(name: string, modifiers: number) {
-  const key = KEYS[name];
-  if (!key) throw new Error(`press does not know ${name}. Use one of ${Object.keys(KEYS).join(", ")}.`);
+  const key = KEYS[name] ?? letterKey(name);
+  if (!key)
+    throw new Error(`press does not know ${name}. Use a letter or one of ${Object.keys(KEYS).join(", ")}.`);
   await withInput(async (send) => {
     const base = {
       key: name,

@@ -12,7 +12,7 @@ import {
 } from "../state/sidebarPrefs";
 import { setView, toast, useApp } from "../state/store";
 import { startNewThreadFromContext } from "../state/threadOpen";
-import { ArrowDownUp, Check, ListFilter, Repeat, SquarePen, X } from "./icons";
+import { ArrowDownUp, Check, LayoutGrid, ListFilter, Repeat, SquarePen, X } from "./icons";
 import { cx, MenuContent, menuItem, menuLabel, menuSeparator, Tooltip } from "./primitives";
 
 const TOOL_BUTTON =
@@ -63,6 +63,13 @@ export function SidebarToolbar() {
           <SquarePen size={14} />
           <span className="flex-1 text-left">New thread</span>
         </button>
+        <NavRow
+          label="Dashboard"
+          current={view === "dashboard"}
+          onClick={() => setView({ kind: "dashboard" })}
+        >
+          <LayoutGrid size={14} />
+        </NavRow>
         <NavRow label="Jobs" current={view === "loops"} onClick={() => setView({ kind: "loops" })}>
           <Repeat size={14} />
         </NavRow>

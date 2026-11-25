@@ -6,12 +6,11 @@
 
 import type { UsageRow } from "../acp/rustcode";
 import type { SessionSummary } from "../acp/types";
-import { readFlag, writeFlag } from "../lib/storage";
 import { sameProject } from "./orchestration";
 import { DAY_MS } from "./period";
 
-/** How many weeks the activity card draws: about four months, in one row of columns. */
-export const HEATMAP_WEEKS = 17;
+/** The most weeks the activity card reads and draws: a year. */
+export const HEATMAP_WEEKS = 52;
 
 /** One day of the heatmap: what ran on it, and how dark its cell is. */
 export interface HeatCell {
@@ -130,13 +129,75 @@ export function projectThreads(sessions: readonly SessionSummary[], project: str
     .sort((one, other) => (other.updatedAt ?? 0) - (one.updatedAt ?? 0));
 }
 
-/** The overview is opt-in and remembers its last setting on this device. */
-const OVERVIEW_KEY = "rc-new-thread-overview";
-export function overviewExpanded(): boolean {
-  return readFlag(OVERVIEW_KEY, false);
+/** The activity card's small numbers: turns in the last seven days, today's included, and the busiest day read. */
+export function activitySummary(
+  turns: ReadonlyMap<string, number>,
+  today: Date = new Date(),
+): { week: number; busiest?: { day: string; turns: number } } {
+  const from = new Date(Date.parse(`${today.toISOString().slice(0, 10)}T00:00:00Z`) - 6 * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+  let week = 0;
+  let busiest: { day: string; turns: number } | undefined;
+  for (const [day, count] of turns) {
+    if (day >= from) week += count;
+    if (count > 0 && (!busiest || count > busiest.turns)) busiest = { day, turns: count };
+  }
+  return { week, busiest };
 }
 
-export function setOverviewExpanded(expanded: boolean): void {
-  // Storage can be unavailable; the view still works for this session.
-  writeFlag(OVERVIEW_KEY, expanded);
+/** Turns per weekday over the days read, Monday first, for the rhythm card. */
+export function weekdayTurns(turns: ReadonlyMap<string, number>): number[] {
+  const totals = [0, 0, 0, 0, 0, 0, 0];
+  for (const [day, value] of turns) totals[weekday(day)] = (totals[weekday(day)] ?? 0) + value;
+  return totals;
+}
+
+/** One group's share of a report: what it ran, and how much of the whole that is. */
+export interface Share {
+  key: string;
+  turns: number;
+  tokens: number;
+  /** Of the turns in every group, 0 to 1. */
+  part: number;
+}
+
+/**
+ * A report's rows added up by harness or by model from `since` on, busiest first. A model row
+ * that names no model is the harness's default, so it is counted under "Default model".
+ */
+export function sharesBy(rows: readonly UsageRow[], key: "harness" | "model", since = ""): Share[] {
+  const groups = new Map<string, { turns: number; tokens: number }>();
+  let all = 0;
+  for (const row of rows) {
+    if (since && (row.day ?? "") < since) continue;
+    const name =
+      (key === "model" ? row.model : row.harness) || (key === "model" ? "Default model" : "unknown");
+    const group = groups.get(name) ?? { turns: 0, tokens: 0 };
+    group.turns += row.turns;
+    group.tokens += (row.input ?? 0) + (row.output ?? 0);
+    groups.set(name, group);
+    all += row.turns;
+  }
+  return [...groups]
+    .map(([name, group]) => ({ key: name, ...group, part: all > 0 ? group.turns / all : 0 }))
+    .filter((share) => share.turns > 0)
+    .sort((one, other) => other.turns - one.turns || other.tokens - one.tokens);
+}
+
+/** What one stretch of days ran: its turns and its input and output tokens. */
+export function periodTotals(
+  rows: readonly UsageRow[],
+  from: string,
+  to = "9999-12-31",
+): { turns: number; tokens: number } {
+  let turns = 0;
+  let tokens = 0;
+  for (const row of rows) {
+    const day = row.day ?? "";
+    if (day < from || day > to) continue;
+    turns += row.turns;
+    tokens += (row.input ?? 0) + (row.output ?? 0);
+  }
+  return { turns, tokens };
 }
