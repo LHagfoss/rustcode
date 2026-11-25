@@ -62,6 +62,7 @@ import {
   useApp,
 } from "../state/store";
 import { AddHarnessForm } from "./AddHarness";
+import { ConfigIssueNotice } from "./ConfigIssueNotice";
 import {
   ArrowLeft,
   Blocks,
@@ -1072,6 +1073,7 @@ export function SettingsPage() {
                   <PageActions slotRef={setTitleSlot} active={!scrolled} />
                 </div>
               </div>
+              <ConfigIssueNotice />
               <Suspense fallback={<Loading error={null} />}>
                 {section === "general" && <GeneralPage />}
                 {section === "chat" && <ChatPage />}

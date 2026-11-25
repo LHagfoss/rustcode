@@ -606,6 +606,38 @@ mod tests {
     }
 
     #[test]
+    fn a_full_read_lists_unreadable_config_files_and_a_keyed_read_skips_them() {
+        let workspace = tempfile::tempdir().unwrap();
+        let project = workspace.path().join(".rustcode");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("config.toml"), "sandbox_mode = [\n").unwrap();
+        let answer = read(GetSettingsRequest {
+            project: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        let issues = answer["configIssues"].as_array().unwrap();
+        let issue = issues
+            .iter()
+            .find(|issue| issue["scope"] == "project")
+            .expect("the broken project file");
+        assert!(issue["path"].as_str().unwrap().ends_with("config.toml"));
+        assert!(
+            issue["message"]
+                .as_str()
+                .unwrap()
+                .contains("Failed to parse")
+        );
+
+        let keyed = read(GetSettingsRequest {
+            keys: Some(vec!["orchestration".to_owned()]),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(keyed.get("configIssues").is_none());
+    }
+
+    #[test]
     fn set_merges_reads_back_and_keeps_the_rest_of_the_file() {
         let answer = write(SetSettingsRequest {
             values: Map::from_iter([
