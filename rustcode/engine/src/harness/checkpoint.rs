@@ -66,7 +66,7 @@ mod tests {
 
     fn status(id: &str, status: ToolCallStatus) -> SessionUpdate {
         SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-            id,
+            id.to_owned(),
             ToolCallUpdateFields::new().status(status),
         ))
     }
