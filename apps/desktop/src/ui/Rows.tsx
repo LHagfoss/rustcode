@@ -481,7 +481,7 @@ export const AssistantRow = memo(function AssistantRow({
   // turn, at the foot of its last reply (`TurnEndRow`), and nothing else has any.
   if (segments.length === 1 && segments[0]!.kind === "markdown")
     return (
-      <div className="selectable">
+      <div className="selectable" data-quote-source>
         <Markdown
           text={item.text}
           streaming={streaming}
@@ -496,7 +496,7 @@ export const AssistantRow = memo(function AssistantRow({
   // A view stands apart from the prose around it: 20px between segments, where 8px ran
   // the sentence after a view into its last row.
   return (
-    <div className="flex flex-col gap-5 selectable">
+    <div className="flex flex-col gap-5 selectable" data-quote-source>
       {segments.map((segment, i) =>
         segment.kind === "markdown" ? (
           <Markdown
