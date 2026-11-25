@@ -33,6 +33,7 @@ import {
   useMachineOfThread,
   useShortcutHint,
   useThreadOffline,
+  worktreeOf,
 } from "../state/store";
 import { formatClock, isRunning, type ThreadState } from "../state/thread";
 import { retryStalledFirstMessage, retryThread } from "../state/threadActions";
@@ -166,6 +167,8 @@ function Header({
   const machineHost = thread ? splitThreadKey(thread.id).host : "";
   const title = pending?.title ?? (thread ? (thread.title ?? listed ?? "New thread") : "New thread");
   const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
+  const repo = useApp((s) => (thread && !pending ? worktreeOf(s, thread.id)?.repo : undefined));
+  const project = projectName(repo || cwd);
   const newThreadHost = useApp((s) => s.newThreadHost);
   const moveBlocked = useMoveBlockedReason(pending ? undefined : thread);
   // The buttons the user keeps, with the panel's toggle last: the panel is the last thing beside
@@ -200,11 +203,11 @@ function Header({
               trigger={
                 <button
                   type="button"
-                  aria-label={`Project: ${projectName(cwd)}`}
+                  aria-label={`Project: ${project}`}
                   className="-mx-1 flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-sm px-2 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg data-[state=open]:bg-fill-subtle data-[state=open]:text-fg"
                 >
-                  <ProjectMark name={projectName(cwd)} />
-                  <span className="min-w-0 truncate">{projectName(cwd)}</span>
+                  <ProjectMark name={project} />
+                  <span className="min-w-0 truncate">{project}</span>
                 </button>
               }
             />
