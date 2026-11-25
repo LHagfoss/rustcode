@@ -287,6 +287,14 @@ export async function runRequestedCompaction(id: string): Promise<void> {
   }
 }
 
+/**
+ * The requested `/compact` turn itself ended. `runPrompt` goes on to start the thread's queue before it
+ * returns, and a turn from that queue may ask for its own compaction.
+ */
+export function requestedCompactionEnded(id: string): void {
+  requestedCompactionsRunning.delete(id);
+}
+
 export function cancelRequestedCompaction(id: string): void {
   requestedCompactions.delete(id);
 }
