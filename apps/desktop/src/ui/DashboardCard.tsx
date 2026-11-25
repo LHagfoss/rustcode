@@ -35,7 +35,7 @@ export function useShownRows(rowHeight = ROW_HEIGHT): number {
 /**
  * One card: a small icon and label, then whatever the card has to say, on the surface the
  * Statistics page's tiles use. Its height is the grid's rows; the dashboard's entrance moves what
- * is inside it (index.css, `rc-overview-in`).
+ * is inside it on the first visit of a session (index.css, `rc-overview-in`).
  */
 export function Card({
   label,
