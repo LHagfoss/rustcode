@@ -19,6 +19,8 @@ const START_SLACK_MS = 5_000;
 
 const STORED_TURN_ROWS = 1_000;
 
+const NO_STORED_TURNS: readonly StoredTurn[] = [];
+
 /** The thread's recorded turns, oldest first. */
 export function storedTurnsSql(threadId: string): string {
   const id = threadId.replaceAll("'", "''");
@@ -79,7 +81,7 @@ export function withStoredTurns(entries: readonly TurnEntry[], stored: readonly 
  * cannot answer leaves the list empty: the rows then show what the transcript knows.
  */
 export function useStoredTurns(threadKey: string | undefined, settled: number): readonly StoredTurn[] {
-  const [stored, setStored] = useState<readonly StoredTurn[]>([]);
+  const [stored, setStored] = useState<{ key: string; rows: readonly StoredTurn[] } | null>(null);
   useEffect(() => {
     if (!threadKey || settled === 0) return;
     const { host, id } = splitThreadKey(threadKey);
@@ -89,12 +91,12 @@ export function useStoredTurns(threadKey: string | undefined, settled: number): 
     conn
       .request(Method.dataQuery, { sql: storedTurnsSql(id), limit: STORED_TURN_ROWS }, 10_000)
       .then((answer) => {
-        if (live) setStored(parseStoredTurns(answer));
+        if (live) setStored({ key: threadKey, rows: parseStoredTurns(answer) });
       })
       .catch(() => {});
     return () => {
       live = false;
     };
   }, [threadKey, settled]);
-  return stored;
+  return stored && stored.key === threadKey ? stored.rows : NO_STORED_TURNS;
 }

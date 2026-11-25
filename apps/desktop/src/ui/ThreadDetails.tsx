@@ -5,13 +5,14 @@
 
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { pullErrorTitle } from "../acp/rustcode";
-import { modelName, projectName } from "../acp/types";
+import { modelName, projectName, type SessionUsage } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { type GitChanges, gitChangeSummary, openExternal, openPath } from "../lib/native";
 import { appPlatform, fileManagerName } from "../lib/platform";
+import { useNow } from "../lib/useNow";
 import { contextPercent } from "../state/details";
 import { turnItemsByEnd } from "../state/fold";
-import { estimateUsd, formatCost } from "../state/pricing";
+import { formatCost } from "../state/pricing";
 import { PULL_LIMIT, usePullList } from "../state/pullQueries";
 import { engineBusy } from "../state/runState";
 import { showPanel, useApp, worktreeOf } from "../state/store";
@@ -42,6 +43,7 @@ import { StatusIcon } from "./Status";
 import { useStoredTurns, withStoredTurns } from "./storedTurns";
 import { type LogTurn, TurnEvents } from "./TurnEvents";
 import { TurnTrace } from "./TurnTrace";
+import { contextTone, threadTotals, turnCost } from "./threadTotals";
 
 /**
  * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
@@ -97,6 +99,22 @@ export function ThreadDetails() {
   const counts = useMemo(() => threadCounts(items ?? []), [items]);
   const running = isRunning(thread) || isLoading(thread) || !!thread?.enginePhase || engineBusy(status);
   const changes = useChanges(host ? undefined : thread?.cwd, isRunning(thread));
+  const entries = useMemo(() => turnEntries(items ?? [], running), [items, running]);
+  const stored = useStoredTurns(id ?? undefined, entries.length);
+  const turns = useMemo(() => withStoredTurns(entries, stored), [entries, stored]);
+  const liveStart = thread?.turn?.startedAt ?? thread?.enginePhase?.startedAt;
+  const now = useNow(liveStart !== undefined);
+  const totals = useMemo(
+    () =>
+      threadTotals(
+        turns,
+        thread?.usage,
+        harnessId,
+        summary?.model,
+        liveStart === undefined ? 0 : Math.max(0, now - liveStart),
+      ),
+    [turns, thread?.usage, harnessId, summary?.model, liveStart, now],
+  );
   // Which sections are folded away: the reader's habit, kept for every thread.
   const [folded, setFolded] = useState<SectionId[]>(readFolded);
   // A row elsewhere (`+2 nested` in the strip's popover) opens a section: the fold is read again.
@@ -132,10 +150,6 @@ export function ThreadDetails() {
     ["Messages", String(counts.messages)],
     ["Tool calls", String(counts.tools)],
   ];
-  if (usage?.cost !== undefined && (!usage.currency || usage.currency === "USD"))
-    activity.push(["Cost", formatCost(usage.cost)]);
-  if (usage?.inputTokens !== undefined) activity.push(["Tokens in", formatTokens(usage.inputTokens)]);
-  if (usage?.outputTokens !== undefined) activity.push(["Tokens out", formatTokens(usage.outputTokens)]);
   if (counts.startedAt) activity.push(["Started", relativeAge(counts.startedAt)]);
   if (summary?.updatedAt) activity.push(["Last active", relativeAge(summary.updatedAt)]);
 
@@ -221,6 +235,29 @@ export function ThreadDetails() {
         </Section>
       )}
       <Section id="activity" title="Activity" folded={isFolded("activity")} onToggle={toggle}>
+        <dl className="mx-2 mb-2 grid grid-cols-3 divide-x divide-border rounded-lg bg-fill-subtle py-2">
+          <Total
+            label="Cost"
+            value={totals.usd === undefined ? "–" : `${totals.estimated ? "~" : ""}${formatCost(totals.usd)}`}
+            tip={
+              totals.usd === undefined
+                ? "No cost reported or priced yet"
+                : totals.estimated
+                  ? "Partly estimated from tokens at list price"
+                  : "As the harness reported it"
+            }
+          />
+          <Total label="Worked" value={formatDuration(totals.workedMs)} tip="Time the agent spent on turns" />
+          <Total
+            label="Tokens"
+            value={totals.tokens === undefined ? "–" : formatTokens(totals.tokens)}
+            tip={
+              usage?.inputTokens !== undefined || usage?.outputTokens !== undefined
+                ? `${formatTokens(usage.inputTokens ?? 0)} in · ${formatTokens(usage.outputTokens ?? 0)} out`
+                : "Input and output tokens"
+            }
+          />
+        </dl>
         <dl className="grid grid-cols-3 gap-x-2 gap-y-2 px-2 py-1">
           {activity.map(([label, value]) => (
             <div key={label} className="min-w-0">
@@ -229,28 +266,11 @@ export function ThreadDetails() {
             </div>
           ))}
         </dl>
-        {usage && used !== undefined && (
-          <div className="flex min-h-8 items-center gap-3 px-2 pt-1 text-callout">
-            <span className="shrink-0 text-caption text-fg-muted">Context</span>
-            <div
-              role="meter"
-              aria-label="Context used"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={used}
-              className="h-1.5 flex-1 overflow-hidden rounded-full bg-fill"
-            >
-              <div className="h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
-            </div>
-            <span className="shrink-0 text-caption text-fg-muted tabular">
-              {formatTokens(usage.used)} / {formatTokens(usage.size)}
-            </span>
-          </div>
-        )}
+        {usage && used !== undefined && <ContextMeter used={used} usage={usage} />}
       </Section>
       <TurnsSection
         key={id}
-        threadKey={id ?? undefined}
+        turns={turns}
         items={items ?? []}
         running={running}
         model={model}
@@ -326,28 +346,16 @@ const OUTCOME = {
   failed: { icon: CircleX, tone: "text-danger", label: "Failed" },
 } as const;
 
-/** Finished turns, newest first. Open a row for its messages and calls. */
-/**
- * A turn's price: what the harness reported, else its tokens at list price
- * (marked `~`), else a dash, so every row has one.
- */
+/** A turn's price: reported, else estimated (marked `~`), else a dash, so every row has one. */
 function turnPrice(turn: TurnEntry, harness: string | undefined, model: string | undefined): string {
-  if (turn.cost !== undefined) return formatCost(turn.cost);
-  const counts = turn.counts;
-  const estimate =
-    harness && counts
-      ? estimateUsd(harness, model, {
-          input: counts.inputTokens,
-          output: counts.outputTokens,
-          cached: counts.cachedTokens,
-        })
-      : undefined;
-  if (estimate !== undefined) return `~${formatCost(estimate)}`;
-  return "$–";
+  const cost = turnCost(turn, harness, model);
+  if (!cost) return "$–";
+  return `${cost.estimated ? "~" : ""}${formatCost(cost.usd)}`;
 }
 
+/** Finished turns, newest first. Open a row for its messages and calls. */
 function TurnsSection({
-  threadKey,
+  turns: oldestFirst,
   items,
   running,
   model,
@@ -356,7 +364,7 @@ function TurnsSection({
   folded,
   onToggle,
 }: {
-  threadKey?: string;
+  turns: readonly TurnEntry[];
   items: readonly TranscriptItem[];
   running?: boolean;
   model?: string;
@@ -366,9 +374,7 @@ function TurnsSection({
   folded: boolean;
   onToggle: (id: SectionId) => void;
 }) {
-  const entries = useMemo(() => turnEntries(items, running), [items, running]);
-  const stored = useStoredTurns(threadKey, entries.length);
-  const turns = useMemo(() => withStoredTurns(entries, stored).reverse(), [entries, stored]);
+  const turns = useMemo(() => [...oldestFirst].reverse(), [oldestFirst]);
   const byEnd = useMemo(() => turnItemsByEnd(items, undefined, running), [items, running]);
   const ends = useMemo(() => {
     const map = new Map<string, Extract<TranscriptItem, { kind: "turnEnd" }>>();
@@ -496,6 +502,51 @@ function TurnScroll({ children }: { children: ReactNode }) {
     >
       <div ref={content} className="py-1">
         {children}
+      </div>
+    </div>
+  );
+}
+
+/** One of the Activity section's headline numbers: a small label over a large value. */
+function Total({ label, value, tip }: { label: string; value: string; tip: string }) {
+  return (
+    <Tooltip label={tip}>
+      <div className="flex min-w-0 flex-col items-center gap-0.5 px-2">
+        <dt className="truncate text-caption text-fg-muted">{label}</dt>
+        <dd className="truncate font-medium text-body text-fg tabular">{value}</dd>
+      </div>
+    </Tooltip>
+  );
+}
+
+const TONE_BAR = { accent: "bg-accent", warning: "bg-warning", danger: "bg-danger" } as const;
+const TONE_TEXT = { accent: "text-fg", warning: "text-warning", danger: "text-danger" } as const;
+
+/** How full the context window is: the percentage up front, a bar that warms as it fills. */
+function ContextMeter({ used, usage }: { used: number; usage: SessionUsage }) {
+  const tone = contextTone(used);
+  return (
+    <div className="flex flex-col gap-1.5 px-2 pt-2">
+      <div className="flex items-baseline gap-2">
+        <span className="text-caption text-fg-muted">Context</span>
+        <span className={cx("font-medium text-callout tabular", TONE_TEXT[tone])}>{used}%</span>
+        <span className="flex-1" />
+        <span className="text-caption text-fg-muted tabular">
+          {formatTokens(usage.used)} / {formatTokens(usage.size)}
+        </span>
+      </div>
+      <div
+        role="meter"
+        aria-label="Context used"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={used}
+        className="h-2 overflow-hidden rounded-full bg-fill"
+      >
+        <div
+          className={cx("h-full rounded-full transition-[width]", TONE_BAR[tone])}
+          style={{ width: `${Math.max(used, 1)}%` }}
+        />
       </div>
     </div>
   );
