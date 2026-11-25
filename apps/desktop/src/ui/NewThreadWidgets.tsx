@@ -18,11 +18,13 @@ import { parseUsageReport } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { openExternal } from "../lib/native";
 import { count } from "../lib/plural";
+import { useInboxItems } from "../state/inboxRead";
 import { daysAgo, previousRows, sumRows, trend } from "../state/period";
 import { costLine, costOfRows, formatBestCost } from "../state/pricing";
 import { cachedPulls, loadPulls, pullState, pullsVersion, subscribePulls } from "../state/pulls";
-import { openSettings, selectThread, setPanel, useApp } from "../state/store";
+import { openSettings, selectThread, setPanel, setView, useApp } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
+import type { WidgetId } from "../state/widgetLayout";
 import {
   HEATMAP_WEEKS,
   type HeatCell,
@@ -43,16 +45,19 @@ import {
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  Hand,
   History,
   type LucideIcon,
 } from "./icons";
 import { cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";
+import { useWidgetEditClass, useWidgetId, useWidgetSpan, WidgetChrome, WidgetGrid } from "./WidgetGrid";
 
 /** How many of each list a card shows before it says how many are left. */
 const SHOWN_THREADS = 3;
 const SHOWN_PULLS = 3;
+const SHOWN_NEEDS = 3;
 
 /** The usage card's window: the last thirty days, counted as whole UTC days. */
 const USAGE_DAYS = 30;
@@ -73,7 +78,6 @@ const SHADE: Record<HeatCell["level"], string> = {
 function Card({
   label,
   icon: Icon,
-  span,
   aside,
   children,
 }: {
@@ -81,13 +85,14 @@ function Card({
   icon: LucideIcon;
   /** Something small at the end of the card's label row. */
   aside?: ReactNode;
-  /** How wide the card is in the dashboard's six columns (from `lg`). */
-  span: string;
   children: ReactNode;
 }) {
+  const span = useWidgetSpan();
+  const editClass = useWidgetEditClass();
   return (
     <section
       aria-label={label}
+      data-widget={useWidgetId()}
       // One height for every card and state. It is see-through: a quarter of
       // the surface and the glass filter, no edge ring, so the picture runs on behind it.
       // The surface is the stable part: the overview's open and close fades its fill and moves
@@ -95,6 +100,7 @@ function Card({
       className={cx(
         "rc-glass-faint rc-overview-card flex min-h-[132px] w-[240px] shrink-0 snap-start flex-col rounded-xl p-3 lg:w-auto",
         span,
+        editClass,
       )}
     >
       <div className="rc-overview-body flex min-h-0 flex-1 flex-col gap-2">
@@ -103,7 +109,7 @@ function Card({
             <Icon size={12} className="shrink-0" />
             {label}
           </h3>
-          {aside}
+          <WidgetChrome fallback={aside} />
         </div>
         {children}
       </div>
@@ -176,7 +182,6 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
     <Card
       label="Activity"
       icon={Activity}
-      span="lg:col-span-3"
       aside={rows === undefined ? undefined : <StreakBadge streak={streak} />}
     >
       {rows === undefined ? (
@@ -223,7 +228,7 @@ function RecentThreadsCard({ project }: { project: string }) {
   const shown = threads.slice(0, SHOWN_THREADS);
   const more = threads.length - shown.length;
   return (
-    <Card label="Recent threads" icon={History} span="lg:col-span-3">
+    <Card label="Recent threads" icon={History}>
       {shown.length ? (
         <div className="flex flex-1 flex-col gap-0.5">
           {shown.map((thread) => (
@@ -258,7 +263,7 @@ function UsageCard({ rows, models, since }: { rows?: UsageRow[]; models?: UsageR
   const cost = useMemo(() => (models ? costOfRows(models) : undefined), [models]);
   const tokens = (totals.input ?? 0) + (totals.output ?? 0);
   return (
-    <Card label="Usage" icon={Gauge} span="lg:col-span-2">
+    <Card label="Usage" icon={Gauge}>
       {rows === undefined ? (
         <div className="flex flex-1 flex-col justify-end gap-1.5">
           <Skeleton className="h-4 w-[60%]" />
@@ -285,6 +290,57 @@ function UsageCard({ rows, models, since }: { rows?: UsageRow[]; models?: UsageR
       <span className="shrink-0 text-caption text-fg-muted">
         {rows === undefined ? "Last 30 days" : `${count(totals.turns, "turn")} in ${USAGE_DAYS} days`}
       </span>
+    </Card>
+  );
+}
+
+function NeedsYouCard() {
+  const items = useInboxItems();
+  const threads = useMemo(() => {
+    const seen = new Set<string>();
+    return items.filter((item) => !seen.has(item.threadId) && seen.add(item.threadId));
+  }, [items]);
+  const shown = threads.slice(0, SHOWN_NEEDS);
+  return (
+    <Card
+      label="Needs you"
+      icon={Hand}
+      aside={
+        threads.length ? (
+          <span className="rounded-full bg-warning/14 px-1.5 font-medium text-caption text-warning tabular">
+            {threads.length}
+          </span>
+        ) : undefined
+      }
+    >
+      {shown.length ? (
+        <div className="flex flex-1 flex-col gap-0.5">
+          {shown.map((item) => (
+            <CardRow
+              key={item.key}
+              onClick={() => selectThread(item.threadId)}
+              title={`${item.title}: ${item.detail}`}
+            >
+              <span className="size-1.5 shrink-0 rounded-full bg-warning" />
+              <span className="min-w-0 flex-1 truncate text-fg">{item.title}</span>
+              <span className="max-w-[45%] shrink truncate text-caption text-fg-muted">{item.detail}</span>
+            </CardRow>
+          ))}
+        </div>
+      ) : (
+        <div className="flex flex-1 items-center">
+          <Nothing>Nothing is waiting on you.</Nothing>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setView({ kind: "inbox" })}
+        className="mt-auto shrink-0 self-start text-caption text-fg-muted hover:text-fg"
+      >
+        {threads.length > shown.length
+          ? `${threads.length - shown.length} more in the inbox`
+          : "Open the inbox"}
+      </button>
     </Card>
   );
 }
@@ -339,7 +395,7 @@ function PullsCard({ project }: { project: string }) {
     [pulls],
   );
   return (
-    <Card label="Pull requests" icon={GitPullRequest} span="lg:col-span-2">
+    <Card label="Pull requests" icon={GitPullRequest}>
       {!project ? (
         <div className="flex flex-1 items-center">
           <Nothing>Choose a folder to see its pull requests.</Nothing>
@@ -441,7 +497,7 @@ function ThisMonthCard({
   }, [rows, since, previousSince]);
   const empty = thisMonth.turns === 0 && lastMonth.turns === 0;
   return (
-    <Card label="This month" icon={CalendarDays} span="lg:col-span-2">
+    <Card label="This month" icon={CalendarDays}>
       {rows === undefined ? (
         <div className="flex flex-1 flex-col justify-center gap-2">
           <Skeleton className="h-3 w-full" />
@@ -494,27 +550,29 @@ export function NewThreadWidgets({ project }: { project: string }) {
     groupBy: "model",
     since: previousSince,
   });
-  return (
-    <div
-      // Below `lg` the cards are one row that scrolls sideways: five columns of a 240px card in a
-      // narrow window would squeeze the labels to nothing. From `lg` they are a dashboard two rows
-      // tall: the activity heatmap and the recent threads across the top (three columns each), then
-      // usage, pull requests and this month in three.
-      className="flex snap-x gap-2 overflow-x-auto pb-0.5 lg:grid lg:grid-cols-6 lg:overflow-visible lg:pb-0"
-      role="group"
-      aria-label="Activity, usage and recent work"
-    >
-      <ActivityCard rows={rows} since={since} />
-      <RecentThreadsCard project={project} />
-      <UsageCard rows={rows} models={recent.data?.rows} since={usageSince} />
-      <PullsCard project={project} />
-      <ThisMonthCard
-        rows={rows}
-        month={month.data?.rows}
-        twoMonths={twoMonths.data?.rows}
-        since={monthSince}
-        previousSince={previousSince}
-      />
-    </div>
-  );
+  const render = (id: WidgetId) => {
+    switch (id) {
+      case "activity":
+        return <ActivityCard rows={rows} since={since} />;
+      case "threads":
+        return <RecentThreadsCard project={project} />;
+      case "needs":
+        return <NeedsYouCard />;
+      case "usage":
+        return <UsageCard rows={rows} models={recent.data?.rows} since={usageSince} />;
+      case "pulls":
+        return <PullsCard project={project} />;
+      case "month":
+        return (
+          <ThisMonthCard
+            rows={rows}
+            month={month.data?.rows}
+            twoMonths={twoMonths.data?.rows}
+            since={monthSince}
+            previousSince={previousSince}
+          />
+        );
+    }
+  };
+  return <WidgetGrid render={render} />;
 }

@@ -516,7 +516,7 @@
 13 apps/desktop/src/ui/ModelPicker.test.ts
 95 apps/desktop/src/ui/ModelPicker.tsx
 19 apps/desktop/src/ui/NewThreadBanner.tsx
-23 apps/desktop/src/ui/NewThreadWidgets.tsx
+19 apps/desktop/src/ui/NewThreadWidgets.tsx
 4 apps/desktop/src/ui/Onboarding.tsx
 13 apps/desktop/src/ui/OutsideAgentsPage.tsx
 8 apps/desktop/src/ui/OutsideApprovals.tsx

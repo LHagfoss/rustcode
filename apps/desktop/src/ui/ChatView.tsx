@@ -71,6 +71,7 @@ import { UserRow } from "./Rows";
 import { useThreadStatus } from "./Status";
 import { ThreadTitle } from "./ThreadTitle";
 import { FIRST_ROW_PAD, Transcript } from "./Transcript";
+import { CustomizeOverview, setWidgetsEditing } from "./WidgetGrid";
 
 function PlanButton({ thread }: { thread: ThreadState }) {
   if (!thread.plan.length) return null;
@@ -598,6 +599,7 @@ export function ChatView() {
     const next = !overview;
     setOverviewExpanded(next);
     setOverview(next);
+    if (!next) setWidgetsEditing(false);
     if (next) {
       setOverviewLeaving(false);
       setOverviewMounted(true);
@@ -895,24 +897,27 @@ export function ChatView() {
               className="rc-lane-inset absolute bottom-0 mx-auto flex max-w-[1100px] flex-col items-center gap-2 pt-2"
               style={{ top: `calc(50% + ${Math.round(stackHeight / 2)}px)` }}
             >
-              <button
-                type="button"
-                aria-expanded={overview}
-                aria-controls="new-thread-overview"
-                className={cx(
-                  "flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted",
-                  // Over a picture the label needs the floating pills' glass to read.
-                  showsBanner ? "rc-glass hover:text-fg" : "hover:bg-fill-subtle",
-                )}
-                onClick={toggleOverview}
-              >
-                <ChevronDown
-                  size={14}
-                  aria-hidden
-                  className={cx("transition-transform duration-200 ease-snappy", overview && "rotate-180")}
-                />
-                {overview ? "Hide overview" : "Show overview"}
-              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  aria-expanded={overview}
+                  aria-controls="new-thread-overview"
+                  className={cx(
+                    "flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted",
+                    // Over a picture the label needs the floating pills' glass to read.
+                    showsBanner ? "rc-glass hover:text-fg" : "hover:bg-fill-subtle",
+                  )}
+                  onClick={toggleOverview}
+                >
+                  <ChevronDown
+                    size={14}
+                    aria-hidden
+                    className={cx("transition-transform duration-200 ease-snappy", overview && "rotate-180")}
+                  />
+                  {overview ? "Hide overview" : "Show overview"}
+                </button>
+                {overview && <CustomizeOverview glass={showsBanner} />}
+              </div>
               {overviewMounted && (
                 <div
                   id="new-thread-overview"
