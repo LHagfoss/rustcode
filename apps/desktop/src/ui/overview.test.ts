@@ -14,6 +14,7 @@ import {
   pullBranches,
   pullPill,
   pullsForBranches,
+  replyHeadline,
   toggleFolded,
   turnEntries,
   turnHasTrace,
@@ -179,6 +180,43 @@ describe("the thread's turns", () => {
       turnEnd("e2"),
     ];
     expect(turnEntries(items).map((turn) => turn.prompt)).toEqual(["Do the work", "Woken for a delegate"]);
+  });
+
+  test("a turn the app started is named by its last reply, and says what started it", () => {
+    const items: TranscriptItem[] = [
+      { kind: "user", id: "u1", text: "Fix it all" },
+      turnEnd("e1"),
+      {
+        kind: "user",
+        id: "u2",
+        text: "Continued after compaction\n\nContinue.\n\n<!-- rustcode:continued -->",
+        continued: true,
+      },
+      { kind: "assistant", id: "a1", text: "Looking at the inbox first." },
+      { kind: "assistant", id: "a2", text: "## Done\n\nI opened **PR 14**: the inbox approves. More here." },
+      turnEnd("e2"),
+      {
+        kind: "user",
+        id: "u3",
+        text: "Resumed after restart.\n\n<!-- rustcode:resumed -->",
+        continued: true,
+      },
+      turnEnd("e3"),
+    ];
+    const turns = turnEntries(items);
+    expect(turns.map((turn) => turn.prompt)).toEqual([
+      "Fix it all",
+      "I opened PR 14: the inbox approves.",
+      "Resumed after restart.",
+    ]);
+    expect(turns.map((turn) => turn.origin)).toEqual([undefined, "After compaction", undefined]);
+  });
+
+  test("a reply's headline is its first plain sentence", () => {
+    expect(replyHeadline("I opened [PR 13](https://x/13). Next the inbox.")).toBe("I opened PR 13.");
+    expect(replyHeadline("```ts\ncode\n```\n- **Merged** twelve PRs")).toBe("Merged twelve PRs");
+    expect(replyHeadline("Version 1.2 ships")).toBe("Version 1.2 ships");
+    expect(replyHeadline("## Only a heading")).toBe("Only a heading");
   });
 
   test("a turn's cost is its last sample minus what the session had already spent", () => {

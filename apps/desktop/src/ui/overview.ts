@@ -9,7 +9,14 @@ import { readStorage, writeStorage } from "../lib/storage";
 import { rowTokens, type TraceUsage, usageDelta } from "../lib/trace";
 import { type DelegateNode, delegateTree } from "../state/delegates";
 import type { Link } from "../state/orchestration";
-import { diffCounts, stripHarnessMarkup, type TranscriptItem, type TurnUsage } from "../state/thread";
+import {
+  CONTINUE_MARK,
+  diffCounts,
+  RESUME_MARK,
+  stripHarnessMarkup,
+  type TranscriptItem,
+  type TurnUsage,
+} from "../state/thread";
 
 // ---------------------------------------------------------------- folded sections
 
@@ -273,8 +280,13 @@ export function pullBranches(own: string | undefined, delegated: readonly (strin
 /** One finished turn, as the Execution log lists it. */
 export interface TurnEntry {
   id: string;
-  /** The first line of the message that opened it, or what woke the thread. */
+  /**
+   * The first line of the message that opened it. A turn the app started on its own (a wake, the
+   * continue after a compaction or a restart) is named by the first sentence of its last reply.
+   */
   prompt: string;
+  /** What started a turn the app began on its own ("After compaction"), shown beside its numbers. */
+  origin?: string;
   /** When the message that opened it was sent, so a stored turn can be matched to it. */
   promptAt?: number;
   at?: number;
@@ -324,6 +336,45 @@ function promptLine(text: string): string {
   return line?.trim() ?? "";
 }
 
+/** What started a turn the app began on its own, or nothing for a message someone sent. */
+export function turnOrigin(item: Extract<TranscriptItem, { kind: "user" }>): string | undefined {
+  if (item.wake) return "Woken for a delegate";
+  if (item.text.includes(CONTINUE_MARK)) return "After compaction";
+  if (item.text.includes(RESUME_MARK)) return "After restart";
+  return undefined;
+}
+
+/** A reply's first sentence, as plain words on one line. */
+export function replyHeadline(text: string): string {
+  const lines = stripHarnessMarkup(text)
+    .replace(/```[\s\S]*?(```|$)/g, "\n")
+    .split("\n")
+    .map((part) => ({ heading: /^\s{0,3}#{1,6}\s/.test(part), words: plainLine(part) }))
+    .filter((part) => part.words);
+  const line = (lines.find((part) => !part.heading) ?? lines[0])?.words ?? "";
+  const end = line.search(/[.!?](\s|$)/);
+  return end < 0 ? line : line.slice(0, end + 1);
+}
+
+function plainLine(line: string): string {
+  return line
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)/, "")
+    .replace(/[`*_~]/g, "")
+    .trim();
+}
+
+/** A turn's row title: an app-started turn is named by what it did, once it replied. */
+function turnHeading(
+  prompt: string,
+  origin: string | undefined,
+  reply: string,
+): Pick<TurnEntry, "prompt" | "origin"> {
+  const headline = origin ? replyHeadline(reply) : "";
+  if (headline) return { prompt: headline, origin };
+  return { prompt: prompt || "No message" };
+}
+
 /**
  * The thread's turns, oldest first, each with the message that opened it. A
  * turn the app woke the thread for has no message of its own, so its row says
@@ -335,6 +386,8 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
   const entries: TurnEntry[] = [];
   let from = 0;
   let prompt = "";
+  let origin: string | undefined;
+  let reply = "";
   let userId: string | undefined;
   let promptAt: number | undefined;
   let worked = false;
@@ -351,7 +404,7 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
       const end = items[i - 1] as Extract<TranscriptItem, { kind: "turnEnd" }>;
       entries.push({
         id: end.id,
-        prompt: prompt || "No message",
+        ...turnHeading(prompt, origin, reply),
         promptAt,
         at: end.at,
         startedAt: end.startedAt,
@@ -364,10 +417,11 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
       userId = undefined;
       promptAt = undefined;
       worked = false;
+      reply = "";
     } else if (nextTurn) {
       entries.push({
         id: userId ?? items[from]!.id,
-        prompt: prompt || "No message",
+        ...turnHeading(prompt, origin, reply),
         promptAt,
         outcome: "completed",
       });
@@ -376,14 +430,17 @@ export function turnEntries(items: readonly TranscriptItem[], running = false): 
       userId = undefined;
       promptAt = undefined;
       worked = false;
+      reply = "";
     }
     if (!item) break;
     if (item.kind === "user" && !item.steered) {
+      origin = turnOrigin(item);
       prompt = item.wake ? "Woken for a delegate" : promptLine(item.text);
       if (userId === undefined) promptAt = item.wake ? undefined : item.at;
       userId ??= item.id;
     } else if (item.kind === "assistant" || item.kind === "tool" || item.kind === "thought") {
       worked = true;
+      if (item.kind === "assistant" && item.text.trim()) reply = item.text;
     }
   }
   return entries;
