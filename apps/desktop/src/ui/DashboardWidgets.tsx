@@ -38,6 +38,7 @@ import {
   type HeatCell,
   heatmapWeeks,
   monthBounds,
+  projectNeeds,
   projectThreads,
   type Streak,
   streakOf,
@@ -475,12 +476,10 @@ function SpendCard({
   );
 }
 
-function NeedsYouCard() {
+function NeedsYouCard({ project }: { project: string }) {
   const items = useInboxItems();
-  const threads = useMemo(() => {
-    const seen = new Set<string>();
-    return items.filter((item) => !seen.has(item.threadId) && seen.add(item.threadId));
-  }, [items]);
+  const sessions = useApp((s) => s.sessions);
+  const threads = useMemo(() => projectNeeds(items, sessions, project), [items, sessions, project]);
   const twoLines = useTwoLines();
   const shown = threads.slice(0, useShownRows(twoLines ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT));
   const listing = useThreadsListing();
@@ -762,7 +761,7 @@ export function DashboardBody({ project }: { project: string }) {
           />
         );
       case "needs":
-        return <NeedsYouCard />;
+        return <NeedsYouCard project={project} />;
       case "pulls":
         return <PullsCard project={project} />;
       case "running":

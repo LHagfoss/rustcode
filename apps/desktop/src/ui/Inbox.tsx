@@ -24,7 +24,7 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
-import { orderedOptions, QuestionCard } from "./AttentionCards";
+import { orderedOptions, QuestionCard, RiskBadge } from "./AttentionCards";
 import { CircleAlert, CircleCheck, CornerDownRight, Hand, MessageCircleQuestion, X } from "./icons";
 import { ViewHeader } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
@@ -212,7 +212,12 @@ function InboxRow({
   onRun: (action: RowAction) => void;
 }) {
   const actions = inboxActions(item);
-  const compact = actions.find((action) => action.primary) ?? actions[0];
+  const risk =
+    item.kind === "approval" && item.request ? assessApproval(item.request, item.project) : undefined;
+  const compact =
+    risk?.level === "destructive"
+      ? openAction(item)
+      : (actions.find((action) => action.primary) ?? actions[0]);
   // The selected question answers in place: its whole card (every answer with what it means, a
   // multiple choice's ticks, the user's own words and files) opens under the row, the same draft
   // as the thread's own card (state/questionDrafts.ts).
@@ -252,6 +257,7 @@ function InboxRow({
               </button>
             </Tooltip>
           )}
+          {risk && risk.level !== "safe" && <RiskBadge risk={risk} />}
           {item.pending > 1 && (
             <span className="shrink-0 text-caption text-fg-faint tabular">
               {item.number} of {item.pending}
@@ -356,6 +362,7 @@ export function Inbox() {
   const items = useInboxItems();
   const now = useClock();
   const groups = useMemo(() => groupInbox(items), [items]);
+  const threadCount = useMemo(() => new Set(items.map((item) => item.threadId)).size, [items]);
   // Where each group's first row sits in the flat list the keyboard moves through.
   const starts = useMemo(() => {
     let at = 0;
@@ -451,12 +458,12 @@ export function Inbox() {
         title={
           <span className="flex items-center gap-2">
             Needs you
-            {items.length > 0 && (
+            {threadCount > 0 && (
               <span
-                key={items.length}
+                key={threadCount}
                 className="rc-count-roll rounded-full bg-warning/14 px-1.5 font-medium text-caption text-warning tabular"
               >
-                {items.length > 99 ? "99+" : items.length}
+                {threadCount > 99 ? "99+" : threadCount}
               </span>
             )}
           </span>
