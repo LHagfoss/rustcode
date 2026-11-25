@@ -1676,6 +1676,28 @@ async fn a_rotating_device_keeps_its_pairing_until_it_is_revoked() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_ends_its_own_pairing_with_unpair() {
+    let host = Host::start().await;
+    let (mut phone, paired) = pair_rotating(&host).await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+    let (mut other, welcome) =
+        authenticate_with(&host, &paired, ("access_token", &paired["access_token"])).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+
+    phone.send(json!({"type": "unpair"})).await;
+    let revoked = phone.frame(|frame| frame["type"] == "error").await;
+    assert_eq!(revoked["code"], "revoked", "{revoked}");
+    assert!(phone.read().await.is_none());
+    assert!(host.lifecycle.devices().unwrap().is_empty());
+    let revoked = other.frame(|frame| frame["type"] == "error").await;
+    assert_eq!(revoked["code"], "revoked", "{revoked}");
+    let (_, gone) =
+        authenticate_with(&host, &paired, ("access_token", &paired["access_token"])).await;
+    assert_eq!(gone["code"], "unauthorized", "{gone}");
+    drop(host.dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_rotating_device_recovers_from_a_dropped_authenticated_frame() {
     let host = Host::start().await;
     let (_paired_phone, paired) = pair_rotating(&host).await;

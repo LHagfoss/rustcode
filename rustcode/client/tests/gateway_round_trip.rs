@@ -1290,3 +1290,39 @@ async fn a_pinned_machine_is_never_dialled_in_the_clear() {
         .unwrap()
         .expect("the client never fell back to plain");
 }
+
+/// Removing a machine ends this computer's pairing there: the machine
+/// forgets the device record, and its token no longer signs in (#4391).
+#[tokio::test]
+async fn removing_a_machine_ends_this_computers_pairing_there() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (machine, tokens, paired) = pair(&host, &connector, config.path()).await;
+    drop(paired);
+    assert_eq!(
+        rustcode_client::unpair_machine(
+            &connector,
+            &machine,
+            &tokens,
+            rustcode_client::UNPAIR_TIMEOUT
+        )
+        .await,
+        rustcode_client::Unpaired::Ended
+    );
+    let error = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect_err("the pairing is over");
+    assert!(rustcode_client::needs_new_pairing(&error), "{error:#}");
+    assert_eq!(
+        rustcode_client::unpair_machine(
+            &connector,
+            &machine,
+            &tokens,
+            rustcode_client::UNPAIR_TIMEOUT
+        )
+        .await,
+        rustcode_client::Unpaired::AlreadyEnded
+    );
+}

@@ -207,11 +207,15 @@ Revocation, from the quickest to the widest:
 1. Settings › Remote access › *Revoke*, or `rc remote revoke <device>`:
    the device's connections close in the same step with `revoked`, and its
    token is forgotten.
-2. `rc remote devices deny <id>`: removes the ACP grant and disconnects.
-3. `/remote off` or `rc remote stop`: nobody reaches the gateway;
+2. Remove on the device's side (Settings › Machines › *Remove*, or
+   `rc machines remove`): the device sends `unpair` and the host revokes the
+   record it signed in as, as in 1. A host that cannot be reached keeps the
+   record, and the device says so.
+3. `rc remote devices deny <id>`: removes the ACP grant and disconnects.
+4. `/remote off` or `rc remote stop`: nobody reaches the gateway;
    pairings are kept.
-4. Replay of a retired refresh token: the whole pairing is revoked by the host.
-5. Expiry: a static token ends after 30 days; a rotating pairing lasts until
+5. Replay of a retired refresh token: the whole pairing is revoked by the host.
+6. Expiry: a static token ends after 30 days; a rotating pairing lasts until
    revoked.
 
 A revoked device is refused with `unauthorized` or `revoked` when it returns,

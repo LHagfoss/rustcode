@@ -1341,15 +1341,15 @@ export function removeMachine(machine: Machine, onRemoved?: () => void): void {
     title: `Remove ${name}?`,
     message:
       `${name} is forgotten on this computer: its pairing token and routes are deleted, and its threads are no longer listed here. ` +
-      "It keeps listing this computer until you revoke it there.",
+      "This computer's access there ends too when it can be reached; otherwise revoke it there.",
     action: "Remove",
     destructive: true,
     run: () => {
-      void shellCall("machines_remove", { id: machine.id }).then(
-        async () => {
+      void shellCall<string | null>("machines_remove", { id: machine.id }).then(
+        async (message) => {
           detach(machine.id);
           void import("./settingsFollow").then((follow) => follow.forgetFollower(machine.id));
-          toast(`Removed ${name}.`, "success");
+          toast(message || `Removed ${name}.`, "success");
           await refreshMachines();
           onRemoved?.();
         },

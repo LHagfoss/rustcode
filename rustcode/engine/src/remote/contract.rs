@@ -283,6 +283,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 rotation_id: "5be1c4a07d2e9f63".to_owned(),
             }),
         ),
+        ("unpair", HandshakeRequest::Unpair),
     ]
 }
 
