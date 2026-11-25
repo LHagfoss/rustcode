@@ -1309,7 +1309,7 @@ export function TurnEndRow({
   threadId?: string;
   latest?: boolean;
 }) {
-  // The turn's only action row: outcome and time, copy and fork, then the changes chip. The newest
+  // The turn's only action row: outcome and time, the trace and changes chips, then copy and fork. The newest
   // answer keeps its actions in view; an older turn's fade in under the pointer or focus, in room
   // the row always keeps (docs/design.md › Type).
   const row = turnActions({ text: reply, at: item.at, threadId });
@@ -1350,6 +1350,8 @@ export function TurnEndRow({
       >
         {item.outcome === "cancelled" && !folded && <SquareStop size={12} />}
         {parts.length > 0 && <span className="tabular">{parts.join(" · ")}</span>}
+        {traced && trace}
+        {changes}
         {(row.copy || row.fork || row.sideChat) && (
           <span
             className={cx(
@@ -1375,8 +1377,6 @@ export function TurnEndRow({
             {row.sideChat && row.copy && <ReplySideChatButton threadId={threadId!} reply={row.copy} />}
           </span>
         )}
-        {traced && trace}
-        {changes}
       </div>
     </div>
   );

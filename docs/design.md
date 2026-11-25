@@ -417,7 +417,9 @@ title, a 2px dot and a `text-callout` summary in `fg-faint`, on one line; a
 failed command keeps its title grey and ends on a neutral capsule with a red
 dot and the exit code, which never truncates. The footer's actions stay in view
 on the newest turn when it ends in a reply; an older turn's fade in (100ms) on
-hover or focus in room the row keeps, and stay visible on touch.
+hover or focus in room the row keeps, and stay visible on touch. They come
+last in the row, after the Trace and Changes chips, so hidden actions never
+leave a gap before a chip.
 
 Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
 that change use `tabular`.
