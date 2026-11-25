@@ -842,7 +842,15 @@ the same thread twice.
 ## Waking a parent thread
 
 Built in the app (`apps/desktop/src/state/host.ts`, rules in
-`state/orchestration.ts`). A thread that starts or messages others is told when
+`state/orchestration.ts`). With no app that hosts orchestration connected to
+the engine, the engine wakes a parent for the links it ran itself
+(`engine: true`) and the workflow runs it drove
+(`orchestration/local_wake.rs`, #4382): finished and failed links are
+gathered per parent for `wake-batch-seconds` from the first, claimed with
+`notifiedAt` so an app that attaches later does not repeat them, and told in
+one turn shaped like the app's (*Delegate finished: …*), after the parent's
+current turn. A parent at Ask access is not woken that way. Stall notices
+and questions stay the app's. A thread that starts or messages others is told when
 they finish or ask, instead of having to poll with sleeps.
 
 - **Batched (issue 3649).** Every wake is a model turn that resends the

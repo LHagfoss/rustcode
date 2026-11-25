@@ -1598,7 +1598,7 @@ async fn wait_session(caller: &str, cancel: &CancellationToken, args: &Value) ->
                 "status": "timeout",
                 "waited_until": waited_until(wait),
                 "links": current,
-                "note": "Still running. The RustCode app is not attached, so these are the link states it last recorded; open the app to keep them current. Anything that settles arrives as a wake while it is open; do not poll with sleeps.",
+                "note": "Still running. The RustCode app is not attached, so these are the link states it last recorded; open the app to keep them current. A link this engine runs wakes this thread when it settles; do not poll with sleeps.",
             });
         }
         tokio::select! {

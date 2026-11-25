@@ -252,8 +252,11 @@ whose agent already read the end (`workflow_status` on a settled run, or its
 own `stop_workflow`) is not woken for it. The app announces only a run that
 ended within the hour before it first saw it, so opening an old thread does not
 wake it for a run from last week; the agent can always read the run with
-`workflow_status`. With no app open nothing wakes the thread: the agent reads
-the run with `workflow_status` and `wait_ms`.
+`workflow_status`. With no app connected to the engine, the engine tells the thread itself
+(#4382): it claims the same `woken` mark, and runs the same note as the
+thread's next turn once its current turn ends, unless the thread is at Ask
+access, where nobody could approve that turn; then the agent reads the run
+with `workflow_status` and `wait_ms`.
 
 **Limits in Settings.** A Workflows group under Orchestration in Settings has
 the four settings in *Limits*, per machine like the delegate limits. A run
