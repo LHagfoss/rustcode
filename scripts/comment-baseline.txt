@@ -463,7 +463,7 @@
 97 apps/desktop/src/ui/ChatView.tsx
 11 apps/desktop/src/ui/CommandPalette.tsx
 5 apps/desktop/src/ui/Compare.tsx
-222 apps/desktop/src/ui/Composer.tsx
+210 apps/desktop/src/ui/Composer.tsx
 30 apps/desktop/src/ui/ComposerDrawer.tsx
 30 apps/desktop/src/ui/ComposerFooter.tsx
 23 apps/desktop/src/ui/ComposerUsage.tsx
