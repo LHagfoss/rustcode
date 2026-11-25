@@ -10,6 +10,7 @@
 // (state/inboxDismissed.ts).
 
 import type { PermissionRequest, SessionSummary } from "../acp/types";
+import { approvalSubject, commandOf } from "../lib/approval";
 import { type InboxDismissals, isDismissed } from "./inboxDismissed";
 import type { Link } from "./orchestration";
 
@@ -94,7 +95,9 @@ function projectOf(read: InboxRead, id: string): string {
 /** What a request asks for, in one line. */
 export function requestDetail(request: PermissionRequest): string {
   if (request.question) return request.question.text;
-  return `Wants to ${request.title}`;
+  const command = commandOf(request);
+  if (command) return `Wants to run ${command.split("\n")[0]!.trim()}`;
+  return `Wants to ${approvalSubject(request)}`;
 }
 
 /** One request as a row, with its place in the thread's approvals. */

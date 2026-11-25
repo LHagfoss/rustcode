@@ -143,6 +143,27 @@ export function projectThreads(sessions: readonly SessionSummary[], project: str
     .sort((one, other) => (other.updatedAt ?? 0) - (one.updatedAt ?? 0));
 }
 
+/**
+ * The dashboard's needs-you rows: one per thread, the first request each, kept to
+ * the dashboard's project like its recent threads. With no project, every thread.
+ */
+export function projectNeeds<T extends { threadId: string }>(
+  items: readonly T[],
+  sessions: readonly SessionSummary[],
+  project: string,
+): T[] {
+  const inProject = project
+    ? new Set(projectThreads(sessions, project).map((session) => session.id))
+    : undefined;
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (inProject && !inProject.has(item.threadId)) return false;
+    if (seen.has(item.threadId)) return false;
+    seen.add(item.threadId);
+    return true;
+  });
+}
+
 /** The activity card's small numbers: turns in the last seven days, today's included, and the busiest day read. */
 export function activitySummary(
   turns: ReadonlyMap<string, number>,

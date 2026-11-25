@@ -213,7 +213,8 @@ function segmentsOf(command: string): string[][] {
     .filter((words) => words.length > 0);
 }
 
-function commandOf(request: PermissionRequest): string | undefined {
+/** The shell command a request would run, as the card shows it, when it runs one. */
+export function commandOf(request: PermissionRequest): string | undefined {
   const input = request.input;
   if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
   const record = input as Record<string, unknown>;

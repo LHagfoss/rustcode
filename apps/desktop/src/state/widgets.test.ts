@@ -9,6 +9,7 @@ import {
   heatmapWeeks,
   monthBounds,
   periodTotals,
+  projectNeeds,
   projectThreads,
   sharePercent,
   sharesBy,
@@ -140,6 +141,35 @@ describe("a project's threads", () => {
 
   test("no project chosen has no threads", () => {
     expect(projectThreads([session()], "")).toEqual([]);
+  });
+});
+
+describe("the dashboard's needs-you rows", () => {
+  const sessions = [
+    session({ id: "here" }),
+    session({
+      id: "tree",
+      cwd: "/tmp/rustcode-1",
+      worktree: { path: "/tmp/rustcode-1", branch: "feat/x", repo: "/Users/ada/code/rustcode" },
+    }),
+    session({ id: "away", cwd: "/Users/ada/code/other" }),
+  ];
+  const items = [
+    { threadId: "here", key: "a" },
+    { threadId: "tree", key: "b" },
+    { threadId: "tree", key: "c" },
+    { threadId: "away", key: "d" },
+  ];
+
+  test("one row per thread of the project, its worktrees included", () => {
+    expect(projectNeeds(items, sessions, "/Users/ada/code/rustcode").map((item) => item.key)).toEqual([
+      "a",
+      "b",
+    ]);
+  });
+
+  test("with no project, one row per thread anywhere", () => {
+    expect(projectNeeds(items, sessions, "").map((item) => item.key)).toEqual(["a", "b", "d"]);
   });
 });
 

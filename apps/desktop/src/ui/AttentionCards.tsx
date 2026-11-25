@@ -236,7 +236,7 @@ const RISK_TONE: Record<RiskAssessment["level"], { icon: string; badge: string }
   destructive: { icon: "text-danger", badge: "bg-danger/12 text-danger" },
 };
 
-function RiskBadge({ risk }: { risk: RiskAssessment }) {
+export function RiskBadge({ risk }: { risk: RiskAssessment }) {
   return (
     <span
       className={cx("shrink-0 rounded-xs px-1.5 font-medium text-caption", RISK_TONE[risk.level].badge)}
