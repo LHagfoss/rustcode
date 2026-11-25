@@ -1201,7 +1201,7 @@
     0 0 14px color-mix(in srgb, var(--rc-bg) 60%, transparent);
 }
 
-/* A day of the activity heatmap's grid: 2px, under the smallest radius step, on a 7px cell. */
+/* A day of the activity heatmap's grid: a fixed 2px corner, so the cells stay squares at any radius setting. */
 .rc-heat-cell {
   border-radius: 2px;
 }

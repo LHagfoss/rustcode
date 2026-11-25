@@ -5,7 +5,7 @@
  * the page below is set to.
  */
 
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { UsageReport } from "../acp/rustcode";
 import { count } from "../lib/plural";
 import {
@@ -67,10 +67,16 @@ function cellTip(cell: ProfileCell, mode: ProfileMode): string {
 
 export function ActivityProfile({ report, error }: { report: UsageReport | null; error?: string | null }) {
   const [mode, setMode] = useState<ProfileMode>("daily");
+  const scroller = useRef<HTMLDivElement>(null);
   const rows = report?.rows;
   const summary = useMemo(() => (rows ? profileSummary(rows) : undefined), [rows]);
   const columns = useMemo(() => (rows ? profileWeeks(rows, mode) : []), [rows, mode]);
   const months = useMemo(() => monthLabels(columns), [columns]);
+  const loaded = Boolean(rows);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (loaded && el) el.scrollLeft = el.scrollWidth;
+  }, [loaded]);
 
   const streak = summary?.streak;
   const best =
@@ -156,14 +162,14 @@ export function ActivityProfile({ report, error }: { report: UsageReport | null;
             />
           </div>
         )}
-        <div className="overflow-x-auto p-4">
+        <div ref={scroller} className={cx("overflow-x-auto", !rows && "p-4")}>
           {!rows ? (
             <Skeleton className="h-[110px] w-full" />
           ) : (
             <div
               role="img"
               aria-label={`Tokens per day over the last ${PROFILE_WEEKS} weeks, ${mode}.`}
-              className="flex min-w-[560px] flex-col gap-1.5"
+              className="flex min-w-[932px] flex-col gap-1.5 p-4"
             >
               <div className="flex gap-[3px]">
                 {columns.map((week, index) => (
@@ -174,13 +180,7 @@ export function ActivityProfile({ report, error }: { report: UsageReport | null;
                     {week.map((cell, day) =>
                       cell ? (
                         <Tooltip key={cell.day} label={cellTip(cell, mode)}>
-                          <span
-                            className={cx(
-                              "aspect-square w-full rounded-inline",
-                              SHADE[cell.level],
-                              streak?.days.has(cell.day) && "ring-1 ring-accent/60",
-                            )}
-                          />
+                          <span className={cx("rc-heat-cell aspect-square w-full", SHADE[cell.level])} />
                         </Tooltip>
                       ) : (
                         <span key={`future-${index}-${day}`} className="aspect-square w-full" />
