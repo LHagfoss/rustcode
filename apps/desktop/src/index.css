@@ -996,7 +996,7 @@
   animation: rc-overview-fill-out 160ms ease-out both;
 }
 
-/* A dashboard bar grows from its base once, when the card first draws. */
+/* A dashboard bar grows from its base once, on the dashboard's first visit of the session. */
 @keyframes rc-dash-bar-in {
   from {
     transform: scale(0, 0);
@@ -1005,6 +1005,9 @@
 .rc-dash-bar {
   transform-origin: left bottom;
   animation: rc-dash-bar-in 420ms var(--ease-snappy) both;
+}
+.rc-dash-still .rc-dash-bar {
+  animation: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .rc-dash-bar {

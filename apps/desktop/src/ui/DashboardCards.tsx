@@ -52,10 +52,13 @@ export function DashboardFigures({
   rows,
   month,
   twoMonths,
+  entrance,
 }: {
   rows?: UsageRow[];
   month?: UsageRow[];
   twoMonths?: UsageRow[];
+  /** The class that plays the dashboard's entrance, or holds it still on a later visit. */
+  entrance: string;
 }) {
   const sessions = useApp((s) => s.sessions);
   const running = useApp((s) => Object.values(s.threads).filter(isRunning).length);
@@ -104,7 +107,7 @@ export function DashboardFigures({
     );
   }
   return (
-    <div className="rc-overview-in grid shrink-0 grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2">
+    <div className={cx(entrance, "grid shrink-0 grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2")}>
       <Tile
         label="Spend this month"
         value={formatBestCost(spend.now)}

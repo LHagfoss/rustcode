@@ -735,7 +735,20 @@ function PullsCard({ project }: { project: string }) {
  * token line; two reads by model price the month's spend and the one before it, a harness's
  * reported cost or the list-price estimate (`state/pricing.ts`).
  */
+/** Whether the dashboard has drawn once this session: its entrance plays on the first visit only. */
+let dashboardEntered = false;
+
+/** The class that plays the dashboard's entrance on its first visit, and holds it still after. */
+function useDashboardEntrance(): string {
+  const [first] = useState(() => !dashboardEntered);
+  useEffect(() => {
+    dashboardEntered = true;
+  }, []);
+  return first ? "rc-overview-in" : "rc-dash-still";
+}
+
 export function DashboardBody({ project }: { project: string }) {
+  const entrance = useDashboardEntrance();
   const since = useMemo(() => daysAgo(new Date(), HEATMAP_WEEKS * 7 - 1), []);
   const usageSince = useMemo(() => daysAgo(new Date(), USAGE_DAYS - 1), []);
   const { since: monthSince, previousSince } = useMemo(() => monthBounds(new Date()), []);
@@ -779,8 +792,13 @@ export function DashboardBody({ project }: { project: string }) {
   };
   return (
     <>
-      <DashboardFigures rows={rows} month={month.data?.rows} twoMonths={twoMonths.data?.rows} />
-      <div className="rc-overview-in min-h-0 w-full flex-1 overflow-y-auto">
+      <DashboardFigures
+        rows={rows}
+        month={month.data?.rows}
+        twoMonths={twoMonths.data?.rows}
+        entrance={entrance}
+      />
+      <div className={cx(entrance, "min-h-0 w-full flex-1 overflow-y-auto")}>
         <WidgetGrid render={render} fill />
       </div>
     </>
