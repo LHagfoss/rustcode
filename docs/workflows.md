@@ -140,6 +140,16 @@ they **nest under it**, count against its delegate slots (`delegates-per-thread`
 the agent starts by hand. When every slot is taken, the run waits and tries
 again rather than failing.
 
+**Retrying a run.** A run that ended `failed`, `timed_out` or `cancelled` can
+be retried (#4383): `run_workflow` with `retry_run_id` (and no `script`, `name`
+or `args`), or **Retry** on the run's card in the app
+(`_rustcode/workflows/retry`). The run goes back to `running` under the same id
+with its saved script; its finished calls are answered from `calls.jsonl` with
+no thread started and no budget spent, and only failed or missing calls start
+workers. `concurrency`, `call_budget` and `timeout_minutes` may lower its
+limits, the timeout counts from the retry, and the thread is told once when it
+ends. A `done` or still `running` run is refused.
+
 ## Durability
 
 Everything is under the starting thread's folder,

@@ -69,6 +69,31 @@ pub(crate) fn resume(
     }
 }
 
+/// Retry one failed, timed-out or stopped run from its finished calls (#4383).
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/workflows/retry", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkflowRetryRequest {
+    pub session_id: String,
+    pub run_id: String,
+}
+
+pub(crate) fn retry(
+    request: WorkflowRetryRequest,
+    host: Option<(Arc<dyn crate::preview::PreviewClient>, u8)>,
+) -> Value {
+    let (client, version) = match host {
+        Some((client, version)) => (Some(client), version),
+        None => (None, 0),
+    };
+    match crate::workflow::retry_run(&request.session_id, &request.run_id, client, version) {
+        Ok(run) => json!({ "run": run }),
+        Err(message) => json!({ "error": { "code": "failed", "message": message } }),
+    }
+}
+
 /// `_rustcode/workflows/wake`: claim the wake of an ended run. Answers
 /// `{claimed}`: true once, for the client that should tell the thread.
 #[derive(

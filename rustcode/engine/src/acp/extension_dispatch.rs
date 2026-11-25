@@ -1890,6 +1890,21 @@ pub(super) async fn dispatch_request(
 
             responder.respond(workflows::resume(request, host))
         }
+        "_rustcode/workflows/retry" => {
+            let request: workflows::WorkflowRetryRequest = parse_params(params)?;
+            let asker = server.clients.info(client_id).orchestration;
+            let host = (asker >= 2)
+                .then(|| {
+                    super::preview::orchestration_client_for(
+                        true,
+                        &server.clients.session(&request.session_id),
+                    )
+                })
+                .flatten()
+                .map(|client| (client, asker));
+
+            responder.respond(workflows::retry(request, host))
+        }
         "_rustcode/workflows/wake" => {
             let request: workflows::WorkflowWakeRequest = parse_params(params)?;
 
