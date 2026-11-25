@@ -80,7 +80,13 @@ export function mergeUsageReports(parts: readonly { host: string; report: UsageR
       }
       // Two machines' rows of one model or day: the same pair only while both agree.
       const modelHarness = known.modelHarness === row.modelHarness ? known.modelHarness : undefined;
-      rows.set(key, { ...known, ...addTotals(totalsOf(known), totalsOf(row)), modelHarness });
+      const longest = Math.max(known.longestTurnMs ?? -1, row.longestTurnMs ?? -1);
+      rows.set(key, {
+        ...known,
+        ...addTotals(totalsOf(known), totalsOf(row)),
+        modelHarness,
+        longestTurnMs: longest < 0 ? undefined : longest,
+      });
     }
   }
   return {

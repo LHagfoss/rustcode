@@ -165,6 +165,7 @@ fn usage_groups_totals_and_scopes_by_project() {
     assert_eq!(codex["turns_without_any_tokens"], 2);
     // No turn in this store reported a cost, so both of codex's are missing one.
     assert_eq!(codex["turns_without_cost"], 2);
+    assert!(codex.get("longest_turn_ms").is_some(), "{codex}");
     // A harness that reported nothing is NULL, never a made-up zero.
     let claude = &rows(&by_harness)[1];
     assert!(claude["input_tokens"].is_null(), "{claude}");
