@@ -562,6 +562,88 @@ pub async fn run_approved(
     result.map(|value| value.to_string())
 }
 
+/// Turn a native `browser_screenshot` result into a short text result and
+/// the saved image, which the turn attaches after the tool batch.
+pub(crate) fn attach_screenshot(
+    content: &str,
+    save_image: impl FnOnce(&[u8], &str) -> std::io::Result<PathBuf>,
+) -> (rustcode_tools::ToolExecutionOutput, Option<PathBuf>) {
+    use rustcode_tools::ToolExecutionOutput;
+    let decoded = serde_json::from_str::<Value>(content)
+        .map_err(|error| format!("the browser answered with malformed JSON: {error}"))
+        .and_then(|value| crate::preview::decode_screenshot(&value));
+    let (bytes, extension) = match decoded {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            return (
+                ToolExecutionOutput::failure(format!("error: browser_screenshot failed: {error}")),
+                None,
+            );
+        }
+    };
+    match save_image(&bytes, extension) {
+        Ok(path) => (
+            ToolExecutionOutput::success(format!(
+                "Captured the browser viewport ({} KB {}); the image is attached after this tool result.",
+                bytes.len().div_ceil(1024),
+                extension.to_ascii_uppercase()
+            )),
+            Some(path),
+        ),
+        Err(error) => (
+            ToolExecutionOutput::failure(format!(
+                "error: could not save the browser screenshot: {error}"
+            )),
+            None,
+        ),
+    }
+}
+
+#[cfg(test)]
+mod screenshot_tests {
+    use super::attach_screenshot;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use std::path::PathBuf;
+
+    #[test]
+    fn screenshot_becomes_an_attachment_not_base64_text() {
+        let png = b"\x89PNG\r\n\x1a\nrest-of-image".to_vec();
+        let content = serde_json::json!({ "data": STANDARD.encode(&png) }).to_string();
+        let mut saved = None;
+        let (output, path) = attach_screenshot(&content, |bytes, extension| {
+            saved = Some((bytes.to_vec(), extension.to_owned()));
+            Ok(PathBuf::from("/tmp/browser.png"))
+        });
+        assert!(output.success, "{}", output.content);
+        assert!(output.content.len() < 1024);
+        assert!(!output.content.contains(&STANDARD.encode(&png)));
+        assert_eq!(path, Some(PathBuf::from("/tmp/browser.png")));
+        assert_eq!(saved, Some((png, "png".to_owned())));
+    }
+
+    #[test]
+    fn unusable_screenshots_are_errors() {
+        for content in [
+            "not json".to_owned(),
+            serde_json::json!({}).to_string(),
+            serde_json::json!({ "data": "!!!" }).to_string(),
+            serde_json::json!({ "data": STANDARD.encode(b"GIF89a") }).to_string(),
+        ] {
+            let (output, path) =
+                attach_screenshot(&content, |_, _| Ok(PathBuf::from("/tmp/unused.png")));
+            assert!(!output.success, "{content}");
+            assert!(path.is_none());
+        }
+        let content =
+            serde_json::json!({ "data": STANDARD.encode(b"\x89PNG\r\n\x1a\n") }).to_string();
+        let (output, path) =
+            attach_screenshot(&content, |_, _| Err(std::io::Error::other("disk full")));
+        assert!(!output.success);
+        assert!(output.content.contains("disk full"));
+        assert!(path.is_none());
+    }
+}
+
 #[cfg(test)]
 mod settings_tests {
     #[test]
