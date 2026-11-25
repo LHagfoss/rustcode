@@ -17,13 +17,14 @@ import {
 } from "react";
 import {
   addWidget,
-  CARD_HEIGHT,
+  cardHeight,
   DEFAULT_LAYOUT,
-  fittedCardHeight,
+  fittedRowHeight,
   getWidgetLayout,
   hiddenWidgets,
-  layoutRows,
   moveWidget,
+  packLayout,
+  ROW_HEIGHT,
   removeWidget,
   resizeWidget,
   sameLayout,
@@ -31,21 +32,17 @@ import {
   useWidgetLayout,
   WIDGET_BLURBS,
   WIDGET_NAMES,
+  type WidgetExtent,
   type WidgetId,
   type WidgetSlot,
-  type WidgetSpan,
 } from "../state/widgetLayout";
 import { GripVertical, Plus, RotateCcw, SlidersHorizontal, X } from "./icons";
 import { cx, Pill, Tooltip } from "./primitives";
 
-const SPAN_CLASS: Record<WidgetSpan, string> = {
-  2: "lg:col-span-2",
-  3: "lg:col-span-3",
-  4: "lg:col-span-4",
-  6: "lg:col-span-6",
-};
+const WIDTH_CLASS: Record<WidgetExtent, string> = { 1: "lg:col-span-1", 2: "lg:col-span-2" };
+const HEIGHT_CLASS: Record<WidgetExtent, string> = { 1: "lg:row-span-1", 2: "lg:row-span-2" };
 
-const SPAN_NAME: Record<WidgetSpan, string> = { 2: "S", 3: "M", 4: "L", 6: "XL" };
+const sizeName = (slot: WidgetSlot) => `${slot.w}×${slot.h}`;
 
 let editing = false;
 const editListeners = new Set<() => void>();
@@ -75,11 +72,12 @@ interface Frame {
 }
 
 const FrameContext = createContext<Frame | undefined>(undefined);
-const HeightContext = createContext(CARD_HEIGHT);
+const RowContext = createContext(ROW_HEIGHT);
 
-/** The height every card in the grid takes, in pixels: taller when the overview has room to fill. */
+/** The card's height in pixels: its rows of the grid, which grow when the overview has room to fill. */
 export function useCardHeight(): number {
-  return useContext(HeightContext);
+  const row = useContext(RowContext);
+  return cardHeight(row, useContext(FrameContext)?.slot.h ?? 1);
 }
 
 /**
@@ -113,10 +111,15 @@ function useRoom(scroller: HTMLElement | null | undefined, on: boolean): number 
   return room;
 }
 
-/** The card's width class in the grid, for `Card` to put on its section. */
+/** The card's width and height classes in the grid, for `Card` to put on its section. */
 export function useWidgetSpan(): string {
   const frame = useContext(FrameContext);
-  return frame ? SPAN_CLASS[frame.slot.span] : "lg:col-span-2";
+  return frame ? `${WIDTH_CLASS[frame.slot.w]} ${HEIGHT_CLASS[frame.slot.h]}` : WIDTH_CLASS[1];
+}
+
+/** How many rows of the grid the card spans. */
+export function useWidgetRows(): WidgetExtent {
+  return useContext(FrameContext)?.slot.h ?? 1;
 }
 
 /** The card's id for the grid's hit test, and the edit mode's outline. */
@@ -138,14 +141,14 @@ export function WidgetChrome({ fallback }: { fallback?: ReactNode }) {
   const name = WIDGET_NAMES[frame.slot.id];
   return (
     <span className="flex shrink-0 items-center gap-0.5">
-      <Tooltip label="Change the width">
+      <Tooltip label="Change the size: wide, tall or both">
         <button
           type="button"
-          aria-label={`Width of ${name}: ${SPAN_NAME[frame.slot.span]}`}
+          aria-label={`Size of ${name}: ${frame.slot.w} wide, ${frame.slot.h} tall`}
           onClick={() => setWidgetLayout(resizeWidget(getWidgetLayout(), frame.slot.id))}
           className="h-5 min-w-5 rounded-sm px-1 font-medium text-caption text-fg-muted tabular hover:bg-fill-subtle hover:text-fg"
         >
-          {SPAN_NAME[frame.slot.span]}
+          {sizeName(frame.slot)}
         </button>
       </Tooltip>
       <Tooltip label="Drag to move, or use the arrow keys">
@@ -213,11 +216,11 @@ export function WidgetGrid({
   const isEditing = useWidgetsEditing();
   const [dragId, setDragId] = useState<WidgetId>();
   const [ghost, setGhost] = useState<{ x: number; y: number }>();
-  const grid = useSlideOnReorder(layout.map((slot) => `${slot.id}:${slot.span}`).join());
+  const grid = useSlideOnReorder(layout.map((slot) => `${slot.id}:${slot.w}${slot.h}`).join());
   const [scroller, setScroller] = useState<HTMLElement | null>();
   useLayoutEffect(() => setScroller(grid.current?.parentElement), [grid]);
   const room = useRoom(scroller, fill);
-  const height = room === undefined ? CARD_HEIGHT : fittedCardHeight(room, layoutRows(layout));
+  const row = room === undefined ? ROW_HEIGHT : fittedRowHeight(room, packLayout(layout).rows);
 
   const hoverTarget = (x: number, pointerY: number, id: WidgetId) => {
     const box = grid.current?.parentElement?.getBoundingClientRect();
@@ -304,10 +307,11 @@ export function WidgetGrid({
 
   const hidden = hiddenWidgets(layout);
   return (
-    <HeightContext.Provider value={height}>
+    <RowContext.Provider value={row}>
       <div
         ref={grid}
-        className="relative flex snap-x gap-2 overflow-x-auto pb-0.5 lg:grid lg:grid-cols-6 lg:overflow-visible lg:pb-0"
+        className="relative flex snap-x gap-2 overflow-x-auto pb-0.5 lg:grid lg:grid-flow-row-dense lg:grid-cols-4 lg:overflow-visible lg:pb-0"
+        style={{ gridAutoRows: row }}
         role="group"
         aria-label="Activity, usage and recent work"
       >
@@ -328,7 +332,7 @@ export function WidgetGrid({
         ))}
         {isEditing && <AddTray hidden={hidden} layout={layout} />}
         {!isEditing && layout.length === 0 && (
-          <div className="col-span-6 flex items-center justify-center gap-2 py-6 text-caption text-fg-muted">
+          <div className="col-span-4 flex items-center justify-center gap-2 py-6 text-caption text-fg-muted">
             The overview is empty.
             <Pill quiet size="sm" onClick={() => setWidgetsEditing(true)}>
               Add cards
@@ -346,7 +350,7 @@ export function WidgetGrid({
           {WIDGET_NAMES[dragId]}
         </div>
       )}
-    </HeightContext.Provider>
+    </RowContext.Provider>
   );
 }
 
@@ -355,7 +359,7 @@ function AddTray({ hidden, layout }: { hidden: WidgetId[]; layout: WidgetSlot[] 
   return (
     <section
       aria-label="Add cards"
-      className="flex w-[240px] shrink-0 snap-start flex-col gap-2 rounded-xl border border-accent/35 border-dashed p-3 lg:col-span-6 lg:w-auto"
+      className="flex w-[240px] shrink-0 snap-start flex-col gap-2 rounded-xl border border-accent/35 border-dashed p-3 lg:col-span-4 lg:w-auto"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-caption font-medium text-fg-muted">

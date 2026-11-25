@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { UsageRow } from "../acp/rustcode";
 import type { SessionSummary } from "../acp/types";
-import { heatmapWeeks, monthBounds, projectThreads, streakOf, turnsPerDay } from "./widgets";
+import { activitySummary, heatmapWeeks, monthBounds, projectThreads, streakOf, turnsPerDay } from "./widgets";
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
   harness: "codex",
@@ -164,5 +164,21 @@ describe("the activity streak", () => {
       current: 1,
       longest: 1,
     });
+  });
+});
+
+describe("activitySummary", () => {
+  test("counts the last seven days and finds the busiest day", () => {
+    const turns = new Map([
+      ["2026-11-25", 3],
+      ["2026-11-19", 2],
+      ["2026-11-18", 9],
+      ["2026-10-01", 4],
+    ]);
+    expect(activitySummary(turns, new Date("2026-11-25T12:00:00Z"))).toEqual({
+      week: 5,
+      busiest: { day: "2026-11-18", turns: 9 },
+    });
+    expect(activitySummary(new Map())).toEqual({ week: 0, busiest: undefined });
   });
 });

@@ -27,6 +27,7 @@ import { formatTokens, relativeAge } from "../state/thread";
 import { isRunning } from "../state/turn";
 import type { WidgetId } from "../state/widgetLayout";
 import {
+  activitySummary,
   HEATMAP_WEEKS,
   type HeatCell,
   heatmapWeeks,
@@ -57,6 +58,7 @@ import {
   useCardHeight,
   useWidgetEditClass,
   useWidgetId,
+  useWidgetRows,
   useWidgetSpan,
   WidgetChrome,
   WidgetGrid,
@@ -85,6 +87,9 @@ const USAGE_DAYS = 30;
 /** A heatmap cell's smallest and largest side and the space between cells, in pixels: squares, as a contribution graph draws them. */
 const HEAT_CELL = 8;
 const HEAT_CELL_MAX = 14;
+/** A two-row activity card stacks its numbers over the heatmap: their line's height, and the larger cells it allows. */
+const STACKED_STATS = 100;
+const STACKED_HEAT_CELL_MAX = 18;
 const HEAT_GAP = 2;
 /** The fewest weeks the heatmap draws, however narrow its card. */
 const MIN_WEEKS = 8;
@@ -296,15 +301,37 @@ function monthLabels(columns: readonly (readonly (HeatCell | null)[])[]): (strin
   });
 }
 
-/** The heatmap cell's side that fits a week's seven days in the card's height. */
-function useHeatCell(): number {
-  const fits = Math.floor((useCardHeight() - CARD_CHROME - 6 * HEAT_GAP - MONTH_ROW) / 7);
-  return Math.max(HEAT_CELL, Math.min(HEAT_CELL_MAX, fits));
+/** The heatmap cell's side that fits a week's seven days in the card's height, under the stacked numbers or beside them. */
+function useHeatCell(stacked: boolean): number {
+  const room = useCardHeight() - CARD_CHROME - 6 * HEAT_GAP - MONTH_ROW - (stacked ? STACKED_STATS : 0);
+  const most = stacked ? STACKED_HEAT_CELL_MAX : HEAT_CELL_MAX;
+  return Math.max(HEAT_CELL, Math.min(most, Math.floor(room / 7)));
+}
+
+const shortDay = (day: string) =>
+  new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+
+/** One of the two-row activity card's small figures: a label over its value. */
+function ActivityFigure({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div className="flex min-w-0 flex-col rounded-lg bg-fill-subtle px-2 py-1">
+      <dt className="truncate text-caption text-fg-muted">{label}</dt>
+      <dd className="truncate text-callout font-medium text-fg tabular">
+        {value}
+        {detail && <span className="font-normal text-caption text-fg-muted"> · {detail}</span>}
+      </dd>
+    </div>
+  );
 }
 
 function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
   const sessions = useApp((s) => s.sessions);
-  const side = useHeatCell();
+  const stacked = useWidgetRows() === 2;
+  const side = useHeatCell(stacked);
   const [box, weeks] = useFittedWeeks(side);
   const turns = useMemo(() => turnsPerDay(rows ?? []), [rows]);
   const columns = useMemo(() => heatmapWeeks(turns, weeks), [turns, weeks]);
@@ -313,6 +340,7 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
     [columns, side],
   );
   const streak = useMemo(() => streakOf(turns), [turns]);
+  const summary = useMemo(() => activitySummary(turns), [turns]);
   const shownTurns = useMemo(
     () => columns.flat().reduce((sum, cell) => sum + (cell?.turns ?? 0), 0),
     [columns],
@@ -332,44 +360,82 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
       ) : turns.size === 0 ? (
         <Nothing>No turns recorded yet.</Nothing>
       ) : (
-        <div className="flex min-h-0 flex-1 items-end gap-4">
-          <div className="flex shrink-0 flex-col">
-            <span className="font-semibold text-title3 text-fg tabular">{shownTurns.toLocaleString()}</span>
-            <span className="text-caption text-fg-muted">turns in {weeks} weeks</span>
-            <span className="text-caption text-fg-muted">{count(activeThreads, "thread")} active</span>
-          </div>
-          <div
-            ref={box}
-            role="img"
-            aria-label={`Turns per day over the last ${weeks} weeks: ${count(shownTurns, "turn")}.`}
-            className="flex min-w-0 flex-1 justify-end overflow-hidden"
-            style={{ gap: HEAT_GAP }}
-          >
-            {columns.map((week, index) => (
-              <div
-                key={week.find(Boolean)?.day ?? index}
-                className="flex shrink-0 flex-col"
-                style={{ gap: HEAT_GAP }}
-              >
-                {months && (
-                  <span className="relative shrink-0" style={{ height: MONTH_ROW - HEAT_GAP }}>
-                    {months[index] && (
-                      <span className="absolute bottom-0 left-0 whitespace-nowrap text-caption text-fg-muted leading-none">
-                        {months[index]}
-                      </span>
-                    )}
-                  </span>
-                )}
-                {week.map((cell, day) => (
-                  <span
-                    key={cell?.day ?? `future-${index}-${day}`}
-                    title={cell ? `${cell.day} · ${count(cell.turns, "turn")}` : undefined}
-                    className={cx("rc-heat-cell rounded-xs", cell && SHADE[cell.level])}
-                    style={{ width: side, height: side }}
-                  />
-                ))}
+        <div
+          className={cx(
+            "flex min-h-0 flex-1",
+            stacked ? "flex-col justify-between gap-2" : "items-end gap-4",
+          )}
+        >
+          {stacked ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-baseline gap-2">
+                <span className="font-semibold text-title2 text-fg tabular">
+                  {shownTurns.toLocaleString()}
+                </span>
+                <span className="truncate text-caption text-fg-muted">
+                  turns in {weeks} weeks · {count(activeThreads, "thread")} active
+                </span>
               </div>
-            ))}
+              <dl className="grid grid-cols-3 gap-2">
+                <ActivityFigure label="This week" value={count(summary.week, "turn")} />
+                <ActivityFigure
+                  label="Busiest day"
+                  value={summary.busiest ? count(summary.busiest.turns, "turn") : "None yet"}
+                  detail={summary.busiest && shortDay(summary.busiest.day)}
+                />
+                <ActivityFigure label="Longest streak" value={count(streak.longest, "day")} />
+              </dl>
+            </div>
+          ) : (
+            <div className="flex shrink-0 flex-col">
+              <span className="font-semibold text-title3 text-fg tabular">{shownTurns.toLocaleString()}</span>
+              <span className="text-caption text-fg-muted">turns in {weeks} weeks</span>
+              <span className="text-caption text-fg-muted">{count(activeThreads, "thread")} active</span>
+            </div>
+          )}
+          <div className={cx("flex min-w-0 flex-1 flex-col", stacked && "justify-center gap-2")}>
+            <div
+              ref={box}
+              role="img"
+              aria-label={`Turns per day over the last ${weeks} weeks: ${count(shownTurns, "turn")}.`}
+              className="flex min-w-0 justify-end overflow-hidden"
+              style={{ gap: HEAT_GAP }}
+            >
+              {columns.map((week, index) => (
+                <div
+                  key={week.find(Boolean)?.day ?? index}
+                  className="flex shrink-0 flex-col"
+                  style={{ gap: HEAT_GAP }}
+                >
+                  {months && (
+                    <span className="relative shrink-0" style={{ height: MONTH_ROW - HEAT_GAP }}>
+                      {months[index] && (
+                        <span className="absolute bottom-0 left-0 whitespace-nowrap text-caption text-fg-muted leading-none">
+                          {months[index]}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                  {week.map((cell, day) => (
+                    <span
+                      key={cell?.day ?? `future-${index}-${day}`}
+                      title={cell ? `${cell.day} · ${count(cell.turns, "turn")}` : undefined}
+                      className={cx("rc-heat-cell rounded-xs", cell && SHADE[cell.level])}
+                      style={{ width: side, height: side }}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+            {stacked && (
+              <div aria-hidden className="flex items-center justify-end gap-1 text-caption text-fg-muted">
+                Less
+                {([0, 1, 2, 3, 4] as const).map((level) => (
+                  <span key={level} className={cx("size-2.5 rounded-xs", SHADE[level])} />
+                ))}
+                More
+              </div>
+            )}
           </div>
         </div>
       )}

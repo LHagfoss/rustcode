@@ -140,3 +140,20 @@ export function setOverviewExpanded(expanded: boolean): void {
   // Storage can be unavailable; the view still works for this session.
   writeFlag(OVERVIEW_KEY, expanded);
 }
+
+/** The activity card's small numbers: turns in the last seven days, today's included, and the busiest day read. */
+export function activitySummary(
+  turns: ReadonlyMap<string, number>,
+  today: Date = new Date(),
+): { week: number; busiest?: { day: string; turns: number } } {
+  const from = new Date(Date.parse(`${today.toISOString().slice(0, 10)}T00:00:00Z`) - 6 * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+  let week = 0;
+  let busiest: { day: string; turns: number } | undefined;
+  for (const [day, count] of turns) {
+    if (day >= from) week += count;
+    if (count > 0 && (!busiest || count > busiest.turns)) busiest = { day, turns: count };
+  }
+  return { week, busiest };
+}
