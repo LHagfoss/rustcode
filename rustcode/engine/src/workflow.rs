@@ -229,7 +229,9 @@ pub(crate) fn validate(tool: &str, args: &Value) -> Result<(), String> {
         }
         return match retry {
             Value::String(id) if store::valid_run_id(id) => Ok(()),
-            _ => Err("retry_run_id must be a run id from run_workflow or workflow_status".to_owned()),
+            _ => {
+                Err("retry_run_id must be a run id from run_workflow or workflow_status".to_owned())
+            }
         };
     }
     match (text("script")?, text("name")?) {
@@ -1408,7 +1410,10 @@ mod tests {
         record.finished_at = Some(3);
         record.woken = true;
         store
-            .create(&record, r#"return [await agent("one"), await agent("two")];"#)
+            .create(
+                &record,
+                r#"return [await agent("one"), await agent("two")];"#,
+            )
             .unwrap();
         store
             .append_call(&record.id, &finished_call("one", json!("cached answer")))
