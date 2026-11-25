@@ -5,6 +5,7 @@
  */
 
 import {
+  type CSSProperties,
   createContext,
   type KeyboardEvent,
   type PointerEvent,
@@ -39,8 +40,12 @@ import {
 import { GripVertical, Plus, RotateCcw, SlidersHorizontal, X } from "./icons";
 import { cx, Pill, Tooltip } from "./primitives";
 
-const WIDTH_CLASS: Record<WidgetExtent, string> = { 1: "lg:col-span-1", 2: "lg:col-span-2" };
-const HEIGHT_CLASS: Record<WidgetExtent, string> = { 1: "lg:row-span-1", 2: "lg:row-span-2" };
+/** The grid's columns for its width: four on a wide window, two on a narrow one, one on a sliver. */
+export function columnsFor(width: number): number {
+  if (width >= 880) return 4;
+  if (width >= 520) return 2;
+  return 1;
+}
 
 const sizeName = (slot: WidgetSlot) => `${slot.w}×${slot.h}`;
 
@@ -64,6 +69,7 @@ export function useWidgetsEditing(): boolean {
 
 interface Frame {
   slot: WidgetSlot;
+  columns: number;
   index: number;
   editing: boolean;
   dragging: boolean;
@@ -111,10 +117,35 @@ function useRoom(scroller: HTMLElement | null | undefined, on: boolean): number 
   return room;
 }
 
-/** The card's width and height classes in the grid, for `Card` to put on its section. */
-export function useWidgetSpan(): string {
+/** Where the card sits in the grid: its columns, never more than the grid has, and its rows. */
+export function useWidgetPlacement(): CSSProperties {
   const frame = useContext(FrameContext);
-  return frame ? `${WIDTH_CLASS[frame.slot.w]} ${HEIGHT_CLASS[frame.slot.h]}` : WIDTH_CLASS[1];
+  if (!frame) return {};
+  const wide = Math.min(frame.slot.w, frame.columns);
+  return {
+    gridColumn: `span ${wide} / span ${wide}`,
+    gridRow: `span ${frame.slot.h} / span ${frame.slot.h}`,
+  };
+}
+
+/** How many of the grid's columns the card spans, so a card can lay out for its width. */
+export function useWidgetColumns(): number {
+  const frame = useContext(FrameContext);
+  return frame ? Math.min(frame.slot.w, frame.columns) : 1;
+}
+
+/** How many columns a grid of `width` pixels has, followed as the element resizes. */
+function useColumns(element: HTMLElement | null): number {
+  const [columns, setColumns] = useState(4);
+  useLayoutEffect(() => {
+    if (!element) return;
+    const fit = () => setColumns(columnsFor(element.clientWidth));
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return columns;
 }
 
 /** How many rows of the grid the card spans. */
@@ -220,7 +251,9 @@ export function WidgetGrid({
   const [scroller, setScroller] = useState<HTMLElement | null>();
   useLayoutEffect(() => setScroller(grid.current?.parentElement), [grid]);
   const room = useRoom(scroller, fill);
-  const row = room === undefined ? ROW_HEIGHT : fittedRowHeight(room, packLayout(layout).rows);
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
+  const columns = useColumns(box);
+  const row = room === undefined ? ROW_HEIGHT : fittedRowHeight(room, packLayout(layout, columns).rows);
 
   const hoverTarget = (x: number, pointerY: number, id: WidgetId) => {
     const box = grid.current?.parentElement?.getBoundingClientRect();
@@ -309,9 +342,12 @@ export function WidgetGrid({
   return (
     <RowContext.Provider value={row}>
       <div
-        ref={grid}
-        className="relative flex snap-x gap-2 overflow-x-auto pb-0.5 lg:grid lg:grid-flow-row-dense lg:grid-cols-4 lg:overflow-visible lg:pb-0"
-        style={{ gridAutoRows: row }}
+        ref={(element) => {
+          grid.current = element;
+          setBox(element);
+        }}
+        className="relative grid grid-flow-row-dense gap-2"
+        style={{ gridAutoRows: row, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
         role="group"
         aria-label="Activity, usage and recent work"
       >
@@ -320,6 +356,7 @@ export function WidgetGrid({
             key={slot.id}
             value={{
               slot,
+              columns,
               index,
               editing: isEditing,
               dragging: dragId === slot.id,
@@ -332,7 +369,7 @@ export function WidgetGrid({
         ))}
         {isEditing && <AddTray hidden={hidden} layout={layout} />}
         {!isEditing && layout.length === 0 && (
-          <div className="col-span-4 flex items-center justify-center gap-2 py-6 text-caption text-fg-muted">
+          <div className="col-span-full flex items-center justify-center gap-2 py-6 text-caption text-fg-muted">
             The overview is empty.
             <Pill quiet size="sm" onClick={() => setWidgetsEditing(true)}>
               Add cards
@@ -359,7 +396,7 @@ function AddTray({ hidden, layout }: { hidden: WidgetId[]; layout: WidgetSlot[] 
   return (
     <section
       aria-label="Add cards"
-      className="flex w-[240px] shrink-0 snap-start flex-col gap-2 rounded-xl border border-accent/35 border-dashed p-3 lg:col-span-4 lg:w-auto"
+      className="col-span-full flex flex-col gap-2 rounded-xl border border-accent/35 border-dashed p-3"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-caption font-medium text-fg-muted">

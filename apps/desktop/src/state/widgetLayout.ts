@@ -7,7 +7,18 @@
 import { useSyncExternalStore } from "react";
 import { readStorage, writeStorage } from "../lib/storage";
 
-export const WIDGET_IDS = ["activity", "threads", "spend", "needs", "pulls", "running"] as const;
+export const WIDGET_IDS = [
+  "activity",
+  "threads",
+  "spend",
+  "needs",
+  "pulls",
+  "running",
+  "today",
+  "models",
+  "harnesses",
+  "rhythm",
+] as const;
 export type WidgetId = (typeof WIDGET_IDS)[number];
 
 /** The overview's grid is this many columns wide; a card takes one or two columns and one or two rows. */
@@ -27,6 +38,10 @@ export const WIDGET_NAMES: Record<WidgetId, string> = {
   needs: "Needs you",
   pulls: "Pull requests",
   running: "Running now",
+  today: "Today",
+  models: "Models",
+  harnesses: "Harnesses",
+  rhythm: "Weekly rhythm",
 };
 
 export const WIDGET_BLURBS: Record<WidgetId, string> = {
@@ -36,6 +51,10 @@ export const WIDGET_BLURBS: Record<WidgetId, string> = {
   needs: "Approvals and questions waiting on you",
   pulls: "This project's pull requests",
   running: "Threads with a turn running",
+  today: "Today's turns and tokens against yesterday, and the last seven days",
+  models: "The models this month's turns ran on",
+  harnesses: "Which harnesses this month's turns ran on",
+  rhythm: "The weekdays you run the most turns on",
 };
 
 /** The size a card takes when it is added back: the cards with the most to show get the most room. */
@@ -46,13 +65,21 @@ const DEFAULT_SIZE: Record<WidgetId, Pick<WidgetSlot, "w" | "h">> = {
   running: { w: 1, h: 1 },
   spend: { w: 2, h: 1 },
   pulls: { w: 2, h: 1 },
+  today: { w: 2, h: 1 },
+  models: { w: 2, h: 1 },
+  harnesses: { w: 1, h: 1 },
+  rhythm: { w: 1, h: 1 },
 };
 
 const slotOf = (id: WidgetId): WidgetSlot => ({ id, ...DEFAULT_SIZE[id] });
 
-/** Three full rows: the activity square and the threads column, the two quiet cards beside them, then spend and pulls. */
+/**
+ * Four full rows: the activity square and the threads column with the two quiet cards beside them,
+ * then the models, harnesses and rhythm, then pulls and today. Spend waits in the tray, because the
+ * dashboard's figures over the grid already lead with it.
+ */
 export const DEFAULT_LAYOUT: readonly WidgetSlot[] = (
-  ["activity", "threads", "needs", "running", "spend", "pulls"] as const
+  ["activity", "threads", "needs", "running", "models", "harnesses", "rhythm", "pulls", "today"] as const
 ).map(slotOf);
 
 /** Cards an earlier version had, and the card that took their place. */
@@ -177,7 +204,8 @@ export function packLayout(
     return true;
   };
   const places: { id: WidgetId; row: number; column: number }[] = [];
-  for (const slot of layout) {
+  for (const wanted of layout) {
+    const slot = { ...wanted, w: Math.min(wanted.w, columns) as WidgetExtent };
     let row = 0;
     let column = 0;
     while (!fits(row, column, slot)) {

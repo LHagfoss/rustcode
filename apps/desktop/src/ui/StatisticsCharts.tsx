@@ -324,7 +324,7 @@ export interface HarnessShare {
 }
 
 /** Shades of the one accent, as the composer's context bar does: rank, not a new palette. */
-function shareShade(index: number): string {
+export function shareShade(index: number): string {
   if (index === 0) return "var(--rc-accent)";
   if (index === 1) return "color-mix(in srgb, var(--rc-accent) 72%, transparent)";
   if (index === 2) return "color-mix(in srgb, var(--rc-accent) 50%, transparent)";

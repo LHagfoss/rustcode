@@ -58,24 +58,27 @@ describe("parseLayout", () => {
 describe("arranging", () => {
   test("moves a card to the target's place in either direction", () => {
     const order = ids([...DEFAULT_LAYOUT]);
+    const rest = ["models", "harnesses", "rhythm"];
     expect(ids(moveWidget(DEFAULT_LAYOUT, "pulls", 1))).toEqual([
       "activity",
       "pulls",
       "threads",
       "needs",
       "running",
-      "spend",
+      ...rest,
+      "today",
     ]);
     expect(ids(moveWidget(DEFAULT_LAYOUT, "activity", 2))).toEqual([
       "threads",
       "needs",
       "activity",
       "running",
-      "spend",
+      ...rest,
       "pulls",
+      "today",
     ]);
     expect(ids(moveWidget(DEFAULT_LAYOUT, "activity", -3))).toEqual(order);
-    expect(ids(moveWidget(DEFAULT_LAYOUT, "pulls", 99))).toEqual(order);
+    expect(ids(moveWidget(DEFAULT_LAYOUT, "today", 99))).toEqual(order);
   });
 
   test("removes, adds back at the end in its own size, and lists what is hidden", () => {
@@ -99,18 +102,26 @@ describe("arranging", () => {
 });
 
 describe("packing", () => {
-  test("the default fills three rows of four with no hole", () => {
+  test("the default fills four rows of four with no hole", () => {
     expect(packLayout(DEFAULT_LAYOUT)).toEqual({
-      rows: 3,
+      rows: 4,
       places: [
         { id: "activity", row: 0, column: 0 },
         { id: "threads", row: 0, column: 2 },
         { id: "needs", row: 0, column: 3 },
         { id: "running", row: 1, column: 3 },
-        { id: "spend", row: 2, column: 0 },
-        { id: "pulls", row: 2, column: 2 },
+        { id: "models", row: 2, column: 0 },
+        { id: "harnesses", row: 2, column: 2 },
+        { id: "rhythm", row: 2, column: 3 },
+        { id: "pulls", row: 3, column: 0 },
+        { id: "today", row: 3, column: 2 },
       ],
     });
+  });
+
+  test("a narrower grid packs the same cards into more rows, a wide card taking a whole row of two", () => {
+    expect(packLayout(DEFAULT_LAYOUT, 2).rows).toBe(8);
+    expect(packLayout(DEFAULT_LAYOUT, 1).rows).toBe(11);
   });
 
   test("a small card later in the order fills a hole a wide one left", () => {

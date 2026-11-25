@@ -630,19 +630,23 @@ composer's keys stay outside the table.
   read when they are attached, not when they are sent, and the prompt's blocks
   are built after the bubble is on screen, so a long paste or a 20 MB picture
   does not hold the row back.
-- **New thread cards.** Under an empty thread's field, a quiet row of glass cards
-  (`ui/NewThreadWidgets.tsx`, `state/widgets.ts`): the last 17 weeks as a
-  contribution heatmap of turns with the threads active in them, this project's
-  three most recent threads, the last 30 days of reported tokens and cost, this
-  project's three most recent pull requests (the same cached `gh` read the
-  sidebar uses; a row opens the pull on GitHub), and this month's turns and
-  spend against the last. One `_rustcode/data/usage` read grouped by day feeds
-  the three figures cards, so the screen asks the engine once. Every card keeps
-  one height from the first frame and says what it has in a line when it has
-  nothing. A persisted toggle opens the overview below the centred composer,
-  without moving it; the remaining space scrolls. Below `lg` the
-  cards are one sideways-scrolling row, and a window shorter than 700px leaves
-  toggle and cards out.
+- **Dashboard.** The sidebar's Dashboard row (and "Show the dashboard" in the
+  command palette) opens the project at a glance (`ui/Dashboard.tsx`,
+  `ui/DashboardWidgets.tsx`, `ui/DashboardCards.tsx`, `state/widgets.ts`).
+  Four figures lead, each with its trend and 30 days as a line: spend this
+  month against the last, turns this week against the last, tokens in 30 days
+  against the 30 before, and the threads that ran this week with what is running
+  and waiting. Under them a grid of cards fills the page: the activity heatmap
+  with its streak, this project's recent threads, what needs you, what is
+  running, the month's models and harness split, turns per weekday,
+  pull requests and today against yesterday (Spend waits in the tray). The grid
+  is four columns wide, two below 880px and one below 520px; rows grow between
+  112 and 280px to fill the window, and each card lays out for its size (a wide
+  card splits its lists in two columns, a list shows the rows its height holds).
+  Customize drags, resizes, removes and adds cards; the layout is kept on the
+  device. One `_rustcode/data/usage` read grouped by day and two by model feed
+  every figure, so the screen adds no engine call. A new thread shows only its
+  heading and the centred composer.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
   links in replies and messages render as chips: the site's favicon, or a globe
   when it has none or it will not decode, and the title on a tint of the page's

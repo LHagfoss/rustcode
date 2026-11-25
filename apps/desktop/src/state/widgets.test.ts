@@ -4,7 +4,17 @@
 import { describe, expect, test } from "bun:test";
 import type { UsageRow } from "../acp/rustcode";
 import type { SessionSummary } from "../acp/types";
-import { activitySummary, heatmapWeeks, monthBounds, projectThreads, streakOf, turnsPerDay } from "./widgets";
+import {
+  activitySummary,
+  heatmapWeeks,
+  monthBounds,
+  periodTotals,
+  projectThreads,
+  sharesBy,
+  streakOf,
+  turnsPerDay,
+  weekdayTurns,
+} from "./widgets";
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
   harness: "codex",
@@ -157,5 +167,42 @@ describe("activitySummary", () => {
       busiest: { day: "2026-11-18", turns: 9 },
     });
     expect(activitySummary(new Map())).toEqual({ week: 0, busiest: undefined });
+  });
+});
+
+describe("the dashboard's splits", () => {
+  test("adds turns up by weekday, Monday first", () => {
+    const turns = new Map([
+      ["2026-11-23", 3],
+      ["2026-11-30", 2],
+      ["2026-11-29", 5],
+    ]);
+    expect(weekdayTurns(turns)).toEqual([5, 0, 0, 0, 0, 0, 5]);
+  });
+
+  test("shares by harness or model, busiest first, from a day on", () => {
+    const rows = [
+      row({ day: "2026-11-01", harness: "codex", turns: 9, input: 10, output: 5 }),
+      row({ day: "2026-11-20", harness: "codex", turns: 1, input: 1, output: 1 }),
+      row({ day: "2026-11-21", harness: "claude-code", model: undefined, turns: 3 }),
+    ];
+    expect(sharesBy(rows, "harness", "2026-11-10")).toEqual([
+      { key: "claude-code", turns: 3, tokens: 0, part: 0.75 },
+      { key: "codex", turns: 1, tokens: 2, part: 0.25 },
+    ]);
+    expect(sharesBy(rows, "model").map((share) => [share.key, share.turns])).toEqual([
+      ["gpt-6-luna", 10],
+      ["Default model", 3],
+    ]);
+  });
+
+  test("totals a stretch of days, both ends included", () => {
+    const rows = [
+      row({ day: "2026-11-01", turns: 2, input: 4 }),
+      row({ day: "2026-11-02", turns: 3, output: 6 }),
+      row({ day: "2026-11-03", turns: 7 }),
+    ];
+    expect(periodTotals(rows, "2026-11-01", "2026-11-02")).toEqual({ turns: 5, tokens: 10 });
+    expect(periodTotals(rows, "2026-11-03")).toEqual({ turns: 7, tokens: 0 });
   });
 });

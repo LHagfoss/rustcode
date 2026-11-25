@@ -996,6 +996,22 @@
   animation: rc-overview-fill-out 160ms ease-out both;
 }
 
+/* A dashboard bar grows from its base once, when the card first draws. */
+@keyframes rc-dash-bar-in {
+  from {
+    transform: scale(0, 0);
+  }
+}
+.rc-dash-bar {
+  transform-origin: left bottom;
+  animation: rc-dash-bar-in 420ms var(--ease-snappy) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-dash-bar {
+    animation: none;
+  }
+}
+
 /*
  * A native slider's thumb is the same knob (settingsKit.tsx `Slider`): the browser draws it in
  * the accent colour otherwise, which reads as a filled control rather than a knob. The range
@@ -1144,10 +1160,8 @@
 }
 
 /*
- * A new thread's cards (ui/NewThreadWidgets.tsx): a quarter of the surface and the shared glass
- * filter, with no edge ring, so the screen's picture runs on behind them instead of stopping at a
- * slab. See-through on purpose: they are the quiet part of that screen, and the field above them is
- * the denser one.
+ * A quiet see-through surface: a quarter of the surface and the shared glass filter, with no
+ * edge ring, so the screen's picture runs on behind it instead of stopping at a slab.
  */
 .rc-glass-faint {
   background: var(--rc-glass-faint-bg);

@@ -1,18 +1,16 @@
 /**
- * The cards under the composer on a new thread: what this computer recorded lately (the activity
- * heatmap and the month's spend), the project's recent threads and pull requests, what waits on
- * the user and what is running. The user picks, orders and sizes them (`WidgetGrid.tsx`).
+ * The dashboard's figures and cards: what this computer recorded lately (the activity heatmap,
+ * spend, models, harnesses and rhythm), the project's recent threads and pull requests, what
+ * waits on the user and what is running. The user picks, orders and sizes the cards
+ * (`WidgetGrid.tsx`).
  *
  * Every card draws from a read the app already makes: one `_rustcode/data/usage` report grouped
  * by day, two by model to price the spend, the session list the sidebar shows, the inbox, and the
- * project's pulls cache (`state/pulls.ts`). No new engine call.
- *
- * Every card is one height: short under the centred composer, so two rows fit in a laptop window,
- * and grown to fill the room above it once the composer is docked. Lists show the rows the height
- * holds and say how many more there are at the end of their label row.
+ * project's pulls cache (`state/pulls.ts`). No new engine call. Lists show the rows a card's
+ * height holds and say how many more there are at the end of their label row.
  */
 
-import { type ReactNode, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { PullRequest, UsageRow } from "../acp/rustcode";
 import { parseUsageReport } from "../acp/rustcode";
 import { Method } from "../acp/types";
@@ -38,6 +36,19 @@ import {
   turnsPerDay,
 } from "../state/widgets";
 import {
+  CARD_CHROME,
+  Card,
+  CardList,
+  CardRow,
+  LabelNote,
+  Nothing,
+  ROW_HEIGHT,
+  TWO_LINE_ROW_HEIGHT,
+  useShownRows,
+  useTwoLines,
+} from "./DashboardCard";
+import { DashboardFigures, HarnessesCard, ModelsCard, RhythmCard, TodayCard } from "./DashboardCards";
+import {
   Activity,
   Flame,
   Gauge,
@@ -48,38 +59,12 @@ import {
   GitPullRequestDraft,
   Hand,
   History,
-  type LucideIcon,
   Play,
 } from "./icons";
 import { cx, Pill, Skeleton, Tooltip } from "./primitives";
 import { TrendPill } from "./StatisticsCharts";
 import { useEngineData } from "./settingsKit";
-import {
-  useCardHeight,
-  useWidgetEditClass,
-  useWidgetId,
-  useWidgetRows,
-  useWidgetSpan,
-  WidgetChrome,
-  WidgetGrid,
-} from "./WidgetGrid";
-
-/** A list row's height, one line or two, and what a card spends on its padding, label row and the gap under it. */
-const ROW_HEIGHT = 24;
-const TWO_LINE_ROW_HEIGHT = 40;
-const CARD_CHROME = 52;
-/** From this card height a list whose rows have more to say gives each row a second line. */
-const TWO_LINE_FROM = 176;
-
-/** Whether the card is tall enough for its rows' second line. */
-function useTwoLines(): boolean {
-  return useCardHeight() >= TWO_LINE_FROM;
-}
-
-/** How many rows a list card shows before its label says how many are left: as many as its height holds. */
-function useShownRows(rowHeight = ROW_HEIGHT): number {
-  return Math.max(1, Math.floor((useCardHeight() - CARD_CHROME + 4) / rowHeight));
-}
+import { useCardHeight, useWidgetRows, WidgetGrid } from "./WidgetGrid";
 
 /** The spend card's token line: the last thirty days, counted as whole UTC days. */
 const USAGE_DAYS = 30;
@@ -102,125 +87,6 @@ const SHADE: Record<HeatCell["level"], string> = {
   3: "bg-accent/70",
   4: "bg-accent",
 };
-
-/**
- * One card: a small icon and label, then whatever the card has to say. It is see-through glass
- * with a hairline edge drawn inside it, so the overview's scroll box never clips the edge. The
- * surface is the stable part: the overview's open and close fade its fill and move what is
- * inside it, never the blur (index.css, `rc-overview`).
- */
-function Card({
-  label,
-  icon: Icon,
-  aside,
-  children,
-}: {
-  label: string;
-  icon: LucideIcon;
-  /** Something small at the end of the card's label row. */
-  aside?: ReactNode;
-  children: ReactNode;
-}) {
-  const span = useWidgetSpan();
-  const editClass = useWidgetEditClass();
-  return (
-    <section
-      aria-label={label}
-      data-widget={useWidgetId()}
-      style={{ height: useCardHeight() }}
-      className={cx(
-        "rc-glass-faint rc-overview-card flex w-[240px] shrink-0 snap-start flex-col overflow-hidden rounded-xl p-3 ring-inset lg:w-auto",
-        span,
-        editClass ?? "ring-1 ring-border-strong",
-      )}
-    >
-      <div className="rc-overview-body flex min-h-0 flex-1 flex-col gap-2">
-        <div className="flex h-5 shrink-0 items-center justify-between gap-2">
-          <h3 className="flex min-w-0 items-center gap-1.5 text-caption font-medium text-fg-muted">
-            <Icon size={12} className="shrink-0" />
-            <span className="truncate">{label}</span>
-          </h3>
-          <WidgetChrome fallback={aside} />
-        </div>
-        {children}
-      </div>
-    </section>
-  );
-}
-
-/** A card's one quiet line when it has nothing else to draw. */
-function Nothing({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex flex-1 items-center">
-      <p className="text-caption text-fg-muted">{children}</p>
-    </div>
-  );
-}
-
-/** A small count at the end of a label row, or a link where it opens what it counts. */
-function LabelNote({
-  children,
-  onClick,
-  title,
-}: {
-  children: ReactNode;
-  onClick?: () => void;
-  title: string;
-}) {
-  const className = "shrink-0 rounded-sm text-caption text-fg-muted tabular";
-  return (
-    <Tooltip label={title}>
-      {onClick ? (
-        <button type="button" onClick={onClick} className={cx(className, "hover:text-fg")}>
-          {children}
-        </button>
-      ) : (
-        <span className={className}>{children}</span>
-      )}
-    </Tooltip>
-  );
-}
-
-/** A row in a card's list: a control, so the card is walkable with the keyboard. */
-function CardRow({
-  onClick,
-  title,
-  mark,
-  detail,
-  children,
-}: {
-  onClick: () => void;
-  title: string;
-  /** What leads the row, a dot or an icon: centred on both lines when there are two. */
-  mark?: ReactNode;
-  /** A quiet second line under the row, for a card tall enough to show it. */
-  detail?: ReactNode;
-  children: ReactNode;
-}) {
-  const className = "-mx-1 min-w-0 shrink-0 rounded-sm px-1 text-left text-callout hover:bg-fill-subtle";
-  return (
-    <Tooltip label={title}>
-      {detail === undefined ? (
-        <button type="button" onClick={onClick} className={cx(className, "flex h-6 items-center gap-2")}>
-          {mark}
-          {children}
-        </button>
-      ) : (
-        <button type="button" onClick={onClick} className={cx(className, "flex h-10 items-center gap-2")}>
-          {mark}
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="flex min-w-0 items-center gap-2">{children}</span>
-            <span className="truncate text-caption text-fg-muted">{detail}</span>
-          </span>
-        </button>
-      )}
-    </Tooltip>
-  );
-}
-
-function CardList({ children }: { children: ReactNode }) {
-  return <div className="-mt-1 flex min-h-0 flex-1 flex-col">{children}</div>;
-}
 
 /**
  * The streak at the end of the activity card's label: a flame and the days in a row with a turn.
@@ -769,7 +635,7 @@ function PullsCard({ project }: { project: string }) {
  * token line; two reads by model price the month's spend and the one before it, a harness's
  * reported cost or the list-price estimate (`state/pricing.ts`).
  */
-export function NewThreadWidgets({ project, docked = false }: { project: string; docked?: boolean }) {
+export function DashboardBody({ project }: { project: string }) {
   const since = useMemo(() => daysAgo(new Date(), HEATMAP_WEEKS * 7 - 1), []);
   const usageSince = useMemo(() => daysAgo(new Date(), USAGE_DAYS - 1), []);
   const { since: monthSince, previousSince } = useMemo(() => monthBounds(new Date()), []);
@@ -801,7 +667,22 @@ export function NewThreadWidgets({ project, docked = false }: { project: string;
         return <PullsCard project={project} />;
       case "running":
         return <RunningCard />;
+      case "today":
+        return <TodayCard rows={rows} />;
+      case "models":
+        return <ModelsCard month={month.data?.rows} />;
+      case "harnesses":
+        return <HarnessesCard month={month.data?.rows} />;
+      case "rhythm":
+        return <RhythmCard rows={rows} />;
     }
   };
-  return <WidgetGrid render={render} fill={docked} />;
+  return (
+    <>
+      <DashboardFigures rows={rows} month={month.data?.rows} twoMonths={twoMonths.data?.rows} />
+      <div className="rc-overview-in min-h-0 w-full flex-1 overflow-y-auto">
+        <WidgetGrid render={render} fill />
+      </div>
+    </>
+  );
 }
