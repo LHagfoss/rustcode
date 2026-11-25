@@ -15,6 +15,7 @@ import {
 } from "react";
 import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { hasLongLine } from "../lib/codeWrap";
 import { copiesOnClick } from "../lib/copyOnClick";
 import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/fileRefs";
 import { highlight, peekHighlight } from "../lib/highlight";
@@ -26,7 +27,7 @@ import { openExternal, openInEditor } from "../lib/native";
 import { advance, newRevealState, type RevealState, rehypeReveal } from "../lib/reveal";
 import { hasShell } from "../lib/shell";
 import { selectThread, toast, useApp } from "../state/store";
-import { Check, Copy, MessagesSquare } from "./icons";
+import { Check, Copy, MessagesSquare, TextWrap } from "./icons";
 import { LinkChip } from "./LinkChip";
 import { MarkdownImage, MermaidBlock } from "./MarkdownMedia";
 import { copyText, cx, Pill, Tooltip } from "./primitives";
@@ -108,23 +109,50 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
       clearTimeout(t);
     };
   }, [code, lang]);
+  const canWrap = useMemo(() => hasLongLine(code), [code]);
+  const [wrapped, setWrapped] = useState(false);
+  const wrap = canWrap && wrapped;
   return (
     // The code surface is `code-bg`, the same one diffs, terminals and diagrams use, so a
     // fenced block reads as code rather than as a lighter card in the prose.
     <div className="overflow-hidden rounded-block bg-code-bg">
       <div className="flex items-center justify-between pt-1.5 pr-1.5 pl-4">
         <span className="font-mono text-caption text-fg-muted">{lang || "code"}</span>
-        <CopyButton text={code} />
+        <span className="flex items-center gap-0.5">
+          {canWrap && (
+            <Pill
+              quiet={!wrapped}
+              size="sm"
+              aria-label="Wrap long lines"
+              aria-pressed={wrapped}
+              onClick={() => setWrapped(!wrapped)}
+            >
+              <TextWrap size={12} />
+              Wrap
+            </Pill>
+          )}
+          <CopyButton text={code} />
+        </span>
       </div>
       {html ? (
         <div
-          className="selectable overflow-x-auto px-4 pt-1 pb-3 font-mono text-callout leading-[20px] [&_pre]:m-0"
+          data-wrap={wrap || undefined}
+          className={cx(
+            "selectable overflow-x-auto px-4 pt-1 pb-3 font-mono text-callout leading-[20px] [&_pre]:m-0",
+            wrap && "[&_pre]:whitespace-pre-wrap [&_pre]:break-words",
+          )}
           // Shiki escapes the code; the HTML holds only spans with colour variables.
           // biome-ignore lint/security/noDangerouslySetInnerHtml: highlighted, escaped output
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <pre className="selectable m-0 overflow-x-auto px-4 pt-1 pb-3 font-mono text-callout leading-[20px]">
+        <pre
+          data-wrap={wrap || undefined}
+          className={cx(
+            "selectable m-0 overflow-x-auto px-4 pt-1 pb-3 font-mono text-callout leading-[20px]",
+            wrap && "whitespace-pre-wrap break-words",
+          )}
+        >
           {code}
         </pre>
       )}
