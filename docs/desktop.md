@@ -1633,7 +1633,10 @@ composer's keys stay outside the table.
   request as a file tree and a unified or side-by-side diff coloured by
   Shiki. Click a line number to draft a comment; the drafts go to the agent
   as one message, or to the pull request as one review with line comments
-  (`_rustcode/pulls/review`).
+  (`_rustcode/pulls/review`) Drafts belong to the source they were written on and
+  are kept in app storage per thread and source (`state/reviewDrafts.ts`), so
+  leaving the screen or reloading keeps them; a source with drafts shows
+  their count on its segment, and *Discard* offers Undo.
 - **Visualizations.** `rustcode-viz` blocks are drawn natively
   (`src/ui/Viz.tsx`): bar chart, table (sortable), tree, line chart (hover),
   stat list and checklist, with the limits and source fallback of
