@@ -41,6 +41,20 @@ export function turnsPerDay(rows: readonly UsageRow[]): Map<string, number> {
 }
 
 /**
+ * How many of the heatmap's week columns reach back to the first day anything ran, the week of
+ * today included; 0 when nothing ran. A short history then draws its own weeks instead of a year
+ * of blank cells before it.
+ */
+export function weeksOfHistory(turns: ReadonlyMap<string, number>, today: Date = new Date()): number {
+  let first: string | undefined;
+  for (const [day, value] of turns) if (value > 0 && (!first || day < first)) first = day;
+  if (!first) return 0;
+  const last = today.toISOString().slice(0, 10);
+  const days = Math.round((Date.parse(`${last}T00:00:00Z`) - Date.parse(`${first}T00:00:00Z`)) / DAY_MS);
+  return Math.floor((days + 6 - weekday(last)) / 7) + 1;
+}
+
+/**
  * The heatmap's columns, one per week, Monday first and ending with the week
  * today is in. Days after today are `null`, so the grid stops at today instead
  * of running to the end of the week. A day's shade is its share of the busiest

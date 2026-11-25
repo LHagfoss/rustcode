@@ -6,9 +6,10 @@
 // the wide "all" read the rows need, trusted for minutes where a panel trusts a
 // read for seconds: `gh` is a process per read, and a row is not worth another.
 
-import type { PullRequest } from "../acp/rustcode";
+import type { PullError, PullRequest } from "../acp/rustcode";
 import {
   pullList,
+  pullListError,
   pullListFailedAt,
   pullQueriesVersion,
   readPullList,
@@ -51,6 +52,19 @@ export function loadPulls(cwd: string): void {
   const failedAt = pullListFailedAt(cwd, "all", LIMIT);
   if (failedAt !== undefined && Date.now() - failedAt < PULLS_TTL) return;
   void readPullList(cwd, "all", { limit: LIMIT, maxAge: PULLS_TTL });
+}
+
+/** Why the project's last read failed, while that failure is still the answer (`PULLS_TTL`). */
+export function pullsError(cwd: string): PullError | undefined {
+  const failedAt = pullListFailedAt(cwd, "all", LIMIT);
+  if (failedAt === undefined || Date.now() - failedAt >= PULLS_TTL) return undefined;
+  return pullListError(cwd, "all", LIMIT);
+}
+
+/** Reads a project's pull requests again now, past a remembered failure. */
+export function retryPulls(cwd: string): void {
+  if (!cwd || !useApp.getState().agent?.pullRequests) return;
+  void readPullList(cwd, "all", { limit: LIMIT, maxAge: PULLS_TTL, force: true });
 }
 
 /** The projects a list of branches would read for, most useful first and capped. */
