@@ -7,6 +7,7 @@ mod banner;
 mod crash_report;
 mod diagnostics;
 mod engine;
+mod git_review;
 mod hub;
 mod issue_report;
 mod links;
@@ -107,6 +108,8 @@ pub fn run() {
             native::reveal_path,
             native::open_login_terminal,
             native::git_changes,
+            git_review::git_commits,
+            git_review::git_commit_changes,
             native::project_files,
             native::read_image,
             native::clipboard_image,

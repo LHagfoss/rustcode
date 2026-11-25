@@ -162,6 +162,7 @@ const EXACT_METHODS: &[&str] = &[
     // The machine fleet's names, versions and last-seen times, exchanged
     // between paired computers (`crate::fleet`): metadata only.
     "_rustcode/environment/sync",
+    "_rustcode/remote/revoke_machine",
     // Running a shell command on this machine for another machine in the fleet
     // (`acp/machine_exec.rs`), subject to this machine's command policy.
     "_rustcode/machine/exec",
@@ -510,6 +511,7 @@ mod tests {
                 "_rustcode/project/create",
                 "_rustcode/worktrees/state",
                 "_rustcode/environment/sync",
+                "_rustcode/remote/revoke_machine",
                 "_rustcode/machine/exec",
                 "_rustcode/machine/update",
                 "_rustcode/session/harness",
