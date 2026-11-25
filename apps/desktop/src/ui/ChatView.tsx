@@ -700,6 +700,32 @@ export function ChatView() {
   // one line at every width, with the right panel's card open or not (index.css).
   // The new-thread screen always has the picture; an open thread has it when Settings says so.
   const showsBanner = !!banner.name && (isNew || banner.inThreads);
+  const roomForOverview = isNew && height >= NEW_THREAD_WIDGETS_MIN_HEIGHT;
+  const docked = roomForOverview && overview;
+  const overviewDocked = roomForOverview && (overview || overviewLeaving);
+  const overviewToggles = (
+    <div className="flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        aria-expanded={overview}
+        aria-controls="new-thread-overview"
+        className={cx(
+          "flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted",
+          // Over a picture the label needs the floating pills' glass to read.
+          showsBanner ? "rc-glass hover:text-fg" : "hover:bg-fill-subtle",
+        )}
+        onClick={toggleOverview}
+      >
+        <ChevronDown
+          size={14}
+          aria-hidden
+          className={cx("transition-transform duration-200 ease-snappy", overview && "rotate-180")}
+        />
+        {overview ? "Hide overview" : "Show overview"}
+      </button>
+      {overview && <CustomizeOverview glass={showsBanner} />}
+    </div>
+  );
   const veil = showsBanner ? darkenOverlay(banner.darken) : null;
 
   return (
@@ -788,7 +814,11 @@ export function ChatView() {
             // (LaneItem). An empty thread sits half the stack up from the middle of the column, measured.
             // Its `bottom` eases in CSS (`rc-lane-stack`), not inline, so opening the right panel can
             // ease its `right` with the rest of the lane.
-            style={isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined}
+            style={
+              isNew && !docked
+                ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` }
+                : undefined
+            }
             className={cx(
               "rc-lane-inset rc-lane-stack absolute bottom-4 mx-auto flex flex-col gap-2",
               // An empty thread's cards are a dashboard, not a lane: they take the wider measure
@@ -797,7 +827,7 @@ export function ChatView() {
             )}
           >
             <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2">
-              {isNew && (
+              {isNew && !docked && (
                 <NewThreadHeading
                   project={projectCwd}
                   banner={showsBanner}
@@ -892,32 +922,24 @@ export function ChatView() {
               </LaneItem>
             </div>
           </div>
-          {isNew && height >= NEW_THREAD_WIDGETS_MIN_HEIGHT && (
+          {roomForOverview && (
             <div
-              className="rc-lane-inset absolute bottom-0 mx-auto flex max-w-[1100px] flex-col items-center gap-2 pt-2"
-              style={{ top: `calc(50% + ${Math.round(stackHeight / 2)}px)` }}
+              className={cx(
+                "rc-lane-inset absolute mx-auto flex w-full max-w-[1100px] flex-col items-center gap-2",
+                overviewDocked ? "justify-end" : "bottom-0 pt-2",
+              )}
+              style={
+                overviewDocked
+                  ? { top: HEADER_HEIGHT, bottom: stackHeight + 24 }
+                  : { top: `calc(50% + ${Math.round(stackHeight / 2)}px)` }
+              }
             >
-              <div className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  aria-expanded={overview}
-                  aria-controls="new-thread-overview"
-                  className={cx(
-                    "flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted",
-                    // Over a picture the label needs the floating pills' glass to read.
-                    showsBanner ? "rc-glass hover:text-fg" : "hover:bg-fill-subtle",
-                  )}
-                  onClick={toggleOverview}
-                >
-                  <ChevronDown
-                    size={14}
-                    aria-hidden
-                    className={cx("transition-transform duration-200 ease-snappy", overview && "rotate-180")}
-                  />
-                  {overview ? "Hide overview" : "Show overview"}
-                </button>
-                {overview && <CustomizeOverview glass={showsBanner} />}
-              </div>
+              {overviewDocked && (
+                <div className={cx("shrink-0", overviewLeaving ? "rc-overview-out" : "rc-dock-heading")}>
+                  <NewThreadHeading project={projectCwd} banner={showsBanner} showTip={false} />
+                </div>
+              )}
+              {!overviewDocked && overviewToggles}
               {overviewMounted && (
                 <div
                   id="new-thread-overview"
@@ -926,8 +948,10 @@ export function ChatView() {
                   // here would take the blur with it. The classes pick the motion their contents
                   // play (index.css, `rc-overview`).
                   className={cx(
-                    "min-h-0 w-full snap-y snap-mandatory overflow-y-auto pb-3",
+                    "min-h-0 w-full shrink snap-y snap-mandatory overflow-y-auto",
+                    overviewDocked ? "pt-1" : "pb-3",
                     overviewLeaving ? "rc-overview-out" : "rc-overview-in",
+                    overviewDocked && "rc-overview-docked",
                   )}
                   onAnimationEnd={(event) => {
                     // The motion runs inside the cards, whose animation ends here (index.css,
@@ -941,6 +965,7 @@ export function ChatView() {
                   <NewThreadWidgets project={projectCwd} />
                 </div>
               )}
+              {overviewDocked && overviewToggles}
             </div>
           )}
         </div>
