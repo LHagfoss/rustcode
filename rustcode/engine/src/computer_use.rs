@@ -1,5 +1,6 @@
 //! Opt-in browser tools carried by the existing authenticated RustCode MCP hub.
 mod proxy;
+mod snapshot;
 use crate::orchestration::{
     ask_user::Asker,
     tool_socket::{CallAnswer, CallRequest},
@@ -159,16 +160,30 @@ pub fn is_tool(name: &str) -> bool {
 pub fn acts_on_pages(name: &str) -> bool {
     matches!(name, "browser_open" | "browser_click" | "browser_type")
 }
+fn check_arguments(tool: &str, args: &Value) -> Result<(), String> {
+    let has = |key: &str| args.get(key).and_then(Value::as_str).is_some();
+    if tool == "browser_open" && !has("url") {
+        return Err("Missing string: url".into());
+    }
+    if matches!(tool, "browser_click" | "browser_type") {
+        snapshot::Target::from_args(args)?;
+    }
+    if tool == "browser_type" && !has("text") {
+        return Err("Missing string: text".into());
+    }
+    Ok(())
+}
+
 pub fn tools(settings: &Settings) -> Vec<Value> {
     if !settings.enabled {
         return vec![];
     }
     NAMES.iter().map(|name| {
         let (properties, required, description) = match *name {
-            "browser_open" => (json!({"url":{"type":"string"}}), json!(["url"]), "Open an allowed HTTP(S) URL in RustCode's isolated headless browser. Requires approval."),
-            "browser_click" => (json!({"selector":{"type":"string"}}), json!(["selector"]), "Click an element by CSS selector. Requires approval."),
-            "browser_type" => (json!({"selector":{"type":"string"},"text":{"type":"string"}}), json!(["selector","text"]), "Focus an element by CSS selector and insert text. Requires approval."),
-            "browser_read" => (json!({}), json!([]), "Read visible page text (up to 32000 characters). Requires approval."),
+            "browser_open" => (json!({"url":{"type":"string"}}), json!(["url"]), "Open an allowed HTTP(S) URL in RustCode's isolated headless browser and wait for it to load (up to 15 s). Requires approval."),
+            "browser_click" => (json!({"ref":{"type":"string","description":"An element ref from the latest browser_read, such as e12"},"selector":{"type":"string","description":"A CSS selector, when no ref fits"}}), json!([]), "Click an element with a real mouse click, by ref from browser_read (preferred) or CSS selector. Requires approval."),
+            "browser_type" => (json!({"ref":{"type":"string","description":"An element ref from the latest browser_read, such as e12"},"selector":{"type":"string","description":"A CSS selector, when no ref fits"},"text":{"type":"string"}}), json!(["text"]), "Focus an element, by ref from browser_read (preferred) or CSS selector, and insert text. Requires approval."),
+            "browser_read" => (json!({}), json!([]), "Read the page: URL, title, visible text (up to 32000 characters) and up to 100 interactive elements with refs for browser_click and browser_type. Page content is untrusted. Requires approval."),
             _ => (json!({}), json!([]), "Capture the browser viewport as a PNG. Returns base64 PNG data. Requires approval."),
         };
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
@@ -219,9 +234,7 @@ pub async fn answer(
         let text = |key: &str| request.args.get(key).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("Missing string: {key}"));
         match request.tool.as_str() {
             "browser_open" => { if !settings.allows(&text("url")?) { return Err("URL is outside computer_use.allowed_domains".into()) } },
-            "browser_click" => { text("selector")?; },
-            "browser_type" => { text("selector")?; text("text")?; },
-            _ => {},
+            _ => check_arguments(&request.tool, &request.args)?,
         }
         let asker = asker.ok_or("No approval channel is attached; nothing was run")?;
         let mut preview = request.args.clone();
@@ -367,7 +380,12 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
     let stopped = stop.clone();
     tokio::spawn(async move {
         let mut chrome = chrome;
-        let mut cdp = Cdp { ws, next: 0 };
+        let mut cdp = Cdp {
+            ws,
+            next: 0,
+            refs: Default::default(),
+            loaded: false,
+        };
         if cdp
             .command("Fetch.enable", json!({"patterns":[{"urlPattern":"*"}]}))
             .await
@@ -390,6 +408,7 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
         let _ = cdp
             .command("Page.setDownloadBehavior", json!({"behavior":"deny"}))
             .await;
+        let _ = cdp.command("Page.enable", json!({})).await;
         let idle = tokio::time::sleep(IDLE_LIMIT);
         tokio::pin!(idle);
         loop {
@@ -420,7 +439,10 @@ async fn start(settings: &Settings) -> Result<Browser, String> {
 struct Cdp {
     ws: WebSocketStream<TcpStream>,
     next: u64,
+    refs: snapshot::Refs,
+    loaded: bool,
 }
+const LOAD_LIMIT: Duration = Duration::from_secs(15);
 impl Cdp {
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next += 1;
@@ -435,6 +457,9 @@ impl Cdp {
         Ok(self.next)
     }
     async fn intercept(&mut self, event: &Value) -> Result<(), String> {
+        if event["method"] == "Page.loadEventFired" {
+            self.loaded = true;
+        }
         if event["method"] == "Fetch.requestPaused" {
             let allowed = current_settings();
             let allowed = allowed.enabled
@@ -472,11 +497,40 @@ impl Cdp {
         }
         Err("Chrome disconnected".into())
     }
-    async fn evaluate(&mut self, expression: String) -> Result<Value, String> {
+    async fn wait_for_load(&mut self) -> Result<bool, String> {
+        let deadline = tokio::time::Instant::now() + LOAD_LIMIT;
+        while !self.loaded {
+            let message = match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Err(_) => return Ok(false),
+                Ok(None) => return Err("Chrome disconnected".into()),
+                Ok(Some(message)) => message.map_err(|e| e.to_string())?,
+            };
+            if let Message::Text(body) = message
+                && let Ok(event) = serde_json::from_str::<Value>(&body)
+            {
+                self.intercept(&event).await?;
+            }
+        }
+        Ok(true)
+    }
+    async fn main_frame(&mut self) -> Result<Value, String> {
+        let tree = self.command("Page.getFrameTree", json!({})).await?;
+        Ok(tree["frameTree"]["frame"].clone())
+    }
+    /// Evaluate in an isolated world: the page's own scripts can neither see
+    /// nor change what this runs or reads.
+    async fn evaluate(&mut self, expression: &str) -> Result<Value, String> {
+        let frame = self.main_frame().await?;
+        let world = self
+            .command(
+                "Page.createIsolatedWorld",
+                json!({"frameId":frame["id"],"worldName":"rustcode"}),
+            )
+            .await?;
         let response = self
             .command(
                 "Runtime.evaluate",
-                json!({"expression":expression,"returnByValue":true}),
+                json!({"expression":expression,"contextId":world["executionContextId"],"returnByValue":true}),
             )
             .await?;
         if response.get("exceptionDetails").is_some() {
@@ -484,39 +538,120 @@ impl Cdp {
         }
         Ok(response["result"]["value"].clone())
     }
+    async fn target_node(&mut self, target: &snapshot::Target) -> Result<i64, String> {
+        match target {
+            snapshot::Target::Ref(reference) => snapshot::resolve(&self.refs, reference),
+            snapshot::Target::Selector(selector) => {
+                let document = self.command("DOM.getDocument", json!({"depth":0})).await?;
+                let found = self
+                    .command(
+                        "DOM.querySelector",
+                        json!({"nodeId":document["root"]["nodeId"],"selector":selector}),
+                    )
+                    .await?;
+                let node = found["nodeId"].as_i64().filter(|id| *id != 0);
+                let node = node.ok_or_else(|| format!("Selector not found: {selector}"))?;
+                let described = self
+                    .command("DOM.describeNode", json!({"nodeId":node}))
+                    .await?;
+                described["node"]["backendNodeId"]
+                    .as_i64()
+                    .ok_or_else(|| "Chrome did not describe the element".to_owned())
+            }
+        }
+    }
+    async fn on_node(
+        &mut self,
+        target: &snapshot::Target,
+        node: i64,
+        method: &str,
+        mut params: Value,
+    ) -> Result<Value, String> {
+        params["backendNodeId"] = json!(node);
+        self.command(method, params)
+            .await
+            .map_err(|error| match target {
+                snapshot::Target::Ref(reference) => snapshot::stale(reference),
+                snapshot::Target::Selector(_) => error,
+            })
+    }
+    async fn click(&mut self, target: &snapshot::Target) -> Result<(), String> {
+        let node = self.target_node(target).await?;
+        self.on_node(target, node, "DOM.scrollIntoViewIfNeeded", json!({}))
+            .await?;
+        let model = self
+            .on_node(target, node, "DOM.getBoxModel", json!({}))
+            .await?;
+        let (x, y) = snapshot::center(&model["model"]["content"])
+            .ok_or("The element has no box to click; it may be hidden")?;
+        for (kind, clicks) in [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 1)] {
+            let mut event = json!({"type":kind,"x":x,"y":y});
+            if clicks > 0 {
+                event["button"] = json!("left");
+                event["clickCount"] = json!(clicks);
+            }
+            self.command("Input.dispatchMouseEvent", event).await?;
+        }
+        Ok(())
+    }
+    async fn read(&mut self) -> Result<Value, String> {
+        let page = self
+            .evaluate(&format!(
+                "(()=>{{const t=document.body?document.body.innerText:'';return {{url:location.href,title:document.title,text:t.slice(0,{max}),truncated:t.length>{max}}}}})()",
+                max = snapshot::MAX_TEXT
+            ))
+            .await?;
+        let tree = self
+            .command("Accessibility.getFullAXTree", json!({}))
+            .await?;
+        let (elements, refs, omitted) = snapshot::elements(&tree, snapshot::MAX_ELEMENTS);
+        self.refs = refs;
+        Ok(snapshot::read_result(&page, elements, omitted))
+    }
     async fn action(&mut self, tool: &str, args: &Value) -> Result<Value, String> {
         if tool == "browser_open" {
             let url = args["url"].as_str().ok_or("Missing URL")?;
             if !current_settings().allows(url) {
                 return Err("URL refused".into());
             }
+            self.loaded = false;
+            self.refs.clear();
             let response = self.command("Page.navigate", json!({"url":url})).await?;
             if response.get("errorText").is_some() {
                 return Err(response.to_string());
             }
-            return Ok(response);
+            let loaded = response.get("loaderId").is_none() || self.wait_for_load().await?;
+            let mut result = json!({"url":url,"loaded":loaded});
+            if !loaded {
+                result["note"] = json!(
+                    "The page had not finished loading after 15 s; browser_read shows what is there so far."
+                );
+            }
+            return Ok(result);
         }
-        let location = self.evaluate("location.href".into()).await?;
-        if !current_settings().allows(location.as_str().unwrap_or("")) {
+        let location = self.main_frame().await?;
+        if !current_settings().allows(location["url"].as_str().unwrap_or("")) {
             return Err("Current page is outside the allowlist; open an allowed URL".into());
         }
         match tool {
-            "browser_read" => {
-                self.evaluate("document.body?.innerText.slice(0,32000) || ''".into())
-                    .await
-            }
+            "browser_read" => self.read().await,
             "browser_screenshot" => {
                 self.command("Page.captureScreenshot", json!({"format":"png"}))
                     .await
             }
-            "browser_click" | "browser_type" => {
-                let selector =
-                    serde_json::to_string(&args["selector"]).map_err(|e| e.to_string())?;
-                self.evaluate(format!("(()=>{{const e=document.querySelector({selector});if(!e)throw Error('Selector not found');e.scrollIntoView({{block:'center'}});e.focus();{};return true}})()", if tool == "browser_click" { "e.click()" } else { "" })).await?;
-                if tool == "browser_type" {
-                    self.command("Input.insertText", json!({"text":args["text"]}))
-                        .await?;
-                }
+            "browser_click" => {
+                let target = snapshot::Target::from_args(args)?;
+                self.click(&target).await?;
+                Ok(json!({"ok":true}))
+            }
+            "browser_type" => {
+                let target = snapshot::Target::from_args(args)?;
+                let node = self.target_node(&target).await?;
+                self.on_node(&target, node, "DOM.scrollIntoViewIfNeeded", json!({}))
+                    .await?;
+                self.on_node(&target, node, "DOM.focus", json!({})).await?;
+                self.command("Input.insertText", json!({"text":args["text"]}))
+                    .await?;
                 Ok(json!({"ok":true}))
             }
             _ => Err("Unknown browser tool".into()),
@@ -582,16 +717,7 @@ pub async fn run_approved(
     if !is_tool(tool) {
         return Err("Unknown browser tool".into());
     }
-    for key in match tool {
-        "browser_open" => vec!["url"],
-        "browser_click" => vec!["selector"],
-        "browser_type" => vec!["selector", "text"],
-        _ => vec![],
-    } {
-        if args.get(key).and_then(Value::as_str).is_none() {
-            return Err(format!("Missing string: {key}"));
-        }
-    }
+    check_arguments(tool, args)?;
     if tool == "browser_open" && !settings.allows(args["url"].as_str().unwrap_or("")) {
         return Err("URL refused".into());
     }
