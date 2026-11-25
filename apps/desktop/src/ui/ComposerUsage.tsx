@@ -15,6 +15,7 @@ import {
 } from "../acp/rustcode";
 import { modelName, type SessionUsage } from "../acp/types";
 import { useHoverTip } from "../lib/hover";
+import { paceLabel, planPace } from "../lib/planPace";
 import { layoutTiles } from "../lib/treemap";
 import { autoCompactBeforeUsage, autoCompactThresholdFor } from "../state/autoCompactRun";
 import {
@@ -542,6 +543,7 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
   const left = leftPercent(w);
   const used = 100 - left;
   const reset = resetLabel(w);
+  const pace = planPace(w);
   return (
     <div className="flex flex-col gap-1.5 px-0.5">
       <div className="flex items-baseline justify-between gap-3 text-callout">
@@ -567,11 +569,26 @@ export function PlanWindow({ window: w, title }: { window: UsageWindow; title?: 
         {[25, 50, 75].map((tick) => (
           <span key={tick} className="absolute inset-y-0 w-px bg-bg/70" style={{ left: `${tick}%` }} />
         ))}
+        {pace && (
+          <span
+            data-pace-mark
+            className="absolute inset-y-0 w-[2px] -translate-x-1/2 rounded-full bg-fg/80"
+            style={{ left: `${pace.evenLeft}%` }}
+          />
+        )}
       </div>
       <div className="flex justify-between text-caption tabular">
         <span className={cx("font-medium", left < 20 ? "text-warning" : "text-fg")}>{left}% left</span>
         <span className="text-fg-faint">{used}% used</span>
       </div>
+      {pace && (
+        <span
+          data-pace={pace.kind}
+          className={cx("text-caption", pace.kind === "runsOut" ? "text-warning" : "text-fg-faint")}
+        >
+          {paceLabel(pace)}
+        </span>
+      )}
     </div>
   );
 }
