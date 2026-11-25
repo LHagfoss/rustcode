@@ -125,38 +125,38 @@ export function ChatRecapCard({ threadId, className }: { threadId: string; class
   return (
     <section
       aria-label="Recap"
-      className={cx("elevated flex flex-col gap-1.5 rounded-xl px-4 py-3 rc-in", className)}
+      className={cx(
+        "flex flex-col gap-0.5 border-border border-l-2 py-0.5 pl-3 text-caption rc-in",
+        className,
+      )}
     >
-      <div className="flex items-center gap-2">
-        <Sparkles size={14} className="shrink-0 text-accent" />
-        <span className="font-semibold text-body">Recap</span>
-        <span className={cx("min-w-0 flex-1 truncate text-caption", STATE_TONE[recap.state])}>
-          {STATE_LABEL[recap.state]}
-        </span>
-        <span className="shrink-0 text-caption text-fg-faint">Last seen {relativeAge(open.since)}</span>
-        <ChromeButton label="Dismiss the recap" onClick={dismissChatRecap}>
-          <X size={13} />
-        </ChromeButton>
-      </div>
-      {recap.asked && (
-        <p className="text-callout text-fg-muted">
-          <span className="font-medium text-fg">You asked </span>
-          {recap.asked}
-        </p>
-      )}
-      {recap.reply && (
-        <p className="text-callout text-fg-muted">
-          <span className="font-medium text-fg">Last reply </span>
-          {recap.reply}
-        </p>
-      )}
-      {recap.state === "failed" && (
-        <div>
+      <div className="flex items-center gap-1.5 text-fg-faint">
+        <Sparkles size={12} className="shrink-0 text-accent" />
+        <span className="font-medium text-fg-muted">Recap</span>
+        <span aria-hidden>·</span>
+        <span className={cx("shrink-0", STATE_TONE[recap.state])}>{STATE_LABEL[recap.state]}</span>
+        <span aria-hidden>·</span>
+        <span className="min-w-0 flex-1 truncate">Last seen {relativeAge(open.since)}</span>
+        {recap.state === "failed" && (
           <Pill size="sm" onClick={() => void retryThread(threadId)}>
             Retry
           </Pill>
-        </div>
-      )}
+        )}
+        <ChromeButton label="Dismiss the recap" onClick={dismissChatRecap}>
+          <X size={12} />
+        </ChromeButton>
+      </div>
+      {recap.asked && <RecapLine label="You asked" text={recap.asked} />}
+      {recap.reply && <RecapLine label="Last reply" text={recap.reply} />}
     </section>
+  );
+}
+
+function RecapLine({ label, text }: { label: string; text: string }) {
+  return (
+    <p title={text} className="truncate text-fg-muted">
+      <span className="text-fg-faint">{label} </span>
+      {text}
+    </p>
   );
 }
