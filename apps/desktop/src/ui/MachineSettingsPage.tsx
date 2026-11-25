@@ -43,6 +43,7 @@ import {
   useMachines,
 } from "../state/machines";
 import { revokeRemoteDevice } from "../state/remoteAccess";
+import { pendingFor, revokeEverywhereAsk, usePendingRevocations } from "../state/revokeEverywhere";
 import { setFollowsThisComputer, useSettingsFollow } from "../state/settingsFollow";
 import { SERVER_SETTINGS } from "../state/settingsRegistry";
 import {
@@ -132,6 +133,10 @@ function MachineSettings({ machine }: { machine: Machine }) {
   const status = deviceStatus(machine);
   const name = machineName(machine);
   const online = machine.state === "connected";
+  const owed = pendingFor(
+    usePendingRevocations((state) => state.list),
+    machine.id,
+  );
   const skew = versionLine(name, machine.version, local, selfName());
 
   const meta = useMemo(
@@ -240,6 +245,27 @@ function MachineSettings({ machine }: { machine: Machine }) {
             Remove machine
           </Action>
         </Row>
+        <Row
+          title="Revoke everywhere"
+          subtitle="For a lost or stolen computer: ends its access to this computer and to every connected machine, then removes it here."
+        >
+          <Action
+            danger
+            onClick={() =>
+              revokeEverywhereAsk(machine, () => {
+                if (useApp.getState().settingsMachine === machine.id) openSettings("machines");
+              })
+            }
+          >
+            Revoke everywhere
+          </Action>
+        </Row>
+        {owed.length > 0 && (
+          <Row
+            title="Revocations waiting for this machine"
+            subtitle={`${owed.map((item) => item.name).join(", ")}: revoked here as soon as ${name} connects.`}
+          />
+        )}
       </Group>
       <Harnesses machine={machine} />
       <WhatSyncs machine={machine} online={online} />
