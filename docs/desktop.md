@@ -1798,6 +1798,15 @@ stream, ⌘K and sidebar filtering, and idle main-thread time. `--profile`
 production build, `--trace` main-thread time by trace event. Chrome stands
 in for WKWebView: compare runs with each other.
 
+It finds Chrome or Chromium on macOS and Linux (`CHROME_PATH` names another).
+CI runs it on every desktop pull request with `--budget
+scripts/perf-budget.json`, which fails the job when a metric passes its
+budget, and keeps the JSON as the `desktop-perf` artifact. Only what a shared
+runner measures steadily is budgeted: React commits while idle, while
+streaming and when reopening the long thread, the stream's backlog after it
+ends, and heap. Raise a budget only with the change that needs it, and say
+why in the pull request.
+
 What was slow, and what changed:
 
 - **The transcript did not virtualize.** The chat column had no

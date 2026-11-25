@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit -p .",
     "lint": "biome check src scripts e2e playwright.config.ts",
     "format": "biome check --write src scripts e2e playwright.config.ts",
-    "test": "bun test src",
+    "test": "bun test src scripts",
     "tauri": "tauri",
     "bundle:engine": "bun scripts/bundle-engine.ts",
     "bundle": "bun scripts/bundle-engine.ts --release && bun run bundle:app",
