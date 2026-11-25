@@ -1,3 +1,17 @@
+## [v1.53.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.53.0) - 2026-11-25
+
+### Features
+- The activity heatmap drops the streak outlines and badge glow for a cleaner look. (#4319)
+- The chat recap is a compact row that fits the chat instead of a large card. (#4320)
+- The Turns panel shows the time and cost of every turn after a restart or in an old thread, not only the latest ones. (#4321)
+- Settings › Machines: the map stays inside its card, and pressing a machine on the map or in the list opens its settings. (#4323)
+- Settings › Capabilities: MCP server rows highlight across the whole row on hover and press, and an opening row's details no longer draw over the rows below. (#4322)
+- The thread info panel now uses the same glass background as the chat composer. (#4324)
+- Statistics now opens with your lifetime tokens, peak day, longest turn, both streaks and a year-long activity grid. (#4325)
+- Add a Dashboard screen to the sidebar with a customizable grid of activity, threads, spend and pull-request cards; the new-thread screen shows only the composer again. (#4326)
+- Mark text in a reply and press Quote to ask about exactly that part. (#4329)
+- Code blocks with long lines have a Wrap button that wraps them instead of scrolling sideways. (#4328)
+- The usage card says when each plan window will run out at the current pace, or how full it will be at the reset. (#4327)
 ## [v1.52.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.52.0) - 2026-11-25
 
 ### Features
