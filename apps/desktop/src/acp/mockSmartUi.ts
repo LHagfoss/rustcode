@@ -464,14 +464,29 @@ export const MOCK_FORM = [
   "```\n",
 ];
 
-/** The catalog replies by prompt: "catalog dashboard", "catalog trend", "catalog form", or any other "catalog". */
+/** A review in shorthand: two open findings with Fix chips, one set aside and one fixed. */
+export const MOCK_FINDINGS_SHORTHAND = [
+  "Two findings are still open.\n\n",
+  "```rustcode-ui v1\n",
+  ":: head Review of the refunds branch | Codex sol + Gemini 3 Pro\n",
+  ":: findings\n",
+  "- High | `src/refunds/router.ts:21` · Codex | The limiter runs after the idempotency lookup, so a replayed request spends budget.\n",
+  "- Medium | `src/charges/limit.ts:42` · Codex | Refunds share the charges bucket. | Set aside: the spec says one budget per partner.\n",
+  "- Low | `src/refunds/limit.test.ts:52` · Gemini | The reset test waits on the wall clock; use fake timers.\n",
+  "- Low | `src/refunds/copy.ts:8` · Gemini | The error message names the wrong field. | Fixed in round 2 {ok}\n",
+  "```\n",
+];
+
+/** The catalog replies by prompt: "catalog review", "catalog dashboard", "catalog trend", "catalog form", or any other "catalog". */
 export const catalogReply = (prompt: string): string[] | undefined =>
-  /\bcatalog dashboard\b/i.test(prompt)
-    ? MOCK_DASH_SHORTHAND
-    : /\bcatalog form\b/i.test(prompt)
-      ? MOCK_FORM
-      : /\bcatalog trend\b/i.test(prompt)
-        ? MOCK_CHARTS_SHORTHAND
-        : /\bcatalog\b/i.test(prompt)
-          ? MOCK_CATALOG
-          : undefined;
+  /\bcatalog review\b/i.test(prompt)
+    ? MOCK_FINDINGS_SHORTHAND
+    : /\bcatalog dashboard\b/i.test(prompt)
+      ? MOCK_DASH_SHORTHAND
+      : /\bcatalog form\b/i.test(prompt)
+        ? MOCK_FORM
+        : /\bcatalog trend\b/i.test(prompt)
+          ? MOCK_CHARTS_SHORTHAND
+          : /\bcatalog\b/i.test(prompt)
+            ? MOCK_CATALOG
+            : undefined;

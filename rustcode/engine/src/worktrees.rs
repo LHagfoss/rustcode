@@ -260,17 +260,8 @@ fn save_record(record: &Record) {
         return;
     };
     if let Ok(text) = serde_json::to_string_pretty(record) {
-        let _ = write_atomic(&path, text.as_bytes());
+        let _ = crate::atomic_file::write_atomic(&path, text.as_bytes());
     }
-}
-
-/// Write `bytes` to `path` through a temporary file beside it.
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, bytes)?;
-    std::fs::rename(&temporary, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&temporary);
-    })
 }
 
 // ------------------------------------------------------------ naming -----
@@ -2065,7 +2056,7 @@ pub(crate) fn attach(session_id: &str, worktree: &Worktree) {
         && let Ok(text) = serde_json::to_string_pretty(worktree)
     {
         let _ = std::fs::create_dir_all(&dir);
-        let _ = write_atomic(&dir.join(THREAD_FILE), text.as_bytes());
+        let _ = crate::atomic_file::write_atomic(&dir.join(THREAD_FILE), text.as_bytes());
     }
     // The worktree knows its repository without asking git, so record it on
     // the thread now: `session/list` reads it later (#3162).

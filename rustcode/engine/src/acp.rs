@@ -28,6 +28,7 @@ pub(crate) mod projects;
 mod prompt;
 pub(crate) mod questions;
 mod remote;
+mod revoke_machine;
 mod rewind;
 pub(crate) mod scheduled;
 mod server_status;

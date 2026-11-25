@@ -949,6 +949,14 @@ pub(super) async fn dispatch_request(
                 Ok(())
             })
         }
+        "_rustcode/remote/revoke_machine" => {
+            let request: revoke_machine::RevokeMachineRequest = parse_params(params)?;
+
+            connection.spawn(async move {
+                responder.respond(revoke_machine::revoke_machine(request).await)?;
+                Ok(())
+            })
+        }
         "_rustcode/remote/revoke" => {
             let server = server.clone();
             let request: remote::RemoteRevokeRequest = parse_params(params)?;

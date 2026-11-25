@@ -1336,6 +1336,13 @@ pub fn authorize_tool(
     authorize_tool_with_args(name, &Value::Null, mode, auto_confirm, bypass_confirmation)
 }
 
+/// Tools that ask before every call even when auto-approve is on: the
+/// browser tools act outside the workspace (docs/computer-use.md). Only an
+/// approval already given for the call (`bypass_confirmation`) skips the card.
+pub fn always_asks(name: &str) -> bool {
+    crate::computer_use::is_tool(name)
+}
+
 pub fn authorize_tool_with_args(
     name: &str,
     args: &Value,
@@ -1349,6 +1356,7 @@ pub fn authorize_tool_with_args(
                 .to_string(),
         );
     }
+    let auto_confirm = auto_confirm && !always_asks(name);
     let command_is_destructive = name == "run_command" && command_requires_confirmation(args);
     let requires_confirmation = if name == "run_command" {
         command_is_destructive
@@ -1384,7 +1392,7 @@ pub fn tool_capabilities(name: &str) -> &'static [ToolCapability] {
 /// Plan mode is intentionally deny-by-default for tools not explicitly known
 /// to be read-only or user-facing.
 pub fn allowed_in_plan_mode(name: &str) -> bool {
-    if name == crate::desktop_control::TOOL_NAME {
+    if name == crate::desktop_control::TOOL_NAME || crate::computer_use::acts_on_pages(name) {
         return false;
     }
     use ToolCapability::*;

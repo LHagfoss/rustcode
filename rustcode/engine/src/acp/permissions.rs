@@ -403,7 +403,11 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
             {
                 return false;
             }
-            if auto_approve {
+            if auto_approve
+                && !tool_calls
+                    .iter()
+                    .any(|call| crate::tools::always_asks(&call.name))
+            {
                 return true;
             }
 
@@ -412,7 +416,7 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
                     &call.name,
                     &call.arguments,
                     mode,
-                    false,
+                    auto_approve,
                     false,
                 ) {
                     crate::tools::AuthorizationDecision::Allow => continue,

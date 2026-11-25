@@ -166,7 +166,7 @@ fn socket_pid(name: &std::ffi::OsStr) -> Option<i32> {
 }
 
 #[cfg(unix)]
-fn process_alive(pid: i32) -> bool {
+pub(crate) fn process_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }

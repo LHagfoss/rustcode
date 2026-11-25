@@ -17,3 +17,22 @@ pub use store::*;
 
 #[cfg(test)]
 pub(crate) use store::{next_session_id_value, queue_history_write, write_history_file};
+
+/// Record a thread whose history stops being saved (a full disk, a read-only
+/// folder) in its log and as a `history.write_failed` operational event.
+pub fn report_history_write_failures() {
+    rustcode_session::on_history_write_failure(|path, error| {
+        let thread = path
+            .parent()
+            .and_then(std::path::Path::file_name)
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or_default();
+        crate::logger::operational_event(
+            "history.write_failed",
+            serde_json::json!({
+                "session_id": thread,
+                "error_kind": format!("{:?}", error.kind()),
+            }),
+        );
+    });
+}
